@@ -37,6 +37,10 @@ struct Params {
     weight_threshold: f32,   // stop when transmittance <= threshold
     max_steps: u32,          // maximum cell transitions
     start_point: u32,        // starting cell index for all rays (MVP)
+
+    // debug mode
+    debug_mode: u32,         // 0 = off, 1 = cell density visualization
+    pad: vec3<u32>,
 };
 
 var<uniform> g_camera: Camera;
@@ -252,12 +256,36 @@ fn load_density(point_idx: u32) -> f32 {
     return g_attributes[base + sh_dim];
 }
 
+// Debug mode constants
+const DEBUG_MODE_OFF: u32 = 0u;
+const DEBUG_MODE_CELL_DENSITY: u32 = 1u;
+
+// Heatmap color ramp for debug visualization
+fn heatmap_color(t: f32) -> vec3f {
+    // Blue -> Cyan -> Green -> Yellow -> Red
+    let t_clamped = clamp(t, 0.0, 1.0);
+    if (t_clamped < 0.25) {
+        let s = t_clamped / 0.25;
+        return vec3f(0.0, s, 1.0);
+    } else if (t_clamped < 0.5) {
+        let s = (t_clamped - 0.25) / 0.25;
+        return vec3f(0.0, 1.0, 1.0 - s);
+    } else if (t_clamped < 0.75) {
+        let s = (t_clamped - 0.5) / 0.25;
+        return vec3f(s, 1.0, 0.0);
+    } else {
+        let s = (t_clamped - 0.75) / 0.25;
+        return vec3f(1.0, 1.0 - s, 0.0);
+    }
+}
+
 // ---- Voronoi traversal ----
 
 fn trace_ray(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
     var t0 = 0.0;
     var transmittance = 1.0;
     var accum_rgb = vec3<f32>(0.0);
+    var cells_visited: u32 = 0u;
 
     var current = g_params.start_point;
     var current_pos = g_points[current].xyz;
@@ -303,6 +331,7 @@ fn trace_ray(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
         let next_pos = g_points[next_idx].xyz;
 
         if (t1 > t0) {
+            cells_visited += 1u;
             let s = load_density(current);
             if (s > 1e-6) {
                 let dt = max(t1 - t0, 0.0);
@@ -317,6 +346,14 @@ fn trace_ray(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
         t0 = max(t0, t1);
         current = next_idx;
         current_pos = next_pos;
+    }
+
+    // Debug mode: cell density visualization
+    if (g_params.debug_mode == DEBUG_MODE_CELL_DENSITY) {
+        // Normalize cell count to a reasonable range (0-100 cells -> 0-1)
+        let density = f32(cells_visited) / 100.0;
+        let debug_color = heatmap_color(density);
+        return vec4<f32>(debug_color, 1.0);
     }
 
     return vec4<f32>(accum_rgb, 1.0 - transmittance);

@@ -1,0 +1,17 @@
+[package]
+name = "blade-volume-view"
+version = "0.1.0"
+edition = "2021"
+description = "Viewer utilities for blade-volume (camera control, input handling)"
+
+[dependencies]
+blade-volume = { path = "../blade-volume" }
+blade-graphics.workspace = true
+blade-macros.workspace = true
+bytemuck.workspace = true
+glam.workspace = true
+log.workspace = true
+winit.workspace = true
+kiddo.workspace = true
+argh.workspace = true
+env_logger.workspace = true

@@ -1,9 +1,8 @@
-[package]
-name = "blade-volume"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+members = ["blade-volume", "blade-volume-view"]
+resolver = "2"
 
-[dependencies]
+[workspace.dependencies]
 blade-graphics = { git = "https://github.com/kvark/blade", rev = "e3cf011ca18a6dfd907d1dedd93e85e21f005fe3" }
 blade-macros = "0.3"
 bytemuck = "1"
@@ -11,9 +10,7 @@ glam = { version = "0.29", features = ["mint"] }
 flate2 = "1.0"
 log = "0.4"
 mint = "0.5"
-
-[dev-dependencies]
 argh = "0.1"
 env_logger = "0.11"
-winit = { version = "0.30" }
+winit = "0.30"
 kiddo = "4"

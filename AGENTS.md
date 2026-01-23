@@ -1,8 +1,58 @@
-Tasks:
-1. Make the `view` example able to run different rendering methods, while sharing the input and camera logic.
-2. Try to integrate radfoam specific point clouds into the general point cloud format.
-3. Move the common shader code into a separate WGSL in the examples, while backend-specific code would be moved to `shaders` folder and be made for embedding into other apps. There would also be shared shaders between backends, e.g. for spherical harmonics evaluation.
-4. Add SDF rendering method based on compute.
-5. Add an API that allows the user to create backend-specific data (BLAS) from triangular meshes.
-6. Implement the distinction between BLAS and TLAS, allow the user to control the transformation of objects every frame.
-7. Implement a way to build BLAS by the means of reconstruction from a sequence of images (and masks).
+This is a Rust+WGSL library that directly works with volumetric data.
+
+# Principles
+
+- low dependencies, only Rust
+- simple code, don't overcomplicate and assume future cases, assume users know what they are doing
+- strict style:
+  - single `use` per crate, prefer to import modules instead of individual items
+  - no implicit references in `match`, prefer explicit `ref` instead
+
+# Development Tracks
+
+## Unification
+
+Make the `view` example able to run different rendering methods, while sharing the input and camera logic. That shared code can land in a separate library within this repo, such that this library depends on `winit`, `egui`, and other view-related things, while the core library doesn't care about user interaction.
+
+Try to integrate radfoam specific point clouds into the general point cloud format. We can support clouds with a few different formats.
+
+Debugging/introspection facilities:
+  - integrate egui, allow to control the quality real-time
+  - display GPU timings
+  - debug rendering mode that shows the density of particles per pixel
+
+## Productionization
+
+Modularize the shaders:
+  - move the common shader code into a separate WGSL in the examples
+  - move backend-specific code to the new `shaders` folder, target embedding into other apps
+  - make shared shaders between backends, e.g. for spherical harmonics evaluation
+
+Add an API that allows the user to create backend-specific data (BLAS) from triangular meshes.
+
+Implement the distinction between BLAS and TLAS, allow the user to control the transformation of objects every frame. Basically, allowing them to:
+```rust
+let object = scene.create_object("point_cloud.ply");
+for frame in frames {
+  scene.set_transform(object, position, rotation, scale);
+  scene.render(target_view);
+}
+```
+
+## Optimization
+
+Gather more ideas?
+
+Dynamic wave regrouping:
+- do the first few steps (applicable to both radfoam and ray-traced gaussians) from the screen
+- re-pack the survived rays into new ways, continue for another number of steps
+- straightforward way would be to re-pack using a different compute invocation, followed by indirect dispatch for the main traversal
+- perhaps this can be implemented to work entirely within a single dispatch by using atomics?
+
+## Extension
+
+New rendering methods:
+- SDF based on compute
+- Gaussians splatted with compute (instead of the current ray tracing), in 3DGUT formulation
+
+Implement a way to build BLAS by the means of reconstruction from a sequence of images (and masks).

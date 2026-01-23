@@ -1,0 +1,18 @@
+//! Viewer utilities for blade-volume.
+//!
+//! This crate provides interactive viewing capabilities for volumetric data:
+//! - `ControlledCamera` for keyboard/mouse-controlled 3D navigation
+//! - Rendering backends for different volumetric representations
+//!
+//! This crate depends on `winit` for input handling, keeping the core
+//! `blade-volume` library free of windowing dependencies.
+
+#![allow(irrefutable_let_patterns)]
+
+mod camera;
+
+pub use camera::ControlledCamera;
+
+// Re-export commonly used types from dependencies for convenience
+pub use blade_volume::CameraParams;
+pub use winit;

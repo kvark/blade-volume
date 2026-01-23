@@ -1,10 +1,12 @@
 #![allow(irrefutable_let_patterns)]
 
+mod camera;
 pub mod io;
 mod point_cloud;
 mod radfoam_point_cloud;
 mod shape;
 
+pub use camera::CameraParams;
 pub use point_cloud::{InitParameters, PointCloud};
 pub use radfoam_point_cloud::RadFoamPointCloud;
 pub use shape::Icosahedron;

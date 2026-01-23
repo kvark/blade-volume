@@ -15,6 +15,7 @@ struct Parameters {
     min_opacity: f32,
     min_transmittance: f32,
     sh_degree: u32,
+    debug_mode: u32,
 }
 var<uniform> g_params: Parameters;
 var g_acc_struct: acceleration_structure;
@@ -118,6 +119,29 @@ struct Hit {
 const hit_window: u32 = 5;
 const BACKGROUND: vec3f = vec3f(0.0);
 
+// Debug mode constants
+const DEBUG_MODE_OFF: u32 = 0u;
+const DEBUG_MODE_PARTICLE_DENSITY: u32 = 1u;
+
+// Heatmap color ramp for debug visualization
+fn heatmap_color(t: f32) -> vec3f {
+    // Blue -> Cyan -> Green -> Yellow -> Red
+    let t_clamped = clamp(t, 0.0, 1.0);
+    if (t_clamped < 0.25) {
+        let s = t_clamped / 0.25;
+        return vec3f(0.0, s, 1.0);
+    } else if (t_clamped < 0.5) {
+        let s = (t_clamped - 0.25) / 0.25;
+        return vec3f(0.0, 1.0, 1.0 - s);
+    } else if (t_clamped < 0.75) {
+        let s = (t_clamped - 0.5) / 0.25;
+        return vec3f(s, 1.0, 0.0);
+    } else {
+        let s = (t_clamped - 0.75) / 0.25;
+        return vec3f(1.0, 1.0 - s, 0.0);
+    }
+}
+
 @fragment
 fn draw_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     let ray_pos = g_camera.position;
@@ -125,6 +149,7 @@ fn draw_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     var t_start = 0.0;
     var transmittance = 1.0;
     var radiance = vec3f(0.0);
+    var hit_count_total = 0u;
 
     while (transmittance > g_params.min_transmittance) {
         var rq: ray_query;
@@ -145,6 +170,7 @@ fn draw_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
                 continue;
             }
 
+            hit_count_total += 1u;
             var hit = Hit(intersection.t, intersection.instance_index);
             for (var i = 0u; i < hit_count; i += 1u) {
                 let other = hits[i];
@@ -183,6 +209,14 @@ fn draw_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
         if (hit_count < hit_window) {
             break;
         }
+    }
+
+    // Debug mode: particle density visualization
+    if (g_params.debug_mode == DEBUG_MODE_PARTICLE_DENSITY) {
+        // Normalize hit count to a reasonable range (0-50 hits -> 0-1)
+        let density = f32(hit_count_total) / 50.0;
+        let debug_color = heatmap_color(density);
+        return vec4f(debug_color, 1.0);
     }
 
     radiance += transmittance * BACKGROUND;
