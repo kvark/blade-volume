@@ -239,23 +239,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 
 [[package]]
-name = "blade-gaussian"
-version = "0.1.0"
-dependencies = [
- "argh",
- "blade-graphics",
- "blade-macros",
- "bytemuck",
- "env_logger",
- "flate2",
- "glam",
- "kiddo",
- "log",
- "mint",
- "winit",
-]
-
-[[package]]
 name = "blade-graphics"
 version = "0.7.0"
 source = "git+https://github.com/kvark/blade?rev=e3cf011ca18a6dfd907d1dedd93e85e21f005fe3#e3cf011ca18a6dfd907d1dedd93e85e21f005fe3"
@@ -298,6 +281,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "blade-volume"
+version = "0.1.0"
+dependencies = [
+ "argh",
+ "blade-graphics",
+ "blade-macros",
+ "bytemuck",
+ "env_logger",
+ "flate2",
+ "glam",
+ "kiddo",
+ "log",
+ "mint",
+ "winit",
 ]
 
 [[package]]

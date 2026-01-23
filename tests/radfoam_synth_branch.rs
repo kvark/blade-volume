@@ -61,7 +61,7 @@ This is not a true Voronoi/Delaunay adjacency, but it is deterministic and stres
 the selection logic. A "real" adjacency fixture can be swapped in later.
 */
 
-use blade_gaussian as gauss;
+use blade_volume as vol;
 
 /// Parameters controlling the branching fixture shape.
 #[derive(Clone, Copy, Debug)]
@@ -105,7 +105,7 @@ impl Default for BranchingParams {
 /// Build a branching synthetic RadFoam model.
 ///
 /// Returns a `RadFoamModel` with points, packed attributes, and CSR adjacency.
-pub fn make_branching_model(params: BranchingParams) -> gauss::RadFoamModel {
+pub fn make_branching_model(params: BranchingParams) -> vol::RadFoamModel {
     assert!(params.spine_len >= 2, "spine_len must be >= 2");
     assert!(
         params.dz.is_finite() && params.dz > 0.0,
@@ -125,8 +125,8 @@ pub fn make_branching_model(params: BranchingParams) -> gauss::RadFoamModel {
         "density must be finite and >= 0"
     );
 
-    let comps = gauss::get_sh_component_count(params.sh_degree);
-    let attr_dim = gauss::RadFoamModel::attribute_dim(params.sh_degree);
+    let comps = vol::get_sh_component_count(params.sh_degree);
+    let attr_dim = vol::RadFoamModel::attribute_dim(params.sh_degree);
 
     // Layout:
     // - First `spine_len` points are spine nodes S_i
@@ -257,7 +257,7 @@ pub fn make_branching_model(params: BranchingParams) -> gauss::RadFoamModel {
         attributes[base + (3 * comps)] = params.density;
     }
 
-    gauss::RadFoamModel {
+    vol::RadFoamModel {
         points,
         attributes,
         sh_degree: params.sh_degree,
@@ -303,7 +303,7 @@ mod tests {
         }
 
         // Attribute length matches N * attr_dim
-        let attr_dim = gauss::RadFoamModel::attribute_dim(m.sh_degree);
+        let attr_dim = vol::RadFoamModel::attribute_dim(m.sh_degree);
         assert_eq!(m.attributes.len(), n * attr_dim);
 
         // Spot-check: a branch node should have exactly 1 neighbor (its parent spine)

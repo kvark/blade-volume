@@ -45,7 +45,7 @@
 //! - Load a RadFoamModel fixture
 //! - Call `trace_one_ray(...)` for a few rays and compare to GPU output.
 
-use blade_gaussian as gauss;
+use blade_volume as vol;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ray {
@@ -106,7 +106,7 @@ fn attr_row_dim(sh_degree: u32) -> u32 {
     1 + 3 * comps
 }
 
-fn read_density(model: &gauss::RadFoamModel, point_idx: u32) -> f32 {
+fn read_density(model: &vol::RadFoamModel, point_idx: u32) -> f32 {
     let sh_degree = model.sh_degree as u32;
     let comps = sh_component_count(sh_degree);
     let sh_dim = 3 * comps;
@@ -147,7 +147,7 @@ fn sh_basis_constants() -> [f32; 16] {
 ///
 /// This mirrors the WGSL implementation and supports degree 0..=3.
 /// For degree < 3, extra coefficients are ignored.
-fn eval_rgb_sh(model: &gauss::RadFoamModel, point_idx: u32, dir: glam::Vec3) -> glam::Vec3 {
+fn eval_rgb_sh(model: &vol::RadFoamModel, point_idx: u32, dir: glam::Vec3) -> glam::Vec3 {
     let deg = model.sh_degree as u32;
     let deg = deg.min(3);
     let comps = sh_component_count(deg).min(16);
@@ -297,11 +297,7 @@ fn eval_rgb_sh(model: &gauss::RadFoamModel, point_idx: u32, dir: glam::Vec3) -> 
 /// Trace a single ray through the RadFoam point set starting from `settings.start_point`.
 ///
 /// This is the CPU reference equivalent of the traversal and forward integration.
-pub fn trace_one_ray(
-    model: &gauss::RadFoamModel,
-    ray: Ray,
-    settings: TraceSettings,
-) -> TraceResult {
+pub fn trace_one_ray(model: &vol::RadFoamModel, ray: Ray, settings: TraceSettings) -> TraceResult {
     assert!(!model.points.is_empty(), "model has no points");
     assert!(
         (settings.start_point as usize) < model.points.len(),
@@ -480,7 +476,7 @@ mod tests {
 
     #[test]
     fn cpu_ref_traces_without_nan_on_tiny_fixture() {
-        let model = gauss::io::load_radfoam_ply("tests/data/radfoam_tiny_ascii.ply");
+        let model = vol::io::load_radfoam_ply("tests/data/radfoam_tiny_ascii.ply");
 
         // Ray from slightly above the square, pointing down + forward-ish.
         let ray = Ray {

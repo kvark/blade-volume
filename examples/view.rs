@@ -1,7 +1,7 @@
 #![allow(irrefutable_let_patterns)]
 
-use blade_gaussian as gauss;
 use blade_graphics as gpu;
+use blade_volume as vol;
 use std::{f32, fmt, mem, str};
 
 const D2R: f32 = f32::consts::PI / 180.0;
@@ -136,7 +136,7 @@ struct Example {
     command_encoder: gpu::CommandEncoder,
     prev_sync_point: Option<gpu::SyncPoint>,
     window_size: winit::dpi::PhysicalSize<u32>,
-    point_cloud: gauss::PointCloud,
+    point_cloud: vol::PointCloud,
     surface: gpu::Surface,
     context: gpu::Context,
     params: Parameters,
@@ -172,7 +172,7 @@ impl Example {
         }
 
         log::info!("Loading Gaussian data");
-        let model = gauss::io::load(&args.input_file);
+        let model = vol::io::load(&args.input_file);
 
         let context = unsafe {
             gpu::Context::init(gpu::ContextDesc {
@@ -199,7 +199,7 @@ impl Example {
         };
         assert_eq!(
             shader.get_struct_size("Gaussian"),
-            mem::size_of::<gauss::GaussianGpu>() as u32
+            mem::size_of::<vol::GaussianGpu>() as u32
         );
 
         let draw_layout = <DrawData as gpu::ShaderData>::layout();
@@ -224,8 +224,8 @@ impl Example {
         });
 
         let min_opacity = 0.01;
-        let params = gauss::InitParameters { min_opacity };
-        let point_cloud = gauss::PointCloud::new(&model, &params, &context, &mut command_encoder);
+        let params = vol::InitParameters { min_opacity };
+        let point_cloud = vol::PointCloud::new(&model, &params, &context, &mut command_encoder);
 
         Self {
             camera,
@@ -334,7 +334,7 @@ fn main() {
 
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
     let mut window_attributes = winit::window::Window::default_attributes();
-    window_attributes.title = "blade-gaussian-viewer".to_string();
+    window_attributes.title = "blade-volume-viewer".to_string();
     if let Some(ref arg) = args.resolution {
         let res = parse_vec::<2, u32>(arg);
         window_attributes.inner_size = Some(winit::dpi::Size::Physical(res.into()));
