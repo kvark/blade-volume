@@ -7,13 +7,13 @@
 //! - We start with CPU-only loader invariants using an ASCII PLY fixture.
 //! - GPU tests will be added once we decide on a readback strategy (rgba16f vs rgba32f).
 
-use blade_gaussian as gauss;
+use blade_volume as vol;
 
 const TINY_ASCII_PLY: &str = "tests/data/radfoam_tiny_ascii.ply";
 
 #[test]
 fn radfoam_ascii_ply_loads_and_has_expected_shapes() {
-    let model = gauss::io::load_radfoam_ply(TINY_ASCII_PLY);
+    let model = vol::io::load_radfoam_ply(TINY_ASCII_PLY);
 
     // Basic counts from the fixture
     assert_eq!(model.points.len(), 4, "fixture should contain 4 points");
@@ -39,7 +39,7 @@ fn radfoam_ascii_ply_loads_and_has_expected_shapes() {
     assert_eq!(model.sh_degree, 1, "fixture should infer SH degree 1");
 
     // Packed attribute length = N * attr_dim
-    let attr_dim = gauss::RadFoamModel::attribute_dim(model.sh_degree);
+    let attr_dim = vol::RadFoamModel::attribute_dim(model.sh_degree);
     assert_eq!(
         model.attributes.len(),
         model.points.len() * attr_dim,
@@ -61,7 +61,7 @@ fn radfoam_ascii_ply_loads_and_has_expected_shapes() {
 
 #[test]
 fn radfoam_ascii_ply_dc_approx_is_reasonable_for_mid_gray_preview() {
-    let model = gauss::io::load_radfoam_ply(TINY_ASCII_PLY);
+    let model = vol::io::load_radfoam_ply(TINY_ASCII_PLY);
 
     // The fixture uses red=green=blue=128 (mid gray-ish).
     // The loader approximates DC by inverting:
@@ -76,7 +76,7 @@ fn radfoam_ascii_ply_dc_approx_is_reasonable_for_mid_gray_preview() {
     const C0: f32 = 0.282_094_791_773_878_14;
     let expected_dc = ((128.0 / 255.0) - 0.5) / C0;
 
-    let attr_dim = gauss::RadFoamModel::attribute_dim(model.sh_degree);
+    let attr_dim = vol::RadFoamModel::attribute_dim(model.sh_degree);
     assert_eq!(attr_dim, 13, "degree 1 should produce attr_dim=13");
 
     for i in 0..model.points.len() {

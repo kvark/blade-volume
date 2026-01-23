@@ -19,6 +19,8 @@
 //! Running on CI:
 //! - This should be compatible with lavapipe as it only requires compute + storage textures
 //!   + copy-to-buffer.
+//! - If no supported GPU device is found (e.g. on some CI runners), this test should
+//!   skip gracefully.
 //!
 //! Validation:
 //! - When Vulkan validation is enabled, we must explicitly destroy GPU resources created by
@@ -26,8 +28,8 @@
 
 #![allow(clippy::float_cmp)]
 
-use blade_gaussian as gauss;
 use blade_graphics as gpu;
+use blade_volume as vol;
 
 // Import the CPU reference tracer as a sibling module (same directory).
 mod radfoam_cpu_ref;
@@ -332,17 +334,20 @@ fn trace_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// Create a headless GPU context for tests.
 ///
 /// Note: we keep validation enabled in debug to catch issues early.
-fn make_test_context() -> gpu::Context {
+fn make_test_context() -> Option<gpu::Context> {
     unsafe {
-        gpu::Context::init(gpu::ContextDesc {
+        match gpu::Context::init(gpu::ContextDesc {
             presentation: false,
             validation: cfg!(debug_assertions),
             timing: false,
             capture: false,
             overlay: false,
             device_id: 0,
-        })
-        .expect("failed to init GPU context")
+        }) {
+            Ok(ctx) => Some(ctx),
+            Err(gpu::NotSupportedError::NoSupportedDeviceFound) => None,
+            Err(other) => panic!("failed to init GPU context: {:?}", other),
+        }
     }
 }
 
@@ -351,7 +356,7 @@ fn cleanup_test_resources(
     context: &gpu::Context,
     encoder: &mut gpu::CommandEncoder,
     pipeline: &mut gpu::ComputePipeline,
-    radfoam_gpu: &mut gauss::RadFoamPointCloud,
+    radfoam_gpu: &mut vol::RadFoamPointCloud,
     out_tex: gpu::Texture,
     out_view: gpu::TextureView,
     readback: gpu::Buffer,
@@ -425,7 +430,10 @@ fn approx_eq(a: f32, b: f32, eps: f32) -> bool {
 /// This uses the same camera model as the shader (fullscreen NDC -> local_dir).
 #[test]
 fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
-    let context = make_test_context();
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping RadFoam GPU-vs-CPU test: no supported GPU device found");
+        return;
+    };
 
     // Build a synthetic, deterministic fixture in-memory.
     //
@@ -449,7 +457,7 @@ fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
     });
 
     // Upload buffers using the existing helper.
-    let mut radfoam_gpu = gauss::RadFoamPointCloud::new(&model, &context, &mut encoder);
+    let mut radfoam_gpu = vol::RadFoamPointCloud::new(&model, &context, &mut encoder);
 
     // Compile test shader and pipeline.
     let shader = context.create_shader(gpu::ShaderDesc {

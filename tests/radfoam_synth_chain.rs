@@ -17,7 +17,7 @@
 //! - For a +Z ray, each cell has at least one neighbor with dp > 0,
 //!   so traversal progresses forward and produces positive segment lengths.
 
-use blade_gaussian as gauss;
+use blade_volume as vol;
 
 /// Build a chain fixture.
 ///
@@ -38,7 +38,7 @@ pub fn make_chain_model(
     density: f32,
     sh_degree: usize,
     dc: glam::Vec3,
-) -> gauss::RadFoamModel {
+) -> vol::RadFoamModel {
     assert!(n >= 2, "chain requires at least 2 points");
     assert!(dz.is_finite() && dz > 0.0, "dz must be finite and > 0");
     assert!(
@@ -46,8 +46,8 @@ pub fn make_chain_model(
         "density must be finite and >= 0"
     );
 
-    let attr_dim = gauss::RadFoamModel::attribute_dim(sh_degree);
-    let comps = gauss::get_sh_component_count(sh_degree);
+    let attr_dim = vol::RadFoamModel::attribute_dim(sh_degree);
+    let comps = vol::get_sh_component_count(sh_degree);
 
     // Points along +Z.
     let mut points = Vec::with_capacity(n);
@@ -95,7 +95,7 @@ pub fn make_chain_model(
         attributes[base + (3 * comps)] = density;
     }
 
-    gauss::RadFoamModel {
+    vol::RadFoamModel {
         points,
         attributes,
         sh_degree,
@@ -124,7 +124,7 @@ mod tests {
         }
 
         // Attribute length
-        let attr_dim = gauss::RadFoamModel::attribute_dim(m.sh_degree);
+        let attr_dim = vol::RadFoamModel::attribute_dim(m.sh_degree);
         assert_eq!(m.attributes.len(), m.points.len() * attr_dim);
     }
 }

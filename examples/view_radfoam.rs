@@ -1,7 +1,7 @@
 #![allow(irrefutable_let_patterns)]
 
-use blade_gaussian as gauss;
 use blade_graphics as gpu;
+use blade_volume as vol;
 use std::{f32, fmt, str};
 
 use kiddo::KdTree;
@@ -140,7 +140,7 @@ struct Example {
     surface: gpu::Surface,
     context: gpu::Context,
 
-    radfoam: gauss::RadFoamPointCloud,
+    radfoam: vol::RadFoamPointCloud,
 
     // CPU-side acceleration for start-point selection (MVP: KD-tree via kiddo)
     radfoam_kd: KdTree<f32, 3>,
@@ -336,7 +336,7 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
 
         // Load scene (after pipelines are created)
         log::info!("Loading RadFoam PLY");
-        let model = gauss::io::load_radfoam_ply(&args.input_file);
+        let model = vol::io::load_radfoam_ply(&args.input_file);
 
         // Build KD-tree for start-point selection
         // NOTE: this is a CPU-only helper, independent of the GPU traversal.
@@ -353,7 +353,7 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
         });
 
         // Upload scene buffers
-        let radfoam = gauss::RadFoamPointCloud::new(&model, &context, &mut command_encoder);
+        let radfoam = vol::RadFoamPointCloud::new(&model, &context, &mut command_encoder);
 
         // Runtime trace params
         // NOTE: start_point will be updated every frame from camera origin (auto-start).
