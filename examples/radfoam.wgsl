@@ -264,14 +264,8 @@ fn trace_ray(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
 
     // Main traversal loop
     var steps: u32 = 0u;
-    loop {
+    while (t0 < g_camera.depth && steps < g_params.max_steps && transmittance > g_params.weight_threshold) {
         steps += 1u;
-        if (steps > g_params.max_steps) {
-            break;
-        }
-        if (transmittance <= g_params.weight_threshold) {
-            break;
-        }
 
         let begin = g_adjacency_offsets[current];
         let end = g_adjacency_offsets[current + 1u];
@@ -282,9 +276,7 @@ fn trace_ray(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
         var next_face: u32 = 0xffffffffu;
 
         // Scan neighbors
-        var j: u32 = 0u;
-        loop {
-            if (j >= num_faces) { break; }
+        for(var j = 0u; j < num_faces; j += 1u) {
             let next_idx = g_adjacency[begin + j];
             let next_pos = g_points[next_idx].xyz;
             let offset = next_pos - current_pos;
@@ -301,7 +293,6 @@ fn trace_ray(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
                     next_face = j;
                 }
             }
-            j += 1u;
         }
 
         if (next_face == 0xffffffffu) {
@@ -326,11 +317,6 @@ fn trace_ray(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
         t0 = max(t0, t1);
         current = next_idx;
         current_pos = next_pos;
-
-        // Optional camera depth clamp
-        if (t0 > g_camera.depth) {
-            break;
-        }
     }
 
     return vec4<f32>(accum_rgb, 1.0 - transmittance);
