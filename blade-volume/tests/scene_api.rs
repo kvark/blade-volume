@@ -1,6 +1,6 @@
 //! Integration tests for the Scene API.
 //!
-//! Tests scene object management, transforms, and TLAS updates.
+//! Tests scene object management, transforms, and software TLAS.
 //! GPU tests are skipped if no supported device is found.
 
 use blade_graphics as gpu;
@@ -30,7 +30,7 @@ fn make_test_context() -> Option<gpu::Context> {
 fn scene_new_is_empty() {
     let scene = vol::Scene::new();
     assert_eq!(scene.object_count(), 0);
-    assert!(scene.tlas().is_none());
+    assert!(scene.render_data().is_none());
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn transform_to_matrix_rotation() {
 }
 
 #[test]
-fn scene_create_radfoam_object() {
+fn scene_add_radfoam_object() {
     let Some(context) = make_test_context() else {
         eprintln!("Skipping scene GPU test: no supported device found");
         return;
@@ -108,15 +108,18 @@ fn scene_create_radfoam_object() {
     let model = radfoam_synth_chain::make_chain_model(10, 0.5, 0.1, 0, glam::Vec3::splat(0.5));
 
     let mut scene = vol::Scene::new();
-    let handle = scene.create_radfoam_object(&model, &context, &mut encoder);
+    let handle = scene.add_radfoam(&model, &context, &mut encoder);
 
     assert_eq!(scene.object_count(), 1);
 
-    // RadFoam objects don't affect TLAS
-    assert!(scene.tlas().is_none());
+    // Check object type
+    assert_eq!(
+        scene.get_object_type(handle),
+        Some(vol::ObjectType::RadFoam)
+    );
 
     // Check transform
-    let t = scene.get_transform(handle);
+    let t = scene.get_transform(handle).expect("should have transform");
     assert_eq!(t.position, glam::Vec3::ZERO);
 
     // Set transform
@@ -124,16 +127,14 @@ fn scene_create_radfoam_object() {
         handle,
         vol::Transform::from_position(glam::Vec3::new(1.0, 2.0, 3.0)),
     );
-    let t2 = scene.get_transform(handle);
+    let t2 = scene.get_transform(handle).expect("should have transform");
     assert_eq!(t2.position, glam::Vec3::new(1.0, 2.0, 3.0));
 
-    // Check object data
-    if let vol::ObjectData::RadFoam(data) = scene.get_object_data(handle) {
-        assert_eq!(data.num_points, 10);
-        assert_eq!(data.sh_degree, 0);
-    } else {
-        panic!("Expected RadFoam object data");
-    }
+    // Check RadFoam cloud access
+    let cloud = scene
+        .get_radfoam_cloud(handle)
+        .expect("should have RadFoam cloud");
+    assert!(cloud.num_points > 0);
 
     // Cleanup
     scene.destroy(&context);
@@ -156,8 +157,8 @@ fn scene_multiple_radfoam_objects() {
     let model2 = radfoam_synth_chain::make_chain_model(8, 0.3, 0.2, 1, glam::Vec3::splat(0.3));
 
     let mut scene = vol::Scene::new();
-    let h1 = scene.create_radfoam_object(&model1, &context, &mut encoder);
-    let h2 = scene.create_radfoam_object(&model2, &context, &mut encoder);
+    let h1 = scene.add_radfoam(&model1, &context, &mut encoder);
+    let h2 = scene.add_radfoam(&model2, &context, &mut encoder);
 
     assert_eq!(scene.object_count(), 2);
     assert_ne!(h1, h2); // Different handles
@@ -166,8 +167,14 @@ fn scene_multiple_radfoam_objects() {
     scene.set_transform(h1, vol::Transform::from_position(glam::Vec3::X));
     scene.set_transform(h2, vol::Transform::from_position(glam::Vec3::Y));
 
-    assert_eq!(scene.get_transform(h1).position, glam::Vec3::X);
-    assert_eq!(scene.get_transform(h2).position, glam::Vec3::Y);
+    assert_eq!(
+        scene.get_transform(h1).expect("h1 transform").position,
+        glam::Vec3::X
+    );
+    assert_eq!(
+        scene.get_transform(h2).expect("h2 transform").position,
+        glam::Vec3::Y
+    );
 
     // Cleanup
     scene.destroy(&context);
@@ -178,4 +185,79 @@ fn scene_multiple_radfoam_objects() {
 fn scene_default_trait() {
     let scene: vol::Scene = Default::default();
     assert_eq!(scene.object_count(), 0);
+}
+
+#[test]
+fn scene_prepare_creates_buffers() {
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping scene GPU test: no supported device found");
+        return;
+    };
+
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "scene-test",
+        buffer_count: 1,
+    });
+
+    let model = radfoam_synth_chain::make_chain_model(10, 0.5, 0.1, 0, glam::Vec3::splat(0.5));
+
+    let mut scene = vol::Scene::new();
+    let handle = scene.add_radfoam(&model, &context, &mut encoder);
+
+    // Before prepare, render_data should be None (no buffers)
+    assert!(scene.render_data().is_none());
+
+    // After prepare, render_data should be available
+    scene.prepare(&context, &mut encoder);
+    let render_data = scene.render_data().expect("should have render data");
+    assert_eq!(render_data.object_count, 1);
+    assert_eq!(render_data.radfoam_clouds.len(), 1);
+
+    // Set transform and re-prepare
+    scene.set_transform(
+        handle,
+        vol::Transform::from_position(glam::Vec3::new(1.0, 2.0, 3.0)),
+    );
+    scene.prepare(&context, &mut encoder);
+
+    // Cleanup
+    scene.destroy(&context);
+    context.destroy_command_encoder(&mut encoder);
+}
+
+#[test]
+fn scene_render_data_reflects_all_objects() {
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping scene GPU test: no supported device found");
+        return;
+    };
+
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "scene-test",
+        buffer_count: 1,
+    });
+
+    let model1 = radfoam_synth_chain::make_chain_model(5, 0.5, 0.1, 0, glam::Vec3::splat(0.5));
+    let model2 = radfoam_synth_chain::make_chain_model(8, 0.3, 0.2, 1, glam::Vec3::splat(0.3));
+
+    let mut scene = vol::Scene::new();
+    let _h1 = scene.add_radfoam(&model1, &context, &mut encoder);
+    let _h2 = scene.add_radfoam(&model2, &context, &mut encoder);
+
+    scene.prepare(&context, &mut encoder);
+    let render_data = scene.render_data().expect("should have render data");
+
+    assert_eq!(render_data.object_count, 2);
+    assert_eq!(render_data.radfoam_clouds.len(), 2);
+    assert_eq!(render_data.gaussian_clouds.len(), 0);
+
+    // Cleanup
+    scene.destroy(&context);
+    context.destroy_command_encoder(&mut encoder);
+}
+
+#[test]
+fn scene_empty_render_data() {
+    let scene = vol::Scene::new();
+    assert!(scene.render_data().is_none());
 }

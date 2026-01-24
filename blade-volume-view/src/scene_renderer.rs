@@ -1,0 +1,401 @@
+//! Unified scene renderer using software TLAS traversal.
+//!
+//! This module provides `SceneRenderer` which renders scenes containing
+//! multiple object types (Gaussian, RadFoam, etc.) using a unified
+//! compute-based traversal of bounding volumes.
+//!
+//! # Architecture
+//!
+//! Unlike the single-backend viewers, the scene renderer:
+//! 1. Traverses object bounding spheres in a compute shader
+//! 2. Dispatches to object-specific backends when rays hit bounds
+//! 3. Composites results from all objects
+//!
+//! This allows mixing Gaussian and RadFoam objects in the same scene
+//! with independent transforms.
+
+use blade_graphics as gpu;
+use blade_volume as vol;
+
+/// Maximum number of RadFoam objects supported via binding arrays.
+const MAX_RADFOAM_OBJECTS: gpu::ResourceIndex = 64;
+
+/// Parameters passed to the scene traversal shader.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct SceneParams {
+    /// Number of objects in the scene.
+    pub object_count: u32,
+    /// SH degree for color evaluation.
+    pub sh_degree: u32,
+    /// Stop when transmittance <= threshold.
+    pub weight_threshold: f32,
+    /// Maximum cell transitions for RadFoam.
+    pub max_steps: u32,
+    /// Debug visualization mode.
+    pub debug_mode: u32,
+    /// RadFoam per-point attribute dimension (sh_dim + 1).
+    pub radfoam_attr_dim: u32,
+    /// Minimum opacity for Gaussian rendering.
+    pub gaussian_min_opacity: f32,
+    /// Padding.
+    pub pad: u32,
+}
+
+impl Default for SceneParams {
+    fn default() -> Self {
+        Self {
+            object_count: 0,
+            sh_degree: 0,
+            weight_threshold: 0.001,
+            max_steps: 1024,
+            debug_mode: 0,
+            radfoam_attr_dim: 0,
+            gaussian_min_opacity: 0.01,
+            pad: 0,
+        }
+    }
+}
+
+/// Debug modes for scene visualization.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SceneDebugMode {
+    /// Normal rendering.
+    Off = 0,
+    /// Show bounding sphere intersections (heatmap by count).
+    Bounds = 1,
+    /// Color by object type.
+    ObjectType = 2,
+    /// Backend-specific density visualization.
+    BackendDensity = 3,
+}
+
+/// Shader data layout for scene traversal.
+///
+/// This struct defines the bindings for the unified scene traversal shader.
+/// RadFoam uses binding arrays to support multiple objects.
+#[derive(blade_macros::ShaderData)]
+pub struct SceneTraverseData<'a> {
+    /// Camera parameters.
+    pub g_camera: vol::CameraParams,
+    /// Scene traversal parameters.
+    pub g_scene_params: SceneParams,
+    /// Object bounding spheres buffer.
+    pub g_bounds: gpu::BufferPiece,
+    /// Object transforms buffer.
+    pub g_transforms: gpu::BufferPiece,
+    /// RadFoam points buffers (binding array).
+    pub g_radfoam_points: &'a gpu::BufferArray<MAX_RADFOAM_OBJECTS>,
+    /// RadFoam attributes buffers (binding array).
+    pub g_radfoam_attributes: &'a gpu::BufferArray<MAX_RADFOAM_OBJECTS>,
+    /// RadFoam adjacency buffers (binding array).
+    pub g_radfoam_adjacency: &'a gpu::BufferArray<MAX_RADFOAM_OBJECTS>,
+    /// RadFoam adjacency offsets buffers (binding array).
+    pub g_radfoam_adjacency_offsets: &'a gpu::BufferArray<MAX_RADFOAM_OBJECTS>,
+    /// Gaussian TLAS (first object).
+    pub g_gaussian_tlas: gpu::AccelerationStructure,
+    /// Gaussian data buffer.
+    pub g_gaussian_data: gpu::BufferPiece,
+    /// Output HDR texture.
+    pub g_out: gpu::TextureView,
+}
+
+/// Shader data layout for HDR to swapchain blit.
+#[derive(blade_macros::ShaderData)]
+pub struct SceneBlitData {
+    /// HDR source texture.
+    pub g_src: gpu::TextureView,
+    /// Texture sampler.
+    pub g_sampler: gpu::Sampler,
+}
+
+/// Unified scene renderer.
+///
+/// Renders scenes with mixed object types using software TLAS traversal.
+pub struct SceneRenderer {
+    /// The scene being rendered.
+    pub scene: vol::Scene,
+    /// Traversal compute pipeline.
+    traverse_pipeline: gpu::ComputePipeline,
+    /// HDR to swapchain blit pipeline.
+    blit_pipeline: gpu::RenderPipeline,
+    /// HDR render target.
+    hdr_tex: gpu::Texture,
+    /// HDR render target view.
+    hdr_view: gpu::TextureView,
+    /// Texture sampler for blit.
+    sampler: gpu::Sampler,
+    /// Rendering parameters.
+    pub params: SceneParams,
+}
+
+impl SceneRenderer {
+    /// Creates a new scene renderer.
+    ///
+    /// # Arguments
+    /// * `context` - GPU context
+    /// * `surface_format` - Swapchain surface format
+    /// * `window_size` - Initial window size
+    /// * `preprocess_shader` - Function to preprocess shader source (expand includes)
+    pub fn new<F>(
+        context: &gpu::Context,
+        surface_format: gpu::TextureFormat,
+        window_size: winit::dpi::PhysicalSize<u32>,
+        preprocess_shader: F,
+    ) -> Self
+    where
+        F: Fn(&str) -> String,
+    {
+        // Create HDR target
+        let (hdr_tex, hdr_view) = Self::create_hdr_target(context, window_size);
+
+        // Sampler for blit
+        let sampler = context.create_sampler(gpu::SamplerDesc {
+            name: "scene-sampler",
+            mag_filter: gpu::FilterMode::Linear,
+            min_filter: gpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // Traverse compute pipeline
+        let shader = {
+            let raw_source = include_str!("../shaders/scene_traverse.wgsl");
+            let source = preprocess_shader(raw_source);
+            context.create_shader(gpu::ShaderDesc { source: &source })
+        };
+        let traverse_layout = <SceneTraverseData as gpu::ShaderData>::layout();
+        let traverse_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+            name: "scene-traverse",
+            data_layouts: &[&traverse_layout],
+            compute: shader.at("main"),
+        });
+
+        // Blit pipeline (reuse radfoam_blit shader)
+        let blit_shader = {
+            let source = include_str!("../shaders/radfoam_blit.wgsl");
+            context.create_shader(gpu::ShaderDesc { source })
+        };
+        let blit_layout = <SceneBlitData as gpu::ShaderData>::layout();
+        let blit_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
+            name: "scene-blit",
+            data_layouts: &[&blit_layout],
+            primitive: gpu::PrimitiveState {
+                topology: gpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            vertex: blit_shader.at("vs"),
+            vertex_fetches: &[],
+            fragment: Some(blit_shader.at("fs")),
+            color_targets: &[surface_format.into()],
+            depth_stencil: None,
+            multisample_state: Default::default(),
+        });
+
+        Self {
+            scene: vol::Scene::new(),
+            traverse_pipeline,
+            blit_pipeline,
+            hdr_tex,
+            hdr_view,
+            sampler,
+            params: SceneParams::default(),
+        }
+    }
+
+    fn create_hdr_target(
+        context: &gpu::Context,
+        size: winit::dpi::PhysicalSize<u32>,
+    ) -> (gpu::Texture, gpu::TextureView) {
+        let tex = context.create_texture(gpu::TextureDesc {
+            name: "scene-hdr",
+            format: gpu::TextureFormat::Rgba16Float,
+            size: gpu::Extent {
+                width: size.width.max(1),
+                height: size.height.max(1),
+                depth: 1,
+            },
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::STORAGE
+                | gpu::TextureUsage::RESOURCE
+                | gpu::TextureUsage::COPY,
+            external: None,
+        });
+        let view = context.create_texture_view(
+            tex,
+            gpu::TextureViewDesc {
+                name: "scene-hdr-view",
+                format: gpu::TextureFormat::Rgba16Float,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources::default(),
+            },
+        );
+        (tex, view)
+    }
+
+    /// Handles window resize.
+    pub fn resize(&mut self, context: &gpu::Context, size: winit::dpi::PhysicalSize<u32>) {
+        context.destroy_texture_view(self.hdr_view);
+        context.destroy_texture(self.hdr_tex);
+        let (hdr_tex, hdr_view) = Self::create_hdr_target(context, size);
+        self.hdr_tex = hdr_tex;
+        self.hdr_view = hdr_view;
+    }
+
+    /// Adds a RadFoam model to the scene.
+    ///
+    /// Returns the object handle for transform manipulation.
+    pub fn add_radfoam(
+        &mut self,
+        model: &vol::PointCloudModel,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) -> vol::ObjectHandle {
+        // Update SH degree in params
+        self.params.sh_degree = model.sh_degree as u32;
+
+        self.scene.add_radfoam(model, context, encoder)
+    }
+
+    /// Adds a Gaussian model to the scene.
+    ///
+    /// Returns the object handle for transform manipulation.
+    pub fn add_gaussian(
+        &mut self,
+        model: &vol::PointCloudModel,
+        min_opacity: f32,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) -> vol::ObjectHandle {
+        // Update params
+        self.params.sh_degree = model.sh_degree as u32;
+        self.params.gaussian_min_opacity = min_opacity;
+
+        self.scene
+            .add_gaussian(model, min_opacity, context, encoder)
+    }
+
+    /// Sets the debug mode.
+    pub fn set_debug_mode(&mut self, mode: SceneDebugMode) {
+        self.params.debug_mode = mode as u32;
+    }
+
+    /// Renders the scene.
+    pub fn render(
+        &mut self,
+        encoder: &mut gpu::CommandEncoder,
+        frame_view: gpu::TextureView,
+        camera_params: vol::CameraParams,
+        _camera_position: glam::Vec3,
+        window_size: winit::dpi::PhysicalSize<u32>,
+        context: &gpu::Context,
+    ) {
+        // Prepare scene (uploads bounds/transforms if dirty)
+        self.scene.prepare(context, encoder);
+
+        // Get render data
+        let Some(render_data) = self.scene.render_data() else {
+            return; // Empty scene
+        };
+
+        // Update params
+        self.params.object_count = render_data.object_count;
+
+        encoder.init_texture(self.hdr_tex);
+
+        // Build RadFoam binding arrays from all objects
+        let mut radfoam_points: gpu::BufferArray<MAX_RADFOAM_OBJECTS> = gpu::BufferArray::new();
+        let mut radfoam_attributes: gpu::BufferArray<MAX_RADFOAM_OBJECTS> = gpu::BufferArray::new();
+        let mut radfoam_adjacency: gpu::BufferArray<MAX_RADFOAM_OBJECTS> = gpu::BufferArray::new();
+        let mut radfoam_adjacency_offsets: gpu::BufferArray<MAX_RADFOAM_OBJECTS> =
+            gpu::BufferArray::new();
+
+        for cloud in render_data.radfoam_clouds {
+            radfoam_points.alloc(cloud.points());
+            radfoam_attributes.alloc(cloud.attributes());
+            radfoam_adjacency.alloc(cloud.point_adjacency());
+            radfoam_adjacency_offsets.alloc(cloud.point_adjacency_offsets());
+        }
+
+        // Set attr_dim from first RadFoam object (assumes all have same SH degree)
+        if let Some(cloud) = render_data.radfoam_clouds.first() {
+            self.params.radfoam_attr_dim = cloud.attr_dim as u32;
+        }
+
+        // Get first Gaussian object's data (binding arrays not yet supported for AS)
+        let (gaussian_tlas, gaussian_buf) = if let Some(cloud) = render_data.gaussian_clouds.first()
+        {
+            (cloud.tlas, cloud.gauss_buf.into())
+        } else if render_data.radfoam_clouds.is_empty() {
+            // No objects at all - skip rendering
+            return;
+        } else {
+            // RadFoam only - we need a valid TLAS placeholder
+            // For now, skip if no Gaussian objects
+            // TODO: support RadFoam-only scenes by creating a dummy TLAS
+            return;
+        };
+
+        // Compute traverse into HDR texture
+        if let mut pass = encoder.compute("scene-traverse") {
+            let mut pen = pass.with(&self.traverse_pipeline);
+
+            pen.bind(
+                0,
+                &SceneTraverseData {
+                    g_camera: camera_params,
+                    g_scene_params: self.params,
+                    g_bounds: render_data.bounds,
+                    g_transforms: render_data.transforms,
+                    g_radfoam_points: &radfoam_points,
+                    g_radfoam_attributes: &radfoam_attributes,
+                    g_radfoam_adjacency: &radfoam_adjacency,
+                    g_radfoam_adjacency_offsets: &radfoam_adjacency_offsets,
+                    g_gaussian_tlas: gaussian_tlas,
+                    g_gaussian_data: gaussian_buf,
+                    g_out: self.hdr_view,
+                },
+            );
+
+            let gx = (window_size.width + 7) / 8;
+            let gy = (window_size.height + 7) / 8;
+            pen.dispatch([gx, gy, 1]);
+        }
+
+        // Blit HDR -> swapchain
+        if let mut pass = encoder.render(
+            "scene-present",
+            gpu::RenderTargetSet {
+                colors: &[gpu::RenderTarget {
+                    view: frame_view,
+                    init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
+                    finish_op: gpu::FinishOp::Store,
+                }],
+                depth_stencil: None,
+            },
+        ) {
+            let mut pen = pass.with(&self.blit_pipeline);
+            pen.bind(
+                0,
+                &SceneBlitData {
+                    g_src: self.hdr_view,
+                    g_sampler: self.sampler,
+                },
+            );
+            pen.draw(0, 3, 0, 1);
+        }
+    }
+
+    /// Cleans up GPU resources.
+    pub fn destroy(mut self, context: &gpu::Context) {
+        self.scene.destroy(context);
+        context.destroy_sampler(self.sampler);
+        context.destroy_texture_view(self.hdr_view);
+        context.destroy_texture(self.hdr_tex);
+        context.destroy_compute_pipeline(&mut self.traverse_pipeline);
+        context.destroy_render_pipeline(&mut self.blit_pipeline);
+    }
+}

@@ -44,9 +44,21 @@ use radfoam_cpu_ref as cpu;
 const RADFOAM_WGSL: &str = include_str!("../../blade-volume-view/shaders/radfoam.wgsl");
 const COMMON_WGSL: &str = include_str!("../../blade-volume-view/shaders/common.wgsl");
 const SH_EVAL_WGSL: &str = include_str!("../../blade-volume-view/shaders/sh_eval.wgsl");
+const RADFOAM_TRACE_WGSL: &str = include_str!("../../blade-volume-view/shaders/radfoam_trace.wgsl");
+const GAUSSIAN_TRACE_WGSL: &str =
+    include_str!("../../blade-volume-view/shaders/gaussian_trace.wgsl");
 
 /// Preprocesses WGSL shader source, expanding `// #include "filename.wgsl"` directives.
+/// Includes are processed recursively to support nested includes.
 fn preprocess_shader(source: &str) -> String {
+    preprocess_shader_recursive(source, 0)
+}
+
+fn preprocess_shader_recursive(source: &str, depth: usize) -> String {
+    if depth > 10 {
+        panic!("Shader include depth exceeded 10 - possible circular include");
+    }
+
     let mut result = String::with_capacity(source.len() * 2);
 
     for line in source.lines() {
@@ -57,12 +69,15 @@ fn preprocess_shader(source: &str) -> String {
                 let include_content = match filename {
                     "common.wgsl" => COMMON_WGSL,
                     "sh_eval.wgsl" => SH_EVAL_WGSL,
+                    "radfoam_trace.wgsl" => RADFOAM_TRACE_WGSL,
+                    "gaussian_trace.wgsl" => GAUSSIAN_TRACE_WGSL,
                     _ => panic!("Unknown shader include: {}", filename),
                 };
                 result.push_str("// === Begin included: ");
                 result.push_str(filename);
                 result.push_str(" ===\n");
-                result.push_str(include_content);
+                // Recursively process includes within the included file
+                result.push_str(&preprocess_shader_recursive(include_content, depth + 1));
                 result.push_str("\n// === End included: ");
                 result.push_str(filename);
                 result.push_str(" ===\n");
