@@ -44,14 +44,26 @@ const EULER: glam::EulerRot = glam::EulerRot::ZYX;
 mod shader_includes {
     pub const COMMON: &str = include_str!("../../shaders/common.wgsl");
     pub const SH_EVAL: &str = include_str!("../../shaders/sh_eval.wgsl");
+    pub const RADFOAM_TRACE: &str = include_str!("../../shaders/radfoam_trace.wgsl");
+    pub const GAUSSIAN_TRACE: &str = include_str!("../../shaders/gaussian_trace.wgsl");
 }
 
 /// Preprocesses WGSL shader source, expanding `// #include "filename.wgsl"` directives.
+/// Includes are processed recursively to support nested includes.
 ///
 /// Supported includes:
 /// - `// #include "common.wgsl"`
 /// - `// #include "sh_eval.wgsl"`
+/// - `// #include "radfoam_trace.wgsl"`
 fn preprocess_shader(source: &str) -> String {
+    preprocess_shader_recursive(source, 0)
+}
+
+fn preprocess_shader_recursive(source: &str, depth: usize) -> String {
+    if depth > 10 {
+        panic!("Shader include depth exceeded 10 - possible circular include");
+    }
+
     let mut result = String::with_capacity(source.len() * 2);
 
     for line in source.lines() {
@@ -62,12 +74,15 @@ fn preprocess_shader(source: &str) -> String {
                 let include_content = match filename {
                     "common.wgsl" => shader_includes::COMMON,
                     "sh_eval.wgsl" => shader_includes::SH_EVAL,
+                    "radfoam_trace.wgsl" => shader_includes::RADFOAM_TRACE,
+                    "gaussian_trace.wgsl" => shader_includes::GAUSSIAN_TRACE,
                     _ => panic!("Unknown shader include: {}", filename),
                 };
                 result.push_str("// === Begin included: ");
                 result.push_str(filename);
                 result.push_str(" ===\n");
-                result.push_str(include_content);
+                // Recursively process includes within the included file
+                result.push_str(&preprocess_shader_recursive(include_content, depth + 1));
                 result.push_str("\n// === End included: ");
                 result.push_str(filename);
                 result.push_str(" ===\n");
@@ -160,7 +175,7 @@ struct GaussianParams {
 struct GaussianDrawData {
     g_camera: vol::CameraParams,
     g_params: GaussianParams,
-    g_acc_struct: gpu::AccelerationStructure,
+    g_gaussian_tlas: gpu::AccelerationStructure,
     g_data: gpu::BufferPiece,
 }
 
@@ -260,7 +275,7 @@ impl GaussianBackend {
                 &GaussianDrawData {
                     g_camera: camera_params,
                     g_params: self.params,
-                    g_acc_struct: self.point_cloud.tlas,
+                    g_gaussian_tlas: self.point_cloud.tlas,
                     g_data: self.point_cloud.gauss_buf.into(),
                 },
             );

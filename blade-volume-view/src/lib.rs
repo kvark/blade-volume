@@ -2,6 +2,7 @@
 //!
 //! This crate provides interactive viewing capabilities for volumetric data:
 //! - `ControlledCamera` for keyboard/mouse-controlled 3D navigation
+//! - `SceneRenderer` for unified multi-object scene rendering
 //! - Rendering backends for different volumetric representations
 //!
 //! This crate depends on `winit` for input handling, keeping the core
@@ -10,8 +11,10 @@
 #![allow(irrefutable_let_patterns)]
 
 mod camera;
+mod scene_renderer;
 
 pub use camera::ControlledCamera;
+pub use scene_renderer::{SceneDebugMode, SceneParams, SceneRenderer};
 
 // Re-export commonly used types from dependencies for convenience
 pub use blade_volume::CameraParams;

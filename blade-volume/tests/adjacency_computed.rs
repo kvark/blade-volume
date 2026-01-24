@@ -255,7 +255,7 @@ fn config_max_neighbors_is_respected() {
 
     let mut model = make_model_without_adjacency(points, 0);
 
-    let config = vol::adjacency::AdjacencyConfig {
+    let config = vol::AdjacencyConfig {
         max_neighbors: 8,
         validate: true,
     };

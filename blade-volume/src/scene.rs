@@ -1,26 +1,97 @@
-//! Scene API for managing multiple objects with per-frame transforms.
+//! Software TLAS Scene API for unified multi-object rendering.
 //!
-//! This module provides a unified scene abstraction that supports:
-//! - Multiple objects (Gaussian splats, RadFoam volumes, meshes)
-//! - Per-object transforms (position, rotation, scale)
-//! - Automatic TLAS rebuild when transforms change
+//! This module provides a scene abstraction where all object types (Gaussian splats,
+//! RadFoam volumes, SDFs, meshes) coexist in a single software-traversed hierarchy.
+//!
+//! # Architecture
+//!
+//! Unlike hardware RT TLAS/BLAS, this uses a **software TLAS** traversed in compute:
+//!
+//! 1. **Scene bounds buffer**: Array of `ObjectBounds` (bounding spheres) on GPU
+//! 2. **Unified traversal**: Compute shader traces rays through all object bounds
+//! 3. **Backend dispatch**: When ray hits bounds, dispatch to object-specific renderer:
+//!    - Gaussian: hardware RT query into per-object BLAS
+//!    - RadFoam: Voronoi traversal via compute
+//!    - SDF: sphere tracing (future)
+//!    - Mesh: hardware RT query (future)
 //!
 //! # Example
 //! ```ignore
-//! let mut scene = Scene::new(&context);
-//! let object = scene.create_gaussian_object(&model, &params, &context, &mut encoder);
+//! let mut scene = Scene::new();
 //!
-//! // Each frame:
-//! scene.set_transform(object, Transform {
-//!     position: glam::Vec3::new(1.0, 0.0, 0.0),
-//!     rotation: glam::Quat::IDENTITY,
-//!     scale: glam::Vec3::ONE,
-//! });
-//! scene.update(&context, &mut encoder);
+//! // Add objects of different types
+//! let gaussian_obj = scene.add_gaussian(&model, min_opacity, &ctx, &mut enc);
+//! let radfoam_obj = scene.add_radfoam(&model, &ctx, &mut enc);
+//!
+//! // Set transforms
+//! scene.set_transform(gaussian_obj, Transform::from_position(pos1));
+//! scene.set_transform(radfoam_obj, Transform::from_position(pos2));
+//!
+//! // Prepare uploads bounds buffer
+//! scene.prepare(&ctx, &mut enc);
+//!
+//! // Render - unified compute traversal handles all object types
+//! scene.render(&mut enc, output_view, camera);
 //! ```
 
 use blade_graphics as gpu;
-use std::{mem, slice};
+use std::mem;
+
+// ============================================================================
+// Object Types
+// ============================================================================
+
+/// Object type identifiers for GPU-side dispatch.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectType {
+    /// Gaussian splatting with hardware RT.
+    Gaussian = 0,
+    /// RadFoam volume with Voronoi traversal.
+    RadFoam = 1,
+    /// Signed distance field with sphere tracing.
+    Sdf = 2,
+    /// Triangle mesh with hardware RT.
+    Mesh = 3,
+}
+
+// ============================================================================
+// GPU Structures (must match shader)
+// ============================================================================
+
+/// Bounding sphere for software TLAS traversal.
+///
+/// Each object in the scene has one of these in the bounds buffer.
+/// The compute shader tests ray-sphere intersection, then dispatches
+/// to the appropriate backend based on `object_type`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ObjectBounds {
+    /// World-space center of bounding sphere.
+    pub center: [f32; 3],
+    /// Bounding sphere radius.
+    pub radius: f32,
+    /// Object type (see ObjectType enum).
+    pub object_type: u32,
+    /// Index into the type-specific data array.
+    pub data_index: u32,
+    /// Padding for alignment.
+    pub pad: [u32; 2],
+}
+
+/// Per-object transform stored separately for efficient updates.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuTransform {
+    /// Object-to-world matrix (column-major 4x4).
+    pub object_to_world: [[f32; 4]; 4],
+    /// World-to-object matrix (column-major 4x4).
+    pub world_to_object: [[f32; 4]; 4],
+}
+
+// ============================================================================
+// Object Handle and Transform
+// ============================================================================
 
 /// Opaque handle to a scene object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -45,12 +116,10 @@ impl Default for Transform {
 }
 
 impl Transform {
-    /// Creates an identity transform.
     pub fn identity() -> Self {
         Self::default()
     }
 
-    /// Creates a transform with only position.
     pub fn from_position(position: glam::Vec3) -> Self {
         Self {
             position,
@@ -58,7 +127,6 @@ impl Transform {
         }
     }
 
-    /// Creates a transform with position and rotation.
     pub fn from_position_rotation(position: glam::Vec3, rotation: glam::Quat) -> Self {
         Self {
             position,
@@ -67,104 +135,72 @@ impl Transform {
         }
     }
 
-    /// Converts to a 4x4 transformation matrix.
     pub fn to_matrix(&self) -> glam::Mat4 {
         glam::Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
     }
 
-    /// Converts to a 3x4 affine transformation matrix (column-major).
-    pub fn to_affine(&self) -> mint::ColumnMatrix3x4<f32> {
-        let m = glam::Mat3::from_quat(self.rotation) * glam::Mat3::from_diagonal(self.scale);
-        mint::ColumnMatrix3x4 {
-            x: m.x_axis.into(),
-            y: m.y_axis.into(),
-            z: m.z_axis.into(),
-            w: self.position.into(),
+    /// Converts to GPU transform struct with both forward and inverse matrices.
+    pub fn to_gpu_transform(&self) -> GpuTransform {
+        let m = self.to_matrix();
+        let inv = m.inverse();
+        GpuTransform {
+            object_to_world: m.to_cols_array_2d(),
+            world_to_object: inv.to_cols_array_2d(),
         }
     }
 }
 
-/// Backend-specific data for different object types.
-pub enum ObjectData {
-    /// Gaussian splatting object with hardware ray tracing.
-    Gaussian(GaussianObjectData),
-    /// RadFoam volume with compute-based Voronoi traversal.
-    RadFoam(RadFoamObjectData),
-    /// Triangle mesh with hardware ray tracing (future).
-    Mesh(MeshObjectData),
-}
+// ============================================================================
+// Scene Object
+// ============================================================================
 
-/// Data for a Gaussian splatting object.
-pub struct GaussianObjectData {
-    /// Icosahedron mesh buffer (shared BLAS geometry).
-    pub mesh_buf: gpu::Buffer,
-    /// Per-instance data buffer for TLAS instances.
-    pub instance_buf: gpu::Buffer,
-    /// Gaussian parameters buffer.
-    pub gauss_buf: gpu::Buffer,
-    /// Bottom-level acceleration structure.
-    pub blas: gpu::AccelerationStructure,
-    /// Number of Gaussian splats.
-    pub instance_count: u32,
-    /// Minimum opacity for instance scaling.
-    pub min_opacity: f32,
-    /// Original model data for transform updates.
-    pub points: Vec<glam::Vec4>,
-    pub rotations: Vec<glam::Quat>,
-    pub scales: Vec<glam::Vec3>,
-}
-
-/// Data for a RadFoam volume object.
-pub struct RadFoamObjectData {
-    /// Point positions buffer.
-    pub points_buf: gpu::Buffer,
-    /// Packed attributes buffer.
-    pub attributes_buf: gpu::Buffer,
-    /// Adjacency indices buffer.
-    pub adjacency_buf: gpu::Buffer,
-    /// Adjacency offsets buffer.
-    pub adjacency_offsets_buf: gpu::Buffer,
-    /// SH degree.
-    pub sh_degree: usize,
-    /// Attribute dimension.
-    pub attr_dim: usize,
-    /// Number of points.
-    pub num_points: usize,
-}
-
-/// Data for a triangle mesh object (future).
-pub struct MeshObjectData {
-    /// Vertex buffer.
-    pub vertex_buf: gpu::Buffer,
-    /// Index buffer.
-    pub index_buf: gpu::Buffer,
-    /// Bottom-level acceleration structure.
-    pub blas: gpu::AccelerationStructure,
-    /// Number of triangles.
-    pub triangle_count: u32,
-}
-
-/// A scene object with transform.
+/// Internal scene object representation.
 struct SceneObject {
-    data: ObjectData,
+    object_type: ObjectType,
+    /// Index into the type-specific data vector.
+    data_index: u32,
+    /// Current transform.
     transform: Transform,
-    transform_dirty: bool,
+    /// Local-space bounding sphere center (usually origin for point clouds).
+    local_center: glam::Vec3,
+    /// Local-space bounding sphere radius.
+    local_radius: f32,
+    /// Whether bounds need recomputation.
+    dirty: bool,
 }
 
-/// Scene manager for multiple objects with transforms.
+// ============================================================================
+// Scene
+// ============================================================================
+
+/// Scene manager with software TLAS for unified multi-object rendering.
 ///
-/// Supports both hardware ray-traced objects (Gaussian, Mesh) and
-/// compute-based objects (RadFoam).
+/// The scene maintains:
+/// - A list of objects with bounding spheres
+/// - Per-type data arrays (Gaussian clouds, RadFoam clouds, etc.)
+/// - GPU buffers for bounds and transforms
+///
+/// During rendering, a compute shader traverses all object bounds and
+/// dispatches to the appropriate backend for each hit.
+///
+/// RadFoam objects use binding arrays, allowing multiple objects in the scene.
+/// Gaussian objects currently use a single hardware TLAS per object.
 pub struct Scene {
+    /// All objects in the scene.
     objects: Vec<SceneObject>,
-    /// Top-level acceleration structure for RT objects.
-    tlas: Option<gpu::AccelerationStructure>,
-    /// Whether TLAS needs rebuild.
-    tlas_dirty: bool,
-    /// Scratch buffer for AS builds.
-    scratch_buf: Option<gpu::Buffer>,
-    /// Instance buffer for TLAS.
-    tlas_instance_buf: Option<gpu::Buffer>,
+
+    /// Gaussian GPU clouds (indexed by SceneObject::data_index for Gaussian type).
+    gaussian_clouds: Vec<crate::GaussianGpuCloud>,
+    /// RadFoam GPU clouds (indexed by SceneObject::data_index for RadFoam type).
+    radfoam_clouds: Vec<crate::RadFoamGpuCloud>,
+
+    /// GPU buffer containing ObjectBounds for all objects.
+    bounds_buffer: Option<gpu::Buffer>,
+    /// GPU buffer containing GpuTransform for all objects.
+    transforms_buffer: Option<gpu::Buffer>,
+
+    /// Whether the scene needs to rebuild GPU buffers.
+    dirty: bool,
 }
 
 impl Scene {
@@ -172,10 +208,11 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             objects: Vec::new(),
-            tlas: None,
-            tlas_dirty: false,
-            scratch_buf: None,
-            tlas_instance_buf: None,
+            gaussian_clouds: Vec::new(),
+            radfoam_clouds: Vec::new(),
+            bounds_buffer: None,
+            transforms_buffer: None,
+            dirty: false,
         }
     }
 
@@ -184,545 +221,232 @@ impl Scene {
         self.objects.len()
     }
 
-    /// Creates a Gaussian splatting object from a point cloud model.
-    ///
-    /// Requires the model to have `transforms` (rotation + scale).
-    pub fn create_gaussian_object(
+    /// Computes bounding sphere for a point cloud model.
+    fn compute_bounding_sphere(points: &[glam::Vec4]) -> (glam::Vec3, f32) {
+        if points.is_empty() {
+            return (glam::Vec3::ZERO, 0.0);
+        }
+
+        // Compute centroid
+        let mut center = glam::Vec3::ZERO;
+        for p in points {
+            center += glam::Vec3::new(p.x, p.y, p.z);
+        }
+        center /= points.len() as f32;
+
+        // Compute max distance from centroid
+        let mut max_dist_sq = 0.0f32;
+        for p in points {
+            let d = glam::Vec3::new(p.x, p.y, p.z) - center;
+            max_dist_sq = max_dist_sq.max(d.length_squared());
+        }
+
+        (center, max_dist_sq.sqrt())
+    }
+
+    /// Adds a Gaussian splatting object to the scene.
+    pub fn add_gaussian(
         &mut self,
         model: &crate::PointCloudModel,
         min_opacity: f32,
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> ObjectHandle {
-        let transforms = model
-            .transforms
-            .as_ref()
-            .expect("Gaussian object requires transforms");
+        let params = crate::InitParameters { min_opacity };
+        let cloud = crate::GaussianGpuCloud::new(model, &params, context, encoder);
 
-        let count = model.len();
+        let (local_center, local_radius) = Self::compute_bounding_sphere(&model.points);
 
-        // Create Gaussian data buffer
-        let gauss_total_size = (count * mem::size_of::<crate::GaussianGpu>()) as u64;
-        let gauss_buf = context.create_buffer(gpu::BufferDesc {
-            name: "scene-gauss-blobs",
-            size: gauss_total_size,
-            memory: gpu::Memory::Device,
-        });
-        let gauss_scratch = context.create_buffer(gpu::BufferDesc {
-            name: "scene-gauss-upload",
-            size: gauss_total_size,
-            memory: gpu::Memory::Upload,
-        });
-
-        {
-            let gaussians_gpu = unsafe {
-                slice::from_raw_parts_mut(gauss_scratch.data() as *mut crate::GaussianGpu, count)
-            };
-            for (i, gg) in gaussians_gpu.iter_mut().enumerate() {
-                let point = model.points[i];
-                gg.mean = [point.x, point.y, point.z];
-                gg.rotation = transforms.rotations[i].into();
-                gg.scale = transforms.scales[i].into();
-                gg.opacity = point.w;
-                let shc = model.get_sh_coefficients(i);
-                for (h, c) in gg.harmonics.iter_mut().zip(shc.iter()) {
-                    *h = (*c, 0)
-                }
-            }
-        }
-
-        // Create icosahedron mesh for BLAS
-        let inner_radius = 1.0;
-        let geometry = crate::Icosahedron::new(inner_radius);
-        let vertex_data_size = (geometry.vertices.len() * mem::size_of::<[f32; 3]>()) as u64;
-        let index_data_size = (geometry.triangles.len() * mem::size_of::<[u16; 3]>()) as u64;
-        let mesh_buf = context.create_buffer(gpu::BufferDesc {
-            name: "scene-gauss-mesh",
-            size: vertex_data_size + index_data_size,
-            memory: gpu::Memory::Device,
-        });
-
-        let meshes = [gpu::AccelerationStructureMesh {
-            vertex_data: mesh_buf.at(0),
-            vertex_format: gpu::VertexFormat::F32Vec3,
-            vertex_stride: mem::size_of::<[f32; 3]>() as u32,
-            vertex_count: geometry.vertices.len() as u32,
-            index_data: mesh_buf.at(vertex_data_size),
-            index_type: Some(gpu::IndexType::U16),
-            triangle_count: geometry.triangles.len() as u32,
-            transform_data: gpu::Buffer::default().at(0),
-            is_opaque: false,
-        }];
-
-        let blas_sizes = context.get_bottom_level_acceleration_structure_sizes(&meshes);
-        let blas = context.create_acceleration_structure(gpu::AccelerationStructureDesc {
-            name: "scene-gauss-blas",
-            ty: gpu::AccelerationStructureType::BottomLevel,
-            size: blas_sizes.data,
-        });
-
-        // Create instance buffer (will be rebuilt when TLAS is updated)
-        let instance_buf = self.create_gaussian_instance_buffer(
-            context,
-            &model.points,
-            &transforms.rotations,
-            &transforms.scales,
-            min_opacity,
-            blas,
-        );
-
-        // Create scratch buffer for BLAS build
-        let scratch_buf = context.create_buffer(gpu::BufferDesc {
-            name: "scene-gauss-scratch",
-            size: blas_sizes.scratch,
-            memory: gpu::Memory::Device,
-        });
-
-        // Upload mesh data
-        let mesh_stage = context.create_buffer(gpu::BufferDesc {
-            name: "scene-gauss-mesh-stage",
-            size: vertex_data_size + index_data_size,
-            memory: gpu::Memory::Upload,
-        });
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                geometry.vertices.as_ptr(),
-                mesh_stage.data() as *mut [f32; 3],
-                geometry.vertices.len(),
-            );
-            std::ptr::copy_nonoverlapping(
-                geometry.triangles.as_ptr(),
-                mesh_stage.data().add(vertex_data_size as usize) as *mut [u16; 3],
-                geometry.triangles.len(),
-            );
-        }
-
-        // Encode uploads and BLAS build
-        encoder.start();
-        if let mut pass = encoder.transfer("scene-gauss-init") {
-            pass.copy_buffer_to_buffer(
-                mesh_stage.at(0),
-                mesh_buf.at(0),
-                vertex_data_size + index_data_size,
-            );
-            pass.copy_buffer_to_buffer(gauss_scratch.at(0), gauss_buf.at(0), gauss_total_size);
-        }
-        if let mut pass = encoder.acceleration_structure("scene-gauss-blas") {
-            pass.build_bottom_level(blas, &meshes, scratch_buf.at(0));
-        }
-
-        let sync_point = context.submit(encoder);
-        context.wait_for(&sync_point, !0);
-
-        context.destroy_buffer(gauss_scratch);
-        context.destroy_buffer(scratch_buf);
-        context.destroy_buffer(mesh_stage);
+        let data_index = self.gaussian_clouds.len() as u32;
+        self.gaussian_clouds.push(cloud);
 
         let handle = ObjectHandle(self.objects.len() as u32);
         self.objects.push(SceneObject {
-            data: ObjectData::Gaussian(GaussianObjectData {
-                mesh_buf,
-                instance_buf,
-                gauss_buf,
-                blas,
-                instance_count: count as u32,
-                min_opacity,
-                points: model.points.clone(),
-                rotations: transforms.rotations.clone(),
-                scales: transforms.scales.clone(),
-            }),
+            object_type: ObjectType::Gaussian,
+            data_index,
             transform: Transform::default(),
-            transform_dirty: true,
+            local_center,
+            local_radius,
+            dirty: true,
         });
 
-        self.tlas_dirty = true;
+        self.dirty = true;
         handle
     }
 
-    /// Creates a RadFoam volume object from a point cloud model.
-    ///
-    /// Requires the model to have `adjacency` data.
-    pub fn create_radfoam_object(
+    /// Adds a RadFoam volume object to the scene.
+    pub fn add_radfoam(
         &mut self,
         model: &crate::PointCloudModel,
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> ObjectHandle {
-        let adjacency = model
-            .adjacency
-            .as_ref()
-            .expect("RadFoam object requires adjacency");
+        let cloud = crate::RadFoamGpuCloud::new(model, context, encoder);
+        let (local_center, local_radius) = Self::compute_bounding_sphere(&model.points);
 
-        let num_points = model.len();
-        let num_adjacency = adjacency.neighbors.len();
-        let sh_component_count = model.sh_component_count();
-        let attr_dim = 1 + 3 * sh_component_count;
-
-        // Sizes
-        let points_size = (num_points * mem::size_of::<[f32; 4]>()) as u64;
-        let attrs_size = (num_points * attr_dim * mem::size_of::<f32>()) as u64;
-        let adj_size = (num_adjacency * mem::size_of::<u32>()) as u64;
-        let adj_off_size = (adjacency.offsets.len() * mem::size_of::<u32>()) as u64;
-
-        // Device buffers
-        let points_buf = context.create_buffer(gpu::BufferDesc {
-            name: "scene-radfoam-points",
-            size: points_size,
-            memory: gpu::Memory::Device,
-        });
-        let attributes_buf = context.create_buffer(gpu::BufferDesc {
-            name: "scene-radfoam-attributes",
-            size: attrs_size,
-            memory: gpu::Memory::Device,
-        });
-        let adjacency_buf = context.create_buffer(gpu::BufferDesc {
-            name: "scene-radfoam-adjacency",
-            size: adj_size,
-            memory: gpu::Memory::Device,
-        });
-        let adjacency_offsets_buf = context.create_buffer(gpu::BufferDesc {
-            name: "scene-radfoam-adjacency-offsets",
-            size: adj_off_size,
-            memory: gpu::Memory::Device,
-        });
-
-        // Upload buffers
-        let points_stage = context.create_buffer(gpu::BufferDesc {
-            name: "scene-radfoam-points-upload",
-            size: points_size,
-            memory: gpu::Memory::Upload,
-        });
-        let attributes_stage = context.create_buffer(gpu::BufferDesc {
-            name: "scene-radfoam-attributes-upload",
-            size: attrs_size,
-            memory: gpu::Memory::Upload,
-        });
-        let adjacency_stage = context.create_buffer(gpu::BufferDesc {
-            name: "scene-radfoam-adjacency-upload",
-            size: adj_size,
-            memory: gpu::Memory::Upload,
-        });
-        let adjacency_offsets_stage = context.create_buffer(gpu::BufferDesc {
-            name: "scene-radfoam-adjacency-offsets-upload",
-            size: adj_off_size,
-            memory: gpu::Memory::Upload,
-        });
-
-        // Fill staging buffers
-        unsafe {
-            let dst_points =
-                slice::from_raw_parts_mut(points_stage.data() as *mut [f32; 4], num_points);
-            for (i, dst) in dst_points.iter_mut().enumerate() {
-                let p = model.points[i];
-                dst[0] = p.x;
-                dst[1] = p.y;
-                dst[2] = p.z;
-                dst[3] = 0.0;
-            }
-
-            let dst_attrs = slice::from_raw_parts_mut(
-                attributes_stage.data() as *mut f32,
-                num_points * attr_dim,
-            );
-            for i in 0..num_points {
-                let base = i * attr_dim;
-                let sh_base = i * sh_component_count * 3;
-                for j in 0..(sh_component_count * 3) {
-                    dst_attrs[base + j] = model.sh_coefficients[sh_base + j];
-                }
-                dst_attrs[base + sh_component_count * 3] = model.points[i].w;
-            }
-
-            if num_adjacency > 0 {
-                std::ptr::copy_nonoverlapping(
-                    adjacency.neighbors.as_ptr(),
-                    adjacency_stage.data() as *mut u32,
-                    num_adjacency,
-                );
-            }
-
-            std::ptr::copy_nonoverlapping(
-                adjacency.offsets.as_ptr(),
-                adjacency_offsets_stage.data() as *mut u32,
-                adjacency.offsets.len(),
-            );
-        }
-
-        // Encode transfers
-        encoder.start();
-        if let mut pass = encoder.transfer("scene-radfoam-init") {
-            if points_size > 0 {
-                pass.copy_buffer_to_buffer(points_stage.at(0), points_buf.at(0), points_size);
-            }
-            if attrs_size > 0 {
-                pass.copy_buffer_to_buffer(
-                    attributes_stage.at(0),
-                    attributes_buf.at(0),
-                    attrs_size,
-                );
-            }
-            if adj_size > 0 {
-                pass.copy_buffer_to_buffer(adjacency_stage.at(0), adjacency_buf.at(0), adj_size);
-            }
-            if adj_off_size > 0 {
-                pass.copy_buffer_to_buffer(
-                    adjacency_offsets_stage.at(0),
-                    adjacency_offsets_buf.at(0),
-                    adj_off_size,
-                );
-            }
-        }
-
-        let sync_point = context.submit(encoder);
-        context.wait_for(&sync_point, !0);
-
-        context.destroy_buffer(points_stage);
-        context.destroy_buffer(attributes_stage);
-        context.destroy_buffer(adjacency_stage);
-        context.destroy_buffer(adjacency_offsets_stage);
+        let data_index = self.radfoam_clouds.len() as u32;
+        self.radfoam_clouds.push(cloud);
 
         let handle = ObjectHandle(self.objects.len() as u32);
         self.objects.push(SceneObject {
-            data: ObjectData::RadFoam(RadFoamObjectData {
-                points_buf,
-                attributes_buf,
-                adjacency_buf,
-                adjacency_offsets_buf,
-                sh_degree: model.sh_degree,
-                attr_dim,
-                num_points,
-            }),
+            object_type: ObjectType::RadFoam,
+            data_index,
             transform: Transform::default(),
-            transform_dirty: false,
+            local_center,
+            local_radius,
+            dirty: true,
         });
 
+        self.dirty = true;
         handle
     }
 
     /// Sets the transform for an object.
     pub fn set_transform(&mut self, handle: ObjectHandle, transform: Transform) {
-        let obj = &mut self.objects[handle.0 as usize];
-        obj.transform = transform;
-        obj.transform_dirty = true;
-
-        // Only Gaussian objects affect TLAS
-        if matches!(obj.data, ObjectData::Gaussian(_)) {
-            self.tlas_dirty = true;
+        if let Some(obj) = self.objects.get_mut(handle.0 as usize) {
+            obj.transform = transform;
+            obj.dirty = true;
+            self.dirty = true;
         }
     }
 
     /// Gets the transform for an object.
-    pub fn get_transform(&self, handle: ObjectHandle) -> Transform {
-        self.objects[handle.0 as usize].transform
+    pub fn get_transform(&self, handle: ObjectHandle) -> Option<Transform> {
+        self.objects.get(handle.0 as usize).map(|obj| obj.transform)
     }
 
-    /// Returns the object data for the given handle.
-    pub fn get_object_data(&self, handle: ObjectHandle) -> &ObjectData {
-        &self.objects[handle.0 as usize].data
+    /// Returns the object type for a handle.
+    pub fn get_object_type(&self, handle: ObjectHandle) -> Option<ObjectType> {
+        self.objects
+            .get(handle.0 as usize)
+            .map(|obj| obj.object_type)
     }
 
-    /// Returns the TLAS for hardware ray tracing, if available.
-    pub fn tlas(&self) -> Option<gpu::AccelerationStructure> {
-        self.tlas
-    }
-
-    /// Updates the scene, rebuilding TLAS if needed.
+    /// Prepares the scene for rendering.
     ///
-    /// Call this after changing transforms and before rendering.
-    pub fn update(&mut self, context: &gpu::Context, encoder: &mut gpu::CommandEncoder) {
-        if !self.tlas_dirty {
+    /// This uploads the bounds, transforms, and packed RadFoam buffers to GPU.
+    pub fn prepare(&mut self, context: &gpu::Context, _encoder: &mut gpu::CommandEncoder) {
+        if !self.dirty || self.objects.is_empty() {
             return;
         }
 
-        // Collect all Gaussian objects with their transforms
-        let mut rt_objects: Vec<(usize, &GaussianObjectData, Transform)> = Vec::new();
-        for (i, obj) in self.objects.iter().enumerate() {
-            if let ObjectData::Gaussian(ref data) = obj.data {
-                rt_objects.push((i, data, obj.transform));
-            }
+        let num_objects = self.objects.len();
+
+        // Build bounds and transforms data
+        let mut bounds_data = Vec::with_capacity(num_objects);
+        let mut transforms_data = Vec::with_capacity(num_objects);
+
+        for obj in &self.objects {
+            // Transform local bounds to world space
+            let world_center = obj.transform.to_matrix().transform_point3(obj.local_center);
+            // Scale radius by max scale component
+            let max_scale = obj.transform.scale.max_element();
+            let world_radius = obj.local_radius * max_scale;
+
+            bounds_data.push(ObjectBounds {
+                center: world_center.into(),
+                radius: world_radius,
+                object_type: obj.object_type as u32,
+                data_index: obj.data_index,
+                pad: [0, 0],
+            });
+
+            transforms_data.push(obj.transform.to_gpu_transform());
         }
 
-        if rt_objects.is_empty() {
-            // No RT objects, no TLAS needed
-            if let Some(tlas) = self.tlas.take() {
-                context.destroy_acceleration_structure(tlas);
-            }
-            if let Some(buf) = self.tlas_instance_buf.take() {
-                context.destroy_buffer(buf);
-            }
-            if let Some(buf) = self.scratch_buf.take() {
-                context.destroy_buffer(buf);
-            }
-            self.tlas_dirty = false;
-            return;
+        // Destroy old buffers
+        if let Some(buf) = self.bounds_buffer.take() {
+            context.destroy_buffer(buf);
+        }
+        if let Some(buf) = self.transforms_buffer.take() {
+            context.destroy_buffer(buf);
         }
 
-        // Calculate total instance count
-        let total_instances: u32 = rt_objects.iter().map(|(_, d, _)| d.instance_count).sum();
-
-        // Build instance data for TLAS
-        let mut instances = Vec::with_capacity(total_instances as usize);
-        let mut blas_list: Vec<gpu::AccelerationStructure> = Vec::new();
-
-        for (_, data, obj_transform) in &rt_objects {
-            let blas_idx = blas_list.len();
-            blas_list.push(data.blas);
-
-            // Build instances for this object
-            for i in 0..data.instance_count as usize {
-                let point = data.points[i];
-                let rotation = data.rotations[i];
-                let scale = data.scales[i];
-                let opacity = point.w;
-                let local_mean = glam::Vec3::new(point.x, point.y, point.z);
-
-                // Apply object transform to local position
-                let world_mean = obj_transform.rotation * (obj_transform.scale * local_mean)
-                    + obj_transform.position;
-                let world_rotation = obj_transform.rotation * rotation;
-                let world_scale = obj_transform.scale * scale;
-
-                let extra_scale = (2.0 * (opacity / data.min_opacity).ln().max(0.0)).sqrt();
-                let m = glam::Mat3::from_quat(world_rotation)
-                    * glam::Mat3::from_diagonal(extra_scale * world_scale);
-
-                instances.push(gpu::AccelerationStructureInstance {
-                    acceleration_structure_index: blas_idx as u32,
-                    transform: mint::ColumnMatrix3x4 {
-                        x: m.x_axis.into(),
-                        y: m.y_axis.into(),
-                        z: m.z_axis.into(),
-                        w: world_mean.into(),
-                    }
-                    .into(),
-                    mask: 0xFF,
-                    custom_index: 0,
-                });
-            }
-        }
-
-        // Create/update instance buffer
-        if let Some(old_buf) = self.tlas_instance_buf.take() {
-            context.destroy_buffer(old_buf);
-        }
-        let instance_buf =
-            context.create_acceleration_structure_instance_buffer(&instances, &blas_list);
-        self.tlas_instance_buf = Some(instance_buf);
-
-        // Create/update TLAS
-        let tlas_sizes = context.get_top_level_acceleration_structure_sizes(total_instances);
-
-        if let Some(old_tlas) = self.tlas.take() {
-            context.destroy_acceleration_structure(old_tlas);
-        }
-        let tlas = context.create_acceleration_structure(gpu::AccelerationStructureDesc {
-            name: "scene-tlas",
-            ty: gpu::AccelerationStructureType::TopLevel,
-            size: tlas_sizes.data,
+        // Create and upload bounds buffer
+        let bounds_size = (num_objects * mem::size_of::<ObjectBounds>()) as u64;
+        let bounds_buffer = context.create_buffer(gpu::BufferDesc {
+            name: "scene-bounds",
+            size: bounds_size,
+            memory: gpu::Memory::Shared, // CPU-writable for easy updates
         });
-        self.tlas = Some(tlas);
-
-        // Create/update scratch buffer
-        if let Some(old_scratch) = self.scratch_buf.take() {
-            context.destroy_buffer(old_scratch);
-        }
-        let scratch_buf = context.create_buffer(gpu::BufferDesc {
-            name: "scene-tlas-scratch",
-            size: tlas_sizes.scratch,
-            memory: gpu::Memory::Device,
-        });
-        self.scratch_buf = Some(scratch_buf);
-
-        // Build TLAS
-        encoder.start();
-        if let mut pass = encoder.acceleration_structure("scene-tlas-build") {
-            pass.build_top_level(
-                tlas,
-                &blas_list,
-                total_instances,
-                instance_buf.at(0),
-                scratch_buf.at(0),
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bounds_data.as_ptr(),
+                bounds_buffer.data() as *mut ObjectBounds,
+                num_objects,
             );
         }
-        let sync_point = context.submit(encoder);
-        context.wait_for(&sync_point, !0);
+        self.bounds_buffer = Some(bounds_buffer);
 
-        self.tlas_dirty = false;
+        // Create and upload transforms buffer
+        let transforms_size = (num_objects * mem::size_of::<GpuTransform>()) as u64;
+        let transforms_buffer = context.create_buffer(gpu::BufferDesc {
+            name: "scene-transforms",
+            size: transforms_size,
+            memory: gpu::Memory::Shared,
+        });
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                transforms_data.as_ptr(),
+                transforms_buffer.data() as *mut GpuTransform,
+                num_objects,
+            );
+        }
+        self.transforms_buffer = Some(transforms_buffer);
+
+        self.dirty = false;
     }
 
-    /// Cleans up GPU resources.
+    /// Returns the scene render data for binding to shaders.
+    pub fn render_data(&self) -> Option<SceneRenderData<'_>> {
+        Some(SceneRenderData {
+            bounds: self.bounds_buffer?.into(),
+            transforms: self.transforms_buffer?.into(),
+            object_count: self.objects.len() as u32,
+            gaussian_clouds: &self.gaussian_clouds,
+            radfoam_clouds: &self.radfoam_clouds,
+        })
+    }
+
+    /// Returns the Gaussian cloud for a specific object.
+    pub fn get_gaussian_cloud(&self, handle: ObjectHandle) -> Option<&crate::GaussianGpuCloud> {
+        let obj = self.objects.get(handle.0 as usize)?;
+        if obj.object_type != ObjectType::Gaussian {
+            return None;
+        }
+        self.gaussian_clouds.get(obj.data_index as usize)
+    }
+
+    /// Returns the RadFoam cloud for a specific object.
+    pub fn get_radfoam_cloud(&self, handle: ObjectHandle) -> Option<&crate::RadFoamGpuCloud> {
+        let obj = self.objects.get(handle.0 as usize)?;
+        if obj.object_type != ObjectType::RadFoam {
+            return None;
+        }
+        self.radfoam_clouds.get(obj.data_index as usize)
+    }
+
+    /// Cleans up all GPU resources.
     pub fn destroy(&mut self, context: &gpu::Context) {
-        for obj in self.objects.drain(..) {
-            match obj.data {
-                ObjectData::Gaussian(data) => {
-                    context.destroy_buffer(data.mesh_buf);
-                    context.destroy_buffer(data.instance_buf);
-                    context.destroy_buffer(data.gauss_buf);
-                    context.destroy_acceleration_structure(data.blas);
-                }
-                ObjectData::RadFoam(data) => {
-                    context.destroy_buffer(data.points_buf);
-                    context.destroy_buffer(data.attributes_buf);
-                    context.destroy_buffer(data.adjacency_buf);
-                    context.destroy_buffer(data.adjacency_offsets_buf);
-                }
-                ObjectData::Mesh(data) => {
-                    context.destroy_buffer(data.vertex_buf);
-                    context.destroy_buffer(data.index_buf);
-                    context.destroy_acceleration_structure(data.blas);
-                }
-            }
+        // Destroy per-object resources
+        for cloud in &mut self.gaussian_clouds {
+            cloud.deinit(context);
         }
+        self.gaussian_clouds.clear();
+        for cloud in &mut self.radfoam_clouds {
+            cloud.deinit(context);
+        }
+        self.radfoam_clouds.clear();
 
-        if let Some(tlas) = self.tlas.take() {
-            context.destroy_acceleration_structure(tlas);
-        }
-        if let Some(buf) = self.tlas_instance_buf.take() {
+        // Destroy scene buffers
+        if let Some(buf) = self.bounds_buffer.take() {
             context.destroy_buffer(buf);
         }
-        if let Some(buf) = self.scratch_buf.take() {
+        if let Some(buf) = self.transforms_buffer.take() {
             context.destroy_buffer(buf);
         }
-    }
 
-    /// Helper to create Gaussian instance buffer.
-    fn create_gaussian_instance_buffer(
-        &self,
-        context: &gpu::Context,
-        points: &[glam::Vec4],
-        rotations: &[glam::Quat],
-        scales: &[glam::Vec3],
-        min_opacity: f32,
-        blas: gpu::AccelerationStructure,
-    ) -> gpu::Buffer {
-        let instances: Vec<gpu::AccelerationStructureInstance> = (0..points.len())
-            .map(|i| {
-                let point = points[i];
-                let rotation = rotations[i];
-                let scale = scales[i];
-                let opacity = point.w;
-                let mean = glam::Vec3::new(point.x, point.y, point.z);
-
-                let extra_scale = (2.0 * (opacity / min_opacity).ln().max(0.0)).sqrt();
-                let m = glam::Mat3::from_quat(rotation)
-                    * glam::Mat3::from_diagonal(extra_scale * scale);
-
-                gpu::AccelerationStructureInstance {
-                    acceleration_structure_index: 0,
-                    transform: mint::ColumnMatrix3x4 {
-                        x: m.x_axis.into(),
-                        y: m.y_axis.into(),
-                        z: m.z_axis.into(),
-                        w: mean.into(),
-                    }
-                    .into(),
-                    mask: 0xFF,
-                    custom_index: 0,
-                }
-            })
-            .collect();
-
-        context.create_acceleration_structure_instance_buffer(&instances, &[blas])
+        self.objects.clear();
     }
 }
 
@@ -731,6 +455,30 @@ impl Default for Scene {
         Self::new()
     }
 }
+
+// ============================================================================
+// Render Data
+// ============================================================================
+
+/// Data needed to render the scene.
+///
+/// Bind these to the unified scene traversal shader.
+pub struct SceneRenderData<'a> {
+    /// GPU buffer of ObjectBounds (one per object).
+    pub bounds: gpu::BufferPiece,
+    /// GPU buffer of GpuTransform (one per object).
+    pub transforms: gpu::BufferPiece,
+    /// Number of objects in the scene.
+    pub object_count: u32,
+    /// Gaussian GPU clouds for backend dispatch.
+    pub gaussian_clouds: &'a [crate::GaussianGpuCloud],
+    /// RadFoam GPU clouds for backend dispatch.
+    pub radfoam_clouds: &'a [crate::RadFoamGpuCloud],
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -745,21 +493,18 @@ mod tests {
     }
 
     #[test]
-    fn transform_to_matrix() {
+    fn transform_to_gpu() {
         let t = Transform {
             position: glam::Vec3::new(1.0, 2.0, 3.0),
             rotation: glam::Quat::IDENTITY,
-            scale: glam::Vec3::new(2.0, 2.0, 2.0),
+            scale: glam::Vec3::ONE,
         };
-        let m = t.to_matrix();
+        let gpu = t.to_gpu_transform();
 
-        // Check translation
-        let translated = m.transform_point3(glam::Vec3::ZERO);
-        assert!((translated - glam::Vec3::new(1.0, 2.0, 3.0)).length() < 1e-5);
-
-        // Check scale
-        let scaled = m.transform_vector3(glam::Vec3::ONE);
-        assert!((scaled - glam::Vec3::new(2.0, 2.0, 2.0)).length() < 1e-5);
+        // Check translation in column 3 (w column)
+        assert!((gpu.object_to_world[3][0] - 1.0).abs() < 1e-5);
+        assert!((gpu.object_to_world[3][1] - 2.0).abs() < 1e-5);
+        assert!((gpu.object_to_world[3][2] - 3.0).abs() < 1e-5);
     }
 
     #[test]
@@ -770,5 +515,31 @@ mod tests {
 
         assert_eq!(h1, h2);
         assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn bounding_sphere_empty() {
+        let (center, radius) = Scene::compute_bounding_sphere(&[]);
+        assert_eq!(center, glam::Vec3::ZERO);
+        assert_eq!(radius, 0.0);
+    }
+
+    #[test]
+    fn bounding_sphere_single_point() {
+        let points = vec![glam::Vec4::new(1.0, 2.0, 3.0, 1.0)];
+        let (center, radius) = Scene::compute_bounding_sphere(&points);
+        assert!((center - glam::Vec3::new(1.0, 2.0, 3.0)).length() < 1e-5);
+        assert!(radius < 1e-5);
+    }
+
+    #[test]
+    fn bounding_sphere_symmetric() {
+        let points = vec![
+            glam::Vec4::new(-1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+        ];
+        let (center, radius) = Scene::compute_bounding_sphere(&points);
+        assert!(center.length() < 1e-5); // Center should be at origin
+        assert!((radius - 1.0).abs() < 1e-5); // Radius should be 1
     }
 }
