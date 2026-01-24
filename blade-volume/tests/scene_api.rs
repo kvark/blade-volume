@@ -1,0 +1,181 @@
+//! Integration tests for the Scene API.
+//!
+//! Tests scene object management, transforms, and TLAS updates.
+//! GPU tests are skipped if no supported device is found.
+
+use blade_graphics as gpu;
+use blade_volume as vol;
+
+mod radfoam_synth_chain;
+
+/// Create a headless GPU context for tests.
+fn make_test_context() -> Option<gpu::Context> {
+    unsafe {
+        match gpu::Context::init(gpu::ContextDesc {
+            presentation: false,
+            validation: cfg!(debug_assertions),
+            timing: false,
+            capture: false,
+            overlay: false,
+            device_id: 0,
+        }) {
+            Ok(ctx) => Some(ctx),
+            Err(gpu::NotSupportedError::NoSupportedDeviceFound) => None,
+            Err(other) => panic!("failed to init GPU context: {:?}", other),
+        }
+    }
+}
+
+#[test]
+fn scene_new_is_empty() {
+    let scene = vol::Scene::new();
+    assert_eq!(scene.object_count(), 0);
+    assert!(scene.tlas().is_none());
+}
+
+#[test]
+fn transform_constructors() {
+    let t1 = vol::Transform::identity();
+    assert_eq!(t1.position, glam::Vec3::ZERO);
+    assert_eq!(t1.rotation, glam::Quat::IDENTITY);
+    assert_eq!(t1.scale, glam::Vec3::ONE);
+
+    let pos = glam::Vec3::new(1.0, 2.0, 3.0);
+    let t2 = vol::Transform::from_position(pos);
+    assert_eq!(t2.position, pos);
+    assert_eq!(t2.rotation, glam::Quat::IDENTITY);
+    assert_eq!(t2.scale, glam::Vec3::ONE);
+
+    let rot = glam::Quat::from_rotation_y(std::f32::consts::PI);
+    let t3 = vol::Transform::from_position_rotation(pos, rot);
+    assert_eq!(t3.position, pos);
+    assert!((t3.rotation.x - rot.x).abs() < 1e-6);
+    assert!((t3.rotation.y - rot.y).abs() < 1e-6);
+    assert!((t3.rotation.z - rot.z).abs() < 1e-6);
+    assert!((t3.rotation.w - rot.w).abs() < 1e-6);
+}
+
+#[test]
+fn transform_to_matrix_translation() {
+    let t = vol::Transform {
+        position: glam::Vec3::new(5.0, 10.0, 15.0),
+        rotation: glam::Quat::IDENTITY,
+        scale: glam::Vec3::ONE,
+    };
+    let m = t.to_matrix();
+    let result = m.transform_point3(glam::Vec3::ZERO);
+    assert!((result - glam::Vec3::new(5.0, 10.0, 15.0)).length() < 1e-5);
+}
+
+#[test]
+fn transform_to_matrix_scale() {
+    let t = vol::Transform {
+        position: glam::Vec3::ZERO,
+        rotation: glam::Quat::IDENTITY,
+        scale: glam::Vec3::new(2.0, 3.0, 4.0),
+    };
+    let m = t.to_matrix();
+    let result = m.transform_vector3(glam::Vec3::ONE);
+    assert!((result - glam::Vec3::new(2.0, 3.0, 4.0)).length() < 1e-5);
+}
+
+#[test]
+fn transform_to_matrix_rotation() {
+    let t = vol::Transform {
+        position: glam::Vec3::ZERO,
+        rotation: glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        scale: glam::Vec3::ONE,
+    };
+    let m = t.to_matrix();
+    let result = m.transform_vector3(glam::Vec3::X);
+    // Rotating X by 90 degrees around Z gives Y
+    assert!((result - glam::Vec3::Y).length() < 1e-5);
+}
+
+#[test]
+fn scene_create_radfoam_object() {
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping scene GPU test: no supported device found");
+        return;
+    };
+
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "scene-test",
+        buffer_count: 1,
+    });
+
+    // Create a simple chain model with adjacency
+    let model = radfoam_synth_chain::make_chain_model(10, 0.5, 0.1, 0, glam::Vec3::splat(0.5));
+
+    let mut scene = vol::Scene::new();
+    let handle = scene.create_radfoam_object(&model, &context, &mut encoder);
+
+    assert_eq!(scene.object_count(), 1);
+
+    // RadFoam objects don't affect TLAS
+    assert!(scene.tlas().is_none());
+
+    // Check transform
+    let t = scene.get_transform(handle);
+    assert_eq!(t.position, glam::Vec3::ZERO);
+
+    // Set transform
+    scene.set_transform(
+        handle,
+        vol::Transform::from_position(glam::Vec3::new(1.0, 2.0, 3.0)),
+    );
+    let t2 = scene.get_transform(handle);
+    assert_eq!(t2.position, glam::Vec3::new(1.0, 2.0, 3.0));
+
+    // Check object data
+    if let vol::ObjectData::RadFoam(data) = scene.get_object_data(handle) {
+        assert_eq!(data.num_points, 10);
+        assert_eq!(data.sh_degree, 0);
+    } else {
+        panic!("Expected RadFoam object data");
+    }
+
+    // Cleanup
+    scene.destroy(&context);
+    context.destroy_command_encoder(&mut encoder);
+}
+
+#[test]
+fn scene_multiple_radfoam_objects() {
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping scene GPU test: no supported device found");
+        return;
+    };
+
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "scene-test",
+        buffer_count: 1,
+    });
+
+    let model1 = radfoam_synth_chain::make_chain_model(5, 0.5, 0.1, 0, glam::Vec3::splat(0.5));
+    let model2 = radfoam_synth_chain::make_chain_model(8, 0.3, 0.2, 1, glam::Vec3::splat(0.3));
+
+    let mut scene = vol::Scene::new();
+    let h1 = scene.create_radfoam_object(&model1, &context, &mut encoder);
+    let h2 = scene.create_radfoam_object(&model2, &context, &mut encoder);
+
+    assert_eq!(scene.object_count(), 2);
+    assert_ne!(h1, h2); // Different handles
+
+    // Set different transforms
+    scene.set_transform(h1, vol::Transform::from_position(glam::Vec3::X));
+    scene.set_transform(h2, vol::Transform::from_position(glam::Vec3::Y));
+
+    assert_eq!(scene.get_transform(h1).position, glam::Vec3::X);
+    assert_eq!(scene.get_transform(h2).position, glam::Vec3::Y);
+
+    // Cleanup
+    scene.destroy(&context);
+    context.destroy_command_encoder(&mut encoder);
+}
+
+#[test]
+fn scene_default_trait() {
+    let scene: vol::Scene = Default::default();
+    assert_eq!(scene.object_count(), 0);
+}
