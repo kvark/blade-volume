@@ -1,13 +1,8 @@
-//Must match `MAX_SH_COMPONENTS`
-const MAX_HARMONICS: u32 = 16;
+// #include "common.wgsl"
+// #include "sh_eval.wgsl"
 
-struct Camera {
-    position: vec3<f32>,
-    depth: f32,
-    orientation: vec4<f32>,
-    fov: vec2<f32>,
-    pad: vec2<u32>,
-}
+// Alias for Gaussian struct compatibility
+const MAX_HARMONICS: u32 = MAX_SH_COMPONENTS;
 
 var<uniform> g_camera: Camera;
 
@@ -30,16 +25,6 @@ struct Gaussian {
     harmonics: array<vec4f, MAX_HARMONICS>,
 }
 var<storage> g_data: array<Gaussian>;
-
-fn qmake(axis: vec3<f32>, angle: f32) -> vec4<f32> {
-    return vec4<f32>(axis * sin(angle), cos(angle));
-}
-fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
-    return v + 2.0*cross(q.xyz, cross(q.xyz,v) + q.w*v);
-}
-fn qinv(q: vec4<f32>) -> vec4<f32> {
-    return vec4<f32>(-q.xyz,q.w);
-}
 
 struct VertexOutput {
     @builtin(position) clip_pos: vec4<f32>,
@@ -123,25 +108,6 @@ const BACKGROUND: vec3f = vec3f(0.0);
 // Debug mode constants
 const DEBUG_MODE_OFF: u32 = 0u;
 const DEBUG_MODE_PARTICLE_DENSITY: u32 = 1u;
-
-// Heatmap color ramp for debug visualization
-fn heatmap_color(t: f32) -> vec3f {
-    // Blue -> Cyan -> Green -> Yellow -> Red
-    let t_clamped = clamp(t, 0.0, 1.0);
-    if (t_clamped < 0.25) {
-        let s = t_clamped / 0.25;
-        return vec3f(0.0, s, 1.0);
-    } else if (t_clamped < 0.5) {
-        let s = (t_clamped - 0.25) / 0.25;
-        return vec3f(0.0, 1.0, 1.0 - s);
-    } else if (t_clamped < 0.75) {
-        let s = (t_clamped - 0.5) / 0.25;
-        return vec3f(s, 1.0, 0.0);
-    } else {
-        let s = (t_clamped - 0.75) / 0.25;
-        return vec3f(1.0, 1.0 - s, 0.0);
-    }
-}
 
 @fragment
 fn draw_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
