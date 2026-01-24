@@ -37,7 +37,7 @@ const D2R: f32 = std::f32::consts::PI / 180.0;
 const EULER: glam::EulerRot = glam::EulerRot::ZYX;
 
 /// Arguments
-#[derive(argh::FromArgs)]
+#[derive(argh::FromArgs, Clone)]
 struct Arguments {
     /// input file path
     #[argh(positional)]
@@ -66,6 +66,19 @@ struct Arguments {
     /// start in debug mode (particle density visualization)
     #[argh(switch)]
     debug: bool,
+
+    /// run a headless benchmark (no window); renders into an offscreen texture and prints timing stats
+    #[argh(switch)]
+    benchmark: bool,
+    /// number of warmup frames to render before measuring (benchmark mode only)
+    #[argh(option, default = "30")]
+    benchmark_warmup: u32,
+    /// number of measured frames to render (benchmark mode only)
+    #[argh(option, default = "120")]
+    benchmark_frames: u32,
+    /// print per-pass timings for each measured frame (benchmark mode only)
+    #[argh(switch)]
+    benchmark_verbose: bool,
 }
 
 fn parse_vec<const N: usize, T: Copy + Default + str::FromStr>(string: &str) -> [T; N]
@@ -90,22 +103,57 @@ struct Example {
     backend: view::RenderBackend,
     command_encoder: gpu::CommandEncoder,
     prev_sync_point: Option<gpu::SyncPoint>,
+
     window_size: winit::dpi::PhysicalSize<u32>,
-    surface: gpu::Surface,
+    surface: Option<gpu::Surface>,
+    surface_format: gpu::TextureFormat,
+
     context: gpu::Context,
     debug_mode: view::DebugMode,
 
     // For command line reproduction
     input_file: String,
 
-    // egui overlay
-    ui_ctx: ui::Context,
-    ui_state: ui_winit::State,
-    ui_painter: begui::GuiPainter,
+    // egui overlay (windowed only)
+    ui_ctx: Option<ui::Context>,
+    ui_state: Option<ui_winit::State>,
+    ui_painter: Option<begui::GuiPainter>,
     ui_show: bool,
 
     // Frame timing history (milliseconds)
     frame_times: VecDeque<f64>,
+}
+
+struct BenchmarkStats {
+    measured_frames: u32,
+    total_ms_sum: f64,
+    total_ms_min: f64,
+    total_ms_max: f64,
+}
+
+impl BenchmarkStats {
+    fn new() -> Self {
+        Self {
+            measured_frames: 0,
+            total_ms_sum: 0.0,
+            total_ms_min: f64::INFINITY,
+            total_ms_max: 0.0,
+        }
+    }
+
+    fn record_total_ms(&mut self, total_ms: f64) {
+        self.measured_frames += 1;
+        self.total_ms_sum += total_ms;
+        self.total_ms_min = self.total_ms_min.min(total_ms);
+        self.total_ms_max = self.total_ms_max.max(total_ms);
+    }
+
+    fn mean_total_ms(&self) -> f64 {
+        if self.measured_frames == 0 {
+            return 0.0;
+        }
+        self.total_ms_sum / self.measured_frames as f64
+    }
 }
 
 impl Example {
@@ -124,7 +172,7 @@ impl Example {
         }
     }
 
-    fn init(window: &winit::window::Window, args: Arguments) -> Self {
+    fn init_windowed(window: &winit::window::Window, args: Arguments) -> Self {
         let mut camera = view::ControlledCamera::default();
         if let Some(ref arg) = args.cam_pose {
             let v = parse_vec::<6, f32>(arg);
@@ -149,6 +197,7 @@ impl Example {
             .create_surface_configured(window, Self::make_surface_config(window_size))
             .unwrap();
         let surface_info = surface.info();
+        let surface_format = surface_info.format;
 
         // egui init
         let ui_ctx = ui::Context::default();
@@ -203,6 +252,7 @@ impl Example {
         } else {
             view::DebugMode::Off
         };
+
         let size = view::RenderSize {
             width: window_size.width,
             height: window_size.height,
@@ -233,19 +283,363 @@ impl Example {
             backend,
             command_encoder,
             prev_sync_point: None,
+
             window_size,
-            surface,
+            surface: Some(surface),
+            surface_format,
+
             context,
             debug_mode,
             input_file: args.input_file,
 
-            ui_ctx,
-            ui_state,
-            ui_painter,
+            ui_ctx: Some(ui_ctx),
+            ui_state: Some(ui_state),
+            ui_painter: Some(ui_painter),
             ui_show,
 
             frame_times: VecDeque::with_capacity(FRAME_TIME_HISTORY_SIZE),
         }
+    }
+
+    fn init_headless(args: Arguments) -> Self {
+        let mut camera = view::ControlledCamera::default();
+        if let Some(ref arg) = args.cam_pose {
+            let v = parse_vec::<6, f32>(arg);
+            camera.position = glam::Vec3::new(v[0], v[1], v[2]);
+            camera.orientation = glam::Quat::from_euler(EULER, v[3] * D2R, v[4] * D2R, v[5] * D2R);
+        }
+
+        // No presentation/surface in headless mode.
+        let context = unsafe {
+            gpu::Context::init(gpu::ContextDesc {
+                presentation: false,
+                // Benchmark mode must not enable validation layers; they skew performance.
+                validation: false,
+                timing: true,
+                capture: false,
+                // Also keep overlays disabled for benchmark consistency.
+                overlay: false,
+                device_id: 0,
+            })
+            .unwrap()
+        };
+
+        let window_size = if let Some(ref arg) = args.resolution {
+            let res = parse_vec::<2, u32>(arg);
+            winit::dpi::PhysicalSize::new(res[0].max(1), res[1].max(1))
+        } else {
+            winit::dpi::PhysicalSize::new(1280, 720)
+        };
+
+        // Pick a stable offscreen format for pipelines in headless mode.
+        // This is independent of any swapchain.
+        let surface_format = gpu::TextureFormat::Rgba8Unorm;
+
+        let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+            name: "benchmark",
+            buffer_count: 2,
+        });
+
+        // Load volume data - use --kind override or auto-detect
+        let model = match args.kind.as_deref() {
+            Some("gaussian") => {
+                log::info!("Loading Gaussian data (forced)");
+                vol::io::load_gaussian(&args.input_file)
+            }
+            Some("radfoam") => {
+                log::info!("Loading RadFoam data (forced)");
+                vol::io::load_radfoam(&args.input_file)
+            }
+            Some(other) => panic!(
+                "Unknown --kind '{}', expected 'gaussian' or 'radfoam'",
+                other
+            ),
+            None => {
+                log::info!("Auto-detecting format...");
+                vol::io::load(&args.input_file)
+            }
+        };
+
+        log::info!(
+            "Loaded {} points ({})",
+            model.len(),
+            if model.transforms.is_some() {
+                "Gaussian"
+            } else {
+                "RadFoam"
+            }
+        );
+
+        let debug_mode = if args.debug {
+            view::DebugMode::ParticleDensity
+        } else {
+            view::DebugMode::Off
+        };
+        let size = view::RenderSize {
+            width: window_size.width,
+            height: window_size.height,
+        };
+        let gaussian_settings = view::GaussianSettings {
+            min_opacity: args.min_opacity,
+            min_transmittance: args.min_transmittance,
+            debug_mode,
+        };
+        let radfoam_settings = view::RadFoamSettings {
+            max_steps: args.max_steps,
+            weight_threshold: args.weight_threshold,
+            debug_mode,
+        };
+        let backend = view::RenderBackend::new_for_model(
+            &model,
+            gaussian_settings,
+            radfoam_settings,
+            &context,
+            &mut command_encoder,
+            surface_format,
+            size,
+        );
+
+        Self {
+            camera,
+
+            backend,
+            command_encoder,
+            prev_sync_point: None,
+
+            window_size,
+            surface: None,
+            surface_format,
+
+            context,
+            debug_mode,
+            input_file: args.input_file,
+
+            ui_ctx: None,
+            ui_state: None,
+            ui_painter: None,
+            ui_show: false,
+
+            frame_times: VecDeque::with_capacity(FRAME_TIME_HISTORY_SIZE),
+        }
+    }
+
+    fn render_headless_benchmark(mut self, args: &Arguments) {
+        // CSV output:
+        // - one header row
+        // - one row per measured frame
+        // - final summary row
+        //
+        // Columns:
+        // frame,total_ms,<pass_0_ms>,<pass_1_ms>,...
+        //
+        // Benchmark notes:
+        // - Benchmark mode is intended for Vulkan (notably AMD) and must run with GPU validation disabled,
+        //   because validation layers skew timings substantially.
+        // - This benchmark is GPU-timing based (`CommandEncoder::timings()`), not CPU frame time.
+        //
+        // Timing stability notes:
+        // - We treat `CommandEncoder::timings()` as the ground truth after submit+wait.
+        // - Some backends/drivers may not populate timings for every frame (or may change the pass set).
+        //   To keep CSV parseable and debuggable:
+        //   - We always print a header once, based on the first *non-empty* timing set seen in measured frames.
+        //   - If later frames have extra passes, we ignore them but (in verbose mode) report the mismatch.
+        //   - If later frames are missing passes, we print empty cells.
+        let extent = gpu::Extent {
+            width: self.window_size.width.max(1),
+            height: self.window_size.height.max(1),
+            depth: 1,
+        };
+
+        let offscreen_tex = self.context.create_texture(gpu::TextureDesc {
+            name: "benchmark-offscreen",
+            format: self.surface_format,
+            size: extent,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::TARGET | gpu::TextureUsage::COPY,
+            external: None,
+        });
+        let offscreen_view = self.context.create_texture_view(
+            offscreen_tex,
+            gpu::TextureViewDesc {
+                name: "benchmark-offscreen-view",
+                format: self.surface_format,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources::default(),
+            },
+        );
+
+        // Warmup + measured frames.
+        let total_frames = args.benchmark_warmup + args.benchmark_frames;
+
+        // IMPORTANT:
+        // `CommandEncoder::timings()` may include passes from initialization (e.g. uploads like "radfoam-init")
+        // if the first frame doesn't emit any timings. Clear any init-time timings by forcing an empty submit,
+        // then begin warmup/measurement after that.
+        self.command_encoder.start();
+        let sync_point = self.context.submit(&mut self.command_encoder);
+        self.context.wait_for(&sync_point, !0);
+
+        // Stats
+        let mut stats = BenchmarkStats::new();
+        let mut pass_names: Vec<String> = Vec::new();
+
+        // CSV header will be printed once we have a non-empty pass set.
+        let mut printed_header = false;
+
+        for frame_index in 0..total_frames {
+            self.command_encoder.start();
+            self.command_encoder.init_texture(offscreen_tex);
+
+            let aspect = self.window_size.width as f32 / self.window_size.height as f32;
+            let camera_params = self.camera.to_params(aspect);
+
+            self.backend.render(
+                &mut self.command_encoder,
+                offscreen_view,
+                camera_params,
+                self.camera.position,
+                view::RenderSize {
+                    width: self.window_size.width,
+                    height: self.window_size.height,
+                },
+            );
+
+            let sync_point = self.context.submit(&mut self.command_encoder);
+            self.context.wait_for(&sync_point, !0);
+
+            if frame_index < args.benchmark_warmup {
+                if args.benchmark_verbose {
+                    println!(
+                        "warmup frame {}: timings.len = {}",
+                        frame_index,
+                        self.command_encoder.timings().len()
+                    );
+                }
+                continue;
+            }
+
+            let out_frame = frame_index - args.benchmark_warmup;
+
+            // The first measured frame is often skewed (pipeline warmup, caches, driver behavior).
+            // Ignore it entirely to keep results more representative.
+            if out_frame == 0 {
+                if args.benchmark_verbose {
+                    println!("measured frame 0: ignored");
+                }
+                continue;
+            }
+
+            // Snapshot timings for this frame (avoid multiple calls while we debug stability).
+            let timings = self.command_encoder.timings();
+
+            if args.benchmark_verbose {
+                println!(
+                    "measured frame {}: timings.len = {}",
+                    out_frame,
+                    timings.len()
+                );
+                for &(ref name, value) in timings {
+                    println!("\t{}: {:.3} ms", name, value.as_secs_f64() * 1000.0);
+                }
+            }
+
+            // Build stable pass list from first measured frame that has any timings (after skipping frame 0).
+            if !printed_header && !timings.is_empty() {
+                for &(ref name, _) in timings {
+                    pass_names.push(name.clone());
+                }
+
+                // Header + notes (as CSV comment lines for easy copy/paste).
+                // Many CSV readers ignore lines starting with '#'.
+                println!("# benchmark: validation=disabled");
+                println!("# benchmark: timings=gpu (CommandEncoder::timings)");
+                println!("# benchmark: backend=vulkan (assumed)");
+                println!("# benchmark: note=first measured frame (frame 0) ignored");
+                print!("frame,total_ms");
+                for name in &pass_names {
+                    print!(",{}", name);
+                }
+                println!();
+                printed_header = true;
+            }
+
+            // If we still don't have a header (no timings reported yet), emit an empty row for visibility.
+            if !printed_header {
+                print!("{},", out_frame);
+                println!();
+                continue;
+            }
+
+            // Create a lookup for this frame's timings for the known pass list.
+            let mut total_ms: f64 = 0.0;
+            let mut values: Vec<Option<f64>> = vec![None; pass_names.len()];
+            for &(ref name, value) in timings {
+                for (i, pass_name) in pass_names.iter().enumerate() {
+                    if name == pass_name {
+                        let ms = value.as_secs_f64() * 1000.0;
+                        values[i] = Some(ms);
+                        total_ms += ms;
+                        break;
+                    }
+                }
+            }
+
+            // In verbose mode, report if this frame's pass set differs from the header.
+            if args.benchmark_verbose {
+                for &(ref name, _) in timings {
+                    if !pass_names.iter().any(|n| n == name) {
+                        println!(
+                            "benchmark: frame {} has extra timing pass '{}' not present in header",
+                            out_frame, name
+                        );
+                    }
+                }
+                for pass_name in &pass_names {
+                    if !timings.iter().any(|(n, _)| n == pass_name) {
+                        println!(
+                            "benchmark: frame {} is missing timing pass '{}' from header",
+                            out_frame, pass_name
+                        );
+                    }
+                }
+            }
+
+            stats.record_total_ms(total_ms);
+
+            // Row
+            print!("{},{}", out_frame, format!("{:.3}", total_ms));
+            for v in values {
+                match v {
+                    Some(ms) => print!(",{}", format!("{:.3}", ms)),
+                    None => print!(","),
+                }
+            }
+            println!();
+        }
+
+        // Summary row (CSV-friendly)
+        println!(
+            "summary,{},,,",
+            format!(
+                "mean {:.3} ms; min {:.3} ms; max {:.3} ms; frames {}",
+                stats.mean_total_ms(),
+                stats.total_ms_min,
+                stats.total_ms_max,
+                stats.measured_frames
+            )
+        );
+
+        // Cleanup: no surface in headless mode; in windowed mode surface is dropped with `Example`.
+        self.backend.destroy(&self.context);
+        self.context.destroy_texture_view(offscreen_view);
+        self.context.destroy_texture(offscreen_tex);
+
+        // CommandEncoder owns command buffers / pools; destroy it explicitly to satisfy validation.
+        self.context
+            .destroy_command_encoder(&mut self.command_encoder);
     }
 
     fn toggle_debug_mode(&mut self) {
@@ -257,16 +651,28 @@ impl Example {
     fn deinit(mut self) {
         self.wait_for_gpu();
         self.backend.destroy(&self.context);
-        self.ui_painter.destroy(&self.context);
+
+        if let Some(ref mut ui_painter) = self.ui_painter {
+            ui_painter.destroy(&self.context);
+        }
+
+        // CommandEncoder owns command buffers / pools; destroy it explicitly to satisfy validation.
+        // Note: destroy takes `&mut CommandEncoder` (not a reference to it).
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
-        self.context.destroy_surface(&mut self.surface);
+
+        if let Some(ref mut surface) = self.surface {
+            self.context.destroy_surface(surface);
+        }
     }
 
     fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
         self.window_size = size;
-        let config = Self::make_surface_config(size);
-        self.context.reconfigure_surface(&mut self.surface, config);
+        if let Some(ref mut surface) = self.surface {
+            let config = Self::make_surface_config(size);
+            self.context.reconfigure_surface(surface, config);
+        }
+
         self.backend.resize(
             &self.context,
             view::RenderSize {
@@ -287,17 +693,32 @@ impl Example {
             return;
         }
 
-        // egui begin frame
-        let raw_input = self.ui_state.take_egui_input(window);
-        self.ui_ctx.begin_pass(raw_input);
-
-        // Pre-compute command line for the UI button (to avoid borrow conflicts)
+        // Pre-compute command line for the UI button.
+        // This must happen before we take mutable borrows of egui state/painter.
         let command_line = self.generate_command_line();
+
+        let (ui_ctx, ui_state, ui_painter) = match (
+            self.ui_ctx.as_ref(),
+            self.ui_state.as_mut(),
+            self.ui_painter.as_mut(),
+        ) {
+            (Some(ui_ctx), Some(ui_state), Some(ui_painter)) => (ui_ctx, ui_state, ui_painter),
+            _ => return,
+        };
+
+        let surface = match self.surface.as_mut() {
+            Some(surface) => surface,
+            None => return,
+        };
+
+        // egui begin frame
+        let raw_input = ui_state.take_egui_input(window);
+        ui_ctx.begin_pass(raw_input);
 
         if self.ui_show {
             ui::Window::new("blade-volume-view")
                 .default_open(true)
-                .show(&self.ui_ctx, |ui| {
+                .show(ui_ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Backend:");
                         match self.backend {
@@ -429,12 +850,10 @@ impl Example {
                 });
         }
 
-        let full_output = self.ui_ctx.end_pass();
-        let paint_jobs = self
-            .ui_ctx
-            .tessellate(full_output.shapes, full_output.pixels_per_point);
+        let full_output = ui_ctx.end_pass();
+        let paint_jobs = ui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
 
-        let frame = self.surface.acquire_frame();
+        let frame = surface.acquire_frame();
 
         self.command_encoder.start();
         self.command_encoder.init_texture(frame.texture());
@@ -453,7 +872,7 @@ impl Example {
         );
 
         // egui textures update
-        self.ui_painter.update_textures(
+        ui_painter.update_textures(
             &mut self.command_encoder,
             &full_output.textures_delta,
             &self.context,
@@ -475,13 +894,12 @@ impl Example {
                 physical_size: (self.window_size.width, self.window_size.height),
                 scale_factor: window.scale_factor() as f32,
             };
-            self.ui_painter
-                .paint(&mut pass, &paint_jobs, &sd, &self.context);
+            ui_painter.paint(&mut pass, &paint_jobs, &sd, &self.context);
         }
 
         self.command_encoder.present(frame);
         let sync_point = self.context.submit(&mut self.command_encoder);
-        self.ui_painter.after_submit(&sync_point);
+        ui_painter.after_submit(&sync_point);
 
         // Wait immediately after presenting to avoid swapchain semaphore reuse validation errors
         // when the swapchain rotates images faster than our timeline semaphore tracking.
@@ -552,6 +970,13 @@ fn main() {
     let args = argh::from_env::<Arguments>();
     env_logger::init();
 
+    // Headless benchmark mode: truly no window/surface.
+    if args.benchmark {
+        let example = Example::init_headless(args.clone());
+        example.render_headless_benchmark(&args);
+        return;
+    }
+
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
     let mut window_attributes = winit::window::Window::default_attributes();
     window_attributes.title = "blade-volume-viewer".to_string();
@@ -561,7 +986,7 @@ fn main() {
     }
     let window = event_loop.create_window(window_attributes).unwrap();
 
-    let mut example = Example::init(&window, args);
+    let mut example = Example::init_windowed(&window, args);
     let mut last_mouse_pos = [0i32; 2];
     let mut in_drag = false;
     let drag_speed = 0.01f32;
@@ -577,7 +1002,9 @@ fn main() {
                     event: ref win_event,
                     ..
                 } => {
-                    let _ = example.ui_state.on_window_event(&window, win_event);
+                    if let Some(ref mut ui_state) = example.ui_state {
+                        let _ = ui_state.on_window_event(&window, win_event);
+                    }
                     match win_event {
                         winit::event::WindowEvent::Resized(size) => {
                             example.resize(*size);
@@ -603,7 +1030,11 @@ fn main() {
                             if *key_code == winit::keyboard::KeyCode::Tab {
                                 example.toggle_debug_mode();
                             }
-                            let wants_keyboard = example.ui_ctx.wants_keyboard_input();
+                            let wants_keyboard = example
+                                .ui_ctx
+                                .as_ref()
+                                .map(|c| c.wants_keyboard_input())
+                                .unwrap_or(false);
                             if !wants_keyboard {
                                 example.camera.on_key(*key_code, 1.0);
                             }
@@ -613,13 +1044,21 @@ fn main() {
                             button: winit::event::MouseButton::Left,
                             ..
                         } => {
-                            let wants_pointer = example.ui_ctx.wants_pointer_input();
+                            let wants_pointer = example
+                                .ui_ctx
+                                .as_ref()
+                                .map(|c| c.wants_pointer_input())
+                                .unwrap_or(false);
                             if !wants_pointer {
                                 in_drag = *state == winit::event::ElementState::Pressed;
                             }
                         }
                         winit::event::WindowEvent::CursorMoved { position, .. } => {
-                            let wants_pointer = example.ui_ctx.wants_pointer_input();
+                            let wants_pointer = example
+                                .ui_ctx
+                                .as_ref()
+                                .map(|c| c.wants_pointer_input())
+                                .unwrap_or(false);
                             if in_drag && !wants_pointer {
                                 let dx = position.x as f32 - last_mouse_pos[0] as f32;
                                 let dy = position.y as f32 - last_mouse_pos[1] as f32;
@@ -628,7 +1067,11 @@ fn main() {
                             last_mouse_pos = [position.x as i32, position.y as i32];
                         }
                         winit::event::WindowEvent::MouseWheel { delta, .. } => {
-                            let wants_pointer = example.ui_ctx.wants_pointer_input();
+                            let wants_pointer = example
+                                .ui_ctx
+                                .as_ref()
+                                .map(|c| c.wants_pointer_input())
+                                .unwrap_or(false);
                             if !wants_pointer {
                                 example.camera.on_wheel(*delta);
                             }
