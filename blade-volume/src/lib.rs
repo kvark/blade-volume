@@ -1,5 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
+pub mod adjacency;
 mod camera;
 mod gpu;
 pub mod io;
@@ -113,6 +114,30 @@ impl PointCloudModel {
             );
         }
         result
+    }
+
+    /// Computes adjacency from point positions using Delaunay tetrahedralization.
+    ///
+    /// This replaces any existing adjacency with a newly computed one.
+    pub fn compute_adjacency(&mut self, config: &adjacency::AdjacencyConfig) {
+        self.adjacency = Some(adjacency::compute_adjacency(&self.points, config));
+    }
+
+    /// Computes adjacency with default configuration.
+    ///
+    /// This replaces any existing adjacency with a newly computed one.
+    pub fn compute_adjacency_default(&mut self) {
+        self.adjacency = Some(adjacency::compute_adjacency_default(&self.points));
+    }
+
+    /// Ensures adjacency is available, computing it if necessary.
+    ///
+    /// Returns a reference to the adjacency data.
+    pub fn ensure_adjacency(&mut self) -> &Adjacency {
+        if self.adjacency.is_none() {
+            self.compute_adjacency_default();
+        }
+        self.adjacency.as_ref().unwrap()
     }
 }
 
