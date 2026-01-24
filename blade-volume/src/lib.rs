@@ -4,10 +4,12 @@ pub mod adjacency;
 mod camera;
 mod gpu;
 pub mod io;
+pub mod scene;
 mod shape;
 
 pub use camera::CameraParams;
 pub use gpu::{GaussianGpuCloud, InitParameters, RadFoamGpuCloud};
+pub use scene::{ObjectData, ObjectHandle, Scene, Transform};
 pub use shape::Icosahedron;
 
 pub const fn get_sh_component_count(degree: usize) -> usize {
