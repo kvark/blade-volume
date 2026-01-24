@@ -19,15 +19,8 @@
 //
 // Output is HDR to a storage texture (rgba16f).
 
-const MAX_SH_COMPONENTS: u32 = 16u; // (1+3)^2
-
-struct Camera {
-    position: vec3<f32>,
-    depth: f32,
-    orientation: vec4<f32>, // quaternion (x,y,z,w)
-    fov: vec2<f32>,         // (fov_x, fov_y) where local_dir = (ndc * tan(0.5*fov), 1)
-    pad: vec2<u32>,
-};
+// #include "common.wgsl"
+// #include "sh_eval.wgsl"
 
 struct Params {
     // must match scene
@@ -65,43 +58,7 @@ var<storage, read> g_adjacency_offsets: array<u32>;
 // Output HDR image.
 var g_out: texture_storage_2d<rgba16float, write>;
 
-// ---- Quaternion helpers ----
-
-fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
-    // v + 2 * cross(q.xyz, cross(q.xyz, v) + q.w * v)
-    let t = 2.0 * cross(q.xyz, v);
-    return v + q.w * t + cross(q.xyz, t);
-}
-
-// ---- SH evaluation (matches existing gaussian shader basis constants) ----
-
-fn sh_basis_constants() -> array<f32, MAX_SH_COMPONENTS> {
-    // These constants match the ones used in `blade-gaussian/examples/shader.wgsl`.
-    return array<f32, MAX_SH_COMPONENTS>(
-        0.28209479177387814,
-        -0.4886025119029199,
-        0.4886025119029199,
-        -0.4886025119029199,
-        1.0925484305920792,
-        -1.0925484305920792,
-        0.31539156525252005,
-        -1.0925484305920792,
-        0.5462742152960396,
-        -0.5900435899266435,
-        2.890611442640554,
-        -0.4570457994644658,
-        0.3731763325901154,
-        -0.4570457994644658,
-        1.445305721320277,
-        -0.5900435899266435
-    );
-}
-
-fn sh_component_count(deg: u32) -> u32 {
-    // (1+deg)^2
-    let d = deg + 1u;
-    return d * d;
-}
+// ---- SH evaluation (uses constants from sh_eval.wgsl) ----
 
 fn eval_sh_rgb(point_idx: u32, dir: vec3<f32>) -> vec3<f32> {
     let deg = g_params.sh_degree;
@@ -259,25 +216,6 @@ fn load_density(point_idx: u32) -> f32 {
 // Debug mode constants
 const DEBUG_MODE_OFF: u32 = 0u;
 const DEBUG_MODE_CELL_DENSITY: u32 = 1u;
-
-// Heatmap color ramp for debug visualization
-fn heatmap_color(t: f32) -> vec3f {
-    // Blue -> Cyan -> Green -> Yellow -> Red
-    let t_clamped = clamp(t, 0.0, 1.0);
-    if (t_clamped < 0.25) {
-        let s = t_clamped / 0.25;
-        return vec3f(0.0, s, 1.0);
-    } else if (t_clamped < 0.5) {
-        let s = (t_clamped - 0.25) / 0.25;
-        return vec3f(0.0, 1.0, 1.0 - s);
-    } else if (t_clamped < 0.75) {
-        let s = (t_clamped - 0.5) / 0.25;
-        return vec3f(s, 1.0, 0.0);
-    } else {
-        let s = (t_clamped - 0.75) / 0.25;
-        return vec3f(1.0, 1.0 - s, 0.0);
-    }
-}
 
 // ---- Voronoi traversal ----
 

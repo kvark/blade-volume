@@ -40,8 +40,41 @@ mod radfoam_synth_chain;
 
 use radfoam_cpu_ref as cpu;
 
-/// Load the production RadFoam shader.
+/// Load the production RadFoam shader and includes.
 const RADFOAM_WGSL: &str = include_str!("../../blade-volume-view/shaders/radfoam.wgsl");
+const COMMON_WGSL: &str = include_str!("../../blade-volume-view/shaders/common.wgsl");
+const SH_EVAL_WGSL: &str = include_str!("../../blade-volume-view/shaders/sh_eval.wgsl");
+
+/// Preprocesses WGSL shader source, expanding `// #include "filename.wgsl"` directives.
+fn preprocess_shader(source: &str) -> String {
+    let mut result = String::with_capacity(source.len() * 2);
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("// #include") {
+            let rest = rest.trim();
+            if let Some(filename) = rest.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                let include_content = match filename {
+                    "common.wgsl" => COMMON_WGSL,
+                    "sh_eval.wgsl" => SH_EVAL_WGSL,
+                    _ => panic!("Unknown shader include: {}", filename),
+                };
+                result.push_str("// === Begin included: ");
+                result.push_str(filename);
+                result.push_str(" ===\n");
+                result.push_str(include_content);
+                result.push_str("\n// === End included: ");
+                result.push_str(filename);
+                result.push_str(" ===\n");
+                continue;
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    result
+}
 
 /// A minimal camera uniform matching the production shader.
 #[repr(C)]
@@ -223,9 +256,8 @@ fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
     let mut radfoam_gpu = vol::RadFoamGpuCloud::new(&model, &context, &mut encoder);
 
     // Compile production shader and pipeline.
-    let shader = context.create_shader(gpu::ShaderDesc {
-        source: RADFOAM_WGSL,
-    });
+    let source = preprocess_shader(RADFOAM_WGSL);
+    let shader = context.create_shader(gpu::ShaderDesc { source: &source });
     let trace_layout = <TraceData as gpu::ShaderData>::layout();
     let mut pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
         name: "radfoam-test-trace",

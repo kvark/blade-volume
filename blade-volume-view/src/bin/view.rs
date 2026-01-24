@@ -36,6 +36,51 @@ use egui_winit as ui_winit;
 const D2R: f32 = std::f32::consts::PI / 180.0;
 const EULER: glam::EulerRot = glam::EulerRot::ZYX;
 
+// ============================================================================
+// Shader Preprocessing
+// ============================================================================
+
+/// Embedded shader include files for preprocessing.
+mod shader_includes {
+    pub const COMMON: &str = include_str!("../../shaders/common.wgsl");
+    pub const SH_EVAL: &str = include_str!("../../shaders/sh_eval.wgsl");
+}
+
+/// Preprocesses WGSL shader source, expanding `// #include "filename.wgsl"` directives.
+///
+/// Supported includes:
+/// - `// #include "common.wgsl"`
+/// - `// #include "sh_eval.wgsl"`
+fn preprocess_shader(source: &str) -> String {
+    let mut result = String::with_capacity(source.len() * 2);
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("// #include") {
+            let rest = rest.trim();
+            if let Some(filename) = rest.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                let include_content = match filename {
+                    "common.wgsl" => shader_includes::COMMON,
+                    "sh_eval.wgsl" => shader_includes::SH_EVAL,
+                    _ => panic!("Unknown shader include: {}", filename),
+                };
+                result.push_str("// === Begin included: ");
+                result.push_str(filename);
+                result.push_str(" ===\n");
+                result.push_str(include_content);
+                result.push_str("\n// === End included: ");
+                result.push_str(filename);
+                result.push_str(" ===\n");
+                continue;
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    result
+}
+
 /// Arguments
 #[derive(argh::FromArgs)]
 struct Arguments {
@@ -138,8 +183,9 @@ impl GaussianBackend {
         surface_format: gpu::TextureFormat,
     ) -> Self {
         let shader = {
-            let source = include_str!("../../shaders/gaussian.wgsl");
-            context.create_shader(gpu::ShaderDesc { source })
+            let raw_source = include_str!("../../shaders/gaussian.wgsl");
+            let source = preprocess_shader(raw_source);
+            context.create_shader(gpu::ShaderDesc { source: &source })
         };
         assert_eq!(
             shader.get_struct_size("Gaussian"),
@@ -319,8 +365,9 @@ impl RadFoamBackend {
 
         // Trace compute pipeline
         let shader = {
-            let source = include_str!("../../shaders/radfoam.wgsl");
-            context.create_shader(gpu::ShaderDesc { source })
+            let raw_source = include_str!("../../shaders/radfoam.wgsl");
+            let source = preprocess_shader(raw_source);
+            context.create_shader(gpu::ShaderDesc { source: &source })
         };
         let trace_layout = <RadFoamTraceData as gpu::ShaderData>::layout();
         let trace_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
