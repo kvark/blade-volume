@@ -12,6 +12,8 @@ flate2.workspace = true
 log.workspace = true
 mint.workspace = true
 
+simple_delaunay_lib.workspace = true
+
 [dev-dependencies]
 half.workspace = true
 kiddo.workspace = true
