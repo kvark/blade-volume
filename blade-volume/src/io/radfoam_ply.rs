@@ -289,7 +289,7 @@ fn infer_sh_degree_from_sh_rest_count(sh_rest_count: usize) -> usize {
     );
 }
 
-pub fn load(file_path: &str) -> crate::RadFoamModel {
+pub fn load(file_path: &str) -> crate::PointCloudModel {
     use std::io::{BufRead as _, Read as _};
 
     assert!(
@@ -416,14 +416,14 @@ pub fn load(file_path: &str) -> crate::RadFoamModel {
     );
 
     // Read vertex records
-    let mut points = vec![glam::Vec3::ZERO; num_points];
+    // Points: Vec4 with xyz=position, w=density
+    let mut points = vec![glam::Vec4::ZERO; num_points];
     let mut adjacency_offsets = vec![0u32; num_points + 1];
 
-    // Packed attributes: per point row = [sh_coeffs (sh_dim), density]
+    // SH coefficients only (no density - that goes in points.w)
     // TEMPORARY: upstream PLY doesn't include DC SH coefficients. We approximate DC from
     // `red/green/blue` preview fields if present, otherwise we leave DC at 0.
-    // Then we fill SH-rest from color_sh_* and append density.
-    let mut attributes = vec![0.0f32; num_points * attr_dim];
+    let mut sh_coefficients = vec![0.0f32; num_points * sh_dim];
 
     const C0: f32 = 0.28209479177387814;
 
@@ -436,9 +436,8 @@ pub fn load(file_path: &str) -> crate::RadFoamModel {
                 let x = read_f32_le(&vertex_row, x_off);
                 let y = read_f32_le(&vertex_row, y_off);
                 let z = read_f32_le(&vertex_row, z_off);
-                points[i] = glam::Vec3::new(x, y, z);
-
                 let density = read_f32_le(&vertex_row, density_off);
+                points[i] = glam::Vec4::new(x, y, z, density);
 
                 // adjacency_offset stores offsets[i+1] in upstream exporter
                 let end_off = read_u32_le(&vertex_row, adj_off_off);
@@ -446,7 +445,7 @@ pub fn load(file_path: &str) -> crate::RadFoamModel {
 
                 // SH layout: [R_comp0, G_comp0, B_comp0, R_comp1, G_comp1, B_comp1, ...]
                 // TEMPORARY: approximate component 0 (DC) from preview RGB if present.
-                let base = i * attr_dim;
+                let base = i * sh_dim;
 
                 if let (Some((r_ty, r_off)), Some((g_ty, g_off)), Some((b_ty, b_off))) =
                     (red_prop, green_prop, blue_prop)
@@ -461,9 +460,9 @@ pub fn load(file_path: &str) -> crate::RadFoamModel {
                     let g8 = read_u8(&vertex_row, g_off) as f32 / 255.0;
                     let b8 = read_u8(&vertex_row, b_off) as f32 / 255.0;
 
-                    attributes[base + 0] = (r8 - 0.5) / C0;
-                    attributes[base + 1] = (g8 - 0.5) / C0;
-                    attributes[base + 2] = (b8 - 0.5) / C0;
+                    sh_coefficients[base + 0] = (r8 - 0.5) / C0;
+                    sh_coefficients[base + 1] = (g8 - 0.5) / C0;
+                    sh_coefficients[base + 2] = (b8 - 0.5) / C0;
                 }
 
                 // Fill components 1..sh_components-1 from color_sh_*
@@ -473,11 +472,9 @@ pub fn load(file_path: &str) -> crate::RadFoamModel {
                         let comp = 1 + (j / 3);
                         let ch = j % 3;
                         let dst = base + 3 * comp + ch;
-                        attributes[dst] = v;
+                        sh_coefficients[dst] = v;
                     }
                 }
-
-                attributes[base + sh_dim] = density;
             }
 
             // Read adjacency records
@@ -500,12 +497,15 @@ pub fn load(file_path: &str) -> crate::RadFoamModel {
             // Validate CSR offsets + indices
             validate_csr(&adjacency_offsets, &point_adjacency, num_points);
 
-            return crate::RadFoamModel {
+            return crate::PointCloudModel {
                 points,
-                attributes,
+                sh_coefficients,
                 sh_degree,
-                point_adjacency,
-                point_adjacency_offsets: adjacency_offsets,
+                transforms: None,
+                adjacency: Some(crate::Adjacency {
+                    neighbors: point_adjacency,
+                    offsets: adjacency_offsets,
+                }),
             };
         }
         PlyFormat::Ascii => {
@@ -575,18 +575,18 @@ pub fn load(file_path: &str) -> crate::RadFoamModel {
                     col += 1;
                 }
 
-                points[i] = glam::Vec3::new(x, y, z);
+                points[i] = glam::Vec4::new(x, y, z, density);
                 adjacency_offsets[i + 1] = end_off;
 
-                let base = i * attr_dim;
+                let base = i * sh_dim;
 
                 if let (Some(r8), Some(g8), Some(b8)) = (r8_opt, g8_opt, b8_opt) {
                     let r = (r8 as f32) / 255.0;
                     let g = (g8 as f32) / 255.0;
                     let b = (b8 as f32) / 255.0;
-                    attributes[base + 0] = (r - 0.5) / C0;
-                    attributes[base + 1] = (g - 0.5) / C0;
-                    attributes[base + 2] = (b - 0.5) / C0;
+                    sh_coefficients[base + 0] = (r - 0.5) / C0;
+                    sh_coefficients[base + 1] = (g - 0.5) / C0;
+                    sh_coefficients[base + 2] = (b - 0.5) / C0;
                 }
 
                 // Fill components 1.. from parsed SH-rest
@@ -594,10 +594,8 @@ pub fn load(file_path: &str) -> crate::RadFoamModel {
                     let comp = 1 + (j / 3);
                     let ch = j % 3;
                     let dst = base + 3 * comp + ch;
-                    attributes[dst] = *v;
+                    sh_coefficients[dst] = *v;
                 }
-
-                attributes[base + sh_dim] = density;
             }
 
             // adjacency element lines
@@ -617,12 +615,15 @@ pub fn load(file_path: &str) -> crate::RadFoamModel {
             // Validate CSR offsets + indices
             validate_csr(&adjacency_offsets, &point_adjacency, num_points);
 
-            return crate::RadFoamModel {
+            return crate::PointCloudModel {
                 points,
-                attributes,
+                sh_coefficients,
                 sh_degree,
-                point_adjacency,
-                point_adjacency_offsets: adjacency_offsets,
+                transforms: None,
+                adjacency: Some(crate::Adjacency {
+                    neighbors: point_adjacency,
+                    offsets: adjacency_offsets,
+                }),
             };
         }
     }

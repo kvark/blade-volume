@@ -38,11 +38,9 @@ This ensures:
 
 Attributes
 ----------
-We construct a `RadFoamModel` compatible with the engine:
-- packed attribute row length: `attr_dim = 1 + 3*(1+sh_degree)^2`
-- coefficient layout: interleaved RGB per SH component:
-    [R_c0, G_c0, B_c0, R_c1, G_c1, B_c1, ...]
-- density is the last scalar.
+We construct a `PointCloudModel` compatible with the engine:
+- SH coefficients packed as RGB per component
+- density stored in points[i].w
 
 For most tests:
 - set `sh_degree = 0` to validate DC-only SH evaluation or constant color.
@@ -79,7 +77,7 @@ pub struct BranchingParams {
     /// Recommend > 0 to ensure dp>0 candidates exist for +Z rays.
     pub branch_z_offset: f32,
 
-    /// Per-cell density to pack into attributes. Must be finite and >= 0.
+    /// Per-cell density. Must be finite and >= 0.
     pub density: f32,
     /// SH degree used for packed attribute layout.
     pub sh_degree: usize,
@@ -104,8 +102,8 @@ impl Default for BranchingParams {
 
 /// Build a branching synthetic RadFoam model.
 ///
-/// Returns a `RadFoamModel` with points, packed attributes, and CSR adjacency.
-pub fn make_branching_model(params: BranchingParams) -> vol::RadFoamModel {
+/// Returns a `PointCloudModel` with points, SH coefficients, and CSR adjacency.
+pub fn make_branching_model(params: BranchingParams) -> vol::PointCloudModel {
     assert!(params.spine_len >= 2, "spine_len must be >= 2");
     assert!(
         params.dz.is_finite() && params.dz > 0.0,
@@ -126,7 +124,7 @@ pub fn make_branching_model(params: BranchingParams) -> vol::RadFoamModel {
     );
 
     let comps = vol::get_sh_component_count(params.sh_degree);
-    let attr_dim = vol::RadFoamModel::attribute_dim(params.sh_degree);
+    let sh_dim = comps * 3;
 
     // Layout:
     // - First `spine_len` points are spine nodes S_i
@@ -142,12 +140,17 @@ pub fn make_branching_model(params: BranchingParams) -> vol::RadFoamModel {
         angles.push(t * std::f32::consts::TAU);
     }
 
-    // Points
-    let mut points: Vec<glam::Vec3> = Vec::with_capacity(n_total);
+    // Points (Vec4 with density in w)
+    let mut points: Vec<glam::Vec4> = Vec::with_capacity(n_total);
 
     // Spine points
     for i in 0..n_spine {
-        points.push(glam::Vec3::new(0.0, 0.0, (i as f32) * params.dz));
+        points.push(glam::Vec4::new(
+            0.0,
+            0.0,
+            (i as f32) * params.dz,
+            params.density,
+        ));
     }
 
     // Branch points
@@ -159,7 +162,12 @@ pub fn make_branching_model(params: BranchingParams) -> vol::RadFoamModel {
             let x = params.branch_radius * a.cos();
             let y = params.branch_radius * a.sin();
             let z = params.branch_z_offset;
-            points.push(spine + glam::Vec3::new(x, y, z));
+            points.push(glam::Vec4::new(
+                spine.x + x,
+                spine.y + y,
+                spine.z + z,
+                params.density,
+            ));
         }
     }
     debug_assert_eq!(points.len(), n_total);
@@ -195,27 +203,27 @@ pub fn make_branching_model(params: BranchingParams) -> vol::RadFoamModel {
     }
 
     // CSR
-    let mut point_adjacency_offsets: Vec<u32> = Vec::with_capacity(n_total + 1);
-    let mut point_adjacency: Vec<u32> = Vec::new();
+    let mut offsets: Vec<u32> = Vec::with_capacity(n_total + 1);
+    let mut neighbors: Vec<u32> = Vec::new();
 
-    point_adjacency_offsets.push(0);
+    offsets.push(0);
     let mut running: u32 = 0;
     for i in 0..n_total {
         let list = &neigh[i];
-        point_adjacency.extend_from_slice(list);
+        neighbors.extend_from_slice(list);
         running += list.len() as u32;
-        point_adjacency_offsets.push(running);
+        offsets.push(running);
     }
 
-    // Packed attributes: set DC, optional degree-1 term(s), set density as last scalar
-    let mut attributes = vec![0.0f32; n_total * attr_dim];
+    // SH coefficients: set DC, optional higher degree terms
+    let mut sh_coefficients = vec![0.0f32; n_total * sh_dim];
     for i in 0..n_total {
-        let base = i * attr_dim;
+        let base = i * sh_dim;
 
         // DC component (component 0)
-        attributes[base + 0] = params.dc.x;
-        attributes[base + 1] = params.dc.y;
-        attributes[base + 2] = params.dc.z;
+        sh_coefficients[base + 0] = params.dc.x;
+        sh_coefficients[base + 1] = params.dc.y;
+        sh_coefficients[base + 2] = params.dc.z;
 
         // If sh_degree >= 1, populate component 1 with a small non-zero coefficient so that
         // SH evaluation is observable in GPU-vs-CPU tests.
@@ -227,42 +235,39 @@ pub fn make_branching_model(params: BranchingParams) -> vol::RadFoamModel {
         //   comp3:  base+9..11
         //   comp4:  base+12..14  (degree 2 starts here)
         //   comp9:  base+27..29  (degree 3 starts here)
-        if params.sh_degree >= 1 {
+        if params.sh_degree >= 1 && sh_dim > 3 {
             // A small, deterministic coefficient; keep it modest to avoid saturating.
             // Only the X channel is non-zero to make direction dependence easier to spot.
-            attributes[base + 3] = 0.05;
-            attributes[base + 4] = 0.0;
-            attributes[base + 5] = 0.0;
+            sh_coefficients[base + 3] = 0.05;
+            sh_coefficients[base + 4] = 0.0;
+            sh_coefficients[base + 5] = 0.0;
         }
 
         // If sh_degree >= 2, also populate one degree-2 coefficient so the degree-2
         // code path is exercised meaningfully. We use component 4 (x*y term in our WGSL)
         // at base+12..14.
-        if params.sh_degree >= 2 {
-            attributes[base + 12] = 0.03;
-            attributes[base + 13] = 0.0;
-            attributes[base + 14] = 0.0;
+        if params.sh_degree >= 2 && sh_dim > 14 {
+            sh_coefficients[base + 12] = 0.03;
+            sh_coefficients[base + 13] = 0.0;
+            sh_coefficients[base + 14] = 0.0;
         }
 
         // If sh_degree >= 3, populate one degree-3 coefficient so the degree-3
         // code path is exercised meaningfully. We use component 9 (the first degree-3 term
         // in our WGSL) at base+27..29.
-        if params.sh_degree >= 3 {
-            attributes[base + 27] = 0.02;
-            attributes[base + 28] = 0.0;
-            attributes[base + 29] = 0.0;
+        if params.sh_degree >= 3 && sh_dim > 29 {
+            sh_coefficients[base + 27] = 0.02;
+            sh_coefficients[base + 28] = 0.0;
+            sh_coefficients[base + 29] = 0.0;
         }
-
-        // Density last scalar (index 3*comps)
-        attributes[base + (3 * comps)] = params.density;
     }
 
-    vol::RadFoamModel {
+    vol::PointCloudModel {
         points,
-        attributes,
+        sh_coefficients,
         sh_degree: params.sh_degree,
-        point_adjacency,
-        point_adjacency_offsets,
+        transforms: None,
+        adjacency: Some(vol::Adjacency { neighbors, offsets }),
     }
 }
 
@@ -285,38 +290,37 @@ mod tests {
 
         // Count: spine 5 + branches 5*4 = 20 => total 25
         assert_eq!(m.points.len(), 25);
-        assert_eq!(m.point_adjacency_offsets.len(), 26);
+
+        let adj = m.adjacency.as_ref().expect("should have adjacency");
+        assert_eq!(adj.offsets.len(), 26);
 
         // Offsets should be monotonic and end at adjacency length
-        for w in m.point_adjacency_offsets.windows(2) {
+        for w in adj.offsets.windows(2) {
             assert!(w[1] >= w[0]);
         }
-        assert_eq!(
-            *m.point_adjacency_offsets.last().unwrap() as usize,
-            m.point_adjacency.len()
-        );
+        assert_eq!(*adj.offsets.last().unwrap() as usize, adj.neighbors.len());
 
         // Adjacency in-bounds
         let n = m.points.len();
-        for &idx in &m.point_adjacency {
+        for &idx in &adj.neighbors {
             assert!((idx as usize) < n);
         }
 
-        // Attribute length matches N * attr_dim
-        let attr_dim = vol::RadFoamModel::attribute_dim(m.sh_degree);
-        assert_eq!(m.attributes.len(), n * attr_dim);
+        // SH coefficients length matches N * sh_dim
+        let sh_dim = m.sh_component_count() * 3;
+        assert_eq!(m.sh_coefficients.len(), n * sh_dim);
 
         // Spot-check: a branch node should have exactly 1 neighbor (its parent spine)
         // Branch nodes start at index spine_len=5.
         let branch0 = 5usize;
-        let a0 = m.point_adjacency_offsets[branch0] as usize;
-        let a1 = m.point_adjacency_offsets[branch0 + 1] as usize;
+        let a0 = adj.offsets[branch0] as usize;
+        let a1 = adj.offsets[branch0 + 1] as usize;
         assert_eq!(a1 - a0, 1);
 
         // A spine node should have >= 1 + branch_degree neighbors (plus prev/next)
         let spine2 = 2usize;
-        let s0 = m.point_adjacency_offsets[spine2] as usize;
-        let s1 = m.point_adjacency_offsets[spine2 + 1] as usize;
+        let s0 = adj.offsets[spine2] as usize;
+        let s1 = adj.offsets[spine2 + 1] as usize;
         assert!((s1 - s0) >= 1 + 4);
     }
 }

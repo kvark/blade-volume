@@ -98,26 +98,22 @@ pub fn detect_format(file_path: &str) -> FormatInfo {
     }
 }
 
-/// Volumetric data that can be either Gaussian or RadFoam format.
-pub enum VolumeData {
-    Gaussian(crate::Model),
-    RadFoam(crate::RadFoamModel),
-}
-
 /// Load volumetric data, automatically detecting the format.
 ///
 /// For PLY files, examines the header to determine if it's a RadFoam or Gaussian format.
 /// SPZ files are always loaded as Gaussian format.
-pub fn load_auto(file_path: &str) -> VolumeData {
+pub fn load(file_path: &str) -> crate::PointCloudModel {
     let info = detect_format(file_path);
     match info.kind {
-        VolumeKind::Gaussian => VolumeData::Gaussian(load_gaussian(file_path)),
-        VolumeKind::RadFoam => VolumeData::RadFoam(load_radfoam(file_path)),
+        VolumeKind::Gaussian => load_gaussian(file_path),
+        VolumeKind::RadFoam => load_radfoam(file_path),
     }
 }
 
 /// Load a Gaussian splatting model from a PLY or SPZ file.
-pub fn load_gaussian(file_name: &str) -> crate::Model {
+///
+/// Returns a `PointCloudModel` with `transforms` set (rotation + scale).
+pub fn load_gaussian(file_name: &str) -> crate::PointCloudModel {
     if file_name.ends_with(".ply") {
         ply::load(file_name)
     } else if file_name.ends_with(".spz") {
@@ -129,24 +125,15 @@ pub fn load_gaussian(file_name: &str) -> crate::Model {
 
 /// Load a RadFoam model from a PLY file.
 ///
+/// Returns a `PointCloudModel` with `adjacency` set.
+///
 /// This expects the PLY format emitted by upstream `RadFoamScene.save_ply()`:
 /// - a `vertex` element with `x,y,z`, `density`, `adjacency_offset`, and `color_sh_*`
 /// - an `adjacency` element containing the flattened `uint32` neighbor indices.
-pub fn load_radfoam(file_name: &str) -> crate::RadFoamModel {
+pub fn load_radfoam(file_name: &str) -> crate::PointCloudModel {
     if file_name.ends_with(".ply") {
         radfoam_ply::load(file_name)
     } else {
         panic!("Unsupported file name for RadFoam loader: {}", file_name);
     }
-}
-
-// Keep the old function names for backwards compatibility
-#[deprecated(since = "0.2.0", note = "Use `load_gaussian` instead")]
-pub fn load(file_name: &str) -> crate::Model {
-    load_gaussian(file_name)
-}
-
-#[deprecated(since = "0.2.0", note = "Use `load_radfoam` instead")]
-pub fn load_radfoam_ply(file_name: &str) -> crate::RadFoamModel {
-    load_radfoam(file_name)
 }

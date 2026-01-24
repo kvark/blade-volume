@@ -6,7 +6,8 @@ pub struct InitParameters {
     pub min_opacity: f32,
 }
 
-pub struct PointCloud {
+/// GPU representation of a Gaussian point cloud for ray-traced rendering.
+pub struct GaussianGpuCloud {
     mesh_buf: gpu::Buffer,
     instance_buf: gpu::Buffer,
     pub gauss_buf: gpu::Buffer,
@@ -14,15 +15,23 @@ pub struct PointCloud {
     pub tlas: gpu::AccelerationStructure,
 }
 
-impl PointCloud {
+impl GaussianGpuCloud {
+    /// Creates a GPU point cloud from a unified model.
+    ///
+    /// Requires the model to have `transforms` (rotation + scale).
     pub fn new(
-        model: &super::Model,
+        model: &crate::PointCloudModel,
         params: &InitParameters,
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Self {
-        let count = model.gaussians.len();
-        let gauss_total_size = (count * mem::size_of::<super::GaussianGpu>()) as u64;
+        let transforms = model
+            .transforms
+            .as_ref()
+            .expect("GaussianGpuCloud requires transforms");
+
+        let count = model.len();
+        let gauss_total_size = (count * mem::size_of::<crate::GaussianGpu>()) as u64;
         let gauss_buf = context.create_buffer(gpu::BufferDesc {
             name: "gauss-blobs",
             size: gauss_total_size,
@@ -35,21 +44,23 @@ impl PointCloud {
         });
         {
             let gaussians_gpu = unsafe {
-                slice::from_raw_parts_mut(gauss_scratch.data() as *mut super::GaussianGpu, count)
+                slice::from_raw_parts_mut(gauss_scratch.data() as *mut crate::GaussianGpu, count)
             };
-            for (gg, g) in gaussians_gpu.iter_mut().zip(&model.gaussians) {
-                gg.mean = g.mean.into();
-                gg.rotation = g.rotation.into();
-                gg.scale = g.scale.into();
-                gg.opacity = g.opacity;
-                for (h, shc) in gg.harmonics.iter_mut().zip(g.shc.iter()) {
-                    *h = (*shc, 0)
+            for (i, gg) in gaussians_gpu.iter_mut().enumerate() {
+                let point = model.points[i];
+                gg.mean = [point.x, point.y, point.z];
+                gg.rotation = transforms.rotations[i].into();
+                gg.scale = transforms.scales[i].into();
+                gg.opacity = point.w; // density/opacity stored in w
+                let shc = model.get_sh_coefficients(i);
+                for (h, c) in gg.harmonics.iter_mut().zip(shc.iter()) {
+                    *h = (*c, 0)
                 }
             }
         }
 
         let inner_radius = 1.0;
-        let geometry = super::Icosahedron::new(inner_radius);
+        let geometry = crate::Icosahedron::new(inner_radius);
         let vertex_data_size = (geometry.vertices.len() * mem::size_of::<[f32; 3]>()) as u64;
         let index_data_size = (geometry.triangles.len() * mem::size_of::<[u16; 3]>()) as u64;
         let mesh_buf = context.create_buffer(gpu::BufferDesc {
@@ -76,25 +87,32 @@ impl PointCloud {
         });
 
         // Build instances
-        let instances = model
-            .gaussians
-            .iter()
-            .map(|g| gpu::AccelerationStructureInstance {
-                acceleration_structure_index: 0,
-                transform: {
-                    let extra_scale = (2.0 * (g.opacity / params.min_opacity).ln().max(0.0)).sqrt();
-                    let m = glam::Mat3::from_quat(g.rotation)
-                        * glam::Mat3::from_diagonal(extra_scale * g.scale);
-                    mint::ColumnMatrix3x4 {
-                        x: m.x_axis.into(),
-                        y: m.y_axis.into(),
-                        z: m.z_axis.into(),
-                        w: g.mean.into(),
-                    }
-                    .into()
-                },
-                mask: 0xFF,
-                custom_index: 0,
+        let instances = (0..count)
+            .map(|i| {
+                let point = model.points[i];
+                let rotation = transforms.rotations[i];
+                let scale = transforms.scales[i];
+                let opacity = point.w;
+                let mean = glam::Vec3::new(point.x, point.y, point.z);
+
+                gpu::AccelerationStructureInstance {
+                    acceleration_structure_index: 0,
+                    transform: {
+                        let extra_scale =
+                            (2.0 * (opacity / params.min_opacity).ln().max(0.0)).sqrt();
+                        let m = glam::Mat3::from_quat(rotation)
+                            * glam::Mat3::from_diagonal(extra_scale * scale);
+                        mint::ColumnMatrix3x4 {
+                            x: m.x_axis.into(),
+                            y: m.y_axis.into(),
+                            z: m.z_axis.into(),
+                            w: mean.into(),
+                        }
+                        .into()
+                    },
+                    mask: 0xFF,
+                    custom_index: 0,
+                }
             })
             .collect::<Vec<_>>();
         let instance_buf =

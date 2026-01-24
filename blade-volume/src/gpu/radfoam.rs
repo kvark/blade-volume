@@ -2,19 +2,19 @@ use blade_graphics as gpu;
 
 use std::{mem, ptr, slice};
 
-/// GPU-side storage for an upstream Radiant Foam (RadFoam) scene.
+/// GPU-side storage for RadFoam point cloud rendering.
 ///
-/// This uploads the buffers required by the upstream tracing kernel:
-/// - `points`: `float3[N]`
+/// This uploads the buffers required by the RadFoam tracing kernel:
+/// - `points`: `vec4<f32>[N]` where xyz is position, w is unused
 /// - `attributes`: packed `f32[N * attr_dim]`, where `attr_dim = 1 + 3 * (1 + sh_degree)^2`
-///   and the last scalar in each row is density `s`.
+///   and the last scalar in each row is density
 /// - `point_adjacency`: flattened neighbor list `u32[K]`
 /// - `point_adjacency_offsets`: CSR offsets `u32[N+1]`
 ///
 /// Notes:
 /// - This does not build any hardware ray tracing acceleration structures.
-/// - This is intended for compute-only traversal.
-pub struct RadFoamPointCloud {
+/// - This is intended for compute-only Voronoi traversal.
+pub struct RadFoamGpuCloud {
     points_buf: gpu::Buffer,
     attributes_buf: gpu::Buffer,
     point_adjacency_buf: gpu::Buffer,
@@ -26,40 +26,38 @@ pub struct RadFoamPointCloud {
     pub num_adjacency: usize,
 }
 
-impl RadFoamPointCloud {
+impl RadFoamGpuCloud {
+    /// Creates a GPU point cloud from a unified model.
+    ///
+    /// Requires the model to have `adjacency` data.
     pub fn new(
-        model: &crate::RadFoamModel,
+        model: &crate::PointCloudModel,
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Self {
-        assert_eq!(
-            model.points.len() + 1,
-            model.point_adjacency_offsets.len(),
-            "RadFoamModel.point_adjacency_offsets must have length N+1"
-        );
-        let num_points = model.points.len();
-        let num_adjacency = model.point_adjacency.len();
-        let attr_dim = crate::RadFoamModel::attribute_dim(model.sh_degree);
+        let adjacency = model
+            .adjacency
+            .as_ref()
+            .expect("RadFoamGpuCloud requires adjacency");
 
+        let num_points = model.len();
         assert_eq!(
-            model.attributes.len(),
-            num_points * attr_dim,
-            "RadFoamModel.attributes must have length N*attr_dim"
+            num_points + 1,
+            adjacency.offsets.len(),
+            "adjacency.offsets must have length N+1"
         );
-        assert!(
-            !model.points.is_empty(),
-            "RadFoamModel has zero points; nothing to upload"
-        );
+
+        let num_adjacency = adjacency.neighbors.len();
+        let sh_component_count = model.sh_component_count();
+        let attr_dim = 1 + 3 * sh_component_count; // SH coefficients + density
+
+        assert!(num_points > 0, "Model has zero points; nothing to upload");
 
         // Sizes
-        //
-        // IMPORTANT:
-        // Our WGSL shaders declare points as `array<vec4<f32>>`, so we must upload points
-        // with 16-byte stride (vec4) to match the GPU layout.
         let points_size = (num_points * mem::size_of::<[f32; 4]>()) as u64;
-        let attrs_size = (model.attributes.len() * mem::size_of::<f32>()) as u64;
+        let attrs_size = (num_points * attr_dim * mem::size_of::<f32>()) as u64;
         let adj_size = (num_adjacency * mem::size_of::<u32>()) as u64;
-        let adj_off_size = (model.point_adjacency_offsets.len() * mem::size_of::<u32>()) as u64;
+        let adj_off_size = (adjacency.offsets.len() * mem::size_of::<u32>()) as u64;
 
         // Device buffers
         let points_buf = context.create_buffer(gpu::BufferDesc {
@@ -107,36 +105,49 @@ impl RadFoamPointCloud {
 
         // Fill staging buffers
         unsafe {
-            // points: write as `[f32; 4]` to match WGSL `array<vec4<f32>>` layout.
-            // We keep `w = 0.0` unused.
+            // Points: write as `[f32; 4]` to match WGSL `array<vec4<f32>>` layout.
+            // xyz = position, w = unused (shader reads density from attributes)
             let dst_points =
                 slice::from_raw_parts_mut(points_stage.data() as *mut [f32; 4], num_points);
-            for (dst, p) in dst_points.iter_mut().zip(model.points.iter()) {
+            for (i, dst) in dst_points.iter_mut().enumerate() {
+                let p = model.points[i];
                 dst[0] = p.x;
                 dst[1] = p.y;
                 dst[2] = p.z;
-                dst[3] = 0.0;
+                dst[3] = 0.0; // unused in shader
             }
 
-            // attributes: contiguous f32 array
-            ptr::copy_nonoverlapping(
-                model.attributes.as_ptr(),
+            // Attributes: pack as [sh_coeffs..., density] per point
+            // This matches the shader's expected layout
+            let dst_attrs = slice::from_raw_parts_mut(
                 attributes_stage.data() as *mut f32,
-                model.attributes.len(),
+                num_points * attr_dim,
             );
+            for i in 0..num_points {
+                let base = i * attr_dim;
+                // Copy SH coefficients (already packed as RGB per component)
+                let sh_base = i * sh_component_count * 3;
+                for j in 0..(sh_component_count * 3) {
+                    dst_attrs[base + j] = model.sh_coefficients[sh_base + j];
+                }
+                // Density is the last scalar (from points.w)
+                dst_attrs[base + sh_component_count * 3] = model.points[i].w;
+            }
 
-            // adjacency: contiguous u32 array
-            ptr::copy_nonoverlapping(
-                model.point_adjacency.as_ptr(),
-                adjacency_stage.data() as *mut u32,
-                model.point_adjacency.len(),
-            );
+            // Adjacency: contiguous u32 array
+            if num_adjacency > 0 {
+                ptr::copy_nonoverlapping(
+                    adjacency.neighbors.as_ptr(),
+                    adjacency_stage.data() as *mut u32,
+                    num_adjacency,
+                );
+            }
 
-            // adjacency offsets: contiguous u32 array
+            // Adjacency offsets: contiguous u32 array
             ptr::copy_nonoverlapping(
-                model.point_adjacency_offsets.as_ptr(),
+                adjacency.offsets.as_ptr(),
                 adjacency_offsets_stage.data() as *mut u32,
-                model.point_adjacency_offsets.len(),
+                adjacency.offsets.len(),
             );
         }
 

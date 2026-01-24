@@ -10,17 +10,6 @@ This is a Rust+WGSL library that directly works with volumetric data.
 
 # Development Tracks
 
-## Unification
-
-Make the `view` example able to run different rendering methods, while sharing the input and camera logic. That shared code can land in a separate library within this repo, such that this library depends on `winit`, `egui`, and other view-related things, while the core library doesn't care about user interaction.
-
-Try to integrate radfoam specific point clouds into the general point cloud format. We can support clouds with a few different formats.
-
-Debugging/introspection facilities:
-  - integrate egui, allow to control the quality real-time
-  - display GPU timings
-  - debug rendering mode that shows the density of particles per pixel
-
 ## Productionization
 
 Modularize the shaders:

@@ -8,6 +8,7 @@ blade-macros = "0.3"
 bytemuck = "1"
 glam = { version = "0.29", features = ["mint"] }
 flate2 = "1.0"
+half = "2"
 log = "0.4"
 mint = "0.5"
 argh = "0.1"

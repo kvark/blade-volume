@@ -18,7 +18,7 @@ fn sigmoid(value: f32) -> f32 {
     1.0 / (1.0 + (-value).exp())
 }
 
-pub fn load(file_path: &str) -> crate::Model {
+pub fn load(file_path: &str) -> crate::PointCloudModel {
     use std::io::{BufRead as _, Read as _};
 
     let mut count = 0;
@@ -80,41 +80,70 @@ pub fn load(file_path: &str) -> crate::Model {
     assert_ne!(offsets.f_dc, 0);
 
     let max_sh_degree = crate::get_sh_degree(sh_rest_count / 3 + 1).min(crate::MAX_SH_DEGREE);
+    let sh_component_count = crate::get_sh_component_count(max_sh_degree);
     let ply_rotation =
         glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 1.0, 0.0), -f32::consts::FRAC_PI_2);
 
     log::info!("Reading {} vertices with stride {} from PLY", count, stride);
+
+    let mut points = Vec::with_capacity(count);
+    let mut rotations = Vec::with_capacity(count);
+    let mut scales = Vec::with_capacity(count);
+    let mut sh_coefficients = Vec::with_capacity(count * sh_component_count * 3);
+
     let mut scratch = vec![0u8; stride];
-    let gaussians = (0..count)
-        .map(|_| {
-            file.read_exact(&mut scratch).unwrap();
-            let mean = read_slice::<3>(&scratch, offsets.mean);
-            let rot = read_slice::<4>(&scratch, offsets.rot);
-            let scale = read_slice::<3>(&scratch, offsets.scale);
-            let opacity = read_slice::<1>(&scratch, offsets.opacity);
-            let mut shc = [glam::Vec3::default(); crate::MAX_SH_COMPONENTS];
-            shc[0] = glam::Vec3::from(read_slice::<3>(&scratch, offsets.f_dc));
-            for i in 1..crate::get_sh_component_count(max_sh_degree) {
-                for k in 0..2 {
-                    let offset = offsets.f_rest + (k * sh_rest_count + i) * mem::size_of::<f32>();
-                    shc[i][k] = read_slice::<1>(&scratch, offset)[0];
+    for _ in 0..count {
+        file.read_exact(&mut scratch).unwrap();
+        let mean = read_slice::<3>(&scratch, offsets.mean);
+        let rot = read_slice::<4>(&scratch, offsets.rot);
+        let scale = read_slice::<3>(&scratch, offsets.scale);
+        let opacity = read_slice::<1>(&scratch, offsets.opacity);
+
+        // Position + opacity
+        let position = ply_rotation * glam::Vec3::from(mean);
+        points.push(glam::Vec4::new(
+            position.x,
+            position.y,
+            position.z,
+            sigmoid(opacity[0]),
+        ));
+
+        // Rotation
+        let rotation =
+            ply_rotation * glam::Quat::from_xyzw(rot[1], rot[2], rot[3], rot[0]).normalize();
+        rotations.push(rotation);
+
+        // Scale (exponentiated from log-space)
+        scales.push(glam::Vec3::from(scale).exp());
+
+        // SH coefficients - pack as RGB per component
+        // DC term
+        let f_dc = read_slice::<3>(&scratch, offsets.f_dc);
+        sh_coefficients.push(f_dc[0]);
+        sh_coefficients.push(f_dc[1]);
+        sh_coefficients.push(f_dc[2]);
+
+        // Higher order terms
+        for i in 1..sh_component_count {
+            for k in 0..3 {
+                let offset = offsets.f_rest + (k * sh_rest_count + i) * mem::size_of::<f32>();
+                if offset < scratch.len() {
+                    sh_coefficients.push(read_slice::<1>(&scratch, offset)[0]);
+                } else {
+                    sh_coefficients.push(0.0);
                 }
             }
-            crate::Gaussian {
-                mean: ply_rotation * glam::Vec3::from(mean),
-                rotation: ply_rotation
-                    * glam::Quat::from_xyzw(rot[1], rot[2], rot[3], rot[0]).normalize(),
-                scale: glam::Vec3::from(scale).exp(),
-                opacity: sigmoid(opacity[0]),
-                shc,
-            }
-        })
-        .collect();
+        }
+    }
+
     // Ensure we are at the end of the file
     assert_eq!(file.read(&mut scratch).unwrap(), 0);
 
-    crate::Model {
-        gaussians,
-        max_sh_degree,
+    crate::PointCloudModel {
+        points,
+        sh_coefficients,
+        sh_degree: max_sh_degree,
+        transforms: Some(crate::Transforms { rotations, scales }),
+        adjacency: None,
     }
 }

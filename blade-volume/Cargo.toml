@@ -13,4 +13,5 @@ log.workspace = true
 mint.workspace = true
 
 [dev-dependencies]
+half.workspace = true
 kiddo.workspace = true

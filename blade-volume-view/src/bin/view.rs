@@ -27,7 +27,7 @@
 use blade_graphics as gpu;
 use blade_volume as vol;
 use blade_volume_view as view;
-use std::{fmt, mem, str};
+use std::{collections::VecDeque, fmt, mem, str};
 
 use blade_egui as begui;
 use egui as ui;
@@ -66,9 +66,6 @@ struct Arguments {
     /// start in debug mode (particle density visualization)
     #[argh(switch)]
     debug: bool,
-    /// start with UI visible
-    #[argh(switch)]
-    ui: bool,
 }
 
 /// Debug/visualization mode for rendering.
@@ -123,14 +120,18 @@ struct GaussianDrawData {
 }
 
 struct GaussianBackend {
-    point_cloud: vol::PointCloud,
+    point_cloud: vol::GaussianGpuCloud,
     draw_pipeline: gpu::RenderPipeline,
     params: GaussianParams,
 }
 
 impl GaussianBackend {
+    fn params_mut(&mut self) -> &mut GaussianParams {
+        &mut self.params
+    }
+
     fn new(
-        model: &vol::Model,
+        model: &vol::PointCloudModel,
         args: &Arguments,
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
@@ -164,7 +165,7 @@ impl GaussianBackend {
         let init_params = vol::InitParameters {
             min_opacity: args.min_opacity,
         };
-        let point_cloud = vol::PointCloud::new(model, &init_params, context, encoder);
+        let point_cloud = vol::GaussianGpuCloud::new(model, &init_params, context, encoder);
 
         let debug_mode = if args.debug {
             DebugMode::ParticleDensity
@@ -174,7 +175,7 @@ impl GaussianBackend {
         let params = GaussianParams {
             min_opacity: args.min_opacity,
             min_transmittance: args.min_transmittance,
-            sh_degree: model.max_sh_degree as u32,
+            sh_degree: model.sh_degree as u32,
             debug_mode: debug_mode as u32,
             pad: [0; 4],
         };
@@ -275,7 +276,7 @@ struct RadFoamBlitData {
 }
 
 struct RadFoamBackend {
-    point_cloud: vol::RadFoamPointCloud,
+    point_cloud: vol::RadFoamGpuCloud,
     /// CPU-side KD-tree for start-point selection
     kd_tree: kiddo::KdTree<f32, 3>,
     trace_pipeline: gpu::ComputePipeline,
@@ -287,8 +288,12 @@ struct RadFoamBackend {
 }
 
 impl RadFoamBackend {
+    fn params_mut(&mut self) -> &mut RadFoamTraceParams {
+        &mut self.trace_params
+    }
+
     fn new(
-        model: &vol::RadFoamModel,
+        model: &vol::PointCloudModel,
         args: &Arguments,
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
@@ -346,7 +351,7 @@ impl RadFoamBackend {
         });
 
         // Upload scene data
-        let point_cloud = vol::RadFoamPointCloud::new(model, context, encoder);
+        let point_cloud = vol::RadFoamGpuCloud::new(model, context, encoder);
 
         let debug_mode = if args.debug {
             DebugMode::ParticleDensity
@@ -591,6 +596,8 @@ impl RenderBackend {
 // Main Application
 // ============================================================================
 
+const FRAME_TIME_HISTORY_SIZE: usize = 120;
+
 struct Example {
     camera: view::ControlledCamera,
     backend: RenderBackend,
@@ -601,11 +608,17 @@ struct Example {
     context: gpu::Context,
     debug_mode: DebugMode,
 
+    // For command line reproduction
+    input_file: String,
+
     // egui overlay
     ui_ctx: ui::Context,
     ui_state: ui_winit::State,
     ui_painter: begui::GuiPainter,
     ui_show: bool,
+
+    // Frame timing history (milliseconds)
+    frame_times: VecDeque<f64>,
 }
 
 impl Example {
@@ -668,46 +681,54 @@ impl Example {
             buffer_count: 2,
         });
 
-        // Determine volume kind: use --kind override or auto-detect
-        let volume_kind = match args.kind.as_deref() {
-            Some("gaussian") => vol::io::VolumeKind::Gaussian,
-            Some("radfoam") => vol::io::VolumeKind::RadFoam,
+        // Load volume data - use --kind override or auto-detect
+        let model = match args.kind.as_deref() {
+            Some("gaussian") => {
+                log::info!("Loading Gaussian data (forced)");
+                vol::io::load_gaussian(&args.input_file)
+            }
+            Some("radfoam") => {
+                log::info!("Loading RadFoam data (forced)");
+                vol::io::load_radfoam(&args.input_file)
+            }
             Some(other) => panic!(
                 "Unknown --kind '{}', expected 'gaussian' or 'radfoam'",
                 other
             ),
             None => {
-                let info = vol::io::detect_format(&args.input_file);
-                log::info!("Auto-detected format: {:?}", info.kind);
-                info.kind
+                log::info!("Auto-detecting format...");
+                vol::io::load(&args.input_file)
             }
         };
 
-        // Create backend based on detected/specified kind
-        let backend = match volume_kind {
-            vol::io::VolumeKind::RadFoam => {
-                log::info!("Loading RadFoam PLY");
-                let model = vol::io::load_radfoam(&args.input_file);
-                RenderBackend::RadFoam(RadFoamBackend::new(
-                    &model,
-                    &args,
-                    &context,
-                    &mut command_encoder,
-                    surface_info.format,
-                    window_size,
-                ))
+        log::info!(
+            "Loaded {} points ({})",
+            model.len(),
+            if model.transforms.is_some() {
+                "Gaussian"
+            } else {
+                "RadFoam"
             }
-            vol::io::VolumeKind::Gaussian => {
-                log::info!("Loading Gaussian data");
-                let model = vol::io::load_gaussian(&args.input_file);
-                RenderBackend::Gaussian(GaussianBackend::new(
-                    &model,
-                    &args,
-                    &context,
-                    &mut command_encoder,
-                    surface_info.format,
-                ))
-            }
+        );
+
+        // Create backend based on model type (transforms = Gaussian, adjacency = RadFoam)
+        let backend = if model.transforms.is_some() {
+            RenderBackend::Gaussian(GaussianBackend::new(
+                &model,
+                &args,
+                &context,
+                &mut command_encoder,
+                surface_info.format,
+            ))
+        } else {
+            RenderBackend::RadFoam(RadFoamBackend::new(
+                &model,
+                &args,
+                &context,
+                &mut command_encoder,
+                surface_info.format,
+                window_size,
+            ))
         };
 
         let debug_mode = if args.debug {
@@ -725,11 +746,14 @@ impl Example {
             surface,
             context,
             debug_mode,
+            input_file: args.input_file,
 
             ui_ctx,
             ui_state,
             ui_painter,
             ui_show,
+
+            frame_times: VecDeque::with_capacity(FRAME_TIME_HISTORY_SIZE),
         }
     }
 
@@ -770,6 +794,9 @@ impl Example {
         let raw_input = self.ui_state.take_egui_input(window);
         self.ui_ctx.begin_pass(raw_input);
 
+        // Pre-compute command line for the UI button (to avoid borrow conflicts)
+        let command_line = self.generate_command_line();
+
         if self.ui_show {
             ui::Window::new("blade-volume-view")
                 .default_open(true)
@@ -783,6 +810,38 @@ impl Example {
                             RenderBackend::RadFoam(_) => {
                                 ui.label("RadFoam compute");
                             }
+                        }
+                    });
+
+                    ui.separator();
+
+                    // Quality controls (backend-specific)
+                    ui.collapsing("Quality", |ui| match self.backend {
+                        RenderBackend::Gaussian(ref mut backend) => {
+                            let params = backend.params_mut();
+                            ui.add(
+                                ui::Slider::new(&mut params.min_opacity, 0.001..=0.5)
+                                    .logarithmic(true)
+                                    .text("Min opacity"),
+                            );
+                            ui.add(
+                                ui::Slider::new(&mut params.min_transmittance, 0.001..=0.5)
+                                    .logarithmic(true)
+                                    .text("Min transmittance"),
+                            );
+                        }
+                        RenderBackend::RadFoam(ref mut backend) => {
+                            let params = backend.params_mut();
+                            ui.add(
+                                ui::Slider::new(&mut params.max_steps, 64..=4096)
+                                    .logarithmic(true)
+                                    .text("Max steps"),
+                            );
+                            ui.add(
+                                ui::Slider::new(&mut params.weight_threshold, 0.0001..=0.1)
+                                    .logarithmic(true)
+                                    .text("Weight threshold"),
+                            );
                         }
                     });
 
@@ -802,13 +861,76 @@ impl Example {
                     });
 
                     ui.separator();
-                    ui.label("Timings (GPU):");
-                    for &(ref name, value) in self.command_encoder.timings() {
-                        ui.label(format!("{}: {:.3} ms", name, value.as_secs_f64() * 1000.0));
+                    ui.collapsing("GPU Timings", |ui| {
+                        // Calculate total frame time from all timing passes
+                        let total_ms: f64 = self
+                            .command_encoder
+                            .timings()
+                            .iter()
+                            .map(|(_, d)| d.as_secs_f64() * 1000.0)
+                            .sum();
+
+                        // Update history
+                        if self.frame_times.len() >= FRAME_TIME_HISTORY_SIZE {
+                            self.frame_times.pop_front();
+                        }
+                        self.frame_times.push_back(total_ms);
+
+                        // Display individual pass timings
+                        for &(ref name, value) in self.command_encoder.timings() {
+                            ui.label(format!("{}: {:.3} ms", name, value.as_secs_f64() * 1000.0));
+                        }
+
+                        // Display frame time histogram
+                        if !self.frame_times.is_empty() {
+                            ui.separator();
+                            let avg_ms: f64 = self.frame_times.iter().sum::<f64>()
+                                / self.frame_times.len() as f64;
+                            let max_ms = self.frame_times.iter().copied().fold(0.0, f64::max);
+                            ui.label(format!("Frame: {:.2} ms avg, {:.2} ms max", avg_ms, max_ms));
+
+                            // Simple bar visualization using egui's built-in plot
+                            let height = 40.0;
+                            let (response, painter) = ui.allocate_painter(
+                                ui::Vec2::new(ui.available_width(), height),
+                                ui::Sense::hover(),
+                            );
+                            let rect = response.rect;
+
+                            // Scale to fit, max at 33ms (30fps baseline)
+                            let max_display_ms = 33.0_f64.max(max_ms * 1.1);
+                            let bar_width = rect.width() / self.frame_times.len() as f32;
+
+                            for (i, &ms) in self.frame_times.iter().enumerate() {
+                                let bar_height = (ms / max_display_ms * height as f64) as f32;
+                                let x = rect.left() + i as f32 * bar_width;
+                                let bar_rect = ui::Rect::from_min_size(
+                                    ui::Pos2::new(x, rect.bottom() - bar_height),
+                                    ui::Vec2::new(bar_width.max(1.0), bar_height),
+                                );
+                                // Color based on frame time (green < 16ms, yellow < 33ms, red > 33ms)
+                                let color = if ms < 16.0 {
+                                    ui::Color32::from_rgb(100, 200, 100)
+                                } else if ms < 33.0 {
+                                    ui::Color32::from_rgb(200, 200, 100)
+                                } else {
+                                    ui::Color32::from_rgb(200, 100, 100)
+                                };
+                                painter.rect_filled(bar_rect, 0.0, color);
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
+                    // Command line reproduction button
+                    if ui.button("Copy command line").clicked() {
+                        ui.ctx().copy_text(command_line.clone());
+                        println!("{}", command_line);
                     }
 
                     ui.separator();
-                    ui.label("Hotkeys: F1 toggle UI, Tab toggle debug, I print info");
+                    ui.small("Hotkeys: F1 toggle UI, Tab toggle debug, I print info");
                 });
         }
 
@@ -882,6 +1004,45 @@ impl Example {
         for &(ref name, value) in self.command_encoder.timings() {
             println!("\t{}: {:.3} ms", name, value.as_secs_f64() * 1000.0);
         }
+    }
+
+    /// Generate command line arguments to reproduce the current view.
+    fn generate_command_line(&self) -> String {
+        let pos = self.camera.position;
+        let (roll, pitch, yaw) = self.camera.orientation.to_euler(EULER);
+
+        let mut args = format!(
+            "cargo run -p blade-volume-view -- \"{}\" --resolution {},{} --cam-pose {:.3},{:.3},{:.3},{:.1},{:.1},{:.1}",
+            self.input_file,
+            self.window_size.width,
+            self.window_size.height,
+            pos.x, pos.y, pos.z,
+            roll / D2R, pitch / D2R, yaw / D2R
+        );
+
+        // Add backend-specific parameters
+        match &self.backend {
+            RenderBackend::Gaussian(backend) => {
+                let params = &backend.params;
+                args.push_str(&format!(" --min-opacity {}", params.min_opacity));
+                args.push_str(&format!(
+                    " --min-transmittance {}",
+                    params.min_transmittance
+                ));
+            }
+            RenderBackend::RadFoam(backend) => {
+                let params = &backend.trace_params;
+                args.push_str(&format!(" --max-steps {}", params.max_steps));
+                args.push_str(&format!(" --weight-threshold {}", params.weight_threshold));
+            }
+        }
+
+        // Add debug flag if active
+        if self.debug_mode == DebugMode::ParticleDensity {
+            args.push_str(" --debug");
+        }
+
+        args
     }
 }
 

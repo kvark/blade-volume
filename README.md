@@ -64,6 +64,8 @@ Implementing [3DGRT paper](https://gaussiantracer.github.io/) with hardware ray 
 cargo run -p blade-volume-view -- /path/to/koala.ply --resolution 800,800 --cam-pose -2.6,-1.7,-0.8,0,73,-17
 ```
 
+Some assets can be found in [GSOP](https://github.com/cgnomads/GSOPs/tree/91e1c34a92f2334a85a3545152d905c5403ee0e0/hip/splats/cleaned).
+
 ## Radiant Foam
 
 Implementing [Radiant Foam paper](https://radiantfoam.github.io/) with pure compute.
@@ -73,7 +75,7 @@ Implementing [Radiant Foam paper](https://radiantfoam.github.io/) with pure comp
 ### Example
 
 ```bash
-cargo run -p blade-volume-view -- /path/to/bicycle.ply --radfoam
+cargo run -p blade-volume-view -- "/path/to/Bicycle.ply" --resolution 1200,900 --cam-pose -1.278,0.002,1.267,-0.0,-57.4,-146.3 --max-steps 1024 --weight-threshold 0.001
 ```
 
 ## Debug Mode

@@ -1,14 +1,12 @@
 #![allow(irrefutable_let_patterns)]
 
 mod camera;
+mod gpu;
 pub mod io;
-mod point_cloud;
-mod radfoam_point_cloud;
 mod shape;
 
 pub use camera::CameraParams;
-pub use point_cloud::{InitParameters, PointCloud};
-pub use radfoam_point_cloud::RadFoamPointCloud;
+pub use gpu::{GaussianGpuCloud, InitParameters, RadFoamGpuCloud};
 pub use shape::Icosahedron;
 
 pub const fn get_sh_component_count(degree: usize) -> usize {
@@ -29,59 +27,66 @@ pub const fn get_sh_degree(count: usize) -> usize {
 pub const MAX_SH_DEGREE: usize = 3;
 pub const MAX_SH_COMPONENTS: usize = get_sh_component_count(MAX_SH_DEGREE);
 
-#[derive(Clone, Default)]
-pub struct Gaussian {
-    pub mean: glam::Vec3,
-    pub rotation: glam::Quat,
-    pub scale: glam::Vec3,
-    pub opacity: f32,
-    pub shc: [glam::Vec3; MAX_SH_COMPONENTS],
+// ============================================================================
+// Unified Point Cloud Model
+// ============================================================================
+
+/// Gaussian ellipsoid transforms: rotation (quat) + scale (vec3).
+#[derive(Clone)]
+pub struct Transforms {
+    /// Rotation quaternion per point.
+    pub rotations: Vec<glam::Quat>,
+    /// Scale per point (in log-space from PLY, exponentiated for use).
+    pub scales: Vec<glam::Vec3>,
 }
 
-pub struct Model {
-    pub gaussians: Vec<Gaussian>,
-    pub max_sh_degree: usize,
+/// CSR adjacency structure for Voronoi cell traversal.
+#[derive(Clone)]
+pub struct Adjacency {
+    /// Flattened neighbor indices.
+    pub neighbors: Vec<u32>,
+    /// CSR offsets (N+1 entries where N = number of points).
+    pub offsets: Vec<u32>,
 }
 
-/// CPU-side storage for an upstream Radiant Foam (RadFoam) scene exported as PLY.
+/// Unified point cloud model.
 ///
-/// This matches the data consumed by the upstream RadFoam tracing kernel:
-/// - `points` are primal points
-/// - `attributes` contain packed SH coefficients followed by density as the last scalar
-/// - `point_adjacency` + `point_adjacency_offsets` form a CSR adjacency structure
+/// Core data common to all formats:
+/// - `points`: position (xyz) + density/opacity (w) packed as Vec4
+/// - `sh_coefficients`: spherical harmonics coefficients
+/// - `sh_degree`: SH basis degree (0-3)
 ///
-/// Notes:
-/// - Upstream uses `attr_memory_size = sh_dim + 1`, where `sh_dim = 3 * (1 + sh_degree)^2`
-/// - The last scalar in each attribute row is density `s`
-///
-/// This type intentionally does not store mesh/triangles; RadFoam traverses Voronoi
-/// cells induced by the point set and its (Delaunay-derived) adjacency.
-pub struct RadFoamModel {
-    /// Primal points (`N` entries).
-    pub points: Vec<glam::Vec3>,
-    /// Packed per-point attributes (`N * (sh_dim + 1)` scalars):
-    /// `[sh_coeffs..., density]` for each point.
-    pub attributes: Vec<f32>,
-    /// Spherical harmonics degree used to interpret `attributes`.
+/// Optional extensions:
+/// - `transforms`: rotation + scale for Gaussian ellipsoids
+/// - `adjacency`: CSR adjacency for RadFoam Voronoi traversal
+#[derive(Clone)]
+pub struct PointCloudModel {
+    /// Position (xyz) + density/opacity (w) for each point.
+    pub points: Vec<glam::Vec4>,
+
+    /// Packed SH coefficients: 3 floats (RGB) per SH component, per point.
+    /// Layout: `[p0_c0_r, p0_c0_g, p0_c0_b, p0_c1_r, ..., p1_c0_r, ...]`
+    /// Length: `N * 3 * sh_component_count(sh_degree)`
+    pub sh_coefficients: Vec<f32>,
+
+    /// Spherical harmonics degree (0-3).
     pub sh_degree: usize,
-    /// Flattened adjacency list (`K` entries).
-    pub point_adjacency: Vec<u32>,
-    /// CSR offsets into `point_adjacency` (`N + 1` entries).
-    ///
-    /// By convention:
-    /// - `point_adjacency_offsets[0] == 0`
-    /// - `point_adjacency_offsets[i+1]` equals the adjacency end offset for point `i`
-    /// - `point_adjacency_offsets[N] == point_adjacency.len() as u32`
-    pub point_adjacency_offsets: Vec<u32>,
+
+    /// Optional: Gaussian ellipsoid transforms (rotation + scale).
+    pub transforms: Option<Transforms>,
+
+    /// Optional: RadFoam CSR adjacency.
+    pub adjacency: Option<Adjacency>,
 }
 
-impl RadFoamModel {
-    /// Returns the packed per-point attribute row length: `sh_dim + 1`.
-    pub const fn attribute_dim(sh_degree: usize) -> usize {
-        1 + 3 * get_sh_component_count(sh_degree)
+impl PointCloudModel {
+    /// Returns the packed per-point attribute row length for RadFoam: `sh_dim + 1`.
+    /// This is used when packing attributes for the GPU shader.
+    pub fn attribute_dim(&self) -> usize {
+        1 + 3 * self.sh_component_count()
     }
 
-    /// Returns the number of points (`N`).
+    /// Returns the number of points.
     pub fn len(&self) -> usize {
         self.points.len()
     }
@@ -89,7 +94,31 @@ impl RadFoamModel {
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
+
+    /// Returns the number of SH components based on degree.
+    pub fn sh_component_count(&self) -> usize {
+        get_sh_component_count(self.sh_degree)
+    }
+
+    /// Returns the SH coefficients for a single point as RGB Vec3 array.
+    pub fn get_sh_coefficients(&self, point_idx: usize) -> [glam::Vec3; MAX_SH_COMPONENTS] {
+        let mut result = [glam::Vec3::ZERO; MAX_SH_COMPONENTS];
+        let comp_count = self.sh_component_count();
+        let base = point_idx * comp_count * 3;
+        for i in 0..comp_count.min(MAX_SH_COMPONENTS) {
+            result[i] = glam::Vec3::new(
+                self.sh_coefficients[base + i * 3],
+                self.sh_coefficients[base + i * 3 + 1],
+                self.sh_coefficients[base + i * 3 + 2],
+            );
+        }
+        result
+    }
 }
+
+// ============================================================================
+// GPU Representation
+// ============================================================================
 
 #[repr(C)]
 pub struct GaussianGpu {

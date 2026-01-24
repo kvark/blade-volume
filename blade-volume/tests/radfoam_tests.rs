@@ -13,24 +13,25 @@ const TINY_ASCII_PLY: &str = "tests/data/radfoam_tiny_ascii.ply";
 
 #[test]
 fn radfoam_ascii_ply_loads_and_has_expected_shapes() {
-    let model = vol::io::load_radfoam_ply(TINY_ASCII_PLY);
+    let model = vol::io::load_radfoam(TINY_ASCII_PLY);
 
     // Basic counts from the fixture
     assert_eq!(model.points.len(), 4, "fixture should contain 4 points");
+
+    let adjacency = model
+        .adjacency
+        .as_ref()
+        .expect("RadFoam model should have adjacency");
+    assert_eq!(adjacency.offsets.len(), 5, "CSR offsets should be N+1");
     assert_eq!(
-        model.point_adjacency_offsets.len(),
-        5,
-        "CSR offsets should be N+1"
-    );
-    assert_eq!(
-        model.point_adjacency.len(),
+        adjacency.neighbors.len(),
         12,
         "fixture adjacency should contain 12 entries"
     );
 
     // CSR offsets in the fixture are: [0,3,6,9,12]
     assert_eq!(
-        model.point_adjacency_offsets,
+        adjacency.offsets,
         vec![0, 3, 6, 9, 12],
         "CSR offsets mismatch"
     );
@@ -38,17 +39,17 @@ fn radfoam_ascii_ply_loads_and_has_expected_shapes() {
     // SH degree inferred from color_sh_* count
     assert_eq!(model.sh_degree, 1, "fixture should infer SH degree 1");
 
-    // Packed attribute length = N * attr_dim
-    let attr_dim = vol::RadFoamModel::attribute_dim(model.sh_degree);
+    // SH coefficients length = N * sh_component_count * 3
+    let sh_dim = model.sh_component_count() * 3;
     assert_eq!(
-        model.attributes.len(),
-        model.points.len() * attr_dim,
-        "attributes should be packed as N * attr_dim"
+        model.sh_coefficients.len(),
+        model.points.len() * sh_dim,
+        "sh_coefficients should be packed as N * sh_dim"
     );
 
     // Ensure adjacency indices are in-bounds
     let n = model.points.len();
-    for (k, &idx) in model.point_adjacency.iter().enumerate() {
+    for (k, &idx) in adjacency.neighbors.iter().enumerate() {
         assert!(
             (idx as usize) < n,
             "adjacency index out of bounds at entry {}: {} (n={})",
@@ -61,7 +62,7 @@ fn radfoam_ascii_ply_loads_and_has_expected_shapes() {
 
 #[test]
 fn radfoam_ascii_ply_dc_approx_is_reasonable_for_mid_gray_preview() {
-    let model = vol::io::load_radfoam_ply(TINY_ASCII_PLY);
+    let model = vol::io::load_radfoam(TINY_ASCII_PLY);
 
     // The fixture uses red=green=blue=128 (mid gray-ish).
     // The loader approximates DC by inverting:
@@ -76,15 +77,18 @@ fn radfoam_ascii_ply_dc_approx_is_reasonable_for_mid_gray_preview() {
     const C0: f32 = 0.282_094_791_773_878_14;
     let expected_dc = ((128.0 / 255.0) - 0.5) / C0;
 
-    let attr_dim = vol::RadFoamModel::attribute_dim(model.sh_degree);
-    assert_eq!(attr_dim, 13, "degree 1 should produce attr_dim=13");
+    let sh_dim = model.sh_component_count() * 3;
+    assert_eq!(
+        sh_dim, 12,
+        "degree 1 should produce sh_dim=12 (4 components * 3 channels)"
+    );
 
     for i in 0..model.points.len() {
-        let base = i * attr_dim;
+        let base = i * sh_dim;
 
-        let dc_r = model.attributes[base + 0];
-        let dc_g = model.attributes[base + 1];
-        let dc_b = model.attributes[base + 2];
+        let dc_r = model.sh_coefficients[base + 0];
+        let dc_g = model.sh_coefficients[base + 1];
+        let dc_b = model.sh_coefficients[base + 2];
 
         // Allow a little slack (parsing + float error); this should be quite tight.
         let eps = 1e-3;
@@ -110,8 +114,8 @@ fn radfoam_ascii_ply_dc_approx_is_reasonable_for_mid_gray_preview() {
             expected_dc
         );
 
-        // Also sanity-check density is present as the last scalar of the row.
-        let density = model.attributes[base + (attr_dim - 1)];
+        // Density is now in points[i].w
+        let density = model.points[i].w;
         assert!(
             density.is_finite() && density > 0.0,
             "density should be finite and >0 for point {} (got {})",

@@ -346,6 +346,7 @@ dependencies = [
  "bytemuck",
  "flate2",
  "glam",
+ "half",
  "kiddo",
  "log",
  "mint",

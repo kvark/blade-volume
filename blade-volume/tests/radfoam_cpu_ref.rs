@@ -32,9 +32,9 @@
 //!   This is useful when a GPU-vs-CPU test mismatch indicates traversal differences.
 //!
 //! Notes:
-//! - This module uses the *packed* attribute layout used in our Rust `RadFoamModel`:
-//!     per-point row = [sh_coeffs (3 * sh_components), density]
-//!   where sh_components = (1 + sh_degree)^2.
+//! - This module uses the unified `PointCloudModel`:
+//!   - Position (xyz) + density (w) in `points`
+//!   - SH coefficients in `sh_coefficients` (3 * sh_components per point)
 //! - For now, SH evaluation is intentionally minimal:
 //!   - If you pass `EvalMode::ConstantRgb`, it ignores SH and uses a fixed rgb.
 //!   - If you pass `EvalMode::Sh`, it evaluates the same SH basis constants as our shader
@@ -42,7 +42,7 @@
 //! - This is placed under `tests/` so it can be used by integration tests directly.
 //!
 //! Usage pattern (in other tests):
-//! - Load a RadFoamModel fixture
+//! - Load a PointCloudModel fixture
 //! - Call `trace_one_ray(...)` for a few rays and compare to GPU output.
 
 use blade_volume as vol;
@@ -101,18 +101,8 @@ fn sh_component_count(deg: u32) -> u32 {
     d * d
 }
 
-fn attr_row_dim(sh_degree: u32) -> u32 {
-    let comps = sh_component_count(sh_degree);
-    1 + 3 * comps
-}
-
-fn read_density(model: &vol::RadFoamModel, point_idx: u32) -> f32 {
-    let sh_degree = model.sh_degree as u32;
-    let comps = sh_component_count(sh_degree);
-    let sh_dim = 3 * comps;
-    let row = attr_row_dim(sh_degree);
-    let base = (point_idx as usize) * (row as usize);
-    model.attributes[base + (sh_dim as usize)]
+fn read_density(model: &vol::PointCloudModel, point_idx: u32) -> f32 {
+    model.points[point_idx as usize].w
 }
 
 fn eval_rgb_constant(constant: glam::Vec3) -> glam::Vec3 {
@@ -143,11 +133,11 @@ fn sh_basis_constants() -> [f32; 16] {
 }
 
 /// Evaluate SH RGB for one point using the packed coefficient layout:
-/// coeff(component i, channel c) is at base + 3*i + c, density at end.
+/// coeff(component i, channel c) is at base + 3*i + c.
 ///
 /// This mirrors the WGSL implementation and supports degree 0..=3.
 /// For degree < 3, extra coefficients are ignored.
-fn eval_rgb_sh(model: &vol::RadFoamModel, point_idx: u32, dir: glam::Vec3) -> glam::Vec3 {
+fn eval_rgb_sh(model: &vol::PointCloudModel, point_idx: u32, dir: glam::Vec3) -> glam::Vec3 {
     let deg = model.sh_degree as u32;
     let deg = deg.min(3);
     let comps = sh_component_count(deg).min(16);
@@ -156,17 +146,16 @@ fn eval_rgb_sh(model: &vol::RadFoamModel, point_idx: u32, dir: glam::Vec3) -> gl
     let d2 = dir * dir;
 
     let sh_dim = 3 * comps;
-    let row = 1 + sh_dim;
-    let base = (point_idx as usize) * (row as usize);
+    let base = (point_idx as usize) * (sh_dim as usize);
 
     let mut color = glam::Vec3::ZERO;
 
     // L0
     if comps >= 1 {
         let c0 = sh[0];
-        color.x += c0 * model.attributes[base + 0];
-        color.y += c0 * model.attributes[base + 1];
-        color.z += c0 * model.attributes[base + 2];
+        color.x += c0 * model.sh_coefficients[base + 0];
+        color.y += c0 * model.sh_coefficients[base + 1];
+        color.z += c0 * model.sh_coefficients[base + 2];
     }
 
     if deg >= 1 && comps >= 4 {
@@ -176,19 +165,19 @@ fn eval_rgb_sh(model: &vol::RadFoamModel, point_idx: u32, dir: glam::Vec3) -> gl
         let x = dir.x;
 
         let c1 = sh[1];
-        color.x += c1 * model.attributes[base + 3] * y;
-        color.y += c1 * model.attributes[base + 4] * y;
-        color.z += c1 * model.attributes[base + 5] * y;
+        color.x += c1 * model.sh_coefficients[base + 3] * y;
+        color.y += c1 * model.sh_coefficients[base + 4] * y;
+        color.z += c1 * model.sh_coefficients[base + 5] * y;
 
         let c2 = sh[2];
-        color.x += c2 * model.attributes[base + 6] * z;
-        color.y += c2 * model.attributes[base + 7] * z;
-        color.z += c2 * model.attributes[base + 8] * z;
+        color.x += c2 * model.sh_coefficients[base + 6] * z;
+        color.y += c2 * model.sh_coefficients[base + 7] * z;
+        color.z += c2 * model.sh_coefficients[base + 8] * z;
 
         let c3 = sh[3];
-        color.x += c3 * model.attributes[base + 9] * x;
-        color.y += c3 * model.attributes[base + 10] * x;
-        color.z += c3 * model.attributes[base + 11] * x;
+        color.x += c3 * model.sh_coefficients[base + 9] * x;
+        color.y += c3 * model.sh_coefficients[base + 10] * x;
+        color.z += c3 * model.sh_coefficients[base + 11] * x;
     }
 
     if deg >= 2 && comps >= 9 {
@@ -201,35 +190,35 @@ fn eval_rgb_sh(model: &vol::RadFoamModel, point_idx: u32, dir: glam::Vec3) -> gl
 
         // 4: x*y
         let c4 = sh[4];
-        color.x += c4 * model.attributes[base + 12] * x * y;
-        color.y += c4 * model.attributes[base + 13] * x * y;
-        color.z += c4 * model.attributes[base + 14] * x * y;
+        color.x += c4 * model.sh_coefficients[base + 12] * x * y;
+        color.y += c4 * model.sh_coefficients[base + 13] * x * y;
+        color.z += c4 * model.sh_coefficients[base + 14] * x * y;
 
         // 5: y*z
         let c5 = sh[5];
-        color.x += c5 * model.attributes[base + 15] * y * z;
-        color.y += c5 * model.attributes[base + 16] * y * z;
-        color.z += c5 * model.attributes[base + 17] * y * z;
+        color.x += c5 * model.sh_coefficients[base + 15] * y * z;
+        color.y += c5 * model.sh_coefficients[base + 16] * y * z;
+        color.z += c5 * model.sh_coefficients[base + 17] * y * z;
 
         // 6: (3z^2 - 1)
         let c6 = sh[6];
         let t6 = 3.0 * zz - 1.0;
-        color.x += c6 * model.attributes[base + 18] * t6;
-        color.y += c6 * model.attributes[base + 19] * t6;
-        color.z += c6 * model.attributes[base + 20] * t6;
+        color.x += c6 * model.sh_coefficients[base + 18] * t6;
+        color.y += c6 * model.sh_coefficients[base + 19] * t6;
+        color.z += c6 * model.sh_coefficients[base + 20] * t6;
 
         // 7: x*z
         let c7 = sh[7];
-        color.x += c7 * model.attributes[base + 21] * x * z;
-        color.y += c7 * model.attributes[base + 22] * x * z;
-        color.z += c7 * model.attributes[base + 23] * x * z;
+        color.x += c7 * model.sh_coefficients[base + 21] * x * z;
+        color.y += c7 * model.sh_coefficients[base + 22] * x * z;
+        color.z += c7 * model.sh_coefficients[base + 23] * x * z;
 
         // 8: (x^2 - y^2)
         let c8 = sh[8];
         let t8 = xx - yy;
-        color.x += c8 * model.attributes[base + 24] * t8;
-        color.y += c8 * model.attributes[base + 25] * t8;
-        color.z += c8 * model.attributes[base + 26] * t8;
+        color.x += c8 * model.sh_coefficients[base + 24] * t8;
+        color.y += c8 * model.sh_coefficients[base + 25] * t8;
+        color.z += c8 * model.sh_coefficients[base + 26] * t8;
     }
 
     if deg >= 3 && comps >= 16 {
@@ -243,51 +232,51 @@ fn eval_rgb_sh(model: &vol::RadFoamModel, point_idx: u32, dir: glam::Vec3) -> gl
         // 9
         let c9 = sh[9];
         let t9 = y * (3.0 * xx - yy);
-        color.x += c9 * model.attributes[base + 27] * t9;
-        color.y += c9 * model.attributes[base + 28] * t9;
-        color.z += c9 * model.attributes[base + 29] * t9;
+        color.x += c9 * model.sh_coefficients[base + 27] * t9;
+        color.y += c9 * model.sh_coefficients[base + 28] * t9;
+        color.z += c9 * model.sh_coefficients[base + 29] * t9;
 
         // 10
         let c10 = sh[10];
         let t10 = x * y * z;
-        color.x += c10 * model.attributes[base + 30] * t10;
-        color.y += c10 * model.attributes[base + 31] * t10;
-        color.z += c10 * model.attributes[base + 32] * t10;
+        color.x += c10 * model.sh_coefficients[base + 30] * t10;
+        color.y += c10 * model.sh_coefficients[base + 31] * t10;
+        color.z += c10 * model.sh_coefficients[base + 32] * t10;
 
         // 11
         let c11 = sh[11];
         let t11 = y * (5.0 * zz - 1.0);
-        color.x += c11 * model.attributes[base + 33] * t11;
-        color.y += c11 * model.attributes[base + 34] * t11;
-        color.z += c11 * model.attributes[base + 35] * t11;
+        color.x += c11 * model.sh_coefficients[base + 33] * t11;
+        color.y += c11 * model.sh_coefficients[base + 34] * t11;
+        color.z += c11 * model.sh_coefficients[base + 35] * t11;
 
         // 12
         let c12 = sh[12];
         let t12 = z * (5.0 * zz - 3.0);
-        color.x += c12 * model.attributes[base + 36] * t12;
-        color.y += c12 * model.attributes[base + 37] * t12;
-        color.z += c12 * model.attributes[base + 38] * t12;
+        color.x += c12 * model.sh_coefficients[base + 36] * t12;
+        color.y += c12 * model.sh_coefficients[base + 37] * t12;
+        color.z += c12 * model.sh_coefficients[base + 38] * t12;
 
         // 13
         let c13 = sh[13];
         let t13 = x * (5.0 * zz - 1.0);
-        color.x += c13 * model.attributes[base + 39] * t13;
-        color.y += c13 * model.attributes[base + 40] * t13;
-        color.z += c13 * model.attributes[base + 41] * t13;
+        color.x += c13 * model.sh_coefficients[base + 39] * t13;
+        color.y += c13 * model.sh_coefficients[base + 40] * t13;
+        color.z += c13 * model.sh_coefficients[base + 41] * t13;
 
         // 14
         let c14 = sh[14];
         let t14 = z * (xx - yy);
-        color.x += c14 * model.attributes[base + 42] * t14;
-        color.y += c14 * model.attributes[base + 43] * t14;
-        color.z += c14 * model.attributes[base + 44] * t14;
+        color.x += c14 * model.sh_coefficients[base + 42] * t14;
+        color.y += c14 * model.sh_coefficients[base + 43] * t14;
+        color.z += c14 * model.sh_coefficients[base + 44] * t14;
 
         // 15
         let c15 = sh[15];
         let t15 = x * (xx - 3.0 * yy);
-        color.x += c15 * model.attributes[base + 45] * t15;
-        color.y += c15 * model.attributes[base + 46] * t15;
-        color.z += c15 * model.attributes[base + 47] * t15;
+        color.x += c15 * model.sh_coefficients[base + 45] * t15;
+        color.y += c15 * model.sh_coefficients[base + 46] * t15;
+        color.z += c15 * model.sh_coefficients[base + 47] * t15;
     }
 
     // For visibility parity with our WGSL: add bias.
@@ -297,12 +286,21 @@ fn eval_rgb_sh(model: &vol::RadFoamModel, point_idx: u32, dir: glam::Vec3) -> gl
 /// Trace a single ray through the RadFoam point set starting from `settings.start_point`.
 ///
 /// This is the CPU reference equivalent of the traversal and forward integration.
-pub fn trace_one_ray(model: &vol::RadFoamModel, ray: Ray, settings: TraceSettings) -> TraceResult {
+pub fn trace_one_ray(
+    model: &vol::PointCloudModel,
+    ray: Ray,
+    settings: TraceSettings,
+) -> TraceResult {
     assert!(!model.points.is_empty(), "model has no points");
     assert!(
         (settings.start_point as usize) < model.points.len(),
         "start_point out of bounds"
     );
+
+    let adjacency = model
+        .adjacency
+        .as_ref()
+        .expect("trace_one_ray requires adjacency");
 
     let debug_enabled = std::env::var("RADFOAM_CPU_TRACE")
         .map(|v| v != "0" && !v.is_empty())
@@ -325,7 +323,8 @@ pub fn trace_one_ray(model: &vol::RadFoamModel, ray: Ray, settings: TraceSetting
     let mut accum_rgb = glam::Vec3::ZERO;
 
     let mut current = settings.start_point;
-    let mut current_pos = model.points[current as usize];
+    let p = model.points[current as usize];
+    let mut current_pos = glam::Vec3::new(p.x, p.y, p.z);
 
     let mut steps = 0u32;
 
@@ -351,8 +350,8 @@ pub fn trace_one_ray(model: &vol::RadFoamModel, ray: Ray, settings: TraceSetting
             break;
         }
 
-        let begin = model.point_adjacency_offsets[current as usize] as usize;
-        let end = model.point_adjacency_offsets[current as usize + 1] as usize;
+        let begin = adjacency.offsets[current as usize] as usize;
+        let end = adjacency.offsets[current as usize + 1] as usize;
 
         // Match shader semantics:
         // - initialize to a large finite value
@@ -364,9 +363,10 @@ pub fn trace_one_ray(model: &vol::RadFoamModel, ray: Ray, settings: TraceSetting
         let mut considered_count: u32 = 0;
         let mut nan_t_count: u32 = 0;
 
-        for (j, &next_idx_u32) in model.point_adjacency[begin..end].iter().enumerate() {
+        for (j, &next_idx_u32) in adjacency.neighbors[begin..end].iter().enumerate() {
             let next_idx = next_idx_u32 as usize;
-            let next_pos = model.points[next_idx];
+            let next_p = model.points[next_idx];
+            let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
             let offset = next_pos - current_pos;
 
             let face_origin = current_pos + 0.5 * offset;
@@ -421,9 +421,10 @@ pub fn trace_one_ray(model: &vol::RadFoamModel, ray: Ray, settings: TraceSetting
             break;
         };
 
-        let next_idx_u32 = model.point_adjacency[begin + j];
+        let next_idx_u32 = adjacency.neighbors[begin + j];
         let next_idx = next_idx_u32;
-        let next_pos = model.points[next_idx as usize];
+        let next_p = model.points[next_idx as usize];
+        let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
 
         // Integrate only if the segment is forward in parametric distance.
         if best_t1 > t0 {
@@ -476,7 +477,7 @@ mod tests {
 
     #[test]
     fn cpu_ref_traces_without_nan_on_tiny_fixture() {
-        let model = vol::io::load_radfoam_ply("tests/data/radfoam_tiny_ascii.ply");
+        let model = vol::io::load_radfoam("tests/data/radfoam_tiny_ascii.ply");
 
         // Ray from slightly above the square, pointing down + forward-ish.
         let ray = Ray {
