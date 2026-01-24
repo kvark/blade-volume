@@ -16,6 +16,7 @@ struct Parameters {
     min_transmittance: f32,
     sh_degree: u32,
     debug_mode: u32,
+    pad: vec4<u32>,
 }
 var<uniform> g_params: Parameters;
 var g_acc_struct: acceleration_structure;

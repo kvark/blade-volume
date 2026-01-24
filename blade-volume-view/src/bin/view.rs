@@ -1,5 +1,9 @@
 //! Unified viewer for volumetric data with multiple rendering backends.
 //!
+//! NOTE: If you change any uniform structs in Rust, make sure the matching WGSL
+//! structs (see `blade-volume-view/shaders/*.wgsl`) match in size/alignment.
+//! A mismatch can cause validation asserts or GPU crashes.
+//!
 //! Usage:
 //!   cargo run -p blade-volume-view -- <input_file> [options]
 //!
@@ -15,6 +19,7 @@
 //!   Mouse wheel - Adjust fly speed
 //!   I - Print info (camera pose, timings)
 //!   Tab - Toggle debug mode (particle density visualization)
+//!   F1 - Toggle UI overlay
 //!   Escape - Exit
 
 #![allow(irrefutable_let_patterns)]
@@ -23,6 +28,10 @@ use blade_graphics as gpu;
 use blade_volume as vol;
 use blade_volume_view as view;
 use std::{fmt, mem, str};
+
+use blade_egui as begui;
+use egui as ui;
+use egui_winit as ui_winit;
 
 const D2R: f32 = std::f32::consts::PI / 180.0;
 const EULER: glam::EulerRot = glam::EulerRot::ZYX;
@@ -57,6 +66,9 @@ struct Arguments {
     /// start in debug mode (particle density visualization)
     #[argh(switch)]
     debug: bool,
+    /// start with UI visible
+    #[argh(switch)]
+    ui: bool,
 }
 
 /// Debug/visualization mode for rendering.
@@ -99,6 +111,7 @@ struct GaussianParams {
     min_transmittance: f32,
     sh_degree: u32,
     debug_mode: u32,
+    pad: [u32; 4],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -163,6 +176,7 @@ impl GaussianBackend {
             min_transmittance: args.min_transmittance,
             sh_degree: model.max_sh_degree as u32,
             debug_mode: debug_mode as u32,
+            pad: [0; 4],
         };
 
         Self {
@@ -240,7 +254,7 @@ struct RadFoamTraceParams {
     max_steps: u32,
     start_point: u32,
     debug_mode: u32,
-    pad: [u32; 3],
+    pad: [u32; 7],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -345,7 +359,7 @@ impl RadFoamBackend {
             max_steps: args.max_steps,
             start_point: 0,
             debug_mode: debug_mode as u32,
-            pad: [0; 3],
+            pad: [0; 7],
         };
 
         Self {
@@ -586,6 +600,12 @@ struct Example {
     surface: gpu::Surface,
     context: gpu::Context,
     debug_mode: DebugMode,
+
+    // egui overlay
+    ui_ctx: ui::Context,
+    ui_state: ui_winit::State,
+    ui_painter: begui::GuiPainter,
+    ui_show: bool,
 }
 
 impl Example {
@@ -623,13 +643,25 @@ impl Example {
             })
             .unwrap()
         };
-        log::info!("{:?}", context.device_information());
-        let window_size = window.inner_size();
 
+        let window_size = window.inner_size();
         let surface = context
             .create_surface_configured(window, Self::make_surface_config(window_size))
             .unwrap();
         let surface_info = surface.info();
+
+        // egui init
+        let ui_ctx = ui::Context::default();
+        let ui_state = ui_winit::State::new(
+            ui_ctx.clone(),
+            ui::ViewportId::ROOT,
+            window,
+            Some(window.scale_factor() as f32),
+            None,
+            None,
+        );
+        let ui_painter = begui::GuiPainter::new(surface_info, &context);
+        let ui_show = true;
 
         let mut command_encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
@@ -693,6 +725,11 @@ impl Example {
             surface,
             context,
             debug_mode,
+
+            ui_ctx,
+            ui_state,
+            ui_painter,
+            ui_show,
         }
     }
 
@@ -705,6 +742,7 @@ impl Example {
     fn deinit(mut self) {
         self.wait_for_gpu();
         self.backend.deinit(&self.context);
+        self.ui_painter.destroy(&self.context);
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
         self.context.destroy_surface(&mut self.surface);
@@ -723,10 +761,62 @@ impl Example {
         }
     }
 
-    fn render(&mut self) {
+    fn render(&mut self, window: &winit::window::Window) {
         if self.window_size == Default::default() {
             return;
         }
+
+        // egui begin frame
+        let raw_input = self.ui_state.take_egui_input(window);
+        self.ui_ctx.begin_pass(raw_input);
+
+        if self.ui_show {
+            ui::Window::new("blade-volume-view")
+                .default_open(true)
+                .show(&self.ui_ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Backend:");
+                        match self.backend {
+                            RenderBackend::Gaussian(_) => {
+                                ui.label("Gaussian RT");
+                            }
+                            RenderBackend::RadFoam(_) => {
+                                ui.label("RadFoam compute");
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        ui.label("Debug mode:");
+                        let mut enabled = self.debug_mode == DebugMode::ParticleDensity;
+                        if ui.checkbox(&mut enabled, "Particle density").changed() {
+                            self.debug_mode = if enabled {
+                                DebugMode::ParticleDensity
+                            } else {
+                                DebugMode::Off
+                            };
+                            self.backend.set_debug_mode(self.debug_mode);
+                        }
+                    });
+
+                    ui.separator();
+                    ui.label("Timings (GPU):");
+                    for &(ref name, value) in self.command_encoder.timings() {
+                        ui.label(format!("{}: {:.3} ms", name, value.as_secs_f64() * 1000.0));
+                    }
+
+                    ui.separator();
+                    ui.label("Hotkeys: F1 toggle UI, Tab toggle debug, I print info");
+                });
+        }
+
+        let full_output = self.ui_ctx.end_pass();
+        let paint_jobs = self
+            .ui_ctx
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
+
         let frame = self.surface.acquire_frame();
 
         self.command_encoder.start();
@@ -739,10 +829,40 @@ impl Example {
             self.window_size,
         );
 
+        // egui textures update
+        self.ui_painter.update_textures(
+            &mut self.command_encoder,
+            &full_output.textures_delta,
+            &self.context,
+        );
+
+        // egui paint over the swapchain (load existing color)
+        if let mut pass = self.command_encoder.render(
+            "ui",
+            gpu::RenderTargetSet {
+                colors: &[gpu::RenderTarget {
+                    view: frame.texture_view(),
+                    init_op: gpu::InitOp::Load,
+                    finish_op: gpu::FinishOp::Store,
+                }],
+                depth_stencil: None,
+            },
+        ) {
+            let sd = begui::ScreenDescriptor {
+                physical_size: (self.window_size.width, self.window_size.height),
+                scale_factor: window.scale_factor() as f32,
+            };
+            self.ui_painter
+                .paint(&mut pass, &paint_jobs, &sd, &self.context);
+        }
+
         self.command_encoder.present(frame);
         let sync_point = self.context.submit(&mut self.command_encoder);
+        self.ui_painter.after_submit(&sync_point);
 
-        self.wait_for_gpu();
+        // Wait immediately after presenting to avoid swapchain semaphore reuse validation errors
+        // when the swapchain rotates images faster than our timeline semaphore tracking.
+        self.context.wait_for(&sync_point, !0);
         self.prev_sync_point = Some(sync_point);
     }
 
@@ -793,56 +913,72 @@ fn main() {
                 winit::event::Event::WindowEvent {
                     event: ref win_event,
                     ..
-                } => match win_event {
-                    winit::event::WindowEvent::Resized(size) => {
-                        example.resize(*size);
-                    }
-                    winit::event::WindowEvent::KeyboardInput {
-                        event:
-                            winit::event::KeyEvent {
-                                physical_key: winit::keyboard::PhysicalKey::Code(key_code),
-                                state: winit::event::ElementState::Pressed,
-                                ..
-                            },
-                        ..
-                    } => {
-                        if *key_code == winit::keyboard::KeyCode::Escape {
+                } => {
+                    let _ = example.ui_state.on_window_event(&window, win_event);
+                    match win_event {
+                        winit::event::WindowEvent::Resized(size) => {
+                            example.resize(*size);
+                        }
+                        winit::event::WindowEvent::KeyboardInput {
+                            event:
+                                winit::event::KeyEvent {
+                                    physical_key: winit::keyboard::PhysicalKey::Code(key_code),
+                                    state: winit::event::ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } => {
+                            if *key_code == winit::keyboard::KeyCode::Escape {
+                                target.exit();
+                            }
+                            if *key_code == winit::keyboard::KeyCode::F1 {
+                                example.ui_show = !example.ui_show;
+                            }
+                            if *key_code == winit::keyboard::KeyCode::KeyI {
+                                example.print_info();
+                            }
+                            if *key_code == winit::keyboard::KeyCode::Tab {
+                                example.toggle_debug_mode();
+                            }
+                            let wants_keyboard = example.ui_ctx.wants_keyboard_input();
+                            if !wants_keyboard {
+                                example.camera.on_key(*key_code, 1.0);
+                            }
+                        }
+                        winit::event::WindowEvent::MouseInput {
+                            state,
+                            button: winit::event::MouseButton::Left,
+                            ..
+                        } => {
+                            let wants_pointer = example.ui_ctx.wants_pointer_input();
+                            if !wants_pointer {
+                                in_drag = *state == winit::event::ElementState::Pressed;
+                            }
+                        }
+                        winit::event::WindowEvent::CursorMoved { position, .. } => {
+                            let wants_pointer = example.ui_ctx.wants_pointer_input();
+                            if in_drag && !wants_pointer {
+                                let dx = position.x as f32 - last_mouse_pos[0] as f32;
+                                let dy = position.y as f32 - last_mouse_pos[1] as f32;
+                                example.camera.on_mouse_drag(dx, dy, drag_speed);
+                            }
+                            last_mouse_pos = [position.x as i32, position.y as i32];
+                        }
+                        winit::event::WindowEvent::MouseWheel { delta, .. } => {
+                            let wants_pointer = example.ui_ctx.wants_pointer_input();
+                            if !wants_pointer {
+                                example.camera.on_wheel(*delta);
+                            }
+                        }
+                        winit::event::WindowEvent::CloseRequested => {
                             target.exit();
                         }
-                        if *key_code == winit::keyboard::KeyCode::KeyI {
-                            example.print_info();
+                        winit::event::WindowEvent::RedrawRequested => {
+                            example.render(&window);
                         }
-                        if *key_code == winit::keyboard::KeyCode::Tab {
-                            example.toggle_debug_mode();
-                        }
-                        example.camera.on_key(*key_code, 1.0);
+                        _ => {}
                     }
-                    winit::event::WindowEvent::MouseInput {
-                        state,
-                        button: winit::event::MouseButton::Left,
-                        ..
-                    } => {
-                        in_drag = *state == winit::event::ElementState::Pressed;
-                    }
-                    winit::event::WindowEvent::CursorMoved { position, .. } => {
-                        if in_drag {
-                            let dx = position.x as f32 - last_mouse_pos[0] as f32;
-                            let dy = position.y as f32 - last_mouse_pos[1] as f32;
-                            example.camera.on_mouse_drag(dx, dy, drag_speed);
-                        }
-                        last_mouse_pos = [position.x as i32, position.y as i32];
-                    }
-                    winit::event::WindowEvent::MouseWheel { delta, .. } => {
-                        example.camera.on_wheel(*delta);
-                    }
-                    winit::event::WindowEvent::CloseRequested => {
-                        target.exit();
-                    }
-                    winit::event::WindowEvent::RedrawRequested => {
-                        example.render();
-                    }
-                    _ => {}
-                },
+                }
                 _ => {}
             }
         })

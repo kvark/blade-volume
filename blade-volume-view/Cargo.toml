@@ -15,3 +15,12 @@ winit.workspace = true
 kiddo.workspace = true
 argh.workspace = true
 env_logger.workspace = true
+
+# IMPORTANT:
+# We must keep `egui`/`egui-winit` versions aligned with `blade-egui` to avoid
+# `epaint::TexturesDelta` type mismatches (two different `epaint` versions).
+#
+# The `blade-egui` git dependency pins the compatible egui stack.
+blade-egui = { git = "https://github.com/kvark/blade", rev = "e3cf011ca18a6dfd907d1dedd93e85e21f005fe3", package = "blade-egui" }
+egui = "0.32"
+egui-winit = "0.32"
