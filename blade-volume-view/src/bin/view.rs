@@ -21,6 +21,10 @@
 //!   Tab - Toggle debug mode (particle density visualization)
 //!   F1 - Toggle UI overlay
 //!   Escape - Exit
+//!
+//! Optimization work:
+//! - RadFoam is being refactored toward a wavefront pipeline. The legacy tracer WGSL is preserved
+//!   as `shaders/radfoam_trace_legacy.wgsl`.
 
 #![allow(irrefutable_let_patterns)]
 
@@ -35,7 +39,6 @@ use egui_winit as ui_winit;
 
 const D2R: f32 = std::f32::consts::PI / 180.0;
 const EULER: glam::EulerRot = glam::EulerRot::ZYX;
-
 /// Arguments
 #[derive(argh::FromArgs, Clone)]
 struct Arguments {
