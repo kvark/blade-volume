@@ -45,6 +45,7 @@ pub enum ConvertError {
     InvalidDensity,
     MissingMeshData,
     UnsupportedPrimitiveMode,
+    MissingOutputData,
 }
 
 impl From<std::io::Error> for ConvertError {
@@ -266,6 +267,56 @@ pub fn convert_gltf(
     }
 
     Ok(model)
+}
+
+pub fn save_ply(
+    path: impl AsRef<path::Path>,
+    model: &vol::PointCloudModel,
+) -> Result<(), ConvertError> {
+    save_ply_with_options(path, model, &SaveOptions::default())
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SaveOptions {
+    pub format: PlyFormat,
+}
+
+impl Default for SaveOptions {
+    fn default() -> Self {
+        Self {
+            format: PlyFormat::Binary,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlyFormat {
+    Ascii,
+    Binary,
+}
+
+pub fn save_ply_with_options(
+    path: impl AsRef<path::Path>,
+    model: &vol::PointCloudModel,
+    options: &SaveOptions,
+) -> Result<(), ConvertError> {
+    if model.transforms.is_some() {
+        match options.format {
+            PlyFormat::Ascii => write_gaussian_ply_ascii(path.as_ref(), model)?,
+            PlyFormat::Binary => write_gaussian_ply_binary(path.as_ref(), model)?,
+        }
+        return Ok(());
+    }
+
+    if model.adjacency.is_some() {
+        match options.format {
+            PlyFormat::Ascii => write_radfoam_ply_ascii(path.as_ref(), model)?,
+            PlyFormat::Binary => write_radfoam_ply_binary(path.as_ref(), model)?,
+        }
+        return Ok(());
+    }
+
+    Err(ConvertError::MissingOutputData)
 }
 
 fn gather_node_triangles(
@@ -499,9 +550,370 @@ fn srgb_to_linear(v: f32) -> f32 {
     }
 }
 
+fn write_gaussian_ply_binary(
+    path: &path::Path,
+    model: &vol::PointCloudModel,
+) -> Result<(), ConvertError> {
+    use std::io::Write as _;
+
+    let Some(ref transforms) = model.transforms else {
+        return Err(ConvertError::MissingOutputData);
+    };
+
+    let count = model.len();
+    let sh_component_count = vol::get_sh_component_count(model.sh_degree);
+    let sh_rest_count = (sh_component_count.saturating_sub(1) * 3) as usize;
+    let ply_rotation =
+        glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
+    let inv_rotation = ply_rotation.inverse();
+
+    let mut file = std::fs::File::create(path)?;
+    writeln!(file, "ply")?;
+    writeln!(file, "format binary_little_endian 1.0")?;
+    writeln!(file, "element vertex {}", count)?;
+    writeln!(file, "property float x")?;
+    writeln!(file, "property float y")?;
+    writeln!(file, "property float z")?;
+    writeln!(file, "property float nx")?;
+    writeln!(file, "property float ny")?;
+    writeln!(file, "property float nz")?;
+    writeln!(file, "property float f_dc_0")?;
+    writeln!(file, "property float f_dc_1")?;
+    writeln!(file, "property float f_dc_2")?;
+    writeln!(file, "property float opacity")?;
+    writeln!(file, "property float scale_0")?;
+    writeln!(file, "property float scale_1")?;
+    writeln!(file, "property float scale_2")?;
+    writeln!(file, "property float rot_0")?;
+    writeln!(file, "property float rot_1")?;
+    writeln!(file, "property float rot_2")?;
+    writeln!(file, "property float rot_3")?;
+    for i in 0..sh_rest_count {
+        writeln!(file, "property float f_rest_{}", i)?;
+    }
+    writeln!(file, "end_header")?;
+
+    for i in 0..count {
+        let point = model.points[i];
+        let position = inv_rotation * glam::Vec3::new(point.x, point.y, point.z);
+        let rotation = inv_rotation * transforms.rotations[i];
+        let scale = transforms.scales[i].max(glam::Vec3::splat(1e-6));
+        let log_scale = glam::Vec3::new(scale.x.ln(), scale.y.ln(), scale.z.ln());
+        let opacity = logit(point.w);
+
+        let base = i * sh_component_count * 3;
+        let f_dc = [
+            model.sh_coefficients[base + 0],
+            model.sh_coefficients[base + 1],
+            model.sh_coefficients[base + 2],
+        ];
+
+        file.write_all(&position.x.to_le_bytes())?;
+        file.write_all(&position.y.to_le_bytes())?;
+        file.write_all(&position.z.to_le_bytes())?;
+        file.write_all(&0.0f32.to_le_bytes())?;
+        file.write_all(&0.0f32.to_le_bytes())?;
+        file.write_all(&0.0f32.to_le_bytes())?;
+        file.write_all(&f_dc[0].to_le_bytes())?;
+        file.write_all(&f_dc[1].to_le_bytes())?;
+        file.write_all(&f_dc[2].to_le_bytes())?;
+        file.write_all(&opacity.to_le_bytes())?;
+        file.write_all(&log_scale.x.to_le_bytes())?;
+        file.write_all(&log_scale.y.to_le_bytes())?;
+        file.write_all(&log_scale.z.to_le_bytes())?;
+        file.write_all(&rotation.w.to_le_bytes())?;
+        file.write_all(&rotation.x.to_le_bytes())?;
+        file.write_all(&rotation.y.to_le_bytes())?;
+        file.write_all(&rotation.z.to_le_bytes())?;
+
+        for j in 0..sh_rest_count {
+            let coeff = model
+                .sh_coefficients
+                .get(base + 3 + j)
+                .copied()
+                .unwrap_or(0.0);
+            file.write_all(&coeff.to_le_bytes())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn write_gaussian_ply_ascii(
+    path: &path::Path,
+    model: &vol::PointCloudModel,
+) -> Result<(), ConvertError> {
+    use std::io::Write as _;
+
+    let Some(ref transforms) = model.transforms else {
+        return Err(ConvertError::MissingOutputData);
+    };
+
+    let count = model.len();
+    let sh_component_count = vol::get_sh_component_count(model.sh_degree);
+    let sh_rest_count = (sh_component_count.saturating_sub(1) * 3) as usize;
+    let ply_rotation =
+        glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
+    let inv_rotation = ply_rotation.inverse();
+
+    let mut file = std::fs::File::create(path)?;
+    writeln!(file, "ply")?;
+    writeln!(file, "format ascii 1.0")?;
+    writeln!(file, "element vertex {}", count)?;
+    writeln!(file, "property float x")?;
+    writeln!(file, "property float y")?;
+    writeln!(file, "property float z")?;
+    writeln!(file, "property float nx")?;
+    writeln!(file, "property float ny")?;
+    writeln!(file, "property float nz")?;
+    writeln!(file, "property float f_dc_0")?;
+    writeln!(file, "property float f_dc_1")?;
+    writeln!(file, "property float f_dc_2")?;
+    writeln!(file, "property float opacity")?;
+    writeln!(file, "property float scale_0")?;
+    writeln!(file, "property float scale_1")?;
+    writeln!(file, "property float scale_2")?;
+    writeln!(file, "property float rot_0")?;
+    writeln!(file, "property float rot_1")?;
+    writeln!(file, "property float rot_2")?;
+    writeln!(file, "property float rot_3")?;
+    for i in 0..sh_rest_count {
+        writeln!(file, "property float f_rest_{}", i)?;
+    }
+    writeln!(file, "end_header")?;
+
+    for i in 0..count {
+        let point = model.points[i];
+        let position = inv_rotation * glam::Vec3::new(point.x, point.y, point.z);
+        let rotation = inv_rotation * transforms.rotations[i];
+        let scale = transforms.scales[i].max(glam::Vec3::splat(1e-6));
+        let log_scale = glam::Vec3::new(scale.x.ln(), scale.y.ln(), scale.z.ln());
+        let opacity = logit(point.w);
+
+        let base = i * sh_component_count * 3;
+        let f_dc = [
+            model.sh_coefficients[base + 0],
+            model.sh_coefficients[base + 1],
+            model.sh_coefficients[base + 2],
+        ];
+
+        write!(
+            file,
+            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+            position.x,
+            position.y,
+            position.z,
+            0.0f32,
+            0.0f32,
+            0.0f32,
+            f_dc[0],
+            f_dc[1],
+            f_dc[2],
+            opacity,
+            log_scale.x,
+            log_scale.y,
+            log_scale.z,
+            rotation.w,
+            rotation.x,
+            rotation.y,
+            rotation.z
+        )?;
+
+        for j in 0..sh_rest_count {
+            let coeff = model
+                .sh_coefficients
+                .get(base + 3 + j)
+                .copied()
+                .unwrap_or(0.0);
+            write!(file, " {}", coeff)?;
+        }
+        writeln!(file)?;
+    }
+
+    Ok(())
+}
+
+fn write_radfoam_ply_ascii(
+    path: &path::Path,
+    model: &vol::PointCloudModel,
+) -> Result<(), ConvertError> {
+    use std::io::Write as _;
+
+    let Some(ref adjacency) = model.adjacency else {
+        return Err(ConvertError::MissingOutputData);
+    };
+
+    let count = model.len();
+    let num_adjacency = adjacency.neighbors.len();
+    let mut file = std::fs::File::create(path)?;
+
+    writeln!(file, "ply")?;
+    writeln!(file, "format ascii 1.0")?;
+    writeln!(file, "element vertex {}", count)?;
+    writeln!(file, "property float x")?;
+    writeln!(file, "property float y")?;
+    writeln!(file, "property float z")?;
+    writeln!(file, "property float density")?;
+    writeln!(file, "property uint adjacency_offset")?;
+    writeln!(file, "property uchar red")?;
+    writeln!(file, "property uchar green")?;
+    writeln!(file, "property uchar blue")?;
+    writeln!(file, "element adjacency {}", num_adjacency)?;
+    writeln!(file, "property uint adjacency")?;
+    writeln!(file, "end_header")?;
+
+    for i in 0..count {
+        let point = model.points[i];
+        let end_off = adjacency.offsets[i + 1];
+        let color = sh0_to_color(model, i);
+        let r = (color.x * 255.0).round().clamp(0.0, 255.0) as u8;
+        let g = (color.y * 255.0).round().clamp(0.0, 255.0) as u8;
+        let b = (color.z * 255.0).round().clamp(0.0, 255.0) as u8;
+        writeln!(
+            file,
+            "{} {} {} {} {} {} {} {}",
+            point.x, point.y, point.z, point.w, end_off, r, g, b
+        )?;
+    }
+
+    for idx in &adjacency.neighbors {
+        writeln!(file, "{}", idx)?;
+    }
+
+    Ok(())
+}
+
+fn write_radfoam_ply_binary(
+    path: &path::Path,
+    model: &vol::PointCloudModel,
+) -> Result<(), ConvertError> {
+    use std::io::Write as _;
+
+    let Some(ref adjacency) = model.adjacency else {
+        return Err(ConvertError::MissingOutputData);
+    };
+
+    let count = model.len();
+    let num_adjacency = adjacency.neighbors.len();
+    let mut file = std::fs::File::create(path)?;
+
+    writeln!(file, "ply")?;
+    writeln!(file, "format binary_little_endian 1.0")?;
+    writeln!(file, "element vertex {}", count)?;
+    writeln!(file, "property float x")?;
+    writeln!(file, "property float y")?;
+    writeln!(file, "property float z")?;
+    writeln!(file, "property float density")?;
+    writeln!(file, "property uint adjacency_offset")?;
+    writeln!(file, "property uchar red")?;
+    writeln!(file, "property uchar green")?;
+    writeln!(file, "property uchar blue")?;
+    writeln!(file, "element adjacency {}", num_adjacency)?;
+    writeln!(file, "property uint adjacency")?;
+    writeln!(file, "end_header")?;
+
+    for i in 0..count {
+        let point = model.points[i];
+        let end_off = adjacency.offsets[i + 1];
+        let color = sh0_to_color(model, i);
+        let r = (color.x * 255.0).round().clamp(0.0, 255.0) as u8;
+        let g = (color.y * 255.0).round().clamp(0.0, 255.0) as u8;
+        let b = (color.z * 255.0).round().clamp(0.0, 255.0) as u8;
+
+        file.write_all(&point.x.to_le_bytes())?;
+        file.write_all(&point.y.to_le_bytes())?;
+        file.write_all(&point.z.to_le_bytes())?;
+        file.write_all(&point.w.to_le_bytes())?;
+        file.write_all(&end_off.to_le_bytes())?;
+        file.write_all(&[r, g, b])?;
+    }
+
+    for idx in &adjacency.neighbors {
+        file.write_all(&idx.to_le_bytes())?;
+    }
+
+    Ok(())
+}
+
+fn sh0_to_color(model: &vol::PointCloudModel, index: usize) -> glam::Vec3 {
+    let base = index * 3;
+    let coeff = glam::Vec3::new(
+        model.sh_coefficients[base + 0],
+        model.sh_coefficients[base + 1],
+        model.sh_coefficients[base + 2],
+    );
+    (coeff * SH_C0 + glam::Vec3::splat(0.5)).clamp(glam::Vec3::ZERO, glam::Vec3::ONE)
+}
+
+fn logit(value: f32) -> f32 {
+    let clamped = value.clamp(1e-6, 1.0 - 1e-6);
+    (clamped / (1.0 - clamped)).ln()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gaussian_ply_roundtrip_keeps_count() {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 0.8),
+            glam::Vec4::new(1.0, 0.5, -0.5, 0.4),
+        ];
+        let sh_coefficients = vec![0.1, 0.2, 0.3, 0.2, 0.1, 0.0];
+        let transforms = vol::Transforms {
+            rotations: vec![glam::Quat::IDENTITY; points.len()],
+            scales: vec![glam::Vec3::splat(0.25); points.len()],
+        };
+        let model = vol::PointCloudModel {
+            points,
+            sh_coefficients,
+            sh_degree: 0,
+            transforms: Some(transforms),
+            adjacency: None,
+        };
+
+        let mut path = std::env::temp_dir();
+        path.push("blade_volume_convert_roundtrip.ply");
+        save_ply(&path, &model).expect("save ply");
+        let loaded = vol::io::load_gaussian(path.to_str().unwrap());
+
+        assert_eq!(loaded.len(), model.len());
+        assert!(loaded.transforms.is_some());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn radfoam_binary_roundtrip_keeps_count() {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 0.5),
+        ];
+        let sh_coefficients = vec![0.0; points.len() * 3];
+        let adjacency = vol::Adjacency {
+            neighbors: vec![1, 0],
+            offsets: vec![0, 1, 2],
+        };
+        let model = vol::PointCloudModel {
+            points,
+            sh_coefficients,
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(adjacency),
+        };
+
+        let mut path = std::env::temp_dir();
+        path.push("blade_volume_convert_roundtrip_radfoam.ply");
+        let options = SaveOptions {
+            format: PlyFormat::Binary,
+        };
+        save_ply_with_options(&path, &model, &options).expect("save ply");
+        let loaded = vol::io::load_radfoam(path.to_str().unwrap());
+
+        assert_eq!(loaded.len(), model.len());
+        assert!(loaded.adjacency.is_some());
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn ray_intersects_triangle_hits() {

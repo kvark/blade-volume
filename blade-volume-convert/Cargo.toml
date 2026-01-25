@@ -9,3 +9,7 @@ glam.workspace = true
 gltf = { version = "1", features = ["import"] }
 image = "0.25"
 rand = "0.8"
+
+[[bin]]
+name = "convert"
+path = "src/main.rs"

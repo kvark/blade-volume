@@ -14,6 +14,7 @@
 //! This allows mixing Gaussian and RadFoam objects in the same scene
 //! with independent transforms.
 
+use crate::RenderSize;
 use blade_graphics as gpu;
 use blade_volume as vol;
 
@@ -141,7 +142,7 @@ impl SceneRenderer {
     pub fn new<F>(
         context: &gpu::Context,
         surface_format: gpu::TextureFormat,
-        window_size: winit::dpi::PhysicalSize<u32>,
+        window_size: RenderSize,
         preprocess_shader: F,
     ) -> Self
     where
@@ -205,7 +206,7 @@ impl SceneRenderer {
 
     fn create_hdr_target(
         context: &gpu::Context,
-        size: winit::dpi::PhysicalSize<u32>,
+        size: RenderSize,
     ) -> (gpu::Texture, gpu::TextureView) {
         let tex = context.create_texture(gpu::TextureDesc {
             name: "scene-hdr",
@@ -237,7 +238,7 @@ impl SceneRenderer {
     }
 
     /// Handles window resize.
-    pub fn resize(&mut self, context: &gpu::Context, size: winit::dpi::PhysicalSize<u32>) {
+    pub fn resize(&mut self, context: &gpu::Context, size: RenderSize) {
         context.destroy_texture_view(self.hdr_view);
         context.destroy_texture(self.hdr_tex);
         let (hdr_tex, hdr_view) = Self::create_hdr_target(context, size);
@@ -290,7 +291,7 @@ impl SceneRenderer {
         frame_view: gpu::TextureView,
         camera_params: vol::CameraParams,
         _camera_position: glam::Vec3,
-        window_size: winit::dpi::PhysicalSize<u32>,
+        window_size: RenderSize,
         context: &gpu::Context,
     ) {
         // Prepare scene (uploads bounds/transforms if dirty)

@@ -27,7 +27,7 @@
 use blade_graphics as gpu;
 use blade_volume as vol;
 use blade_volume_view as view;
-use std::{collections::VecDeque, fmt, mem, str};
+use std::{collections::VecDeque, fmt, str};
 
 use blade_egui as begui;
 use egui as ui;
@@ -35,67 +35,6 @@ use egui_winit as ui_winit;
 
 const D2R: f32 = std::f32::consts::PI / 180.0;
 const EULER: glam::EulerRot = glam::EulerRot::ZYX;
-
-// ============================================================================
-// Shader Preprocessing
-// ============================================================================
-
-/// Embedded shader include files for preprocessing.
-mod shader_includes {
-    pub const COMMON: &str = blade_volume::shaders::COMMON;
-    pub const SH_EVAL: &str = blade_volume::shaders::SH_EVAL;
-    pub const RADFOAM_TRACE: &str = blade_volume::shaders::RADFOAM_TRACE;
-    pub const GAUSSIAN_TRACE: &str = blade_volume::shaders::GAUSSIAN_TRACE;
-}
-
-/// Preprocesses WGSL shader source, expanding `// #include "filename.wgsl"` directives.
-/// Includes are processed recursively to support nested includes.
-///
-/// Supported includes:
-/// - `// #include "common.wgsl"`
-/// - `// #include "sh_eval.wgsl"`
-/// - `// #include "radfoam_trace.wgsl"`
-/// - `// #include "gaussian_trace.wgsl"`
-fn preprocess_shader(source: &str) -> String {
-    preprocess_shader_recursive(source, 0)
-}
-
-fn preprocess_shader_recursive(source: &str, depth: usize) -> String {
-    if depth > 10 {
-        panic!("Shader include depth exceeded 10 - possible circular include");
-    }
-
-    let mut result = String::with_capacity(source.len() * 2);
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("// #include") {
-            let rest = rest.trim();
-            if let Some(filename) = rest.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                let include_content = match filename {
-                    "common.wgsl" => shader_includes::COMMON,
-                    "sh_eval.wgsl" => shader_includes::SH_EVAL,
-                    "radfoam_trace.wgsl" => shader_includes::RADFOAM_TRACE,
-                    "gaussian_trace.wgsl" => shader_includes::GAUSSIAN_TRACE,
-                    _ => panic!("Unknown shader include: {}", filename),
-                };
-                result.push_str("// === Begin included: ");
-                result.push_str(filename);
-                result.push_str(" ===\n");
-                // Recursively process includes within the included file
-                result.push_str(&preprocess_shader_recursive(include_content, depth + 1));
-                result.push_str("\n// === End included: ");
-                result.push_str(filename);
-                result.push_str(" ===\n");
-                continue;
-            }
-        }
-        result.push_str(line);
-        result.push('\n');
-    }
-
-    result
-}
 
 /// Arguments
 #[derive(argh::FromArgs)]
@@ -129,24 +68,6 @@ struct Arguments {
     debug: bool,
 }
 
-/// Debug/visualization mode for rendering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DebugMode {
-    /// Normal rendering
-    Off,
-    /// Show particle density per pixel (heatmap)
-    ParticleDensity,
-}
-
-impl DebugMode {
-    fn toggle(self) -> Self {
-        match self {
-            DebugMode::Off => DebugMode::ParticleDensity,
-            DebugMode::ParticleDensity => DebugMode::Off,
-        }
-    }
-}
-
 fn parse_vec<const N: usize, T: Copy + Default + str::FromStr>(string: &str) -> [T; N]
 where
     <T as str::FromStr>::Err: fmt::Debug,
@@ -159,503 +80,6 @@ where
 }
 
 // ============================================================================
-// Gaussian Ray-Tracing Backend
-// ============================================================================
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct GaussianParams {
-    min_opacity: f32,
-    min_transmittance: f32,
-    sh_degree: u32,
-    debug_mode: u32,
-    pad: [u32; 4],
-}
-
-#[derive(blade_macros::ShaderData)]
-struct GaussianDrawData {
-    g_camera: vol::CameraParams,
-    g_params: GaussianParams,
-    g_gaussian_tlas: gpu::AccelerationStructure,
-    g_data: gpu::BufferPiece,
-}
-
-struct GaussianBackend {
-    point_cloud: vol::GaussianGpuCloud,
-    draw_pipeline: gpu::RenderPipeline,
-    params: GaussianParams,
-}
-
-impl GaussianBackend {
-    fn params_mut(&mut self) -> &mut GaussianParams {
-        &mut self.params
-    }
-
-    fn new(
-        model: &vol::PointCloudModel,
-        args: &Arguments,
-        context: &gpu::Context,
-        encoder: &mut gpu::CommandEncoder,
-        surface_format: gpu::TextureFormat,
-    ) -> Self {
-        let shader = {
-            let raw_source = vol::shaders::GAUSSIAN;
-            let source = preprocess_shader(raw_source);
-            context.create_shader(gpu::ShaderDesc { source: &source })
-        };
-        assert_eq!(
-            shader.get_struct_size("Gaussian"),
-            mem::size_of::<vol::GaussianGpu>() as u32
-        );
-
-        let draw_layout = <GaussianDrawData as gpu::ShaderData>::layout();
-        let draw_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
-            name: "gaussian-main",
-            data_layouts: &[&draw_layout],
-            primitive: gpu::PrimitiveState {
-                topology: gpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            vertex: shader.at("draw_vs"),
-            vertex_fetches: &[],
-            fragment: Some(shader.at("draw_fs")),
-            color_targets: &[surface_format.into()],
-            depth_stencil: None,
-            multisample_state: Default::default(),
-        });
-
-        let init_params = vol::InitParameters {
-            min_opacity: args.min_opacity,
-        };
-        let point_cloud = vol::GaussianGpuCloud::new(model, &init_params, context, encoder);
-
-        let debug_mode = if args.debug {
-            DebugMode::ParticleDensity
-        } else {
-            DebugMode::Off
-        };
-        let params = GaussianParams {
-            min_opacity: args.min_opacity,
-            min_transmittance: args.min_transmittance,
-            sh_degree: model.sh_degree as u32,
-            debug_mode: debug_mode as u32,
-            pad: [0; 4],
-        };
-
-        Self {
-            point_cloud,
-            draw_pipeline,
-            params,
-        }
-    }
-
-    fn set_debug_mode(&mut self, mode: DebugMode) {
-        self.params.debug_mode = mode as u32;
-    }
-
-    fn render(
-        &self,
-        encoder: &mut gpu::CommandEncoder,
-        frame_view: gpu::TextureView,
-        camera_params: vol::CameraParams,
-    ) {
-        if let mut pass = encoder.render(
-            "gaussian-render",
-            gpu::RenderTargetSet {
-                colors: &[gpu::RenderTarget {
-                    view: frame_view,
-                    init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                    finish_op: gpu::FinishOp::Store,
-                }],
-                depth_stencil: None,
-            },
-        ) {
-            let mut pen = pass.with(&self.draw_pipeline);
-            pen.bind(
-                0,
-                &GaussianDrawData {
-                    g_camera: camera_params,
-                    g_params: self.params,
-                    g_gaussian_tlas: self.point_cloud.tlas,
-                    g_data: self.point_cloud.gauss_buf.into(),
-                },
-            );
-            pen.draw(0, 3, 0, 1);
-        }
-    }
-
-    fn print_info(&self) {
-        println!("Gaussian Params:");
-        println!("\tmin_opacity: {}", self.params.min_opacity);
-        println!("\tmin_transmittance: {}", self.params.min_transmittance);
-        println!("\tsh_degree: {}", self.params.sh_degree);
-        println!(
-            "\tdebug_mode: {:?}",
-            if self.params.debug_mode == 0 {
-                DebugMode::Off
-            } else {
-                DebugMode::ParticleDensity
-            }
-        );
-    }
-
-    fn deinit(mut self, context: &gpu::Context) {
-        context.destroy_render_pipeline(&mut self.draw_pipeline);
-        self.point_cloud.deinit(context);
-    }
-}
-
-// ============================================================================
-// RadFoam Compute Backend
-// ============================================================================
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct RadFoamTraceParams {
-    sh_degree: u32,
-    weight_threshold: f32,
-    max_steps: u32,
-    start_point: u32,
-    debug_mode: u32,
-    pad: [u32; 7],
-}
-
-#[derive(blade_macros::ShaderData)]
-struct RadFoamTraceData {
-    g_camera: vol::CameraParams,
-    g_params: RadFoamTraceParams,
-    g_points: gpu::BufferPiece,
-    g_attributes: gpu::BufferPiece,
-    g_adjacency: gpu::BufferPiece,
-    g_adjacency_offsets: gpu::BufferPiece,
-    g_out: gpu::TextureView,
-}
-
-#[derive(blade_macros::ShaderData)]
-struct RadFoamBlitData {
-    g_src: gpu::TextureView,
-    g_sampler: gpu::Sampler,
-}
-
-struct RadFoamBackend {
-    point_cloud: vol::RadFoamGpuCloud,
-    /// CPU-side KD-tree for start-point selection
-    kd_tree: kiddo::KdTree<f32, 3>,
-    trace_pipeline: gpu::ComputePipeline,
-    blit_pipeline: gpu::RenderPipeline,
-    hdr_tex: gpu::Texture,
-    hdr_view: gpu::TextureView,
-    sampler: gpu::Sampler,
-    trace_params: RadFoamTraceParams,
-}
-
-impl RadFoamBackend {
-    fn params_mut(&mut self) -> &mut RadFoamTraceParams {
-        &mut self.trace_params
-    }
-
-    fn new(
-        model: &vol::PointCloudModel,
-        args: &Arguments,
-        context: &gpu::Context,
-        encoder: &mut gpu::CommandEncoder,
-        surface_format: gpu::TextureFormat,
-        window_size: winit::dpi::PhysicalSize<u32>,
-    ) -> Self {
-        // Build KD-tree for start-point selection
-        let mut kd_tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
-        for (i, p) in model.points.iter().enumerate() {
-            let _ = kd_tree.add(&[p.x, p.y, p.z], i as u64);
-        }
-
-        // Create HDR target
-        let (hdr_tex, hdr_view) = Self::create_hdr_target(context, window_size);
-
-        // Sampler for blit
-        let sampler = context.create_sampler(gpu::SamplerDesc {
-            name: "radfoam-sampler",
-            mag_filter: gpu::FilterMode::Linear,
-            min_filter: gpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        // Trace compute pipeline
-        let shader = {
-            let raw_source = vol::shaders::RADFOAM;
-            let source = preprocess_shader(raw_source);
-            context.create_shader(gpu::ShaderDesc { source: &source })
-        };
-        let trace_layout = <RadFoamTraceData as gpu::ShaderData>::layout();
-        let trace_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
-            name: "radfoam-trace",
-            data_layouts: &[&trace_layout],
-            compute: shader.at("trace_main"),
-        });
-
-        // Blit pipeline
-        let blit_shader = {
-            let source = vol::shaders::RADFOAM_BLIT;
-            context.create_shader(gpu::ShaderDesc { source })
-        };
-        let blit_layout = <RadFoamBlitData as gpu::ShaderData>::layout();
-        let blit_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
-            name: "radfoam-blit",
-            data_layouts: &[&blit_layout],
-            primitive: gpu::PrimitiveState {
-                topology: gpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            vertex: blit_shader.at("vs"),
-            vertex_fetches: &[],
-            fragment: Some(blit_shader.at("fs")),
-            color_targets: &[surface_format.into()],
-            depth_stencil: None,
-            multisample_state: Default::default(),
-        });
-
-        // Upload scene data
-        let point_cloud = vol::RadFoamGpuCloud::new(model, context, encoder);
-
-        let debug_mode = if args.debug {
-            DebugMode::ParticleDensity
-        } else {
-            DebugMode::Off
-        };
-        let trace_params = RadFoamTraceParams {
-            sh_degree: point_cloud.sh_degree as u32,
-            weight_threshold: args.weight_threshold,
-            max_steps: args.max_steps,
-            start_point: 0,
-            debug_mode: debug_mode as u32,
-            pad: [0; 7],
-        };
-
-        Self {
-            point_cloud,
-            kd_tree,
-            trace_pipeline,
-            blit_pipeline,
-            hdr_tex,
-            hdr_view,
-            sampler,
-            trace_params,
-        }
-    }
-
-    fn create_hdr_target(
-        context: &gpu::Context,
-        size: winit::dpi::PhysicalSize<u32>,
-    ) -> (gpu::Texture, gpu::TextureView) {
-        let tex = context.create_texture(gpu::TextureDesc {
-            name: "radfoam-hdr",
-            format: gpu::TextureFormat::Rgba16Float,
-            size: gpu::Extent {
-                width: size.width.max(1),
-                height: size.height.max(1),
-                depth: 1,
-            },
-            array_layer_count: 1,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: gpu::TextureDimension::D2,
-            usage: gpu::TextureUsage::STORAGE
-                | gpu::TextureUsage::RESOURCE
-                | gpu::TextureUsage::COPY,
-            external: None,
-        });
-        let view = context.create_texture_view(
-            tex,
-            gpu::TextureViewDesc {
-                name: "radfoam-hdr-view",
-                format: gpu::TextureFormat::Rgba16Float,
-                dimension: gpu::ViewDimension::D2,
-                subresources: &gpu::TextureSubresources::default(),
-            },
-        );
-        (tex, view)
-    }
-
-    fn resize(&mut self, context: &gpu::Context, size: winit::dpi::PhysicalSize<u32>) {
-        context.destroy_texture_view(self.hdr_view);
-        context.destroy_texture(self.hdr_tex);
-        let (hdr_tex, hdr_view) = Self::create_hdr_target(context, size);
-        self.hdr_tex = hdr_tex;
-        self.hdr_view = hdr_view;
-    }
-
-    fn set_debug_mode(&mut self, mode: DebugMode) {
-        self.trace_params.debug_mode = mode as u32;
-    }
-
-    fn render(
-        &mut self,
-        encoder: &mut gpu::CommandEncoder,
-        frame_view: gpu::TextureView,
-        camera_params: vol::CameraParams,
-        camera_position: glam::Vec3,
-        window_size: winit::dpi::PhysicalSize<u32>,
-    ) {
-        // Auto-start: pick nearest point to camera origin via KD-tree
-        {
-            let q = [camera_position.x, camera_position.y, camera_position.z];
-            let nearest = self.kd_tree.nearest_one::<kiddo::SquaredEuclidean>(&q);
-            self.trace_params.start_point = nearest.item as u32;
-        }
-
-        encoder.init_texture(self.hdr_tex);
-
-        // Compute trace into HDR texture
-        if let mut pass = encoder.compute("radfoam-trace") {
-            let mut pen = pass.with(&self.trace_pipeline);
-            pen.bind(
-                0,
-                &RadFoamTraceData {
-                    g_camera: camera_params,
-                    g_params: self.trace_params,
-                    g_points: self.point_cloud.points(),
-                    g_attributes: self.point_cloud.attributes(),
-                    g_adjacency: self.point_cloud.point_adjacency(),
-                    g_adjacency_offsets: self.point_cloud.point_adjacency_offsets(),
-                    g_out: self.hdr_view,
-                },
-            );
-
-            // Workgroup sizing matches radfoam.wgsl: @workgroup_size(8,8,1)
-            let gx = (window_size.width + 7) / 8;
-            let gy = (window_size.height + 7) / 8;
-            pen.dispatch([gx, gy, 1]);
-        }
-
-        // Blit HDR -> swapchain with tonemap
-        if let mut pass = encoder.render(
-            "radfoam-present",
-            gpu::RenderTargetSet {
-                colors: &[gpu::RenderTarget {
-                    view: frame_view,
-                    init_op: gpu::InitOp::Clear(gpu::TextureColor::OpaqueBlack),
-                    finish_op: gpu::FinishOp::Store,
-                }],
-                depth_stencil: None,
-            },
-        ) {
-            let mut pen = pass.with(&self.blit_pipeline);
-            pen.bind(
-                0,
-                &RadFoamBlitData {
-                    g_src: self.hdr_view,
-                    g_sampler: self.sampler,
-                },
-            );
-            pen.draw(0, 3, 0, 1);
-        }
-    }
-
-    fn print_info(&self) {
-        println!("RadFoam Trace Params:");
-        println!("\tsh_degree: {}", self.trace_params.sh_degree);
-        println!("\tstart_point: {}", self.trace_params.start_point);
-        println!("\tmax_steps: {}", self.trace_params.max_steps);
-        println!("\tweight_threshold: {}", self.trace_params.weight_threshold);
-        println!(
-            "\tdebug_mode: {:?}",
-            if self.trace_params.debug_mode == 0 {
-                DebugMode::Off
-            } else {
-                DebugMode::ParticleDensity
-            }
-        );
-    }
-
-    fn deinit(mut self, context: &gpu::Context) {
-        context.destroy_sampler(self.sampler);
-        context.destroy_texture_view(self.hdr_view);
-        context.destroy_texture(self.hdr_tex);
-        self.point_cloud.deinit(context);
-        context.destroy_compute_pipeline(&mut self.trace_pipeline);
-        context.destroy_render_pipeline(&mut self.blit_pipeline);
-    }
-}
-
-// ============================================================================
-// Unified Rendering Backend
-// ============================================================================
-
-enum RenderBackend {
-    Gaussian(GaussianBackend),
-    RadFoam(RadFoamBackend),
-}
-
-impl RenderBackend {
-    fn resize(&mut self, context: &gpu::Context, size: winit::dpi::PhysicalSize<u32>) {
-        match self {
-            RenderBackend::Gaussian(_) => {
-                // Gaussian backend doesn't need resize handling
-            }
-            RenderBackend::RadFoam(ref mut backend) => {
-                backend.resize(context, size);
-            }
-        }
-    }
-
-    fn set_debug_mode(&mut self, mode: DebugMode) {
-        match self {
-            RenderBackend::Gaussian(ref mut backend) => {
-                backend.set_debug_mode(mode);
-            }
-            RenderBackend::RadFoam(ref mut backend) => {
-                backend.set_debug_mode(mode);
-            }
-        }
-    }
-
-    fn render(
-        &mut self,
-        encoder: &mut gpu::CommandEncoder,
-        frame_view: gpu::TextureView,
-        camera: &view::ControlledCamera,
-        window_size: winit::dpi::PhysicalSize<u32>,
-    ) {
-        let aspect = window_size.width as f32 / window_size.height as f32;
-        let camera_params = camera.to_params(aspect);
-
-        match self {
-            RenderBackend::Gaussian(ref backend) => {
-                backend.render(encoder, frame_view, camera_params);
-            }
-            RenderBackend::RadFoam(ref mut backend) => {
-                backend.render(
-                    encoder,
-                    frame_view,
-                    camera_params,
-                    camera.position,
-                    window_size,
-                );
-            }
-        }
-    }
-
-    fn print_info(&self) {
-        match self {
-            RenderBackend::Gaussian(ref backend) => {
-                println!("Backend: Gaussian Ray-Tracing");
-                backend.print_info();
-            }
-            RenderBackend::RadFoam(ref backend) => {
-                println!("Backend: RadFoam Compute");
-                backend.print_info();
-            }
-        }
-    }
-
-    fn deinit(self, context: &gpu::Context) {
-        match self {
-            RenderBackend::Gaussian(backend) => backend.deinit(context),
-            RenderBackend::RadFoam(backend) => backend.deinit(context),
-        }
-    }
-}
-
-// ============================================================================
 // Main Application
 // ============================================================================
 
@@ -663,13 +87,13 @@ const FRAME_TIME_HISTORY_SIZE: usize = 120;
 
 struct Example {
     camera: view::ControlledCamera,
-    backend: RenderBackend,
+    backend: view::RenderBackend,
     command_encoder: gpu::CommandEncoder,
     prev_sync_point: Option<gpu::SyncPoint>,
     window_size: winit::dpi::PhysicalSize<u32>,
     surface: gpu::Surface,
     context: gpu::Context,
-    debug_mode: DebugMode,
+    debug_mode: view::DebugMode,
 
     // For command line reproduction
     input_file: String,
@@ -774,31 +198,35 @@ impl Example {
             }
         );
 
-        // Create backend based on model type (transforms = Gaussian, adjacency = RadFoam)
-        let backend = if model.transforms.is_some() {
-            RenderBackend::Gaussian(GaussianBackend::new(
-                &model,
-                &args,
-                &context,
-                &mut command_encoder,
-                surface_info.format,
-            ))
+        let debug_mode = if args.debug {
+            view::DebugMode::ParticleDensity
         } else {
-            RenderBackend::RadFoam(RadFoamBackend::new(
-                &model,
-                &args,
-                &context,
-                &mut command_encoder,
-                surface_info.format,
-                window_size,
-            ))
+            view::DebugMode::Off
+        };
+        let size = view::RenderSize {
+            width: window_size.width,
+            height: window_size.height,
+        };
+        let gaussian_settings = view::GaussianSettings {
+            min_opacity: args.min_opacity,
+            min_transmittance: args.min_transmittance,
+            debug_mode,
+        };
+        let radfoam_settings = view::RadFoamSettings {
+            max_steps: args.max_steps,
+            weight_threshold: args.weight_threshold,
+            debug_mode,
         };
 
-        let debug_mode = if args.debug {
-            DebugMode::ParticleDensity
-        } else {
-            DebugMode::Off
-        };
+        let backend = view::RenderBackend::new_for_model(
+            &model,
+            gaussian_settings,
+            radfoam_settings,
+            &context,
+            &mut command_encoder,
+            surface_info.format,
+            size,
+        );
 
         Self {
             camera,
@@ -828,7 +256,7 @@ impl Example {
 
     fn deinit(mut self) {
         self.wait_for_gpu();
-        self.backend.deinit(&self.context);
+        self.backend.destroy(&self.context);
         self.ui_painter.destroy(&self.context);
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
@@ -839,7 +267,13 @@ impl Example {
         self.window_size = size;
         let config = Self::make_surface_config(size);
         self.context.reconfigure_surface(&mut self.surface, config);
-        self.backend.resize(&self.context, size);
+        self.backend.resize(
+            &self.context,
+            view::RenderSize {
+                width: size.width,
+                height: size.height,
+            },
+        );
     }
 
     fn wait_for_gpu(&mut self) {
@@ -867,10 +301,10 @@ impl Example {
                     ui.horizontal(|ui| {
                         ui.label("Backend:");
                         match self.backend {
-                            RenderBackend::Gaussian(_) => {
+                            view::RenderBackend::Gaussian(_) => {
                                 ui.label("Gaussian RT");
                             }
-                            RenderBackend::RadFoam(_) => {
+                            view::RenderBackend::RadFoam(_) => {
                                 ui.label("RadFoam compute");
                             }
                         }
@@ -880,28 +314,26 @@ impl Example {
 
                     // Quality controls (backend-specific)
                     ui.collapsing("Quality", |ui| match self.backend {
-                        RenderBackend::Gaussian(ref mut backend) => {
-                            let params = backend.params_mut();
+                        view::RenderBackend::Gaussian(ref mut backend) => {
                             ui.add(
-                                ui::Slider::new(&mut params.min_opacity, 0.001..=0.5)
+                                ui::Slider::new(backend.min_opacity_mut(), 0.001..=0.5)
                                     .logarithmic(true)
                                     .text("Min opacity"),
                             );
                             ui.add(
-                                ui::Slider::new(&mut params.min_transmittance, 0.001..=0.5)
+                                ui::Slider::new(backend.min_transmittance_mut(), 0.001..=0.5)
                                     .logarithmic(true)
                                     .text("Min transmittance"),
                             );
                         }
-                        RenderBackend::RadFoam(ref mut backend) => {
-                            let params = backend.params_mut();
+                        view::RenderBackend::RadFoam(ref mut backend) => {
                             ui.add(
-                                ui::Slider::new(&mut params.max_steps, 64..=4096)
+                                ui::Slider::new(backend.max_steps_mut(), 64..=4096)
                                     .logarithmic(true)
                                     .text("Max steps"),
                             );
                             ui.add(
-                                ui::Slider::new(&mut params.weight_threshold, 0.0001..=0.1)
+                                ui::Slider::new(backend.weight_threshold_mut(), 0.0001..=0.1)
                                     .logarithmic(true)
                                     .text("Weight threshold"),
                             );
@@ -912,12 +344,12 @@ impl Example {
 
                     ui.horizontal(|ui| {
                         ui.label("Debug mode:");
-                        let mut enabled = self.debug_mode == DebugMode::ParticleDensity;
+                        let mut enabled = self.debug_mode == view::DebugMode::ParticleDensity;
                         if ui.checkbox(&mut enabled, "Particle density").changed() {
                             self.debug_mode = if enabled {
-                                DebugMode::ParticleDensity
+                                view::DebugMode::ParticleDensity
                             } else {
-                                DebugMode::Off
+                                view::DebugMode::Off
                             };
                             self.backend.set_debug_mode(self.debug_mode);
                         }
@@ -1007,11 +439,17 @@ impl Example {
         self.command_encoder.start();
         self.command_encoder.init_texture(frame.texture());
 
+        let aspect = self.window_size.width as f32 / self.window_size.height as f32;
+        let camera_params = self.camera.to_params(aspect);
         self.backend.render(
             &mut self.command_encoder,
             frame.texture_view(),
-            &self.camera,
-            self.window_size,
+            camera_params,
+            self.camera.position,
+            view::RenderSize {
+                width: self.window_size.width,
+                height: self.window_size.height,
+            },
         );
 
         // egui textures update
@@ -1085,23 +523,24 @@ impl Example {
 
         // Add backend-specific parameters
         match &self.backend {
-            RenderBackend::Gaussian(backend) => {
-                let params = &backend.params;
-                args.push_str(&format!(" --min-opacity {}", params.min_opacity));
+            view::RenderBackend::Gaussian(backend) => {
+                args.push_str(&format!(" --min-opacity {}", backend.min_opacity()));
                 args.push_str(&format!(
                     " --min-transmittance {}",
-                    params.min_transmittance
+                    backend.min_transmittance()
                 ));
             }
-            RenderBackend::RadFoam(backend) => {
-                let params = &backend.trace_params;
-                args.push_str(&format!(" --max-steps {}", params.max_steps));
-                args.push_str(&format!(" --weight-threshold {}", params.weight_threshold));
+            view::RenderBackend::RadFoam(backend) => {
+                args.push_str(&format!(" --max-steps {}", backend.max_steps()));
+                args.push_str(&format!(
+                    " --weight-threshold {}",
+                    backend.weight_threshold()
+                ));
             }
         }
 
         // Add debug flag if active
-        if self.debug_mode == DebugMode::ParticleDensity {
+        if self.debug_mode == view::DebugMode::ParticleDensity {
             args.push_str(" --debug");
         }
 
