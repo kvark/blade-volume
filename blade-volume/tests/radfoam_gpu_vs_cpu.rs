@@ -6,7 +6,7 @@
 //! - Compare against the CPU reference tracer for matching rays
 //!
 //! Notes / assumptions:
-//! - This test uses the production shader from blade-volume-view/shaders/radfoam.wgsl
+//! - This test uses the production shader from blade-volume/shaders/radfoam.wgsl
 //! - For this correctness check, we enable SH **degree 3** evaluation in both CPU and GPU
 //!   to validate packed attribute reading + SH evaluation alongside traversal/integration.
 //! - The synthetic fixture is a branching topology that creates higher-degree nodes to
@@ -41,12 +41,11 @@ mod radfoam_synth_chain;
 use radfoam_cpu_ref as cpu;
 
 /// Load the production RadFoam shader and includes.
-const RADFOAM_WGSL: &str = include_str!("../../blade-volume-view/shaders/radfoam.wgsl");
-const COMMON_WGSL: &str = include_str!("../../blade-volume-view/shaders/common.wgsl");
-const SH_EVAL_WGSL: &str = include_str!("../../blade-volume-view/shaders/sh_eval.wgsl");
-const RADFOAM_TRACE_WGSL: &str = include_str!("../../blade-volume-view/shaders/radfoam_trace.wgsl");
-const GAUSSIAN_TRACE_WGSL: &str =
-    include_str!("../../blade-volume-view/shaders/gaussian_trace.wgsl");
+const RADFOAM_WGSL: &str = vol::shaders::RADFOAM;
+const COMMON_WGSL: &str = vol::shaders::COMMON;
+const SH_EVAL_WGSL: &str = vol::shaders::SH_EVAL;
+const RADFOAM_TRACE_WGSL: &str = vol::shaders::RADFOAM_TRACE;
+const GAUSSIAN_TRACE_WGSL: &str = vol::shaders::GAUSSIAN_TRACE;
 
 /// Preprocesses WGSL shader source, expanding `// #include "filename.wgsl"` directives.
 /// Includes are processed recursively to support nested includes.

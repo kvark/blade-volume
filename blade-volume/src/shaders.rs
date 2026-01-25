@@ -1,0 +1,8 @@
+pub const COMMON: &str = include_str!("../shaders/common.wgsl");
+pub const SH_EVAL: &str = include_str!("../shaders/sh_eval.wgsl");
+pub const RADFOAM_TRACE: &str = include_str!("../shaders/radfoam_trace.wgsl");
+pub const GAUSSIAN_TRACE: &str = include_str!("../shaders/gaussian_trace.wgsl");
+pub const RADFOAM: &str = include_str!("../shaders/radfoam.wgsl");
+pub const GAUSSIAN: &str = include_str!("../shaders/gaussian.wgsl");
+pub const SCENE_TRAVERSE: &str = include_str!("../shaders/scene_traverse.wgsl");
+pub const RADFOAM_BLIT: &str = include_str!("../shaders/radfoam_blit.wgsl");

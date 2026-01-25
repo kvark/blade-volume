@@ -1,7 +1,7 @@
 //! Unified viewer for volumetric data with multiple rendering backends.
 //!
 //! NOTE: If you change any uniform structs in Rust, make sure the matching WGSL
-//! structs (see `blade-volume-view/shaders/*.wgsl`) match in size/alignment.
+//! structs (see `blade-volume/shaders/*.wgsl`) match in size/alignment.
 //! A mismatch can cause validation asserts or GPU crashes.
 //!
 //! Usage:
@@ -42,10 +42,10 @@ const EULER: glam::EulerRot = glam::EulerRot::ZYX;
 
 /// Embedded shader include files for preprocessing.
 mod shader_includes {
-    pub const COMMON: &str = include_str!("../../shaders/common.wgsl");
-    pub const SH_EVAL: &str = include_str!("../../shaders/sh_eval.wgsl");
-    pub const RADFOAM_TRACE: &str = include_str!("../../shaders/radfoam_trace.wgsl");
-    pub const GAUSSIAN_TRACE: &str = include_str!("../../shaders/gaussian_trace.wgsl");
+    pub const COMMON: &str = blade_volume::shaders::COMMON;
+    pub const SH_EVAL: &str = blade_volume::shaders::SH_EVAL;
+    pub const RADFOAM_TRACE: &str = blade_volume::shaders::RADFOAM_TRACE;
+    pub const GAUSSIAN_TRACE: &str = blade_volume::shaders::GAUSSIAN_TRACE;
 }
 
 /// Preprocesses WGSL shader source, expanding `// #include "filename.wgsl"` directives.
@@ -55,6 +55,7 @@ mod shader_includes {
 /// - `// #include "common.wgsl"`
 /// - `// #include "sh_eval.wgsl"`
 /// - `// #include "radfoam_trace.wgsl"`
+/// - `// #include "gaussian_trace.wgsl"`
 fn preprocess_shader(source: &str) -> String {
     preprocess_shader_recursive(source, 0)
 }
@@ -198,7 +199,7 @@ impl GaussianBackend {
         surface_format: gpu::TextureFormat,
     ) -> Self {
         let shader = {
-            let raw_source = include_str!("../../shaders/gaussian.wgsl");
+            let raw_source = vol::shaders::GAUSSIAN;
             let source = preprocess_shader(raw_source);
             context.create_shader(gpu::ShaderDesc { source: &source })
         };
@@ -380,7 +381,7 @@ impl RadFoamBackend {
 
         // Trace compute pipeline
         let shader = {
-            let raw_source = include_str!("../../shaders/radfoam.wgsl");
+            let raw_source = vol::shaders::RADFOAM;
             let source = preprocess_shader(raw_source);
             context.create_shader(gpu::ShaderDesc { source: &source })
         };
@@ -393,7 +394,7 @@ impl RadFoamBackend {
 
         // Blit pipeline
         let blit_shader = {
-            let source = include_str!("../../shaders/radfoam_blit.wgsl");
+            let source = vol::shaders::RADFOAM_BLIT;
             context.create_shader(gpu::ShaderDesc { source })
         };
         let blit_layout = <RadFoamBlitData as gpu::ShaderData>::layout();
