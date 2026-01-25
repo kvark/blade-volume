@@ -10,7 +10,7 @@
 //
 // The Gaussian struct must also be defined before including this file.
 
-// #include "sh_eval.wgsl"
+// NOTE: `sh_eval.wgsl` must be included by the parent shader before this file.
 
 struct GaussianTraceParams {
     t_start: f32,

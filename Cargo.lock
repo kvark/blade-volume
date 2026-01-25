@@ -479,6 +479,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blade-volume-test"
+version = "0.1.0"
+dependencies = [
+ "blade-graphics",
+ "blade-volume",
+ "blade-volume-convert",
+ "blade-volume-view",
+ "glam",
+ "half",
+ "image",
+]
+
+[[package]]
 name = "blade-volume-view"
 version = "0.1.0"
 dependencies = [

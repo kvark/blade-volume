@@ -1,5 +1,5 @@
 [workspace]
-members = ["blade-volume", "blade-volume-view", "blade-volume-convert"]
+members = ["blade-volume", "blade-volume-view", "blade-volume-convert", "blade-volume-test"]
 resolver = "2"
 
 [workspace.dependencies]
