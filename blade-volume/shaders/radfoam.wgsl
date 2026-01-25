@@ -13,11 +13,12 @@
 
 struct Params {
     sh_degree: u32,
+    init_steps: u32,        // unused in legacy path, kept for shared layout
     weight_threshold: f32,
     max_steps: u32,
     start_point: u32,
     debug_mode: u32,
-    pad: vec3<u32>,
+    pad: vec2<u32>,
 };
 
 var<uniform> g_camera: Camera;

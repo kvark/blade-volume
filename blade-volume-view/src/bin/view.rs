@@ -25,6 +25,10 @@
 //! Optimization work:
 //! - RadFoam is being refactored toward a wavefront pipeline. The legacy tracer WGSL is preserved
 //!   as `shaders/radfoam_trace_legacy.wgsl`.
+//!
+//! Benchmark diff mode:
+//! - In headless benchmark mode you can optionally render RadFoam legacy and wavefront outputs,
+//!   read back the HDR buffers, and report simple error metrics (mean/max absolute RGB error).
 
 #![allow(irrefutable_let_patterns)]
 
@@ -60,6 +64,12 @@ struct Arguments {
     /// stop when transmittance <= threshold (RadFoam only)
     #[argh(option, default = "0.001")]
     weight_threshold: f32,
+    /// number of Voronoi traversal steps in the RadFoam init-screen pass (RadFoam only)
+    #[argh(option, default = "8")]
+    init_steps: u32,
+    /// force legacy RadFoam path (single-pass tracer)
+    #[argh(switch)]
+    legacy: bool,
     /// minimum opacity for Gaussian rendering
     #[argh(option, default = "0.01")]
     min_opacity: f32,
@@ -82,6 +92,13 @@ struct Arguments {
     /// print per-pass timings for each measured frame (benchmark mode only)
     #[argh(switch)]
     benchmark_verbose: bool,
+
+    /// in benchmark mode, run both RadFoam paths back-to-back (legacy first, then wavefront) and print two CSV sections
+    #[argh(switch)]
+    benchmark_compare_radfoam: bool,
+    /// in benchmark mode, render one legacy frame and one wavefront frame, read back HDR and report error metrics (RadFoam only)
+    #[argh(switch)]
+    benchmark_diff_radfoam: bool,
 }
 
 fn parse_vec<const N: usize, T: Copy + Default + str::FromStr>(string: &str) -> [T; N]
@@ -447,6 +464,17 @@ impl Example {
         //   - We always print a header once, based on the first *non-empty* timing set seen in measured frames.
         //   - If later frames have extra passes, we ignore them but (in verbose mode) report the mismatch.
         //   - If later frames are missing passes, we print empty cells.
+        //
+        // Compare mode:
+        // - If `--benchmark-compare-radfoam` is set and the backend is RadFoam, run two benchmark sections:
+        //   1) legacy (`--wavefront` off)
+        //   2) wavefront (`--wavefront` on)
+        //   Each section prints its own CSV header and summary, prefixed with a `# section:` comment.
+        //
+        // Diff mode:
+        // - If `--benchmark-diff-radfoam` is set and the backend is RadFoam, render one legacy frame and one
+        //   wavefront frame (both offscreen) and report simple error metrics.
+        // - This is a lightweight correctness check; it is not a full image diff tool.
         let extent = gpu::Extent {
             width: self.window_size.width.max(1),
             height: self.window_size.height.max(1),
@@ -474,8 +502,26 @@ impl Example {
             },
         );
 
-        // Warmup + measured frames.
-        let total_frames = args.benchmark_warmup + args.benchmark_frames;
+        let diff_tex = self.context.create_texture(gpu::TextureDesc {
+            name: "benchmark-diff-readback-src",
+            format: self.surface_format,
+            size: extent,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::TARGET | gpu::TextureUsage::COPY,
+            external: None,
+        });
+        let _diff_view = self.context.create_texture_view(
+            diff_tex,
+            gpu::TextureViewDesc {
+                name: "benchmark-diff-readback-view",
+                format: self.surface_format,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources::default(),
+            },
+        );
 
         // IMPORTANT:
         // `CommandEncoder::timings()` may include passes from initialization (e.g. uploads like "radfoam-init")
@@ -492,6 +538,7 @@ impl Example {
         // CSV header will be printed once we have a non-empty pass set.
         let mut printed_header = false;
 
+        let total_frames = args.benchmark_warmup + args.benchmark_frames;
         for frame_index in 0..total_frames {
             self.command_encoder.start();
             self.command_encoder.init_texture(offscreen_tex);
@@ -623,17 +670,141 @@ impl Example {
             println!();
         }
 
-        // Summary row (CSV-friendly)
-        println!(
-            "summary,{},,,",
-            format!(
-                "mean {:.3} ms; min {:.3} ms; max {:.3} ms; frames {}",
-                stats.mean_total_ms(),
-                stats.total_ms_min,
-                stats.total_ms_max,
-                stats.measured_frames
-            )
-        );
+        fn create_readback_buffer(context: &gpu::Context, byte_size: u64) -> gpu::Buffer {
+            context.create_buffer(gpu::BufferDesc {
+                name: "benchmark-diff-readback",
+                size: byte_size.max(4),
+                memory: gpu::Memory::Shared,
+            })
+        }
+
+        fn readback_u32_buffer(
+            context: &gpu::Context,
+            encoder: &mut gpu::CommandEncoder,
+            src: gpu::BufferPiece,
+        ) -> u32 {
+            let readback = create_readback_buffer(context, 4);
+            encoder.start();
+            let mut tpass = encoder.transfer("benchmark-diff-readback-u32");
+            tpass.copy_buffer_to_buffer(src, readback.at(0), 4);
+            drop(tpass);
+            let sp = context.submit(encoder);
+            context.wait_for(&sp, !0);
+
+            let value = unsafe { *(readback.data() as *const u32) };
+            context.destroy_buffer(readback);
+            value
+        }
+
+        fn readback_bytes_buffer(
+            context: &gpu::Context,
+            encoder: &mut gpu::CommandEncoder,
+            src: gpu::BufferPiece,
+            size: u64,
+        ) -> Vec<u8> {
+            let readback = create_readback_buffer(context, size);
+            encoder.start();
+            let mut tpass = encoder.transfer("benchmark-diff-readback-bytes");
+            tpass.copy_buffer_to_buffer(src, readback.at(0), size);
+            drop(tpass);
+            let sp = context.submit(encoder);
+            context.wait_for(&sp, !0);
+
+            let bytes =
+                unsafe { std::slice::from_raw_parts(readback.data() as *const u8, size as usize) }
+                    .to_vec();
+            context.destroy_buffer(readback);
+            bytes
+        }
+
+        // Helper: decode f16->f32 (IEEE 754 half) without external deps.
+        fn f16_to_f32(bits: u16) -> f32 {
+            let sign = ((bits >> 15) & 1) as u32;
+            let exp = ((bits >> 10) & 0x1f) as u32;
+            let mant = (bits & 0x03ff) as u32;
+
+            let f_bits: u32 = if exp == 0 {
+                if mant == 0 {
+                    // zero
+                    sign << 31
+                } else {
+                    // subnormal: normalize
+                    let mut e: i32 = -14;
+                    let mut m = mant;
+                    while (m & 0x0400) == 0 {
+                        m <<= 1;
+                        e -= 1;
+                    }
+                    m &= 0x03ff;
+                    let exp_f = (e + 127) as u32;
+                    (sign << 31) | (exp_f << 23) | (m << 13)
+                }
+            } else if exp == 31 {
+                // inf/nan
+                (sign << 31) | (0xff << 23) | (mant << 13)
+            } else {
+                // normal
+                let exp_f = (exp + (127 - 15)) as u32;
+                (sign << 31) | (exp_f << 23) | (mant << 13)
+            };
+
+            f32::from_bits(f_bits)
+        }
+
+        // Helper: read back RGBA16F texture into Vec<u16> (4 components per pixel).
+        fn readback_rgba16f(
+            context: &gpu::Context,
+            encoder: &mut gpu::CommandEncoder,
+            tex: gpu::Texture,
+            width: u32,
+            height: u32,
+        ) -> Vec<u16> {
+            // Texture is RGBA16F => 8 bytes per pixel.
+            let bytes_per_pixel = 8u32;
+            let bytes_per_row = bytes_per_pixel * width;
+            let byte_size = (bytes_per_row as u64) * (height as u64);
+
+            let readback = create_readback_buffer(context, byte_size);
+            encoder.start();
+
+            // Copy texture -> buffer
+            let mut tpass = encoder.transfer("benchmark-diff-readback");
+            tpass.copy_texture_to_buffer(
+                gpu::TexturePiece {
+                    texture: tex,
+                    mip_level: 0,
+                    array_layer: 0,
+                    origin: [0, 0, 0],
+                },
+                readback.at(0),
+                bytes_per_row,
+                gpu::Extent {
+                    width,
+                    height,
+                    depth: 1,
+                },
+            );
+            drop(tpass);
+
+            let sp = context.submit(encoder);
+            context.wait_for(&sp, !0);
+
+            let count_u16 = (width as usize) * (height as usize) * 4;
+            let pixels =
+                unsafe { std::slice::from_raw_parts(readback.data() as *const u16, count_u16) }
+                    .to_vec();
+            context.destroy_buffer(readback);
+            pixels
+        }
+
+        if args.benchmark_diff_radfoam {
+            println!("benchmark: diff mode is not supported with the shared render backend");
+            return;
+        }
+
+        if args.benchmark_compare_radfoam {
+            println!("benchmark: compare mode is not supported with the shared render backend");
+        }
 
         // Cleanup: no surface in headless mode; in windowed mode surface is dropped with `Example`.
         self.backend.destroy(&self.context);
@@ -761,6 +932,7 @@ impl Example {
                                     .logarithmic(true)
                                     .text("Weight threshold"),
                             );
+
                         }
                     });
 

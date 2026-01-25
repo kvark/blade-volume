@@ -33,7 +33,6 @@ struct Params {
     // padding
     pad0: u32,
     pad1: u32,
-    pad2: u32,
 };
 
 var<uniform> g_camera: Camera;
