@@ -160,7 +160,7 @@ impl SceneRenderer {
 
         // Traverse compute pipeline
         let shader = {
-            let raw_source = include_str!("../shaders/scene_traverse.wgsl");
+            let raw_source = vol::shaders::SCENE_TRAVERSE;
             let source = preprocess_shader(raw_source);
             context.create_shader(gpu::ShaderDesc { source: &source })
         };
@@ -173,7 +173,7 @@ impl SceneRenderer {
 
         // Blit pipeline (reuse radfoam_blit shader)
         let blit_shader = {
-            let source = include_str!("../shaders/radfoam_blit.wgsl");
+            let source = vol::shaders::RADFOAM_BLIT;
             context.create_shader(gpu::ShaderDesc { source })
         };
         let blit_layout = <SceneBlitData as gpu::ShaderData>::layout();

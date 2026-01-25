@@ -4,6 +4,7 @@ mod adjacency;
 mod camera;
 mod gpu;
 mod scene;
+pub mod shaders;
 mod shape;
 
 pub mod io;
