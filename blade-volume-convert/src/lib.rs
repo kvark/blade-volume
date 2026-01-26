@@ -20,6 +20,9 @@ pub struct ConvertOptions {
     pub seed: u64,
     pub surface_opacity: f32,
     pub interior_opacity: f32,
+    pub surface_scale: f32,
+    pub interior_scale: f32,
+    pub surface_normal_scale: f32,
 }
 
 impl Default for ConvertOptions {
@@ -30,10 +33,13 @@ impl Default for ConvertOptions {
             surface_density_scale: 1.0,
             interior_density_scale: 0.25,
             alpha_threshold: 0.01,
-            ambient: glam::Vec3::ONE,
+            ambient: glam::Vec3::splat(1.5),
             seed: 0,
             surface_opacity: 1.0,
             interior_opacity: 0.25,
+            surface_scale: 1.0,
+            interior_scale: 1.0,
+            surface_normal_scale: 1.0,
         }
     }
 }
@@ -182,6 +188,8 @@ pub fn convert_gltf(
 
     if interior_density > 0.0 {
         let spacing = interior_density.powf(-1.0 / 3.0);
+        let sub_div = 3u32;
+        let sub_spacing = spacing / sub_div as f32;
         let start = bbox.min + glam::Vec3::splat(0.5 * spacing);
         let mut z = start.z;
         while z <= bbox.max.z {
@@ -193,18 +201,38 @@ pub fn convert_gltf(
                     if is_point_inside_mesh(p, &triangles) {
                         let color =
                             (avg_color * options.ambient).clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
-                        push_point(
-                            &mut points,
-                            &mut sh_coefficients,
-                            &mut rotations,
-                            &mut scales,
-                            p,
-                            color,
-                            options.interior_opacity,
-                            spacing * 0.5,
-                            None,
-                            options,
-                        );
+                        let base = p - glam::Vec3::splat(0.5 * spacing);
+                        let scale = sub_spacing * 0.5 * options.interior_scale;
+                        let mut iz = 0u32;
+                        while iz < sub_div {
+                            let mut iy = 0u32;
+                            while iy < sub_div {
+                                let mut ix = 0u32;
+                                while ix < sub_div {
+                                    let offset = glam::Vec3::new(
+                                        (ix as f32 + 0.5) * sub_spacing,
+                                        (iy as f32 + 0.5) * sub_spacing,
+                                        (iz as f32 + 0.5) * sub_spacing,
+                                    );
+                                    let sp = base + offset;
+                                    push_point(
+                                        &mut points,
+                                        &mut sh_coefficients,
+                                        &mut rotations,
+                                        &mut scales,
+                                        sp,
+                                        color,
+                                        options.interior_opacity,
+                                        scale,
+                                        None,
+                                        options,
+                                    );
+                                    ix += 1;
+                                }
+                                iy += 1;
+                            }
+                            iz += 1;
+                        }
                     }
                     x += spacing;
                 }
@@ -241,7 +269,7 @@ pub fn convert_gltf(
                     p,
                     color,
                     options.surface_opacity,
-                    surface_point_scale(density),
+                    surface_point_scale(density) * options.surface_scale,
                     Some(tri.normal),
                     options,
                 );
@@ -427,14 +455,28 @@ fn compute_average_color(materials: &[MaterialInfo]) -> glam::Vec3 {
 }
 
 fn is_point_inside_mesh(point: glam::Vec3, triangles: &[Triangle]) -> bool {
-    let ray_dir = glam::Vec3::X;
-    let mut hits = 0u32;
-    for tri in triangles {
-        if ray_intersects_triangle(point, ray_dir, tri) {
-            hits += 1;
+    const RAYS: [glam::Vec3; 3] = [
+        glam::Vec3::new(0.321, 0.571, 0.755),
+        glam::Vec3::new(-0.742, 0.201, 0.639),
+        glam::Vec3::new(0.189, -0.911, 0.367),
+    ];
+
+    let mut odd_hits = 0u32;
+    for ray_dir in &RAYS {
+        let dir = ray_dir.normalize();
+        let origin = point + dir * 1e-4;
+        let mut hits = 0u32;
+        for tri in triangles {
+            if ray_intersects_triangle(origin, dir, tri) {
+                hits += 1;
+            }
+        }
+        if hits % 2 == 1 {
+            odd_hits += 1;
         }
     }
-    hits % 2 == 1
+
+    odd_hits >= 2
 }
 
 fn ray_intersects_triangle(origin: glam::Vec3, dir: glam::Vec3, tri: &Triangle) -> bool {
@@ -499,15 +541,18 @@ fn push_point(
 
     match options.output {
         OutputKind::Gaussian => {
-            sh_coefficients.extend_from_slice(&[color.x, color.y, color.z]);
-            let rotation = match normal {
+            let biased = (color - glam::Vec3::splat(0.5)) / SH_C0;
+            sh_coefficients.extend_from_slice(&[biased.x, biased.y, biased.z]);
+            let (rotation, scale_vec) = match normal {
                 Some(n) if n.length_squared() > 0.0 => {
-                    glam::Quat::from_rotation_arc(glam::Vec3::Z, n.normalize())
+                    let rot = glam::Quat::from_rotation_arc(glam::Vec3::Z, n.normalize());
+                    let s = glam::Vec3::new(scale, scale, scale * options.surface_normal_scale);
+                    (rot, s)
                 }
-                _ => glam::Quat::IDENTITY,
+                _ => (glam::Quat::IDENTITY, glam::Vec3::splat(scale)),
             };
             rotations.push(rotation);
-            scales.push(glam::Vec3::splat(scale));
+            scales.push(scale_vec);
         }
         OutputKind::RadFoam => {
             let biased = (color - glam::Vec3::splat(0.5)) / SH_C0;

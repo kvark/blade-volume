@@ -5,6 +5,7 @@
 
 use blade_graphics as gpu;
 use blade_volume as vol;
+use std::sync;
 
 mod radfoam_synth_chain;
 
@@ -24,6 +25,14 @@ fn make_test_context() -> Option<gpu::Context> {
             Err(other) => panic!("failed to init GPU context: {:?}", other),
         }
     }
+}
+
+fn gpu_test_guard() -> sync::MutexGuard<'static, ()> {
+    static GPU_TEST_LOCK: sync::OnceLock<sync::Mutex<()>> = sync::OnceLock::new();
+    GPU_TEST_LOCK
+        .get_or_init(|| sync::Mutex::new(()))
+        .lock()
+        .expect("lock gpu test mutex")
 }
 
 #[test]
@@ -94,6 +103,7 @@ fn transform_to_matrix_rotation() {
 
 #[test]
 fn scene_add_radfoam_object() {
+    let _guard = gpu_test_guard();
     let Some(context) = make_test_context() else {
         eprintln!("Skipping scene GPU test: no supported device found");
         return;
@@ -143,6 +153,7 @@ fn scene_add_radfoam_object() {
 
 #[test]
 fn scene_multiple_radfoam_objects() {
+    let _guard = gpu_test_guard();
     let Some(context) = make_test_context() else {
         eprintln!("Skipping scene GPU test: no supported device found");
         return;
@@ -189,6 +200,7 @@ fn scene_default_trait() {
 
 #[test]
 fn scene_prepare_creates_buffers() {
+    let _guard = gpu_test_guard();
     let Some(context) = make_test_context() else {
         eprintln!("Skipping scene GPU test: no supported device found");
         return;
@@ -227,6 +239,7 @@ fn scene_prepare_creates_buffers() {
 
 #[test]
 fn scene_render_data_reflects_all_objects() {
+    let _guard = gpu_test_guard();
     let Some(context) = make_test_context() else {
         eprintln!("Skipping scene GPU test: no supported device found");
         return;

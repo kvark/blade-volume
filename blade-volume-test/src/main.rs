@@ -4,8 +4,8 @@ use blade_volume_convert as convert;
 use blade_volume_view as view;
 use std::{env, path};
 
-const REF_WIDTH: u32 = 512;
-const REF_HEIGHT: u32 = 512;
+const REF_WIDTH: u32 = 128;
+const REF_HEIGHT: u32 = 128;
 const REF_NAME: &str = "police_ref.png";
 const INPUT_NAME: &str = "police.glb";
 const REF_TOLERANCE: u8 = 3;
@@ -16,15 +16,27 @@ fn main() {
     let input_path = data_dir.join(INPUT_NAME);
     let ref_path = data_dir.join(REF_NAME);
 
-    let update = env::args().any(|arg| arg == "--update");
+    let args: Vec<String> = env::args().collect();
+    let update = args.iter().any(|arg| arg == "--update");
+    let debug = args.iter().any(|arg| arg == "--debug");
 
     let mut options = convert::ConvertOptions::default();
     options.output = convert::OutputKind::Gaussian;
+    options.density = 80.0;
+    options.surface_density_scale = 80.0;
+    options.interior_density_scale = 6.0;
+    options.ambient = glam::Vec3::splat(0.9);
+    options.surface_scale = 0.028;
+    options.interior_scale = 0.3;
+    options.surface_opacity = 0.8;
+    options.interior_opacity = 0.95;
+    options.surface_normal_scale = 0.015;
 
     let model = convert::convert_gltf(&input_path, &options)
         .unwrap_or_else(|err| panic!("conversion failed: {err:?}"));
+    println!("converted points: {}", model.len());
 
-    let image = render_offscreen(&model, REF_WIDTH, REF_HEIGHT);
+    let image = render_offscreen(&model, REF_WIDTH, REF_HEIGHT, debug);
 
     if update || !ref_path.exists() {
         image::save_buffer(
@@ -69,7 +81,7 @@ fn main() {
     println!("image matches reference");
 }
 
-fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32) -> Vec<u8> {
+fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32, debug: bool) -> Vec<u8> {
     let context = unsafe {
         gpu::Context::init(gpu::ContextDesc {
             presentation: false,
@@ -88,16 +100,25 @@ fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32) -> Ve
     });
 
     let size = view::RenderSize { width, height };
-    let debug_mode = view::DebugMode::Off;
+    let gaussian_debug_mode = if debug {
+        view::DebugMode::ParticleDensity
+    } else {
+        view::DebugMode::Off
+    };
     let gaussian_settings = view::GaussianSettings {
-        min_opacity: 0.01,
-        min_transmittance: 0.01,
-        debug_mode,
+        min_opacity: 0.0004,
+        min_transmittance: 0.001,
+        debug_mode: gaussian_debug_mode,
+    };
+    let radfoam_debug_mode = if debug {
+        view::DebugMode::ParticleDensity
+    } else {
+        view::DebugMode::Off
     };
     let radfoam_settings = view::RadFoamSettings {
-        max_steps: 1024,
-        weight_threshold: 0.001,
-        debug_mode,
+        max_steps: 256,
+        weight_threshold: 0.05,
+        debug_mode: radfoam_debug_mode,
     };
 
     let mut backend = view::RenderBackend::new_for_model(
@@ -135,15 +156,7 @@ fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32) -> Ve
         },
     );
 
-    let camera = vol::CameraParams {
-        cam_position: [3.0, 2.0, -3.0],
-        depth: 20.0,
-        cam_orientation: glam::Quat::from_rotation_y(0.8)
-            .mul_quat(glam::Quat::from_rotation_x(-0.2))
-            .into(),
-        fov: [1.0, 1.0],
-        pad: [0, 0],
-    };
+    let camera = camera_from_bounds(model);
 
     encoder.start();
     encoder.init_texture(output);
@@ -182,7 +195,10 @@ fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32) -> Ve
     drop(tpass);
 
     let sp = context.submit(&mut encoder);
-    context.wait_for(&sp, !0);
+    let ok = context.wait_for(&sp, 20000);
+    if !ok {
+        panic!("GPU timed out while rendering reference image");
+    }
 
     let data = unsafe {
         std::slice::from_raw_parts(
@@ -242,4 +258,52 @@ fn compare_images(a: &[u8], b: &[u8], tolerance: u8) -> bool {
         }
     }
     false
+}
+
+fn camera_from_bounds(model: &vol::PointCloudModel) -> vol::CameraParams {
+    let (center, radius) = compute_bounds(model);
+    let view_dir = glam::Vec3::new(0.8, -0.4, -0.6).normalize();
+    let distance = radius * 2.5 + 0.1;
+    let position = center - view_dir * distance;
+    let orientation = look_at_orientation(position, center, -glam::Vec3::Y);
+
+    vol::CameraParams {
+        cam_position: position.into(),
+        depth: distance + radius * 2.0,
+        cam_orientation: orientation.into(),
+        fov: [1.0, 1.0],
+        pad: [0, 0],
+    }
+}
+
+fn compute_bounds(model: &vol::PointCloudModel) -> (glam::Vec3, f32) {
+    if model.points.is_empty() {
+        return (glam::Vec3::ZERO, 1.0);
+    }
+
+    let mut min = glam::Vec3::splat(f32::INFINITY);
+    let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+    for p in &model.points {
+        let v = glam::Vec3::new(p.x, p.y, p.z);
+        min = min.min(v);
+        max = max.max(v);
+    }
+    let center = (min + max) * 0.5;
+    let mut radius = 0.0f32;
+    for p in &model.points {
+        let v = glam::Vec3::new(p.x, p.y, p.z);
+        radius = radius.max((v - center).length());
+    }
+    (center, radius.max(0.1))
+}
+
+fn look_at_orientation(position: glam::Vec3, target: glam::Vec3, up: glam::Vec3) -> glam::Quat {
+    let forward = (target - position).normalize();
+    let mut right = up.cross(forward).normalize_or_zero();
+    if right.length_squared() < 1e-6 {
+        right = glam::Vec3::X.cross(forward).normalize_or_zero();
+    }
+    let up = forward.cross(right);
+    let basis = glam::Mat3::from_cols(right, up, forward);
+    glam::Quat::from_mat3(&basis)
 }
