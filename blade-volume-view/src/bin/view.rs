@@ -35,7 +35,10 @@
 use blade_graphics as gpu;
 use blade_volume as vol;
 use blade_volume_view as view;
-use std::{collections::VecDeque, fmt, str};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt, str,
+};
 
 use blade_egui as begui;
 use egui as ui;
@@ -67,9 +70,9 @@ struct Arguments {
     /// number of Voronoi traversal steps in the RadFoam init-screen pass (RadFoam only)
     #[argh(option, default = "8")]
     init_steps: u32,
-    /// force legacy RadFoam path (single-pass tracer)
+    /// use wavefront RadFoam path (multi-pass)
     #[argh(switch)]
-    legacy: bool,
+    wavefront: bool,
     /// minimum opacity for Gaussian rendering
     #[argh(option, default = "0.01")]
     min_opacity: f32,
@@ -112,10 +115,8 @@ where
     vec
 }
 
-// ============================================================================
 // Main Application
 // ============================================================================
-
 const FRAME_TIME_HISTORY_SIZE: usize = 120;
 
 struct Example {
@@ -932,7 +933,6 @@ impl Example {
                                     .logarithmic(true)
                                     .text("Weight threshold"),
                             );
-
                         }
                     });
 
@@ -1082,7 +1082,7 @@ impl Example {
         self.prev_sync_point = Some(sync_point);
     }
 
-    fn print_info(&self) {
+    fn print_info(&mut self) {
         println!("Camera:");
         let (roll, pitch, yaw) = self.camera.orientation.to_euler(EULER);
         println!("\tposition: {:?}", self.camera.position);
@@ -1095,9 +1095,24 @@ impl Example {
         println!("Debug Mode: {:?}", self.debug_mode);
         self.backend.print_info();
         println!("Timings:");
+        let mut total_ms = 0.0;
+        let mut grouped: HashMap<&str, f64> = HashMap::new();
         for &(ref name, value) in self.command_encoder.timings() {
-            println!("\t{}: {:.3} ms", name, value.as_secs_f64() * 1000.0);
+            let ms = value.as_secs_f64() * 1000.0;
+            total_ms += ms;
+            if name == "radfoam-wavefront" || name == "radfoam-wavefront-clear-count" {
+                *grouped.entry(name.as_str()).or_insert(0.0) += ms;
+                continue;
+            }
+            println!("\t{}: {:.3} ms", name, ms);
         }
+        if let Some(ms) = grouped.get("radfoam-wavefront-clear-count") {
+            println!("\tradfoam-wavefront-clear-count (sum): {:.3} ms", ms);
+        }
+        if let Some(ms) = grouped.get("radfoam-wavefront") {
+            println!("\tradfoam-wavefront (sum): {:.3} ms", ms);
+        }
+        println!("\tTOTAL: {:.3} ms", total_ms);
     }
 
     /// Generate command line arguments to reproduce the current view.

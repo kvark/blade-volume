@@ -50,9 +50,9 @@ struct Params {
     pad1: u32,
 };
 
-struct WavefrontParams {
-    // Number of rays in the queue (<= queue capacity).
-    queue_count: u32,
+struct WavefrontPhaseParams {
+    // Number of traversal steps to execute per phase.
+    phase_steps: u32,
     // Padding
     pad0: u32,
     pad1: u32,
@@ -61,7 +61,7 @@ struct WavefrontParams {
 
 var<uniform> g_camera: Camera;
 var<uniform> g_params: Params;
-var<storage, read> g_wf: WavefrontParams;
+var<uniform> g_phase: WavefrontPhaseParams;
 
 // ----------------------------------------------------------------------------
 // Scene buffers (match legacy)
@@ -110,9 +110,16 @@ struct RayState {
 };
 
 var<storage, read> g_queue: array<RayState>;
+var<storage, read> g_queue_count: atomic<u32>;
+var<storage, read_write> g_next_queue: array<RayState>;
+var<storage, read_write> g_next_queue_count: atomic<u32>;
 
 // Output HDR image.
 var g_out: texture_storage_2d<rgba16float, write>;
+
+// Workgroup shared state for early-exit decision.
+var<workgroup> wg_exit: u32;
+var<workgroup> wg_alive: atomic<u32>;
 
 // ----------------------------------------------------------------------------
 // Helpers
@@ -295,9 +302,14 @@ fn step_voronoi(ray_origin: vec3<f32>, ray_dir: vec3<f32>, current: u32, t0: f32
 // ----------------------------------------------------------------------------
 
 @compute @workgroup_size(256, 1, 1)
-fn wavefront_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn wavefront_phase_main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid3: vec3<u32>,
+) {
+    let lid = lid3.x;
     let qi = gid.x;
-    if (qi >= g_wf.queue_count) {
+    let queue_count = atomicLoad(&g_queue_count);
+    if (qi >= queue_count) {
         return;
     }
 
@@ -323,35 +335,74 @@ fn wavefront_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ray_origin = g_camera.position;
     let ray_dir = normalize(state.ray_dir.xyz);
 
-    // Continue traversal until termination.
-    while (state.t0 < g_camera.depth && state.steps < g_params.max_steps && state.transmittance > g_params.weight_threshold) {
-        let packed = step_voronoi(ray_origin, ray_dir, state.current, state.t0);
-        let advanced = packed.z > 0.5;
-        if (!advanced) {
-            break;
+    let phase_steps = g_phase.phase_steps;
+    var alive = true;
+    let exit_threshold = 128u; // half of workgroup size (256)
+
+    // Continue traversal for a bounded number of steps.
+    for (var step = 0u; step < phase_steps; step += 1u) {
+        if (lid == 0u) {
+            atomicStore(&wg_alive, 0u);
+            wg_exit = 0u;
         }
+        workgroupBarrier();
 
-        let next_t0 = packed.x;
-        let next_idx = u32(packed.y);
+        if (alive) {
+            if (!(state.t0 < g_camera.depth && state.steps < g_params.max_steps && state.transmittance > g_params.weight_threshold)) {
+                alive = false;
+            } else {
+                let packed = step_voronoi(ray_origin, ray_dir, state.current, state.t0);
+                let advanced = packed.z > 0.5;
+                if (!advanced) {
+                    alive = false;
+                } else {
+                    let next_t0 = packed.x;
+                    let next_idx = u32(packed.y);
 
-        // Integrate segment [t0, next_t0] in current cell.
-        if (next_t0 > state.t0) {
-            state.cells_visited += 1u;
+                    // Integrate segment [t0, next_t0] in current cell.
+                    if (next_t0 > state.t0) {
+                        state.cells_visited += 1u;
 
-            let s = load_density(state.current);
-            if (s > 1e-6) {
-                let dt = max(next_t0 - state.t0, 0.0);
-                let alpha = 1.0 - exp(-s * dt);
-                let wgt = state.transmittance * alpha;
-                let rgb = eval_sh_rgb(state.current, ray_dir);
-                state.accum_rgb = vec4<f32>(state.accum_rgb.xyz + wgt * rgb, state.accum_rgb.w);
-                state.transmittance = state.transmittance * (1.0 - alpha);
+                        let s = load_density(state.current);
+                        if (s > 1e-6) {
+                            let dt = max(next_t0 - state.t0, 0.0);
+                            let alpha = 1.0 - exp(-s * dt);
+                            let wgt = state.transmittance * alpha;
+                            let rgb = eval_sh_rgb(state.current, ray_dir);
+                            state.accum_rgb = vec4<f32>(state.accum_rgb.xyz + wgt * rgb, state.accum_rgb.w);
+                            state.transmittance = state.transmittance * (1.0 - alpha);
+                        }
+                    }
+
+                    state.steps += 1u;
+                    state.t0 = max(state.t0, next_t0);
+                    state.current = next_idx;
+                }
             }
         }
 
-        state.steps += 1u;
-        state.t0 = max(state.t0, next_t0);
-        state.current = next_idx;
+        if (alive) {
+            atomicAdd(&wg_alive, 1u);
+        }
+        workgroupBarrier();
+
+        if (lid == 0u) {
+            let alive_count = atomicLoad(&wg_alive);
+            if (alive_count <= exit_threshold) {
+                wg_exit = 1u;
+            }
+        }
+        workgroupBarrier();
+
+        if (wg_exit != 0u) {
+            break;
+        }
+    }
+
+    if (alive && state.t0 < g_camera.depth && state.steps < g_params.max_steps && state.transmittance > g_params.weight_threshold) {
+        let dst = atomicAdd(&g_next_queue_count, 1u);
+        g_next_queue[dst] = state;
+        return;
     }
 
     // Debug mode: visualize traversal effort
