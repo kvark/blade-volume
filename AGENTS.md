@@ -6,6 +6,7 @@ This is a Rust+WGSL library that directly works with volumetric data.
 - simple code, don't overcomplicate and assume future cases, assume users know what they are doing
 - strict style:
   - single `use` per crate, prefer to import modules instead of individual items
+  - either publicly export a module, or some of its types, but not both
   - no implicit references in `match`, prefer explicit `ref` instead
 
 # Development Tracks
@@ -45,3 +46,9 @@ New rendering methods:
 - Gaussians splatted with compute (instead of the current ray tracing), in 3DGUT formulation
 
 Implement a way to build BLAS by the means of reconstruction from a sequence of images (and masks).
+
+## Testing
+
+Image reftests for all methods.
+CI based on Vulkan lavapipe.
+It would help to generate some of the models programmatically, so that we don't commit big assets into the repo. Could be some simple-ish geometric primitives, like a christmas tree.

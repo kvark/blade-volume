@@ -191,11 +191,12 @@ impl GaussianBackend {
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct RadFoamTraceParams {
     sh_degree: u32,
+    init_steps: u32,
     weight_threshold: f32,
     max_steps: u32,
     start_point: u32,
     debug_mode: u32,
-    pad: [u32; 7],
+    pad: [u32; 2],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -301,11 +302,12 @@ impl RadFoamBackend {
 
         let trace_params = RadFoamTraceParams {
             sh_degree: point_cloud.sh_degree as u32,
+            init_steps: 0,
             weight_threshold: settings.weight_threshold,
             max_steps: settings.max_steps,
             start_point: 0,
             debug_mode: settings.debug_mode as u32,
-            pad: [0; 7],
+            pad: [0; 2],
         };
 
         Self {

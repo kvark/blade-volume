@@ -102,21 +102,16 @@ struct CameraParams {
 }
 
 /// Trace parameters matching the production shader.
-///
-/// WGSL layout (std140/uniform alignment):
-/// - vec3<u32> requires 16-byte alignment
-/// - struct size rounds up to multiple of 16
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct TraceParams {
-    sh_degree: u32,        // offset 0
-    weight_threshold: f32, // offset 4
-    max_steps: u32,        // offset 8
-    start_point: u32,      // offset 12
-    debug_mode: u32,       // offset 16
-    _align_pad: [u32; 3],  // offset 20 (padding to align vec3 to 32)
-    pad: [u32; 3],         // offset 32 (the vec3<u32> pad field)
-    _size_pad: u32,        // offset 44 (padding to make struct 48 bytes)
+    sh_degree: u32,
+    init_steps: u32,
+    weight_threshold: f32,
+    max_steps: u32,
+    start_point: u32,
+    debug_mode: u32,
+    pad: [u32; 2],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -297,13 +292,12 @@ fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
     // Use the first point (0). For a +Z chain this is always a valid start for a +Z ray.
     let params = TraceParams {
         sh_degree: model.sh_degree as u32,
+        init_steps: 0,
         weight_threshold: 1e-4,
         max_steps: 256,
         start_point: 0,
         debug_mode: 0, // Normal rendering, not debug visualization
-        _align_pad: [0, 0, 0],
-        pad: [0, 0, 0],
-        _size_pad: 0,
+        pad: [0, 0],
     };
 
     // Dispatch compute.
