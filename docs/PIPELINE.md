@@ -113,20 +113,27 @@ deferred until that data exists.
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
 reverse.
 
-#### M3a — Crate skeleton
+#### M3a — Crate skeleton (done)
 
-- `cargo new --lib blade-volume-train`, wire into workspace.
-- Define the trainer state: parameters mirror `PointCloudModel` fields but live as
-  meganeura tensors with gradients.
-- Conversion: `TrainerState ⇆ PointCloudModel`.
+- `blade-volume-train` crate wired into the workspace, depends on
+  `blade-volume` + `meganeura 0.2`.
+- `TrainerState` mirrors the optimisable parts of `PointCloudModel` but stores
+  density and radius in their `softplus` pre-image, matching what PowerFoam
+  does. Free parameters: positions, SH coefficients, sh_degree.
+- `TrainerState::from_model` / `::to_model` round-trip a `PointCloudModel`
+  through trainer space; tests verify both with and without radii.
+- Gradient-bearing meganeura graph nodes deferred to M3c — the dep is already
+  pulled and re-exported (`pub use meganeura`) so the M3c entry point is
+  unblocked.
 
 #### M3b — COLMAP loader
 
 - Read `sparse/0/{cameras,images,points3D}.bin`. Pure Rust, no native deps.
 - Camera intrinsics + extrinsics → our `CameraParams` type.
 - Initial sparse points → starting `PointCloudModel`.
-- Tests: parse a small COLMAP dump we keep under `etc/` (git-LFS or generated in a
-  doc-test).
+- Tests: synthesise a tiny COLMAP dump from hand-crafted poses+points so we
+  don't ship 300 MB of binaries in this repo. For end-to-end smoke tests pull
+  a real scene with `etc/fetch_test_dataset.sh` (see *Test data*).
 
 #### M3c — Differentiable forward + loss
 
@@ -167,6 +174,22 @@ M1 ──▶ M2a ──▶ M2b ──▶ M2c ──▶ M2d
 - meganeura API: tensors-of-vec3 or flat tensor-of-f32? Decide at M3a after reading
   meganeura's actual surface.
 - Loss-domain (linear vs. sRGB) and tonemap: punt to M3c.
+
+## Test data
+
+Survey of Hugging Face datasets we can use to test the training pipeline, picked
+because they ship with the canonical COLMAP `sparse/0/{cameras,images,points3D}.bin`
+layout (not just raw images):
+
+| Repo | Scene | Images | Size | Notes |
+|---|---|---:|---:|---|
+| [`yuangjia/mipnerf-bonsai`](https://hf.co/datasets/yuangjia/mipnerf-bonsai) | bonsai | 292 | 280 MB | **default smoke test**; single Mip-NeRF-360 scene, full COLMAP outputs, no licence stamp |
+| [`pablovela5620/example-colmap-glomap`](https://hf.co/datasets/pablovela5620/example-colmap-glomap) | mixed | 104 | 420 MB | ships both `colmap/` and `glomap/` outputs for cross-checking |
+| [`nvs-bench/mipnerf360`](https://hf.co/datasets/nvs-bench/mipnerf360) | all 9 Mip-NeRF-360 scenes | 1.9K | 1.9 GB | full benchmark; MIT licence |
+| [`DL3DV/DL3DV-ALL-ColmapCache`](https://hf.co/datasets/DL3DV/DL3DV-ALL-ColmapCache) | 10K scenes | — | >1 TB | gated; use the `DL3DV-10K-Sample` companion if/when needed |
+
+`etc/fetch_test_dataset.sh <scene>` pulls one of these into `etc/data/<scene>/`.
+Nothing in this directory is checked in.
 
 ## Out-of-scope (for now)
 

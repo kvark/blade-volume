@@ -1,0 +1,14 @@
+[package]
+name = "blade-volume-train"
+version = "0.1.0"
+edition = "2021"
+description = "Training pipeline for blade-volume point clouds (meganeura backend)"
+
+[dependencies]
+blade-volume = { path = "../blade-volume" }
+glam.workspace = true
+log.workspace = true
+meganeura.workspace = true
+
+[lints]
+workspace = true

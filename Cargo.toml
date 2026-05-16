@@ -1,5 +1,11 @@
 [workspace]
-members = ["blade-volume", "blade-volume-view", "blade-volume-convert", "blade-volume-test"]
+members = [
+    "blade-volume",
+    "blade-volume-view",
+    "blade-volume-convert",
+    "blade-volume-test",
+    "blade-volume-train",
+]
 resolver = "2"
 
 # Mirror the lint policy from blade-graphics/src/lib.rs.
@@ -21,6 +27,7 @@ unused_extern_crates = "warn"
 [workspace.dependencies]
 blade-graphics = { git = "https://github.com/kvark/blade", rev = "0d693426253fb2aaea0d842bf76bf13e2773a411" }
 blade-macros = "0.3"
+meganeura = "0.2"
 bytemuck = "1"
 glam = { version = "0.30", features = ["mint"] }
 flate2 = "1"
