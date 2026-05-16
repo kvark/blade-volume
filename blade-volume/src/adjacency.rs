@@ -120,6 +120,76 @@ pub fn compute_adjacency_default(points: &[glam::Vec4]) -> Adjacency {
     compute_adjacency(points, &AdjacencyConfig::default())
 }
 
+/// Computes the Čech-complex adjacency for a set of weighted points (Power Foam).
+///
+/// An edge `{i, j}` is emitted when the balls `B(p_i, r_i)` and `B(p_j, r_j)` overlap,
+/// i.e. `|p_i - p_j| <= r_i + r_j`. The result is the same CSR [`Adjacency`] used by
+/// the unweighted Voronoi path so downstream code (shaders, validation) is unchanged.
+///
+/// `radii.len()` must equal `points.len()`. Negative radii are clamped to `0`.
+///
+/// Implementation: builds a k-d tree of point positions, queries each point within
+/// `r_i + r_max` to bound candidates, then filters by the exact overlap predicate.
+pub fn compute_cech(points: &[glam::Vec4], radii: &[f32], config: &AdjacencyConfig) -> Adjacency {
+    let num_points = points.len();
+    assert_eq!(
+        radii.len(),
+        num_points,
+        "compute_cech: radii.len() ({}) must equal points.len() ({})",
+        radii.len(),
+        num_points
+    );
+
+    let radii: Vec<f32> = radii.iter().map(|&r| r.max(0.0)).collect();
+    let r_max = radii.iter().copied().fold(0.0_f32, f32::max);
+
+    let mut kd_tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
+    for (i, p) in points.iter().enumerate() {
+        kd_tree.add(&[p.x, p.y, p.z], i as u64);
+    }
+
+    let mut neighbor_sets: Vec<Vec<u32>> = vec![Vec::new(); num_points];
+
+    for (i, p) in points.iter().enumerate() {
+        let r_i = radii[i];
+        let bound = r_i + r_max;
+        let bound_sq = bound * bound;
+        let q = [p.x, p.y, p.z];
+        for hit in kd_tree.within_unsorted::<kiddo::SquaredEuclidean>(&q, bound_sq) {
+            let j = hit.item as usize;
+            if j == i {
+                continue;
+            }
+            let sum = r_i + radii[j];
+            if hit.distance <= sum * sum {
+                neighbor_sets[i].push(j as u32);
+            }
+        }
+    }
+
+    let mut offsets = Vec::with_capacity(num_points + 1);
+    let mut neighbors = Vec::new();
+    offsets.push(0u32);
+    for neighbor_list in neighbor_sets.iter_mut() {
+        neighbor_list.sort_unstable();
+        neighbor_list.dedup();
+        let count = neighbor_list.len().min(config.max_neighbors);
+        neighbors.extend_from_slice(&neighbor_list[..count]);
+        offsets.push(neighbors.len() as u32);
+    }
+
+    if config.validate {
+        validate_csr(&offsets, &neighbors, num_points);
+    }
+
+    Adjacency { neighbors, offsets }
+}
+
+/// [`compute_cech`] with the default [`AdjacencyConfig`].
+pub fn compute_cech_default(points: &[glam::Vec4], radii: &[f32]) -> Adjacency {
+    compute_cech(points, radii, &AdjacencyConfig::default())
+}
+
 /// Validates a CSR adjacency structure.
 ///
 /// # Panics
@@ -274,6 +344,126 @@ mod tests {
         ];
 
         compute_adjacency_default(&points);
+    }
+
+    fn neighbors_of(adj: &Adjacency, i: usize) -> Vec<u32> {
+        let start = adj.offsets[i] as usize;
+        let end = adj.offsets[i + 1] as usize;
+        adj.neighbors[start..end].to_vec()
+    }
+
+    #[test]
+    fn cech_isolated_balls_have_no_edges() {
+        // Balls separated by more than the sum of their radii.
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(10.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 10.0, 0.0, 1.0),
+        ];
+        let radii = vec![1.0, 1.0, 1.0];
+        let adj = compute_cech_default(&points, &radii);
+
+        assert_eq!(adj.offsets, vec![0, 0, 0, 0]);
+        assert!(adj.neighbors.is_empty());
+    }
+
+    #[test]
+    fn cech_overlapping_balls_emit_bidirectional_edge() {
+        // |p_0 - p_1| = 1.0, r_0 + r_1 = 1.5 → overlap.
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(10.0, 0.0, 0.0, 1.0),
+        ];
+        let radii = vec![1.0, 0.5, 0.5];
+        let adj = compute_cech_default(&points, &radii);
+
+        assert_eq!(neighbors_of(&adj, 0), vec![1]);
+        assert_eq!(neighbors_of(&adj, 1), vec![0]);
+        assert!(neighbors_of(&adj, 2).is_empty());
+    }
+
+    #[test]
+    fn cech_touching_balls_emit_edge() {
+        // Exactly touching at the boundary — the predicate is `<=` so we include it.
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+        ];
+        let radii = vec![0.4, 0.6];
+        let adj = compute_cech_default(&points, &radii);
+
+        assert_eq!(neighbors_of(&adj, 0), vec![1]);
+        assert_eq!(neighbors_of(&adj, 1), vec![0]);
+    }
+
+    #[test]
+    fn cech_fully_overlapping_cluster_is_complete_graph() {
+        // 4 points within a sphere; each ball has radius 2 → all pairs overlap.
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 1.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 0.0, 1.0, 1.0),
+        ];
+        let radii = vec![2.0; 4];
+        let adj = compute_cech_default(&points, &radii);
+
+        for i in 0..4 {
+            let mut got = neighbors_of(&adj, i);
+            got.sort();
+            let expected: Vec<u32> = (0..4u32).filter(|&j| j as usize != i).collect();
+            assert_eq!(got, expected, "point {i}");
+        }
+    }
+
+    #[test]
+    fn cech_zero_radii_emit_no_edges() {
+        // Degenerate but valid: zero-radius balls touch nothing (except coincident points).
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(0.1, 0.0, 0.0, 1.0),
+        ];
+        let radii = vec![0.0, 0.0];
+        let adj = compute_cech_default(&points, &radii);
+        assert!(adj.neighbors.is_empty());
+    }
+
+    #[test]
+    fn cech_dispatch_via_model() {
+        // PointCloudModel::compute_adjacency_default chooses Čech when radii is Some.
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(10.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 10.0, 0.0, 1.0),
+        ];
+        let mut model = crate::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: None,
+            radii: Some(vec![1.0, 0.5, 0.5, 0.5]),
+            points,
+        };
+        model.compute_adjacency_default();
+        let adj = model.adjacency.as_ref().unwrap();
+        // Only the first two balls overlap (|0-1| = 1 ≤ 1.0 + 0.5).
+        assert_eq!(neighbors_of(adj, 0), vec![1]);
+        assert_eq!(neighbors_of(adj, 1), vec![0]);
+        assert!(neighbors_of(adj, 2).is_empty());
+        assert!(neighbors_of(adj, 3).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "radii.len()")]
+    fn cech_panics_on_radii_length_mismatch() {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+        ];
+        let radii = vec![1.0];
+        compute_cech_default(&points, &radii);
     }
 
     #[test]

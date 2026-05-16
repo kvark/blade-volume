@@ -52,14 +52,15 @@ defer all of that and reuse our SH path. Adoption order:
 - No shader changes yet — render code ignores the radii.
 - Tests: extend the PLY round-trip test with a radii-present case.
 
-#### M2b — Čech-complex adjacency builder
+#### M2b — Čech-complex adjacency builder (done)
 
-- New `adjacency::compute_cech(points, radii, config)` returning the existing CSR.
-- AABB tree (we already pull a Delaunay crate; pick something minimal — maybe roll
-  the AABB tree by hand against the existing kiddo dep, or add a small `rstar` dep).
-- Gate the existing Delaunay path on `radii.is_none()`; Čech path when `Some`.
-- Tests: synthetic fixtures from `radfoam_synth_*` adapted; verify Čech reproduces
-  Delaunay-like adjacency when all radii are equal and small.
+- `adjacency::compute_cech(points, radii, config)` emits an edge `{i,j}` when
+  `|p_i - p_j| ≤ r_i + r_j`; returns the existing CSR `Adjacency`.
+- Candidates are pruned with a `kiddo` k-d tree range query (radius
+  `r_i + r_max`), then the exact overlap predicate filters them.
+- `PointCloudModel::compute_adjacency_default` dispatches: Čech when
+  `radii.is_some()`, Delaunay otherwise.
+- `kiddo` promoted from dev-dep to runtime dep on `blade-volume`.
 
 #### M2c — PowerFoam WGSL
 

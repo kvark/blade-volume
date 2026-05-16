@@ -9,6 +9,7 @@ blade-macros.workspace = true
 bytemuck.workspace = true
 glam.workspace = true
 flate2.workspace = true
+kiddo.workspace = true
 log.workspace = true
 mint.workspace = true
 
@@ -16,7 +17,6 @@ simple_delaunay_lib.workspace = true
 
 [dev-dependencies]
 half.workspace = true
-kiddo.workspace = true
 
 [lints]
 workspace = true

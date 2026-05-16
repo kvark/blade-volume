@@ -9,7 +9,10 @@ mod shape;
 
 pub mod io;
 
-pub use adjacency::{compute_adjacency, compute_adjacency_default, AdjacencyConfig};
+pub use adjacency::{
+    compute_adjacency, compute_adjacency_default, compute_cech, compute_cech_default,
+    AdjacencyConfig,
+};
 pub use camera::CameraParams;
 pub use gpu::{GaussianGpuCloud, InitParameters, RadFoamGpuCloud};
 pub use scene::{
@@ -129,18 +132,23 @@ impl PointCloudModel {
         result
     }
 
-    /// Computes adjacency from point positions using Delaunay tetrahedralization.
+    /// Computes adjacency from point positions.
+    ///
+    /// When `radii` is `Some`, builds the Čech complex on the weighted balls
+    /// (Power Foam). Otherwise falls back to Delaunay tetrahedralisation.
     ///
     /// This replaces any existing adjacency with a newly computed one.
     pub fn compute_adjacency(&mut self, config: &adjacency::AdjacencyConfig) {
-        self.adjacency = Some(adjacency::compute_adjacency(&self.points, config));
+        let new = match self.radii {
+            Some(ref radii) => adjacency::compute_cech(&self.points, radii, config),
+            None => adjacency::compute_adjacency(&self.points, config),
+        };
+        self.adjacency = Some(new);
     }
 
-    /// Computes adjacency with default configuration.
-    ///
-    /// This replaces any existing adjacency with a newly computed one.
+    /// Computes adjacency with default configuration. See [`Self::compute_adjacency`].
     pub fn compute_adjacency_default(&mut self) {
-        self.adjacency = Some(adjacency::compute_adjacency_default(&self.points));
+        self.compute_adjacency(&adjacency::AdjacencyConfig::default());
     }
 
     /// Ensures adjacency is available, computing it if necessary.
