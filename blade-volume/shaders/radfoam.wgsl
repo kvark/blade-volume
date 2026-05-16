@@ -47,6 +47,14 @@ fn rf_get_point(idx: u32) -> vec3<f32> {
     return g_points[idx].xyz;
 }
 
+// Per-point radius for Power Foam. The CPU side packs `radius` into the .w
+// channel of `g_points` (density lives in `g_attributes`). Unweighted clouds
+// upload zero here, which makes the radical plane in radfoam_trace.wgsl
+// degenerate to the standard Voronoi bisector.
+fn rf_get_radius(idx: u32) -> f32 {
+    return g_points[idx].w;
+}
+
 fn rf_get_density(idx: u32) -> f32 {
     let attr_dim = rf_compute_attr_dim();
     let comps = min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS);

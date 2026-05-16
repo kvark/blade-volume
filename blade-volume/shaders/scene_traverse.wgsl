@@ -194,6 +194,10 @@ fn rf_get_point(idx: u32) -> vec3<f32> {
     return g_radfoam_points[g_rf_obj].data[idx].xyz;
 }
 
+fn rf_get_radius(idx: u32) -> f32 {
+    return g_radfoam_points[g_rf_obj].data[idx].w;
+}
+
 fn rf_get_density(idx: u32) -> f32 {
     let attr_dim = g_scene_params.radfoam_attr_dim;
     let comps = min(sh_component_count(g_scene_params.sh_degree), MAX_SH_COMPONENTS);

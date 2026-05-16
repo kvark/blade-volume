@@ -5,7 +5,8 @@ use std::{mem, ptr, slice};
 /// GPU-side storage for RadFoam point cloud rendering.
 ///
 /// This uploads the buffers required by the RadFoam tracing kernel:
-/// - `points`: `vec4<f32>[N]` where xyz is position, w is unused
+/// - `points`: `vec4<f32>[N]` where xyz is position and w is per-point radius
+///   (Power Foam weight, or 0 for plain Voronoi)
 /// - `attributes`: packed `f32[N * attr_dim]`, where `attr_dim = 1 + 3 * (1 + sh_degree)^2`
 ///   and the last scalar in each row is density
 /// - `point_adjacency`: flattened neighbor list `u32[K]`
@@ -106,15 +107,17 @@ impl RadFoamGpuCloud {
         // Fill staging buffers
         unsafe {
             // Points: write as `[f32; 4]` to match WGSL `array<vec4<f32>>` layout.
-            // xyz = position, w = unused (shader reads density from attributes)
+            // xyz = position; w = radius (Power Foam weight, 0 for plain Voronoi).
+            // Density is read by the shader from `attributes`, not from here.
             let dst_points =
                 slice::from_raw_parts_mut(points_stage.data() as *mut [f32; 4], num_points);
+            let radii = model.radii.as_deref();
             for (i, dst) in dst_points.iter_mut().enumerate() {
                 let p = model.points[i];
                 dst[0] = p.x;
                 dst[1] = p.y;
                 dst[2] = p.z;
-                dst[3] = 0.0; // unused in shader
+                dst[3] = radii.map_or(0.0, |r| r[i]);
             }
 
             // Attributes: pack as [sh_coeffs..., density] per point

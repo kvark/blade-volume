@@ -64,17 +64,15 @@ The library boundary stays at `PointCloudModel` — the training crate produces 
 PowerFoam (theialab/powerfoam, arXiv 2604.24994) generalises RadFoam: Voronoi → **power diagram** (weighted Voronoi), each site carries an extra **radius/weight** parameter, and adjacency is a **Čech complex** built from overlapping balls rather than a Delaunay tetrahedralisation. The same primitives serve both a rasterizer and a ray-tracer with adjacency-walk traversal.
 
 Concrete deltas vs current RadFoam path:
-- **Per-point data**: add `radius: f32` (or `weight: f32`) to the point representation. PowerFoam also carries a rotation quat and a texel/spherical-Voronoi colour model — start by ignoring those and reusing our SH path.
-- **Adjacency builder**: replace the `simple_delaunay_lib` call in `adjacency.rs` with a Čech-complex builder (AABB tree over balls of radius `radii[i]`, edges where balls overlap). The CSR storage format we already have is fine.
-- **Traversal**: the face between sites `i` and `j` is no longer the perpendicular bisector — it is the **radical plane** `|x - p_i|² - r_i² = |x - p_j|² - r_j²`. In the WGSL ray-walk this means changing how `face_origin` / `face_normal` and the `t` parameter are derived (positions only → positions + weights).
-- **PLY format**: PowerFoam's checkpointed `points.ply` is a lossy visualisation only — the real state lives in `model.pt`. Define a small extension to our RadFoam PLY adding per-vertex `radius` (and quat, when we adopt the full model).
+- **Per-point data**: `PointCloudModel.radii: Option<Vec<f32>>` carries the weight (done, M2a). PowerFoam also carries a rotation quat and a texel/spherical-Voronoi colour model — defer until after geometry is stable.
+- **Adjacency builder**: `adjacency::compute_cech` emits an edge `{i,j}` when `|p_i - p_j| ≤ r_i + r_j` (done, M2b). `PointCloudModel::compute_adjacency*` dispatches Čech vs Delaunay based on `radii.is_some()`. CSR storage is unchanged.
+- **Traversal**: WGSL `radfoam_trace.wgsl` uses the radical plane `shift = 0.5 + 0.5·(r_i² - r_j²)/|p_j - p_i|²` (done, M2c). The radius lives in the `.w` channel of `g_points`; unweighted clouds upload 0 and the formula degenerates to the bisector — no new bind-group entry, no fork.
+- **PLY format**: per-vertex `property float radius` added to the RadFoam PLY reader/writer (done, M2a). Round-trips both binary and ASCII.
 - **Don't pull Python in**: keep PowerFoam adoption to a clean re-implementation in Rust/WGSL. Use the paper + their Warp kernels as a reference, not a dependency.
 
-Suggested order:
-1. Extend `PointCloudModel` with `Option<Vec<f32>>` radii.
-2. Add a Čech-complex adjacency builder behind a feature flag, share the CSR storage with existing RadFoam.
-3. Fork the RadFoam WGSL into `powerfoam.wgsl`, swap the face-plane derivation, gate on the radii buffer presence.
-4. Once stable, extend to the full PowerFoam appearance model (quaternion + texel sites).
+Remaining work to fully cover the PowerFoam paper:
+1. Cross-validate against a PowerFoam checkpoint scene (M2d).
+2. Extend to the full PowerFoam appearance model (quaternion + texel sites + spherical-Voronoi colours).
 
 ## Style
 

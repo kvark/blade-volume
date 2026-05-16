@@ -62,15 +62,30 @@ defer all of that and reuse our SH path. Adoption order:
   `radii.is_some()`, Delaunay otherwise.
 - `kiddo` promoted from dev-dep to runtime dep on `blade-volume`.
 
-#### M2c — PowerFoam WGSL
+#### M2c — Power Foam WGSL (done)
 
-- Fork `blade-volume/shaders/radfoam.wgsl` → `powerfoam.wgsl`.
-- Swap the bisector face derivation for the radical plane:
-  - `face_normal = p_j - p_i`
-  - `face_origin = midpoint + (r_i² − r_j²) / (2 |p_j − p_i|²) · (p_j − p_i)`
-- Add a `radii` storage buffer in the bind group.
-- New backend `gpu/powerfoam.rs` mirroring `gpu/radfoam.rs`.
-- Viewer auto-selects PowerFoam when the loaded model has `radii.is_some()`.
+Implementation deviates from the original plan in one way: rather than fork a new
+shader / backend, we extend the existing `radfoam_trace.wgsl` to take a
+`rf_get_radius` accessor and use the radical-plane formula
+
+```
+shift       = 0.5 + 0.5 * (r_i² - r_j²) / |p_j - p_i|²
+face_origin = p_i + shift * (p_j - p_i)
+face_normal = p_j - p_i
+```
+
+When radii are zero the shift collapses to `0.5` and the plane is the standard
+Voronoi bisector — so unweighted clouds traverse identically to before.
+
+To avoid adding a bind-group entry, the per-point radius lives in the otherwise-
+unused `.w` channel of `g_points`. `gpu/radfoam.rs` writes
+`model.radii.as_deref().map_or(0.0, |r| r[i])` into that slot at upload.
+Both shader includers (`radfoam.wgsl` single-object, `scene_traverse.wgsl`
+multi-object) gained a one-line `rf_get_radius` accessor.
+
+Viewer auto-selection: no change needed — `RadFoamBackend` now handles both
+weighted and unweighted models. `radii.is_some()` produces Power Foam traversal
+automatically.
 
 #### M2d — Cross-check
 
