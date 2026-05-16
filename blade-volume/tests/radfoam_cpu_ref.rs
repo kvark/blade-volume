@@ -107,6 +107,16 @@ fn read_density(model: &vol::PointCloudModel, point_idx: u32) -> f32 {
     model.points[point_idx as usize].w
 }
 
+/// Per-point radius. Defaults to zero when the model has no `radii` (plain
+/// RadFoam, in which case the radical plane in [`trace_one_ray`] degenerates to
+/// the standard Voronoi bisector).
+fn read_radius(model: &vol::PointCloudModel, point_idx: u32) -> f32 {
+    model
+        .radii
+        .as_deref()
+        .map_or(0.0, |r| r[point_idx as usize])
+}
+
 fn eval_rgb_constant(constant: glam::Vec3) -> glam::Vec3 {
     constant
 }
@@ -327,6 +337,7 @@ pub fn trace_one_ray(
     let mut current = settings.start_point;
     let p = model.points[current as usize];
     let mut current_pos = glam::Vec3::new(p.x, p.y, p.z);
+    let mut current_radius = read_radius(model, current);
 
     let mut steps = 0u32;
 
@@ -365,13 +376,19 @@ pub fn trace_one_ray(
         let mut considered_count: u32 = 0;
         let mut nan_t_count: u32 = 0;
 
+        let r_i_sq = current_radius * current_radius;
         for (j, &next_idx_u32) in adjacency.neighbors[begin..end].iter().enumerate() {
             let next_idx = next_idx_u32 as usize;
             let next_p = model.points[next_idx];
             let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
+            let r_j = read_radius(model, next_idx_u32);
             let offset = next_pos - current_pos;
 
-            let face_origin = current_pos + 0.5 * offset;
+            // Radical plane between weighted spheres; reduces to the bisector when
+            // both radii are zero. Matches shaders/radfoam_trace.wgsl.
+            let dsq = offset.length_squared().max(1e-20);
+            let shift = 0.5 + 0.5 * (r_i_sq - r_j * r_j) / dsq;
+            let face_origin = current_pos + shift * offset;
             let face_normal = offset;
 
             let dp = face_normal.dot(dir);
@@ -463,6 +480,7 @@ pub fn trace_one_ray(
         t0 = t0.max(best_t1);
         current = next_idx;
         current_pos = next_pos;
+        current_radius = read_radius(model, next_idx);
     }
 
     TraceResult {

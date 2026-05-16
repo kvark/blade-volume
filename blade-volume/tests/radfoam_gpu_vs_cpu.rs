@@ -184,34 +184,16 @@ fn decode_rgba16f(data: &[u16], pixel_idx: usize) -> glam::Vec4 {
     )
 }
 
-/// GPU-vs-CPU correctness check:
-/// - render a tiny 8x8 image
-/// - read back a small set of pixels
-/// - compare each to CPU reference for the matching ray
+/// Render `model` on the GPU with the production RadFoam shader and assert each
+/// pixel in `test_pixels` matches the CPU reference tracer.
 ///
-/// This uses the same camera model as the shader (fullscreen NDC -> local_dir).
-#[test]
-fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
-    let Some(context) = make_test_context() else {
-        eprintln!("Skipping RadFoam GPU-vs-CPU test: no supported GPU device found");
-        return;
-    };
-
-    // Build a synthetic, deterministic fixture in-memory.
-    //
-    // Branching topology: creates higher-degree nodes (multiple neighbors) to
-    // exercise multi-neighbor face selection.
-    let model = radfoam_synth_branch::make_branching_model(radfoam_synth_branch::BranchingParams {
-        spine_len: 64,
-        dz: 0.05,
-        branch_degree: 6,
-        branch_radius: 0.10,
-        branch_z_offset: 0.02,
-        density: 0.1,
-        sh_degree: 3, // SH degree 3
-        dc: glam::Vec3::splat(0.1),
-    });
-
+/// Used by both the plain RadFoam regression test and the Power Foam radii test
+/// below — they only differ in the model that's passed in.
+fn assert_gpu_matches_cpu(
+    context: gpu::Context,
+    model: vol::PointCloudModel,
+    test_pixels: &[(u32, u32)],
+) {
     // Create command encoder early so we can explicitly destroy it for validation cleanliness.
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "radfoam-test",
@@ -315,19 +297,6 @@ fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
     let data =
         unsafe { std::slice::from_raw_parts(readback.data() as *const u16, (8 * 8 * 4) as usize) };
 
-    // Compare a small set of pixels for coverage.
-    // Keep these away from edges to reduce sensitivity to mapping conventions.
-    let test_pixels: &[(u32, u32)] = &[
-        (0, 0),
-        (1, 1),
-        // Include a pixel that is off the diagonal to ensure non-zero x/y NDC components
-        // and therefore exercise degree-1 directional SH terms more strongly.
-        (1, 6),
-        (3, 3),
-        (4, 4),
-        (6, 6),
-    ];
-
     let w = 8.0f32;
     let h = 8.0f32;
     let tan_half = glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan());
@@ -398,4 +367,56 @@ fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
         out_view,
         readback,
     );
+}
+
+// Pixels kept away from edges to reduce sensitivity to mapping conventions.
+// The off-diagonal one ensures non-zero NDC x/y to exercise degree-1 SH terms.
+const TEST_PIXELS: &[(u32, u32)] = &[(0, 0), (1, 1), (1, 6), (3, 3), (4, 4), (6, 6)];
+
+fn make_branching_test_model() -> vol::PointCloudModel {
+    radfoam_synth_branch::make_branching_model(radfoam_synth_branch::BranchingParams {
+        spine_len: 64,
+        dz: 0.05,
+        branch_degree: 6,
+        branch_radius: 0.10,
+        branch_z_offset: 0.02,
+        density: 0.1,
+        sh_degree: 3,
+        dc: glam::Vec3::splat(0.1),
+    })
+}
+
+/// Original regression: plain RadFoam (no radii) — GPU must match CPU.
+#[test]
+fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping RadFoam GPU-vs-CPU test: no supported GPU device found");
+        return;
+    };
+    assert_gpu_matches_cpu(context, make_branching_test_model(), TEST_PIXELS);
+}
+
+/// Power Foam self-consistency: the same fixture with non-zero per-point radii
+/// must produce matching GPU and CPU outputs.
+///
+/// The radii are deliberately asymmetric (spine vs. branches) so the radical
+/// plane shifts noticeably away from the bisector — if either the WGSL or the
+/// CPU reference got the formula wrong, the two would diverge here.
+#[test]
+fn powerfoam_gpu_matches_cpu_with_radii() {
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping Power Foam GPU-vs-CPU test: no supported GPU device found");
+        return;
+    };
+    let mut model = make_branching_test_model();
+
+    // Matches the BranchingParams above: first `spine_len` points are spine,
+    // the rest are branch nodes.
+    let spine_len = 64;
+    let radii: Vec<f32> = (0..model.points.len())
+        .map(|i| if i < spine_len { 0.015 } else { 0.030 })
+        .collect();
+    model.radii = Some(radii);
+
+    assert_gpu_matches_cpu(context, model, TEST_PIXELS);
 }

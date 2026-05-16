@@ -87,12 +87,26 @@ Viewer auto-selection: no change needed — `RadFoamBackend` now handles both
 weighted and unweighted models. `radii.is_some()` produces Power Foam traversal
 automatically.
 
-#### M2d — Cross-check
+#### M2d — Cross-check (done, self-consistency)
 
-- Port one PowerFoam checkpoint scene (via a one-off Python export script in `etc/`)
-  to our radii-extended PLY.
-- Image-diff against PowerFoam's own renderer at a fixed pose. Wide tolerance is fine;
-  we just want the same scene to be recognisable.
+External cross-check against a PowerFoam checkpoint is parked: it needs a CUDA-
+trained scene we don't have. Instead we proved internal consistency:
+
+- `radfoam_cpu_ref.rs` (CPU reference tracer) now uses the same radical-plane
+  formula as `radfoam_trace.wgsl`. A `read_radius` helper returns 0 when
+  `model.radii` is `None`, so unweighted clouds still trace as before.
+- New `powerfoam_gpu_matches_cpu_with_radii` test runs the same fixture as the
+  plain RadFoam regression but with asymmetric per-point radii (spine 0.015,
+  branches 0.030) — the radical plane shifts noticeably away from the bisector,
+  so any mismatch between WGSL and CPU formulas would surface here. Both
+  tracers match within f16 precision.
+- The original `radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels`
+  regression and the new radii test now share a `assert_gpu_matches_cpu(...)`
+  helper.
+
+When a real PowerFoam scene shows up, the path forward is a Python script in
+`etc/` that reads PowerFoam's `model.pt` and emits our radii-extended PLY —
+deferred until that data exists.
 
 ### M3 — Training crate scaffolding
 
