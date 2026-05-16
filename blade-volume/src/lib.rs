@@ -67,6 +67,7 @@ pub struct Adjacency {
 /// Optional extensions:
 /// - `transforms`: rotation + scale for Gaussian ellipsoids
 /// - `adjacency`: CSR adjacency for RadFoam Voronoi traversal
+/// - `radii`: per-point weight/radius for Power-Foam-style power diagrams
 #[derive(Clone)]
 pub struct PointCloudModel {
     /// Position (xyz) + density/opacity (w) for each point.
@@ -85,6 +86,11 @@ pub struct PointCloudModel {
 
     /// Optional: RadFoam CSR adjacency.
     pub adjacency: Option<Adjacency>,
+
+    /// Optional: per-point radius/weight. When `Some`, downstream code is free to treat
+    /// the cloud as a power diagram (Power Foam) rather than a plain Voronoi diagram.
+    /// Length must equal `points.len()`.
+    pub radii: Option<Vec<f32>>,
 }
 
 impl PointCloudModel {
@@ -113,8 +119,8 @@ impl PointCloudModel {
         let mut result = [glam::Vec3::ZERO; MAX_SH_COMPONENTS];
         let comp_count = self.sh_component_count();
         let base = point_idx * comp_count * 3;
-        for i in 0..comp_count.min(MAX_SH_COMPONENTS) {
-            result[i] = glam::Vec3::new(
+        for (i, slot) in result.iter_mut().take(comp_count).enumerate() {
+            *slot = glam::Vec3::new(
                 self.sh_coefficients[base + i * 3],
                 self.sh_coefficients[base + i * 3 + 1],
                 self.sh_coefficients[base + i * 3 + 2],

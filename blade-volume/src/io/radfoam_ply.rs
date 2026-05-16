@@ -273,7 +273,7 @@ fn infer_sh_degree_from_sh_rest_count(sh_rest_count: usize) -> usize {
     //   sh_rest_count / 3 = (1 + deg)^2 - 1
     //   (1 + deg)^2 = sh_rest_count / 3 + 1
     // We solve for deg by trying 0..=3 (consistent with this crate’s MAX_SH_DEGREE).
-    if sh_rest_count % 3 != 0 {
+    if !sh_rest_count.is_multiple_of(3) {
         panic!("color_sh_* property count must be divisible by 3, got {sh_rest_count}");
     }
     let per_channel = sh_rest_count / 3;
@@ -355,6 +355,14 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
     let green_prop = vertex_el.prop_offset("green");
     let blue_prop = vertex_el.prop_offset("blue");
 
+    // Optional per-point radius/weight (Power Foam).
+    let radius_prop = vertex_el.prop_offset("radius");
+    if let Some((ty, _)) = radius_prop {
+        if ty != PlyScalarType::Float32 {
+            panic!("vertex radius must be float32");
+        }
+    }
+
     // Discover color_sh_* properties and their offsets (in order by index)
     let mut color_sh: Vec<(usize, usize)> = Vec::new(); // (index, offset)
     for p in &vertex_el.props {
@@ -372,8 +380,8 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
 
     // Ensure indices are contiguous 0..M-1 if present.
     if !color_sh.is_empty() {
-        for (expect, (idx, _)) in color_sh.iter().enumerate() {
-            if *idx != expect {
+        for (expect, &(idx, _)) in color_sh.iter().enumerate() {
+            if idx != expect {
                 panic!(
                     "color_sh_* indices must be contiguous starting from 0, expected {expect} got {idx}"
                 );
@@ -425,7 +433,9 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
     // `red/green/blue` preview fields if present, otherwise we leave DC at 0.
     let mut sh_coefficients = vec![0.0f32; num_points * sh_dim];
 
-    const C0: f32 = 0.28209479177387814;
+    let mut radii: Option<Vec<f32>> = radius_prop.map(|_| vec![0.0f32; num_points]);
+
+    const C0: f32 = 0.282_094_8;
 
     match header.format {
         PlyFormat::BinaryLittleEndian => {
@@ -460,29 +470,33 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                     let g8 = read_u8(&vertex_row, g_off) as f32 / 255.0;
                     let b8 = read_u8(&vertex_row, b_off) as f32 / 255.0;
 
-                    sh_coefficients[base + 0] = (r8 - 0.5) / C0;
+                    sh_coefficients[base] = (r8 - 0.5) / C0;
                     sh_coefficients[base + 1] = (g8 - 0.5) / C0;
                     sh_coefficients[base + 2] = (b8 - 0.5) / C0;
                 }
 
                 // Fill components 1..sh_components-1 from color_sh_*
                 if !color_sh.is_empty() {
-                    for (j, (_, off)) in color_sh.iter().enumerate() {
-                        let v = read_f32_le(&vertex_row, *off);
+                    for (j, &(_, off)) in color_sh.iter().enumerate() {
+                        let v = read_f32_le(&vertex_row, off);
                         let comp = 1 + (j / 3);
                         let ch = j % 3;
                         let dst = base + 3 * comp + ch;
                         sh_coefficients[dst] = v;
                     }
                 }
+
+                if let (Some(ref mut radii), Some((_, off))) = (radii.as_mut(), radius_prop) {
+                    radii[i] = read_f32_le(&vertex_row, off);
+                }
             }
 
             // Read adjacency records
             let mut point_adjacency = vec![0u32; num_adjacency];
             let mut adj_row = vec![0u8; adjacency_el.stride];
-            for i in 0..num_adjacency {
+            for slot in point_adjacency.iter_mut().take(num_adjacency) {
                 file.read_exact(&mut adj_row).unwrap();
-                point_adjacency[i] = read_u32_le(&adj_row, adj_off);
+                *slot = read_u32_le(&adj_row, adj_off);
             }
 
             // Ensure there is no trailing data (optional strictness)
@@ -497,7 +511,7 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
             // Validate CSR offsets + indices
             validate_csr(&adjacency_offsets, &point_adjacency, num_points);
 
-            return crate::PointCloudModel {
+            crate::PointCloudModel {
                 points,
                 sh_coefficients,
                 sh_degree,
@@ -506,7 +520,8 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                     neighbors: point_adjacency,
                     offsets: adjacency_offsets,
                 }),
-            };
+                radii,
+            }
         }
         PlyFormat::Ascii => {
             // ASCII: read per-row tokens.
@@ -535,13 +550,13 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
 
                 // We parse by property order, not by offsets (offsets are for binary).
                 // This is robust as long as the header order matches row order (PLY spec).
-                let mut col = 0usize;
 
                 let mut x = 0.0f32;
                 let mut y = 0.0f32;
                 let mut z = 0.0f32;
                 let mut density = 0.0f32;
                 let mut end_off: u32 = 0;
+                let mut radius: Option<f32> = None;
 
                 // optional RGB
                 let mut r8_opt: Option<u8> = None;
@@ -551,7 +566,7 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                 // SH-rest floats in order
                 let mut sh_rest_vals: Vec<f32> = Vec::with_capacity(color_sh.len());
 
-                for p in vertex_el.props.iter() {
+                for (col, p) in vertex_el.props.iter().enumerate() {
                     let tok = parts[col];
                     match (p.name.as_str(), p.ty) {
                         ("x", PlyScalarType::Float32) => x = tok.parse().unwrap(),
@@ -566,13 +581,13 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                             g8_opt = Some(tok.parse::<u8>().unwrap())
                         }
                         ("blue", PlyScalarType::Uint8) => b8_opt = Some(tok.parse::<u8>().unwrap()),
+                        ("radius", PlyScalarType::Float32) => radius = Some(tok.parse().unwrap()),
                         (name, PlyScalarType::Float32) if name.starts_with("color_sh_") => {
                             sh_rest_vals.push(tok.parse().unwrap())
                         }
                         // Skip unsupported-but-sized props
                         _ => {}
                     }
-                    col += 1;
                 }
 
                 points[i] = glam::Vec4::new(x, y, z, density);
@@ -584,7 +599,7 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                     let r = (r8 as f32) / 255.0;
                     let g = (g8 as f32) / 255.0;
                     let b = (b8 as f32) / 255.0;
-                    sh_coefficients[base + 0] = (r - 0.5) / C0;
+                    sh_coefficients[base] = (r - 0.5) / C0;
                     sh_coefficients[base + 1] = (g - 0.5) / C0;
                     sh_coefficients[base + 2] = (b - 0.5) / C0;
                 }
@@ -596,11 +611,15 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                     let dst = base + 3 * comp + ch;
                     sh_coefficients[dst] = *v;
                 }
+
+                if let (Some(ref mut radii), Some(r)) = (radii.as_mut(), radius) {
+                    radii[i] = r;
+                }
             }
 
             // adjacency element lines
             let mut point_adjacency = vec![0u32; num_adjacency];
-            for i in 0..num_adjacency {
+            for slot in point_adjacency.iter_mut() {
                 // Skip empty lines and comment lines.
                 line.clear();
                 file.read_line(&mut line).unwrap();
@@ -609,13 +628,13 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                     file.read_line(&mut line).unwrap();
                 }
                 let tok = line.split_whitespace().next().unwrap();
-                point_adjacency[i] = tok.parse().unwrap();
+                *slot = tok.parse().unwrap();
             }
 
             // Validate CSR offsets + indices
             validate_csr(&adjacency_offsets, &point_adjacency, num_points);
 
-            return crate::PointCloudModel {
+            crate::PointCloudModel {
                 points,
                 sh_coefficients,
                 sh_degree,
@@ -624,7 +643,8 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                     neighbors: point_adjacency,
                     offsets: adjacency_offsets,
                 }),
-            };
+                radii,
+            }
         }
     }
 }

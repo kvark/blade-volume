@@ -125,13 +125,11 @@ impl RadFoamGpuCloud {
             );
             for i in 0..num_points {
                 let base = i * attr_dim;
-                // Copy SH coefficients (already packed as RGB per component)
-                let sh_base = i * sh_component_count * 3;
-                for j in 0..(sh_component_count * 3) {
-                    dst_attrs[base + j] = model.sh_coefficients[sh_base + j];
-                }
-                // Density is the last scalar (from points.w)
-                dst_attrs[base + sh_component_count * 3] = model.points[i].w;
+                let sh_len = sh_component_count * 3;
+                let sh_base = i * sh_len;
+                dst_attrs[base..base + sh_len]
+                    .copy_from_slice(&model.sh_coefficients[sh_base..sh_base + sh_len]);
+                dst_attrs[base + sh_len] = model.points[i].w;
             }
 
             // Adjacency: contiguous u32 array
@@ -181,7 +179,7 @@ impl RadFoamGpuCloud {
         }
 
         let sync_point = context.submit(encoder);
-        context.wait_for(&sync_point, !0);
+        let _ = context.wait_for(&sync_point, !0);
 
         // Free staging buffers
         context.destroy_buffer(points_stage);

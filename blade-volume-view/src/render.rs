@@ -87,8 +87,11 @@ impl GaussianBackend {
     ) -> Self {
         let shader = {
             let raw_source = vol::shaders::GAUSSIAN;
-            let source = preprocess_shader(raw_source);
-            context.create_shader(gpu::ShaderDesc { source: &source })
+            let source = vol::shaders::compose(raw_source);
+            context.create_shader(gpu::ShaderDesc {
+                source: &source,
+                naga_module: None,
+            })
         };
         assert_eq!(
             shader.get_struct_size("Gaussian"),
@@ -253,7 +256,7 @@ impl RadFoamBackend {
     ) -> Self {
         let mut kd_tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
         for (i, p) in model.points.iter().enumerate() {
-            let _ = kd_tree.add(&[p.x, p.y, p.z], i as u64);
+            kd_tree.add(&[p.x, p.y, p.z], i as u64);
         }
 
         let (hdr_tex, hdr_view) = Self::create_hdr_target(context, size);
@@ -267,8 +270,11 @@ impl RadFoamBackend {
 
         let shader = {
             let raw_source = vol::shaders::RADFOAM;
-            let source = preprocess_shader(raw_source);
-            context.create_shader(gpu::ShaderDesc { source: &source })
+            let source = vol::shaders::compose(raw_source);
+            context.create_shader(gpu::ShaderDesc {
+                source: &source,
+                naga_module: None,
+            })
         };
         let trace_layout = <RadFoamTraceData as gpu::ShaderData>::layout();
         let trace_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
@@ -279,7 +285,10 @@ impl RadFoamBackend {
 
         let blit_shader = {
             let source = vol::shaders::RADFOAM_BLIT;
-            context.create_shader(gpu::ShaderDesc { source })
+            context.create_shader(gpu::ShaderDesc {
+                source,
+                naga_module: None,
+            })
         };
         let blit_layout = <RadFoamBlitData as gpu::ShaderData>::layout();
         let blit_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
@@ -396,8 +405,8 @@ impl RadFoamBackend {
                 },
             );
 
-            let gx = (size.width + 7) / 8;
-            let gy = (size.height + 7) / 8;
+            let gx = size.width.div_ceil(8);
+            let gy = size.height.div_ceil(8);
             pen.dispatch([gx, gy, 1]);
         }
 
@@ -450,6 +459,8 @@ impl RadFoamBackend {
     }
 }
 
+// Only one backend lives at a time; boxing would just add indirection.
+#[allow(clippy::large_enum_variant)]
 pub enum RenderBackend {
     Gaussian(GaussianBackend),
     RadFoam(RadFoamBackend),
@@ -486,14 +497,14 @@ impl RenderBackend {
     }
 
     pub fn resize(&mut self, context: &gpu::Context, size: RenderSize) {
-        match self {
+        match *self {
             RenderBackend::Gaussian(_) => {}
             RenderBackend::RadFoam(ref mut backend) => backend.resize(context, size),
         }
     }
 
     pub fn set_debug_mode(&mut self, mode: DebugMode) {
-        match self {
+        match *self {
             RenderBackend::Gaussian(ref mut backend) => backend.set_debug_mode(mode),
             RenderBackend::RadFoam(ref mut backend) => backend.set_debug_mode(mode),
         }
@@ -507,7 +518,7 @@ impl RenderBackend {
         camera_position: glam::Vec3,
         size: RenderSize,
     ) {
-        match self {
+        match *self {
             RenderBackend::Gaussian(ref backend) => {
                 backend.render(encoder, frame_view, camera_params);
             }
@@ -518,7 +529,7 @@ impl RenderBackend {
     }
 
     pub fn print_info(&self) {
-        match self {
+        match *self {
             RenderBackend::Gaussian(ref backend) => {
                 println!("Backend: Gaussian Ray-Tracing");
                 backend.print_info();
@@ -536,44 +547,4 @@ impl RenderBackend {
             RenderBackend::RadFoam(backend) => backend.destroy(context),
         }
     }
-}
-
-pub fn preprocess_shader(source: &str) -> String {
-    preprocess_shader_recursive(source, 0)
-}
-
-fn preprocess_shader_recursive(source: &str, depth: usize) -> String {
-    if depth > 10 {
-        panic!("Shader include depth exceeded 10 - possible circular include");
-    }
-
-    let mut result = String::with_capacity(source.len() * 2);
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("// #include") {
-            let rest = rest.trim();
-            if let Some(filename) = rest.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                let include_content = match filename {
-                    "common.wgsl" => vol::shaders::COMMON,
-                    "sh_eval.wgsl" => vol::shaders::SH_EVAL,
-                    "radfoam_trace.wgsl" => vol::shaders::RADFOAM_TRACE,
-                    "gaussian_trace.wgsl" => vol::shaders::GAUSSIAN_TRACE,
-                    _ => panic!("Unknown shader include: {}", filename),
-                };
-                result.push_str("// === Begin included: ");
-                result.push_str(filename);
-                result.push_str(" ===\n");
-                result.push_str(&preprocess_shader_recursive(include_content, depth + 1));
-                result.push_str("\n// === End included: ");
-                result.push_str(filename);
-                result.push_str(" ===\n");
-                continue;
-            }
-        }
-        result.push_str(line);
-        result.push('\n');
-    }
-
-    result
 }

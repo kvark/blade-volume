@@ -133,21 +133,11 @@ pub struct SceneRenderer {
 
 impl SceneRenderer {
     /// Creates a new scene renderer.
-    ///
-    /// # Arguments
-    /// * `context` - GPU context
-    /// * `surface_format` - Swapchain surface format
-    /// * `window_size` - Initial window size
-    /// * `preprocess_shader` - Function to preprocess shader source (expand includes)
-    pub fn new<F>(
+    pub fn new(
         context: &gpu::Context,
         surface_format: gpu::TextureFormat,
         window_size: RenderSize,
-        preprocess_shader: F,
-    ) -> Self
-    where
-        F: Fn(&str) -> String,
-    {
+    ) -> Self {
         // Create HDR target
         let (hdr_tex, hdr_view) = Self::create_hdr_target(context, window_size);
 
@@ -162,8 +152,11 @@ impl SceneRenderer {
         // Traverse compute pipeline
         let shader = {
             let raw_source = vol::shaders::SCENE_TRAVERSE;
-            let source = preprocess_shader(raw_source);
-            context.create_shader(gpu::ShaderDesc { source: &source })
+            let source = vol::shaders::compose(raw_source);
+            context.create_shader(gpu::ShaderDesc {
+                source: &source,
+                naga_module: None,
+            })
         };
         let traverse_layout = <SceneTraverseData as gpu::ShaderData>::layout();
         let traverse_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
@@ -175,7 +168,10 @@ impl SceneRenderer {
         // Blit pipeline (reuse radfoam_blit shader)
         let blit_shader = {
             let source = vol::shaders::RADFOAM_BLIT;
-            context.create_shader(gpu::ShaderDesc { source })
+            context.create_shader(gpu::ShaderDesc {
+                source,
+                naga_module: None,
+            })
         };
         let blit_layout = <SceneBlitData as gpu::ShaderData>::layout();
         let blit_pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
@@ -361,8 +357,8 @@ impl SceneRenderer {
                 },
             );
 
-            let gx = (window_size.width + 7) / 8;
-            let gy = (window_size.height + 7) / 8;
+            let gx = window_size.width.div_ceil(8);
+            let gy = window_size.height.div_ceil(8);
             pen.dispatch([gx, gy, 1]);
         }
 

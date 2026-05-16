@@ -11,8 +11,10 @@ fn main() {
         other => usage(&format!("unknown output kind: {other}")),
     };
 
-    let mut options = convert::ConvertOptions::default();
-    options.output = kind;
+    let options = convert::ConvertOptions {
+        output: kind,
+        ..Default::default()
+    };
 
     let model = match convert::convert_gltf(&parsed.input, &options) {
         Ok(model) => model,

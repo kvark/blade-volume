@@ -74,7 +74,7 @@ fn radfoam_ascii_ply_dc_approx_is_reasonable_for_mid_gray_preview() {
     //
     // We don't need exact equality here; we just want to catch obvious regressions
     // (e.g. forgetting to apply inversion or writing DC to wrong slots).
-    const C0: f32 = 0.282_094_791_773_878_14;
+    const C0: f32 = 0.282_094_8;
     let expected_dc = ((128.0 / 255.0) - 0.5) / C0;
 
     let sh_dim = model.sh_component_count() * 3;
@@ -86,7 +86,7 @@ fn radfoam_ascii_ply_dc_approx_is_reasonable_for_mid_gray_preview() {
     for i in 0..model.points.len() {
         let base = i * sh_dim;
 
-        let dc_r = model.sh_coefficients[base + 0];
+        let dc_r = model.sh_coefficients[base];
         let dc_g = model.sh_coefficients[base + 1];
         let dc_b = model.sh_coefficients[base + 2];
 

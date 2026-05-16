@@ -82,7 +82,7 @@ pub fn make_chain_model(
         let base = i * sh_dim;
 
         // component 0 (DC)
-        sh_coefficients[base + 0] = dc.x;
+        sh_coefficients[base] = dc.x;
         sh_coefficients[base + 1] = dc.y;
         sh_coefficients[base + 2] = dc.z;
 
@@ -95,6 +95,7 @@ pub fn make_chain_model(
         sh_degree,
         transforms: None,
         adjacency: Some(vol::Adjacency { neighbors, offsets }),
+        radii: None,
     }
 }
 

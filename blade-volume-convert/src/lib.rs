@@ -1,7 +1,7 @@
 use blade_volume as vol;
 use std::path;
 
-const SH_C0: f32 = 0.28209479177387814;
+const SH_C0: f32 = 0.282_094_8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputKind {
@@ -283,6 +283,7 @@ pub fn convert_gltf(
         sh_degree: 0,
         transforms: None,
         adjacency: None,
+        radii: None,
     };
 
     match options.output {
@@ -491,7 +492,7 @@ fn ray_intersects_triangle(origin: glam::Vec3, dir: glam::Vec3, tri: &Triangle) 
     let inv_det = 1.0 / det;
     let tvec = origin - tri.v0;
     let u = tvec.dot(pvec) * inv_det;
-    if u < 0.0 || u > 1.0 {
+    if !(0.0..=1.0).contains(&u) {
         return false;
     }
     let qvec = tvec.cross(v0v1);
@@ -504,8 +505,9 @@ fn ray_intersects_triangle(origin: glam::Vec3, dir: glam::Vec3, tri: &Triangle) 
 }
 
 fn sample_barycentric(rng: &mut rand::rngs::StdRng) -> (f32, f32) {
-    let r1: f32 = rand::Rng::gen(rng);
-    let r2: f32 = rand::Rng::gen(rng);
+    use rand::RngExt as _;
+    let r1: f32 = rng.random();
+    let r2: f32 = rng.random();
     let sqrt_r1 = r1.sqrt();
     let u = 1.0 - sqrt_r1;
     let v = r2 * sqrt_r1;
@@ -607,7 +609,7 @@ fn write_gaussian_ply_binary(
 
     let count = model.len();
     let sh_component_count = vol::get_sh_component_count(model.sh_degree);
-    let sh_rest_count = (sh_component_count.saturating_sub(1) * 3) as usize;
+    let sh_rest_count = sh_component_count.saturating_sub(1) * 3;
     let ply_rotation =
         glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
     let inv_rotation = ply_rotation.inverse();
@@ -648,7 +650,7 @@ fn write_gaussian_ply_binary(
 
         let base = i * sh_component_count * 3;
         let f_dc = [
-            model.sh_coefficients[base + 0],
+            model.sh_coefficients[base],
             model.sh_coefficients[base + 1],
             model.sh_coefficients[base + 2],
         ];
@@ -696,7 +698,7 @@ fn write_gaussian_ply_ascii(
 
     let count = model.len();
     let sh_component_count = vol::get_sh_component_count(model.sh_degree);
-    let sh_rest_count = (sh_component_count.saturating_sub(1) * 3) as usize;
+    let sh_rest_count = sh_component_count.saturating_sub(1) * 3;
     let ply_rotation =
         glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
     let inv_rotation = ply_rotation.inverse();
@@ -737,7 +739,7 @@ fn write_gaussian_ply_ascii(
 
         let base = i * sh_component_count * 3;
         let f_dc = [
-            model.sh_coefficients[base + 0],
+            model.sh_coefficients[base],
             model.sh_coefficients[base + 1],
             model.sh_coefficients[base + 2],
         ];
@@ -803,6 +805,9 @@ fn write_radfoam_ply_ascii(
     writeln!(file, "property uchar red")?;
     writeln!(file, "property uchar green")?;
     writeln!(file, "property uchar blue")?;
+    if model.radii.is_some() {
+        writeln!(file, "property float radius")?;
+    }
     writeln!(file, "element adjacency {}", num_adjacency)?;
     writeln!(file, "property uint adjacency")?;
     writeln!(file, "end_header")?;
@@ -814,11 +819,15 @@ fn write_radfoam_ply_ascii(
         let r = (color.x * 255.0).round().clamp(0.0, 255.0) as u8;
         let g = (color.y * 255.0).round().clamp(0.0, 255.0) as u8;
         let b = (color.z * 255.0).round().clamp(0.0, 255.0) as u8;
-        writeln!(
+        write!(
             file,
             "{} {} {} {} {} {} {} {}",
             point.x, point.y, point.z, point.w, end_off, r, g, b
         )?;
+        if let Some(ref radii) = model.radii {
+            write!(file, " {}", radii[i])?;
+        }
+        writeln!(file)?;
     }
 
     for idx in &adjacency.neighbors {
@@ -853,6 +862,9 @@ fn write_radfoam_ply_binary(
     writeln!(file, "property uchar red")?;
     writeln!(file, "property uchar green")?;
     writeln!(file, "property uchar blue")?;
+    if model.radii.is_some() {
+        writeln!(file, "property float radius")?;
+    }
     writeln!(file, "element adjacency {}", num_adjacency)?;
     writeln!(file, "property uint adjacency")?;
     writeln!(file, "end_header")?;
@@ -871,6 +883,9 @@ fn write_radfoam_ply_binary(
         file.write_all(&point.w.to_le_bytes())?;
         file.write_all(&end_off.to_le_bytes())?;
         file.write_all(&[r, g, b])?;
+        if let Some(ref radii) = model.radii {
+            file.write_all(&radii[i].to_le_bytes())?;
+        }
     }
 
     for idx in &adjacency.neighbors {
@@ -883,7 +898,7 @@ fn write_radfoam_ply_binary(
 fn sh0_to_color(model: &vol::PointCloudModel, index: usize) -> glam::Vec3 {
     let base = index * 3;
     let coeff = glam::Vec3::new(
-        model.sh_coefficients[base + 0],
+        model.sh_coefficients[base],
         model.sh_coefficients[base + 1],
         model.sh_coefficients[base + 2],
     );
@@ -916,6 +931,7 @@ mod tests {
             sh_degree: 0,
             transforms: Some(transforms),
             adjacency: None,
+            radii: None,
         };
 
         let mut path = std::env::temp_dir();
@@ -945,6 +961,7 @@ mod tests {
             sh_degree: 0,
             transforms: None,
             adjacency: Some(adjacency),
+            radii: None,
         };
 
         let mut path = std::env::temp_dir();
@@ -957,6 +974,76 @@ mod tests {
 
         assert_eq!(loaded.len(), model.len());
         assert!(loaded.adjacency.is_some());
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn make_radfoam_radii_model() -> vol::PointCloudModel {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 0.5),
+            glam::Vec4::new(0.0, 1.0, 0.0, 0.25),
+        ];
+        let radii = vec![0.10, 0.25, 0.5];
+        vol::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            adjacency: Some(vol::Adjacency {
+                neighbors: vec![1, 0, 2, 1],
+                offsets: vec![0, 1, 3, 4],
+            }),
+            radii: Some(radii),
+            transforms: None,
+            sh_degree: 0,
+            points,
+        }
+    }
+
+    fn assert_radii_roundtrip(format: PlyFormat) {
+        let model = make_radfoam_radii_model();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "blade_volume_convert_roundtrip_radii_{}.ply",
+            match format {
+                PlyFormat::Ascii => "ascii",
+                PlyFormat::Binary => "binary",
+            }
+        ));
+        save_ply_with_options(&path, &model, &SaveOptions { format }).expect("save ply");
+        let loaded = vol::io::load_radfoam(path.to_str().unwrap());
+        let expected = model.radii.as_ref().unwrap();
+        let actual = loaded.radii.as_ref().expect("radii preserved");
+        assert_eq!(actual.len(), expected.len());
+        for (a, b) in actual.iter().zip(expected.iter()) {
+            assert!((a - b).abs() < 1e-6, "radius {a} != {b}");
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn radfoam_binary_roundtrip_preserves_radii() {
+        assert_radii_roundtrip(PlyFormat::Binary);
+    }
+
+    #[test]
+    fn radfoam_ascii_roundtrip_preserves_radii() {
+        assert_radii_roundtrip(PlyFormat::Ascii);
+    }
+
+    #[test]
+    fn radfoam_without_radii_stays_none_after_roundtrip() {
+        let mut model = make_radfoam_radii_model();
+        model.radii = None;
+        let mut path = std::env::temp_dir();
+        path.push("blade_volume_convert_roundtrip_no_radii.ply");
+        save_ply_with_options(
+            &path,
+            &model,
+            &SaveOptions {
+                format: PlyFormat::Binary,
+            },
+        )
+        .expect("save ply");
+        let loaded = vol::io::load_radfoam(path.to_str().unwrap());
+        assert!(loaded.radii.is_none());
         let _ = std::fs::remove_file(path);
     }
 

@@ -18,7 +18,9 @@ fn make_test_context() -> Option<gpu::Context> {
             timing: false,
             capture: false,
             overlay: false,
-            device_id: 0,
+            ray_tracing: true,
+            xr: None,
+            device_id: None,
         }) {
             Ok(ctx) => Some(ctx),
             Err(gpu::NotSupportedError::NoSupportedDeviceFound) => None,

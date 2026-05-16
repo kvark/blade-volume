@@ -175,7 +175,7 @@ impl GaussianGpuCloud {
             );
         }
         let sync_point = context.submit(encoder);
-        context.wait_for(&sync_point, !0);
+        let _ = context.wait_for(&sync_point, !0);
 
         context.destroy_buffer(gauss_scratch);
         context.destroy_buffer(scratch_buf);

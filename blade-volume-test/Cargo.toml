@@ -11,3 +11,6 @@ blade-volume-view = { path = "../blade-volume-view" }
 glam.workspace = true
 half.workspace = true
 image = "0.25"
+
+[lints]
+workspace = true

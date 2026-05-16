@@ -113,5 +113,6 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
         sh_degree: 0, // Only DC for now
         transforms: Some(crate::Transforms { rotations, scales }),
         adjacency: None,
+        radii: None,
     }
 }

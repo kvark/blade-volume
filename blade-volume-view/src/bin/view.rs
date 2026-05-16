@@ -139,7 +139,9 @@ impl Example {
                 timing: true,
                 capture: false,
                 overlay: true,
-                device_id: 0,
+                ray_tracing: true,
+                xr: None,
+                device_id: None,
             })
             .unwrap()
         };
@@ -278,7 +280,7 @@ impl Example {
 
     fn wait_for_gpu(&mut self) {
         if let Some(sp) = self.prev_sync_point.take() {
-            self.context.wait_for(&sp, !0);
+            let _ = self.context.wait_for(&sp, !0);
         }
     }
 
@@ -362,7 +364,7 @@ impl Example {
                             .command_encoder
                             .timings()
                             .iter()
-                            .map(|(_, d)| d.as_secs_f64() * 1000.0)
+                            .map(|&(_, d)| d.as_secs_f64() * 1000.0)
                             .sum();
 
                         // Update history
@@ -485,7 +487,7 @@ impl Example {
 
         // Wait immediately after presenting to avoid swapchain semaphore reuse validation errors
         // when the swapchain rotates images faster than our timeline semaphore tracking.
-        self.context.wait_for(&sync_point, !0);
+        let _ = self.context.wait_for(&sync_point, !0);
         self.prev_sync_point = Some(sync_point);
     }
 
@@ -522,15 +524,15 @@ impl Example {
         );
 
         // Add backend-specific parameters
-        match &self.backend {
-            view::RenderBackend::Gaussian(backend) => {
+        match self.backend {
+            view::RenderBackend::Gaussian(ref backend) => {
                 args.push_str(&format!(" --min-opacity {}", backend.min_opacity()));
                 args.push_str(&format!(
                     " --min-transmittance {}",
                     backend.min_transmittance()
                 ));
             }
-            view::RenderBackend::RadFoam(backend) => {
+            view::RenderBackend::RadFoam(ref backend) => {
                 args.push_str(&format!(" --max-steps {}", backend.max_steps()));
                 args.push_str(&format!(
                     " --weight-threshold {}",
@@ -548,104 +550,130 @@ impl Example {
     }
 }
 
+struct App {
+    args: Option<Arguments>,
+    window: Option<winit::window::Window>,
+    example: Option<Example>,
+    last_mouse_pos: [i32; 2],
+    in_drag: bool,
+}
+
+const DRAG_SPEED: f32 = 0.01;
+
+impl winit::application::ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let args = self.args.take().expect("resumed called twice without args");
+        let mut window_attributes = winit::window::Window::default_attributes();
+        window_attributes.title = "blade-volume-viewer".to_string();
+        if let Some(ref arg) = args.resolution {
+            let res = parse_vec::<2, u32>(arg);
+            window_attributes.inner_size = Some(winit::dpi::Size::Physical(res.into()));
+        }
+        let window = event_loop.create_window(window_attributes).unwrap();
+        let example = Example::init(&window, args);
+        self.window = Some(window);
+        self.example = Some(example);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        let Some(ref window) = self.window else {
+            return;
+        };
+        let Some(ref mut example) = self.example else {
+            return;
+        };
+        let _ = example.ui_state.on_window_event(window, &event);
+        match event {
+            winit::event::WindowEvent::Resized(size) => {
+                example.resize(size);
+            }
+            winit::event::WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        physical_key: winit::keyboard::PhysicalKey::Code(key_code),
+                        state: winit::event::ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => {
+                if key_code == winit::keyboard::KeyCode::Escape {
+                    event_loop.exit();
+                }
+                if key_code == winit::keyboard::KeyCode::F1 {
+                    example.ui_show = !example.ui_show;
+                }
+                if key_code == winit::keyboard::KeyCode::KeyI {
+                    example.print_info();
+                }
+                if key_code == winit::keyboard::KeyCode::Tab {
+                    example.toggle_debug_mode();
+                }
+                if !example.ui_ctx.egui_wants_keyboard_input() {
+                    example.camera.on_key(key_code, 1.0);
+                }
+            }
+            winit::event::WindowEvent::MouseInput {
+                state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } if !example.ui_ctx.egui_wants_pointer_input() => {
+                self.in_drag = state == winit::event::ElementState::Pressed;
+            }
+            winit::event::WindowEvent::CursorMoved { position, .. } => {
+                if self.in_drag && !example.ui_ctx.egui_wants_pointer_input() {
+                    let dx = position.x as f32 - self.last_mouse_pos[0] as f32;
+                    let dy = position.y as f32 - self.last_mouse_pos[1] as f32;
+                    example.camera.on_mouse_drag(dx, dy, DRAG_SPEED);
+                }
+                self.last_mouse_pos = [position.x as i32, position.y as i32];
+            }
+            winit::event::WindowEvent::MouseWheel { delta, .. }
+                if !example.ui_ctx.egui_wants_pointer_input() =>
+            {
+                example.camera.on_wheel(delta);
+            }
+            winit::event::WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            winit::event::WindowEvent::RedrawRequested => {
+                example.render(window);
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        if let Some(ref window) = self.window {
+            window.request_redraw();
+        }
+    }
+}
+
 fn main() {
     let args = argh::from_env::<Arguments>();
     env_logger::init();
 
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let mut window_attributes = winit::window::Window::default_attributes();
-    window_attributes.title = "blade-volume-viewer".to_string();
-    if let Some(ref arg) = args.resolution {
-        let res = parse_vec::<2, u32>(arg);
-        window_attributes.inner_size = Some(winit::dpi::Size::Physical(res.into()));
+    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+
+    let mut app = App {
+        args: Some(args),
+        window: None,
+        example: None,
+        last_mouse_pos: [0i32; 2],
+        in_drag: false,
+    };
+    event_loop.run_app(&mut app).unwrap();
+
+    if let Some(example) = app.example {
+        example.deinit();
     }
-    let window = event_loop.create_window(window_attributes).unwrap();
-
-    let mut example = Example::init(&window, args);
-    let mut last_mouse_pos = [0i32; 2];
-    let mut in_drag = false;
-    let drag_speed = 0.01f32;
-
-    event_loop
-        .run(|event, target| {
-            target.set_control_flow(winit::event_loop::ControlFlow::Poll);
-            match event {
-                winit::event::Event::AboutToWait => {
-                    window.request_redraw();
-                }
-                winit::event::Event::WindowEvent {
-                    event: ref win_event,
-                    ..
-                } => {
-                    let _ = example.ui_state.on_window_event(&window, win_event);
-                    match win_event {
-                        winit::event::WindowEvent::Resized(size) => {
-                            example.resize(*size);
-                        }
-                        winit::event::WindowEvent::KeyboardInput {
-                            event:
-                                winit::event::KeyEvent {
-                                    physical_key: winit::keyboard::PhysicalKey::Code(key_code),
-                                    state: winit::event::ElementState::Pressed,
-                                    ..
-                                },
-                            ..
-                        } => {
-                            if *key_code == winit::keyboard::KeyCode::Escape {
-                                target.exit();
-                            }
-                            if *key_code == winit::keyboard::KeyCode::F1 {
-                                example.ui_show = !example.ui_show;
-                            }
-                            if *key_code == winit::keyboard::KeyCode::KeyI {
-                                example.print_info();
-                            }
-                            if *key_code == winit::keyboard::KeyCode::Tab {
-                                example.toggle_debug_mode();
-                            }
-                            let wants_keyboard = example.ui_ctx.wants_keyboard_input();
-                            if !wants_keyboard {
-                                example.camera.on_key(*key_code, 1.0);
-                            }
-                        }
-                        winit::event::WindowEvent::MouseInput {
-                            state,
-                            button: winit::event::MouseButton::Left,
-                            ..
-                        } => {
-                            let wants_pointer = example.ui_ctx.wants_pointer_input();
-                            if !wants_pointer {
-                                in_drag = *state == winit::event::ElementState::Pressed;
-                            }
-                        }
-                        winit::event::WindowEvent::CursorMoved { position, .. } => {
-                            let wants_pointer = example.ui_ctx.wants_pointer_input();
-                            if in_drag && !wants_pointer {
-                                let dx = position.x as f32 - last_mouse_pos[0] as f32;
-                                let dy = position.y as f32 - last_mouse_pos[1] as f32;
-                                example.camera.on_mouse_drag(dx, dy, drag_speed);
-                            }
-                            last_mouse_pos = [position.x as i32, position.y as i32];
-                        }
-                        winit::event::WindowEvent::MouseWheel { delta, .. } => {
-                            let wants_pointer = example.ui_ctx.wants_pointer_input();
-                            if !wants_pointer {
-                                example.camera.on_wheel(*delta);
-                            }
-                        }
-                        winit::event::WindowEvent::CloseRequested => {
-                            target.exit();
-                        }
-                        winit::event::WindowEvent::RedrawRequested => {
-                            example.render(&window);
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        })
-        .unwrap();
-
-    example.deinit();
 }

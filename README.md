@@ -2,6 +2,10 @@
 
 Volumetric rendering methods based on Blade graphics.
 
+The longer-term goal is a phone-video → reconstruction → interactive viewer pipeline.
+Training will live in a separate crate built on [meganeura](https://github.com/kvark/meganeura);
+no Python, no Burn. See `AGENTS.md` for the roadmap.
+
 ## Workspace Structure
 
 This repository is organized as a Cargo workspace:
@@ -9,7 +13,13 @@ This repository is organized as a Cargo workspace:
 ```
 blade-volume/          # Core library (no windowing dependencies)
 blade-volume-view/     # Viewer utilities with winit (camera, input)
+blade-volume-convert/  # glTF → point-cloud sampling
+blade-volume-test/     # Image-reference regression harness
 ```
+
+CI enforces `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`.
+The clippy policy mirrors `blade-graphics/src/lib.rs` and lives in the root `Cargo.toml`'s
+`[workspace.lints]` block — keep both in sync.
 
 ## Unified Viewer
 

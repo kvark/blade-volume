@@ -20,17 +20,19 @@ fn main() {
     let update = args.iter().any(|arg| arg == "--update");
     let debug = args.iter().any(|arg| arg == "--debug");
 
-    let mut options = convert::ConvertOptions::default();
-    options.output = convert::OutputKind::Gaussian;
-    options.density = 80.0;
-    options.surface_density_scale = 80.0;
-    options.interior_density_scale = 6.0;
-    options.ambient = glam::Vec3::splat(0.9);
-    options.surface_scale = 0.028;
-    options.interior_scale = 0.3;
-    options.surface_opacity = 0.8;
-    options.interior_opacity = 0.95;
-    options.surface_normal_scale = 0.015;
+    let options = convert::ConvertOptions {
+        output: convert::OutputKind::Gaussian,
+        density: 80.0,
+        surface_density_scale: 80.0,
+        interior_density_scale: 6.0,
+        ambient: glam::Vec3::splat(0.9),
+        surface_scale: 0.028,
+        interior_scale: 0.3,
+        surface_opacity: 0.8,
+        interior_opacity: 0.95,
+        surface_normal_scale: 0.015,
+        ..Default::default()
+    };
 
     let model = convert::convert_gltf(&input_path, &options)
         .unwrap_or_else(|err| panic!("conversion failed: {err:?}"));
@@ -89,7 +91,9 @@ fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32, debug
             timing: false,
             capture: false,
             overlay: false,
-            device_id: 0,
+            ray_tracing: true,
+            xr: None,
+            device_id: None,
         })
         .expect("create context")
     };
@@ -195,9 +199,10 @@ fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32, debug
     drop(tpass);
 
     let sp = context.submit(&mut encoder);
-    let ok = context.wait_for(&sp, 20000);
-    if !ok {
-        panic!("GPU timed out while rendering reference image");
+    match context.wait_for(&sp, 20000) {
+        Ok(true) => {}
+        Ok(false) => panic!("GPU timed out while rendering reference image"),
+        Err(err) => panic!("GPU wait failed: {err:?}"),
     }
 
     let data = unsafe {

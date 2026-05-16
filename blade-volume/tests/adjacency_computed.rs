@@ -25,7 +25,7 @@ fn make_model_without_adjacency(points: Vec<glam::Vec4>, sh_degree: usize) -> vo
     for i in 0..n {
         let base = i * sh_dim;
         // Set DC to a visible gray
-        sh_coefficients[base + 0] = 0.5; // R
+        sh_coefficients[base] = 0.5; // R
         sh_coefficients[base + 1] = 0.5; // G
         sh_coefficients[base + 2] = 0.5; // B
     }
@@ -36,6 +36,7 @@ fn make_model_without_adjacency(points: Vec<glam::Vec4>, sh_degree: usize) -> vo
         sh_degree,
         transforms: None,
         adjacency: None, // No adjacency - will be computed
+        radii: None,
     }
 }
 
@@ -175,6 +176,7 @@ fn ensure_adjacency_preserves_existing() {
         sh_degree: 0,
         transforms: None,
         adjacency: Some(custom_adj),
+        radii: None,
     };
 
     // ensure_adjacency should NOT recompute

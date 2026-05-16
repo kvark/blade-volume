@@ -9,18 +9,18 @@
 //! What it implements (forward-only):
 //! - Voronoi cell traversal over points with CSR adjacency.
 //! - Plane selection identical to upstream `trace()` logic:
-//!     offset = next - current
-//!     face_origin = current + 0.5 * offset
-//!     face_normal = offset
-//!     dp = dot(face_normal, ray_dir)
-//!     t = dot(face_origin - ray_origin, face_normal) / dp
+//!   offset = next - current
+//!   face_origin = current + 0.5 * offset
+//!   face_normal = offset
+//!   dp = dot(face_normal, ray_dir)
+//!   t = dot(face_origin - ray_origin, face_normal) / dp
 //!   Pick the smallest `t` among faces with `dp > 0`.
 //! - Segment-wise alpha integration per cell (piecewise constant density):
-//!     dt = max(t1 - t0, 0)
-//!     alpha = 1 - exp(-s * dt)
-//!     w = T * alpha
-//!     rgb += w * cell_rgb
-//!     T *= (1 - alpha)
+//!   dt = max(t1 - t0, 0)
+//!   alpha = 1 - exp(-s * dt)
+//!   w = T * alpha
+//!   rgb += w * cell_rgb
+//!   T *= (1 - alpha)
 //! - Termination:
 //!   - transmittance <= weight_threshold
 //!   - steps >= max_steps
@@ -55,6 +55,7 @@ pub struct Ray {
 
 /// Controls how RGB is produced per cell.
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub enum EvalMode {
     /// Ignore SH coefficients, use a constant RGB for every visited cell.
     ConstantRgb(glam::Vec3),
@@ -89,6 +90,7 @@ impl Default for TraceSettings {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(dead_code)]
 pub struct TraceResult {
     pub rgba: glam::Vec4,
     pub steps: u32,
@@ -113,22 +115,22 @@ fn eval_rgb_constant(constant: glam::Vec3) -> glam::Vec3 {
 /// These match `blade-gaussian/examples/shader.wgsl` and our `examples/radfoam.wgsl`.
 fn sh_basis_constants() -> [f32; 16] {
     [
-        0.28209479177387814,
-        -0.4886025119029199,
-        0.4886025119029199,
-        -0.4886025119029199,
-        1.0925484305920792,
-        -1.0925484305920792,
-        0.31539156525252005,
-        -1.0925484305920792,
-        0.5462742152960396,
-        -0.5900435899266435,
-        2.890611442640554,
-        -0.4570457994644658,
-        0.3731763325901154,
-        -0.4570457994644658,
-        1.445305721320277,
-        -0.5900435899266435,
+        0.282_094_8,
+        -0.488_602_52,
+        0.488_602_52,
+        -0.488_602_52,
+        1.092_548_5,
+        -1.092_548_5,
+        0.315_391_57,
+        -1.092_548_5,
+        0.546_274_24,
+        -0.590_043_6,
+        2.890_611_4,
+        -0.457_045_8,
+        0.373_176_34,
+        -0.457_045_8,
+        1.445_305_7,
+        -0.590_043_6,
     ]
 }
 
@@ -153,7 +155,7 @@ fn eval_rgb_sh(model: &vol::PointCloudModel, point_idx: u32, dir: glam::Vec3) ->
     // L0
     if comps >= 1 {
         let c0 = sh[0];
-        color.x += c0 * model.sh_coefficients[base + 0];
+        color.x += c0 * model.sh_coefficients[base];
         color.y += c0 * model.sh_coefficients[base + 1];
         color.z += c0 * model.sh_coefficients[base + 2];
     }
@@ -485,14 +487,15 @@ mod tests {
             direction: glam::Vec3::new(0.0, 0.0, 1.0),
         };
 
-        let mut settings = TraceSettings::default();
-        settings.start_point = 0;
-        settings.max_steps = 16;
-        settings.depth = 100.0;
-        settings.weight_threshold = 1e-4;
-        settings.eval_mode = EvalMode::ConstantRgb(glam::Vec3::splat(1.0));
-        // Avoid noisy logs in unit tests by default.
-        settings.debug_max_print_steps = Some(0);
+        let settings = TraceSettings {
+            start_point: 0,
+            max_steps: 16,
+            depth: 100.0,
+            weight_threshold: 1e-4,
+            eval_mode: EvalMode::ConstantRgb(glam::Vec3::splat(1.0)),
+            // Avoid noisy logs in unit tests by default.
+            debug_max_print_steps: Some(0),
+        };
 
         let out = trace_one_ray(&model, ray, settings);
 

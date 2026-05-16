@@ -2,17 +2,33 @@
 members = ["blade-volume", "blade-volume-view", "blade-volume-convert", "blade-volume-test"]
 resolver = "2"
 
+# Mirror the lint policy from blade-graphics/src/lib.rs.
+[workspace.lints.clippy]
+match_like_matches_macro = "allow"
+redundant_pattern_matching = "allow"
+needless_lifetimes = "allow"
+new_without_default = "allow"
+single_match = "allow"
+vec_init_then_push = "allow"
+missing_safety_doc = "allow"
+too_many_arguments = "allow"
+pattern_type_mismatch = "warn"
+
+[workspace.lints.rust]
+trivial_numeric_casts = "warn"
+unused_extern_crates = "warn"
+
 [workspace.dependencies]
-blade-graphics = { git = "https://github.com/kvark/blade", rev = "e3cf011ca18a6dfd907d1dedd93e85e21f005fe3" }
+blade-graphics = { git = "https://github.com/kvark/blade", rev = "0d693426253fb2aaea0d842bf76bf13e2773a411" }
 blade-macros = "0.3"
 bytemuck = "1"
-glam = { version = "0.29", features = ["mint"] }
-flate2 = "1.0"
+glam = { version = "0.30", features = ["mint"] }
+flate2 = "1"
 half = "2"
 log = "0.4"
 mint = "0.5"
 argh = "0.1"
 env_logger = "0.11"
 winit = "0.30"
-kiddo = "4"
+kiddo = "5"
 simple_delaunay_lib = "0.2"

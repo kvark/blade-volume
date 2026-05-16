@@ -17,3 +17,6 @@ simple_delaunay_lib.workspace = true
 [dev-dependencies]
 half.workspace = true
 kiddo.workspace = true
+
+[lints]
+workspace = true

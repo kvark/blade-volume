@@ -15,9 +15,7 @@ mod render;
 mod scene_renderer;
 
 pub use camera::ControlledCamera;
-pub use render::{
-    preprocess_shader, DebugMode, GaussianSettings, RadFoamSettings, RenderBackend, RenderSize,
-};
+pub use render::{DebugMode, GaussianSettings, RadFoamSettings, RenderBackend, RenderSize};
 pub use scene_renderer::{SceneDebugMode, SceneParams, SceneRenderer};
 
 // Re-export commonly used types from dependencies for convenience

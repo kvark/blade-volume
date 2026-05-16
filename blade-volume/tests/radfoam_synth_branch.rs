@@ -21,7 +21,7 @@ We build a "spine" along +Z with a branching cluster at each spine node:
 
 - Spine nodes: S_i = (0, 0, i*dz), i=0..spine_len-1
 - For each spine node i, we create `branch_degree` branch nodes:
-    B_{i,j} = S_i + (R*cos(theta_j), R*sin(theta_j), branch_z_offset)
+  B_{i,j} = S_i + (R*cos(theta_j), R*sin(theta_j), branch_z_offset)
   where theta_j are evenly spaced angles around the circle.
 
 Adjacency:
@@ -208,8 +208,7 @@ pub fn make_branching_model(params: BranchingParams) -> vol::PointCloudModel {
 
     offsets.push(0);
     let mut running: u32 = 0;
-    for i in 0..n_total {
-        let list = &neigh[i];
+    for list in neigh.iter().take(n_total) {
         neighbors.extend_from_slice(list);
         running += list.len() as u32;
         offsets.push(running);
@@ -221,7 +220,7 @@ pub fn make_branching_model(params: BranchingParams) -> vol::PointCloudModel {
         let base = i * sh_dim;
 
         // DC component (component 0)
-        sh_coefficients[base + 0] = params.dc.x;
+        sh_coefficients[base] = params.dc.x;
         sh_coefficients[base + 1] = params.dc.y;
         sh_coefficients[base + 2] = params.dc.z;
 
@@ -268,6 +267,7 @@ pub fn make_branching_model(params: BranchingParams) -> vol::PointCloudModel {
         sh_degree: params.sh_degree,
         transforms: None,
         adjacency: Some(vol::Adjacency { neighbors, offsets }),
+        radii: None,
     }
 }
 
@@ -321,6 +321,6 @@ mod tests {
         let spine2 = 2usize;
         let s0 = adj.offsets[spine2] as usize;
         let s1 = adj.offsets[spine2 + 1] as usize;
-        assert!((s1 - s0) >= 1 + 4);
+        assert!((s1 - s0) > 4);
     }
 }

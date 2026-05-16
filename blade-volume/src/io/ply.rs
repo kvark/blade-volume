@@ -145,5 +145,6 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
         sh_degree: max_sh_degree,
         transforms: Some(crate::Transforms { rotations, scales }),
         adjacency: None,
+        radii: None,
     }
 }
