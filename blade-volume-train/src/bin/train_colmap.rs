@@ -69,6 +69,10 @@ struct Args {
     #[argh(option, default = "8")]
     views: usize,
 
+    /// held-out images for PSNR evaluation (default 0 = no test set)
+    #[argh(option, default = "0")]
+    test_views: usize,
+
     /// training epochs (default 100)
     #[argh(option, default = "100")]
     epochs: usize,
@@ -110,12 +114,18 @@ fn main() {
 
     let sparse = path::Path::new(&args.sparse);
     let images = path::Path::new(&args.images);
-    let trained = pipeline::train_colmap_appearance(sparse, images, &config, gpu.clone());
+    let outcome = pipeline::train_colmap_appearance_split(
+        sparse,
+        images,
+        &config,
+        args.test_views,
+        gpu.clone(),
+    );
 
     let output = path::Path::new(&args.output);
     convert::save_ply_with_options(
         output,
-        &trained,
+        &outcome.model,
         &convert::SaveOptions {
             format: convert::PlyFormat::Binary,
         },
@@ -127,23 +137,71 @@ fn main() {
     println!(
         "wrote {} ({} points, {} adjacency edges)",
         output.display(),
-        trained.len(),
-        trained
+        outcome.model.len(),
+        outcome
+            .model
             .adjacency
             .as_ref()
             .map(|a| a.neighbors.len())
             .unwrap_or(0),
     );
 
+    // --- Evaluation on held-out test views ---
+    if args.test_views > 0 {
+        let train_count = config.max_views.unwrap_or(0);
+        let test_images: Vec<_> = outcome
+            .reconstruction
+            .images
+            .iter()
+            .skip(train_count)
+            .take(args.test_views)
+            .collect();
+        let test_views = pipeline::build_views_from(
+            &outcome.reconstruction,
+            images,
+            &outcome.model,
+            &config,
+            test_images.iter().copied(),
+        );
+        if test_views.is_empty() {
+            eprintln!("no usable test views (image files missing?)");
+        } else {
+            let psnrs = pipeline::evaluate_views(&outcome.model, &test_views, &config);
+            // Train-set PSNR too, for comparison.
+            let train_views = pipeline::build_views_from(
+                &outcome.reconstruction,
+                images,
+                &outcome.model,
+                &config,
+                outcome.reconstruction.images.iter().take(train_count),
+            );
+            let train_psnrs = pipeline::evaluate_views(&outcome.model, &train_views, &config);
+            let avg_train: f32 =
+                train_psnrs.iter().copied().sum::<f32>() / train_psnrs.len() as f32;
+            let avg_test: f32 = psnrs.iter().copied().sum::<f32>() / psnrs.len() as f32;
+            println!(
+                "PSNR train (avg over {} views): {avg_train:.2} dB",
+                train_psnrs.len()
+            );
+            println!(
+                "PSNR test  (avg over {} views): {avg_test:.2} dB",
+                psnrs.len()
+            );
+            for (img, p) in test_images.iter().zip(psnrs.iter()) {
+                println!("  test {}: {:.2} dB", img.name, p);
+            }
+        }
+    }
+
     if let Some(ref novel_path) = args.novel_out {
-        render_novel_at(&trained, sparse, &config, 0.5, novel_path);
+        render_novel_at(&outcome.model, sparse, &config, 0.5, novel_path);
     }
     if let Some(ref prefix) = args.novel_strip_prefix {
         let n = args.novel_strip_count.max(2);
         for k in 0..n {
             let t = k as f32 / (n - 1) as f32;
             let path = format!("{prefix}_{k:02}.png");
-            render_novel_at(&trained, sparse, &config, t, &path);
+            render_novel_at(&outcome.model, sparse, &config, t, &path);
         }
     }
 }

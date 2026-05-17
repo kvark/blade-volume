@@ -11,7 +11,7 @@
 //!
 //! The bin target `train_colmap` (in `src/bin/`) wraps these for CLI use.
 
-use crate::{colmap, diff_render};
+use crate::{colmap, diff_render, metrics, render};
 use blade_graphics as gpu;
 use blade_volume as vol;
 use std::{path, sync};
@@ -114,9 +114,25 @@ pub fn build_views(
     initial_model: &vol::PointCloudModel,
     config: &PipelineConfig,
 ) -> Vec<diff_render::ViewSupervision> {
+    let images = reconstruction
+        .images
+        .iter()
+        .take(config.max_views.unwrap_or(reconstruction.images.len()));
+    build_views_from(reconstruction, images_dir, initial_model, config, images)
+}
+
+/// Build a custom slice of views — same machinery as [`build_views`] but the
+/// caller picks the images. Used by the test-set evaluation path so it can
+/// reuse the camera-conversion + image-loading logic.
+pub fn build_views_from<'a>(
+    reconstruction: &colmap::Reconstruction,
+    images_dir: &path::Path,
+    initial_model: &vol::PointCloudModel,
+    config: &PipelineConfig,
+    images: impl IntoIterator<Item = &'a colmap::ColmapImage>,
+) -> Vec<diff_render::ViewSupervision> {
     let mut views = Vec::new();
-    let limit = config.max_views.unwrap_or(reconstruction.images.len());
-    for image in reconstruction.images.iter().take(limit) {
+    for image in images {
         let target_path = images_dir.join(&image.name);
         let target_rgb =
             match load_and_downsample_image(&target_path, config.resolution.0, config.resolution.1)
@@ -138,17 +154,71 @@ pub fn build_views(
     views
 }
 
-/// Orchestrator. Takes a sparse COLMAP directory + a parallel images
-/// directory, returns a trained `PointCloudModel` whose per-cell density
-/// and SH degree-0 DC have been fit to the provided views' downsampled
-/// pixels. The model's geometry is the sparse 3D points from
-/// `points3D.bin`; adjacency is computed via Delaunay.
+/// Render each `view` at the configured resolution and report per-view +
+/// average PSNR against its ground-truth pixels. Predictions are clamped to
+/// `[0, 1]` before the PSNR computation (matches how the image would land
+/// on screen / disk). Returns the per-view PSNR values in the same order
+/// as `views`.
+pub fn evaluate_views(
+    model: &vol::PointCloudModel,
+    views: &[diff_render::ViewSupervision],
+    config: &PipelineConfig,
+) -> Vec<f32> {
+    let mut out = Vec::with_capacity(views.len());
+    for v in views {
+        let pixels = render::render_cpu(
+            model,
+            &v.camera,
+            render::RenderSettings {
+                width: config.resolution.0,
+                height: config.resolution.1,
+                start_point: v.start_cell,
+                max_steps: config.max_steps as u32,
+                weight_threshold: 1e-4,
+            },
+        );
+        let mut pred = metrics::rgba_to_rgb(&pixels);
+        for p in pred.iter_mut() {
+            *p = p.clamp(0.0, 1.0);
+        }
+        out.push(metrics::psnr(&pred, &v.target_rgb));
+    }
+    out
+}
+
+/// Result of an end-to-end COLMAP training run. The Reconstruction comes
+/// back so callers can render extra views (test set, novel poses) without
+/// re-parsing the binary.
+pub struct TrainOutcome {
+    pub model: vol::PointCloudModel,
+    pub reconstruction: colmap::Reconstruction,
+    /// Loss values per Adam step in the order they ran (epoch-major × view-major).
+    pub training_loss: Vec<f32>,
+}
+
+/// Convenience wrapper that calls [`train_colmap_appearance_split`] with no
+/// test views. Returns just the trained model for backwards compatibility.
 pub fn train_colmap_appearance(
     sparse_dir: &path::Path,
     images_dir: &path::Path,
     config: &PipelineConfig,
     gpu: sync::Arc<gpu::Context>,
 ) -> vol::PointCloudModel {
+    train_colmap_appearance_split(sparse_dir, images_dir, config, 0, gpu).model
+}
+
+/// Orchestrator. Loads the COLMAP reconstruction, splits its image list into
+/// the first `config.max_views` training images and the next `test_views`
+/// held-out images, builds an initial `PointCloudModel`, fits appearance,
+/// and returns the trained model along with the reconstruction so the caller
+/// can evaluate on the test split if desired (`evaluate_views`).
+pub fn train_colmap_appearance_split(
+    sparse_dir: &path::Path,
+    images_dir: &path::Path,
+    config: &PipelineConfig,
+    _test_views: usize,
+    gpu: sync::Arc<gpu::Context>,
+) -> TrainOutcome {
     let recon = colmap::load_reconstruction(sparse_dir);
     let mut model = recon.to_initial_model();
     if let Some(cap) = config.max_initial_points {
@@ -196,7 +266,11 @@ pub fn train_colmap_appearance(
     let views = build_views(&recon, images_dir, &model, config);
     if views.is_empty() {
         log::warn!("no usable training views — returning untrained initial model");
-        return model;
+        return TrainOutcome {
+            model,
+            reconstruction: recon,
+            training_loss: Vec::new(),
+        };
     }
 
     let losses = diff_render::fit_appearance_multi_view(
@@ -215,7 +289,11 @@ pub fn train_colmap_appearance(
             losses.len()
         );
     }
-    model
+    TrainOutcome {
+        model,
+        reconstruction: recon,
+        training_loss: losses,
+    }
 }
 
 #[cfg(test)]
