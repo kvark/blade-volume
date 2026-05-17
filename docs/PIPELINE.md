@@ -175,22 +175,40 @@ Broken into sub-steps:
   real renderer. SSIM is parked: meganeura doesn't expose a shortcut for
   the per-window stats and composing it from `conv2d` adds shape-juggling
   overhead we don't need until L1 alone stops being enough.
-- **M3c-4 — Plug the real (differentiable) renderer in and confirm one
-  scene converges at low resolution.** With positions+adjacency frozen,
-  the volumetric integration along a precomputed per-pixel path is
-  expressible as a composition of existing meganeura ops (gather for
-  per-cell density/SH, elementwise for alpha/transmittance, `sum_all`
-  for the per-pixel reduction). Variable-length paths need padding +
-  masking, but no custom op. Updating positions/radii is a later phase
-  (the cell-walk itself stays non-differentiable; that's PowerFoam's
-  raytrace-mode trick of detaching the traversal and keeping the
-  integration smooth).
+- **M3c-4 — Real differentiable renderer with frozen geometry (done).**
+  Four sub-pieces:
+  - `vol::trace::record_path` records the `(cell, dt)` sequence each ray
+    covers without integrating. Non-differentiable but the geometry
+    decisions live entirely on the CPU side.
+  - `blade_volume_train::diff_render::build_volumetric_graph` constructs
+    the meganeura subgraph: gather per-step density/SH via `embedding`,
+    cumulative-sum-by-pixel via `[P, L] @ [L, L]` matmul with a
+    strict-lower-triangular ones matrix, `exp(-x) = recip(sigmoid(x)) - 1`
+    surrogate (meganeura lacks raw `exp`), three parallel per-channel
+    pipelines summed into one scalar L1 loss.
+  - `fit_appearance_to_pixels` (single view) and `fit_appearance_multi_view`
+    (camera ring) drive Adam manually via `set_adam` + `step` + `wait`
+    rather than the Trainer/DataLoader path (whose `(data, labels)` shape
+    can't express our four-input graph). Tests show 10× loss reduction
+    on a one-pixel scene and trained-view-B L1 of 0.01 vs 0.37 black
+    baseline on a four-camera ring.
+  - `pipeline::train_colmap_appearance` orchestrates the COLMAP→foam
+    pipeline; `train_colmap` is the CLI. Bonsai (MipNeRF-360) trains in
+    ~2 s on an RTX 5070: loss 0.36 → 0.09 over 1600 Adam steps, 8 views
+    at 24×24, 2000 subsampled cells. Outputs a binary PLY + an
+    interpolated-camera novel-view strip.
+
+  Known meganeura matmul shape bug: P×L when P≥784 and L≥16 produces
+  NaN. Workaround is to keep P or L below those bounds (default
+  resolution/max-steps does so). To be reported upstream.
 
 #### M3d — Online viewer attach
 
 - During training, periodically convert `TrainerState → PointCloudModel` and hand it
   to a running `blade-volume-view` instance via a shared `Arc<Mutex<...>>`.
 - This mirrors PowerFoam's `--viewer` flag.
+- Not yet wired; the CLI dumps a final PLY and the existing viewer can
+  load it after the run.
 
 ### M4 — Capture stage
 
@@ -198,6 +216,16 @@ Only after M3 produces something worth looking at.
 
 - A short doc page: which phone apps work, what frame rate / exposure settings.
 - `etc/colmap.sh` wrapper: video → frames → COLMAP sparse reconstruction.
+
+### M-mesh — Direct mesh → foam conversion (investigated)
+
+`docs/MESH_TO_FOAM.md` covers the "without 2D snapshots" question in
+detail. Summary: yes, `blade-volume-convert` already does it (gathered
+triangles + grid-interior + barycentric-surface sampling + material
+textures → Delaunay → renderable foam). Improvements ordered by cost
+documented there. Initial Power-Foam radii helper
+(`adjacency::radii_from_nearest_neighbour`) shipped — one-line upgrade
+from plain Voronoi to Power Foam for any mesh-derived cloud.
 
 ## Sequencing recommendation
 

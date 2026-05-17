@@ -15,7 +15,26 @@ blade-volume/          # Core library (no windowing dependencies)
 blade-volume-view/     # Viewer utilities with winit (camera, input)
 blade-volume-convert/  # glTF → point-cloud sampling
 blade-volume-test/     # Image-reference regression harness
+blade-volume-train/    # Meganeura-backed appearance training (COLMAP → foam)
 ```
+
+## Training a foam from a COLMAP scene
+
+```bash
+etc/fetch_test_dataset.sh bonsai                  # ~280 MB into etc/data/bonsai/
+cargo run --release -p blade-volume-train --bin train_colmap -- \
+    --sparse etc/data/bonsai/sparse/0 \
+    --images etc/data/bonsai/images \
+    --output  bonsai.ply \
+    --novel-strip-prefix novel \
+    --width 24 --height 24 --views 8 --epochs 200 \
+    --max-steps 24 --max-points 2000 --learning-rate 0.05
+```
+
+Outputs a binary RadFoam PLY plus a 5-frame interpolated-camera strip
+(`novel_00.png` … `novel_04.png`). The PLY can be opened with the viewer
+above. See `docs/PIPELINE.md` for the design and `docs/MESH_TO_FOAM.md`
+for the parallel mesh-to-foam path.
 
 CI enforces `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`.
 The clippy policy mirrors `blade-graphics/src/lib.rs` and lives in the root `Cargo.toml`'s
