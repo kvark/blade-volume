@@ -134,6 +134,86 @@ pub fn sh_coefficients_as_parameter(g: &mut mn::Graph, model: &vol::PointCloudMo
     g.parameter("sh_coefficients", &[n, sh_dim])
 }
 
+/// Optimise an image-shaped parameter to match `target` via L1 loss + Adam.
+///
+/// Next step up from [`fit_constant_rgb`]: the parameter is now a flat RGB
+/// image (`width * height * 3` floats in row-major order), the loss is L1
+/// (the photometric loss used by 3DGS/RadFoam/PowerFoam training), and the
+/// data flows as a higher-rank tensor. The forward is still identity (param
+/// → prediction) — M3c-4 replaces this with the real differentiable
+/// renderer, but the rest of this scaffold (loss shape, parameter layout,
+/// Adam wiring) stays.
+///
+/// SSIM is intentionally not included yet. meganeura's op set doesn't expose
+/// a 2D-convolution shortcut for the per-window stats; expressing SSIM as a
+/// composition of `conv2d` would work but adds shape-juggling overhead we
+/// don't need until L1 alone stops being enough.
+///
+/// `target.len()` must equal `width * height * 3`. Returns the trained image
+/// in the same layout.
+pub fn fit_constant_image(
+    target: &[f32],
+    width: u32,
+    height: u32,
+    config: FitConfig,
+    gpu: sync::Arc<gpu::Context>,
+) -> Vec<f32> {
+    let dim = (width as usize) * (height as usize) * 3;
+    assert_eq!(
+        target.len(),
+        dim,
+        "fit_constant_image: target.len() ({}) must equal width*height*3 ({})",
+        target.len(),
+        dim
+    );
+
+    let mut g = mn::Graph::new();
+    let batch: usize = 1;
+
+    let x = g.input("x", &[batch, dim]);
+    let labels = g.input("labels", &[batch, dim]);
+    let img_param = g.parameter("img", &[batch, dim]);
+
+    let zero = g.constant(vec![0.0; batch * dim], &[batch, dim]);
+    let dead = g.mul(x, zero);
+    let pred = g.add(img_param, dead);
+    let loss = g.l1_loss(pred, labels);
+    g.set_outputs(vec![loss]);
+
+    let (mut session, _report) = mn::build(
+        &g,
+        mn::SessionConfig {
+            mode: mn::Mode::Training,
+            gpu: Some(gpu),
+            ..Default::default()
+        },
+    );
+
+    session.set_parameter("img", &vec![0.5; batch * dim]);
+
+    let data: Vec<f32> = target.to_vec();
+    let labels: Vec<f32> = target.to_vec();
+    let mut loader = mn::DataLoader::new(data, labels, dim, dim, batch);
+
+    let train_cfg = mn::TrainConfig {
+        optimizer: mn::Optimizer::adam(config.learning_rate),
+        learning_rate: config.learning_rate,
+        log_interval: 0,
+        data_input: "x".into(),
+        label_input: "labels".into(),
+    };
+    let mut trainer = mn::Trainer::new(session, train_cfg);
+    trainer.train(&mut loader, config.epochs);
+    let session = trainer.into_session();
+
+    let buf = session
+        .param_buffer("img")
+        .expect("img parameter not found in session plan");
+    let mut out = vec![0.0f32; batch * dim];
+    session.read_buffer(buf, &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +233,55 @@ mod tests {
                 target[i]
             );
         }
+    }
+
+    /// Synthetic 8x8 RGB target with a smooth gradient — every pixel takes a
+    /// distinct value so the test catches systemic miswiring (rows transposed,
+    /// channels swapped, batch dim collapsed, etc.).
+    fn synthetic_target(w: u32, h: u32) -> Vec<f32> {
+        let mut img = Vec::with_capacity((w * h * 3) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                img.push(x as f32 / (w - 1) as f32);
+                img.push(y as f32 / (h - 1) as f32);
+                img.push(0.5);
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn fits_image_via_l1_adam() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping fit_constant_image: no supported GPU device");
+            return;
+        };
+        let w = 8;
+        let h = 8;
+        let target = synthetic_target(w, h);
+        let result = fit_constant_image(
+            &target,
+            w,
+            h,
+            FitConfig {
+                learning_rate: 0.1,
+                epochs: 300,
+            },
+            gpu,
+        );
+
+        assert_eq!(result.len(), target.len());
+        let mut max_err = 0.0f32;
+        for (got, want) in result.iter().zip(target.iter()) {
+            let err = (got - want).abs();
+            if err > max_err {
+                max_err = err;
+            }
+        }
+        assert!(
+            max_err < 0.02,
+            "max per-pixel L1 error {max_err} exceeds 0.02; image did not converge"
+        );
     }
 
     #[test]

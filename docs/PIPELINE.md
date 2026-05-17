@@ -167,9 +167,24 @@ Broken into sub-steps:
   likely need a custom op (recorded-path-then-integrate, à la PowerFoam's
   raytrace mode) rather than expressing the cell-walk as a composition of
   existing ops.
-- **M3c-3 — L1 + SSIM loss against ground-truth images, Adam optimiser.**
+- **M3c-3 — Image-shaped L1 loss + Adam (done, SSIM deferred).**
+  `fit::fit_constant_image(target, w, h, ...)` trains a `[1, w*h*3]`
+  parameter to match a target image via L1 loss. Test converges an 8×8
+  RGB gradient image to within 0.02 max per-pixel error in 300 epochs.
+  Forward is still identity (parameter → prediction) — M3c-4 swaps in the
+  real renderer. SSIM is parked: meganeura doesn't expose a shortcut for
+  the per-window stats and composing it from `conv2d` adds shape-juggling
+  overhead we don't need until L1 alone stops being enough.
 - **M3c-4 — Plug the real (differentiable) renderer in and confirm one
-  scene converges at low resolution.**
+  scene converges at low resolution.** With positions+adjacency frozen,
+  the volumetric integration along a precomputed per-pixel path is
+  expressible as a composition of existing meganeura ops (gather for
+  per-cell density/SH, elementwise for alpha/transmittance, `sum_all`
+  for the per-pixel reduction). Variable-length paths need padding +
+  masking, but no custom op. Updating positions/radii is a later phase
+  (the cell-walk itself stays non-differentiable; that's PowerFoam's
+  raytrace-mode trick of detaching the traversal and keeping the
+  integration smooth).
 
 #### M3d — Online viewer attach
 
