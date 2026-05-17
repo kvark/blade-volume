@@ -243,6 +243,181 @@ impl Default for AppearanceFitConfig {
     }
 }
 
+/// One supervised view: a camera + the pixel image we want the trained model
+/// to reproduce at that camera. `target_rgb` is `width * height * 3` floats
+/// in row-major RGB order. `start_cell` is the index of the Voronoi cell the
+/// per-pixel rays of this view should start in — caller picks (usually via
+/// a kd-tree from the camera origin).
+#[derive(Clone)]
+pub struct ViewSupervision {
+    pub camera: vol::CameraParams,
+    pub target_rgb: Vec<f32>,
+    pub start_cell: u32,
+}
+
+/// Per-pixel ray for a view, matching `render::render_cpu`'s mapping.
+fn rays_for_view(cam: &vol::CameraParams, w: u32, h: u32) -> Vec<vol::trace::Ray> {
+    let tan_half = glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan());
+    let orientation = glam::Quat::from_xyzw(
+        cam.cam_orientation[0],
+        cam.cam_orientation[1],
+        cam.cam_orientation[2],
+        cam.cam_orientation[3],
+    );
+    let origin = glam::Vec3::from_array(cam.cam_position);
+    let mut rays = Vec::with_capacity((w * h) as usize);
+    let wf = w as f32;
+    let hf = h as f32;
+    for iy in 0..h {
+        let py = (iy as f32 + 0.5) / hf;
+        let ndc_y = py * 2.0 - 1.0;
+        for ix in 0..w {
+            let px = (ix as f32 + 0.5) / wf;
+            let ndc_x = px * 2.0 - 1.0;
+            let local = glam::Vec3::new(ndc_x * tan_half.x, ndc_y * tan_half.y, 1.0);
+            rays.push(vol::trace::Ray {
+                origin,
+                direction: (orientation * local).normalize(),
+            });
+        }
+    }
+    rays
+}
+
+/// Fit per-cell density + SH degree-0 DC of `model` so it reproduces every
+/// view in `views`. Geometry is frozen — the cell-walk paths through each
+/// view are recorded once at the start (positions and adjacency don't
+/// change during appearance training) and reused for every Adam step.
+///
+/// All views must share the same `width` × `height` and `max_steps`. The
+/// graph is built once for that fixed shape; per-epoch we cycle through
+/// views and run one Adam step per view.
+///
+/// Returns one loss per Adam step (`epochs * views.len()` total).
+pub fn fit_appearance_multi_view(
+    model: &mut vol::PointCloudModel,
+    views: &[ViewSupervision],
+    width: u32,
+    height: u32,
+    max_steps: usize,
+    config: AppearanceFitConfig,
+    gpu: std::sync::Arc<blade_graphics::Context>,
+) -> Vec<f32> {
+    assert!(
+        !views.is_empty(),
+        "fit_appearance_multi_view needs >=1 view"
+    );
+    let p = (width as usize) * (height as usize);
+    let n_cells = model.points.len();
+
+    for v in views {
+        assert_eq!(
+            v.target_rgb.len(),
+            p * 3,
+            "target_rgb length must equal width*height*3"
+        );
+        assert!(
+            (v.start_cell as usize) < n_cells,
+            "view start_cell out of range"
+        );
+    }
+
+    // Record paths per view once; geometry is fixed during appearance training.
+    let trace_settings = vol::trace::TraceSettings {
+        start_point: 0, // overwritten per view below
+        max_steps: max_steps as u32,
+        weight_threshold: 0.0,
+        depth: views[0].camera.depth,
+        eval_mode: vol::trace::EvalMode::Sh,
+    };
+    let mut flats: Vec<FlatPaths> = Vec::with_capacity(views.len());
+    for v in views {
+        let mut s = trace_settings;
+        s.start_point = v.start_cell;
+        s.depth = v.camera.depth;
+        let rays = rays_for_view(&v.camera, width, height);
+        let paths: Vec<_> = rays
+            .into_iter()
+            .map(|ray| vol::trace::record_path(model, ray, s))
+            .collect();
+        flats.push(flatten_paths(&paths, max_steps));
+    }
+
+    let mut g = mn::Graph::new();
+    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps);
+    let (mut session, _report) = mn::build(
+        &g,
+        mn::SessionConfig {
+            mode: mn::Mode::Training,
+            gpu: Some(gpu),
+            ..Default::default()
+        },
+    );
+
+    // Lift the model's current values into the four parameter tables.
+    let mut init_density = Vec::with_capacity(n_cells);
+    let mut init_r = Vec::with_capacity(n_cells);
+    let mut init_g = Vec::with_capacity(n_cells);
+    let mut init_b = Vec::with_capacity(n_cells);
+    for (i, point) in model.points.iter().enumerate() {
+        init_density.push(point.w);
+        init_r.push(model.sh_coefficients[i * 3]);
+        init_g.push(model.sh_coefficients[i * 3 + 1]);
+        init_b.push(model.sh_coefficients[i * 3 + 2]);
+    }
+    session.set_parameter("log_density", &init_density);
+    session.set_parameter("sh_r", &init_r);
+    session.set_parameter("sh_g", &init_g);
+    session.set_parameter("sh_b", &init_b);
+
+    let mut losses = Vec::with_capacity(config.epochs * views.len());
+    for _ in 0..config.epochs {
+        for (vi, v) in views.iter().enumerate() {
+            session.set_input_u32("cell_indices", &flats[vi].cell);
+            session.set_input("dt", &flats[vi].dt);
+            session.set_input("mask", &flats[vi].mask);
+            session.set_input("labels", &v.target_rgb);
+            session.set_adam(
+                config.learning_rate,
+                config.adam_beta1,
+                config.adam_beta2,
+                config.adam_eps,
+            );
+            session.step();
+            session.wait();
+            losses.push(session.read_output(1).first().copied().unwrap_or(f32::NAN));
+        }
+    }
+
+    // Write trained parameters back.
+    let density_buf = session.param_buffer("log_density").unwrap();
+    let r_buf = session.param_buffer("sh_r").unwrap();
+    let g_buf = session.param_buffer("sh_g").unwrap();
+    let b_buf = session.param_buffer("sh_b").unwrap();
+
+    let mut out_density = vec![0.0f32; n_cells];
+    session.read_buffer(density_buf, &mut out_density);
+    let mut out_chan = vec![0.0f32; n_cells];
+
+    for (i, d) in out_density.iter().enumerate() {
+        model.points[i].w = d.max(0.0);
+    }
+    session.read_buffer(r_buf, &mut out_chan);
+    for (i, &c) in out_chan.iter().enumerate() {
+        model.sh_coefficients[i * 3] = c;
+    }
+    session.read_buffer(g_buf, &mut out_chan);
+    for (i, &c) in out_chan.iter().enumerate() {
+        model.sh_coefficients[i * 3 + 1] = c;
+    }
+    session.read_buffer(b_buf, &mut out_chan);
+    for (i, &c) in out_chan.iter().enumerate() {
+        model.sh_coefficients[i * 3 + 2] = c;
+    }
+
+    losses
+}
+
 /// Fit per-cell density + SH degree-0 DC of `model` to match a target image,
 /// given precomputed per-pixel paths. Geometry (positions, radii, adjacency)
 /// is left untouched.
@@ -576,36 +751,6 @@ mod tests {
         );
     }
 
-    /// Per-pixel ray for an 8×8 image at the given camera. Mirrors
-    /// `render::render_cpu`'s mapping.
-    fn rays_for(cam: &vol::CameraParams, w: u32, h: u32) -> Vec<vol::trace::Ray> {
-        let tan_half = glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan());
-        let orientation = glam::Quat::from_xyzw(
-            cam.cam_orientation[0],
-            cam.cam_orientation[1],
-            cam.cam_orientation[2],
-            cam.cam_orientation[3],
-        );
-        let origin = glam::Vec3::from_array(cam.cam_position);
-        let mut rays = Vec::with_capacity((w * h) as usize);
-        let wf = w as f32;
-        let hf = h as f32;
-        for iy in 0..h {
-            let py = (iy as f32 + 0.5) / hf;
-            let ndc_y = py * 2.0 - 1.0;
-            for ix in 0..w {
-                let px = (ix as f32 + 0.5) / wf;
-                let ndc_x = px * 2.0 - 1.0;
-                let local = glam::Vec3::new(ndc_x * tan_half.x, ndc_y * tan_half.y, 1.0);
-                rays.push(vol::trace::Ray {
-                    origin,
-                    direction: (orientation * local).normalize(),
-                });
-            }
-        }
-        rays
-    }
-
     fn mean_l1(a: &[f32], b: &[f32]) -> f32 {
         assert_eq!(a.len(), b.len());
         a.iter()
@@ -697,7 +842,7 @@ mod tests {
             depth: cam_a.depth,
             eval_mode: vol::trace::EvalMode::Sh,
         };
-        let paths_a: Vec<_> = rays_for(&cam_a, w, h)
+        let paths_a: Vec<_> = rays_for_view(&cam_a, w, h)
             .into_iter()
             .map(|ray| vol::trace::record_path(&init, ray, trace_settings))
             .collect();
@@ -746,5 +891,121 @@ mod tests {
             rgb.push(rgba[px * 4 + 2]);
         }
         rgb
+    }
+
+    /// Approximate COLMAP-style training: 4 cameras around a 4-cell scene,
+    /// each contributing one ground-truth render. Train appearance against
+    /// all four views, then evaluate on a held-out novel view. The novel
+    /// view's L1 against ground truth should beat what a single-view
+    /// trainer would get and certainly beat the black baseline.
+    #[test]
+    fn multi_view_training_beats_single_view_on_novel_pose() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping multi_view_training: no GPU");
+            return;
+        };
+
+        const SH_C0: f32 = 0.282_094_8;
+        let cell_colours = [
+            [0.9_f32, 0.1, 0.1],
+            [0.1, 0.9, 0.1],
+            [0.1, 0.1, 0.9],
+            [0.9, 0.9, 0.1],
+        ];
+        let gt = {
+            let mut m = tiny_model();
+            for (i, c) in cell_colours.iter().enumerate() {
+                for (k, v) in c.iter().enumerate() {
+                    m.sh_coefficients[i * 3 + k] = (v - 0.5) / SH_C0;
+                }
+            }
+            m
+        };
+
+        // Camera ring around the cluster.
+        fn ring_camera(theta: f32) -> vol::CameraParams {
+            let r = 1.5_f32;
+            let pos = glam::Vec3::new(r * theta.sin(), 0.10, -(r * theta.cos()));
+            // Orientation: look toward +Z origin from this point; we'll yaw
+            // around Y by `theta`.
+            let q = glam::Quat::from_axis_angle(glam::Vec3::Y, theta);
+            vol::CameraParams {
+                cam_position: pos.into(),
+                depth: 100.0,
+                cam_orientation: [q.x, q.y, q.z, q.w],
+                fov: [0.6, 0.6],
+                pad: [0, 0],
+            }
+        }
+
+        let train_thetas = [0.0_f32, 0.5, -0.5, 1.0];
+        let novel_theta = 0.25_f32;
+        let w = 8u32;
+        let h = 8u32;
+        let render_settings = crate::render::RenderSettings {
+            width: w,
+            height: h,
+            start_point: 0,
+            max_steps: 32,
+            weight_threshold: 1e-4,
+        };
+
+        let views: Vec<ViewSupervision> = train_thetas
+            .iter()
+            .map(|&t| {
+                let cam = ring_camera(t);
+                let rgba = crate::render::render_cpu(&gt, &cam, render_settings);
+                ViewSupervision {
+                    camera: cam,
+                    target_rgb: strip_alpha(&rgba),
+                    start_cell: 0,
+                }
+            })
+            .collect();
+
+        let mut init = tiny_model();
+        for p in init.points.iter_mut() {
+            p.w = 1.0;
+        }
+        for v in init.sh_coefficients.iter_mut() {
+            *v = 0.0;
+        }
+
+        let losses = fit_appearance_multi_view(
+            &mut init,
+            &views,
+            w,
+            h,
+            32,
+            AppearanceFitConfig {
+                learning_rate: 0.1,
+                epochs: 200,
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+        assert!(losses.first().unwrap().is_finite());
+        assert!(losses.last().unwrap().is_finite());
+
+        let novel_cam = ring_camera(novel_theta);
+        let gt_novel = strip_alpha(&crate::render::render_cpu(&gt, &novel_cam, render_settings));
+        let trained_novel = strip_alpha(&crate::render::render_cpu(
+            &init,
+            &novel_cam,
+            render_settings,
+        ));
+        let baseline = vec![0.0f32; gt_novel.len()];
+
+        let err_trained = mean_l1(&trained_novel, &gt_novel);
+        let err_black = mean_l1(&baseline, &gt_novel);
+        eprintln!(
+            "multi-view novel-pose: trained L1 {err_trained:.4}, black baseline {err_black:.4}, \
+             final loss {:.4}",
+            losses.last().unwrap()
+        );
+        assert!(
+            err_trained < err_black * 0.5,
+            "trained novel view did not beat baseline: trained={err_trained} baseline={err_black}"
+        );
     }
 }
