@@ -596,8 +596,7 @@ mod tests {
             for ix in 0..w {
                 let px = (ix as f32 + 0.5) / wf;
                 let ndc_x = px * 2.0 - 1.0;
-                let local =
-                    glam::Vec3::new(ndc_x * tan_half.x, ndc_y * tan_half.y, 1.0);
+                let local = glam::Vec3::new(ndc_x * tan_half.x, ndc_y * tan_half.y, 1.0);
                 rays.push(vol::trace::Ray {
                     origin,
                     direction: (orientation * local).normalize(),
