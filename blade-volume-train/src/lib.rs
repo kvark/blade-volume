@@ -29,6 +29,7 @@
 use blade_volume as vol;
 
 pub mod colmap;
+pub mod render;
 
 // Re-export so downstream crates only need to add one dep.
 pub use meganeura;

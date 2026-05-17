@@ -147,12 +147,20 @@ reverse.
 
 #### M3c — Differentiable forward + loss
 
-- The renderer is currently GPU compute. We need either:
-  (a) a CPU reference forward that's differentiable through meganeura, or
-  (b) a GPU forward + custom backward.
-- Start with (a) at low resolution to debug the math, then move to (b) for speed.
-- Loss: L1 + SSIM over rendered vs. ground-truth images.
-- Optimiser: Adam from meganeura.
+Broken into sub-steps:
+
+- **M3c-1 — Public CPU tracer + screen renderer (done).** The CPU tracer
+  promoted from `tests/radfoam_cpu_ref.rs` into `blade_volume::trace`; existing
+  tests now call into the library. `blade_volume_train::render::render_cpu`
+  wraps it with the camera→ray mapping so we can produce a rendered image
+  from a `PointCloudModel` + `CameraParams`. Non-differentiable so far.
+- **M3c-2 — Meganeura graph of the forward.** Express the trace as graph ops
+  (positions/radii/SH/density flow in as parameters; pixels flow out as a
+  tensor). The traversal control flow is the tricky bit — likely a Python-
+  style "scan with carry" if meganeura supports it, otherwise a custom op.
+- **M3c-3 — L1 + SSIM loss against ground-truth images, Adam optimiser.**
+- **M3c-4 — Plug the real (differentiable) renderer in and confirm one
+  scene converges at low resolution.**
 
 #### M3d — Online viewer attach
 

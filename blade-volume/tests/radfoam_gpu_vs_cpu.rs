@@ -332,9 +332,6 @@ fn assert_gpu_matches_cpu(
             start_point: params.start_point,
             depth: cam.depth,
             eval_mode: cpu::EvalMode::Sh,
-            // Enable limited CPU traversal logging when debugging this test:
-            //   RADFOAM_CPU_TRACE=1 cargo test --test radfoam_gpu_vs_cpu -- --nocapture
-            debug_max_print_steps: Some(16),
         };
 
         let cpu_out = cpu::trace_one_ray(&model, cpu_ray, cpu_settings);

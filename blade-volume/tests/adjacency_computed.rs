@@ -215,7 +215,6 @@ fn computed_adjacency_cpu_traversal_produces_output() {
         start_point: 0,
         depth: 10.0,
         eval_mode: cpu::EvalMode::ConstantRgb(glam::Vec3::splat(1.0)),
-        debug_max_print_steps: None,
     };
 
     let result = cpu::trace_one_ray(&model, ray, settings);

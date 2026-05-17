@@ -6,6 +6,7 @@ mod gpu;
 mod scene;
 pub mod shaders;
 mod shape;
+pub mod trace;
 
 pub mod io;
 
