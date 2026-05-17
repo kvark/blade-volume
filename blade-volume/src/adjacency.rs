@@ -120,6 +120,45 @@ pub fn compute_adjacency_default(points: &[glam::Vec4]) -> Adjacency {
     compute_adjacency(points, &AdjacencyConfig::default())
 }
 
+/// Estimate per-point radii from the nearest-neighbour distance, scaled by
+/// `factor`. This is the simplest "local feature size" estimator and matches
+/// what RadFoam/Power Foam use for an initial radius when starting from a
+/// raw point cloud or a sampled mesh.
+///
+/// Given a point cloud `points`, the radius assigned to site `i` is
+/// `factor * min_{j != i} |p_i - p_j|`. A `factor` near `0.5` keeps the
+/// balls just barely touching their nearest neighbours, which makes the
+/// resulting Čech complex match the Delaunay graph in the common case but
+/// shrinks cells in dense regions.
+pub fn radii_from_nearest_neighbour(points: &[glam::Vec4], factor: f32) -> Vec<f32> {
+    let n = points.len();
+    let mut tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
+    for (i, p) in points.iter().enumerate() {
+        tree.add(&[p.x, p.y, p.z], i as u64);
+    }
+    let mut radii = vec![0.0_f32; n];
+    for (i, p) in points.iter().enumerate() {
+        // Ask for the 2 nearest — the closest is the point itself.
+        let hits = tree.nearest_n::<kiddo::SquaredEuclidean>(&[p.x, p.y, p.z], 2);
+        let mut min_sq = f32::INFINITY;
+        for hit in hits {
+            if hit.item as usize == i {
+                continue;
+            }
+            if hit.distance < min_sq {
+                min_sq = hit.distance;
+            }
+        }
+        let dist = if min_sq.is_finite() {
+            min_sq.sqrt()
+        } else {
+            0.0
+        };
+        radii[i] = (dist * factor).max(0.0);
+    }
+    radii
+}
+
 /// Computes the Čech-complex adjacency for a set of weighted points (Power Foam).
 ///
 /// An edge `{i, j}` is emitted when the balls `B(p_i, r_i)` and `B(p_j, r_j)` overlap,
@@ -453,6 +492,21 @@ mod tests {
         assert_eq!(neighbors_of(adj, 1), vec![0]);
         assert!(neighbors_of(adj, 2).is_empty());
         assert!(neighbors_of(adj, 3).is_empty());
+    }
+
+    #[test]
+    fn radii_from_nearest_neighbour_matches_pair_distance() {
+        // Three colinear points 1, 2, 4 units apart. Nearest neighbours:
+        // p0 → p1 (dist 1), p1 → p0 (dist 1), p2 → p1 (dist 2).
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(3.0, 0.0, 0.0, 1.0),
+        ];
+        let radii = radii_from_nearest_neighbour(&points, 0.5);
+        assert!((radii[0] - 0.5).abs() < 1e-5);
+        assert!((radii[1] - 0.5).abs() < 1e-5);
+        assert!((radii[2] - 1.0).abs() < 1e-5);
     }
 
     #[test]
