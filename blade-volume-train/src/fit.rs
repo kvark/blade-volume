@@ -26,28 +26,17 @@
 use blade_graphics as gpu;
 use blade_volume as vol;
 use meganeura as mn;
+use std::sync;
 
-/// Probe whether a Blade GPU context can be initialised on this host.
+/// Try to bring up a Blade GPU context. Returns `None` on hosts without a
+/// supported device (CI, headless, no Vulkan/Metal/DX12) so callers can
+/// skip gracefully.
 ///
-/// meganeura 0.2 builds its own GPU context inside [`build_session`], so we
-/// can't inject one — the best we can do is *try* to initialise the same
-/// configuration first and bail if it fails, mirroring what
-/// `meganeura::runtime::Session::new` does internally. If this returns `false`,
-/// callers should skip; calling [`fit_constant_rgb`] anyway would panic.
-pub fn gpu_available() -> bool {
-    unsafe {
-        gpu::Context::init(gpu::ContextDesc {
-            presentation: false,
-            validation: cfg!(debug_assertions),
-            timing: true,
-            capture: false,
-            overlay: false,
-            ray_tracing: false,
-            xr: None,
-            device_id: None,
-        })
-    }
-    .is_ok()
+/// The context is wrapped in `Arc` so the same one can be shared with
+/// `meganeura` via [`mn::SessionConfig::gpu`] — no need to spin up a second
+/// context for training.
+pub fn try_init_gpu() -> Option<sync::Arc<gpu::Context>> {
+    mn::init_gpu_context().ok().map(sync::Arc::new)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -67,13 +56,14 @@ impl Default for FitConfig {
 
 /// Optimise a 3-vector parameter `rgb` so that `mse(rgb, target) → 0`.
 ///
-/// Trivial as a renderer but exercises the full Graph → autodiff → Adam loop.
-/// Returns the trained value.
-///
-/// Panics if meganeura fails to build/run the graph (e.g. no supported GPU).
-/// Callers running this without a guaranteed GPU should probe with
-/// [`gpu_available`] first.
-pub fn fit_constant_rgb(target: [f32; 3], config: FitConfig) -> [f32; 3] {
+/// Trivial as a renderer but exercises the full Graph → autodiff → Adam loop
+/// while sharing a GPU context with the rest of the pipeline. Returns the
+/// trained value.
+pub fn fit_constant_rgb(
+    target: [f32; 3],
+    config: FitConfig,
+    gpu: sync::Arc<gpu::Context>,
+) -> [f32; 3] {
     let mut g = mn::Graph::new();
 
     // batch=1 because the toy has a single "sample". meganeura still requires
@@ -95,7 +85,14 @@ pub fn fit_constant_rgb(target: [f32; 3], config: FitConfig) -> [f32; 3] {
     let loss = g.mse_loss(pred, labels);
     g.set_outputs(vec![loss]);
 
-    let mut session = mn::train::build_session(&g);
+    let (mut session, _report) = mn::build(
+        &g,
+        mn::SessionConfig {
+            mode: mn::Mode::Training,
+            gpu: Some(gpu),
+            ..Default::default()
+        },
+    );
 
     // Start at zero so we know convergence wasn't pre-seeded.
     session.set_parameter("rgb", &vec![0.0; batch * dim]);
@@ -143,12 +140,12 @@ mod tests {
 
     #[test]
     fn fits_target_rgb_via_adam() {
-        if !gpu_available() {
+        let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping fit_constant_rgb: no supported GPU device");
             return;
-        }
+        };
         let target = [0.30_f32, 0.60, 0.90];
-        let result = fit_constant_rgb(target, FitConfig::default());
+        let result = fit_constant_rgb(target, FitConfig::default(), gpu);
         for (i, &v) in result.iter().enumerate() {
             assert!(
                 (v - target[i]).abs() < 0.02,
@@ -174,8 +171,6 @@ mod tests {
         };
         let mut g = mn::Graph::new();
         let _node = sh_coefficients_as_parameter(&mut g, &model);
-        // Graph should now contain the parameter node; we just exercised the
-        // declaration without panicking.
         assert!(!g.nodes().is_empty());
     }
 }

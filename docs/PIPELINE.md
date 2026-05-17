@@ -157,15 +157,16 @@ Broken into sub-steps:
 - **M3c-2 — Meganeura plumbing proof (done).** `blade_volume_train::fit`
   exercises the full Graph → autodiff → Adam loop on a toy: optimise a
   `[1, 3]` parameter to match a target RGB via MSE. Test converges to within
-  0.02 on hosts that have a GPU; skips gracefully otherwise via `gpu_available()`.
-  Pinned meganeura at `"0.2"` (crates.io); the published 0.2.0 surface does
-  not expose `build`/`SessionConfig`/`Mode` or external-context injection,
-  so the toy uses `build_session(&g)` and probes the GPU via raw
-  `blade_graphics::Context::init`. Notes on meganeura's op set captured in
-  the module doc — biggest gap for the real renderer is no `where`/scan/while
-  primitive, so M3c-4 will likely need a custom op (recorded-path-then-
-  integrate, à la PowerFoam's raytrace mode) rather than expressing the
-  cell-walk as a composition of existing ops.
+  0.02 on hosts that have a GPU; skips gracefully otherwise via
+  `try_init_gpu()`. Pinned meganeura at a git rev (tip-of-main is what we
+  need — published 0.2.0 doesn't expose `build`/`SessionConfig`/`Mode`).
+  blade-graphics is unified at `72c30c1` (the rev meganeura pins) so we
+  share one GPU context across our renderer and the meganeura session.
+  Notes on meganeura's op set captured in the module doc — biggest gap for
+  the real renderer is no `where`/scan/while primitive, so M3c-4 will
+  likely need a custom op (recorded-path-then-integrate, à la PowerFoam's
+  raytrace mode) rather than expressing the cell-walk as a composition of
+  existing ops.
 - **M3c-3 — L1 + SSIM loss against ground-truth images, Adam optimiser.**
 - **M3c-4 — Plug the real (differentiable) renderer in and confirm one
   scene converges at low resolution.**

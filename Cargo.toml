@@ -25,9 +25,9 @@ trivial_numeric_casts = "warn"
 unused_extern_crates = "warn"
 
 [workspace.dependencies]
-blade-graphics = { git = "https://github.com/kvark/blade", rev = "0d693426253fb2aaea0d842bf76bf13e2773a411" }
+blade-graphics = { git = "https://github.com/kvark/blade", rev = "72c30c1" }
 blade-macros = "0.3"
-meganeura = "0.2"
+meganeura = { git = "https://github.com/kvark/meganeura", rev = "d511c617df391b4844c37e7cbe0997b2d71817ed" }
 bytemuck = "1"
 glam = { version = "0.30", features = ["mint"] }
 flate2 = "1"
