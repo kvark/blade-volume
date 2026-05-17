@@ -29,6 +29,7 @@
 use blade_volume as vol;
 
 pub mod colmap;
+pub mod diff_render;
 pub mod fit;
 pub mod render;
 
