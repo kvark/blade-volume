@@ -20,17 +20,25 @@ use std::{path, sync};
 /// this as the `start_cell` of every ray for the view at that camera —
 /// rays parametrically advance forward, so starting in the cell nearest
 /// the eye keeps the trace inside the scene's depth budget.
+///
+/// Linear scan over every point; cheap enough for our scales (sub-millisecond
+/// for 100K points) and avoids the kiddo "too many points at same position"
+/// panic on mesh-derived clouds where grid-sampled interior points often
+/// share coordinates.
 pub fn pick_start_cell(model: &vol::PointCloudModel, camera_origin: glam::Vec3) -> u32 {
-    let mut tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
+    let mut best_idx = 0u32;
+    let mut best_sq = f32::INFINITY;
     for (i, p) in model.points.iter().enumerate() {
-        tree.add(&[p.x, p.y, p.z], i as u64);
+        let dx = p.x - camera_origin.x;
+        let dy = p.y - camera_origin.y;
+        let dz = p.z - camera_origin.z;
+        let sq = dx * dx + dy * dy + dz * dz;
+        if sq < best_sq {
+            best_sq = sq;
+            best_idx = i as u32;
+        }
     }
-    let hit = tree.nearest_one::<kiddo::SquaredEuclidean>(&[
-        camera_origin.x,
-        camera_origin.y,
-        camera_origin.z,
-    ]);
-    hit.item as u32
+    best_idx
 }
 
 /// Load `path` as an RGB image, downsample to `(width, height)`, and return

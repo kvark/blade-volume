@@ -16,7 +16,7 @@
 use argh::FromArgs;
 use blade_volume as vol;
 use blade_volume_convert as convert;
-use blade_volume_train::{metrics, render};
+use blade_volume_train::{metrics, pipeline, render};
 use std::path;
 
 /// Sweep blade-volume-convert density vs CPU-rendered foam PSNR.
@@ -78,10 +78,17 @@ fn main() {
         }
         let n_points = model.len();
         let cam = camera_from_bounds(&model);
+        // Cell-index 0 is a different point in space at each density, so
+        // hard-coding it makes the per-density renders incomparable. Use
+        // the kd-tree-based nearest-to-camera lookup so each render starts
+        // in the cell that contains (or is closest to) the eye, consistent
+        // across densities.
+        let start_point =
+            pipeline::pick_start_cell(&model, glam::Vec3::from_array(cam.cam_position));
         let settings = render::RenderSettings {
             width: args.width,
             height: args.height,
-            start_point: 0,
+            start_point,
             max_steps: args.max_steps,
             weight_threshold: 1e-4,
         };
