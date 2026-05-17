@@ -154,10 +154,18 @@ Broken into sub-steps:
   tests now call into the library. `blade_volume_train::render::render_cpu`
   wraps it with the camera→ray mapping so we can produce a rendered image
   from a `PointCloudModel` + `CameraParams`. Non-differentiable so far.
-- **M3c-2 — Meganeura graph of the forward.** Express the trace as graph ops
-  (positions/radii/SH/density flow in as parameters; pixels flow out as a
-  tensor). The traversal control flow is the tricky bit — likely a Python-
-  style "scan with carry" if meganeura supports it, otherwise a custom op.
+- **M3c-2 — Meganeura plumbing proof (done).** `blade_volume_train::fit`
+  exercises the full Graph → autodiff → Adam loop on a toy: optimise a
+  `[1, 3]` parameter to match a target RGB via MSE. Test converges to within
+  0.02 on hosts that have a GPU; skips gracefully otherwise via `gpu_available()`.
+  Pinned meganeura at `"0.2"` (crates.io); the published 0.2.0 surface does
+  not expose `build`/`SessionConfig`/`Mode` or external-context injection,
+  so the toy uses `build_session(&g)` and probes the GPU via raw
+  `blade_graphics::Context::init`. Notes on meganeura's op set captured in
+  the module doc — biggest gap for the real renderer is no `where`/scan/while
+  primitive, so M3c-4 will likely need a custom op (recorded-path-then-
+  integrate, à la PowerFoam's raytrace mode) rather than expressing the
+  cell-walk as a composition of existing ops.
 - **M3c-3 — L1 + SSIM loss against ground-truth images, Adam optimiser.**
 - **M3c-4 — Plug the real (differentiable) renderer in and confirm one
   scene converges at low resolution.**

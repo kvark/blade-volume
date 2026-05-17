@@ -586,6 +586,7 @@ dependencies = [
 name = "blade-volume-train"
 version = "0.1.0"
 dependencies = [
+ "blade-graphics 0.8.4 (git+https://github.com/kvark/blade?rev=0d693426253fb2aaea0d842bf76bf13e2773a411)",
  "blade-volume",
  "glam",
  "log",
