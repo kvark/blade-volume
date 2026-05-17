@@ -49,6 +49,14 @@ struct Args {
     #[argh(option)]
     novel_out: Option<String>,
 
+    /// optional output prefix for a strip of novel poses (writes <prefix>_NN.png)
+    #[argh(option)]
+    novel_strip_prefix: Option<String>,
+
+    /// how many novel poses to render in the strip (default 5)
+    #[argh(option, default = "5")]
+    novel_strip_count: u32,
+
     /// training image width (default 32)
     #[argh(option, default = "32")]
     width: u32,
@@ -128,19 +136,27 @@ fn main() {
     );
 
     if let Some(ref novel_path) = args.novel_out {
-        render_novel(&trained, sparse, images, &config, novel_path);
+        render_novel_at(&trained, sparse, &config, 0.5, novel_path);
+    }
+    if let Some(ref prefix) = args.novel_strip_prefix {
+        let n = args.novel_strip_count.max(2);
+        for k in 0..n {
+            let t = k as f32 / (n - 1) as f32;
+            let path = format!("{prefix}_{k:02}.png");
+            render_novel_at(&trained, sparse, &config, t, &path);
+        }
     }
 }
 
-/// Render the trained model from a pose halfway between the first two
-/// training cameras. Quick-and-dirty: we re-read the reconstruction to get
-/// the first two image extrinsics, then interpolate position + spherical-
-/// linearly interpolate the orientation quat.
-fn render_novel(
+/// Render the trained model from a pose interpolated between the first two
+/// training cameras at parameter `t` in `[0, 1]`. `t = 0` reproduces the first
+/// training view, `t = 1` reproduces the second, anything in between is a
+/// genuinely novel pose.
+fn render_novel_at(
     model: &vol::PointCloudModel,
     sparse: &path::Path,
-    _images: &path::Path,
     config: &pipeline::PipelineConfig,
+    t: f32,
     novel_path: &str,
 ) {
     let recon = blade_volume_train::colmap::load_reconstruction(sparse);
@@ -153,7 +169,7 @@ fn render_novel(
     }
     let cam_a = recon.camera_params_for(&recon.images[0], config.far_plane);
     let cam_b = recon.camera_params_for(&recon.images[1], config.far_plane);
-    let novel = interp_camera(&cam_a, &cam_b, 0.5);
+    let novel = interp_camera(&cam_a, &cam_b, t);
 
     let settings = blade_volume_train::render::RenderSettings {
         width: config.resolution.0,
