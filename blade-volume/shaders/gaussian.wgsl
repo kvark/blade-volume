@@ -2,6 +2,8 @@
 //
 // Output is rendered directly to the screen via rasterization (fullscreen triangle).
 
+enable wgpu_ray_query;
+
 // #include "common.wgsl"
 // #include "sh_eval.wgsl"
 

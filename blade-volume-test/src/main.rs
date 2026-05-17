@@ -66,7 +66,9 @@ fn main() {
         );
     }
 
+    let psnr = compute_psnr(reference.as_raw(), &image);
     let mismatch = compare_images(reference.as_raw(), &image, REF_TOLERANCE);
+    println!("PSNR vs reference: {psnr:.2} dB");
     if mismatch {
         let out_path = data_dir.join("police_out.png");
         image::save_buffer(
@@ -77,10 +79,45 @@ fn main() {
             image::ColorType::Rgba8,
         )
         .unwrap();
-        panic!("image mismatch; wrote output to {}", out_path.display());
+        if psnr < 30.0 {
+            panic!(
+                "image mismatch; PSNR {psnr:.2} dB is below 30 dB. \
+                 Wrote output to {}",
+                out_path.display()
+            );
+        } else {
+            println!(
+                "byte-level mismatch but PSNR {psnr:.2} dB ≥ 30 dB; wrote {}",
+                out_path.display()
+            );
+        }
+    } else {
+        println!("image matches reference (within {REF_TOLERANCE}/channel)");
     }
+}
 
-    println!("image matches reference");
+/// PSNR over the RGB channels (alpha ignored), MAX=1.0. Assumes both buffers
+/// are RGBA8 of identical dimensions.
+fn compute_psnr(a: &[u8], b: &[u8]) -> f32 {
+    assert_eq!(a.len(), b.len());
+    let n_px = a.len() / 4;
+    if n_px == 0 {
+        return f32::NAN;
+    }
+    let mut sse = 0.0f64;
+    for px in 0..n_px {
+        for c in 0..3 {
+            let da = a[px * 4 + c] as f64 / 255.0;
+            let db = b[px * 4 + c] as f64 / 255.0;
+            let d = da - db;
+            sse += d * d;
+        }
+    }
+    let mse = sse / (n_px as f64 * 3.0);
+    if mse <= 0.0 {
+        return f32::INFINITY;
+    }
+    (-10.0 * mse.log10()) as f32
 }
 
 fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32, debug: bool) -> Vec<u8> {

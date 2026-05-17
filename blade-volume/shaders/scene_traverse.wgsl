@@ -14,6 +14,8 @@
 // LIMITATIONS:
 // - RadFoam uses fixed start point (proper entry point search is future work)
 
+enable wgpu_ray_query;
+
 // #include "common.wgsl"
 // #include "sh_eval.wgsl"
 
