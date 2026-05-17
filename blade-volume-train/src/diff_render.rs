@@ -575,4 +575,177 @@ mod tests {
             "loss did not drop enough: first {first}, last {last}"
         );
     }
+
+    /// Per-pixel ray for an 8×8 image at the given camera. Mirrors
+    /// `render::render_cpu`'s mapping.
+    fn rays_for(cam: &vol::CameraParams, w: u32, h: u32) -> Vec<vol::trace::Ray> {
+        let tan_half = glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan());
+        let orientation = glam::Quat::from_xyzw(
+            cam.cam_orientation[0],
+            cam.cam_orientation[1],
+            cam.cam_orientation[2],
+            cam.cam_orientation[3],
+        );
+        let origin = glam::Vec3::from_array(cam.cam_position);
+        let mut rays = Vec::with_capacity((w * h) as usize);
+        let wf = w as f32;
+        let hf = h as f32;
+        for iy in 0..h {
+            let py = (iy as f32 + 0.5) / hf;
+            let ndc_y = py * 2.0 - 1.0;
+            for ix in 0..w {
+                let px = (ix as f32 + 0.5) / wf;
+                let ndc_x = px * 2.0 - 1.0;
+                let local =
+                    glam::Vec3::new(ndc_x * tan_half.x, ndc_y * tan_half.y, 1.0);
+                rays.push(vol::trace::Ray {
+                    origin,
+                    direction: (orientation * local).normalize(),
+                });
+            }
+        }
+        rays
+    }
+
+    fn mean_l1(a: &[f32], b: &[f32]) -> f32 {
+        assert_eq!(a.len(), b.len());
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).abs())
+            .sum::<f32>()
+            / a.len() as f32
+    }
+
+    /// Train on view A, render trained model from view B, compare to the
+    /// ground-truth render at view B. This is the novel-pose generalisation
+    /// check: with appearance-only training (frozen geometry), the trained
+    /// model should reproduce cell colours that *any* ray sees consistently,
+    /// so a different camera should also see them.
+    #[test]
+    fn novel_pose_render_matches_ground_truth() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping novel_pose_render_matches_ground_truth: no GPU");
+            return;
+        };
+
+        // Ground truth: 4 cells, each with a distinct strong colour.
+        const SH_C0: f32 = 0.282_094_8;
+        let cell_colours = [
+            [0.9_f32, 0.1, 0.1],
+            [0.1, 0.9, 0.1],
+            [0.1, 0.1, 0.9],
+            [0.9, 0.9, 0.1],
+        ];
+        let gt = {
+            let mut m = tiny_model();
+            for (i, c) in cell_colours.iter().enumerate() {
+                for (k, v) in c.iter().enumerate() {
+                    m.sh_coefficients[i * 3 + k] = (v - 0.5) / SH_C0;
+                }
+            }
+            m
+        };
+
+        let cam_a = vol::CameraParams {
+            cam_position: [0.10, 0.10, -1.0],
+            depth: 100.0,
+            cam_orientation: [0.0, 0.0, 0.0, 1.0],
+            fov: [0.5, 0.5],
+            pad: [0, 0],
+        };
+        // View B: yaw camera 90° so it looks along +X instead of +Z, from a
+        // different starting position. Same fov / depth.
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        let rot = glam::Quat::from_axis_angle(glam::Vec3::Y, half_pi);
+        let cam_b = vol::CameraParams {
+            cam_position: [-1.0, 0.10, 0.10],
+            depth: 100.0,
+            cam_orientation: [rot.x, rot.y, rot.z, rot.w],
+            fov: [0.5, 0.5],
+            pad: [0, 0],
+        };
+
+        let w = 8u32;
+        let h = 8u32;
+        let render_settings = crate::render::RenderSettings {
+            width: w,
+            height: h,
+            start_point: 0,
+            max_steps: 32,
+            weight_threshold: 1e-4,
+        };
+        let target_a = crate::render::render_cpu(&gt, &cam_a, render_settings);
+        let gt_render_b = crate::render::render_cpu(&gt, &cam_b, render_settings);
+
+        // Strip the alpha channel from render_cpu's RGBA output for the
+        // L1-target since the graph only predicts RGB.
+        let target_a_rgb = strip_alpha(&target_a);
+
+        let mut init = tiny_model();
+        for p in init.points.iter_mut() {
+            p.w = 1.0;
+        }
+        for v in init.sh_coefficients.iter_mut() {
+            *v = 0.0;
+        }
+
+        // Record paths from the init model (geometry = gt's geometry; only
+        // appearance is being optimised, so traversal is identical).
+        let trace_settings = vol::trace::TraceSettings {
+            start_point: 0,
+            max_steps: 32,
+            weight_threshold: 0.0,
+            depth: cam_a.depth,
+            eval_mode: vol::trace::EvalMode::Sh,
+        };
+        let paths_a: Vec<_> = rays_for(&cam_a, w, h)
+            .into_iter()
+            .map(|ray| vol::trace::record_path(&init, ray, trace_settings))
+            .collect();
+
+        fit_appearance_to_pixels(
+            &mut init,
+            &target_a_rgb,
+            &paths_a,
+            32,
+            AppearanceFitConfig {
+                learning_rate: 0.1,
+                epochs: 500,
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        // Render the trained model from the novel pose.
+        let trained_b = crate::render::render_cpu(&init, &cam_b, render_settings);
+
+        // Compare just RGB. The trained model should produce *something* not
+        // wildly different from the GT render at view B.
+        let trained_b_rgb = strip_alpha(&trained_b);
+        let gt_b_rgb = strip_alpha(&gt_render_b);
+        let novel_err = mean_l1(&trained_b_rgb, &gt_b_rgb);
+
+        let baseline = strip_alpha(&vec![0.0f32; target_a.len()]); // pure black
+        let baseline_err = mean_l1(&baseline, &gt_b_rgb);
+
+        eprintln!("novel-pose mean L1: {novel_err:.4}; black baseline: {baseline_err:.4}");
+        // Trained novel-view should beat the trivial black baseline by a
+        // healthy margin.
+        assert!(
+            novel_err < baseline_err * 0.8,
+            "novel-pose render didn't beat the black baseline: \
+             trained={novel_err} baseline={baseline_err}"
+        );
+    }
+
+    fn strip_alpha(rgba: &[f32]) -> Vec<f32> {
+        let n_px = rgba.len() / 4;
+        let mut rgb = Vec::with_capacity(n_px * 3);
+        for px in 0..n_px {
+            rgb.push(rgba[px * 4]);
+            rgb.push(rgba[px * 4 + 1]);
+            rgb.push(rgba[px * 4 + 2]);
+        }
+        rgb
+    }
 }
