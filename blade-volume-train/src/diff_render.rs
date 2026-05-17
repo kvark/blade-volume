@@ -263,11 +263,9 @@ pub struct AppearanceFitConfig {
     pub adam_eps: f32,
     /// When `Some(K)`, each Adam step samples `K` random pixels from a
     /// randomly chosen training view rather than feeding every pixel of
-    /// every view. Required for full-resolution images: the meganeura
-    /// matmul has a known shape bug at `P × L` with `P >= 784` and `L >= 16`,
-    /// so we keep `P = K` small and rely on stochastic mini-batching.
-    /// `None` falls back to feeding every pixel at the view's resolution
-    /// — fine for tiny synthetic tests.
+    /// every view. Cheap stochastic mini-batching that scales to full
+    /// image resolutions. `None` falls back to feeding every pixel at
+    /// the view's resolution — fine for tiny synthetic tests.
     pub pixel_batch: Option<usize>,
     /// Number of Adam steps per view in batched mode. Used only when
     /// `pixel_batch.is_some()`. Default 200.

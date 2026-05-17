@@ -89,8 +89,9 @@ struct Args {
     #[argh(option, default = "2000")]
     max_points: usize,
 
-    /// pixels per Adam step (default 0 = whole-image mode). Use ~400-512 to
-    /// train at full image resolution without hitting the meganeura matmul bug.
+    /// pixels per Adam step (default 0 = whole-image mode). Random
+    /// pixel sampling per step keeps the matmul tile aligned regardless
+    /// of image resolution.
     #[argh(option, default = "0")]
     pixel_batch: usize,
 

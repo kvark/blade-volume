@@ -2810,7 +2810,7 @@ dependencies = [
 [[package]]
 name = "meganeura"
 version = "0.2.0"
-source = "git+https://github.com/kvark/meganeura?rev=d511c617df391b4844c37e7cbe0997b2d71817ed#d511c617df391b4844c37e7cbe0997b2d71817ed"
+source = "git+https://github.com/kvark/meganeura?rev=7f9b7ed4acad09346c1ebf23676e9e627061a259#7f9b7ed4acad09346c1ebf23676e9e627061a259"
 dependencies = [
  "blade-graphics",
  "blade-macros 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
