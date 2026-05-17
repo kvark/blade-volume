@@ -165,6 +165,10 @@ fn strict_lower_triangular_ones(l: usize) -> Vec<f32> {
     data
 }
 
+/// SH degree-0 basis constant — matches `vol::trace::eval_rgb_sh` so the
+/// graph's per-cell colour expression mirrors the production renderer.
+const SH_C0: f32 = 0.282_094_8;
+
 fn channel_pixel(
     g: &mut mn::Graph,
     cell_indices: mn::NodeId,
@@ -176,7 +180,14 @@ fn channel_pixel(
 ) -> mn::NodeId {
     let color_flat = g.embedding(cell_indices, sh_chan); // [P*L, 1]
     let color = g.reshape(color_flat, &[p, l]);
-    let weighted = g.mul(weight, color); // [P, L]
+    // Match `eval_rgb_sh`: per-cell colour = SH_C0 * sh_chan + 0.5.
+    // We multiply weight by this whole expression; equivalently emit the
+    // scaled-plus-biased colour, then mul by weight, then reduce.
+    let scale = g.constant(vec![SH_C0; p * l], &[p, l]);
+    let bias = g.constant(vec![0.5; p * l], &[p, l]);
+    let scaled = g.mul(color, scale);
+    let biased = g.add(scaled, bias);
+    let weighted = g.mul(weight, biased); // [P, L]
     g.matmul(weighted, ones_l1) // [P, L] @ [L, 1] = [P, 1]
 }
 
@@ -208,6 +219,137 @@ pub struct FlatPaths {
     pub cell: Vec<u32>,
     pub dt: Vec<f32>,
     pub mask: Vec<f32>,
+}
+
+/// Knobs for [`fit_appearance_to_pixels`].
+#[derive(Clone, Copy, Debug)]
+pub struct AppearanceFitConfig {
+    pub learning_rate: f32,
+    pub epochs: usize,
+    pub adam_beta1: f32,
+    pub adam_beta2: f32,
+    pub adam_eps: f32,
+}
+
+impl Default for AppearanceFitConfig {
+    fn default() -> Self {
+        Self {
+            learning_rate: 0.1,
+            epochs: 200,
+            adam_beta1: 0.9,
+            adam_beta2: 0.999,
+            adam_eps: 1e-8,
+        }
+    }
+}
+
+/// Fit per-cell density + SH degree-0 DC of `model` to match a target image,
+/// given precomputed per-pixel paths. Geometry (positions, radii, adjacency)
+/// is left untouched.
+///
+/// `target_pixels.len()` must equal `paths.len() * 3` (RGB per pixel,
+/// row-major). All paths are flattened to `max_steps` — shorter paths are
+/// padded with zero `mask` so they contribute nothing.
+///
+/// Returns the loss after each Adam step.
+pub fn fit_appearance_to_pixels(
+    model: &mut vol::PointCloudModel,
+    target_pixels: &[f32],
+    paths: &[vol::trace::PathResult],
+    max_steps: usize,
+    config: AppearanceFitConfig,
+    gpu: std::sync::Arc<blade_graphics::Context>,
+) -> Vec<f32> {
+    let p = paths.len();
+    let n_cells = model.points.len();
+    assert_eq!(
+        target_pixels.len(),
+        p * 3,
+        "target_pixels.len() must be P*3"
+    );
+    assert!(
+        model.sh_degree == 0,
+        "fit_appearance_to_pixels needs SH degree 0"
+    );
+
+    let flat = flatten_paths(paths, max_steps);
+
+    let mut g = mn::Graph::new();
+    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps);
+
+    let (mut session, _report) = mn::build(
+        &g,
+        mn::SessionConfig {
+            mode: mn::Mode::Training,
+            gpu: Some(gpu),
+            ..Default::default()
+        },
+    );
+
+    // Lift the model's current values into the four parameter tables.
+    let mut init_density = Vec::with_capacity(n_cells);
+    let mut init_r = Vec::with_capacity(n_cells);
+    let mut init_g = Vec::with_capacity(n_cells);
+    let mut init_b = Vec::with_capacity(n_cells);
+    for (i, p) in model.points.iter().enumerate() {
+        init_density.push(p.w);
+        init_r.push(model.sh_coefficients[i * 3]);
+        init_g.push(model.sh_coefficients[i * 3 + 1]);
+        init_b.push(model.sh_coefficients[i * 3 + 2]);
+    }
+    session.set_parameter("log_density", &init_density);
+    session.set_parameter("sh_r", &init_r);
+    session.set_parameter("sh_g", &init_g);
+    session.set_parameter("sh_b", &init_b);
+
+    session.set_input_u32("cell_indices", &flat.cell);
+    session.set_input("dt", &flat.dt);
+    session.set_input("mask", &flat.mask);
+    session.set_input("labels", target_pixels);
+
+    let mut losses = Vec::with_capacity(config.epochs);
+    for _ in 0..config.epochs {
+        // `set_adam` queues a one-shot — `step()` consumes it. Re-arm before
+        // every step or the optimiser stops updating after the first.
+        session.set_adam(
+            config.learning_rate,
+            config.adam_beta1,
+            config.adam_beta2,
+            config.adam_eps,
+        );
+        session.step();
+        session.wait();
+        let read = session.read_output(1);
+        losses.push(read.first().copied().unwrap_or(f32::NAN));
+    }
+
+    // Write trained parameters back into the model. `relu` in the graph
+    // means densities are clamped to >= 0 in the forward; mirror that here.
+    let density_buf = session.param_buffer("log_density").unwrap();
+    let mut out_density = vec![0.0f32; n_cells];
+    session.read_buffer(density_buf, &mut out_density);
+
+    let mut out_chan = vec![0.0f32; n_cells];
+    let r_buf = session.param_buffer("sh_r").unwrap();
+    let g_buf = session.param_buffer("sh_g").unwrap();
+    let b_buf = session.param_buffer("sh_b").unwrap();
+    for (i, d) in out_density.iter().enumerate() {
+        model.points[i].w = d.max(0.0);
+    }
+    session.read_buffer(r_buf, &mut out_chan);
+    for (i, &c) in out_chan.iter().enumerate() {
+        model.sh_coefficients[i * 3] = c;
+    }
+    session.read_buffer(g_buf, &mut out_chan);
+    for (i, &c) in out_chan.iter().enumerate() {
+        model.sh_coefficients[i * 3 + 1] = c;
+    }
+    session.read_buffer(b_buf, &mut out_chan);
+    for (i, &c) in out_chan.iter().enumerate() {
+        model.sh_coefficients[i * 3 + 2] = c;
+    }
+
+    losses
 }
 
 #[cfg(test)]
@@ -324,5 +466,113 @@ mod tests {
         session.set_adam(0.1, 0.9, 0.999, 1e-8);
         session.step();
         session.wait();
+    }
+
+    /// End-to-end: a small target image is the ground-truth render of a
+    /// known model. Re-initialise the same geometry with bad appearance
+    /// values, fit, and check that the loss decreases by an order of
+    /// magnitude over 200 steps. This is the smoke test that proves
+    /// gradients actually flow into per-cell density/SH and reduce error.
+    #[test]
+    fn fit_appearance_reduces_loss() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping fit_appearance_reduces_loss: no GPU");
+            return;
+        };
+
+        // Ground-truth model: tetrahedron, density 4, cell 0 is red-ish.
+        let gt = {
+            let mut m = tiny_model();
+            // Use SH_C0 to encode a target RGB through the DC channel.
+            const SH_C0: f32 = 0.282_094_8;
+            let target_rgb = [0.7f32, 0.2, 0.1]; // cell 0 hue
+                                                 // (rgb - 0.5) / SH_C0 maps the renderer's 0.5+bias output back
+                                                 // to the desired colour.
+            for (i, &c) in target_rgb.iter().enumerate() {
+                m.sh_coefficients[i] = (c - 0.5) / SH_C0;
+            }
+            m
+        };
+
+        // Single pixel, ray nearly through cell 0.
+        let cam = vol::CameraParams {
+            cam_position: [0.05, 0.05, -1.0],
+            depth: 100.0,
+            cam_orientation: [0.0, 0.0, 0.0, 1.0],
+            fov: [0.5, 0.5],
+            pad: [0, 0],
+        };
+        let target_pixels = crate::render::render_cpu(
+            &gt,
+            &cam,
+            crate::render::RenderSettings {
+                width: 1,
+                height: 1,
+                start_point: 0,
+                max_steps: 16,
+                weight_threshold: 1e-4,
+            },
+        );
+        let target_rgb = [target_pixels[0], target_pixels[1], target_pixels[2]];
+
+        // Init model: same geometry, density a couple of orders of magnitude
+        // away from the ground truth (4.0). Starting too low (e.g. 0.01)
+        // shrinks alpha to ~0.004 and gradients can't move SH at all in 200
+        // Adam steps. Zero SH DC gives a fully-grey starting prediction.
+        let mut init = tiny_model();
+        for i in 0..init.points.len() {
+            init.points[i].w = 1.0;
+        }
+        for v in init.sh_coefficients.iter_mut() {
+            *v = 0.0;
+        }
+
+        // Record one path through the init geometry for that single pixel.
+        // The ray follows the same camera→pixel mapping render_cpu uses.
+        let ndc = glam::Vec2::new(0.0, 0.0); // pixel (0,0) of a 1x1 image
+        let tan_half = glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan());
+        let local_dir = glam::Vec3::new(ndc.x * tan_half.x, ndc.y * tan_half.y, 1.0);
+        let orientation = glam::Quat::from_xyzw(
+            cam.cam_orientation[0],
+            cam.cam_orientation[1],
+            cam.cam_orientation[2],
+            cam.cam_orientation[3],
+        );
+        let ray = vol::trace::Ray {
+            origin: glam::Vec3::from_array(cam.cam_position),
+            direction: (orientation * local_dir).normalize(),
+        };
+        let path = vol::trace::record_path(
+            &init,
+            ray,
+            vol::trace::TraceSettings {
+                start_point: 0,
+                max_steps: 16,
+                weight_threshold: 0.0,
+                depth: cam.depth,
+                eval_mode: vol::trace::EvalMode::Sh,
+            },
+        );
+
+        let losses = fit_appearance_to_pixels(
+            &mut init,
+            &target_rgb,
+            &[path],
+            16,
+            AppearanceFitConfig {
+                learning_rate: 0.1,
+                epochs: 500,
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        let first = losses.first().copied().unwrap();
+        let last = losses.last().copied().unwrap();
+        assert!(first.is_finite() && last.is_finite(), "non-finite loss");
+        assert!(
+            last < first * 0.1,
+            "loss did not drop enough: first {first}, last {last}"
+        );
     }
 }
