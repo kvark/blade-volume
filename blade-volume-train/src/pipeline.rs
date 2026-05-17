@@ -60,6 +60,12 @@ pub struct PipelineConfig {
     pub max_steps: usize,
     /// Cap on number of views to feed into training. `None` uses all.
     pub max_views: Option<usize>,
+    /// Cap on number of cells in the initial point cloud. `None` keeps every
+    /// point from `points3D.bin`. The current Delaunay backend
+    /// (`simple_delaunay_lib`) gets quadratic on tens of thousands of points;
+    /// real COLMAP scenes routinely ship 100K+, so subsampling is essential.
+    /// When set, we pick a deterministic stride through the points.
+    pub max_initial_points: Option<usize>,
     /// Adam settings.
     pub fit: diff_render::AppearanceFitConfig,
     /// `CameraParams::depth` — far plane forwarded to every per-view camera.
@@ -72,6 +78,7 @@ impl Default for PipelineConfig {
             resolution: (32, 32),
             max_steps: 64,
             max_views: Some(8),
+            max_initial_points: Some(2000),
             fit: diff_render::AppearanceFitConfig {
                 learning_rate: 0.1,
                 epochs: 100,
@@ -80,6 +87,20 @@ impl Default for PipelineConfig {
             far_plane: 100.0,
         }
     }
+}
+
+/// Return at most `cap` evenly-spaced indices from `[0, n)`.
+fn subsample_indices(n: usize, cap: usize) -> Vec<usize> {
+    if n <= cap {
+        return (0..n).collect();
+    }
+    let mut out = Vec::with_capacity(cap);
+    for k in 0..cap {
+        // floor((k + 0.5) * n / cap) — places samples in the middle of each bin.
+        let idx = ((k as u64 * 2 + 1) * n as u64) / (2 * cap as u64);
+        out.push((idx as usize).min(n - 1));
+    }
+    out
 }
 
 /// Build the training views from a COLMAP reconstruction.
@@ -130,7 +151,40 @@ pub fn train_colmap_appearance(
 ) -> vol::PointCloudModel {
     let recon = colmap::load_reconstruction(sparse_dir);
     let mut model = recon.to_initial_model();
+    if let Some(cap) = config.max_initial_points {
+        if model.points.len() > cap {
+            let n_before = model.points.len();
+            let indices = subsample_indices(n_before, cap);
+            let mut new_points = Vec::with_capacity(indices.len());
+            let mut new_sh = Vec::with_capacity(indices.len() * 3);
+            for &i in &indices {
+                new_points.push(model.points[i]);
+                new_sh.extend_from_slice(&model.sh_coefficients[i * 3..i * 3 + 3]);
+            }
+            model.points = new_points;
+            model.sh_coefficients = new_sh;
+            log::info!(
+                "subsampled COLMAP cloud {} → {} points",
+                n_before,
+                model.points.len()
+            );
+        }
+    }
+    log::info!(
+        "computing Delaunay adjacency for {} points...",
+        model.points.len()
+    );
+    let t0 = std::time::Instant::now();
     model.compute_adjacency_default();
+    log::info!(
+        "adjacency done in {:.2}s ({} edges)",
+        t0.elapsed().as_secs_f32(),
+        model
+            .adjacency
+            .as_ref()
+            .map(|a| a.neighbors.len())
+            .unwrap_or(0),
+    );
     log::info!(
         "loaded {} COLMAP points, {} images; training {} views at {:?}",
         model.points.len(),
@@ -339,6 +393,7 @@ mod tests {
             resolution: (8, 8),
             max_steps: 16,
             max_views: Some(2),
+            max_initial_points: None,
             fit: diff_render::AppearanceFitConfig {
                 learning_rate: 0.1,
                 epochs: 20,

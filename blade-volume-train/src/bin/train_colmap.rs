@@ -72,6 +72,10 @@ struct Args {
     /// adam learning rate (default 0.1)
     #[argh(option, default = "0.1")]
     learning_rate: f32,
+
+    /// cap on initial COLMAP points (default 2000; Delaunay scales poorly past this)
+    #[argh(option, default = "2000")]
+    max_points: usize,
 }
 
 fn main() {
@@ -87,6 +91,7 @@ fn main() {
         resolution: (args.width, args.height),
         max_steps: args.max_steps,
         max_views: Some(args.views),
+        max_initial_points: Some(args.max_points),
         fit: diff_render::AppearanceFitConfig {
             learning_rate: args.learning_rate,
             epochs: args.epochs,

@@ -202,17 +202,49 @@ pub fn flatten_paths(paths: &[vol::trace::PathResult], max_steps: usize) -> Flat
     let mut cell = vec![0u32; pl];
     let mut dt = vec![0.0f32; pl];
     let mut mask = vec![0.0f32; pl];
+    let mut total = 0usize;
+    let mut max_dt = 0.0f32;
+    let mut bad_dt = 0usize;
     for (pi, path) in paths.iter().enumerate() {
         let n = path.entries.len().min(max_steps);
+        total += n;
         for (k, e) in path.entries[..n].iter().enumerate() {
             let idx = pi * max_steps + k;
             cell[idx] = e.cell;
-            dt[idx] = e.dt;
-            mask[idx] = 1.0;
+            // Clamp pathological dt: rays starting outside any cell can give
+            // huge segments that overflow sigmoid/recip in the graph; cap so
+            // the cumsum stays in a numerically benign range.
+            let dt_clamped = if !e.dt.is_finite() || e.dt < 0.0 {
+                bad_dt += 1;
+                0.0
+            } else {
+                e.dt.min(MAX_PATH_DT)
+            };
+            if dt_clamped > max_dt {
+                max_dt = dt_clamped;
+            }
+            dt[idx] = dt_clamped;
+            mask[idx] = if dt_clamped > 0.0 { 1.0 } else { 0.0 };
         }
     }
+    if bad_dt > 0 {
+        log::warn!("flatten_paths: clamped {bad_dt} non-finite dt values to zero");
+    }
+    log::debug!(
+        "flatten_paths: {} paths, {} entries, max_dt {:.3}, total steps avg {:.1}",
+        p,
+        total,
+        max_dt,
+        total as f32 / p as f32,
+    );
     FlatPaths { cell, dt, mask }
 }
+
+/// Path segments longer than this saturate the sigmoid surrogate for
+/// `exp(-density * dt)` in the differentiable forward. Capping here keeps
+/// gradients well-behaved without changing the renderer's CPU output (which
+/// uses real `exp` and tolerates arbitrary dt).
+pub const MAX_PATH_DT: f32 = 50.0;
 
 #[derive(Clone, Debug)]
 pub struct FlatPaths {
@@ -371,7 +403,8 @@ pub fn fit_appearance_multi_view(
     session.set_parameter("sh_b", &init_b);
 
     let mut losses = Vec::with_capacity(config.epochs * views.len());
-    for _ in 0..config.epochs {
+    let log_every = config.epochs.div_ceil(10).max(1);
+    for epoch in 0..config.epochs {
         for (vi, v) in views.iter().enumerate() {
             session.set_input_u32("cell_indices", &flats[vi].cell);
             session.set_input("dt", &flats[vi].dt);
@@ -385,7 +418,21 @@ pub fn fit_appearance_multi_view(
             );
             session.step();
             session.wait();
-            losses.push(session.read_output(1).first().copied().unwrap_or(f32::NAN));
+            let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
+            if losses.len() < 4 {
+                log::info!("step {} (view {vi}): loss {loss}", losses.len());
+            }
+            losses.push(loss);
+        }
+        if epoch == 0 || (epoch + 1).is_multiple_of(log_every) {
+            let recent_avg: f32 =
+                losses.iter().rev().take(views.len()).copied().sum::<f32>() / views.len() as f32;
+            log::info!(
+                "epoch {}/{}: avg loss {:.4}",
+                epoch + 1,
+                config.epochs,
+                recent_avg
+            );
         }
     }
 
