@@ -62,7 +62,10 @@ pub fn load_and_downsample_image(
 
 #[derive(Clone, Debug)]
 pub struct PipelineConfig {
-    /// Training resolution per view (width, height).
+    /// Training resolution per view (width, height). With
+    /// `fit.pixel_batch.is_some()` this is the size we downsample images
+    /// to before training — paths are recorded against the downsampled
+    /// pixel grid. With `None`, this is also the per-step graph shape.
     pub resolution: (u32, u32),
     /// Maximum path length per ray.
     pub max_steps: usize,
@@ -78,6 +81,10 @@ pub struct PipelineConfig {
     pub fit: diff_render::AppearanceFitConfig,
     /// `CameraParams::depth` — far plane forwarded to every per-view camera.
     pub far_plane: f32,
+    /// Initial per-cell density at conversion time. The trainer optimises
+    /// this, but starting value matters: too low and alphas are tiny so
+    /// gradients can't push the model forward in reasonable Adam steps.
+    pub initial_density: f32,
 }
 
 impl Default for PipelineConfig {
@@ -93,6 +100,19 @@ impl Default for PipelineConfig {
                 ..diff_render::AppearanceFitConfig::default()
             },
             far_plane: 100.0,
+            initial_density: 1.0,
+        }
+    }
+}
+
+impl PipelineConfig {
+    /// Total number of Adam steps the trainer will run. Useful for callers
+    /// that want a progress bar without re-running training.
+    pub fn total_adam_steps(&self, n_views: usize) -> usize {
+        if self.fit.pixel_batch.is_some() {
+            self.fit.steps_per_view * n_views
+        } else {
+            self.fit.epochs * n_views
         }
     }
 }
@@ -156,6 +176,8 @@ pub fn build_views_from<'a>(
         views.push(diff_render::ViewSupervision {
             camera: cam,
             target_rgb,
+            width: config.resolution.0,
+            height: config.resolution.1,
             start_cell,
         });
     }
@@ -228,7 +250,7 @@ pub fn train_colmap_appearance_split(
     gpu: sync::Arc<gpu::Context>,
 ) -> TrainOutcome {
     let recon = colmap::load_reconstruction(sparse_dir);
-    let mut model = recon.to_initial_model();
+    let mut model = recon.to_initial_model_with_density(config.initial_density);
     if let Some(cap) = config.max_initial_points {
         if model.points.len() > cap {
             let n_before = model.points.len();
@@ -480,6 +502,7 @@ mod tests {
             max_steps: 16,
             max_views: Some(2),
             max_initial_points: None,
+            initial_density: 1.0,
             fit: diff_render::AppearanceFitConfig {
                 learning_rate: 0.1,
                 epochs: 20,

@@ -329,6 +329,13 @@ impl Reconstruction {
     ///   (modulo the renderer's `0.5 +` bias)
     /// - no transforms, no adjacency, no radii — the trainer fills those in
     pub fn to_initial_model(&self) -> vol::PointCloudModel {
+        self.to_initial_model_with_density(DEFAULT_INITIAL_DENSITY)
+    }
+
+    /// As [`to_initial_model`] but with a caller-chosen uniform density.
+    /// Higher values give larger initial per-cell alpha at typical COLMAP
+    /// scales — useful when the training loss plateaus too early.
+    pub fn to_initial_model_with_density(&self, initial_density: f32) -> vol::PointCloudModel {
         let n = self.points.len();
         let mut points = Vec::with_capacity(n);
         let mut sh = Vec::with_capacity(n * 3);
@@ -337,7 +344,7 @@ impl Reconstruction {
                 p.xyz[0] as f32,
                 p.xyz[1] as f32,
                 p.xyz[2] as f32,
-                DEFAULT_INITIAL_DENSITY,
+                initial_density,
             ));
             let r = (p.rgb[0] as f32) / 255.0;
             let g = (p.rgb[1] as f32) / 255.0;

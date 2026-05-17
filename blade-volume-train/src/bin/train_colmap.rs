@@ -88,6 +88,19 @@ struct Args {
     /// cap on initial COLMAP points (default 2000; Delaunay scales poorly past this)
     #[argh(option, default = "2000")]
     max_points: usize,
+
+    /// pixels per Adam step (default 0 = whole-image mode). Use ~400-512 to
+    /// train at full image resolution without hitting the meganeura matmul bug.
+    #[argh(option, default = "0")]
+    pixel_batch: usize,
+
+    /// adam steps per view in pixel-batched mode (default 200)
+    #[argh(option, default = "200")]
+    steps_per_view: usize,
+
+    /// initial uniform per-cell density before training (default 1.0)
+    #[argh(option, default = "1.0")]
+    initial_density: f32,
 }
 
 fn main() {
@@ -99,6 +112,11 @@ fn main() {
         std::process::exit(2);
     };
 
+    let pixel_batch = if args.pixel_batch == 0 {
+        None
+    } else {
+        Some(args.pixel_batch)
+    };
     let config = pipeline::PipelineConfig {
         resolution: (args.width, args.height),
         max_steps: args.max_steps,
@@ -107,9 +125,12 @@ fn main() {
         fit: diff_render::AppearanceFitConfig {
             learning_rate: args.learning_rate,
             epochs: args.epochs,
+            pixel_batch,
+            steps_per_view: args.steps_per_view,
             ..diff_render::AppearanceFitConfig::default()
         },
         far_plane: 100.0,
+        initial_density: args.initial_density,
     };
 
     let sparse = path::Path::new(&args.sparse);

@@ -261,6 +261,17 @@ pub struct AppearanceFitConfig {
     pub adam_beta1: f32,
     pub adam_beta2: f32,
     pub adam_eps: f32,
+    /// When `Some(K)`, each Adam step samples `K` random pixels from a
+    /// randomly chosen training view rather than feeding every pixel of
+    /// every view. Required for full-resolution images: the meganeura
+    /// matmul has a known shape bug at `P × L` with `P >= 784` and `L >= 16`,
+    /// so we keep `P = K` small and rely on stochastic mini-batching.
+    /// `None` falls back to feeding every pixel at the view's resolution
+    /// — fine for tiny synthetic tests.
+    pub pixel_batch: Option<usize>,
+    /// Number of Adam steps per view in batched mode. Used only when
+    /// `pixel_batch.is_some()`. Default 200.
+    pub steps_per_view: usize,
 }
 
 impl Default for AppearanceFitConfig {
@@ -271,6 +282,8 @@ impl Default for AppearanceFitConfig {
             adam_beta1: 0.9,
             adam_beta2: 0.999,
             adam_eps: 1e-8,
+            pixel_batch: None,
+            steps_per_view: 200,
         }
     }
 }
@@ -284,6 +297,8 @@ impl Default for AppearanceFitConfig {
 pub struct ViewSupervision {
     pub camera: vol::CameraParams,
     pub target_rgb: Vec<f32>,
+    pub width: u32,
+    pub height: u32,
     pub start_cell: u32,
 }
 
@@ -339,18 +354,29 @@ pub fn fit_appearance_multi_view(
         !views.is_empty(),
         "fit_appearance_multi_view needs >=1 view"
     );
-    let p = (width as usize) * (height as usize);
     let n_cells = model.points.len();
+    for v in views {
+        assert!(
+            (v.start_cell as usize) < n_cells,
+            "view start_cell out of range"
+        );
+        assert_eq!(
+            v.target_rgb.len() as u32,
+            v.width * v.height * 3,
+            "view target_rgb length mismatches its width*height*3"
+        );
+    }
 
+    if let Some(k) = config.pixel_batch {
+        return fit_appearance_pixel_batched(model, views, max_steps, k, config, gpu);
+    }
+
+    let p = (width as usize) * (height as usize);
     for v in views {
         assert_eq!(
             v.target_rgb.len(),
             p * 3,
-            "target_rgb length must equal width*height*3"
-        );
-        assert!(
-            (v.start_cell as usize) < n_cells,
-            "view start_cell out of range"
+            "whole-image mode: target_rgb length must equal width*height*3"
         );
     }
 
@@ -386,21 +412,7 @@ pub fn fit_appearance_multi_view(
         },
     );
 
-    // Lift the model's current values into the four parameter tables.
-    let mut init_density = Vec::with_capacity(n_cells);
-    let mut init_r = Vec::with_capacity(n_cells);
-    let mut init_g = Vec::with_capacity(n_cells);
-    let mut init_b = Vec::with_capacity(n_cells);
-    for (i, point) in model.points.iter().enumerate() {
-        init_density.push(point.w);
-        init_r.push(model.sh_coefficients[i * 3]);
-        init_g.push(model.sh_coefficients[i * 3 + 1]);
-        init_b.push(model.sh_coefficients[i * 3 + 2]);
-    }
-    session.set_parameter("log_density", &init_density);
-    session.set_parameter("sh_r", &init_r);
-    session.set_parameter("sh_g", &init_g);
-    session.set_parameter("sh_b", &init_b);
+    upload_model_parameters(&mut session, model);
 
     let mut losses = Vec::with_capacity(config.epochs * views.len());
     let log_every = config.epochs.div_ceil(10).max(1);
@@ -440,6 +452,38 @@ pub fn fit_appearance_multi_view(
     let g_buf = session.param_buffer("sh_g").unwrap();
     let b_buf = session.param_buffer("sh_b").unwrap();
 
+    download_model_parameters(&session, model, density_buf, r_buf, g_buf, b_buf, n_cells);
+
+    losses
+}
+
+fn upload_model_parameters(session: &mut mn::Session, model: &vol::PointCloudModel) {
+    let n_cells = model.points.len();
+    let mut init_density = Vec::with_capacity(n_cells);
+    let mut init_r = Vec::with_capacity(n_cells);
+    let mut init_g = Vec::with_capacity(n_cells);
+    let mut init_b = Vec::with_capacity(n_cells);
+    for (i, point) in model.points.iter().enumerate() {
+        init_density.push(point.w);
+        init_r.push(model.sh_coefficients[i * 3]);
+        init_g.push(model.sh_coefficients[i * 3 + 1]);
+        init_b.push(model.sh_coefficients[i * 3 + 2]);
+    }
+    session.set_parameter("log_density", &init_density);
+    session.set_parameter("sh_r", &init_r);
+    session.set_parameter("sh_g", &init_g);
+    session.set_parameter("sh_b", &init_b);
+}
+
+fn download_model_parameters(
+    session: &mn::Session,
+    model: &mut vol::PointCloudModel,
+    density_buf: meganeura::compile::BufferRef,
+    r_buf: meganeura::compile::BufferRef,
+    g_buf: meganeura::compile::BufferRef,
+    b_buf: meganeura::compile::BufferRef,
+    n_cells: usize,
+) {
     let mut out_density = vec![0.0f32; n_cells];
     session.read_buffer(density_buf, &mut out_density);
     let mut out_chan = vec![0.0f32; n_cells];
@@ -459,6 +503,162 @@ pub fn fit_appearance_multi_view(
     for (i, &c) in out_chan.iter().enumerate() {
         model.sh_coefficients[i * 3 + 2] = c;
     }
+}
+
+/// Per-pixel ray for view (cam, ix, iy) in an `(image_w, image_h)` grid.
+/// Mirrors the mapping in `render::render_cpu` and `rays_for_view`.
+fn ray_for_pixel(cam: &vol::CameraParams, ix: u32, iy: u32, w: u32, h: u32) -> vol::trace::Ray {
+    let tan_half = glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan());
+    let orientation = glam::Quat::from_xyzw(
+        cam.cam_orientation[0],
+        cam.cam_orientation[1],
+        cam.cam_orientation[2],
+        cam.cam_orientation[3],
+    );
+    let origin = glam::Vec3::from_array(cam.cam_position);
+    let px = (ix as f32 + 0.5) / w as f32;
+    let py = (iy as f32 + 0.5) / h as f32;
+    let ndc = glam::Vec2::new(px * 2.0 - 1.0, py * 2.0 - 1.0);
+    let local = glam::Vec3::new(ndc.x * tan_half.x, ndc.y * tan_half.y, 1.0);
+    vol::trace::Ray {
+        origin,
+        direction: (orientation * local).normalize(),
+    }
+}
+
+/// Pixel-batched training mode. Each Adam step picks a random training view
+/// and `pixel_batch` random pixels from its image, records paths through the
+/// current model, and runs one optimiser step. Allows training at full image
+/// resolution without exceeding the meganeura matmul shape limits.
+fn fit_appearance_pixel_batched(
+    model: &mut vol::PointCloudModel,
+    views: &[ViewSupervision],
+    max_steps: usize,
+    pixel_batch: usize,
+    config: AppearanceFitConfig,
+    gpu: std::sync::Arc<blade_graphics::Context>,
+) -> Vec<f32> {
+    let n_cells = model.points.len();
+    let total_steps = config.steps_per_view.max(1) * views.len();
+
+    let mut g = mn::Graph::new();
+    let _vg = build_volumetric_graph(&mut g, n_cells, pixel_batch, max_steps);
+    let (mut session, _report) = mn::build(
+        &g,
+        mn::SessionConfig {
+            mode: mn::Mode::Training,
+            gpu: Some(gpu),
+            ..Default::default()
+        },
+    );
+    upload_model_parameters(&mut session, model);
+
+    // Deterministic LCG so reruns produce identical results.
+    let mut state: u64 = 0xDEAD_BEEF_F00D_CAFE;
+    let mut next_u32 = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 32) as u32
+    };
+
+    let trace_settings_template = vol::trace::TraceSettings {
+        start_point: 0,
+        max_steps: max_steps as u32,
+        weight_threshold: 0.0,
+        depth: views[0].camera.depth,
+        eval_mode: vol::trace::EvalMode::Sh,
+    };
+
+    // Scratch buffers re-used across steps to avoid per-step allocation.
+    let pl = pixel_batch * max_steps;
+    let mut flat = FlatPaths {
+        cell: vec![0u32; pl],
+        dt: vec![0.0f32; pl],
+        mask: vec![0.0f32; pl],
+    };
+    let mut target_buf = vec![0.0f32; pixel_batch * 3];
+
+    let mut losses = Vec::with_capacity(total_steps);
+    let log_every = total_steps.div_ceil(10).max(1);
+
+    for step in 0..total_steps {
+        // Reset scratch (paths shorter than max_steps must pad mask=0).
+        for slot in flat.cell.iter_mut() {
+            *slot = 0;
+        }
+        for slot in flat.dt.iter_mut() {
+            *slot = 0.0;
+        }
+        for slot in flat.mask.iter_mut() {
+            *slot = 0.0;
+        }
+
+        let vi = (next_u32() as usize) % views.len();
+        let v = &views[vi];
+        let img_size = v.width * v.height;
+
+        let mut s = trace_settings_template;
+        s.start_point = v.start_cell;
+        s.depth = v.camera.depth;
+
+        for k in 0..pixel_batch {
+            let pidx = next_u32() % img_size;
+            let ix = pidx % v.width;
+            let iy = pidx / v.width;
+            let ray = ray_for_pixel(&v.camera, ix, iy, v.width, v.height);
+            let path = vol::trace::record_path(model, ray, s);
+            let n = path.entries.len().min(max_steps);
+            for (idx, e) in path.entries[..n].iter().enumerate() {
+                let slot = k * max_steps + idx;
+                flat.cell[slot] = e.cell;
+                let dt_clamped = if !e.dt.is_finite() || e.dt < 0.0 {
+                    0.0
+                } else {
+                    e.dt.min(MAX_PATH_DT)
+                };
+                flat.dt[slot] = dt_clamped;
+                flat.mask[slot] = if dt_clamped > 0.0 { 1.0 } else { 0.0 };
+            }
+            let base = (pidx as usize) * 3;
+            target_buf[k * 3] = v.target_rgb[base];
+            target_buf[k * 3 + 1] = v.target_rgb[base + 1];
+            target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+        }
+
+        session.set_input_u32("cell_indices", &flat.cell);
+        session.set_input("dt", &flat.dt);
+        session.set_input("mask", &flat.mask);
+        session.set_input("labels", &target_buf);
+        session.set_adam(
+            config.learning_rate,
+            config.adam_beta1,
+            config.adam_beta2,
+            config.adam_eps,
+        );
+        session.step();
+        session.wait();
+        let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
+        losses.push(loss);
+        if step == 0 || (step + 1).is_multiple_of(log_every) {
+            let window: usize = log_every.min(losses.len());
+            let recent_avg: f32 =
+                losses.iter().rev().take(window).copied().sum::<f32>() / window as f32;
+            log::info!(
+                "step {}/{}: avg loss {:.4} (window {})",
+                step + 1,
+                total_steps,
+                recent_avg,
+                window
+            );
+        }
+    }
+
+    let density_buf = session.param_buffer("log_density").unwrap();
+    let r_buf = session.param_buffer("sh_r").unwrap();
+    let g_buf = session.param_buffer("sh_g").unwrap();
+    let b_buf = session.param_buffer("sh_b").unwrap();
+    download_model_parameters(&session, model, density_buf, r_buf, g_buf, b_buf, n_cells);
 
     losses
 }
@@ -1003,6 +1203,8 @@ mod tests {
                 ViewSupervision {
                     camera: cam,
                     target_rgb: strip_alpha(&rgba),
+                    width: w,
+                    height: h,
                     start_cell: 0,
                 }
             })
