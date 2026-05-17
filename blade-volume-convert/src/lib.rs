@@ -23,6 +23,23 @@ pub struct ConvertOptions {
     pub surface_scale: f32,
     pub interior_scale: f32,
     pub surface_normal_scale: f32,
+    /// Curvature exponent for per-triangle surface sampling. `0` keeps the
+    /// uniform-by-area density. `>0` boosts the sample count on triangles
+    /// that are at a high dihedral angle to their (vertex-shared) neighbours,
+    /// at the cost of sparser sampling on flat regions. Total sample budget
+    /// stays roughly the same; mass is just redistributed.
+    pub curvature_boost: f32,
+    /// Number of spring-relaxation iterations applied after Delaunay (RadFoam
+    /// path only). `0` skips the relaxation entirely.
+    pub lloyd_iterations: usize,
+    /// Per-iteration step size for [`vol::lloyd_relax`].
+    pub lloyd_step: f32,
+    /// When `true`, populate `model.radii` from the post-Lloyd nearest-
+    /// neighbour distance (Power Foam mode). When `false`, leave `radii`
+    /// as `None` (plain Voronoi).
+    pub assign_radii: bool,
+    /// Multiplier for [`vol::radii_from_nearest_neighbour`].
+    pub radius_factor: f32,
 }
 
 impl Default for ConvertOptions {
@@ -40,6 +57,11 @@ impl Default for ConvertOptions {
             surface_scale: 1.0,
             interior_scale: 1.0,
             surface_normal_scale: 1.0,
+            curvature_boost: 0.0,
+            lloyd_iterations: 0,
+            lloyd_step: 0.3,
+            assign_radii: false,
+            radius_factor: 0.5,
         }
     }
 }
@@ -108,6 +130,71 @@ impl Texture {
         let a = self.data[idx + 3] as f32 / 255.0;
         glam::Vec4::new(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b), a)
     }
+}
+
+/// Per-triangle curvature proxy in `[0, 1]`. Higher means the triangle's
+/// normal disagrees more with the normals of triangles sharing any of its
+/// vertices. Computed by hashing each triangle into buckets keyed by its
+/// vertex positions (snapped to a coarse grid to make exact-same-vertex
+/// triangles co-locate), then per triangle averaging `1 - dot(n, n_j)`
+/// across its neighbours.
+fn compute_triangle_curvatures(triangles: &[Triangle]) -> Vec<f32> {
+    use std::collections::HashMap;
+    if triangles.is_empty() {
+        return Vec::new();
+    }
+
+    // Bounding-box-derived snap epsilon so different mesh scales work.
+    let mut min = glam::Vec3::splat(f32::INFINITY);
+    let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+    for t in triangles {
+        for v in &[t.v0, t.v1, t.v2] {
+            min = min.min(*v);
+            max = max.max(*v);
+        }
+    }
+    let diag = (max - min).length().max(1e-6);
+    let snap = diag * 1e-5;
+
+    let key = |v: glam::Vec3| -> (i64, i64, i64) {
+        (
+            (v.x / snap).round() as i64,
+            (v.y / snap).round() as i64,
+            (v.z / snap).round() as i64,
+        )
+    };
+
+    let mut buckets: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    for (i, t) in triangles.iter().enumerate() {
+        for v in &[t.v0, t.v1, t.v2] {
+            buckets.entry(key(*v)).or_default().push(i);
+        }
+    }
+
+    let mut out = Vec::with_capacity(triangles.len());
+    for (i, t) in triangles.iter().enumerate() {
+        let mut sum_diff = 0.0_f32;
+        let mut count = 0usize;
+        for v in &[t.v0, t.v1, t.v2] {
+            if let Some(neighbours) = buckets.get(&key(*v)) {
+                for &j in neighbours {
+                    if j == i {
+                        continue;
+                    }
+                    let cos = t.normal.dot(triangles[j].normal).clamp(-1.0, 1.0);
+                    sum_diff += 1.0 - cos.abs();
+                    count += 1;
+                }
+            }
+        }
+        let val = if count == 0 {
+            0.0
+        } else {
+            (sum_diff / count as f32).clamp(0.0, 1.0)
+        };
+        out.push(val);
+    }
+    out
 }
 
 struct Triangle {
@@ -245,8 +332,18 @@ pub fn convert_gltf(
     let surface_density = density.powf(2.0 / 3.0) * options.surface_density_scale;
     if surface_density > 0.0 {
         let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(options.seed);
-        for tri in &triangles {
-            let count = (tri.area * surface_density).ceil() as u32;
+        let curvatures = if options.curvature_boost > 0.0 {
+            compute_triangle_curvatures(&triangles)
+        } else {
+            vec![0.0_f32; triangles.len()]
+        };
+        for (ti, tri) in triangles.iter().enumerate() {
+            let factor = if options.curvature_boost > 0.0 {
+                1.0 + options.curvature_boost * curvatures[ti]
+            } else {
+                1.0
+            };
+            let count = (tri.area * surface_density * factor).ceil() as u32;
             for _ in 0..count {
                 let (u, v) = sample_barycentric(&mut rng);
                 let w = 1.0 - u - v;
@@ -292,6 +389,18 @@ pub fn convert_gltf(
         }
         OutputKind::RadFoam => {
             model.adjacency = Some(vol::compute_adjacency_default(&model.points));
+            if options.lloyd_iterations > 0 {
+                vol::lloyd_relax(&mut model, options.lloyd_iterations, options.lloyd_step);
+            }
+            if options.assign_radii {
+                model.radii = Some(vol::radii_from_nearest_neighbour(
+                    &model.points,
+                    options.radius_factor,
+                ));
+                // Keep Delaunay adjacency: it's a superset of Čech for radii
+                // ≤ nearest-neighbour, and kiddo panics on the coincident
+                // grid-interior points the converter emits.
+            }
         }
     }
 

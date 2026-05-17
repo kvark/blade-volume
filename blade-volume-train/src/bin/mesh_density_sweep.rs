@@ -45,6 +45,22 @@ struct Args {
     /// max traversal steps per ray (default 256)
     #[argh(option, default = "256")]
     max_steps: u32,
+
+    /// curvature exponent for adaptive sampling (0 = uniform; try 4.0)
+    #[argh(option, default = "0.0")]
+    curvature_boost: f32,
+
+    /// spring-relaxation iterations after Delaunay (try 3-5)
+    #[argh(option, default = "0")]
+    lloyd_iterations: usize,
+
+    /// per-iter relaxation step (try 0.3)
+    #[argh(option, default = "0.3")]
+    lloyd_step: f32,
+
+    /// populate per-cell radii (Power Foam mode) from nearest-neighbour distance
+    #[argh(switch)]
+    assign_radii: bool,
 }
 
 fn main() {
@@ -69,6 +85,10 @@ fn main() {
             interior_density_scale: 0.25,
             surface_opacity: 0.95,
             interior_opacity: 0.6,
+            curvature_boost: args.curvature_boost,
+            lloyd_iterations: args.lloyd_iterations,
+            lloyd_step: args.lloyd_step,
+            assign_radii: args.assign_radii,
             ..Default::default()
         };
         let mut model = convert::convert_gltf(path::Path::new(&args.input), &options)

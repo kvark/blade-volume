@@ -120,6 +120,88 @@ pub fn compute_adjacency_default(points: &[glam::Vec4]) -> Adjacency {
     compute_adjacency(points, &AdjacencyConfig::default())
 }
 
+/// Spring-relaxation: each point pushes its Delaunay neighbours apart along
+/// the connecting edge to a target spacing equal to the mean current edge
+/// length. After each iteration the adjacency is rebuilt to reflect the new
+/// positions.
+///
+/// This is the cluster-spreading effect a true Lloyd's CVT pass would
+/// achieve. True Lloyd's moves sites to their Voronoi cell centroids, which
+/// needs the Delaunay *tetrahedra* (we only keep edges); this spring model
+/// is the standard cheap substitute. Strong, dense clusters get pushed
+/// apart; well-distributed regions stabilise.
+///
+/// `step` in `(0, 1]` is the per-iteration relaxation rate. `0.3` is a
+/// reasonable default. Density (`w`) and other model state are preserved.
+pub fn lloyd_relax(model: &mut crate::PointCloudModel, iterations: usize, step: f32) {
+    assert!(
+        (0.0..=1.0).contains(&step),
+        "lloyd_relax: step {step} must be in [0, 1]"
+    );
+    for _ in 0..iterations {
+        if model.adjacency.is_none() {
+            model.compute_adjacency_default();
+        }
+        let adj = model.adjacency.as_ref().unwrap();
+
+        // Target spacing = mean edge length across the whole graph.
+        let mut total_len = 0.0f64;
+        let mut edge_count = 0usize;
+        for i in 0..model.points.len() {
+            let begin = adj.offsets[i] as usize;
+            let end = adj.offsets[i + 1] as usize;
+            for &n in &adj.neighbors[begin..end] {
+                if (n as usize) < i {
+                    continue; // count each edge once
+                }
+                let a = model.points[i];
+                let b = model.points[n as usize];
+                total_len += (glam::Vec3::new(a.x - b.x, a.y - b.y, a.z - b.z).length()) as f64;
+                edge_count += 1;
+            }
+        }
+        let target = if edge_count > 0 {
+            (total_len / edge_count as f64) as f32
+        } else {
+            0.0
+        };
+        if target <= 0.0 {
+            break;
+        }
+
+        // Accumulate per-point displacement = sum over neighbours j of
+        // (target - |edge|) * unit_vec_from_j_to_i. Long edges contract,
+        // short edges expand.
+        let mut disp: Vec<glam::Vec3> = vec![glam::Vec3::ZERO; model.points.len()];
+        for (i, pi_slot) in disp.iter_mut().enumerate() {
+            let begin = adj.offsets[i] as usize;
+            let end = adj.offsets[i + 1] as usize;
+            let pi = glam::Vec3::new(model.points[i].x, model.points[i].y, model.points[i].z);
+            for &n in &adj.neighbors[begin..end] {
+                let pj_pt = model.points[n as usize];
+                let pj = glam::Vec3::new(pj_pt.x, pj_pt.y, pj_pt.z);
+                let v = pi - pj;
+                let len = v.length();
+                if len < 1e-9 {
+                    continue;
+                }
+                let unit = v / len;
+                let force = (target - len) * step;
+                *pi_slot += unit * force;
+            }
+        }
+
+        let mut new_points: Vec<glam::Vec4> = Vec::with_capacity(model.points.len());
+        for (i, p) in model.points.iter().enumerate() {
+            let pos = glam::Vec3::new(p.x, p.y, p.z) + disp[i];
+            new_points.push(glam::Vec4::new(pos.x, pos.y, pos.z, p.w));
+        }
+        model.points = new_points;
+        model.adjacency = None;
+    }
+    model.compute_adjacency_default();
+}
+
 /// Estimate per-point radii from the nearest-neighbour distance, scaled by
 /// `factor`. This is the simplest "local feature size" estimator and matches
 /// what RadFoam/Power Foam use for an initial radius when starting from a
@@ -132,25 +214,29 @@ pub fn compute_adjacency_default(points: &[glam::Vec4]) -> Adjacency {
 /// shrinks cells in dense regions.
 pub fn radii_from_nearest_neighbour(points: &[glam::Vec4], factor: f32) -> Vec<f32> {
     let n = points.len();
-    let mut tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
-    for (i, p) in points.iter().enumerate() {
-        tree.add(&[p.x, p.y, p.z], i as u64);
-    }
+    // Linear O(N^2) scan rather than kiddo: mesh-derived clouds frequently
+    // have coincident points (interior grid sampler) and kiddo panics on
+    // "too many same-position points" by default. For N up to ~50K this is
+    // a sub-second one-time pass anyway.
     let mut radii = vec![0.0_f32; n];
-    for (i, p) in points.iter().enumerate() {
-        // Ask for the 2 nearest — the closest is the point itself.
-        let hits = tree.nearest_n::<kiddo::SquaredEuclidean>(&[p.x, p.y, p.z], 2);
-        let mut min_sq = f32::INFINITY;
-        for hit in hits {
-            if hit.item as usize == i {
+    for (i, pi) in points.iter().enumerate() {
+        let mut best_sq = f32::INFINITY;
+        for (j, pj) in points.iter().enumerate() {
+            if i == j {
                 continue;
             }
-            if hit.distance < min_sq {
-                min_sq = hit.distance;
+            let dx = pi.x - pj.x;
+            let dy = pi.y - pj.y;
+            let dz = pi.z - pj.z;
+            let sq = dx * dx + dy * dy + dz * dz;
+            // Coincident points (sq == 0) give zero radius; skip them so
+            // we report the next-nearest distance.
+            if sq > 0.0 && sq < best_sq {
+                best_sq = sq;
             }
         }
-        let dist = if min_sq.is_finite() {
-            min_sq.sqrt()
+        let dist = if best_sq.is_finite() {
+            best_sq.sqrt()
         } else {
             0.0
         };
@@ -492,6 +578,53 @@ mod tests {
         assert_eq!(neighbors_of(adj, 1), vec![0]);
         assert!(neighbors_of(adj, 2).is_empty());
         assert!(neighbors_of(adj, 3).is_empty());
+    }
+
+    #[test]
+    fn lloyd_relax_increases_min_pairwise_distance() {
+        // Eight points: four at the corners of a unit cube + four
+        // tightly-clustered near the origin. Lloyd's pushes the cluster
+        // apart, raising the smallest pairwise distance in the cloud.
+        let pts = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 1.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 0.0, 1.0, 1.0),
+            glam::Vec4::new(0.05, 0.05, 0.05, 1.0),
+            glam::Vec4::new(0.06, 0.04, 0.05, 1.0),
+            glam::Vec4::new(0.04, 0.06, 0.05, 1.0),
+            glam::Vec4::new(0.05, 0.05, 0.06, 1.0),
+        ];
+        let min_pairwise = |pts: &[glam::Vec4]| -> f32 {
+            let mut best = f32::INFINITY;
+            for i in 0..pts.len() {
+                for j in (i + 1)..pts.len() {
+                    let d = (glam::Vec3::new(pts[i].x, pts[i].y, pts[i].z)
+                        - glam::Vec3::new(pts[j].x, pts[j].y, pts[j].z))
+                    .length();
+                    if d < best {
+                        best = d;
+                    }
+                }
+            }
+            best
+        };
+        let before = min_pairwise(&pts);
+
+        let mut model = crate::PointCloudModel {
+            points: pts,
+            sh_coefficients: vec![0.0; 8 * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: None,
+            radii: None,
+        };
+        lloyd_relax(&mut model, 8, 0.5);
+        let after = min_pairwise(&model.points);
+        assert!(
+            after > before * 2.0,
+            "lloyd_relax should spread the cluster; min pairwise {before} → {after}"
+        );
     }
 
     #[test]
