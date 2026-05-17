@@ -419,9 +419,7 @@ pub fn fit_appearance_multi_view(
             session.step();
             session.wait();
             let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
-            if losses.len() < 4 {
-                log::info!("step {} (view {vi}): loss {loss}", losses.len());
-            }
+            log::trace!("step {} (view {vi}): loss {loss}", losses.len());
             losses.push(loss);
         }
         if epoch == 0 || (epoch + 1).is_multiple_of(log_every) {
