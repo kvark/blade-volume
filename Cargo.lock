@@ -549,9 +549,14 @@ dependencies = [
 name = "blade-volume-train"
 version = "0.1.0"
 dependencies = [
+ "argh",
  "blade-graphics",
  "blade-volume",
+ "blade-volume-convert",
+ "env_logger",
  "glam",
+ "image",
+ "kiddo",
  "log",
  "meganeura",
 ]

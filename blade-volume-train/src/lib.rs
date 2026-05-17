@@ -31,6 +31,7 @@ use blade_volume as vol;
 pub mod colmap;
 pub mod diff_render;
 pub mod fit;
+pub mod pipeline;
 pub mod render;
 
 // Re-export so downstream crates only need to add one dep.

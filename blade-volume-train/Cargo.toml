@@ -5,9 +5,14 @@ edition = "2021"
 description = "Training pipeline for blade-volume point clouds (meganeura backend)"
 
 [dependencies]
+argh.workspace = true
 blade-graphics.workspace = true
 blade-volume = { path = "../blade-volume" }
+blade-volume-convert = { path = "../blade-volume-convert" }
+env_logger.workspace = true
 glam.workspace = true
+image = "0.25"
+kiddo.workspace = true
 log.workspace = true
 meganeura.workspace = true
 
