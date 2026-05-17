@@ -126,14 +126,24 @@ reverse.
   pulled and re-exported (`pub use meganeura`) so the M3c entry point is
   unblocked.
 
-#### M3b — COLMAP loader
+#### M3b — COLMAP loader (done)
 
-- Read `sparse/0/{cameras,images,points3D}.bin`. Pure Rust, no native deps.
-- Camera intrinsics + extrinsics → our `CameraParams` type.
-- Initial sparse points → starting `PointCloudModel`.
-- Tests: synthesise a tiny COLMAP dump from hand-crafted poses+points so we
-  don't ship 300 MB of binaries in this repo. For end-to-end smoke tests pull
-  a real scene with `etc/fetch_test_dataset.sh` (see *Test data*).
+- `blade_volume_train::colmap` parses `sparse/0/{cameras,images,points3D}.bin`
+  in pure Rust (little-endian, mirrors `reconstruction_io_binary.cc`). No
+  pycolmap, no native deps.
+- Camera intrinsics + per-image extrinsics → `vol::CameraParams`. Inverts
+  `cam_from_world` (COLMAP) to `world_from_cam` (renderer convention) and
+  converts focal length + width/height to full-angle fov.
+- All 16 COLMAP camera models are recognised; distortion coefficients are
+  read into the struct but ignored downstream (renderer is pinhole).
+- `Reconstruction::to_initial_model` builds a starting `PointCloudModel`
+  with positions + DC-only SH from RGB + uniform initial density.
+- The per-image `points2D` array and per-point `track` are skipped on read —
+  they're the bulk of `images.bin` (~68 MB on bonsai) and aren't used for
+  initialisation.
+- Tests synthesise a tiny COLMAP dump (3 points, 2 images, 1 PINHOLE camera)
+  in a temp dir and round-trip parse + conversion. End-to-end smoke tests
+  against a real scene pull via `etc/fetch_test_dataset.sh`.
 
 #### M3c — Differentiable forward + loss
 
