@@ -248,6 +248,121 @@ pub fn eval_rgb_sh(model: &PointCloudModel, point_idx: u32, dir: glam::Vec3) -> 
     0.5 + color
 }
 
+/// One step of the trace: the cell we were *in* during the segment and the
+/// segment's length along the ray.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PathEntry {
+    pub cell: u32,
+    pub dt: f32,
+}
+
+/// Record-only result of a ray trace: the sequence of `(cell, dt)` segments
+/// the ray covers, plus the normalised ray direction (used for view-dependent
+/// SH evaluation downstream). Unlike [`TraceResult`] this performs no
+/// volumetric integration — all colour/density/alpha computation is deferred
+/// to the consumer.
+///
+/// Used as the input to the differentiable forward in `blade-volume-train`:
+/// path traversal stays in non-differentiable native code, the per-segment
+/// alpha/transmittance/colour integration runs through autodiff.
+#[derive(Clone, Debug)]
+pub struct PathResult {
+    pub entries: Vec<PathEntry>,
+    pub ray_dir: glam::Vec3,
+}
+
+/// Trace a ray and record per-segment `(cell, dt)` pairs without integrating.
+/// Termination rules match [`trace_one_ray`] but the weight-threshold early-
+/// out is disabled — the consumer decides when transmittance has decayed
+/// enough to stop, so it needs the whole path.
+pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -> PathResult {
+    assert!(!model.points.is_empty(), "model has no points");
+    assert!(
+        (settings.start_point as usize) < model.points.len(),
+        "start_point out of bounds"
+    );
+
+    let adjacency = model
+        .adjacency
+        .as_ref()
+        .expect("record_path requires adjacency");
+
+    let mut entries = Vec::new();
+    let mut dir = ray.direction;
+    let dir_len = dir.length();
+    if dir_len <= 0.0 || !dir_len.is_finite() {
+        return PathResult {
+            entries,
+            ray_dir: glam::Vec3::ZERO,
+        };
+    }
+    dir /= dir_len;
+
+    let mut t0 = 0.0f32;
+    let mut current = settings.start_point;
+    let p = model.points[current as usize];
+    let mut current_pos = glam::Vec3::new(p.x, p.y, p.z);
+    let mut current_radius = read_radius(model, current);
+
+    let mut steps = 0u32;
+    while steps < settings.max_steps {
+        steps += 1;
+        if t0 > settings.depth {
+            break;
+        }
+
+        let begin = adjacency.offsets[current as usize] as usize;
+        let end = adjacency.offsets[current as usize + 1] as usize;
+
+        let mut best_t1 = f32::MAX;
+        let mut next_face: Option<usize> = None;
+        let r_i_sq = current_radius * current_radius;
+
+        for (j, &next_idx_u32) in adjacency.neighbors[begin..end].iter().enumerate() {
+            let next_idx = next_idx_u32 as usize;
+            let next_p = model.points[next_idx];
+            let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
+            let r_j = read_radius(model, next_idx_u32);
+            let offset = next_pos - current_pos;
+            let dsq = offset.length_squared().max(1e-20);
+            let shift = 0.5 + 0.5 * (r_i_sq - r_j * r_j) / dsq;
+            let face_origin = current_pos + shift * offset;
+            let face_normal = offset;
+            let dp = face_normal.dot(dir);
+            if dp > 0.0 {
+                let t = (face_origin - ray.origin).dot(face_normal) / dp;
+                if t.is_finite() && t < best_t1 {
+                    best_t1 = t;
+                    next_face = Some(j);
+                }
+            }
+        }
+
+        let Some(j) = next_face else {
+            break;
+        };
+
+        let next_idx_u32 = adjacency.neighbors[begin + j];
+        let next_p = model.points[next_idx_u32 as usize];
+        let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
+
+        if best_t1 > t0 {
+            let dt = (best_t1 - t0).max(0.0);
+            entries.push(PathEntry { cell: current, dt });
+        }
+
+        t0 = t0.max(best_t1);
+        current = next_idx_u32;
+        current_pos = next_pos;
+        current_radius = read_radius(model, next_idx_u32);
+    }
+
+    PathResult {
+        entries,
+        ray_dir: dir,
+    }
+}
+
 /// Trace a single ray through the point cloud, returning the integrated
 /// colour, traversal step count, last cell entered, and stop parameter.
 pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -> TraceResult {
@@ -357,5 +472,108 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
         steps,
         last_point: current,
         t_end: t0,
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    /// Tetrahedron of unit-density cells. Adjacency is the Delaunay edges
+    /// computed from positions.
+    fn tetra_model() -> PointCloudModel {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 5.0),
+            glam::Vec4::new(0.5, 0.0, 0.0, 5.0),
+            glam::Vec4::new(0.0, 0.5, 0.0, 5.0),
+            glam::Vec4::new(0.0, 0.0, 0.5, 5.0),
+        ];
+        let n = points.len();
+        let mut m = PointCloudModel {
+            points,
+            sh_coefficients: vec![0.0; n * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: None,
+            radii: None,
+        };
+        m.compute_adjacency_default();
+        m
+    }
+
+    fn settings_for(start_point: u32) -> TraceSettings {
+        TraceSettings {
+            start_point,
+            max_steps: 32,
+            weight_threshold: 0.0, // record_path ignores this anyway
+            depth: 100.0,
+            eval_mode: EvalMode::ConstantRgb(glam::Vec3::ONE),
+        }
+    }
+
+    #[test]
+    fn record_path_yields_finite_dts_and_nonempty_entries() {
+        let model = tetra_model();
+        let ray = Ray {
+            origin: glam::Vec3::new(0.1, 0.1, -1.0),
+            direction: glam::Vec3::new(0.0, 0.0, 1.0),
+        };
+        let path = record_path(&model, ray, settings_for(0));
+        assert!(!path.entries.is_empty(), "path is empty");
+        for e in &path.entries {
+            assert!(e.dt.is_finite() && e.dt >= 0.0, "bad dt {}", e.dt);
+            assert!(
+                (e.cell as usize) < model.points.len(),
+                "bad cell {}",
+                e.cell
+            );
+        }
+        // Ray direction is unit-length.
+        assert!((path.ray_dir.length() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn record_path_agrees_with_trace_one_ray_on_path() {
+        // Integrate over the recorded path manually with the same formulas
+        // the GPU shader uses and check that the answer matches trace_one_ray.
+        let model = tetra_model();
+        let ray = Ray {
+            origin: glam::Vec3::new(0.1, 0.1, -1.0),
+            direction: glam::Vec3::new(0.0, 0.0, 1.0),
+        };
+        let settings = settings_for(0);
+        let path = record_path(&model, ray, settings);
+        let integrated = trace_one_ray(&model, ray, settings);
+
+        let mut transmittance = 1.0f32;
+        let mut alpha_accum = 0.0f32;
+        for e in &path.entries {
+            let s = model.points[e.cell as usize].w;
+            if s <= 1e-6 {
+                continue;
+            }
+            let alpha = 1.0 - (-s * e.dt).exp();
+            alpha_accum += transmittance * alpha;
+            transmittance *= 1.0 - alpha;
+        }
+        // Reconstructed alpha matches `1 - transmittance` from trace_one_ray.
+        let trace_alpha = integrated.rgba.w;
+        assert!(
+            (alpha_accum - trace_alpha).abs() < 1e-4,
+            "path-integrated alpha {alpha_accum} disagrees with trace {trace_alpha}"
+        );
+    }
+
+    #[test]
+    fn record_path_respects_max_steps() {
+        let model = tetra_model();
+        let ray = Ray {
+            origin: glam::Vec3::new(0.1, 0.1, -1.0),
+            direction: glam::Vec3::new(0.0, 0.0, 1.0),
+        };
+        let mut settings = settings_for(0);
+        settings.max_steps = 2;
+        let path = record_path(&model, ray, settings);
+        assert!(path.entries.len() <= 2);
     }
 }
