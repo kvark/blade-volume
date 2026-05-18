@@ -89,6 +89,11 @@ struct Args {
     #[argh(option, default = "2000")]
     max_points: usize,
 
+    /// k for symmetric k-NN adjacency (default 0 = use Delaunay).
+    /// Set to e.g. 24 to scale past Delaunay's ~7K-point memory wall.
+    #[argh(option, default = "0")]
+    knn: usize,
+
     /// pixels per Adam step (default 0 = whole-image mode). Random
     /// pixel sampling per step keeps the matmul tile aligned regardless
     /// of image resolution.
@@ -118,6 +123,11 @@ fn main() {
     } else {
         Some(args.pixel_batch)
     };
+    let adjacency = if args.knn > 0 {
+        pipeline::AdjacencyKind::Knn(args.knn)
+    } else {
+        pipeline::AdjacencyKind::Delaunay
+    };
     let config = pipeline::PipelineConfig {
         resolution: (args.width, args.height),
         max_steps: args.max_steps,
@@ -132,6 +142,7 @@ fn main() {
         },
         far_plane: 100.0,
         initial_density: args.initial_density,
+        adjacency,
     };
 
     let sparse = path::Path::new(&args.sparse);

@@ -315,6 +315,77 @@ pub fn compute_cech_default(points: &[glam::Vec4], radii: &[f32]) -> Adjacency {
     compute_cech(points, radii, &AdjacencyConfig::default())
 }
 
+/// Symmetric k-nearest-neighbour adjacency.
+///
+/// Connects each point to its `k` nearest neighbours (Euclidean) and
+/// symmetrises: if `A` lists `B` as a neighbour, `B` also lists `A`. The
+/// resulting graph is a strict superset of the standard k-NN graph and
+/// is typically slightly denser than `2k` neighbours per point in the
+/// interior, less near the boundary.
+///
+/// Cost: O(N log N) time (kd-tree build + per-point k-NN queries) and
+/// O(N · k) memory. This scales to tens of thousands of points where
+/// `compute_adjacency` (Delaunay tetrahedralisation) becomes
+/// O(N^1.5)-memory and runs out of RAM around 8 K.
+///
+/// The resulting adjacency is not the Voronoi/Delaunay one, so the
+/// radfoam traversal it feeds will skip across "true" cell boundaries
+/// occasionally. Empirically this is fine for appearance training:
+/// the differentiable forward sums over a path, so getting the wrong
+/// next cell once or twice just averages a slightly different bag of
+/// nearby densities.
+///
+/// # Panics
+/// Panics if `k >= points.len()` or `points.is_empty()`.
+pub fn compute_knn(points: &[glam::Vec4], k: usize) -> Adjacency {
+    let n = points.len();
+    assert!(n > 0, "compute_knn: empty point cloud");
+    assert!(
+        k < n,
+        "compute_knn: k ({k}) must be smaller than the point count ({n})",
+    );
+
+    let mut kd: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
+    for (i, p) in points.iter().enumerate() {
+        kd.add(&[p.x, p.y, p.z], i as u64);
+    }
+
+    // Pull k+1 (the closest is the point itself) for each query.
+    let want = (k + 1).min(n);
+    let mut neighbour_sets: Vec<Vec<u32>> = vec![Vec::new(); n];
+    for (i, p) in points.iter().enumerate() {
+        let q = [p.x, p.y, p.z];
+        let hits = kd.nearest_n::<kiddo::SquaredEuclidean>(&q, want);
+        for hit in hits {
+            let j = hit.item as usize;
+            if j == i {
+                continue;
+            }
+            neighbour_sets[i].push(j as u32);
+            // Symmetrise: the kd-tree gives us i → j; record j → i too.
+            // We'll dedup below.
+            neighbour_sets[j].push(i as u32);
+        }
+    }
+
+    let mut offsets = Vec::with_capacity(n + 1);
+    let mut neighbours = Vec::new();
+    offsets.push(0u32);
+    for list in neighbour_sets.iter_mut() {
+        list.sort_unstable();
+        list.dedup();
+        neighbours.extend_from_slice(list);
+        offsets.push(neighbours.len() as u32);
+    }
+
+    let adj = Adjacency {
+        neighbors: neighbours,
+        offsets,
+    };
+    validate_csr(&adj.offsets, &adj.neighbors, n);
+    adj
+}
+
 /// Validates a CSR adjacency structure.
 ///
 /// # Panics
@@ -689,6 +760,98 @@ mod tests {
                 i,
                 neighbor_count,
                 config.max_neighbors
+            );
+        }
+    }
+
+    #[test]
+    fn compute_knn_returns_symmetric_graph_with_at_least_k_neighbours() {
+        // Jittered grid — kiddo's default bucket size panics on exactly
+        // co-axial points (which a pure integer grid would produce), so
+        // perturb each coordinate slightly.
+        let mut points = Vec::new();
+        for ix in 0..6 {
+            for iy in 0..6 {
+                for iz in 0..6 {
+                    let jitter = ((ix * 31 + iy * 7 + iz) as f32) * 1e-3;
+                    points.push(glam::Vec4::new(
+                        ix as f32 + jitter,
+                        iy as f32 + jitter * 0.7,
+                        iz as f32 + jitter * 1.3,
+                        1.0,
+                    ));
+                }
+            }
+        }
+        let k = 8usize;
+        let adj = compute_knn(&points, k);
+
+        // Each point has at least k neighbours (more, after symmetrising).
+        for i in 0..points.len() {
+            let a = adj.offsets[i] as usize;
+            let b = adj.offsets[i + 1] as usize;
+            assert!(
+                b - a >= k,
+                "point {i} has only {} neighbours, want >= {k}",
+                b - a
+            );
+        }
+
+        // Symmetric: if j ∈ N(i) then i ∈ N(j).
+        for i in 0..points.len() {
+            let a = adj.offsets[i] as usize;
+            let b = adj.offsets[i + 1] as usize;
+            for &j in &adj.neighbors[a..b] {
+                let ja = adj.offsets[j as usize] as usize;
+                let jb = adj.offsets[j as usize + 1] as usize;
+                assert!(
+                    adj.neighbors[ja..jb].contains(&(i as u32)),
+                    "edge {i} → {j} present but reverse missing",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compute_knn_picks_geometrically_nearest_neighbours_for_a_grid() {
+        // Same jittering as the symmetry test — kiddo's default bucket
+        // would otherwise panic on the co-axial integer grid.
+        let mut points = Vec::new();
+        for ix in 0..5 {
+            for iy in 0..5 {
+                for iz in 0..5 {
+                    let jitter = ((ix * 31 + iy * 7 + iz) as f32) * 1e-3;
+                    points.push(glam::Vec4::new(
+                        ix as f32 + jitter,
+                        iy as f32 + jitter * 0.7,
+                        iz as f32 + jitter * 1.3,
+                        1.0,
+                    ));
+                }
+            }
+        }
+        let adj = compute_knn(&points, 6);
+        let center_idx = (2 * 5 + 2) * 5 + 2; // (2, 2, 2)
+        let a = adj.offsets[center_idx] as usize;
+        let b = adj.offsets[center_idx + 1] as usize;
+        let neighbours = &adj.neighbors[a..b];
+        // The 6 face neighbours must all be present (possibly with extras
+        // from corners coming in via symmetrisation).
+        let want: Vec<u32> = [
+            (1 * 5 + 2) * 5 + 2, // x-1
+            (3 * 5 + 2) * 5 + 2, // x+1
+            (2 * 5 + 1) * 5 + 2, // y-1
+            (2 * 5 + 3) * 5 + 2, // y+1
+            (2 * 5 + 2) * 5 + 1, // z-1
+            (2 * 5 + 2) * 5 + 3, // z+1
+        ]
+        .iter()
+        .map(|&v| v as u32)
+        .collect();
+        for w in want {
+            assert!(
+                neighbours.contains(&w),
+                "center missing face neighbour {w}: have {neighbours:?}",
             );
         }
     }

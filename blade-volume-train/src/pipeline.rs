@@ -85,6 +85,22 @@ pub struct PipelineConfig {
     /// this, but starting value matters: too low and alphas are tiny so
     /// gradients can't push the model forward in reasonable Adam steps.
     pub initial_density: f32,
+    /// Adjacency choice for the initial point cloud.
+    pub adjacency: AdjacencyKind,
+}
+
+/// Adjacency algorithm to use when building the initial foam.
+#[derive(Clone, Copy, Debug)]
+pub enum AdjacencyKind {
+    /// Exact Delaunay tetrahedralisation. Memory is O(N^1.5); breaks past
+    /// ~7 K points on a 24 GB machine.
+    Delaunay,
+    /// Symmetric k-nearest-neighbour graph with `k` neighbours per point.
+    /// Memory is O(N · k), so 50 K+ points fit easily. Edges are an
+    /// approximation of the true Voronoi neighbours; appearance training
+    /// is tolerant to this because the differentiable forward integrates
+    /// along a path and averages over the cells visited.
+    Knn(usize),
 }
 
 impl Default for PipelineConfig {
@@ -101,6 +117,7 @@ impl Default for PipelineConfig {
             },
             far_plane: 100.0,
             initial_density: 1.0,
+            adjacency: AdjacencyKind::Delaunay,
         }
     }
 }
@@ -270,12 +287,24 @@ pub fn train_colmap_appearance_split(
             );
         }
     }
-    log::info!(
-        "computing Delaunay adjacency for {} points...",
-        model.points.len()
-    );
     let t0 = std::time::Instant::now();
-    model.compute_adjacency_default();
+    match config.adjacency {
+        AdjacencyKind::Delaunay => {
+            log::info!(
+                "computing Delaunay adjacency for {} points...",
+                model.points.len()
+            );
+            model.compute_adjacency_default();
+        }
+        AdjacencyKind::Knn(k) => {
+            log::info!(
+                "computing symmetric k-NN adjacency (k={k}) for {} points...",
+                model.points.len()
+            );
+            let adj = vol::compute_knn(&model.points, k);
+            model.adjacency = Some(adj);
+        }
+    }
     log::info!(
         "adjacency done in {:.2}s ({} edges)",
         t0.elapsed().as_secs_f32(),
@@ -509,6 +538,7 @@ mod tests {
                 ..diff_render::AppearanceFitConfig::default()
             },
             far_plane: 50.0,
+            adjacency: AdjacencyKind::Delaunay,
         };
         let trained = train_colmap_appearance(&sparse, &images, &config, gpu);
 
