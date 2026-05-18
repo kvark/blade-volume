@@ -503,27 +503,6 @@ fn download_model_parameters(
     }
 }
 
-/// Per-pixel ray for view (cam, ix, iy) in an `(image_w, image_h)` grid.
-/// Mirrors the mapping in `render::render_cpu` and `rays_for_view`.
-fn ray_for_pixel(cam: &vol::CameraParams, ix: u32, iy: u32, w: u32, h: u32) -> vol::trace::Ray {
-    let tan_half = glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan());
-    let orientation = glam::Quat::from_xyzw(
-        cam.cam_orientation[0],
-        cam.cam_orientation[1],
-        cam.cam_orientation[2],
-        cam.cam_orientation[3],
-    );
-    let origin = glam::Vec3::from_array(cam.cam_position);
-    let px = (ix as f32 + 0.5) / w as f32;
-    let py = (iy as f32 + 0.5) / h as f32;
-    let ndc = glam::Vec2::new(px * 2.0 - 1.0, py * 2.0 - 1.0);
-    let local = glam::Vec3::new(ndc.x * tan_half.x, ndc.y * tan_half.y, 1.0);
-    vol::trace::Ray {
-        origin,
-        direction: (orientation * local).normalize(),
-    }
-}
-
 /// Pixel-batched training mode. Each Adam step picks a random training view
 /// and `pixel_batch` random pixels from its image, records paths through the
 /// current model, and runs one optimiser step. Allows training at full image
@@ -545,11 +524,53 @@ fn fit_appearance_pixel_batched(
         &g,
         mn::SessionConfig {
             mode: mn::Mode::Training,
-            gpu: Some(gpu),
+            gpu: Some(gpu.clone()),
             ..Default::default()
         },
     );
     upload_model_parameters(&mut session, model);
+
+    // Path recording on GPU: positions + adjacency are frozen during
+    // appearance training, so this cloud is initialised once and reused
+    // every step. The shader records `(cell, dt, mask)` per pixel into
+    // device buffers; we read those back and feed them to meganeura
+    // via `set_input`. Same trace as the CPU `record_path` but
+    // parallel over pixels — replaces the single-threaded ray-marching
+    // bottleneck that dominated each step at full resolution.
+    let gpu_cloud = {
+        let mut init_encoder = gpu.create_command_encoder(blade_graphics::CommandEncoderDesc {
+            name: "path-record-init",
+            buffer_count: 1,
+        });
+        let cloud = vol::RadFoamGpuCloud::new(model, &gpu, &mut init_encoder);
+        gpu.destroy_command_encoder(&mut init_encoder);
+        cloud
+    };
+    let recorder = vol::gpu::PathRecorder::new(&gpu);
+    let path_bufs =
+        vol::gpu::PathRecordBuffers::new(&gpu, pixel_batch as u32, max_steps as u32);
+
+    let mut record_encoder = gpu.create_command_encoder(blade_graphics::CommandEncoderDesc {
+        name: "path-record-step",
+        buffer_count: 2,
+    });
+
+    let pl_bytes = (pixel_batch as u64) * (max_steps as u64) * 4;
+    let cells_dl = gpu.create_buffer(blade_graphics::BufferDesc {
+        name: "path-record-cells-readback",
+        size: pl_bytes,
+        memory: blade_graphics::Memory::Shared,
+    });
+    let dts_dl = gpu.create_buffer(blade_graphics::BufferDesc {
+        name: "path-record-dts-readback",
+        size: pl_bytes,
+        memory: blade_graphics::Memory::Shared,
+    });
+    let mask_dl = gpu.create_buffer(blade_graphics::BufferDesc {
+        name: "path-record-mask-readback",
+        size: pl_bytes,
+        memory: blade_graphics::Memory::Shared,
+    });
 
     // Deterministic LCG so reruns produce identical results.
     let mut state: u64 = 0xDEAD_BEEF_F00D_CAFE;
@@ -560,14 +581,6 @@ fn fit_appearance_pixel_batched(
         (state >> 32) as u32
     };
 
-    let trace_settings_template = vol::trace::TraceSettings {
-        start_point: 0,
-        max_steps: max_steps as u32,
-        weight_threshold: 0.0,
-        depth: views[0].camera.depth,
-        eval_mode: vol::trace::EvalMode::Sh,
-    };
-
     // Scratch buffers re-used across steps to avoid per-step allocation.
     let pl = pixel_batch * max_steps;
     let mut flat = FlatPaths {
@@ -576,6 +589,7 @@ fn fit_appearance_pixel_batched(
         mask: vec![0.0f32; pl],
     };
     let mut target_buf = vec![0.0f32; pixel_batch * 3];
+    let mut pixel_indices = vec![0u32; pixel_batch];
 
     let mut losses = Vec::with_capacity(total_steps);
     let log_every = total_steps.div_ceil(10).max(1);
@@ -587,47 +601,78 @@ fn fit_appearance_pixel_batched(
     );
 
     for step in 0..total_steps {
-        // Reset scratch (paths shorter than max_steps must pad mask=0).
-        for slot in flat.cell.iter_mut() {
-            *slot = 0;
-        }
-        for slot in flat.dt.iter_mut() {
-            *slot = 0.0;
-        }
-        for slot in flat.mask.iter_mut() {
-            *slot = 0.0;
-        }
-
         let vi = (next_u32() as usize) % views.len();
         let v = &views[vi];
         let img_size = v.width * v.height;
 
-        let mut s = trace_settings_template;
-        s.start_point = v.start_cell;
-        s.depth = v.camera.depth;
-
+        // Pick random pixels and pack the target RGB for each.
         for k in 0..pixel_batch {
             let pidx = next_u32() % img_size;
-            let ix = pidx % v.width;
-            let iy = pidx / v.width;
-            let ray = ray_for_pixel(&v.camera, ix, iy, v.width, v.height);
-            let path = vol::trace::record_path(model, ray, s);
-            let n = path.entries.len().min(max_steps);
-            for (idx, e) in path.entries[..n].iter().enumerate() {
-                let slot = k * max_steps + idx;
-                flat.cell[slot] = e.cell;
-                let dt_clamped = if !e.dt.is_finite() || e.dt < 0.0 {
-                    0.0
-                } else {
-                    e.dt.min(MAX_PATH_DT)
-                };
-                flat.dt[slot] = dt_clamped;
-                flat.mask[slot] = if dt_clamped > 0.0 { 1.0 } else { 0.0 };
-            }
+            pixel_indices[k] = pidx;
             let base = (pidx as usize) * 3;
             target_buf[k * 3] = v.target_rgb[base];
             target_buf[k * 3 + 1] = v.target_rgb[base + 1];
             target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+        }
+        path_bufs.write_pixel_indices(&pixel_indices);
+
+        // GPU path-record: zero outputs, upload pixel indices, dispatch
+        // the recorder, copy outputs into readback buffers, submit.
+        record_encoder.start();
+        {
+            let mut tx = record_encoder.transfer("path-record-prepare");
+            let pix_size = (pixel_batch * std::mem::size_of::<u32>()) as u64;
+            tx.copy_buffer_to_buffer(
+                path_bufs.pixel_indices_stage.at(0),
+                path_bufs.pixel_indices.at(0),
+                pix_size,
+            );
+            tx.fill_buffer(path_bufs.cells.at(0), pl_bytes, 0);
+            tx.fill_buffer(path_bufs.dts.at(0), pl_bytes, 0);
+            tx.fill_buffer(path_bufs.mask.at(0), pl_bytes, 0);
+        }
+        recorder.dispatch(
+            &mut record_encoder,
+            &gpu_cloud,
+            path_bufs.pixel_indices.into(),
+            path_bufs.cells.into(),
+            path_bufs.dts.into(),
+            path_bufs.mask.into(),
+            vol::gpu::RecordPathsArgs {
+                camera: v.camera,
+                start_point: v.start_cell,
+                max_steps: max_steps as u32,
+                image_width: v.width,
+                image_height: v.height,
+                max_path_dt: MAX_PATH_DT,
+                depth: v.camera.depth,
+                num_pixels: pixel_batch as u32,
+            },
+        );
+        {
+            let mut tx = record_encoder.transfer("path-record-readback");
+            tx.copy_buffer_to_buffer(path_bufs.cells.at(0), cells_dl.at(0), pl_bytes);
+            tx.copy_buffer_to_buffer(path_bufs.dts.at(0), dts_dl.at(0), pl_bytes);
+            tx.copy_buffer_to_buffer(path_bufs.mask.at(0), mask_dl.at(0), pl_bytes);
+        }
+        let sp = gpu.submit(&mut record_encoder);
+        let _ = gpu.wait_for(&sp, !0);
+
+        // Pull the recorded paths into the flat scratch and feed them
+        // into meganeura. `Memory::Shared` buffers are mappable so the
+        // read is a memcpy off the GPU's view.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                cells_dl.data() as *const u32,
+                flat.cell.as_mut_ptr(),
+                pl,
+            );
+            std::ptr::copy_nonoverlapping(dts_dl.data() as *const f32, flat.dt.as_mut_ptr(), pl);
+            std::ptr::copy_nonoverlapping(
+                mask_dl.data() as *const f32,
+                flat.mask.as_mut_ptr(),
+                pl,
+            );
         }
 
         session.set_input_u32("cell_indices", &flat.cell);
@@ -657,6 +702,19 @@ fn fit_appearance_pixel_batched(
     let g_buf = session.param_buffer("sh_g").unwrap();
     let b_buf = session.param_buffer("sh_b").unwrap();
     download_model_parameters(&session, model, density_buf, r_buf, g_buf, b_buf, n_cells);
+
+    // Cleanup GPU resources we own (the cloud/buffers/recorder).
+    drop(session);
+    let mut gpu_cloud = gpu_cloud;
+    gpu_cloud.deinit(&gpu);
+    let mut path_bufs = path_bufs;
+    path_bufs.destroy(&gpu);
+    let mut recorder = recorder;
+    recorder.destroy(&gpu);
+    gpu.destroy_buffer(cells_dl);
+    gpu.destroy_buffer(dts_dl);
+    gpu.destroy_buffer(mask_dl);
+    gpu.destroy_command_encoder(&mut record_encoder);
 
     losses
 }
