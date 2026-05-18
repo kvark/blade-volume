@@ -96,11 +96,21 @@ pub enum AdjacencyKind {
     /// ~7 K points on a 24 GB machine.
     Delaunay,
     /// Symmetric k-nearest-neighbour graph with `k` neighbours per point.
-    /// Memory is O(N · k), so 50 K+ points fit easily. Edges are an
-    /// approximation of the true Voronoi neighbours; appearance training
-    /// is tolerant to this because the differentiable forward integrates
-    /// along a path and averages over the cells visited.
+    /// Cheap (O(N · k) memory) but the resulting edges are a poor
+    /// approximation of the Voronoi adjacency: true Voronoi neighbours
+    /// can be far away (long thin cells) while many close points sit
+    /// on the same side. Path tracing through a k-NN graph picks the
+    /// wrong next-cell often enough to cost ~3 dB of PSNR at 6 K
+    /// cells. Kept for scaling experiments, not for quality.
     Knn(usize),
+    /// Čech complex: each point gets a radius (here scaled
+    /// nearest-neighbour distance) and two points are adjacent when
+    /// their balls intersect. Closer to a power-diagram adjacency than
+    /// k-NN at the same memory budget, so the path-tracer's
+    /// face-finding picks the right next-cell more often.
+    /// `radius_factor` ~ 1.0 keeps balls just-touching their nearest
+    /// neighbour.
+    Cech { radius_factor: f32 },
 }
 
 impl Default for PipelineConfig {
@@ -271,7 +281,17 @@ pub fn train_colmap_appearance_split(
     if let Some(cap) = config.max_initial_points {
         if model.points.len() > cap {
             let n_before = model.points.len();
-            let indices = subsample_indices(n_before, cap);
+            // Pick the highest-track-length COLMAP points first. Track
+            // length = how many images saw this 3D point during SfM, so
+            // it's a cheap proxy for "how many training rays will hit
+            // the cell built around this point". Stride-sampling picks
+            // many points the training cameras never look at, and those
+            // cells stay at init values and pollute the path-trace.
+            let mut order: Vec<usize> = (0..n_before).collect();
+            order.sort_by(|&a, &b| recon.points[b].track_len.cmp(&recon.points[a].track_len));
+            order.truncate(cap);
+            order.sort_unstable();
+            let indices = order;
             let mut new_points = Vec::with_capacity(indices.len());
             let mut new_sh = Vec::with_capacity(indices.len() * 3);
             for &i in &indices {
@@ -281,7 +301,7 @@ pub fn train_colmap_appearance_split(
             model.points = new_points;
             model.sh_coefficients = new_sh;
             log::info!(
-                "subsampled COLMAP cloud {} → {} points",
+                "subsampled COLMAP cloud {} → {} points (top-track-length)",
                 n_before,
                 model.points.len()
             );
@@ -302,6 +322,15 @@ pub fn train_colmap_appearance_split(
                 model.points.len()
             );
             let adj = vol::compute_knn(&model.points, k);
+            model.adjacency = Some(adj);
+        }
+        AdjacencyKind::Cech { radius_factor } => {
+            log::info!(
+                "computing Cech adjacency (radius_factor={radius_factor}) for {} points...",
+                model.points.len()
+            );
+            let radii = vol::radii_from_nearest_neighbour(&model.points, radius_factor);
+            let adj = vol::compute_cech_default(&model.points, &radii);
             model.adjacency = Some(adj);
         }
     }

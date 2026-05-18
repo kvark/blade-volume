@@ -91,8 +91,20 @@ struct Args {
 
     /// k for symmetric k-NN adjacency (default 0 = use Delaunay).
     /// Set to e.g. 24 to scale past Delaunay's ~7K-point memory wall.
+    /// Note: k-NN edges are a poor approximation of the true Voronoi
+    /// adjacency and the path-tracer pays ~3 dB of PSNR for it. Prefer
+    /// `--cech-radius` over `--knn` for quality.
     #[argh(option, default = "0")]
     knn: usize,
+
+    /// radius factor for Čech adjacency (default 0 = off). When > 0,
+    /// each point's radius = factor × distance to its nearest
+    /// neighbour, and the adjacency is the intersection-graph of
+    /// those balls. Better than k-NN for path-tracing because edges
+    /// are anchored to the geometric scale of each cell, not raw
+    /// distance rank. A factor of ~1.0 keeps balls just-touching.
+    #[argh(option, default = "0.0")]
+    cech_radius: f32,
 
     /// pixels per Adam step (default 0 = whole-image mode). Random
     /// pixel sampling per step keeps the matmul tile aligned regardless
@@ -123,7 +135,11 @@ fn main() {
     } else {
         Some(args.pixel_batch)
     };
-    let adjacency = if args.knn > 0 {
+    let adjacency = if args.cech_radius > 0.0 {
+        pipeline::AdjacencyKind::Cech {
+            radius_factor: args.cech_radius,
+        }
+    } else if args.knn > 0 {
         pipeline::AdjacencyKind::Knn(args.knn)
     } else {
         pipeline::AdjacencyKind::Delaunay
