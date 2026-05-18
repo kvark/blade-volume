@@ -107,8 +107,6 @@ pub fn fit_constant_rgb(
         optimizer: mn::Optimizer::adam(config.learning_rate),
         learning_rate: config.learning_rate,
         log_interval: 0,
-        data_input: "x".into(),
-        label_input: "labels".into(),
     };
     let mut trainer = mn::Trainer::new(session, train_cfg);
     trainer.train(&mut loader, config.epochs);
@@ -199,8 +197,6 @@ pub fn fit_constant_image(
         optimizer: mn::Optimizer::adam(config.learning_rate),
         learning_rate: config.learning_rate,
         log_interval: 0,
-        data_input: "x".into(),
-        label_input: "labels".into(),
     };
     let mut trainer = mn::Trainer::new(session, train_cfg);
     trainer.train(&mut loader, config.epochs);

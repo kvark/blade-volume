@@ -414,18 +414,18 @@ pub fn fit_appearance_multi_view(
 
     let mut losses = Vec::with_capacity(config.epochs * views.len());
     let log_every = config.epochs.div_ceil(10).max(1);
+    session.set_adam(
+        config.learning_rate,
+        config.adam_beta1,
+        config.adam_beta2,
+        config.adam_eps,
+    );
     for epoch in 0..config.epochs {
         for (vi, v) in views.iter().enumerate() {
             session.set_input_u32("cell_indices", &flats[vi].cell);
             session.set_input("dt", &flats[vi].dt);
             session.set_input("mask", &flats[vi].mask);
             session.set_input("labels", &v.target_rgb);
-            session.set_adam(
-                config.learning_rate,
-                config.adam_beta1,
-                config.adam_beta2,
-                config.adam_eps,
-            );
             session.step();
             session.wait();
             let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
@@ -579,6 +579,12 @@ fn fit_appearance_pixel_batched(
 
     let mut losses = Vec::with_capacity(total_steps);
     let log_every = total_steps.div_ceil(10).max(1);
+    session.set_adam(
+        config.learning_rate,
+        config.adam_beta1,
+        config.adam_beta2,
+        config.adam_eps,
+    );
 
     for step in 0..total_steps {
         // Reset scratch (paths shorter than max_steps must pad mask=0).
@@ -628,12 +634,6 @@ fn fit_appearance_pixel_batched(
         session.set_input("dt", &flat.dt);
         session.set_input("mask", &flat.mask);
         session.set_input("labels", &target_buf);
-        session.set_adam(
-            config.learning_rate,
-            config.adam_beta1,
-            config.adam_beta2,
-            config.adam_eps,
-        );
         session.step();
         session.wait();
         let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
@@ -726,15 +726,13 @@ pub fn fit_appearance_to_pixels(
     session.set_input("labels", target_pixels);
 
     let mut losses = Vec::with_capacity(config.epochs);
+    session.set_adam(
+        config.learning_rate,
+        config.adam_beta1,
+        config.adam_beta2,
+        config.adam_eps,
+    );
     for _ in 0..config.epochs {
-        // `set_adam` queues a one-shot — `step()` consumes it. Re-arm before
-        // every step or the optimiser stops updating after the first.
-        session.set_adam(
-            config.learning_rate,
-            config.adam_beta1,
-            config.adam_beta2,
-            config.adam_eps,
-        );
         session.step();
         session.wait();
         let read = session.read_output(1);
