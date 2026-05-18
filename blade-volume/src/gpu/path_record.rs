@@ -169,6 +169,25 @@ pub struct PathRecordBuffers {
 
 impl PathRecordBuffers {
     pub fn new(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
+        Self::new_with(context, num_pixels, max_steps, false)
+    }
+
+    /// Allocate the three output streams as `Memory::External(Fd(None))`
+    /// so the caller can pass each one as an
+    /// `ExternalMemorySource` into the consumer's `bind_external_buffer`
+    /// (meganeura's slot import). Same-context external memory works on
+    /// Vulkan; Metal/GLES backends `unimplemented!()` on the buffer
+    /// allocation.
+    pub fn new_external(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
+        Self::new_with(context, num_pixels, max_steps, true)
+    }
+
+    fn new_with(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+        external: bool,
+    ) -> Self {
         let pl = (num_pixels as u64) * (max_steps as u64);
         let cells_bytes = pl * mem::size_of::<u32>() as u64;
         let dts_bytes = pl * mem::size_of::<f32>() as u64;
@@ -185,20 +204,37 @@ impl PathRecordBuffers {
             size: pix_bytes,
             memory: gpu::Memory::Upload,
         });
+        let mem = |external_flag: bool| {
+            if external_flag {
+                // None = export side; the consumer will import via the
+                // FD this side returns from get_external_buffer_source.
+                #[cfg(target_os = "linux")]
+                {
+                    gpu::Memory::External(gpu::ExternalMemorySource::Fd(None))
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = external_flag;
+                    gpu::Memory::Device
+                }
+            } else {
+                gpu::Memory::Device
+            }
+        };
         let cells = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-cells",
             size: cells_bytes,
-            memory: gpu::Memory::Device,
+            memory: mem(external),
         });
         let dts = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-dts",
             size: dts_bytes,
-            memory: gpu::Memory::Device,
+            memory: mem(external),
         });
         let mask = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-mask",
             size: mask_bytes,
-            memory: gpu::Memory::Device,
+            memory: mem(external),
         });
 
         Self {

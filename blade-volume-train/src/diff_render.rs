@@ -547,29 +547,29 @@ fn fit_appearance_pixel_batched(
         cloud
     };
     let recorder = vol::gpu::PathRecorder::new(&gpu);
+    // Allocate the path-record outputs as exported external memory so
+    // we can hand them straight to meganeura without a CPU round trip.
+    // The meganeura session imports the same FD and points its
+    // `cell_indices` / `dt` / `mask` input slots at it.
     let path_bufs =
-        vol::gpu::PathRecordBuffers::new(&gpu, pixel_batch as u32, max_steps as u32);
+        vol::gpu::PathRecordBuffers::new_external(&gpu, pixel_batch as u32, max_steps as u32);
+    let pl_bytes = (pixel_batch as u64) * (max_steps as u64) * 4;
+    for (slot, buf) in [
+        ("cell_indices", path_bufs.cells),
+        ("dt", path_bufs.dts),
+        ("mask", path_bufs.mask),
+    ] {
+        let source = gpu
+            .get_external_buffer_source(buf)
+            .expect("PathRecordBuffers::new_external must produce an exportable buffer");
+        session
+            .bind_external_buffer(meganeura::ExternalSlot::Input(slot), source, pl_bytes)
+            .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
+    }
 
     let mut record_encoder = gpu.create_command_encoder(blade_graphics::CommandEncoderDesc {
         name: "path-record-step",
         buffer_count: 2,
-    });
-
-    let pl_bytes = (pixel_batch as u64) * (max_steps as u64) * 4;
-    let cells_dl = gpu.create_buffer(blade_graphics::BufferDesc {
-        name: "path-record-cells-readback",
-        size: pl_bytes,
-        memory: blade_graphics::Memory::Shared,
-    });
-    let dts_dl = gpu.create_buffer(blade_graphics::BufferDesc {
-        name: "path-record-dts-readback",
-        size: pl_bytes,
-        memory: blade_graphics::Memory::Shared,
-    });
-    let mask_dl = gpu.create_buffer(blade_graphics::BufferDesc {
-        name: "path-record-mask-readback",
-        size: pl_bytes,
-        memory: blade_graphics::Memory::Shared,
     });
 
     // Deterministic LCG so reruns produce identical results.
@@ -581,13 +581,11 @@ fn fit_appearance_pixel_batched(
         (state >> 32) as u32
     };
 
-    // Scratch buffers re-used across steps to avoid per-step allocation.
-    let pl = pixel_batch * max_steps;
-    let mut flat = FlatPaths {
-        cell: vec![0u32; pl],
-        dt: vec![0.0f32; pl],
-        mask: vec![0.0f32; pl],
-    };
+    // Scratch buffers re-used across steps. `cell/dt/mask` no longer
+    // round-trip through host memory — meganeura's slots are aliased
+    // to the recorder's device buffers via `bind_external_buffer`, so
+    // we only keep host-side `target_buf` (the per-pixel RGB) and the
+    // pixel-index permutation.
     let mut target_buf = vec![0.0f32; pixel_batch * 3];
     let mut pixel_indices = vec![0u32; pixel_batch];
 
@@ -616,8 +614,13 @@ fn fit_appearance_pixel_batched(
         }
         path_bufs.write_pixel_indices(&pixel_indices);
 
-        // GPU path-record: zero outputs, upload pixel indices, dispatch
-        // the recorder, copy outputs into readback buffers, submit.
+        // GPU path-record: zero the shared outputs, upload pixel
+        // indices, dispatch the recorder. No CPU readback — meganeura
+        // already has its `cell_indices` / `dt` / `mask` slots aliased
+        // to these buffers via `bind_external_buffer`, so the writes
+        // are picked up by `session.step()` on the same queue. Per-pass
+        // pipeline barriers in blade-graphics provide cross-submit
+        // memory visibility.
         record_encoder.start();
         {
             let mut tx = record_encoder.transfer("path-record-prepare");
@@ -649,35 +652,11 @@ fn fit_appearance_pixel_batched(
                 num_pixels: pixel_batch as u32,
             },
         );
-        {
-            let mut tx = record_encoder.transfer("path-record-readback");
-            tx.copy_buffer_to_buffer(path_bufs.cells.at(0), cells_dl.at(0), pl_bytes);
-            tx.copy_buffer_to_buffer(path_bufs.dts.at(0), dts_dl.at(0), pl_bytes);
-            tx.copy_buffer_to_buffer(path_bufs.mask.at(0), mask_dl.at(0), pl_bytes);
-        }
-        let sp = gpu.submit(&mut record_encoder);
-        let _ = gpu.wait_for(&sp, !0);
+        // Submit but don't wait — meganeura's step submit, queued next,
+        // will start after this one and see its writes via the barrier
+        // inside the next `begin_pass`.
+        let _ = gpu.submit(&mut record_encoder);
 
-        // Pull the recorded paths into the flat scratch and feed them
-        // into meganeura. `Memory::Shared` buffers are mappable so the
-        // read is a memcpy off the GPU's view.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                cells_dl.data() as *const u32,
-                flat.cell.as_mut_ptr(),
-                pl,
-            );
-            std::ptr::copy_nonoverlapping(dts_dl.data() as *const f32, flat.dt.as_mut_ptr(), pl);
-            std::ptr::copy_nonoverlapping(
-                mask_dl.data() as *const f32,
-                flat.mask.as_mut_ptr(),
-                pl,
-            );
-        }
-
-        session.set_input_u32("cell_indices", &flat.cell);
-        session.set_input("dt", &flat.dt);
-        session.set_input("mask", &flat.mask);
         session.set_input("labels", &target_buf);
         session.step();
         session.wait();
@@ -711,9 +690,6 @@ fn fit_appearance_pixel_batched(
     path_bufs.destroy(&gpu);
     let mut recorder = recorder;
     recorder.destroy(&gpu);
-    gpu.destroy_buffer(cells_dl);
-    gpu.destroy_buffer(dts_dl);
-    gpu.destroy_buffer(mask_dl);
     gpu.destroy_command_encoder(&mut record_encoder);
 
     losses
