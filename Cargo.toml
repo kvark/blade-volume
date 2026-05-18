@@ -27,7 +27,7 @@ unused_extern_crates = "warn"
 [workspace.dependencies]
 blade-graphics = { git = "https://github.com/kvark/blade", rev = "72c30c1" }
 blade-macros = "0.3"
-meganeura = { git = "https://github.com/kvark/meganeura", rev = "1fefa6b" }
+meganeura = { git = "https://github.com/kvark/meganeura", rev = "331edb85276a46c0eadb22a42644e2cccb8a5114" }
 bytemuck = "1"
 glam = { version = "0.30", features = ["mint"] }
 flate2 = "1"
