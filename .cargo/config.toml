@@ -1,0 +1,6 @@
+# qhull-sys's bindgen step needs to find <float.h>. On Debian/Ubuntu
+# this header ships with GCC, not with libclang's resource dir, so we
+# pass the GCC include path explicitly. Adjust the GCC version to
+# whatever lives under `/usr/lib/gcc/x86_64-linux-gnu/`.
+[env]
+BINDGEN_EXTRA_CLANG_ARGS = "-I/usr/lib/gcc/x86_64-linux-gnu/15/include"

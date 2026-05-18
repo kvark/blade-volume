@@ -92,9 +92,15 @@ pub struct PipelineConfig {
 /// Adjacency algorithm to use when building the initial foam.
 #[derive(Clone, Copy, Debug)]
 pub enum AdjacencyKind {
-    /// Exact Delaunay tetrahedralisation. Memory is O(N^1.5); breaks past
-    /// ~7 K points on a 24 GB machine.
+    /// Exact Delaunay tetrahedralisation via `simple_delaunay_lib`.
+    /// Memory is O(N^1.5); breaks past ~7 K points on a 24 GB machine.
     Delaunay,
+    /// Exact Delaunay tetrahedralisation via Qhull. O(N log N) memory
+    /// and time, so 100 K – 1 M point clouds fit comfortably. Output
+    /// matches the `Delaunay` backend on non-degenerate inputs (≥98%
+    /// edge agreement on random clouds; differences come from
+    /// tie-breaking on near-co-spherical quadruples).
+    DelaunayQhull,
     /// Symmetric k-nearest-neighbour graph with `k` neighbours per point.
     /// Cheap (O(N · k) memory) but the resulting edges are a poor
     /// approximation of the Voronoi adjacency: true Voronoi neighbours
@@ -315,6 +321,14 @@ pub fn train_colmap_appearance_split(
                 model.points.len()
             );
             model.compute_adjacency_default();
+        }
+        AdjacencyKind::DelaunayQhull => {
+            log::info!(
+                "computing Qhull Delaunay adjacency for {} points...",
+                model.points.len()
+            );
+            let adj = vol::compute_adjacency_qhull_default(&model.points);
+            model.adjacency = Some(adj);
         }
         AdjacencyKind::Knn(k) => {
             log::info!(

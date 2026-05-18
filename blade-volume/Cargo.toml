@@ -12,6 +12,7 @@ flate2.workspace = true
 kiddo.workspace = true
 log.workspace = true
 mint.workspace = true
+qhull.workspace = true
 
 simple_delaunay_lib.workspace = true
 

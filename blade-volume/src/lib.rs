@@ -11,7 +11,8 @@ pub mod trace;
 pub mod io;
 
 pub use adjacency::{
-    compute_adjacency, compute_adjacency_default, compute_cech, compute_cech_default, compute_knn,
+    compute_adjacency, compute_adjacency_default, compute_adjacency_qhull,
+    compute_adjacency_qhull_default, compute_cech, compute_cech_default, compute_knn,
     lloyd_relax, radii_from_nearest_neighbour, AdjacencyConfig,
 };
 pub use camera::CameraParams;

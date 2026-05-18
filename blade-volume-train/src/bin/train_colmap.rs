@@ -89,20 +89,21 @@ struct Args {
     #[argh(option, default = "2000")]
     max_points: usize,
 
+    /// use Qhull (O(N log N)) instead of the default
+    /// `simple_delaunay_lib` (O(N^1.5)) Delaunay backend. Required
+    /// for >7K-cell training; both produce exact Voronoi adjacency
+    /// (so path-tracing stays correct).
+    #[argh(switch)]
+    qhull: bool,
+
     /// k for symmetric k-NN adjacency (default 0 = use Delaunay).
-    /// Set to e.g. 24 to scale past Delaunay's ~7K-point memory wall.
-    /// Note: k-NN edges are a poor approximation of the true Voronoi
-    /// adjacency and the path-tracer pays ~3 dB of PSNR for it. Prefer
-    /// `--cech-radius` over `--knn` for quality.
+    /// Approximate; useful for non-radfoam workloads only — the
+    /// path-tracer pays ~3 dB of PSNR for the wrong face partners.
     #[argh(option, default = "0")]
     knn: usize,
 
-    /// radius factor for Čech adjacency (default 0 = off). When > 0,
-    /// each point's radius = factor × distance to its nearest
-    /// neighbour, and the adjacency is the intersection-graph of
-    /// those balls. Better than k-NN for path-tracing because edges
-    /// are anchored to the geometric scale of each cell, not raw
-    /// distance rank. A factor of ~1.0 keeps balls just-touching.
+    /// radius factor for Čech adjacency (default 0 = off). Approximate;
+    /// same caveat as `--knn` re: path-tracer correctness.
     #[argh(option, default = "0.0")]
     cech_radius: f32,
 
@@ -135,7 +136,9 @@ fn main() {
     } else {
         Some(args.pixel_batch)
     };
-    let adjacency = if args.cech_radius > 0.0 {
+    let adjacency = if args.qhull {
+        pipeline::AdjacencyKind::DelaunayQhull
+    } else if args.cech_radius > 0.0 {
         pipeline::AdjacencyKind::Cech {
             radius_factor: args.cech_radius,
         }
