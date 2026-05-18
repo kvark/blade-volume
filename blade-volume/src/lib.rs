@@ -2,7 +2,7 @@
 
 mod adjacency;
 mod camera;
-mod gpu;
+pub mod gpu;
 mod scene;
 pub mod shaders;
 mod shape;
