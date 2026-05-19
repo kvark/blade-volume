@@ -30,23 +30,39 @@ use meganeura as mn;
 /// Handle to the parameter and input nodes of a built graph, so callers can
 /// `set_parameter` / `set_input` / read parameters back without re-deriving
 /// the names.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct VolumetricGraph {
     pub n_cells: usize,
     pub n_pixels: usize,
     pub max_steps: usize,
+    pub sh_degree: usize,
 
     pub log_density: mn::NodeId,
-    pub sh_r: mn::NodeId,
-    pub sh_g: mn::NodeId,
-    pub sh_b: mn::NodeId,
+    /// `sh_coefficients[c][k]` is the `[n_cells, 1]` parameter table for
+    /// channel `c` ∈ {0=R, 1=G, 2=B} and SH component `k` ∈ `0..(1+sh_degree)²`.
+    pub sh_coefficients: Vec<Vec<mn::NodeId>>,
 
     pub cell_indices: mn::NodeId,
     pub dt: mn::NodeId,
     pub mask: mn::NodeId,
+    /// `basis_inputs[k-1]` is the `[P, 1]` per-pixel basis input for SH
+    /// component `k` (k ≥ 1). Component 0 is the constant `SH_C0`, no
+    /// input needed. Empty when `sh_degree == 0`.
+    pub basis_inputs: Vec<mn::NodeId>,
     pub target: mn::NodeId,
 
     pub loss: mn::NodeId,
+}
+
+/// SH-component name suffix, e.g. `parameter_name("sh_r", 0)` → `"sh_r"`,
+/// `parameter_name("sh_r", 3)` → `"sh_r_3"`. Component 0 keeps the
+/// historical bare name for backward-compat with SH-0 checkpoints.
+fn parameter_name(channel: &str, k: usize) -> String {
+    if k == 0 {
+        channel.to_string()
+    } else {
+        format!("{channel}_{k}")
+    }
 }
 
 /// Build the volumetric forward + L1 loss subgraph and return handles.
@@ -54,15 +70,27 @@ pub struct VolumetricGraph {
 /// `n_cells` is the number of cells in the model (the embedding-table size).
 /// `n_pixels` is `P = width * height`. `max_steps` is the longest path the
 /// recorder will produce; shorter paths get zero `mask`/`dt` padding.
+///
+/// `sh_degree` ∈ {0, 1, 2, 3} controls the per-cell colour expressiveness.
+/// SH-0 (default) is a flat scalar — same as the original SH-degree-0
+/// pipeline. Higher degrees take per-pixel basis-value inputs named
+/// `basis_1`, `basis_2`, … through `basis_{(1+sh_degree)²-1}` and learn
+/// `(1+sh_degree)²` coefficients per cell per RGB channel.
 pub fn build_volumetric_graph(
     g: &mut mn::Graph,
     n_cells: usize,
     n_pixels: usize,
     max_steps: usize,
+    sh_degree: usize,
 ) -> VolumetricGraph {
+    assert!(
+        sh_degree <= 3,
+        "build_volumetric_graph: sh_degree {sh_degree} not supported (max 3)",
+    );
     let p = n_pixels;
     let l = max_steps;
     let pl = p * l;
+    let num_components = (1 + sh_degree) * (1 + sh_degree);
 
     let cell_indices = g.input_u32("cell_indices", &[pl]);
     let dt = g.input("dt", &[pl]);
@@ -71,14 +99,27 @@ pub fn build_volumetric_graph(
     // for L1 loss; we reshape rather than introduce a batch dimension upstream.
     let target = g.input("labels", &[1, p * 3]);
 
-    // Parameters live as [N, 1] tables so `embedding` returns [P*L, 1] which
-    // reshapes cheaply to [P, L].
-    let log_density = g.parameter("log_density", &[n_cells, 1]);
-    let sh_r = g.parameter("sh_r", &[n_cells, 1]);
-    let sh_g = g.parameter("sh_g", &[n_cells, 1]);
-    let sh_b = g.parameter("sh_b", &[n_cells, 1]);
+    // Per-pixel SH basis values. Component 0 is the constant SH_C0
+    // (handled inside `channel_pixel_sh`), so we only declare inputs for
+    // components 1..K.
+    let basis_inputs: Vec<mn::NodeId> = (1..num_components)
+        .map(|k| g.input(&format!("basis_{k}"), &[p, 1]))
+        .collect();
 
-    // Gather and reshape to [P, L] per channel.
+    // Parameters live as [N, 1] tables so `embedding` returns [P*L, 1] which
+    // reshapes cheaply to [P, L]. For SH-degree > 0 we have K such tables
+    // per channel; `sh_<chan>` is k=0, `sh_<chan>_<k>` for k>0.
+    let log_density = g.parameter("log_density", &[n_cells, 1]);
+    let mut sh_coefficients: Vec<Vec<mn::NodeId>> = Vec::with_capacity(3);
+    for channel in ["sh_r", "sh_g", "sh_b"] {
+        let mut per_channel = Vec::with_capacity(num_components);
+        for k in 0..num_components {
+            per_channel.push(g.parameter(&parameter_name(channel, k), &[n_cells, 1]));
+        }
+        sh_coefficients.push(per_channel);
+    }
+
+    // Density chain unchanged.
     let density_flat = g.embedding(cell_indices, log_density);
     let density_flat = g.relu(density_flat); // non-negative density
     let density = g.reshape(density_flat, &[p, l]);
@@ -114,9 +155,40 @@ pub fn build_volumetric_graph(
 
     // Per-channel pixel: pixel_c = (weight * color_c) @ ones_L
     let ones_l1 = g.constant(vec![1.0; l], &[l, 1]);
-    let pixel_r = channel_pixel(g, cell_indices, sh_r, weight, ones_l1, p, l);
-    let pixel_g = channel_pixel(g, cell_indices, sh_g, weight, ones_l1, p, l);
-    let pixel_b = channel_pixel(g, cell_indices, sh_b, weight, ones_l1, p, l);
+    let ones_1l = g.constant(vec![1.0; l], &[1, l]);
+    let pixel_r = channel_pixel_sh(
+        g,
+        cell_indices,
+        &sh_coefficients[0],
+        &basis_inputs,
+        weight,
+        ones_l1,
+        ones_1l,
+        p,
+        l,
+    );
+    let pixel_g = channel_pixel_sh(
+        g,
+        cell_indices,
+        &sh_coefficients[1],
+        &basis_inputs,
+        weight,
+        ones_l1,
+        ones_1l,
+        p,
+        l,
+    );
+    let pixel_b = channel_pixel_sh(
+        g,
+        cell_indices,
+        &sh_coefficients[2],
+        &basis_inputs,
+        weight,
+        ones_l1,
+        ones_1l,
+        p,
+        l,
+    );
 
     // Three per-channel L1 losses summed into one scalar. We could concat
     // and call l1_loss once, but concat in meganeura works on flat NCHW
@@ -142,13 +214,13 @@ pub fn build_volumetric_graph(
         n_cells,
         n_pixels,
         max_steps,
+        sh_degree,
         log_density,
-        sh_r,
-        sh_g,
-        sh_b,
+        sh_coefficients,
         cell_indices,
         dt,
         mask,
+        basis_inputs,
         target,
         loss,
     }
@@ -165,28 +237,135 @@ fn strict_lower_triangular_ones(l: usize) -> Vec<f32> {
     data
 }
 
-/// SH degree-0 basis constant — matches `vol::trace::eval_rgb_sh` so the
-/// graph's per-cell colour expression mirrors the production renderer.
+/// SH basis constants — degree-0 first (matches `vol::trace::eval_rgb_sh`).
 const SH_C0: f32 = 0.282_094_8;
+/// SH degree-1 coefficient: `|Y_1m| = SH_C1 * <axis>` for the three m's.
+pub const SH_C1: f32 = 0.488_602_5;
+/// SH degree-2 coefficients (m = -2..2). Sign / axis pairings are applied
+/// at basis-evaluation time, see [`sh_basis`].
+pub const SH_C2: [f32; 5] = [
+    1.092_548_4,
+    -1.092_548_4,
+    0.315_391_57,
+    -1.092_548_4,
+    0.546_274_2,
+];
+/// SH degree-3 coefficients (m = -3..3).
+pub const SH_C3: [f32; 7] = [
+    -0.590_043_6,
+    2.890_611_4,
+    -0.457_045_8,
+    0.373_176_33,
+    -0.457_045_8,
+    1.445_305_7,
+    -0.590_043_6,
+];
 
-fn channel_pixel(
+/// Camera quantities that don't depend on the pixel; computed once per
+/// view and reused for every per-pixel ray during a step.
+struct RayConstants {
+    origin: glam::Vec3,
+    orientation: glam::Quat,
+    tan_half: glam::Vec2,
+}
+
+fn ray_constants(cam: &vol::CameraParams) -> RayConstants {
+    RayConstants {
+        origin: glam::Vec3::from_array(cam.cam_position),
+        orientation: glam::Quat::from_xyzw(
+            cam.cam_orientation[0],
+            cam.cam_orientation[1],
+            cam.cam_orientation[2],
+            cam.cam_orientation[3],
+        ),
+        tan_half: glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan()),
+    }
+}
+
+fn ray_dir_for_pixel(c: &RayConstants, ix: u32, iy: u32, w: u32, h: u32) -> glam::Vec3 {
+    let px = (ix as f32 + 0.5) / w as f32;
+    let py = (iy as f32 + 0.5) / h as f32;
+    let ndc = glam::Vec2::new(px * 2.0 - 1.0, py * 2.0 - 1.0);
+    let local = glam::Vec3::new(ndc.x * c.tan_half.x, ndc.y * c.tan_half.y, 1.0);
+    let _ = c.origin;
+    (c.orientation * local).normalize()
+}
+
+/// Evaluate the spherical-harmonics basis at unit direction `dir`, for
+/// the first `num_components` components. Matches
+/// `blade-volume/shaders/sh_eval.wgsl::sh_eval_color` term-by-term, so
+/// CPU-precomputed bases used by the training graph stay numerically
+/// consistent with the production renderer's GPU evaluation.
+pub fn sh_basis(dir: glam::Vec3, num_components: usize) -> Vec<f32> {
+    let mut b = Vec::with_capacity(num_components);
+    let (x, y, z) = (dir.x, dir.y, dir.z);
+    b.push(SH_C0);
+    if num_components > 1 {
+        b.push(-SH_C1 * y);
+        b.push(SH_C1 * z);
+        b.push(-SH_C1 * x);
+    }
+    if num_components > 4 {
+        let (xx, yy, zz) = (x * x, y * y, z * z);
+        b.push(SH_C2[0] * x * y);
+        b.push(SH_C2[1] * y * z);
+        b.push(SH_C2[2] * (3.0 * zz - 1.0));
+        b.push(SH_C2[3] * x * z);
+        b.push(SH_C2[4] * (xx - yy));
+    }
+    if num_components > 9 {
+        let (xx, yy, zz) = (x * x, y * y, z * z);
+        b.push(SH_C3[0] * y * (3.0 * xx - yy));
+        b.push(SH_C3[1] * x * y * z);
+        b.push(SH_C3[2] * y * (5.0 * zz - 1.0));
+        b.push(SH_C3[3] * z * (5.0 * zz - 3.0));
+        b.push(SH_C3[4] * x * (5.0 * zz - 1.0));
+        b.push(SH_C3[5] * z * (xx - yy));
+        b.push(SH_C3[6] * x * (xx - 3.0 * yy));
+    }
+    b.truncate(num_components);
+    b
+}
+
+#[allow(clippy::too_many_arguments)]
+fn channel_pixel_sh(
     g: &mut mn::Graph,
     cell_indices: mn::NodeId,
-    sh_chan: mn::NodeId,
+    sh_chans: &[mn::NodeId], // K parameter tables [N, 1]
+    basis_inputs: &[mn::NodeId], // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
     weight: mn::NodeId,
-    ones_l1: mn::NodeId,
+    ones_l1: mn::NodeId, // [L, 1] for the final reduce
+    ones_1l: mn::NodeId, // [1, L] for broadcasting basis along the L axis
     p: usize,
     l: usize,
 ) -> mn::NodeId {
-    let color_flat = g.embedding(cell_indices, sh_chan); // [P*L, 1]
-    let color = g.reshape(color_flat, &[p, l]);
-    // Match `eval_rgb_sh`: per-cell colour = SH_C0 * sh_chan + 0.5.
-    // We multiply weight by this whole expression; equivalently emit the
-    // scaled-plus-biased colour, then mul by weight, then reduce.
+    let k = sh_chans.len();
+    assert_eq!(
+        basis_inputs.len(),
+        k.saturating_sub(1),
+        "channel_pixel_sh: basis_inputs.len() ({}) must equal sh_chans.len() - 1 ({})",
+        basis_inputs.len(),
+        k.saturating_sub(1),
+    );
+
+    // Component 0: per-cell colour scaled by the constant SH_C0.
+    let color_flat = g.embedding(cell_indices, sh_chans[0]);
+    let color_2d = g.reshape(color_flat, &[p, l]);
     let scale = g.constant(vec![SH_C0; p * l], &[p, l]);
+    let mut color_total = g.mul(color_2d, scale);
+
+    // Components 1..K: per-cell colour times per-pixel basis broadcast
+    // across the L axis via matmul with `ones_1l`.
+    for (idx, &sh_chan_k) in sh_chans.iter().enumerate().skip(1) {
+        let color_flat_k = g.embedding(cell_indices, sh_chan_k);
+        let color_k = g.reshape(color_flat_k, &[p, l]);
+        let basis_k_2d = g.matmul(basis_inputs[idx - 1], ones_1l); // [P, L]
+        let contrib = g.mul(color_k, basis_k_2d);
+        color_total = g.add(color_total, contrib);
+    }
+
     let bias = g.constant(vec![0.5; p * l], &[p, l]);
-    let scaled = g.mul(color, scale);
-    let biased = g.add(scaled, bias);
+    let biased = g.add(color_total, bias);
     let weighted = g.mul(weight, biased); // [P, L]
     g.matmul(weighted, ones_l1) // [P, L] @ [L, 1] = [P, 1]
 }
@@ -270,6 +449,12 @@ pub struct AppearanceFitConfig {
     /// Number of Adam steps per view in batched mode. Used only when
     /// `pixel_batch.is_some()`. Default 200.
     pub steps_per_view: usize,
+    /// SH degree for view-dependent colour. 0 = flat colour (default,
+    /// matches the original radfoam pipeline). 1–3 enable view
+    /// dependence: ~3-5 dB PSNR improvement on Mip-NeRF 360 scenes at
+    /// the cost of `(1+sh_degree)²` per-cell parameters per RGB
+    /// channel. Only the `pixel_batch`-mode pipeline supports SH > 0.
+    pub sh_degree: usize,
 }
 
 impl Default for AppearanceFitConfig {
@@ -282,6 +467,7 @@ impl Default for AppearanceFitConfig {
             adam_eps: 1e-8,
             pixel_batch: None,
             steps_per_view: 200,
+            sh_degree: 0,
         }
     }
 }
@@ -400,7 +586,7 @@ pub fn fit_appearance_multi_view(
     }
 
     let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps);
+    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0);
     let (mut session, _report) = mn::build(
         &g,
         mn::SessionConfig {
@@ -444,13 +630,7 @@ pub fn fit_appearance_multi_view(
         }
     }
 
-    // Write trained parameters back.
-    let density_buf = session.param_buffer("log_density").unwrap();
-    let r_buf = session.param_buffer("sh_r").unwrap();
-    let g_buf = session.param_buffer("sh_g").unwrap();
-    let b_buf = session.param_buffer("sh_b").unwrap();
-
-    download_model_parameters(&session, model, density_buf, r_buf, g_buf, b_buf, n_cells);
+    download_model_parameters(&session, model);
 
     losses
 }
@@ -458,48 +638,47 @@ pub fn fit_appearance_multi_view(
 fn upload_model_parameters(session: &mut mn::Session, model: &vol::PointCloudModel) {
     let n_cells = model.points.len();
     let mut init_density = Vec::with_capacity(n_cells);
-    let mut init_r = Vec::with_capacity(n_cells);
-    let mut init_g = Vec::with_capacity(n_cells);
-    let mut init_b = Vec::with_capacity(n_cells);
-    for (i, point) in model.points.iter().enumerate() {
+    for point in &model.points {
         init_density.push(point.w);
-        init_r.push(model.sh_coefficients[i * 3]);
-        init_g.push(model.sh_coefficients[i * 3 + 1]);
-        init_b.push(model.sh_coefficients[i * 3 + 2]);
     }
     session.set_parameter("log_density", &init_density);
-    session.set_parameter("sh_r", &init_r);
-    session.set_parameter("sh_g", &init_g);
-    session.set_parameter("sh_b", &init_b);
+
+    // `model.sh_coefficients` layout (lib.rs spec):
+    //   `[p0_c0_r, p0_c0_g, p0_c0_b, p0_c1_r, p0_c1_g, p0_c1_b, ..., p1_c0_r, ...]`
+    // i.e. per point, RGB interleaved within each SH component, then
+    // components contiguous. We unpack into `[N]` slices, one per
+    // `sh_<chan>_<k>` parameter the graph declared.
+    let num_components = model.sh_component_count();
+    let row_stride = num_components * 3;
+    let mut scratch = vec![0.0_f32; n_cells];
+    for (chan_idx, chan) in ["sh_r", "sh_g", "sh_b"].iter().enumerate() {
+        for k in 0..num_components {
+            for (i, slot) in scratch.iter_mut().enumerate() {
+                *slot = model.sh_coefficients[i * row_stride + k * 3 + chan_idx];
+            }
+            session.set_parameter(&parameter_name(chan, k), &scratch);
+        }
+    }
 }
 
-fn download_model_parameters(
-    session: &mn::Session,
-    model: &mut vol::PointCloudModel,
-    density_buf: meganeura::compile::BufferRef,
-    r_buf: meganeura::compile::BufferRef,
-    g_buf: meganeura::compile::BufferRef,
-    b_buf: meganeura::compile::BufferRef,
-    n_cells: usize,
-) {
+fn download_model_parameters(session: &mn::Session, model: &mut vol::PointCloudModel) {
+    let n_cells = model.points.len();
     let mut out_density = vec![0.0f32; n_cells];
-    session.read_buffer(density_buf, &mut out_density);
-    let mut out_chan = vec![0.0f32; n_cells];
-
+    session.read_param("log_density", &mut out_density);
     for (i, d) in out_density.iter().enumerate() {
         model.points[i].w = d.max(0.0);
     }
-    session.read_buffer(r_buf, &mut out_chan);
-    for (i, &c) in out_chan.iter().enumerate() {
-        model.sh_coefficients[i * 3] = c;
-    }
-    session.read_buffer(g_buf, &mut out_chan);
-    for (i, &c) in out_chan.iter().enumerate() {
-        model.sh_coefficients[i * 3 + 1] = c;
-    }
-    session.read_buffer(b_buf, &mut out_chan);
-    for (i, &c) in out_chan.iter().enumerate() {
-        model.sh_coefficients[i * 3 + 2] = c;
+
+    let num_components = model.sh_component_count();
+    let row_stride = num_components * 3;
+    let mut out_chan = vec![0.0f32; n_cells];
+    for (chan_idx, chan) in ["sh_r", "sh_g", "sh_b"].iter().enumerate() {
+        for k in 0..num_components {
+            session.read_param(&parameter_name(chan, k), &mut out_chan);
+            for (i, &c) in out_chan.iter().enumerate() {
+                model.sh_coefficients[i * row_stride + k * 3 + chan_idx] = c;
+            }
+        }
     }
 }
 
@@ -518,8 +697,33 @@ fn fit_appearance_pixel_batched(
     let n_cells = model.points.len();
     let total_steps = config.steps_per_view.max(1) * views.len();
 
+    // The model's existing SH degree drives the graph: callers wanting to
+    // expand a SH-0 model to a higher degree must reshape
+    // `model.sh_coefficients` and update `model.sh_degree` before calling
+    // this function.
+    let sh_degree = config.sh_degree.max(model.sh_degree);
+    let num_components = (1 + sh_degree) * (1 + sh_degree);
+    if model.sh_degree < sh_degree {
+        // Expand `sh_coefficients` to the wider SH layout, zero-padding
+        // the new components. Existing colour (component 0) is
+        // preserved exactly; the higher-order coefficients start at
+        // zero, so the initial colour matches a SH-0 model.
+        let n_cells_local = model.points.len();
+        let old_stride = model.sh_component_count() * 3;
+        let new_stride = num_components * 3;
+        let mut expanded = vec![0.0_f32; n_cells_local * new_stride];
+        for i in 0..n_cells_local {
+            // Component 0 = first 3 entries per cell.
+            for chan in 0..3 {
+                expanded[i * new_stride + chan] = model.sh_coefficients[i * old_stride + chan];
+            }
+        }
+        model.sh_coefficients = expanded;
+        model.sh_degree = sh_degree;
+    }
+
     let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(&mut g, n_cells, pixel_batch, max_steps);
+    let _vg = build_volumetric_graph(&mut g, n_cells, pixel_batch, max_steps, sh_degree);
     let (mut session, _report) = mn::build(
         &g,
         mn::SessionConfig {
@@ -588,6 +792,13 @@ fn fit_appearance_pixel_batched(
     // pixel-index permutation.
     let mut target_buf = vec![0.0f32; pixel_batch * 3];
     let mut pixel_indices = vec![0u32; pixel_batch];
+    // For SH degree > 0, per-pixel basis is computed on the CPU from
+    // each pixel's view-ray direction and fed in as inputs named
+    // `basis_1` … `basis_{K-1}`. Component 0 is the constant `SH_C0`
+    // and is folded directly into the graph.
+    let mut basis_inputs: Vec<Vec<f32>> = (1..num_components)
+        .map(|_| vec![0.0_f32; pixel_batch])
+        .collect();
 
     let mut losses = Vec::with_capacity(total_steps);
     let log_every = total_steps.div_ceil(10).max(1);
@@ -597,13 +808,26 @@ fn fit_appearance_pixel_batched(
         config.adam_beta2,
         config.adam_eps,
     );
+    // Train the higher-order SH coefficients at 0.1× the base LR, matching
+    // the RadFoam paper's `sh_factor`. The k=0 (DC) coefficients are named
+    // bare `sh_r` / `sh_g` / `sh_b` and don't match the `_` prefix, so they
+    // keep the full LR.
+    if sh_degree >= 1 {
+        for chan in ["sh_r_", "sh_g_", "sh_b_"] {
+            session.set_lr_multiplier(chan, 0.1);
+        }
+    }
 
     for step in 0..total_steps {
         let vi = (next_u32() as usize) % views.len();
         let v = &views[vi];
         let img_size = v.width * v.height;
 
-        // Pick random pixels and pack the target RGB for each.
+        // Pick random pixels and pack the target RGB for each. When
+        // sh_degree > 0, also compute the per-pixel SH basis values
+        // from the camera ray direction.
+        let cam_ray_constants =
+            ray_constants(&v.camera);
         for k in 0..pixel_batch {
             let pidx = next_u32() % img_size;
             pixel_indices[k] = pidx;
@@ -611,8 +835,21 @@ fn fit_appearance_pixel_batched(
             target_buf[k * 3] = v.target_rgb[base];
             target_buf[k * 3 + 1] = v.target_rgb[base + 1];
             target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+
+            if num_components > 1 {
+                let ix = pidx % v.width;
+                let iy = pidx / v.width;
+                let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
+                let basis = sh_basis(dir, num_components);
+                for (j, &bv) in basis.iter().enumerate().skip(1) {
+                    basis_inputs[j - 1][k] = bv;
+                }
+            }
         }
         path_bufs.write_pixel_indices(&pixel_indices);
+        for (j, vec) in basis_inputs.iter().enumerate() {
+            session.set_input(&format!("basis_{}", j + 1), vec);
+        }
 
         // GPU path-record: zero the shared outputs, upload pixel
         // indices, dispatch the recorder. No CPU readback — meganeura
@@ -676,11 +913,7 @@ fn fit_appearance_pixel_batched(
         }
     }
 
-    let density_buf = session.param_buffer("log_density").unwrap();
-    let r_buf = session.param_buffer("sh_r").unwrap();
-    let g_buf = session.param_buffer("sh_g").unwrap();
-    let b_buf = session.param_buffer("sh_b").unwrap();
-    download_model_parameters(&session, model, density_buf, r_buf, g_buf, b_buf, n_cells);
+    download_model_parameters(&session, model);
 
     // Cleanup GPU resources we own (the cloud/buffers/recorder).
     drop(session);
@@ -727,7 +960,7 @@ pub fn fit_appearance_to_pixels(
     let flat = flatten_paths(paths, max_steps);
 
     let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps);
+    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0);
 
     let (mut session, _report) = mn::build(
         &g,
@@ -773,31 +1006,7 @@ pub fn fit_appearance_to_pixels(
         losses.push(read.first().copied().unwrap_or(f32::NAN));
     }
 
-    // Write trained parameters back into the model. `relu` in the graph
-    // means densities are clamped to >= 0 in the forward; mirror that here.
-    let density_buf = session.param_buffer("log_density").unwrap();
-    let mut out_density = vec![0.0f32; n_cells];
-    session.read_buffer(density_buf, &mut out_density);
-
-    let mut out_chan = vec![0.0f32; n_cells];
-    let r_buf = session.param_buffer("sh_r").unwrap();
-    let g_buf = session.param_buffer("sh_g").unwrap();
-    let b_buf = session.param_buffer("sh_b").unwrap();
-    for (i, d) in out_density.iter().enumerate() {
-        model.points[i].w = d.max(0.0);
-    }
-    session.read_buffer(r_buf, &mut out_chan);
-    for (i, &c) in out_chan.iter().enumerate() {
-        model.sh_coefficients[i * 3] = c;
-    }
-    session.read_buffer(g_buf, &mut out_chan);
-    for (i, &c) in out_chan.iter().enumerate() {
-        model.sh_coefficients[i * 3 + 1] = c;
-    }
-    session.read_buffer(b_buf, &mut out_chan);
-    for (i, &c) in out_chan.iter().enumerate() {
-        model.sh_coefficients[i * 3 + 2] = c;
-    }
+    download_model_parameters(&session, model);
 
     losses
 }
@@ -891,7 +1100,7 @@ mod tests {
         let flat = flatten_paths(&[path], max_steps);
 
         let mut g = mn::Graph::new();
-        let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps);
+        let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0);
 
         let (mut session, _report) = mn::build(
             &g,

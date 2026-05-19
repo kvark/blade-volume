@@ -120,6 +120,13 @@ struct Args {
     /// initial uniform per-cell density before training (default 1.0)
     #[argh(option, default = "1.0")]
     initial_density: f32,
+
+    /// SH degree for view-dependent colour (0–3, default 0).
+    /// Higher degrees give better PSNR on view-dependent surfaces
+    /// (metallic, glossy, leafy) at the cost of `(1+deg)²` per-cell
+    /// parameters per channel. Only effective in `--pixel-batch` mode.
+    #[argh(option, default = "0")]
+    sh_degree: usize,
 }
 
 fn main() {
@@ -157,6 +164,7 @@ fn main() {
             epochs: args.epochs,
             pixel_batch,
             steps_per_view: args.steps_per_view,
+            sh_degree: args.sh_degree,
             ..diff_render::AppearanceFitConfig::default()
         },
         far_plane: 100.0,
