@@ -169,6 +169,21 @@ struct Args {
     /// At step `total_steps` the effective LR equals `learning_rate * lr_min_ratio`.
     #[argh(option, default = "0.01")]
     lr_min_ratio: f32,
+
+    /// patch-based sampling + structural-gradient L1 loss. `0` (default) =
+    /// random-pixel L1 only; `> 0` = each Adam step samples a single
+    /// `--patch-size × --patch-size` contiguous patch (requires
+    /// `--pixel-batch == --patch-size²`) and the loss becomes
+    /// `(1 - --grad-loss-weight) * L1 + --grad-loss-weight * L1_grad`,
+    /// where `L1_grad` is the L1 distance between rendered and target
+    /// finite-difference gradients. Captures edge structure that
+    /// random-pixel L1 misses.
+    #[argh(option, default = "0")]
+    patch_size: usize,
+
+    /// weight on the structural-gradient L1 term when `--patch-size > 0`.
+    #[argh(option, default = "0.2")]
+    grad_loss_weight: f32,
 }
 
 fn main() {
@@ -217,6 +232,8 @@ fn main() {
             sh_degree: args.sh_degree,
             lr_schedule,
             lr_min_ratio: args.lr_min_ratio,
+            patch_size: args.patch_size,
+            grad_loss_weight: args.grad_loss_weight,
             densify: if args.densify_every > 0 {
                 Some(diff_render::DensifyConfig {
                     every: args.densify_every,

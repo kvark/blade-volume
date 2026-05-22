@@ -36,12 +36,26 @@ pub struct VolumetricGraph {
     pub n_pixels: usize,
     pub max_steps: usize,
     pub sh_degree: usize,
+    pub num_views: usize,
 
     pub log_density: mn::NodeId,
     pub positions: mn::NodeId,
     /// `sh_coefficients[c][k]` is the `[n_cells, 1]` parameter table for
     /// channel `c` ∈ {0=R, 1=G, 2=B} and SH component `k` ∈ `0..(1+sh_degree)²`.
     pub sh_coefficients: Vec<Vec<mn::NodeId>>,
+    /// Per-view, per-channel RGB gain: one `[num_views, 1]` table per
+    /// channel. Multiplies each rendered pixel before the L1 loss.
+    /// Initialised to 1.0; frozen at 1.0 when the `exposure_*` LR
+    /// multipliers are 0 (default OFF for an apples-to-apples
+    /// baseline). With LR > 0 Adam absorbs per-image brightness
+    /// variation into these tables instead of the SH chain. Three
+    /// separate tables (rather than one `[num_views, 3]`) so the
+    /// gradient flows through `embedding` only — `SplitA`/`SplitB`
+    /// have an empty backward in meganeura and would silently zero
+    /// the gradient.
+    pub exposure_r: mn::NodeId,
+    pub exposure_g: mn::NodeId,
+    pub exposure_b: mn::NodeId,
 
     pub cell_indices: mn::NodeId,
     pub next_cell_indices: mn::NodeId,
@@ -49,6 +63,9 @@ pub struct VolumetricGraph {
     pub ray_origin: mn::NodeId,
     pub ray_dir_per_pixel: mn::NodeId,
     pub pixel_idx_per_step: mn::NodeId,
+    /// Single u32 scalar — index into `exposure` for the current view.
+    /// Set once per Adam step via `set_input_u32("view_idx", &[vi])`.
+    pub view_idx: mn::NodeId,
     /// `basis_inputs[k-1]` is the `[P, 1]` per-pixel basis input for SH
     /// component `k` (k ≥ 1). Component 0 is the constant `SH_C0`, no
     /// input needed. Empty when `sh_degree == 0`.
@@ -90,11 +107,25 @@ pub fn build_volumetric_graph(
     n_pixels: usize,
     max_steps: usize,
     sh_degree: usize,
+    num_views: usize,
+    patch_size: usize,
+    grad_loss_weight: f32,
 ) -> VolumetricGraph {
     assert!(
         sh_degree <= 3,
         "build_volumetric_graph: sh_degree {sh_degree} not supported (max 3)",
     );
+    assert!(
+        num_views >= 1,
+        "build_volumetric_graph: num_views must be at least 1",
+    );
+    if patch_size > 0 {
+        assert_eq!(
+            n_pixels,
+            patch_size * patch_size,
+            "patch mode: n_pixels must equal patch_size²"
+        );
+    }
     let p = n_pixels;
     let l = max_steps;
     let pl = p * l;
@@ -130,6 +161,16 @@ pub fn build_volumetric_graph(
     // have K coefficient tables per channel.
     let log_density = g.parameter("log_density", &[n_cells, 1]);
     let positions = g.parameter("positions", &[n_cells, 3]);
+    // Per-view RGB gain: separate `[num_views, 1]` table per channel
+    // so each channel's gradient flows back through `embedding`
+    // (which has a `scatter_add` backward). Folding channels into a
+    // single `[num_views, 3]` table and splitting wouldn't work —
+    // `SplitA`/`SplitB` have an empty backward in meganeura, so the
+    // gradient never reaches the parameter.
+    let exposure_r = g.parameter("exposure_r", &[num_views, 1]);
+    let exposure_g = g.parameter("exposure_g", &[num_views, 1]);
+    let exposure_b = g.parameter("exposure_b", &[num_views, 1]);
+    let view_idx = g.input_u32("view_idx", &[1]);
     let mut sh_coefficients: Vec<Vec<mn::NodeId>> = Vec::with_capacity(3);
     for channel in ["sh_r", "sh_g", "sh_b"] {
         let mut per_channel = Vec::with_capacity(num_components);
@@ -296,11 +337,56 @@ pub fn build_volumetric_graph(
     let split_b = g.split_b(target_rest_2d, p as u32, 1, 1, 1);
     let target_b = g.reshape(split_b, &[p, 1]);
 
+    // --- Per-view exposure ---
+    //
+    // Each channel's exposure is its own `[num_views, 1]` table. Gather
+    // the row for the current view via embedding (which is fully
+    // differentiable — backward is scatter_add into the table). The
+    // result is `[1, 1]`; broadcast to `[p, 1]` with a matmul against
+    // the `ones[p, 1]` constant, then elementwise-multiply the
+    // rendered channel.
+    let ones_p1 = g.constant(vec![1.0_f32; p], &[p, 1]);
+    let exp_r_11 = g.embedding(view_idx, exposure_r); // [1, 1]
+    let exp_r_p = g.matmul(ones_p1, exp_r_11); // [p, 1]
+    let pixel_r = g.mul(pixel_r, exp_r_p);
+    let exp_g_11 = g.embedding(view_idx, exposure_g);
+    let exp_g_p = g.matmul(ones_p1, exp_g_11);
+    let pixel_g = g.mul(pixel_g, exp_g_p);
+    let exp_b_11 = g.embedding(view_idx, exposure_b);
+    let exp_b_p = g.matmul(ones_p1, exp_b_11);
+    let pixel_b = g.mul(pixel_b, exp_b_p);
+
     let loss_r = g.l1_loss(pixel_r, target_r);
     let loss_g = g.l1_loss(pixel_g, target_g);
     let loss_b = g.l1_loss(pixel_b, target_b);
     let loss_rg = g.add(loss_r, loss_g);
-    let loss = g.add(loss_rg, loss_b);
+    let l1 = g.add(loss_rg, loss_b);
+
+    // Gradient (structural) L1 loss, computed in patch mode only. The
+    // finite-difference ∂/∂x and ∂/∂y of the rendered patch is matched
+    // against the corresponding difference of the target patch. Acts as
+    // a poor-man's SSIM — captures local edge structure that random-
+    // pixel L1 alone cannot see.
+    let loss = if patch_size > 0 && grad_loss_weight > 0.0 {
+        let q = patch_size;
+        let grad_r = patch_grad_l1(g, pixel_r, target_r, q);
+        let grad_g = patch_grad_l1(g, pixel_g, target_g, q);
+        let grad_b = patch_grad_l1(g, pixel_b, target_b, q);
+        let grad_rg = g.add(grad_r, grad_g);
+        let grad_loss = g.add(grad_rg, grad_b);
+        // Combine: (1 - α) * L1 + α * L1_grad
+        let l1_weight = g.constant(vec![1.0 - grad_loss_weight], &[1, 1]);
+        let grad_weight = g.constant(vec![grad_loss_weight], &[1, 1]);
+        let l1_2d = g.reshape(l1, &[1, 1]);
+        let grad_2d = g.reshape(grad_loss, &[1, 1]);
+        let l1_scaled = g.mul(l1_2d, l1_weight);
+        let grad_scaled = g.mul(grad_2d, grad_weight);
+        let combined = g.add(l1_scaled, grad_scaled);
+        g.reshape(combined, &[1])
+    } else {
+        l1
+    };
+
     // `dt_from_positions` as a second output so callers can read it
     // back and compare against the shader-computed dt during the
     // position-optimisation sanity check.
@@ -311,15 +397,20 @@ pub fn build_volumetric_graph(
         n_pixels,
         max_steps,
         sh_degree,
+        num_views,
         log_density,
         positions,
         sh_coefficients,
+        exposure_r,
+        exposure_g,
+        exposure_b,
         cell_indices,
         next_cell_indices,
         mask,
         ray_origin,
         ray_dir_per_pixel,
         pixel_idx_per_step,
+        view_idx,
         basis_inputs,
         target,
         loss,
@@ -336,6 +427,59 @@ fn strict_lower_triangular_ones(l: usize) -> Vec<f32> {
         }
     }
     data
+}
+
+/// Build the L1 distance between finite-difference gradients of a single
+/// channel for the rendered patch and the target patch. Both inputs are
+/// `[q*q, 1]` (row-major flat patches); returns a scalar.
+///
+/// `diff_x[i, j] = X[i, j+1] - X[i, j]` is computed via matmul with a
+/// constant `[q, q-1]` band matrix on the right. `diff_y[i, j] = X[i+1, j]
+/// - X[i, j]` uses a `[q-1, q]` band matrix on the left. The matmuls are
+/// differentiable end-to-end — `SplitA`/`SplitB` cannot be used here
+/// because their autodiff backward is empty (gradients would silently
+/// drop to zero before reaching the rendered pixels).
+fn patch_grad_l1(
+    g: &mut mn::Graph,
+    pred: mn::NodeId,
+    target: mn::NodeId,
+    q: usize,
+) -> mn::NodeId {
+    // Reshape flat [q*q, 1] → [q, q] (rows × cols).
+    let pred_2d = g.reshape(pred, &[q, q]);
+    let target_2d = g.reshape(target, &[q, q]);
+
+    // X-direction: D_x has shape [q, q-1], D_x[k, j] = +1 iff k == j+1,
+    // -1 iff k == j, else 0. Then `X @ D_x` is shape [q, q-1] with
+    // `(X @ D_x)[i, j] = X[i, j+1] - X[i, j]`.
+    let mut d_x_data = vec![0.0_f32; q * (q - 1)];
+    for j in 0..(q - 1) {
+        d_x_data[j * (q - 1) + j] = -1.0; // row k=j, col j
+        d_x_data[(j + 1) * (q - 1) + j] = 1.0; // row k=j+1, col j
+    }
+    let d_x = g.constant(d_x_data, &[q, q - 1]);
+    let pred_dx = g.matmul(pred_2d, d_x);
+    let tgt_dx = g.matmul(target_2d, d_x);
+    let dx_flat_pred = g.reshape(pred_dx, &[1, q * (q - 1)]);
+    let dx_flat_tgt = g.reshape(tgt_dx, &[1, q * (q - 1)]);
+    let loss_dx = g.l1_loss(dx_flat_pred, dx_flat_tgt);
+
+    // Y-direction: D_y has shape [q-1, q], D_y[i, k] = +1 iff k == i+1,
+    // -1 iff k == i, else 0. Then `D_y @ X` is shape [q-1, q] with
+    // `(D_y @ X)[i, j] = X[i+1, j] - X[i, j]`.
+    let mut d_y_data = vec![0.0_f32; (q - 1) * q];
+    for i in 0..(q - 1) {
+        d_y_data[i * q + i] = -1.0; // row i, col k=i
+        d_y_data[i * q + (i + 1)] = 1.0; // row i, col k=i+1
+    }
+    let d_y = g.constant(d_y_data, &[q - 1, q]);
+    let pred_dy = g.matmul(d_y, pred_2d);
+    let tgt_dy = g.matmul(d_y, target_2d);
+    let dy_flat_pred = g.reshape(pred_dy, &[1, (q - 1) * q]);
+    let dy_flat_tgt = g.reshape(tgt_dy, &[1, (q - 1) * q]);
+    let loss_dy = g.l1_loss(dy_flat_pred, dy_flat_tgt);
+
+    g.add(loss_dx, loss_dy)
 }
 
 /// SH basis constants — degree-0 first (matches `vol::trace::eval_rgb_sh`).
@@ -578,6 +722,18 @@ pub struct AppearanceFitConfig {
     /// periodically during training. `None` disables densification
     /// entirely (geometry stays frozen at initialisation count).
     pub densify: Option<DensifyConfig>,
+    /// Patch-based sampling + structural-gradient L1 loss. When
+    /// `patch_size > 0`, each Adam step samples a single contiguous
+    /// `patch_size × patch_size` patch (so `pixel_batch == patch_size²`),
+    /// and the loss becomes `(1 - grad_loss_weight) * L1 + grad_loss_weight * L1_grad`
+    /// where `L1_grad` is the L1 distance between rendered and target
+    /// finite-difference gradients (∂/∂x, ∂/∂y). Acts as a poor-man's
+    /// SSIM and captures edge structure that random-pixel L1 misses.
+    /// `0` (default) keeps the legacy random-pixel L1.
+    pub patch_size: usize,
+    /// Weight on the gradient L1 term when `patch_size > 0`. Common
+    /// choices in the literature are 0.1–0.2.
+    pub grad_loss_weight: f32,
 }
 
 /// Adaptive densification: every `every` training steps after `warmup`
@@ -632,6 +788,8 @@ impl Default for AppearanceFitConfig {
             densify: None,
             lr_schedule: LrSchedule::Cosine,
             lr_min_ratio: 0.01,
+            patch_size: 0,
+            grad_loss_weight: 0.0,
         }
     }
 }
@@ -770,7 +928,7 @@ pub fn fit_appearance_multi_view(
     }
 
     let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0);
+    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, views.len().max(1), 0, 0.0);
     let (mut session, _report) = mn::build(
         &g,
         mn::SessionConfig {
@@ -848,6 +1006,33 @@ fn upload_model_parameters(session: &mut mn::Session, model: &vol::PointCloudMod
             session.set_parameter(&parameter_name(chan, k), &scratch);
         }
     }
+}
+
+fn debug_dump_exposure(session: &mn::Session, num_views: usize) {
+    let mut r = vec![0.0_f32; num_views];
+    let mut g = vec![0.0_f32; num_views];
+    let mut b = vec![0.0_f32; num_views];
+    session.read_param("exposure_r", &mut r);
+    session.read_param("exposure_g", &mut g);
+    session.read_param("exposure_b", &mut b);
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    let mut sum = 0.0_f64;
+    let mut n = 0usize;
+    for buf in [&r, &g, &b] {
+        for &v in buf {
+            min = min.min(v);
+            max = max.max(v);
+            sum += v as f64;
+            n += 1;
+        }
+    }
+    let mean = sum / n as f64;
+    eprintln!(
+        "exposure[{num_views}]: min={min:.4} max={max:.4} mean={mean:.4} \
+         first_view=[r={:.3}, g={:.3}, b={:.3}]",
+        r[0], g[0], b[0],
+    );
 }
 
 fn download_model_parameters(session: &mn::Session, model: &mut vol::PointCloudModel) {
@@ -1068,11 +1253,15 @@ fn restore_adam_state(
 /// (graph parameters, embedding tables, GPU adjacency buffer) get
 /// rebuilt. Path-record buffers and the recorder pipeline survive the
 /// rebuild.
+#[allow(clippy::too_many_arguments)]
 fn build_train_session(
     model: &vol::PointCloudModel,
     pixel_batch: usize,
     max_steps: usize,
     sh_degree: usize,
+    num_views: usize,
+    patch_size: usize,
+    grad_loss_weight: f32,
     gpu: &std::sync::Arc<blade_graphics::Context>,
     path_bufs: &vol::gpu::PathRecordBuffers,
     lr: f32,
@@ -1080,7 +1269,16 @@ fn build_train_session(
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
     let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(&mut g, n_cells, pixel_batch, max_steps, sh_degree);
+    let _vg = build_volumetric_graph(
+        &mut g,
+        n_cells,
+        pixel_batch,
+        max_steps,
+        sh_degree,
+        num_views,
+        patch_size,
+        grad_loss_weight,
+    );
     let (mut session, _report) = mn::build(
         &g,
         mn::SessionConfig {
@@ -1137,6 +1335,28 @@ fn build_train_session(
         .and_then(|s| s.parse::<f32>().ok())
         .unwrap_or(0.0);
     session.set_lr_multiplier("positions", position_lr_ratio);
+
+    // Per-view exposure: init to 1.0 (identity). Defaults to enabled
+    // (LR multiplier 1.0) when more than one view is being trained;
+    // set `BLADE_VOLUME_PER_VIEW_EXPOSURE=0` to freeze at 1.0 for an
+    // apples-to-apples comparison. With `num_views == 1` there's only
+    // one row, equivalent to a global gain — still safe at LR 1.0,
+    // but the multiplier is forced to 0 to keep the single-view case
+    // identical to pre-feature behaviour.
+    let exposure_init = vec![1.0_f32; num_views];
+    session.set_parameter("exposure_r", &exposure_init);
+    session.set_parameter("exposure_g", &exposure_init);
+    session.set_parameter("exposure_b", &exposure_init);
+    // 0.05 default chosen via the May 2026 sweep at 8-view × 50-step
+    // smoke: ratios 0.05–0.1 added +0.1–0.2 dB train and test PSNR;
+    // 0.3 overshot (–0.7 dB test); 1.0 overshot badly (–3 dB test).
+    // Off when only one view (gain collapses into SH chain anyway).
+    let exposure_lr_ratio = std::env::var("BLADE_VOLUME_PER_VIEW_EXPOSURE")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(if num_views > 1 { 0.05 } else { 0.0 });
+    // "exposure_" prefix matches exposure_r/g/b at once.
+    session.set_lr_multiplier("exposure_", exposure_lr_ratio);
 
     (session, gpu_cloud)
 }
@@ -1240,11 +1460,16 @@ fn fit_appearance_pixel_batched(
     let _ = n_cells;
     let mut path_bufs =
         vol::gpu::PathRecordBuffers::new_external(&gpu, pixel_batch as u32, max_steps as u32);
+    let patch_size = config.patch_size;
+    let grad_loss_weight = config.grad_loss_weight;
     let (mut session, mut gpu_cloud) = build_train_session(
         model,
         pixel_batch,
         max_steps,
         sh_degree,
+        views.len(),
+        patch_size,
+        grad_loss_weight,
         &gpu,
         &path_bufs,
         config.learning_rate,
@@ -1278,25 +1503,64 @@ fn fit_appearance_pixel_batched(
             ray_origin_buf[0] = cam_ray_constants.origin.x;
             ray_origin_buf[1] = cam_ray_constants.origin.y;
             ray_origin_buf[2] = cam_ray_constants.origin.z;
-            for k in 0..pixel_batch {
-                let pidx = next_u32() % img_size;
-                pixel_indices[k] = pidx;
-                let base = (pidx as usize) * 3;
-                target_buf[k * 3] = v.target_rgb[base];
-                target_buf[k * 3 + 1] = v.target_rgb[base + 1];
-                target_buf[k * 3 + 2] = v.target_rgb[base + 2];
 
-                let ix = pidx % v.width;
-                let iy = pidx / v.width;
-                let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
-                ray_dir_per_pixel_buf[k * 3] = dir.x;
-                ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
-                ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
+            // Two sampling modes:
+            //   - random pixels: pick `pixel_batch` independent random
+            //     pixels (legacy behaviour, used with patch_size == 0).
+            //   - patch: pick a random `q × q` patch corner and emit
+            //     pixel indices in row-major order across the patch, so
+            //     the graph can treat them as a 2D image for gradient
+            //     L1.
+            if patch_size > 0 {
+                let q = patch_size as u32;
+                let max_x = v.width.saturating_sub(q);
+                let max_y = v.height.saturating_sub(q);
+                let x0 = next_u32() % (max_x + 1);
+                let y0 = next_u32() % (max_y + 1);
+                for ky in 0..q {
+                    for kx in 0..q {
+                        let k = (ky * q + kx) as usize;
+                        let ix = x0 + kx;
+                        let iy = y0 + ky;
+                        let pidx = iy * v.width + ix;
+                        pixel_indices[k] = pidx;
+                        let base = (pidx as usize) * 3;
+                        target_buf[k * 3] = v.target_rgb[base];
+                        target_buf[k * 3 + 1] = v.target_rgb[base + 1];
+                        target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+                        let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
+                        ray_dir_per_pixel_buf[k * 3] = dir.x;
+                        ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
+                        ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
+                        if num_components > 1 {
+                            let basis = sh_basis(dir, num_components);
+                            for (j, &bv) in basis.iter().enumerate().skip(1) {
+                                basis_inputs[j - 1][k] = bv;
+                            }
+                        }
+                    }
+                }
+            } else {
+                for k in 0..pixel_batch {
+                    let pidx = next_u32() % img_size;
+                    pixel_indices[k] = pidx;
+                    let base = (pidx as usize) * 3;
+                    target_buf[k * 3] = v.target_rgb[base];
+                    target_buf[k * 3 + 1] = v.target_rgb[base + 1];
+                    target_buf[k * 3 + 2] = v.target_rgb[base + 2];
 
-                if num_components > 1 {
-                    let basis = sh_basis(dir, num_components);
-                    for (j, &bv) in basis.iter().enumerate().skip(1) {
-                        basis_inputs[j - 1][k] = bv;
+                    let ix = pidx % v.width;
+                    let iy = pidx / v.width;
+                    let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
+                    ray_dir_per_pixel_buf[k * 3] = dir.x;
+                    ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
+                    ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
+
+                    if num_components > 1 {
+                        let basis = sh_basis(dir, num_components);
+                        for (j, &bv) in basis.iter().enumerate().skip(1) {
+                            basis_inputs[j - 1][k] = bv;
+                        }
                     }
                 }
             }
@@ -1343,6 +1607,7 @@ fn fit_appearance_pixel_batched(
             let _ = gpu.submit(&mut record_encoder);
 
             session.set_input("labels", &target_buf);
+            session.set_input_u32("view_idx", &[vi as u32]);
             // Apply LR schedule: re-set Adam every step with the
             // current effective LR. `set_adam` is cheap (just updates
             // a session field), and per-parameter LR multipliers (set
@@ -1430,6 +1695,9 @@ fn fit_appearance_pixel_batched(
                     pixel_batch,
                     max_steps,
                     sh_degree,
+                    views.len(),
+                    patch_size,
+                    grad_loss_weight,
                     &gpu,
                     &path_bufs,
                     config.learning_rate,
@@ -1459,6 +1727,7 @@ fn fit_appearance_pixel_batched(
         }
     }
 
+    debug_dump_exposure(&session, views.len());
     download_model_parameters(&session, model);
     drop(session);
     gpu_cloud.deinit(&gpu);
@@ -1502,7 +1771,7 @@ pub fn fit_appearance_to_pixels(
     let flat = flatten_paths(paths, max_steps);
 
     let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0);
+    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0);
 
     let (mut session, _report) = mn::build(
         &g,
@@ -1734,11 +2003,15 @@ mod tests {
             let n_cells = 32usize;
             let n_pixels = 8usize;
             let max_steps = 4usize;
-            let vg = build_volumetric_graph(&mut g, n_cells, n_pixels, max_steps, sh_degree);
+            let num_views = 5usize;
+            let vg = build_volumetric_graph(
+                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0,
+            );
             assert_eq!(vg.sh_degree, sh_degree);
             assert_eq!(vg.n_cells, n_cells);
             assert_eq!(vg.n_pixels, n_pixels);
             assert_eq!(vg.max_steps, max_steps);
+            assert_eq!(vg.num_views, num_views);
             // SH coefficient tables: 3 channels × (1+deg)² components.
             let num_components = (1 + sh_degree) * (1 + sh_degree);
             assert_eq!(vg.sh_coefficients.len(), 3);
@@ -1748,6 +2021,17 @@ mod tests {
             // basis_inputs: K-1 entries (component 0 is folded in).
             assert_eq!(vg.basis_inputs.len(), num_components - 1);
         }
+    }
+
+    #[test]
+    fn build_volumetric_graph_constructs_in_patch_mode() {
+        // Patch mode: `n_pixels == patch_size²`, gradient L1 added to
+        // the loss. Catches shape mismatches inside `patch_grad_l1`.
+        let mut g = mn::Graph::new();
+        let patch_size = 4usize;
+        let n_pixels = patch_size * patch_size;
+        let vg = build_volumetric_graph(&mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2);
+        assert_eq!(vg.n_pixels, n_pixels);
     }
 
     #[test]
@@ -1848,7 +2132,7 @@ mod tests {
         let flat = flatten_paths(&[path], max_steps);
 
         let mut g = mn::Graph::new();
-        let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0);
+        let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0);
 
         let (mut session, _report) = mn::build(
             &g,
