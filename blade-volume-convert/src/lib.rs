@@ -1035,7 +1035,17 @@ fn write_radfoam_ply_binary(
 }
 
 fn sh0_to_color(model: &vol::PointCloudModel, index: usize) -> glam::Vec3 {
-    let base = index * 3;
+    // The SH layout is `[p0_c0_r, p0_c0_g, p0_c0_b, p0_c1_r, ..., p1_c0_r, ...]`:
+    // 3 channels × `(1+sh_degree)²` components per point. The DC term lives at
+    // the start of each per-point stride. The previous `index * 3` worked
+    // accidentally for SH-0 (stride 3) but read garbage out of higher-order
+    // coefficients for SH-1+ models — that round-tripped a "DC" that was
+    // actually some other point's higher SH coefficient, hard-coding a
+    // ~8 dB PSNR collapse into every saved SH-3 PLY. The 2026-05-22 exposure
+    // A/B caught it: in-training eval 20.85 dB, fresh eval of the same PLY
+    // 11.64 dB.
+    let stride = vol::get_sh_component_count(model.sh_degree) * 3;
+    let base = index * stride;
     let coeff = glam::Vec3::new(
         model.sh_coefficients[base],
         model.sh_coefficients[base + 1],
