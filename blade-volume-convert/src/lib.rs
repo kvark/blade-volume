@@ -901,6 +901,9 @@ fn write_radfoam_ply_ascii(
 
     let count = model.len();
     let num_adjacency = adjacency.neighbors.len();
+    let sh_components = vol::get_sh_component_count(model.sh_degree);
+    let sh_rest = (sh_components - 1) * 3;
+    let sh_block = sh_components * 3;
     let mut file = std::fs::File::create(path)?;
 
     writeln!(file, "ply")?;
@@ -914,6 +917,9 @@ fn write_radfoam_ply_ascii(
     writeln!(file, "property uchar red")?;
     writeln!(file, "property uchar green")?;
     writeln!(file, "property uchar blue")?;
+    for k in 0..sh_rest {
+        writeln!(file, "property float color_sh_{k}")?;
+    }
     if model.radii.is_some() {
         writeln!(file, "property float radius")?;
     }
@@ -933,6 +939,13 @@ fn write_radfoam_ply_ascii(
             "{} {} {} {} {} {} {} {}",
             point.x, point.y, point.z, point.w, end_off, r, g, b
         )?;
+        let base = i * sh_block;
+        for j in 0..sh_rest {
+            let comp = 1 + j / 3;
+            let ch = j % 3;
+            let value = model.sh_coefficients[base + 3 * comp + ch];
+            write!(file, " {value}")?;
+        }
         if let Some(ref radii) = model.radii {
             write!(file, " {}", radii[i])?;
         }
@@ -958,6 +971,10 @@ fn write_radfoam_ply_binary(
 
     let count = model.len();
     let num_adjacency = adjacency.neighbors.len();
+    let sh_components = vol::get_sh_component_count(model.sh_degree);
+    // Number of `color_sh_*` properties = (components excluding DC) × 3 channels.
+    let sh_rest = (sh_components - 1) * 3;
+    let sh_block = sh_components * 3;
     let mut file = std::fs::File::create(path)?;
 
     writeln!(file, "ply")?;
@@ -971,6 +988,9 @@ fn write_radfoam_ply_binary(
     writeln!(file, "property uchar red")?;
     writeln!(file, "property uchar green")?;
     writeln!(file, "property uchar blue")?;
+    for k in 0..sh_rest {
+        writeln!(file, "property float color_sh_{k}")?;
+    }
     if model.radii.is_some() {
         writeln!(file, "property float radius")?;
     }
@@ -992,6 +1012,16 @@ fn write_radfoam_ply_binary(
         file.write_all(&point.w.to_le_bytes())?;
         file.write_all(&end_off.to_le_bytes())?;
         file.write_all(&[r, g, b])?;
+        // color_sh_* layout per RadFoam upstream loader: index j maps to
+        // SH component `1 + j/3`, channel `j%3`. DC (component 0) lives
+        // in red/green/blue above (as 8-bit-quantised preview).
+        let base = i * sh_block;
+        for j in 0..sh_rest {
+            let comp = 1 + j / 3;
+            let ch = j % 3;
+            let value = model.sh_coefficients[base + 3 * comp + ch];
+            file.write_all(&value.to_le_bytes())?;
+        }
         if let Some(ref radii) = model.radii {
             file.write_all(&radii[i].to_le_bytes())?;
         }
@@ -1050,6 +1080,68 @@ mod tests {
 
         assert_eq!(loaded.len(), model.len());
         assert!(loaded.transforms.is_some());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn radfoam_binary_roundtrip_preserves_sh3() {
+        // Two points with SH degree 3 (16 components × 3 channels per cell).
+        // The DC coefficients (component 0) round-trip through the 8-bit
+        // RGB preview path and lose a little precision; the higher-order
+        // coefficients (1..15) must survive exactly through the new
+        // `color_sh_*` properties.
+        let n = 2usize;
+        let sh_degree = 3usize;
+        let sh_components = vol::get_sh_component_count(sh_degree);
+        let sh_block = sh_components * 3;
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 0.5),
+        ];
+        // Distinct values per cell × component × channel so any layout
+        // swap shows up.
+        let sh_coefficients: Vec<f32> = (0..n * sh_block).map(|i| 0.001 * (i as f32) - 0.5).collect();
+        let model = vol::PointCloudModel {
+            points,
+            sh_coefficients: sh_coefficients.clone(),
+            sh_degree,
+            transforms: None,
+            adjacency: Some(vol::Adjacency {
+                neighbors: vec![1, 0],
+                offsets: vec![0, 1, 2],
+            }),
+            radii: None,
+        };
+
+        let mut path = std::env::temp_dir();
+        path.push("blade_volume_convert_roundtrip_radfoam_sh3.ply");
+        save_ply_with_options(
+            &path,
+            &model,
+            &SaveOptions {
+                format: PlyFormat::Binary,
+            },
+        )
+        .expect("save ply");
+        let loaded = vol::io::load_radfoam(path.to_str().unwrap());
+
+        assert_eq!(loaded.sh_degree, sh_degree, "sh_degree must round-trip");
+        assert_eq!(loaded.sh_coefficients.len(), n * sh_block);
+        // Higher-order coefficients (component 1..15) must match exactly.
+        for i in 0..n {
+            let base = i * sh_block;
+            for c in 1..sh_components {
+                for ch in 0..3 {
+                    let off = base + 3 * c + ch;
+                    assert!(
+                        (loaded.sh_coefficients[off] - sh_coefficients[off]).abs() < 1e-6,
+                        "sh[{i},{c},{ch}] roundtrip mismatch: got {}, want {}",
+                        loaded.sh_coefficients[off],
+                        sh_coefficients[off],
+                    );
+                }
+            }
+        }
         let _ = std::fs::remove_file(path);
     }
 
