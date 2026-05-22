@@ -1008,6 +1008,57 @@ fn upload_model_parameters(session: &mut mn::Session, model: &vol::PointCloudMod
     }
 }
 
+/// Bake the mean per-view exposure into the SH-DC coefficients so the
+/// model evaluates correctly through a renderer that does not know
+/// about the `exposure_*` parameters. During training,
+/// `pixel * exposure[view_idx] ≈ target`; if Adam drives `mean(exposure)`
+/// away from 1.0 the SH chain absorbs the inverse, leaving an un-
+/// corrected eval (no exposure multiplier) systematically too bright
+/// or too dark. Multiplying the SH-DC term per channel by the channel-
+/// wise mean exposure removes the bias: a fresh tracer with no
+/// exposure knowledge then sees the "average-exposure" calibration,
+/// which is the closest a test-view render can get without learning a
+/// new exposure for that view.
+fn bake_mean_exposure_into_sh(
+    session: &mn::Session,
+    model: &mut vol::PointCloudModel,
+    num_views: usize,
+) {
+    if num_views == 0 {
+        return;
+    }
+    let mut r = vec![0.0_f32; num_views];
+    let mut g = vec![0.0_f32; num_views];
+    let mut b = vec![0.0_f32; num_views];
+    session.read_param("exposure_r", &mut r);
+    session.read_param("exposure_g", &mut g);
+    session.read_param("exposure_b", &mut b);
+    let mean = |v: &[f32]| v.iter().copied().sum::<f32>() / v.len() as f32;
+    let mean_r = mean(&r);
+    let mean_g = mean(&g);
+    let mean_b = mean(&b);
+    // If exposure stayed at 1.0 (the OFF mode) this is a no-op.
+    if (mean_r - 1.0).abs() < 1e-6 && (mean_g - 1.0).abs() < 1e-6 && (mean_b - 1.0).abs() < 1e-6 {
+        return;
+    }
+    eprintln!(
+        "baking mean exposure into SH DC: r={mean_r:.4} g={mean_g:.4} b={mean_b:.4}"
+    );
+    let num_components = model.sh_component_count();
+    let row_stride = num_components * 3;
+    let mean_per_channel = [mean_r, mean_g, mean_b];
+    for i in 0..model.points.len() {
+        for (c, scale) in mean_per_channel.iter().enumerate() {
+            // SH layout: [p_c0_r, p_c0_g, p_c0_b, p_c1_r, ...]. Only
+            // the DC term (k=0) needs scaling; higher-order SH
+            // components are view-dependent details that exposure
+            // should not bake into.
+            let dc_idx = i * row_stride + c;
+            model.sh_coefficients[dc_idx] *= scale;
+        }
+    }
+}
+
 fn debug_dump_exposure(session: &mn::Session, num_views: usize) {
     let mut r = vec![0.0_f32; num_views];
     let mut g = vec![0.0_f32; num_views];
@@ -1347,14 +1398,20 @@ fn build_train_session(
     session.set_parameter("exposure_r", &exposure_init);
     session.set_parameter("exposure_g", &exposure_init);
     session.set_parameter("exposure_b", &exposure_init);
-    // 0.05 default chosen via the May 2026 sweep at 8-view × 50-step
-    // smoke: ratios 0.05–0.1 added +0.1–0.2 dB train and test PSNR;
-    // 0.3 overshot (–0.7 dB test); 1.0 overshot badly (–3 dB test).
-    // Off when only one view (gain collapses into SH chain anyway).
+    // Default OFF: the May 2026 production A/B at 75K × 256² × SH-3 ×
+    // 6400-steps with LR ratio 0.05 still degraded test PSNR by
+    // 3.3 dB (18.00 → 14.67). Exposure absorbed per-view brightness
+    // variance during training, but eval (a fresh tracer with no
+    // exposure knowledge) sees a model calibrated against the
+    // average-exposure brightness — close for views near the mean,
+    // far for the rest. The `bake_mean_exposure_into_sh` step
+    // post-training renormalises the SH-DC term, but cannot recover
+    // the per-view residual. Set `BLADE_VOLUME_PER_VIEW_EXPOSURE=$r`
+    // to opt in (r ~ 0.01–0.05; anything higher overshoots).
     let exposure_lr_ratio = std::env::var("BLADE_VOLUME_PER_VIEW_EXPOSURE")
         .ok()
         .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(if num_views > 1 { 0.05 } else { 0.0 });
+        .unwrap_or(0.0);
     // "exposure_" prefix matches exposure_r/g/b at once.
     session.set_lr_multiplier("exposure_", exposure_lr_ratio);
 
@@ -1729,6 +1786,7 @@ fn fit_appearance_pixel_batched(
 
     debug_dump_exposure(&session, views.len());
     download_model_parameters(&session, model);
+    bake_mean_exposure_into_sh(&session, model, views.len());
     drop(session);
     gpu_cloud.deinit(&gpu);
     path_bufs.destroy(&gpu);
