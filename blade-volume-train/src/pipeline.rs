@@ -175,9 +175,16 @@ pub fn build_views(
     initial_model: &vol::PointCloudModel,
     config: &PipelineConfig,
 ) -> Vec<diff_render::ViewSupervision> {
+    // Filter to images that actually exist on disk before taking
+    // `max_views`. The COLMAP image list and the filesystem can drift
+    // (e.g. only a 27% subset of images delivered in the bonsai-80
+    // dataset), and `take(max_views)` from the raw list ends up with
+    // fewer than requested when missing files fall inside the prefix
+    // — and worse, the eval test-split lands on the missing files.
     let images = reconstruction
         .images
         .iter()
+        .filter(|img| images_dir.join(&img.name).is_file())
         .take(config.max_views.unwrap_or(reconstruction.images.len()));
     build_views_from(reconstruction, images_dir, initial_model, config, images)
 }

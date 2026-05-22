@@ -1,0 +1,168 @@
+//! Evaluate PSNR (train + test) of a trained RadFoam PLY against a COLMAP
+//! dataset, picking a sensible train/test split from the *files that
+//! actually exist on disk* (the default `train_colmap` slicing assumes
+//! COLMAP's image order matches filesystem order, which it doesn't on
+//! datasets where only a subset of the images were ever provided).
+//!
+//! Usage:
+//!
+//! ```text
+//! cargo run --release -p blade-volume-train --bin eval_psnr -- \
+//!     --ply /tmp/blade-train/bigres1/bonsai.ply \
+//!     --sparse etc/data/bonsai/sparse/0 \
+//!     --images etc/data/bonsai/images \
+//!     --width 128 --height 128 --train 51 --test 8
+//! ```
+//!
+//! Reports the per-view PSNR breakdown and the train/test averages.
+
+use argh::FromArgs;
+use blade_volume as vol;
+use blade_volume_train::{colmap, pipeline};
+use std::path;
+
+/// Evaluate PSNR of a trained RadFoam PLY against existing COLMAP images.
+#[derive(FromArgs)]
+struct Args {
+    /// path to the trained PLY
+    #[argh(option)]
+    ply: String,
+
+    /// path to the COLMAP `sparse/0` directory
+    #[argh(option)]
+    sparse: String,
+
+    /// path to the COLMAP images directory
+    #[argh(option)]
+    images: String,
+
+    /// render width
+    #[argh(option, default = "128")]
+    width: u32,
+
+    /// render height
+    #[argh(option, default = "128")]
+    height: u32,
+
+    /// number of training views to evaluate (first N existing files in
+    /// COLMAP order, after filtering)
+    #[argh(option, default = "16")]
+    train: usize,
+
+    /// number of test views (next K existing files after the train block)
+    #[argh(option, default = "8")]
+    test: usize,
+
+    /// far plane for camera params
+    #[argh(option, default = "100.0")]
+    far_plane: f32,
+
+    /// max ray steps for the path-tracer
+    #[argh(option, default = "96")]
+    max_steps: usize,
+
+    /// rebuild adjacency from the loaded points (ignore any adjacency
+    /// stored in the PLY). Useful for PLYs where positions were
+    /// optimised after the saved adjacency was computed.
+    #[argh(switch)]
+    rebuild_adjacency: bool,
+}
+
+fn main() {
+    env_logger::init();
+    let args: Args = argh::from_env();
+
+    let mut model = vol::io::load_radfoam(&args.ply);
+    if args.rebuild_adjacency {
+        eprintln!("rebuilding adjacency from points (Qhull)…");
+        model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
+    }
+    println!(
+        "loaded {} ({} cells, sh_degree {}, adjacency {})",
+        args.ply,
+        model.points.len(),
+        model.sh_degree,
+        model
+            .adjacency
+            .as_ref()
+            .map(|a| a.neighbors.len())
+            .unwrap_or(0),
+    );
+
+    let sparse = path::Path::new(&args.sparse);
+    let images_dir = path::Path::new(&args.images);
+    let recon = colmap::load_reconstruction(sparse);
+
+    // Filter COLMAP image entries to those whose file actually exists on
+    // disk. Keep the COLMAP order so subsequent train/test slicing is
+    // deterministic and reproducible.
+    let existing: Vec<&colmap::ColmapImage> = recon
+        .images
+        .iter()
+        .filter(|img| images_dir.join(&img.name).is_file())
+        .collect();
+    println!(
+        "{} of {} COLMAP images exist on disk",
+        existing.len(),
+        recon.images.len()
+    );
+
+    let train_slice: Vec<&colmap::ColmapImage> =
+        existing.iter().take(args.train).copied().collect();
+    let test_slice: Vec<&colmap::ColmapImage> = existing
+        .iter()
+        .skip(args.train)
+        .take(args.test)
+        .copied()
+        .collect();
+    if test_slice.is_empty() {
+        eprintln!(
+            "no test views available — train={} test={} but only {} files exist",
+            args.train,
+            args.test,
+            existing.len()
+        );
+        std::process::exit(2);
+    }
+
+    let config = pipeline::PipelineConfig {
+        resolution: (args.width, args.height),
+        max_steps: args.max_steps,
+        max_views: Some(args.train),
+        max_initial_points: Some(model.points.len()),
+        far_plane: args.far_plane,
+        ..pipeline::PipelineConfig::default()
+    };
+
+    let train_views = pipeline::build_views_from(
+        &recon,
+        images_dir,
+        &model,
+        &config,
+        train_slice.iter().copied(),
+    );
+    let test_views = pipeline::build_views_from(
+        &recon,
+        images_dir,
+        &model,
+        &config,
+        test_slice.iter().copied(),
+    );
+
+    let train_psnrs = pipeline::evaluate_views(&model, &train_views, &config);
+    let test_psnrs = pipeline::evaluate_views(&model, &test_views, &config);
+
+    let avg_train: f32 = train_psnrs.iter().copied().sum::<f32>() / train_psnrs.len() as f32;
+    let avg_test: f32 = test_psnrs.iter().copied().sum::<f32>() / test_psnrs.len() as f32;
+    println!(
+        "PSNR train (avg over {} views): {avg_train:.2} dB",
+        train_psnrs.len()
+    );
+    println!(
+        "PSNR test  (avg over {} views): {avg_test:.2} dB",
+        test_psnrs.len()
+    );
+    for (img, p) in test_slice.iter().zip(test_psnrs.iter()) {
+        println!("  test {}: {:.2} dB", img.name, p);
+    }
+}
