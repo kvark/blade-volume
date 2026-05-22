@@ -35,8 +35,31 @@ use std::sync;
 /// The context is wrapped in `Arc` so the same one can be shared with
 /// `meganeura` via [`mn::SessionConfig::gpu`] — no need to spin up a second
 /// context for training.
+///
+/// Refuses to return a software-rasterizer context (llvmpipe, lavapipe) by
+/// default — a silent fallback to CPU rendering is ~25× slower than the
+/// real GPU and was responsible for ~43 h of wasted training runs after the
+/// May-18 Xid 62 crash. Set `BLADE_VOLUME_ALLOW_SOFTWARE=1` to override.
 pub fn try_init_gpu() -> Option<sync::Arc<gpu::Context>> {
-    mn::init_gpu_context().ok().map(sync::Arc::new)
+    let ctx = mn::init_gpu_context().ok()?;
+    let info = ctx.device_information();
+    let allow_sw = std::env::var("BLADE_VOLUME_ALLOW_SOFTWARE")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if info.is_software_emulated && !allow_sw {
+        eprintln!(
+            "try_init_gpu: refusing software rasterizer '{}' (driver '{}'); \
+             set BLADE_VOLUME_ALLOW_SOFTWARE=1 to override, or fix the Vulkan ICD selection \
+             (pin VK_ICD_FILENAMES to the real driver).",
+            info.device_name, info.driver_name,
+        );
+        return None;
+    }
+    eprintln!(
+        "try_init_gpu: using '{}' ({})",
+        info.device_name, info.driver_name,
+    );
+    Some(sync::Arc::new(ctx))
 }
 
 #[derive(Clone, Copy, Debug)]
