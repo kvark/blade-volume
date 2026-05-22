@@ -77,8 +77,11 @@ struct Args {
     #[argh(option, default = "100")]
     epochs: usize,
 
-    /// max traversal steps per ray (default 64)
-    #[argh(option, default = "64")]
+    /// max traversal steps per ray (default 128). With 100K cells in a
+    /// bonsai-scale scene, an average ray crosses ~50-80 cell boundaries
+    /// at 64² resolution; higher resolution / more cells need more
+    /// steps. Path truncation throws away the far end of the integral.
+    #[argh(option, default = "128")]
     max_steps: usize,
 
     /// adam learning rate (default 0.1)
@@ -127,6 +130,45 @@ struct Args {
     /// parameters per channel. Only effective in `--pixel-batch` mode.
     #[argh(option, default = "0")]
     sh_degree: usize,
+
+    /// adaptive densification: cells between splits (default 0 = off).
+    /// Recommended 500–1000. After every cycle the top
+    /// `--densify-fraction` cells by accumulated |grad(log_density)|
+    /// are split — each parent gets a sibling cell at `pos + jitter`
+    /// with the same density and SH coefficients, and adjacency is
+    /// rebuilt (Qhull, ~2 s @ 100K cells). Requires `--pixel-batch`.
+    #[argh(option, default = "0")]
+    densify_every: usize,
+
+    /// fraction of cells to split per densify cycle (default 0.01 = 1%).
+    /// Ignored when `--densify-every 0`.
+    #[argh(option, default = "0.01")]
+    densify_fraction: f32,
+
+    /// per-cell jitter for split siblings, in units of the parent's
+    /// nearest-neighbour distance (default 0.5). A small fraction of
+    /// the cell scale keeps the new cell inside the parent's Voronoi
+    /// neighbourhood; too large and it pops out into unrelated
+    /// territory.
+    #[argh(option, default = "0.5")]
+    densify_jitter: f32,
+
+    /// steps to wait before the first densify cycle (default 500). Lets
+    /// the per-cell gradient signal settle from random init before
+    /// committing to splits.
+    #[argh(option, default = "500")]
+    densify_warmup: usize,
+
+    /// learning-rate schedule: "constant" or "cosine" (default cosine).
+    /// Cosine decays from `--learning-rate` to `learning_rate * --lr-min-ratio`
+    /// over the full Adam-step budget.
+    #[argh(option, default = "String::from(\"cosine\")")]
+    lr_schedule: String,
+
+    /// cosine-decay floor as a fraction of `--learning-rate` (default 0.01).
+    /// At step `total_steps` the effective LR equals `learning_rate * lr_min_ratio`.
+    #[argh(option, default = "0.01")]
+    lr_min_ratio: f32,
 }
 
 fn main() {
@@ -154,6 +196,14 @@ fn main() {
     } else {
         pipeline::AdjacencyKind::Delaunay
     };
+    let lr_schedule = match args.lr_schedule.as_str() {
+        "constant" => diff_render::LrSchedule::Constant,
+        "cosine" => diff_render::LrSchedule::Cosine,
+        other => {
+            eprintln!("unknown --lr-schedule '{other}' (use 'constant' or 'cosine')");
+            std::process::exit(2);
+        }
+    };
     let config = pipeline::PipelineConfig {
         resolution: (args.width, args.height),
         max_steps: args.max_steps,
@@ -165,6 +215,18 @@ fn main() {
             pixel_batch,
             steps_per_view: args.steps_per_view,
             sh_degree: args.sh_degree,
+            lr_schedule,
+            lr_min_ratio: args.lr_min_ratio,
+            densify: if args.densify_every > 0 {
+                Some(diff_render::DensifyConfig {
+                    every: args.densify_every,
+                    fraction: args.densify_fraction,
+                    jitter_scale: args.densify_jitter,
+                    warmup: args.densify_warmup,
+                })
+            } else {
+                None
+            },
             ..diff_render::AppearanceFitConfig::default()
         },
         far_plane: 100.0,
@@ -174,13 +236,29 @@ fn main() {
 
     let sparse = path::Path::new(&args.sparse);
     let images = path::Path::new(&args.images);
-    let outcome = pipeline::train_colmap_appearance_split(
+    let mut outcome = pipeline::train_colmap_appearance_split(
         sparse,
         images,
         &config,
         args.test_views,
         gpu.clone(),
     );
+
+    // Rebuild adjacency from the final positions so the saved PLY +
+    // eval below operate on the geometry actually optimized — a
+    // no-op when positions are frozen, essential when they aren't.
+    if std::env::var("BLADE_VOLUME_POSITION_LR_RATIO")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.0)
+        > 0.0
+    {
+        eprintln!(
+            "rebuilding adjacency after position-opt for {} points...",
+            outcome.model.len()
+        );
+        outcome.model.adjacency = Some(vol::compute_adjacency_qhull_default(&outcome.model.points));
+    }
 
     let output = path::Path::new(&args.output);
     convert::save_ply_with_options(
@@ -209,12 +287,21 @@ fn main() {
     // --- Evaluation on held-out test views ---
     if args.test_views > 0 {
         let train_count = config.max_views.unwrap_or(0);
-        let test_images: Vec<_> = outcome
+        // COLMAP's image order isn't necessarily filesystem order, so on
+        // datasets where only a subset of images live on disk a naive
+        // skip-then-take can pick missing files. Filter to existing
+        // files first, then slice.
+        let existing: Vec<&_> = outcome
             .reconstruction
             .images
             .iter()
+            .filter(|img| images.join(&img.name).is_file())
+            .collect();
+        let test_images: Vec<_> = existing
+            .iter()
             .skip(train_count)
             .take(args.test_views)
+            .copied()
             .collect();
         let test_views = pipeline::build_views_from(
             &outcome.reconstruction,
@@ -227,13 +314,15 @@ fn main() {
             eprintln!("no usable test views (image files missing?)");
         } else {
             let psnrs = pipeline::evaluate_views(&outcome.model, &test_views, &config);
-            // Train-set PSNR too, for comparison.
+            // Train-set PSNR too, for comparison. Same existing-file
+            // filter so we evaluate the actual training views, not a
+            // mis-aligned prefix of the full COLMAP list.
             let train_views = pipeline::build_views_from(
                 &outcome.reconstruction,
                 images,
                 &outcome.model,
                 &config,
-                outcome.reconstruction.images.iter().take(train_count),
+                existing.iter().take(train_count).copied(),
             );
             let train_psnrs = pipeline::evaluate_views(&outcome.model, &train_views, &config);
             let avg_train: f32 =

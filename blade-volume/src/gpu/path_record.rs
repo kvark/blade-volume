@@ -60,6 +60,7 @@ struct PathRecordData {
     g_adjacency_offsets: gpu::BufferPiece,
     g_pixel_indices: gpu::BufferPiece,
     g_cells_out: gpu::BufferPiece,
+    g_next_cells_out: gpu::BufferPiece,
     g_dts_out: gpu::BufferPiece,
     g_mask_out: gpu::BufferPiece,
     g_camera: CameraParams,
@@ -95,15 +96,14 @@ impl PathRecorder {
         context.destroy_compute_pipeline(&mut self.pipeline);
     }
 
-    /// Record `args.num_pixels` paths into the three caller-owned
-    /// output buffers.
+    /// Record `args.num_pixels` paths into the four caller-owned output
+    /// buffers (cells, next_cells, dts, mask).
     ///
     /// The caller is responsible for:
-    ///   - zeroing `cells_out`, `dts_out`, `mask_out` before this call
-    ///     (the shader only writes the steps that were actually taken);
-    ///   - making sure all four "in" buffers are valid for at least
-    ///     `args.num_pixels * args.max_steps * sizeof(slot)` bytes and
-    ///     `args.num_pixels * 4` bytes for `pixel_indices`;
+    ///   - zeroing all four output buffers before this call (the shader
+    ///     only writes the steps that were actually taken);
+    ///   - making sure all five buffers (output × 4 + pixel_indices)
+    ///     are valid for the right number of bytes;
     ///   - submitting the encoder afterwards.
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
@@ -112,6 +112,7 @@ impl PathRecorder {
         cloud: &crate::gpu::RadFoamGpuCloud,
         pixel_indices: gpu::BufferPiece,
         cells_out: gpu::BufferPiece,
+        next_cells_out: gpu::BufferPiece,
         dts_out: gpu::BufferPiece,
         mask_out: gpu::BufferPiece,
         args: RecordPathsArgs,
@@ -137,6 +138,7 @@ impl PathRecorder {
                 g_adjacency_offsets: cloud.point_adjacency_offsets(),
                 g_pixel_indices: pixel_indices,
                 g_cells_out: cells_out,
+                g_next_cells_out: next_cells_out,
                 g_dts_out: dts_out,
                 g_mask_out: mask_out,
                 g_camera: args.camera,
@@ -156,6 +158,7 @@ impl PathRecorder {
 pub struct PathRecordBuffers {
     pub pixel_indices: gpu::Buffer,
     pub cells: gpu::Buffer,
+    pub next_cells: gpu::Buffer,
     pub dts: gpu::Buffer,
     pub mask: gpu::Buffer,
     /// Upload-side staging for `pixel_indices` (write from CPU, copy to
@@ -226,6 +229,11 @@ impl PathRecordBuffers {
             size: cells_bytes,
             memory: mem(external),
         });
+        let next_cells = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-next-cells",
+            size: cells_bytes,
+            memory: mem(external),
+        });
         let dts = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-dts",
             size: dts_bytes,
@@ -240,6 +248,7 @@ impl PathRecordBuffers {
         Self {
             pixel_indices,
             cells,
+            next_cells,
             dts,
             mask,
             pixel_indices_stage,
@@ -266,16 +275,17 @@ impl PathRecordBuffers {
         }
     }
 
-    /// Total bytes of all three output streams (for sanity checks).
+    /// Total bytes of all four output streams (for sanity checks).
     pub fn out_bytes(&self) -> u64 {
         let pl = (self.num_pixels as u64) * (self.max_steps as u64);
-        pl * (mem::size_of::<u32>() + 2 * mem::size_of::<f32>()) as u64
+        pl * (2 * mem::size_of::<u32>() + 2 * mem::size_of::<f32>()) as u64
     }
 
     pub fn destroy(&mut self, context: &gpu::Context) {
         context.destroy_buffer(self.pixel_indices);
         context.destroy_buffer(self.pixel_indices_stage);
         context.destroy_buffer(self.cells);
+        context.destroy_buffer(self.next_cells);
         context.destroy_buffer(self.dts);
         context.destroy_buffer(self.mask);
     }

@@ -2,10 +2,18 @@
 //
 // Traces one ray per output slot through the foam — same Voronoi /
 // power-diagram traversal as `radfoam_trace.wgsl` — but instead of
-// accumulating colour it writes a `(cell, dt, mask)` tuple for every
-// step along the path. The training pipeline reads those tuples into
-// meganeura as `cell_indices` (u32), `dt` (f32), and `mask` (f32)
-// tensors, and the differentiable forward is built around them.
+// accumulating colour it writes a `(cell, next_cell, dt, mask)` tuple
+// for every step along the path. The training pipeline reads those
+// tuples into meganeura as `cell_indices` (u32), `next_cell_indices`
+// (u32), `dt` (f32), and `mask` (f32) tensors, and the differentiable
+// forward is built around them.
+//
+// `next_cell_indices` enables differentiable position optimisation:
+// with `cell` and `next_cell` known per step, the graph can compute
+// `dt` from `positions[cell]` and `positions[next_cell]` (the bisector
+// plane between them) and the ray geometry — making `positions` an
+// optimisable parameter while the cell-sequence decision (an argmin
+// over face intersections) stays in this non-differentiable shader.
 //
 // Output layout: row-major `[num_pixels, max_steps]` flat buffers.
 // Pre-zero the output buffers before dispatch — the shader only writes
@@ -48,6 +56,7 @@ var<storage, read> g_adjacency: array<u32>;
 var<storage, read> g_adjacency_offsets: array<u32>;
 var<storage, read> g_pixel_indices: array<u32>;
 var<storage, read_write> g_cells_out: array<u32>;
+var<storage, read_write> g_next_cells_out: array<u32>;
 var<storage, read_write> g_dts_out: array<f32>;
 var<storage, read_write> g_mask_out: array<f32>;
 var<uniform> g_camera: Camera;
@@ -133,12 +142,13 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (dt > g_params.max_path_dt) {
             dt = g_params.max_path_dt;
         }
+        let next_idx = g_adjacency[next_face];
         g_cells_out[row_start + step] = current;
+        g_next_cells_out[row_start + step] = next_idx;
         g_dts_out[row_start + step] = dt;
         g_mask_out[row_start + step] = 1.0;
 
         t0 = t1;
-        let next_idx = g_adjacency[next_face];
         current = next_idx;
         current_pos = g_points[next_idx].xyz;
         current_radius = g_points[next_idx].w;

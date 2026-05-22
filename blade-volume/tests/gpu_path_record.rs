@@ -179,6 +179,7 @@ fn gpu_path_record_matches_cpu_on_grid() {
         // takes; leftover slots must be zero).
         let pl = (num_pixels as u64) * (max_steps as u64);
         tx.fill_buffer(bufs.cells.at(0), pl * 4, 0);
+        tx.fill_buffer(bufs.next_cells.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.dts.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.mask.at(0), pl * 4, 0);
     }
@@ -187,6 +188,7 @@ fn gpu_path_record_matches_cpu_on_grid() {
         &cloud,
         bufs.pixel_indices.into(),
         bufs.cells.into(),
+        bufs.next_cells.into(),
         bufs.dts.into(),
         bufs.mask.into(),
         RecordPathsArgs {
