@@ -164,9 +164,10 @@ pub fn build_volumetric_graph(
     // Per-view RGB gain: separate `[num_views, 1]` table per channel
     // so each channel's gradient flows back through `embedding`
     // (which has a `scatter_add` backward). Folding channels into a
-    // single `[num_views, 3]` table and splitting wouldn't work —
-    // `SplitA`/`SplitB` have an empty backward in meganeura, so the
-    // gradient never reaches the parameter.
+    // single `[num_views, 3]` table + `split_a`/`split_b` would also
+    // work post-meganeura `ca11915` (which implemented split's
+    // backward), but the per-channel layout is what landed during
+    // the original investigation and is easier to read; keeping it.
     let exposure_r = g.parameter("exposure_r", &[num_views, 1]);
     let exposure_g = g.parameter("exposure_g", &[num_views, 1]);
     let exposure_b = g.parameter("exposure_b", &[num_views, 1]);
