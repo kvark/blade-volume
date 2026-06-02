@@ -18,7 +18,7 @@
 
 use argh::FromArgs;
 use blade_volume as vol;
-use blade_volume_train::{colmap, pipeline};
+use blade_volume_train::{colmap, metrics, pipeline, render};
 use std::path;
 
 /// Evaluate PSNR of a trained RadFoam PLY against existing COLMAP images.
@@ -66,6 +66,40 @@ struct Args {
     /// optimised after the saved adjacency was computed.
     #[argh(switch)]
     rebuild_adjacency: bool,
+
+    /// optional directory to dump per-test-view comparison PNGs
+    /// (ground-truth | rendered, side by side). Created if absent.
+    #[argh(option)]
+    dump_dir: Option<String>,
+}
+
+/// Write a side-by-side `[GT | rendered]` PNG. Both inputs are row-major
+/// RGB f32 in [0,1] of size `w*h*3`.
+fn dump_comparison(path: &path::Path, gt: &[f32], pred: &[f32], w: u32, h: u32) {
+    let (wu, hu) = (w as usize, h as usize);
+    let gap = 8usize;
+    let out_w = wu * 2 + gap;
+    let mut buf = image::RgbImage::from_pixel(out_w as u32, h, image::Rgb([20, 20, 20]));
+    for y in 0..hu {
+        for x in 0..wu {
+            let i = (y * wu + x) * 3;
+            let g = image::Rgb([
+                (gt[i].clamp(0.0, 1.0) * 255.0) as u8,
+                (gt[i + 1].clamp(0.0, 1.0) * 255.0) as u8,
+                (gt[i + 2].clamp(0.0, 1.0) * 255.0) as u8,
+            ]);
+            let p = image::Rgb([
+                (pred[i].clamp(0.0, 1.0) * 255.0) as u8,
+                (pred[i + 1].clamp(0.0, 1.0) * 255.0) as u8,
+                (pred[i + 2].clamp(0.0, 1.0) * 255.0) as u8,
+            ]);
+            buf.put_pixel(x as u32, y as u32, g);
+            buf.put_pixel((x + wu + gap) as u32, y as u32, p);
+        }
+    }
+    if let Err(e) = buf.save(path) {
+        eprintln!("failed to write {}: {e}", path.display());
+    }
 }
 
 fn main() {
@@ -164,5 +198,34 @@ fn main() {
     );
     for (img, p) in test_slice.iter().zip(test_psnrs.iter()) {
         println!("  test {}: {:.2} dB", img.name, p);
+    }
+
+    if let Some(dir) = &args.dump_dir {
+        let dir = path::Path::new(dir);
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("could not create dump dir {}: {e}", dir.display());
+        } else {
+            for (img, view) in test_slice.iter().zip(test_views.iter()) {
+                let rgba = render::render_cpu(
+                    &model,
+                    &view.camera,
+                    render::RenderSettings {
+                        width: args.width,
+                        height: args.height,
+                        start_point: view.start_cell,
+                        max_steps: args.max_steps as u32,
+                        weight_threshold: 1e-4,
+                    },
+                );
+                let pred = metrics::rgba_to_rgb(&rgba);
+                let stem = path::Path::new(&img.name)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| img.name.clone());
+                let out = dir.join(format!("cmp_{stem}.png"));
+                dump_comparison(&out, &view.target_rgb, &pred, args.width, args.height);
+                println!("  wrote {}", out.display());
+            }
+        }
     }
 }
