@@ -750,7 +750,7 @@ pub enum LrSchedule {
 }
 
 /// Knobs for [`fit_appearance_to_pixels`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct AppearanceFitConfig {
     pub learning_rate: f32,
     pub epochs: usize,
@@ -804,6 +804,12 @@ pub struct AppearanceFitConfig {
     /// that dip to negative log-density keep a gradient and recover
     /// instead of dying — important for stable densification.
     pub softplus_beta: f32,
+    /// When `Some(path)`, write a PLY checkpoint at the end of every
+    /// densify cycle (≈ every `densify.every` steps) so a crash/reboot
+    /// during a long run loses at most one cycle instead of the whole
+    /// run. Exposure is baked into a clone, never the live model. `None`
+    /// (default) disables intermediate checkpoints.
+    pub checkpoint_path: Option<std::path::PathBuf>,
 }
 
 /// Adaptive densification: every `every` training steps after `warmup`
@@ -881,6 +887,7 @@ impl Default for AppearanceFitConfig {
             grad_loss_weight: 0.0,
             opacity_weight: 0.0,
             softplus_beta: 0.0,
+            checkpoint_path: None,
         }
     }
 }
@@ -1117,6 +1124,26 @@ fn upload_model_parameters(
 /// exposure knowledge then sees the "average-exposure" calibration,
 /// which is the closest a test-view render can get without learning a
 /// new exposure for that view.
+/// Atomically write a model to `path` as a binary PLY: write to a
+/// sibling `.tmp` then rename, so a crash mid-write can't leave a
+/// truncated checkpoint clobbering the previous good one.
+fn save_checkpoint(
+    path: &std::path::Path,
+    model: &vol::PointCloudModel,
+) -> Result<(), String> {
+    let tmp = path.with_extension("ply.tmp");
+    blade_volume_convert::save_ply_with_options(
+        &tmp,
+        model,
+        &blade_volume_convert::SaveOptions {
+            format: blade_volume_convert::PlyFormat::Binary,
+        },
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("{e:?}"))?;
+    Ok(())
+}
+
 fn bake_mean_exposure_into_sh(
     session: &mn::Session,
     model: &mut vol::PointCloudModel,
@@ -1875,6 +1902,28 @@ fn fit_appearance_pixel_batched(
 
         steps_done += cycle_budget;
         cycle += 1;
+
+        // Crash-safety checkpoint: write the current model to disk at the
+        // end of every cycle so a reboot/suspend during a multi-hour run
+        // loses at most one cycle's progress, not the whole run. The PLY
+        // only gets written at the very end otherwise. Downloading into
+        // the live `model` mid-cycle is harmless (host state is only
+        // pushed back to the GPU at densify rebuilds); exposure is baked
+        // into a throwaway clone so the live model is never mutated.
+        if let Some(ckpt) = &config.checkpoint_path {
+            download_model_parameters(&session, model, config.softplus_beta);
+            let mut snapshot = model.clone();
+            bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
+            match save_checkpoint(ckpt, &snapshot) {
+                Ok(()) => log::info!(
+                    "checkpoint: wrote {} ({} cells) at step {}",
+                    ckpt.display(),
+                    snapshot.points.len(),
+                    steps_done,
+                ),
+                Err(err) => log::warn!("checkpoint save failed: {err:?}"),
+            }
+        }
 
         // Prune + densify, gated by the RadFoam schedule: only between
         // `warmup` and `densify_until`, and only while under the point

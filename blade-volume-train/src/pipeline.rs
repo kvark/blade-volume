@@ -388,7 +388,7 @@ pub fn train_colmap_appearance_split(
         config.resolution.0,
         config.resolution.1,
         config.max_steps,
-        config.fit,
+        config.fit.clone(),
         gpu,
     );
 

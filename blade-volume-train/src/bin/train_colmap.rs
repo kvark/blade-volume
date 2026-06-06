@@ -223,6 +223,13 @@ struct Args {
     /// recover instead of dying (dead-ReLU) — stabilises densification.
     #[argh(option, default = "0.0")]
     softplus_beta: f32,
+
+    /// optional PLY checkpoint path written at the end of every densify
+    /// cycle (≈ every --densify-every steps) so a reboot/suspend during a
+    /// long run loses at most one cycle. Defaults to <output>.ckpt.ply
+    /// when --densify-every > 0; pass "none" to disable.
+    #[argh(option)]
+    checkpoint: Option<String>,
 }
 
 fn main() {
@@ -275,6 +282,15 @@ fn main() {
             grad_loss_weight: args.grad_loss_weight,
             opacity_weight: args.opacity_weight,
             softplus_beta: args.softplus_beta,
+            checkpoint_path: match args.checkpoint.as_deref() {
+                Some("none") => None,
+                Some(p) => Some(path::PathBuf::from(p)),
+                // Default: checkpoint next to the output when densifying.
+                None if args.densify_every > 0 => {
+                    Some(path::Path::new(&args.output).with_extension("ckpt.ply"))
+                }
+                None => None,
+            },
             densify: if args.densify_every > 0 {
                 Some(diff_render::DensifyConfig {
                     every: args.densify_every,
