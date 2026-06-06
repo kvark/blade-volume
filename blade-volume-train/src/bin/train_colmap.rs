@@ -140,10 +140,37 @@ struct Args {
     #[argh(option, default = "0")]
     densify_every: usize,
 
-    /// fraction of cells to split per densify cycle (default 0.01 = 1%).
-    /// Ignored when `--densify-every 0`.
-    #[argh(option, default = "0.01")]
+    /// per-round growth: each densify round adds `fraction × current`
+    /// cells, parents drawn by weighted multinomial on
+    /// `|grad(log_density)| × cell_radius` (RadFoam uses 0.15). Ignored
+    /// when `--densify-every 0`.
+    #[argh(option, default = "0.15")]
     densify_fraction: f32,
+
+    /// point budget: stop growing once the cloud reaches this many cells
+    /// (RadFoam bonsai ≈ 2,097,152). Default 2_000_000.
+    #[argh(option, default = "2000000")]
+    densify_target: usize,
+
+    /// stop densifying after this step (refinement-only afterwards).
+    /// Default 0 = densify until the end of training.
+    #[argh(option, default = "0")]
+    densify_until: usize,
+
+    /// prune small near-transparent cells each densify round (RadFoam's
+    /// floater remover). Off by default for backward compatibility.
+    #[argh(switch)]
+    prune: bool,
+
+    /// prune a cell only if its post-activation density is below this
+    /// (default 0.01). Requires `--prune`.
+    #[argh(option, default = "0.01")]
+    prune_density: f32,
+
+    /// also require farthest-neighbour radius below this (default 0.1) to
+    /// prune — only cull small dim cells, never large empty background ones.
+    #[argh(option, default = "0.1")]
+    prune_radius: f32,
 
     /// per-cell jitter for split siblings, in units of the parent's
     /// nearest-neighbour distance (default 0.5). A small fraction of
@@ -184,6 +211,18 @@ struct Args {
     /// weight on the structural-gradient L1 term when `--patch-size > 0`.
     #[argh(option, default = "0.2")]
     grad_loss_weight: f32,
+
+    /// weight on the RadFoam opacity loss `mean((opacity-1)^2)` + white-
+    /// background compositing (default 0 = off). Pushes rays to full
+    /// opacity, suppressing semi-transparent floaters. Try 0.1-1.0.
+    #[argh(option, default = "0.0")]
+    opacity_weight: f32,
+
+    /// softplus beta for density activation (default 0 = legacy ReLU).
+    /// RadFoam uses 10. Keeps a gradient for negative log-density so cells
+    /// recover instead of dying (dead-ReLU) — stabilises densification.
+    #[argh(option, default = "0.0")]
+    softplus_beta: f32,
 }
 
 fn main() {
@@ -234,12 +273,23 @@ fn main() {
             lr_min_ratio: args.lr_min_ratio,
             patch_size: args.patch_size,
             grad_loss_weight: args.grad_loss_weight,
+            opacity_weight: args.opacity_weight,
+            softplus_beta: args.softplus_beta,
             densify: if args.densify_every > 0 {
                 Some(diff_render::DensifyConfig {
                     every: args.densify_every,
                     fraction: args.densify_fraction,
                     jitter_scale: args.densify_jitter,
                     warmup: args.densify_warmup,
+                    target_points: args.densify_target,
+                    densify_until: if args.densify_until == 0 {
+                        usize::MAX
+                    } else {
+                        args.densify_until
+                    },
+                    prune: args.prune,
+                    prune_density: args.prune_density,
+                    prune_radius: args.prune_radius,
                 })
             } else {
                 None

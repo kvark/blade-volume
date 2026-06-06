@@ -101,6 +101,7 @@ fn parameter_name(channel: &str, k: usize) -> String {
 /// pipeline. Higher degrees take per-pixel basis-value inputs named
 /// `basis_1`, `basis_2`, … through `basis_{(1+sh_degree)²-1}` and learn
 /// `(1+sh_degree)²` coefficients per cell per RGB channel.
+#[allow(clippy::too_many_arguments)]
 pub fn build_volumetric_graph(
     g: &mut mn::Graph,
     n_cells: usize,
@@ -110,6 +111,8 @@ pub fn build_volumetric_graph(
     num_views: usize,
     patch_size: usize,
     grad_loss_weight: f32,
+    opacity_weight: f32,
+    softplus_beta: f32,
 ) -> VolumetricGraph {
     assert!(
         sh_degree <= 3,
@@ -181,9 +184,29 @@ pub fn build_volumetric_graph(
         sh_coefficients.push(per_channel);
     }
 
-    // Density chain unchanged.
-    let density_flat = g.embedding(cell_indices, log_density);
-    let density_flat = g.relu(density_flat); // non-negative density
+    // Density activation. ReLU (legacy) zeroes negative log-density AND
+    // its gradient, so a cell that dips negative dies permanently (dead
+    // ReLU) — these accumulate and destabilise densification. softplus
+    // (RadFoam's choice) keeps a small gradient for negatives so cells
+    // recover. Stable form with meganeura ops (no exp/softplus builtin):
+    //   softplus_β(x) = (1/β)[relu(βx) − log(sigmoid(|βx|))]
+    // (sigmoid(|βx|) ∈ [0.5,1] so the log can't overflow). At β=10,
+    // log_density = 1.0 → density ≈ 1.0, preserving the ReLU init.
+    let density_pre = g.embedding(cell_indices, log_density);
+    let density_flat = if softplus_beta > 0.0 {
+        let beta_c = g.constant(vec![softplus_beta; pl], &[pl, 1]);
+        let bx = g.mul(density_pre, beta_c);
+        let relu_bx = g.relu(bx);
+        let abs_bx = g.abs(bx);
+        let sig = g.sigmoid(abs_bx);
+        let log_sig = g.log(sig);
+        let neg_log_sig = g.neg(log_sig);
+        let sp = g.add(relu_bx, neg_log_sig);
+        let inv_beta = g.constant(vec![1.0 / softplus_beta; pl], &[pl, 1]);
+        g.mul(sp, inv_beta)
+    } else {
+        g.relu(density_pre) // legacy non-negative density
+    };
     let density = g.reshape(density_flat, &[p, l]);
     let mask_2d = g.reshape(mask, &[p, l]);
 
@@ -291,6 +314,10 @@ pub fn build_volumetric_graph(
     // Per-channel pixel: pixel_c = (weight * color_c) @ ones_L
     let ones_l1 = g.constant(vec![1.0; l], &[l, 1]);
     let ones_1l = g.constant(vec![1.0; l], &[1, l]);
+
+    // Accumulated opacity per pixel = Σ_L weight = 1 − T_final. Drives the
+    // RadFoam opacity loss + white-background compositing.
+    let opacity = g.matmul(weight, ones_l1); // [P, 1]
     let pixel_r = channel_pixel_sh(
         g,
         cell_indices,
@@ -357,6 +384,22 @@ pub fn build_volumetric_graph(
     let exp_b_p = g.matmul(ones_p1, exp_b_11);
     let pixel_b = g.mul(pixel_b, exp_b_p);
 
+    // White-background compositing (RadFoam): add (1 − opacity) per channel
+    // so rays that accumulate little opacity read as white. Active only
+    // alongside the opacity loss; otherwise the legacy un-composited path
+    // is preserved exactly.
+    let (pixel_r, pixel_g, pixel_b) = if opacity_weight > 0.0 {
+        let neg_op = g.neg(opacity);
+        let bg = g.add(ones_p1, neg_op); // [P,1] = 1 − opacity
+        (
+            g.add(pixel_r, bg),
+            g.add(pixel_g, bg),
+            g.add(pixel_b, bg),
+        )
+    } else {
+        (pixel_r, pixel_g, pixel_b)
+    };
+
     let loss_r = g.l1_loss(pixel_r, target_r);
     let loss_g = g.l1_loss(pixel_g, target_g);
     let loss_b = g.l1_loss(pixel_b, target_b);
@@ -368,7 +411,7 @@ pub fn build_volumetric_graph(
     // against the corresponding difference of the target patch. Acts as
     // a poor-man's SSIM — captures local edge structure that random-
     // pixel L1 alone cannot see.
-    let loss = if patch_size > 0 && grad_loss_weight > 0.0 {
+    let color_loss = if patch_size > 0 && grad_loss_weight > 0.0 {
         let q = patch_size;
         let grad_r = patch_grad_l1(g, pixel_r, target_r, q);
         let grad_g = patch_grad_l1(g, pixel_g, target_g, q);
@@ -386,6 +429,22 @@ pub fn build_volumetric_graph(
         g.reshape(combined, &[1])
     } else {
         l1
+    };
+
+    // RadFoam opacity loss: push accumulated opacity → 1 (the all-ones
+    // target alpha for opaque COLMAP scenes). Penalises semi-transparent
+    // floaters that random-pixel L1 alone tolerates. `loss = color +
+    // opacity_weight · mean((opacity − 1)²)`.
+    let loss = if opacity_weight > 0.0 {
+        let op_loss = g.mse_loss(opacity, ones_p1); // scalar [1]
+        let opw = g.constant(vec![opacity_weight], &[1, 1]);
+        let cl_2d = g.reshape(color_loss, &[1, 1]);
+        let op_2d = g.reshape(op_loss, &[1, 1]);
+        let op_scaled = g.mul(op_2d, opw);
+        let total = g.add(cl_2d, op_scaled);
+        g.reshape(total, &[1])
+    } else {
+        color_loss
     };
 
     // `dt_from_positions` as a second output so callers can read it
@@ -735,6 +794,16 @@ pub struct AppearanceFitConfig {
     /// Weight on the gradient L1 term when `patch_size > 0`. Common
     /// choices in the literature are 0.1–0.2.
     pub grad_loss_weight: f32,
+    /// Weight on the RadFoam opacity loss `mean((opacity − 1)²)`, which
+    /// pushes every ray to full opacity (white-background composite) and
+    /// suppresses semi-transparent floaters. `0.0` (default) disables it
+    /// and keeps the legacy un-composited L1 path.
+    pub opacity_weight: f32,
+    /// Softplus β for the density activation. `0.0` (default) uses legacy
+    /// ReLU; `> 0` (RadFoam uses 10) uses `(1/β)·softplus(βx)` so cells
+    /// that dip to negative log-density keep a gradient and recover
+    /// instead of dying — important for stable densification.
+    pub softplus_beta: f32,
 }
 
 /// Adaptive densification: every `every` training steps after `warmup`
@@ -751,26 +820,45 @@ pub struct AppearanceFitConfig {
 pub struct DensifyConfig {
     /// Steps between densify rounds.
     pub every: usize,
-    /// Top-`fraction` cells by accumulated `|grad|` get split. e.g. 0.01
-    /// = top 1 % each cycle.
+    /// Per-round growth factor: each round adds `fraction × current_cells`
+    /// new cells (RadFoam uses 0.15 = +15%/round), selected by weighted
+    /// multinomial on `accumulated|grad(log_density)| × cell_radius`.
     pub fraction: f32,
-    /// Sibling-cell positional jitter, in world units. Scaled per-cell
-    /// by the local nearest-neighbour distance via the current
-    /// adjacency CSR (so splits in dense clusters get small offsets,
-    /// splits in sparse regions get larger ones).
+    /// Unused legacy knob (sibling jitter); the RadFoam-style child
+    /// placement (0.25× toward the farthest neighbour + a 0.1× random
+    /// kick) is now hardcoded. Kept for CLI compatibility.
     pub jitter_scale: f32,
     /// Skip the first `warmup` steps before the first densify (lets
-    /// the per-cell gradient signal settle).
+    /// the per-cell gradient signal settle). RadFoam: 2000.
     pub warmup: usize,
+    /// Stop growing once the cell count reaches this budget (RadFoam
+    /// bonsai: ~2,097,152).
+    pub target_points: usize,
+    /// Stop densifying after this step (refinement-only phase follows).
+    /// RadFoam densifies iters 2000–11000 of 20000 (~55 %).
+    pub densify_until: usize,
+    /// Prune near-transparent small cells each densify round (the floater
+    /// remover RadFoam has and we previously lacked).
+    pub prune: bool,
+    /// Prune a cell only if its post-activation density is below this.
+    pub prune_density: f32,
+    /// …and its farthest-neighbour radius is below this (only cull small
+    /// dim cells; large empty background cells are kept).
+    pub prune_radius: f32,
 }
 
 impl Default for DensifyConfig {
     fn default() -> Self {
         Self {
-            every: 1000,
-            fraction: 0.01,
+            every: 500,
+            fraction: 0.15,
             jitter_scale: 0.5,
-            warmup: 500,
+            warmup: 2000,
+            target_points: 2_097_152,
+            densify_until: usize::MAX,
+            prune: true,
+            prune_density: 0.01,
+            prune_radius: 0.1,
         }
     }
 }
@@ -791,6 +879,8 @@ impl Default for AppearanceFitConfig {
             lr_min_ratio: 0.01,
             patch_size: 0,
             grad_loss_weight: 0.0,
+            opacity_weight: 0.0,
+            softplus_beta: 0.0,
         }
     }
 }
@@ -929,7 +1019,8 @@ pub fn fit_appearance_multi_view(
     }
 
     let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, views.len().max(1), 0, 0.0);
+    let _vg =
+        build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, views.len().max(1), 0, 0.0, 0.0, 0.0);
     let (mut session, _report) = mn::build(
         &g,
         mn::SessionConfig {
@@ -939,7 +1030,7 @@ pub fn fit_appearance_multi_view(
         },
     );
 
-    upload_model_parameters(&mut session, model);
+    upload_model_parameters(&mut session, model, 0.0);
 
     let mut losses = Vec::with_capacity(config.epochs * views.len());
     let log_every = config.epochs.div_ceil(10).max(1);
@@ -973,17 +1064,23 @@ pub fn fit_appearance_multi_view(
         }
     }
 
-    download_model_parameters(&session, model);
+    download_model_parameters(&session, model, 0.0);
 
     losses
 }
 
-fn upload_model_parameters(session: &mut mn::Session, model: &vol::PointCloudModel) {
+fn upload_model_parameters(
+    session: &mut mn::Session,
+    model: &vol::PointCloudModel,
+    softplus_beta: f32,
+) {
     let n_cells = model.points.len();
     let mut init_density = Vec::with_capacity(n_cells);
     let mut init_positions = Vec::with_capacity(n_cells * 3);
     for point in &model.points {
-        init_density.push(point.w);
+        // `.w` stores the density; seed the raw `log_density` parameter by
+        // inverting the activation so softplus(seed) == .w (exact round-trip).
+        init_density.push(inv_density_activation(point.w, softplus_beta));
         init_positions.push(point.x);
         init_positions.push(point.y);
         init_positions.push(point.z);
@@ -1087,12 +1184,47 @@ fn debug_dump_exposure(session: &mn::Session, num_views: usize) {
     );
 }
 
-fn download_model_parameters(session: &mn::Session, model: &mut vol::PointCloudModel) {
+/// Density activation applied on the host when baking the trained
+/// `log_density` parameter into `model.points[i].w` (the density the eval
+/// tracer reads). MUST match `build_volumetric_graph`'s in-graph
+/// activation or training and eval disagree (an activation mismatch
+/// silently collapses eval PSNR while training loss looks fine).
+/// `beta <= 0` = legacy ReLU; `beta > 0` = `(1/β)·softplus(βx)`.
+fn density_activation(x: f32, beta: f32) -> f32 {
+    if beta <= 0.0 {
+        return x.max(0.0);
+    }
+    let bx = beta * x;
+    let sp = if bx > 20.0 { bx } else { (1.0 + bx.exp()).ln() };
+    sp / beta
+}
+
+/// Inverse of [`density_activation`] — recovers a `log_density` seed from a
+/// stored density so the `param → .w → param` round-trip across densify
+/// rebuilds is exact (softplus preserves negatives, unlike ReLU's clamp).
+fn inv_density_activation(y: f32, beta: f32) -> f32 {
+    if beta <= 0.0 {
+        return y; // ReLU stores density (≥0) directly as the log-density seed
+    }
+    let by = beta * y;
+    let inv = if by > 20.0 {
+        by
+    } else {
+        (by.exp() - 1.0).max(1e-20).ln()
+    };
+    inv / beta
+}
+
+fn download_model_parameters(
+    session: &mn::Session,
+    model: &mut vol::PointCloudModel,
+    softplus_beta: f32,
+) {
     let n_cells = model.points.len();
     let mut out_density = vec![0.0f32; n_cells];
     session.read_param("log_density", &mut out_density);
     for (i, d) in out_density.iter().enumerate() {
-        model.points[i].w = d.max(0.0);
+        model.points[i].w = density_activation(*d, softplus_beta);
     }
 
     let mut out_positions = vec![0.0_f32; n_cells * 3];
@@ -1116,65 +1248,63 @@ fn download_model_parameters(session: &mn::Session, model: &mut vol::PointCloudM
     }
 }
 
-/// Compute per-cell local scale (nearest-neighbour distance) from the
-/// current adjacency CSR. Used to set per-cell jitter magnitude during
-/// densification so dense clusters get small offsets and sparse regions
-/// get larger ones.
-fn per_cell_nn_distance(model: &vol::PointCloudModel) -> Vec<f32> {
+/// Per-cell farthest-neighbour distance (`cell_radius`) and the index of
+/// that farthest neighbour, from the current adjacency CSR. `cell_radius`
+/// weights densification (big high-error cells get subdivided) and the
+/// farthest-neighbour direction is where RadFoam places the split child.
+fn per_cell_farthest(model: &vol::PointCloudModel) -> (Vec<f32>, Vec<usize>) {
     let n = model.points.len();
-    let mut nn = vec![f32::INFINITY; n];
+    let mut radius = vec![0.0f32; n];
+    let mut farthest: Vec<usize> = (0..n).collect();
     let Some(adj) = model.adjacency.as_ref() else {
-        return vec![1.0; n];
+        return (vec![1.0; n], farthest);
     };
     for i in 0..n {
         let pi = glam::Vec3::new(model.points[i].x, model.points[i].y, model.points[i].z);
         let start = adj.offsets[i] as usize;
         let end = adj.offsets[i + 1] as usize;
-        for j in &adj.neighbors[start..end] {
-            let pj_v = model.points[*j as usize];
+        let mut best = 0.0f32;
+        let mut bj = i;
+        for &j in &adj.neighbors[start..end] {
+            let pj_v = model.points[j as usize];
             let pj = glam::Vec3::new(pj_v.x, pj_v.y, pj_v.z);
             let d = (pi - pj).length();
-            if d < nn[i] && d > 0.0 {
-                nn[i] = d;
+            if d > best {
+                best = d;
+                bj = j as usize;
             }
         }
+        radius[i] = best;
+        farthest[i] = bj;
     }
-    for d in &mut nn {
-        if !d.is_finite() {
-            *d = 1.0;
-        }
-    }
-    nn
+    (radius, farthest)
 }
 
-/// Split the top-`count` cells by accumulated `|grad|`. Each split
-/// appends a new cell at `pos + jitter * nn_distance * unit_random`
-/// with the same density and SH coefficients as the parent. Returns
-/// the parent index for each appended cell (in append order); empty
-/// if no cells were appended.
-fn split_cells_by_gradient(
+/// One RadFoam-style prune+densify round on the post-download `model`
+/// (positions in `points.xyz`, density in `points.w`, current adjacency).
+///
+/// 1. **Prune** small near-transparent cells (`density < prune_density &&
+///    cell_radius < prune_radius`) — the floater remover.
+/// 2. **Densify** by appending `fraction × survivors` children, parents
+///    drawn by weighted multinomial (without replacement) on
+///    `grad_accum × cell_radius`. Each child sits 0.25× toward the
+///    parent's farthest neighbour plus a small random kick, inheriting the
+///    parent's density + SH.
+///
+/// Returns `(new_to_old, pruned, added)`: `new_to_old[j]` is the OLD cell
+/// index whose Adam (m,v) the rebuilt cell `j` should inherit (survivor →
+/// itself, child → parent), used to carry optimiser momentum across the
+/// session rebuild.
+fn prune_and_densify(
     model: &mut vol::PointCloudModel,
     grad_accum: &[f32],
-    count: usize,
-    jitter_scale: f32,
+    cfg: &DensifyConfig,
     rng_state: &mut u64,
-) -> Vec<usize> {
-    let n = model.points.len();
-    if n == 0 || count == 0 {
-        return Vec::new();
-    }
-    debug_assert_eq!(grad_accum.len(), n);
-
-    let mut idx: Vec<usize> = (0..n).collect();
-    idx.sort_unstable_by(|&a, &b| {
-        grad_accum[b]
-            .partial_cmp(&grad_accum[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    idx.truncate(count.min(n));
-
-    let nn = per_cell_nn_distance(model);
+) -> (Vec<usize>, usize, usize) {
+    let n_old = model.points.len();
     let sh_block = model.sh_component_count() * 3;
+    let (radius, farthest) = per_cell_farthest(model);
+
     let mut next_unit = || {
         *rng_state = rng_state
             .wrapping_mul(6_364_136_223_846_793_005)
@@ -1182,21 +1312,69 @@ fn split_cells_by_gradient(
         ((*rng_state >> 32) as i32 as f32) / (i32::MAX as f32)
     };
 
-    for &i in &idx {
-        let scale = jitter_scale * nn[i];
-        let offset = glam::Vec3::new(next_unit(), next_unit(), next_unit()) * scale;
-        let p = model.points[i];
-        model.points.push(glam::Vec4::new(
-            p.x + offset.x,
-            p.y + offset.y,
-            p.z + offset.z,
-            p.w,
-        ));
-        let base = i * sh_block;
-        let copy: Vec<f32> = model.sh_coefficients[base..base + sh_block].to_vec();
-        model.sh_coefficients.extend_from_slice(&copy);
+    // --- Prune ---
+    let survivors: Vec<usize> = (0..n_old)
+        .filter(|&i| {
+            if !cfg.prune {
+                return true;
+            }
+            let dim = model.points[i].w < cfg.prune_density;
+            let small = radius[i] < cfg.prune_radius;
+            !(dim && small)
+        })
+        .collect();
+    let n_surv = survivors.len();
+    let pruned = n_old - n_surv;
+
+    // --- Densify: weighted sampling without replacement (Efraimidis–
+    // Spirakis: key = ln(u)/w, take the top-`want` keys). ---
+    let headroom = cfg.target_points.saturating_sub(n_surv);
+    let want = (((n_surv as f32) * cfg.fraction).round() as usize).min(headroom);
+    let parents_local: Vec<usize> = if want == 0 {
+        Vec::new()
+    } else {
+        let mut keyed: Vec<(f32, usize)> = (0..n_surv)
+            .map(|local| {
+                let oi = survivors[local];
+                let w = (grad_accum[oi] * radius[oi]).max(1e-12);
+                let u = (next_unit() * 0.5 + 0.5).clamp(1e-6, 1.0); // (0,1]
+                (u.ln() / w, local)
+            })
+            .collect();
+        let k = want.min(keyed.len());
+        keyed.select_nth_unstable_by(k - 1, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        keyed.truncate(k);
+        keyed.into_iter().map(|(_, local)| local).collect()
+    };
+    let added = parents_local.len();
+
+    // --- Rebuild model arrays: survivors compacted, then children ---
+    let n_new = n_surv + added;
+    let mut new_points = Vec::with_capacity(n_new);
+    let mut new_sh = Vec::with_capacity(n_new * sh_block);
+    let mut new_to_old = Vec::with_capacity(n_new);
+    for &oi in &survivors {
+        new_points.push(model.points[oi]);
+        new_sh.extend_from_slice(&model.sh_coefficients[oi * sh_block..(oi + 1) * sh_block]);
+        new_to_old.push(oi);
     }
-    idx
+    for &local in &parents_local {
+        let oi = survivors[local];
+        let p = model.points[oi];
+        let pf = model.points[farthest[oi]];
+        let toward = glam::Vec3::new(pf.x - p.x, pf.y - p.y, pf.z - p.z) * 0.25;
+        let kick_scale = (toward.length() * 0.1).max(1e-5);
+        let kick = glam::Vec3::new(next_unit(), next_unit(), next_unit()) * kick_scale;
+        let off = toward + kick;
+        new_points.push(glam::Vec4::new(p.x + off.x, p.y + off.y, p.z + off.z, p.w));
+        new_sh.extend_from_slice(&model.sh_coefficients[oi * sh_block..(oi + 1) * sh_block]);
+        new_to_old.push(oi);
+    }
+    model.points = new_points;
+    model.sh_coefficients = new_sh;
+    (new_to_old, pruned, added)
 }
 
 /// Enumerate every per-cell parameter name with its per-cell element
@@ -1253,49 +1431,37 @@ fn save_adam_state(session: &mn::Session, sh_degree: usize, n_cells: usize) -> A
     }
 }
 
-/// Restore Adam state into a freshly built session whose cell table
-/// grew from `snap.n_cells` to `n_new`. Old cells keep their original
-/// `(m, v)`. New cells `n_cells..n_new` inherit the Adam state of
-/// their parent cell (passed in `parents`, one entry per appended cell)
-/// — the child is a twin of the parent so its optimiser momentum
-/// should match. Starting children at `(m=0, v=0)` against a fully-
-/// converged neighbourhood causes huge first-step updates (v hasn't
-/// built up) that destabilise the loss; inheriting avoids that.
+/// Restore Adam state into a freshly built session after a prune+densify
+/// round remapped the cell table. `new_to_old[j]` is the OLD cell index
+/// whose `(m, v)` the rebuilt cell `j` inherits — survivors map to their
+/// former slot (momentum preserved through pruning's compaction), split
+/// children map to their parent (a twin should share the parent's
+/// momentum; starting children at `(m=0, v=0)` against a converged
+/// neighbourhood causes destabilising first-step updates).
 ///
-/// The Adam step counter is preserved exactly so bias correction is
-/// continuous for both old and child cells.
-fn restore_adam_state(
+/// The Adam step counter is preserved exactly so bias correction stays
+/// continuous.
+fn restore_adam_state_remap(
     session: &mn::Session,
     snap: &AdamSnapshot,
-    parents: &[usize],
+    new_to_old: &[usize],
     sh_degree: usize,
-    n_new: usize,
 ) {
-    debug_assert!(n_new >= snap.n_cells);
-    debug_assert_eq!(n_new - snap.n_cells, parents.len());
+    let n_new = new_to_old.len();
     let names = per_cell_param_names_with_stride(sh_degree);
     debug_assert_eq!(names.len(), snap.entries.len());
     for (i, (_name, stride)) in names.iter().enumerate() {
         let entry = &snap.entries[i];
         debug_assert_eq!(entry.stride, *stride);
         let s = *stride;
-        let mut padded = vec![0.0_f32; n_new * s];
-        // Old cells: 0..n_cells slot stays the same.
-        padded[..snap.n_cells * s].copy_from_slice(&entry.m);
-        // New cells: inherit from parent slot.
-        for (k, &parent) in parents.iter().enumerate() {
-            let dst = (snap.n_cells + k) * s;
-            let src = parent * s;
-            padded[dst..dst + s].copy_from_slice(&entry.m[src..src + s]);
+        let mut m = vec![0.0_f32; n_new * s];
+        let mut v = vec![0.0_f32; n_new * s];
+        for (j, &oi) in new_to_old.iter().enumerate() {
+            m[j * s..j * s + s].copy_from_slice(&entry.m[oi * s..oi * s + s]);
+            v[j * s..j * s + s].copy_from_slice(&entry.v[oi * s..oi * s + s]);
         }
-        session.write_adam_m(&entry.name, &padded);
-        padded[..snap.n_cells * s].copy_from_slice(&entry.v);
-        for (k, &parent) in parents.iter().enumerate() {
-            let dst = (snap.n_cells + k) * s;
-            let src = parent * s;
-            padded[dst..dst + s].copy_from_slice(&entry.v[src..src + s]);
-        }
-        session.write_adam_v(&entry.name, &padded);
+        session.write_adam_m(&entry.name, &m);
+        session.write_adam_v(&entry.name, &v);
     }
 }
 
@@ -1314,6 +1480,8 @@ fn build_train_session(
     num_views: usize,
     patch_size: usize,
     grad_loss_weight: f32,
+    opacity_weight: f32,
+    softplus_beta: f32,
     gpu: &std::sync::Arc<blade_graphics::Context>,
     path_bufs: &vol::gpu::PathRecordBuffers,
     lr: f32,
@@ -1330,6 +1498,8 @@ fn build_train_session(
         num_views,
         patch_size,
         grad_loss_weight,
+        opacity_weight,
+        softplus_beta,
     );
     let (mut session, _report) = mn::build(
         &g,
@@ -1339,7 +1509,7 @@ fn build_train_session(
             ..Default::default()
         },
     );
-    upload_model_parameters(&mut session, model);
+    upload_model_parameters(&mut session, model, softplus_beta);
 
     let gpu_cloud = {
         let mut init_encoder = gpu.create_command_encoder(blade_graphics::CommandEncoderDesc {
@@ -1500,7 +1670,9 @@ fn fit_appearance_pixel_batched(
         .collect();
 
     let mut losses = Vec::with_capacity(total_steps);
-    let log_every = total_steps.div_ceil(10).max(1);
+    // Frequent loss readouts (every ~2000 steps) so long multi-hour runs
+    // surface their trajectory instead of only ~10 lines total.
+    let log_every = 2000.min(total_steps).max(1);
 
     // Densification splits cells between training cycles. The
     // session + GPU cloud + path-record buffers are kept alive across
@@ -1528,6 +1700,8 @@ fn fit_appearance_pixel_batched(
         views.len(),
         patch_size,
         grad_loss_weight,
+        config.opacity_weight,
+        config.softplus_beta,
         &gpu,
         &path_bufs,
         config.learning_rate,
@@ -1702,30 +1876,29 @@ fn fit_appearance_pixel_batched(
         steps_done += cycle_budget;
         cycle += 1;
 
-        // Densify if there's another cycle ahead and we're past warmup.
+        // Prune + densify, gated by the RadFoam schedule: only between
+        // `warmup` and `densify_until`, and only while under the point
+        // budget. Past that it's a refinement-only phase (no rebuilds).
         if let Some(d) = densify {
-            if steps_done >= d.warmup && steps_done < total_steps {
-                let want = ((model.points.len() as f32) * d.fraction).round() as usize;
-                let want = want.max(1);
-
+            let gate = steps_done >= d.warmup
+                && steps_done < total_steps
+                && steps_done < d.densify_until
+                && model.points.len() < d.target_points;
+            if gate {
                 // Snapshot params + Adam state at the OLD size, before
-                // the split grows `model.points`.
+                // prune+densify remaps `model.points`.
                 let n_old = model.points.len();
-                download_model_parameters(&session, model);
+                download_model_parameters(&session, model, config.softplus_beta);
                 let adam_snap = save_adam_state(&session, sh_degree, n_old);
 
-                let parents = split_cells_by_gradient(
-                    model,
-                    &grad_accum,
-                    want,
-                    d.jitter_scale,
-                    &mut rng_split,
-                );
-                let added = parents.len();
+                let (new_to_old, pruned, added) =
+                    prune_and_densify(model, &grad_accum, &d, &mut rng_split);
                 log::info!(
-                    "densify cycle {}: split {added} cells (target {want}, fraction {:.3}) → {} total",
+                    "densify cycle {}: {} cells (-{} pruned, +{} split) → {} total",
                     cycle,
-                    d.fraction,
+                    n_old,
+                    pruned,
+                    added,
                     model.points.len(),
                 );
                 // Rebuild Voronoi adjacency for the new cell set so the
@@ -1756,6 +1929,8 @@ fn fit_appearance_pixel_batched(
                     views.len(),
                     patch_size,
                     grad_loss_weight,
+                    config.opacity_weight,
+                    config.softplus_beta,
                     &gpu,
                     &path_bufs,
                     config.learning_rate,
@@ -1767,26 +1942,18 @@ fn fit_appearance_pixel_batched(
                 // to the fresh session.
                 session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
 
-                // Restore Adam momentum: old cells keep their (m, v);
-                // child cells inherit their parent's (m, v) so they
-                // start with a calibrated momentum rather than zero,
-                // matching the parent they were split from. Bias-
-                // correction `t` is preserved so the optimiser doesn't
-                // think it's step 1 again.
-                restore_adam_state(
-                    &session,
-                    &adam_snap,
-                    &parents,
-                    sh_degree,
-                    model.points.len(),
-                );
+                // Restore Adam momentum: survivors keep their (m, v),
+                // children inherit their parent's, via the new_to_old
+                // remap. Bias-correction `t` is preserved so the
+                // optimiser doesn't think it's step 1 again.
+                restore_adam_state_remap(&session, &adam_snap, &new_to_old, sh_degree);
                 session.set_adam_step_count(adam_snap.t);
             }
         }
     }
 
     debug_dump_exposure(&session, views.len());
-    download_model_parameters(&session, model);
+    download_model_parameters(&session, model, config.softplus_beta);
     bake_mean_exposure_into_sh(&session, model, views.len());
     drop(session);
     gpu_cloud.deinit(&gpu);
@@ -1830,7 +1997,7 @@ pub fn fit_appearance_to_pixels(
     let flat = flatten_paths(paths, max_steps);
 
     let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0);
+    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0);
 
     let (mut session, _report) = mn::build(
         &g,
@@ -1876,7 +2043,7 @@ pub fn fit_appearance_to_pixels(
         losses.push(read.first().copied().unwrap_or(f32::NAN));
     }
 
-    download_model_parameters(&session, model);
+    download_model_parameters(&session, model, 0.0);
 
     losses
 }
@@ -2064,7 +2231,7 @@ mod tests {
             let max_steps = 4usize;
             let num_views = 5usize;
             let vg = build_volumetric_graph(
-                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0,
+                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0, 0.0, 0.0,
             );
             assert_eq!(vg.sh_degree, sh_degree);
             assert_eq!(vg.n_cells, n_cells);
@@ -2089,7 +2256,7 @@ mod tests {
         let mut g = mn::Graph::new();
         let patch_size = 4usize;
         let n_pixels = patch_size * patch_size;
-        let vg = build_volumetric_graph(&mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2);
+        let vg = build_volumetric_graph(&mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0);
         assert_eq!(vg.n_pixels, n_pixels);
     }
 
@@ -2191,7 +2358,7 @@ mod tests {
         let flat = flatten_paths(&[path], max_steps);
 
         let mut g = mn::Graph::new();
-        let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0);
+        let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0);
 
         let (mut session, _report) = mn::build(
             &g,
