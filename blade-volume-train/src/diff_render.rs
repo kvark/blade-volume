@@ -810,6 +810,15 @@ pub struct AppearanceFitConfig {
     /// run. Exposure is baked into a clone, never the live model. `None`
     /// (default) disables intermediate checkpoints.
     pub checkpoint_path: Option<std::path::PathBuf>,
+    /// Absolute step to resume training from (default 0). When resuming a
+    /// model loaded from a checkpoint PLY, this offsets the loop counter
+    /// so the cosine LR schedule and densify gates (warmup/until)
+    /// continue from where the interrupted run left off instead of
+    /// restarting at step 0 with peak LR. The total step count is
+    /// unchanged, so a resume runs `total_steps − resume_step` more
+    /// steps. Adam state starts fresh, which is identical to how every
+    /// densify cycle already behaves.
+    pub resume_step: usize,
 }
 
 /// Adaptive densification: every `every` training steps after `warmup`
@@ -888,6 +897,7 @@ impl Default for AppearanceFitConfig {
             opacity_weight: 0.0,
             softplus_beta: 0.0,
             checkpoint_path: None,
+            resume_step: 0,
         }
     }
 }
@@ -1708,7 +1718,19 @@ fn fit_appearance_pixel_batched(
     // only torn down and rebuilt when a split actually changes the cell
     // count.
     let densify = config.densify;
-    let mut steps_done = 0usize;
+    // Resume: start the loop counter at the checkpoint's absolute step so
+    // the cosine LR and densify schedule pick up where the interrupted
+    // run stopped. Clamped so a stale/overshooting sidecar can't skip the
+    // whole run.
+    let mut steps_done = config.resume_step.min(total_steps.saturating_sub(1));
+    if steps_done > 0 {
+        log::info!(
+            "resuming at step {}/{} with {} cells (Adam re-warms, as at any densify cycle)",
+            steps_done,
+            total_steps,
+            model.points.len(),
+        );
+    }
     let mut grad_accum = vec![0.0f32; model.points.len()];
     let mut grad_scratch = vec![0.0f32; model.points.len()];
     let mut rng_split: u64 = 0xCAFE_F00D_DEAD_BEEF;
@@ -1915,12 +1937,22 @@ fn fit_appearance_pixel_batched(
             let mut snapshot = model.clone();
             bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
             match save_checkpoint(ckpt, &snapshot) {
-                Ok(()) => log::info!(
-                    "checkpoint: wrote {} ({} cells) at step {}",
-                    ckpt.display(),
-                    snapshot.points.len(),
-                    steps_done,
-                ),
+                Ok(()) => {
+                    // Sidecar with the absolute step so a relaunch can
+                    // resume the schedule (see `resume_step`). Written
+                    // after the PLY rename so it never points past a
+                    // half-written checkpoint.
+                    let step_path = ckpt.with_extension("ply.step");
+                    if let Err(err) = std::fs::write(&step_path, steps_done.to_string()) {
+                        log::warn!("checkpoint step-sidecar write failed: {err:?}");
+                    }
+                    log::info!(
+                        "checkpoint: wrote {} ({} cells) at step {}",
+                        ckpt.display(),
+                        snapshot.points.len(),
+                        steps_done,
+                    );
+                }
                 Err(err) => log::warn!("checkpoint save failed: {err:?}"),
             }
         }

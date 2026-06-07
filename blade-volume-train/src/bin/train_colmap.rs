@@ -230,6 +230,18 @@ struct Args {
     /// when --densify-every > 0; pass "none" to disable.
     #[argh(option)]
     checkpoint: Option<String>,
+
+    /// resume: load the initial foam from this checkpoint PLY (positions,
+    /// densities, SH) instead of the COLMAP cloud. Cameras still come from
+    /// --sparse/--images. Pairs with --resume-step (auto-read from the
+    /// `<ply>.step` sidecar if that flag is omitted).
+    #[argh(option)]
+    init_ply: Option<String>,
+
+    /// resume: absolute step to continue the LR/densify schedule from.
+    /// When omitted and --init-ply is set, read it from `<init-ply>.step`.
+    #[argh(option)]
+    resume_step: Option<usize>,
 }
 
 fn main() {
@@ -265,6 +277,34 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // Resume bookkeeping: when --init-ply is given, determine the step to
+    // continue the schedule from — explicit --resume-step wins, else the
+    // `<ply>.step` sidecar the checkpoint writer dropped, else 0.
+    let init_ply = args.init_ply.as_deref().map(path::PathBuf::from);
+    let resume_step = match (&init_ply, args.resume_step) {
+        (_, Some(s)) => s,
+        (Some(ply), None) => {
+            let sidecar = ply.with_extension("ply.step");
+            match std::fs::read_to_string(&sidecar)
+                .ok()
+                .and_then(|s| s.trim().parse::<usize>().ok())
+            {
+                Some(s) => {
+                    eprintln!("resume: read step {s} from {}", sidecar.display());
+                    s
+                }
+                None => {
+                    eprintln!(
+                        "resume: no readable step sidecar at {}, starting schedule at 0",
+                        sidecar.display()
+                    );
+                    0
+                }
+            }
+        }
+        (None, None) => 0,
+    };
+
     let config = pipeline::PipelineConfig {
         resolution: (args.width, args.height),
         max_steps: args.max_steps,
@@ -282,6 +322,7 @@ fn main() {
             grad_loss_weight: args.grad_loss_weight,
             opacity_weight: args.opacity_weight,
             softplus_beta: args.softplus_beta,
+            resume_step,
             checkpoint_path: match args.checkpoint.as_deref() {
                 Some("none") => None,
                 Some(p) => Some(path::PathBuf::from(p)),
@@ -315,6 +356,7 @@ fn main() {
         far_plane: 100.0,
         initial_density: args.initial_density,
         adjacency,
+        init_ply,
     };
 
     let sparse = path::Path::new(&args.sparse);

@@ -87,6 +87,12 @@ pub struct PipelineConfig {
     pub initial_density: f32,
     /// Adjacency choice for the initial point cloud.
     pub adjacency: AdjacencyKind,
+    /// Resume: when `Some(path)`, load the initial foam from this RadFoam
+    /// PLY (a prior checkpoint) instead of building it from the COLMAP
+    /// reconstruction. Cameras/views still come from `--sparse`/`--images`;
+    /// only the point cloud (positions, densities, SH) is taken from the
+    /// PLY. Pairs with `fit.resume_step` to continue the schedule.
+    pub init_ply: Option<path::PathBuf>,
 }
 
 /// Adjacency algorithm to use when building the initial foam.
@@ -134,6 +140,7 @@ impl Default for PipelineConfig {
             far_plane: 100.0,
             initial_density: 1.0,
             adjacency: AdjacencyKind::Delaunay,
+            init_ply: None,
         }
     }
 }
@@ -290,9 +297,26 @@ pub fn train_colmap_appearance_split(
     gpu: sync::Arc<gpu::Context>,
 ) -> TrainOutcome {
     let recon = colmap::load_reconstruction(sparse_dir);
-    let mut model = recon.to_initial_model_with_density(config.initial_density);
-    if let Some(cap) = config.max_initial_points {
-        if model.points.len() > cap {
+    // Resume path: take the foam from a checkpoint PLY instead of the
+    // COLMAP cloud. Cameras/views still come from `recon`; the PLY already
+    // carries the densified, trained cell set, so we skip the COLMAP
+    // subsample. Adjacency is (re)built below either way.
+    let mut model = if let Some(ply) = &config.init_ply {
+        let path_str = ply.to_string_lossy().to_string();
+        let m = vol::io::load_radfoam(&path_str);
+        log::info!(
+            "resume: loaded initial foam from {} ({} cells, sh_degree {})",
+            path_str,
+            m.points.len(),
+            m.sh_degree,
+        );
+        m
+    } else {
+        recon.to_initial_model_with_density(config.initial_density)
+    };
+    if config.init_ply.is_none() {
+        if let Some(cap) = config.max_initial_points {
+            if model.points.len() > cap {
             let n_before = model.points.len();
             // Pick the highest-track-length COLMAP points first. Track
             // length = how many images saw this 3D point during SfM, so
@@ -318,6 +342,7 @@ pub fn train_colmap_appearance_split(
                 n_before,
                 model.points.len()
             );
+            }
         }
     }
     let t0 = std::time::Instant::now();
@@ -589,6 +614,7 @@ mod tests {
             },
             far_plane: 50.0,
             adjacency: AdjacencyKind::Delaunay,
+            init_ply: None,
         };
         let trained = train_colmap_appearance(&sparse, &images, &config, gpu);
 
