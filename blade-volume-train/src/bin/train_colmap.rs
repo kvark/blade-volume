@@ -242,6 +242,15 @@ struct Args {
     /// When omitted and --init-ply is set, read it from `<init-ply>.step`.
     #[argh(option)]
     resume_step: Option<usize>,
+
+    /// hold out every Nth image for testing (standard NVS "llffhold"
+    /// protocol; Mip-NeRF-360 uses 8) and train on the rest. Default 0 =
+    /// legacy contiguous split (first --views train, next --test-views
+    /// test), which on filename-ordered captures tests on a tail arc of
+    /// the trajectory (mostly extrapolation) and is not comparable to
+    /// published numbers. --test-views caps the held-out count when > 0.
+    #[argh(option, default = "0")]
+    test_every: usize,
 }
 
 fn main() {
@@ -357,6 +366,7 @@ fn main() {
         initial_density: args.initial_density,
         adjacency,
         init_ply,
+        test_every: args.test_every,
     };
 
     let sparse = path::Path::new(&args.sparse);
@@ -410,24 +420,17 @@ fn main() {
     );
 
     // --- Evaluation on held-out test views ---
-    if args.test_views > 0 {
-        let train_count = config.max_views.unwrap_or(0);
-        // COLMAP's image order isn't necessarily filesystem order, so on
-        // datasets where only a subset of images live on disk a naive
-        // skip-then-take can pick missing files. Filter to existing
-        // files first, then slice.
-        let existing: Vec<&_> = outcome
-            .reconstruction
-            .images
-            .iter()
-            .filter(|img| images.join(&img.name).is_file())
-            .collect();
-        let test_images: Vec<_> = existing
-            .iter()
-            .skip(train_count)
-            .take(args.test_views)
-            .copied()
-            .collect();
+    if args.test_views > 0 || args.test_every > 0 {
+        // Same split logic as training (existence-filtered COLMAP order):
+        // interleaved every-Nth when --test-every > 0, else the legacy
+        // contiguous first-train/next-test slicing.
+        let (train_images, test_images) = pipeline::split_train_test(
+            &outcome.reconstruction,
+            images,
+            config.max_views,
+            args.test_views,
+            args.test_every,
+        );
         let test_views = pipeline::build_views_from(
             &outcome.reconstruction,
             images,
@@ -439,15 +442,13 @@ fn main() {
             eprintln!("no usable test views (image files missing?)");
         } else {
             let psnrs = pipeline::evaluate_views(&outcome.model, &test_views, &config);
-            // Train-set PSNR too, for comparison. Same existing-file
-            // filter so we evaluate the actual training views, not a
-            // mis-aligned prefix of the full COLMAP list.
+            // Train-set PSNR too, for comparison.
             let train_views = pipeline::build_views_from(
                 &outcome.reconstruction,
                 images,
                 &outcome.model,
                 &config,
-                existing.iter().take(train_count).copied(),
+                train_images.iter().copied(),
             );
             let train_psnrs = pipeline::evaluate_views(&outcome.model, &train_views, &config);
             let avg_train: f32 =

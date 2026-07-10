@@ -71,6 +71,13 @@ struct Args {
     /// (ground-truth | rendered, side by side). Created if absent.
     #[argh(option)]
     dump_dir: Option<String>,
+
+    /// hold out every Nth image as the test set (standard NVS "llffhold"
+    /// protocol; Mip-NeRF-360 uses 8), train slice = the rest. Default 0 =
+    /// legacy contiguous slicing (--train then --test). Must match the
+    /// split the PLY was trained with or train/test numbers are polluted.
+    #[argh(option, default = "0")]
+    test_every: usize,
 }
 
 /// Write a side-by-side `[GT | rendered]` PNG. Both inputs are row-major
@@ -127,34 +134,26 @@ fn main() {
     let images_dir = path::Path::new(&args.images);
     let recon = colmap::load_reconstruction(sparse);
 
-    // Filter COLMAP image entries to those whose file actually exists on
-    // disk. Keep the COLMAP order so subsequent train/test slicing is
-    // deterministic and reproducible.
-    let existing: Vec<&colmap::ColmapImage> = recon
-        .images
-        .iter()
-        .filter(|img| images_dir.join(&img.name).is_file())
-        .collect();
-    println!(
-        "{} of {} COLMAP images exist on disk",
-        existing.len(),
-        recon.images.len()
+    // Split via the shared helper (existence-filtered COLMAP order):
+    // interleaved every-Nth when --test-every > 0, else the legacy
+    // contiguous --train / --test slicing.
+    let (train_slice, test_slice) = pipeline::split_train_test(
+        &recon,
+        images_dir,
+        Some(args.train),
+        args.test,
+        args.test_every,
     );
-
-    let train_slice: Vec<&colmap::ColmapImage> =
-        existing.iter().take(args.train).copied().collect();
-    let test_slice: Vec<&colmap::ColmapImage> = existing
-        .iter()
-        .skip(args.train)
-        .take(args.test)
-        .copied()
-        .collect();
+    println!(
+        "split: {} train / {} test views (test_every={})",
+        train_slice.len(),
+        test_slice.len(),
+        args.test_every,
+    );
     if test_slice.is_empty() {
         eprintln!(
-            "no test views available — train={} test={} but only {} files exist",
-            args.train,
-            args.test,
-            existing.len()
+            "no test views available — train={} test={} test_every={}",
+            args.train, args.test, args.test_every,
         );
         std::process::exit(2);
     }

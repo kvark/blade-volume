@@ -93,6 +93,14 @@ pub struct PipelineConfig {
     /// only the point cloud (positions, densities, SH) is taken from the
     /// PLY. Pairs with `fit.resume_step` to continue the schedule.
     pub init_ply: Option<path::PathBuf>,
+    /// Standard NVS held-out split: when `> 0`, every `test_every`-th image
+    /// (index `% test_every == 0` over the existence-filtered, COLMAP-ordered
+    /// list) is held out for testing and training uses the rest. The
+    /// Mip-NeRF-360 / NeRF "llffhold" convention is 8. `0` (legacy) trains
+    /// on the first `max_views` images — which on filename-ordered captures
+    /// makes the test set a contiguous tail arc (mostly extrapolation) and
+    /// depresses test PSNR versus the standard protocol.
+    pub test_every: usize,
 }
 
 /// Adjacency algorithm to use when building the initial foam.
@@ -141,6 +149,7 @@ impl Default for PipelineConfig {
             initial_density: 1.0,
             adjacency: AdjacencyKind::Delaunay,
             init_ply: None,
+            test_every: 0,
         }
     }
 }
@@ -169,6 +178,60 @@ fn subsample_indices(n: usize, cap: usize) -> Vec<usize> {
         out.push((idx as usize).min(n - 1));
     }
     out
+}
+
+/// Partition the existence-filtered, COLMAP-ordered image list into
+/// `(train, test)` slices. With `test_every > 0`, every `test_every`-th
+/// image is held out (the standard NVS "llffhold" protocol); train is the
+/// rest, capped at `max_views`, and test is capped at `test_views` when
+/// that is non-zero. With `test_every == 0` this reproduces the legacy
+/// contiguous slicing: first `max_views` train, next `test_views` test.
+pub fn split_train_test<'a>(
+    reconstruction: &'a colmap::Reconstruction,
+    images_dir: &path::Path,
+    max_views: Option<usize>,
+    test_views: usize,
+    test_every: usize,
+) -> (
+    Vec<&'a colmap::ColmapImage>,
+    Vec<&'a colmap::ColmapImage>,
+) {
+    let existing: Vec<&colmap::ColmapImage> = reconstruction
+        .images
+        .iter()
+        .filter(|img| images_dir.join(&img.name).is_file())
+        .collect();
+    if test_every > 0 {
+        let mut train = Vec::new();
+        let mut test = Vec::new();
+        for (i, img) in existing.iter().enumerate() {
+            if i % test_every == 0 {
+                test.push(*img);
+            } else {
+                train.push(*img);
+            }
+        }
+        if let Some(cap) = max_views {
+            train.truncate(cap);
+        }
+        if test_views > 0 {
+            test.truncate(test_views);
+        }
+        (train, test)
+    } else {
+        let train: Vec<&colmap::ColmapImage> = existing
+            .iter()
+            .take(max_views.unwrap_or(existing.len()))
+            .copied()
+            .collect();
+        let test: Vec<&colmap::ColmapImage> = existing
+            .iter()
+            .skip(train.len())
+            .take(test_views)
+            .copied()
+            .collect();
+        (train, test)
+    }
 }
 
 /// Build the training views from a COLMAP reconstruction.
@@ -397,7 +460,24 @@ pub fn train_colmap_appearance_split(
         config.resolution,
     );
 
-    let views = build_views(&recon, images_dir, &model, config);
+    let views = if config.test_every > 0 {
+        let (train_imgs, test_imgs) = split_train_test(
+            &recon,
+            images_dir,
+            config.max_views,
+            0,
+            config.test_every,
+        );
+        log::info!(
+            "every-{}th held-out split: {} train / {} test images",
+            config.test_every,
+            train_imgs.len(),
+            test_imgs.len(),
+        );
+        build_views_from(&recon, images_dir, &model, config, train_imgs)
+    } else {
+        build_views(&recon, images_dir, &model, config)
+    };
     if views.is_empty() {
         log::warn!("no usable training views — returning untrained initial model");
         return TrainOutcome {
@@ -615,6 +695,7 @@ mod tests {
             far_plane: 50.0,
             adjacency: AdjacencyKind::Delaunay,
             init_ply: None,
+            test_every: 0,
         };
         let trained = train_colmap_appearance(&sparse, &images, &config, gpu);
 
