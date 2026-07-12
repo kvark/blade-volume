@@ -7,7 +7,7 @@ description = "Training pipeline for blade-volume point clouds (meganeura backen
 [dependencies]
 argh.workspace = true
 blade-graphics.workspace = true
-blade-volume = { path = "../blade-volume" }
+blade-volume = { path = "../blade-volume", features = ["qhull"] }
 blade-volume-convert = { path = "../blade-volume-convert" }
 env_logger.workspace = true
 glam.workspace = true

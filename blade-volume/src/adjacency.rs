@@ -330,6 +330,7 @@ pub fn compute_cech_default(points: &[glam::Vec4], radii: &[f32]) -> Adjacency {
 /// # Panics
 /// Panics if fewer than 5 points are provided (Qhull needs at least 5
 /// for a 3D Delaunay) or if the C library reports an error.
+#[cfg(feature = "qhull")]
 pub fn compute_adjacency_qhull(points: &[glam::Vec4], config: &AdjacencyConfig) -> Adjacency {
     let num_points = points.len();
     assert!(
@@ -391,6 +392,7 @@ pub fn compute_adjacency_qhull(points: &[glam::Vec4], config: &AdjacencyConfig) 
 }
 
 /// [`compute_adjacency_qhull`] with the default [`AdjacencyConfig`].
+#[cfg(feature = "qhull")]
 pub fn compute_adjacency_qhull_default(points: &[glam::Vec4]) -> Adjacency {
     compute_adjacency_qhull(points, &AdjacencyConfig::default())
 }
@@ -892,6 +894,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "qhull")]
     #[test]
     fn compute_adjacency_qhull_largely_agrees_with_simple_delaunay_on_random_input() {
         // The two backends agree on >95% of edges for typical
@@ -944,6 +947,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "qhull")]
     #[test]
     fn compute_adjacency_qhull_handles_a_jittered_grid_without_panicking() {
         // Just check it doesn't blow up — the exact adjacency on a

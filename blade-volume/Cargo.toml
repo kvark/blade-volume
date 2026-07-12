@@ -3,6 +3,10 @@ name = "blade-volume"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+qhull = ["dep:qhull"]
+
 [dependencies]
 blade-graphics.workspace = true
 blade-macros.workspace = true
@@ -12,7 +16,7 @@ flate2.workspace = true
 kiddo.workspace = true
 log.workspace = true
 mint.workspace = true
-qhull.workspace = true
+qhull = { workspace = true, optional = true }
 
 simple_delaunay_lib.workspace = true
 
