@@ -218,6 +218,11 @@ struct Args {
     #[argh(option, default = "0.0")]
     opacity_weight: f32,
 
+    /// weight on smooth per-ray depth variance (default 0 = off). Small
+    /// values such as 1e-4 discourage floaters and thick multi-surface rays.
+    #[argh(option, default = "0.0")]
+    distortion_weight: f32,
+
     /// composite training, held-out evaluation, and novel renders on white
     /// instead of the default black background
     #[argh(switch)]
@@ -349,6 +354,7 @@ fn main() {
             patch_size: args.patch_size,
             grad_loss_weight: args.grad_loss_weight,
             opacity_weight: args.opacity_weight,
+            distortion_weight: args.distortion_weight,
             softplus_beta: args.softplus_beta,
             background_rgb: if args.white_background {
                 [1.0; 3]

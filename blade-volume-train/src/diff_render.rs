@@ -112,6 +112,7 @@ pub fn build_volumetric_graph(
     patch_size: usize,
     grad_loss_weight: f32,
     opacity_weight: f32,
+    distortion_weight: f32,
     softplus_beta: f32,
     background_rgb: [f32; 3],
     use_recorded_dt: bool,
@@ -480,6 +481,37 @@ pub fn build_volumetric_graph(
         color_loss
     };
 
+    // Smooth ray-thickness penalty. Segment midpoints come from the exact dt
+    // stream selected above. `opacity * E[t²] - E[t]²` is the unnormalised
+    // weighted depth variance; it is zero for a single concentrated surface
+    // and grows when a ray spreads contribution across floaters/layers.
+    let loss = if distortion_weight > 0.0 {
+        let depth_prefix_matrix = g.constant(strict_lower_triangular_ones(l), &[l, l]);
+        let depth_prefix = g.matmul(dt_2d, depth_prefix_matrix);
+        let half = g.constant(vec![0.5_f32; p * l], &[p, l]);
+        let half_dt = g.mul(dt_2d, half);
+        let midpoint = g.add(depth_prefix, half_dt);
+        let weighted_midpoint = g.mul(weight, midpoint);
+        let first_moment = g.matmul(weighted_midpoint, ones_l1);
+        let midpoint_squared = g.mul(midpoint, midpoint);
+        let weighted_midpoint_squared = g.mul(weight, midpoint_squared);
+        let second_moment = g.matmul(weighted_midpoint_squared, ones_l1);
+        let opacity_second = g.mul(opacity, second_moment);
+        let first_squared = g.mul(first_moment, first_moment);
+        let neg_first_squared = g.neg(first_squared);
+        let variance_raw = g.add(opacity_second, neg_first_squared);
+        let variance = g.relu(variance_raw);
+        let variance_loss = g.mean_all(variance);
+        let base_2d = g.reshape(loss, &[1, 1]);
+        let variance_2d = g.reshape(variance_loss, &[1, 1]);
+        let scale = g.constant(vec![distortion_weight], &[1, 1]);
+        let scaled = g.mul(variance_2d, scale);
+        let total = g.add(base_2d, scaled);
+        g.reshape(total, &[1])
+    } else {
+        loss
+    };
+
     // `dt_from_positions` as a second output so callers can read it
     // back and compare against the shader-computed dt during the
     // position-optimisation sanity check.
@@ -830,6 +862,11 @@ pub struct AppearanceFitConfig {
     /// suppresses semi-transparent floaters. `0.0` (default) disables it
     /// and keeps the legacy un-composited L1 path.
     pub opacity_weight: f32,
+    /// Weight on a smooth per-ray weighted depth-variance loss. `0.0`
+    /// disables it. Small values such as `1e-4` discourage contribution
+    /// spread across floaters without requiring a non-differentiable sampled
+    /// depth-quantile lookup.
+    pub distortion_weight: f32,
     /// Softplus β for the density activation. `0.0` (default) uses legacy
     /// ReLU; `> 0` (RadFoam uses 10) uses `(1/β)·softplus(βx)` so cells
     /// that dip to negative log-density keep a gradient and recover
@@ -941,6 +978,7 @@ impl Default for AppearanceFitConfig {
             patch_size: 0,
             grad_loss_weight: 0.0,
             opacity_weight: 0.0,
+            distortion_weight: 0.0,
             softplus_beta: 0.0,
             background_rgb: [0.0; 3],
             position_lr_ratio: 0.0,
@@ -1034,6 +1072,18 @@ pub fn fit_appearance_multi_view(
     let pixel_batch = config.pixel_batch.unwrap_or(p);
     assert!(pixel_batch > 0, "pixel_batch must be greater than zero");
     assert!(
+        config.learning_rate.is_finite() && config.learning_rate >= 0.0,
+        "learning_rate must be finite and non-negative"
+    );
+    assert!(
+        config.opacity_weight.is_finite() && config.opacity_weight >= 0.0,
+        "opacity_weight must be finite and non-negative"
+    );
+    assert!(
+        config.distortion_weight.is_finite() && config.distortion_weight >= 0.0,
+        "distortion_weight must be finite and non-negative"
+    );
+    assert!(
         config
             .background_rgb
             .iter()
@@ -1056,6 +1106,13 @@ pub fn fit_appearance_multi_view(
         model.radii.is_none() || config.densify.is_none(),
         "weighted-cloud densification requires a radius split policy and is not supported"
     );
+    if let Some(ref densify) = config.densify {
+        assert!(densify.every > 0, "densify.every must be greater than zero");
+        assert!(
+            densify.fraction.is_finite() && densify.fraction >= 0.0,
+            "densify.fraction must be finite and non-negative"
+        );
+    }
     if config.pixel_batch.is_none() {
         config.steps_per_view = config.epochs;
     }
@@ -1546,6 +1603,7 @@ fn build_train_session(
     patch_size: usize,
     grad_loss_weight: f32,
     opacity_weight: f32,
+    distortion_weight: f32,
     softplus_beta: f32,
     background_rgb: [f32; 3],
     gpu: &std::sync::Arc<blade_graphics::Context>,
@@ -1566,6 +1624,7 @@ fn build_train_session(
         patch_size,
         grad_loss_weight,
         opacity_weight,
+        distortion_weight,
         softplus_beta,
         background_rgb,
         model.radii.is_some(),
@@ -1771,6 +1830,7 @@ fn fit_appearance_pixel_batched(
         patch_size,
         grad_loss_weight,
         config.opacity_weight,
+        config.distortion_weight,
         config.softplus_beta,
         config.background_rgb,
         &gpu,
@@ -2049,6 +2109,7 @@ fn fit_appearance_pixel_batched(
                     patch_size,
                     grad_loss_weight,
                     config.opacity_weight,
+                    config.distortion_weight,
                     config.softplus_beta,
                     config.background_rgb,
                     &gpu,
@@ -2112,6 +2173,7 @@ fn fit_appearance_pixel_batched(
                     patch_size,
                     grad_loss_weight,
                     config.opacity_weight,
+                    config.distortion_weight,
                     config.softplus_beta,
                     config.background_rgb,
                     &gpu,
@@ -2398,7 +2460,7 @@ mod tests {
             let max_steps = 4usize;
             let num_views = 5usize;
             let vg = build_volumetric_graph(
-                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0, 0.0, 0.0,
+                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0, 0.0, 0.0, 0.0,
                 [0.0; 3], false,
             );
             assert_eq!(vg.sh_degree, sh_degree);
@@ -2425,7 +2487,7 @@ mod tests {
         let patch_size = 4usize;
         let n_pixels = patch_size * patch_size;
         let vg = build_volumetric_graph(
-            &mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0, [0.0; 3], false,
+            &mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0, 0.0, [0.0; 3], false,
         );
         assert_eq!(vg.n_pixels, n_pixels);
     }
@@ -2514,7 +2576,7 @@ mod tests {
 
         let mut g = mn::Graph::new();
         let _vg = build_volumetric_graph(
-            &mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0, [0.0; 3], false,
+            &mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
         );
 
         let (mut session, _report) = mn::build(
@@ -2574,7 +2636,7 @@ mod tests {
         let n_cells = model.points.len();
         let mut g = mn::Graph::new();
         let vg = build_volumetric_graph(
-            &mut g, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, [0.0; 3], true,
+            &mut g, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], true,
         );
         let dt_output = g.reshape(vg.dt_from_positions, &[1]);
         g.set_outputs(vec![dt_output]);
@@ -2634,6 +2696,7 @@ mod tests {
                 0.0,
                 0.0,
                 0.0,
+                0.0,
                 background_rgb,
                 true,
             );
@@ -2668,6 +2731,69 @@ mod tests {
         let white_loss = evaluate([1.0; 3]);
         assert!(black_loss > 1.0, "black loss={black_loss}");
         assert!(white_loss < 1e-6, "white loss={white_loss}");
+    }
+
+    #[test]
+    fn distortion_loss_penalizes_depth_spread() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping distortion_loss_penalizes_depth_spread: no GPU");
+            return;
+        };
+        let evaluate = |distortion_weight| {
+            let mut model = tiny_model();
+            for point in model.points.iter_mut() {
+                point.w = 1.0;
+            }
+            let mut graph = mn::Graph::new();
+            build_volumetric_graph(
+                &mut graph,
+                model.points.len(),
+                1,
+                2,
+                0,
+                1,
+                0,
+                0.0,
+                0.0,
+                distortion_weight,
+                0.0,
+                [0.0; 3],
+                true,
+            );
+            let (mut session, _) = mn::build(
+                &graph,
+                mn::SessionConfig {
+                    mode: mn::Mode::Training,
+                    gpu: Some(gpu.clone()),
+                    ..Default::default()
+                },
+            );
+            upload_model_parameters(&mut session, &model, 0.0);
+            for channel in ["exposure_r", "exposure_g", "exposure_b"] {
+                session.set_parameter(channel, &[1.0]);
+            }
+            session.set_input_u32("cell_indices", &[0, 1]);
+            session.set_input_u32("next_cell_indices", &[0, 1]);
+            session.set_input("recorded_dt", &[1.0, 4.0]);
+            session.set_input("mask", &[1.0, 1.0]);
+            session.set_input("ray_origin", &[0.0, 0.0, -1.0]);
+            session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
+            session.set_input_u32("pixel_idx_per_step", &[0, 0]);
+            session.set_input_u32("view_idx", &[0]);
+            session.set_input("labels", &[0.0, 0.0, 0.0]);
+            session.set_adam(0.0, 0.9, 0.999, 1e-8);
+            session.step();
+            session.wait();
+            session.read_output(1)[0]
+        };
+
+        let base = evaluate(0.0);
+        let regularized = evaluate(1.0);
+        assert!(base.is_finite() && regularized.is_finite());
+        assert!(
+            regularized > base + 1e-3,
+            "base={base} regularized={regularized}"
+        );
     }
 
     /// End-to-end: a small target image is the ground-truth render of a
