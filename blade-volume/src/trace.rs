@@ -331,7 +331,7 @@ pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -
             let dp = face_normal.dot(dir);
             if dp > 0.0 {
                 let t = (face_origin - ray.origin).dot(face_normal) / dp;
-                if t.is_finite() && t < best_t1 {
+                if t.is_finite() && t > t0 && t < best_t1 {
                     best_t1 = t;
                     next_face = Some(j);
                 }
@@ -430,7 +430,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
             let dp = face_normal.dot(dir);
             if dp > 0.0 {
                 let t = (face_origin - ray.origin).dot(face_normal) / dp;
-                if t.is_finite() && t < best_t1 {
+                if t.is_finite() && t > t0 && t < best_t1 {
                     best_t1 = t;
                     next_face = Some(j);
                 }

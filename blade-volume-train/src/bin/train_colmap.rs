@@ -110,10 +110,9 @@ struct Args {
     #[argh(option, default = "0.0")]
     cech_radius: f32,
 
-    /// pixels per Adam step (default 0 = whole-image mode). Random
-    /// pixel sampling per step keeps the matmul tile aligned regardless
-    /// of image resolution.
-    #[argh(option, default = "0")]
+    /// pixels per Adam step (default 256). Random pixel sampling keeps the
+    /// graph small regardless of image resolution. Set 0 to use every pixel.
+    #[argh(option, default = "256")]
     pixel_batch: usize,
 
     /// adam steps per view in pixel-batched mode (default 200)
@@ -127,7 +126,7 @@ struct Args {
     /// SH degree for view-dependent colour (0–3, default 0).
     /// Higher degrees give better PSNR on view-dependent surfaces
     /// (metallic, glossy, leafy) at the cost of `(1+deg)²` per-cell
-    /// parameters per channel. Only effective in `--pixel-batch` mode.
+    /// parameters per channel.
     #[argh(option, default = "0")]
     sh_degree: usize,
 

@@ -62,10 +62,8 @@ pub fn load_and_downsample_image(
 
 #[derive(Clone, Debug)]
 pub struct PipelineConfig {
-    /// Training resolution per view (width, height). With
-    /// `fit.pixel_batch.is_some()` this is the size we downsample images
-    /// to before training — paths are recorded against the downsampled
-    /// pixel grid. With `None`, this is also the per-step graph shape.
+    /// Training resolution per view (width, height). Images are downsampled
+    /// to this size before training; paths use the same pixel grid.
     pub resolution: (u32, u32),
     /// Maximum path length per ray.
     pub max_steps: usize,

@@ -742,7 +742,7 @@ pub enum LrSchedule {
     Cosine,
 }
 
-/// Knobs for [`fit_appearance_to_pixels`].
+/// Knobs for [`fit_appearance_multi_view`].
 #[derive(Clone, Debug)]
 pub struct AppearanceFitConfig {
     pub learning_rate: f32,
@@ -757,19 +757,17 @@ pub struct AppearanceFitConfig {
     /// `lr_schedule == Constant`.
     pub lr_min_ratio: f32,
     /// When `Some(K)`, each Adam step samples `K` random pixels from a
-    /// randomly chosen training view rather than feeding every pixel of
-    /// every view. Cheap stochastic mini-batching that scales to full
-    /// image resolutions. `None` falls back to feeding every pixel at
-    /// the view's resolution — fine for tiny synthetic tests.
+    /// randomly chosen training view. `None` feeds every pixel exactly once
+    /// per step and uses `epochs` steps per view. Both modes use the same GPU
+    /// path recorder and differentiable graph.
     pub pixel_batch: Option<usize>,
-    /// Number of Adam steps per view in batched mode. Used only when
-    /// `pixel_batch.is_some()`. Default 200.
+    /// Number of Adam steps per view in randomly batched mode. Default 200.
     pub steps_per_view: usize,
     /// SH degree for view-dependent colour. 0 = flat colour (default,
     /// matches the original radfoam pipeline). 1–3 enable view
     /// dependence: ~3-5 dB PSNR improvement on Mip-NeRF 360 scenes at
     /// the cost of `(1+sh_degree)²` per-cell parameters per RGB
-    /// channel. Only the `pixel_batch`-mode pipeline supports SH > 0.
+    /// channel.
     pub sh_degree: usize,
     /// Adaptive densification: split the highest-gradient cells
     /// periodically during training. `None` disables densification
@@ -929,52 +927,21 @@ pub struct ViewSupervision {
     pub start_cell: u32,
 }
 
-/// Per-pixel ray for a view, matching `render::render_cpu`'s mapping.
-fn rays_for_view(cam: &vol::CameraParams, w: u32, h: u32) -> Vec<vol::trace::Ray> {
-    let tan_half = glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan());
-    let orientation = glam::Quat::from_xyzw(
-        cam.cam_orientation[0],
-        cam.cam_orientation[1],
-        cam.cam_orientation[2],
-        cam.cam_orientation[3],
-    );
-    let origin = glam::Vec3::from_array(cam.cam_position);
-    let mut rays = Vec::with_capacity((w * h) as usize);
-    let wf = w as f32;
-    let hf = h as f32;
-    for iy in 0..h {
-        let py = (iy as f32 + 0.5) / hf;
-        let ndc_y = py * 2.0 - 1.0;
-        for ix in 0..w {
-            let px = (ix as f32 + 0.5) / wf;
-            let ndc_x = px * 2.0 - 1.0;
-            let local = glam::Vec3::new(ndc_x * tan_half.x, ndc_y * tan_half.y, 1.0);
-            rays.push(vol::trace::Ray {
-                origin,
-                direction: (orientation * local).normalize(),
-            });
-        }
-    }
-    rays
-}
-
-/// Fit per-cell density + SH degree-0 DC of `model` so it reproduces every
-/// view in `views`. Geometry is frozen — the cell-walk paths through each
-/// view are recorded once at the start (positions and adjacency don't
-/// change during appearance training) and reused for every Adam step.
+/// Fit per-cell density and SH coefficients of `model` so it reproduces every
+/// view in `views`. Paths are recorded from the current model on the GPU for
+/// every Adam step.
 ///
-/// All views must share the same `width` × `height` and `max_steps`. The
-/// graph is built once for that fixed shape; per-epoch we cycle through
-/// views and run one Adam step per view.
-///
-/// Returns one loss per Adam step (`epochs * views.len()` total).
+/// `pixel_batch = None` uses the complete `width × height` image as the batch
+/// and preserves the legacy `epochs * views.len()` step count without using
+/// the obsolete precomputed-path graph. `Some(K)` uses random mini-batches and
+/// `steps_per_view * views.len()` steps.
 pub fn fit_appearance_multi_view(
     model: &mut vol::PointCloudModel,
     views: &[ViewSupervision],
     width: u32,
     height: u32,
     max_steps: usize,
-    config: AppearanceFitConfig,
+    mut config: AppearanceFitConfig,
     gpu: std::sync::Arc<blade_graphics::Context>,
 ) -> Vec<f32> {
     assert!(
@@ -994,99 +961,22 @@ pub fn fit_appearance_multi_view(
         );
     }
 
-    if let Some(k) = config.pixel_batch {
-        return fit_appearance_pixel_batched(model, views, max_steps, k, config, gpu);
-    }
-
     let p = (width as usize) * (height as usize);
     for v in views {
+        assert_eq!(v.width, width, "view width must match graph width");
+        assert_eq!(v.height, height, "view height must match graph height");
         assert_eq!(
             v.target_rgb.len(),
             p * 3,
-            "whole-image mode: target_rgb length must equal width*height*3"
+            "target_rgb length must equal width*height*3"
         );
     }
-
-    // Record paths per view once; geometry is fixed during appearance training.
-    let trace_settings = vol::trace::TraceSettings {
-        start_point: 0, // overwritten per view below
-        max_steps: max_steps as u32,
-        weight_threshold: 0.0,
-        depth: views[0].camera.depth,
-        eval_mode: vol::trace::EvalMode::Sh,
-    };
-    let mut flats: Vec<FlatPaths> = Vec::with_capacity(views.len());
-    for v in views {
-        let mut s = trace_settings;
-        s.start_point = v.start_cell;
-        s.depth = v.camera.depth;
-        let rays = rays_for_view(&v.camera, width, height);
-        let paths: Vec<_> = rays
-            .into_iter()
-            .map(|ray| vol::trace::record_path(model, ray, s))
-            .collect();
-        flats.push(flatten_paths(&paths, max_steps));
+    let pixel_batch = config.pixel_batch.unwrap_or(p);
+    assert!(pixel_batch > 0, "pixel_batch must be greater than zero");
+    if config.pixel_batch.is_none() {
+        config.steps_per_view = config.epochs;
     }
-
-    let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(
-        &mut g,
-        n_cells,
-        p,
-        max_steps,
-        0,
-        views.len().max(1),
-        0,
-        0.0,
-        0.0,
-        0.0,
-    );
-    let (mut session, _report) = mn::build(
-        &g,
-        mn::SessionConfig {
-            mode: mn::Mode::Training,
-            gpu: Some(gpu),
-            ..Default::default()
-        },
-    );
-
-    upload_model_parameters(&mut session, model, 0.0);
-
-    let mut losses = Vec::with_capacity(config.epochs * views.len());
-    let log_every = config.epochs.div_ceil(10).max(1);
-    session.set_adam(
-        config.learning_rate,
-        config.adam_beta1,
-        config.adam_beta2,
-        config.adam_eps,
-    );
-    for epoch in 0..config.epochs {
-        for (vi, v) in views.iter().enumerate() {
-            session.set_input_u32("cell_indices", &flats[vi].cell);
-            session.set_input("dt", &flats[vi].dt);
-            session.set_input("mask", &flats[vi].mask);
-            session.set_input("labels", &v.target_rgb);
-            session.step();
-            session.wait();
-            let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
-            log::trace!("step {} (view {vi}): loss {loss}", losses.len());
-            losses.push(loss);
-        }
-        if epoch == 0 || (epoch + 1).is_multiple_of(log_every) {
-            let recent_avg: f32 =
-                losses.iter().rev().take(views.len()).copied().sum::<f32>() / views.len() as f32;
-            log::info!(
-                "epoch {}/{}: avg loss {:.4}",
-                epoch + 1,
-                config.epochs,
-                recent_avg
-            );
-        }
-    }
-
-    download_model_parameters(&session, model, 0.0);
-
-    losses
+    fit_appearance_pixel_batched(model, views, max_steps, pixel_batch, config, gpu)
 }
 
 fn upload_model_parameters(
@@ -1635,6 +1525,7 @@ fn fit_appearance_pixel_batched(
 ) -> Vec<f32> {
     let n_cells = model.points.len();
     let total_steps = config.steps_per_view.max(1) * views.len();
+    let full_image_batch = config.pixel_batch.is_none();
 
     // The model's existing SH degree drives the graph: callers wanting to
     // expand a SH-0 model to a higher degree must reshape
@@ -1813,6 +1704,29 @@ fn fit_appearance_pixel_batched(
                             for (j, &bv) in basis.iter().enumerate().skip(1) {
                                 basis_inputs[j - 1][k] = bv;
                             }
+                        }
+                    }
+                }
+            } else if full_image_batch {
+                assert_eq!(pixel_batch, img_size as usize);
+                for (k, pidx) in (0..img_size).enumerate() {
+                    pixel_indices[k] = pidx;
+                    let base = (pidx as usize) * 3;
+                    target_buf[k * 3] = v.target_rgb[base];
+                    target_buf[k * 3 + 1] = v.target_rgb[base + 1];
+                    target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+
+                    let ix = pidx % v.width;
+                    let iy = pidx / v.width;
+                    let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
+                    ray_dir_per_pixel_buf[k * 3] = dir.x;
+                    ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
+                    ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
+
+                    if num_components > 1 {
+                        let basis = sh_basis(dir, num_components);
+                        for (j, &bv) in basis.iter().enumerate().skip(1) {
+                            basis_inputs[j - 1][k] = bv;
                         }
                     }
                 }
@@ -2042,89 +1956,6 @@ fn fit_appearance_pixel_batched(
     let mut recorder = recorder;
     recorder.destroy(&gpu);
     gpu.destroy_command_encoder(&mut record_encoder);
-
-    losses
-}
-
-/// Fit per-cell density + SH degree-0 DC of `model` to match a target image,
-/// given precomputed per-pixel paths. Geometry (positions, radii, adjacency)
-/// is left untouched.
-///
-/// `target_pixels.len()` must equal `paths.len() * 3` (RGB per pixel,
-/// row-major). All paths are flattened to `max_steps` — shorter paths are
-/// padded with zero `mask` so they contribute nothing.
-///
-/// Returns the loss after each Adam step.
-pub fn fit_appearance_to_pixels(
-    model: &mut vol::PointCloudModel,
-    target_pixels: &[f32],
-    paths: &[vol::trace::PathResult],
-    max_steps: usize,
-    config: AppearanceFitConfig,
-    gpu: std::sync::Arc<blade_graphics::Context>,
-) -> Vec<f32> {
-    let p = paths.len();
-    let n_cells = model.points.len();
-    assert_eq!(
-        target_pixels.len(),
-        p * 3,
-        "target_pixels.len() must be P*3"
-    );
-    assert!(
-        model.sh_degree == 0,
-        "fit_appearance_to_pixels needs SH degree 0"
-    );
-
-    let flat = flatten_paths(paths, max_steps);
-
-    let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0);
-
-    let (mut session, _report) = mn::build(
-        &g,
-        mn::SessionConfig {
-            mode: mn::Mode::Training,
-            gpu: Some(gpu),
-            ..Default::default()
-        },
-    );
-
-    // Lift the model's current values into the four parameter tables.
-    let mut init_density = Vec::with_capacity(n_cells);
-    let mut init_r = Vec::with_capacity(n_cells);
-    let mut init_g = Vec::with_capacity(n_cells);
-    let mut init_b = Vec::with_capacity(n_cells);
-    for (i, p) in model.points.iter().enumerate() {
-        init_density.push(p.w);
-        init_r.push(model.sh_coefficients[i * 3]);
-        init_g.push(model.sh_coefficients[i * 3 + 1]);
-        init_b.push(model.sh_coefficients[i * 3 + 2]);
-    }
-    session.set_parameter("log_density", &init_density);
-    session.set_parameter("sh_r", &init_r);
-    session.set_parameter("sh_g", &init_g);
-    session.set_parameter("sh_b", &init_b);
-
-    session.set_input_u32("cell_indices", &flat.cell);
-    session.set_input("dt", &flat.dt);
-    session.set_input("mask", &flat.mask);
-    session.set_input("labels", target_pixels);
-
-    let mut losses = Vec::with_capacity(config.epochs);
-    session.set_adam(
-        config.learning_rate,
-        config.adam_beta1,
-        config.adam_beta2,
-        config.adam_eps,
-    );
-    for _ in 0..config.epochs {
-        session.step();
-        session.wait();
-        let read = session.read_output(1);
-        losses.push(read.first().copied().unwrap_or(f32::NAN));
-    }
-
-    download_model_parameters(&session, model, 0.0);
 
     losses
 }
@@ -2414,14 +2245,9 @@ mod tests {
         assert_eq!(f.mask, vec![1.0, 1.0, 0.0, 1.0, 0.0, 0.0]);
     }
 
-    /// Build the graph, feed inputs, run one Adam step via the lower-level
-    /// `session.step()` (rather than `Trainer`/`DataLoader`). No convergence
-    /// assertion — that's M3c-4c. This just proves the forward/backward
-    /// dispatch succeeds end-to-end on the GPU.
-    ///
-    /// We bypass `Trainer` because its `(data, labels)` shape doesn't fit our
-    /// graph: we need a `u32` input (`cell_indices`) plus three `f32` inputs
-    /// (`dt`, `mask`, `labels`) per step.
+    /// Build the graph, feed its differentiable path inputs, and run one Adam
+    /// step via the lower-level Session API. This catches shader-generation,
+    /// dtype, and shape errors that graph-construction tests cannot see.
     #[test]
     fn volumetric_graph_runs_one_step() {
         let Some(gpu) = try_init_gpu() else {
@@ -2432,21 +2258,8 @@ mod tests {
         let model = tiny_model();
         let n_cells = model.points.len();
 
-        let ray = vol::trace::Ray {
-            origin: glam::Vec3::new(0.1, 0.1, -1.0),
-            direction: glam::Vec3::new(0.0, 0.0, 1.0),
-        };
-        let settings = vol::trace::TraceSettings {
-            start_point: 0,
-            max_steps: 8,
-            weight_threshold: 0.0,
-            depth: 100.0,
-            eval_mode: vol::trace::EvalMode::ConstantRgb(glam::Vec3::ONE),
-        };
-        let path = vol::trace::record_path(&model, ray, settings);
-        let max_steps = 8usize;
+        let max_steps = 1usize;
         let p = 1usize;
-        let flat = flatten_paths(&[path], max_steps);
 
         let mut g = mn::Graph::new();
         let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0);
@@ -2461,13 +2274,26 @@ mod tests {
         );
 
         session.set_parameter("log_density", &vec![1.0; n_cells]);
+        let positions: Vec<f32> = model
+            .points
+            .iter()
+            .flat_map(|point| [point.x, point.y, point.z])
+            .collect();
+        session.set_parameter("positions", &positions);
         session.set_parameter("sh_r", &vec![0.0; n_cells]);
         session.set_parameter("sh_g", &vec![0.0; n_cells]);
         session.set_parameter("sh_b", &vec![0.0; n_cells]);
+        session.set_parameter("exposure_r", &[1.0]);
+        session.set_parameter("exposure_g", &[1.0]);
+        session.set_parameter("exposure_b", &[1.0]);
 
-        session.set_input_u32("cell_indices", &flat.cell);
-        session.set_input("dt", &flat.dt);
-        session.set_input("mask", &flat.mask);
+        session.set_input_u32("cell_indices", &[0]);
+        session.set_input_u32("next_cell_indices", &[3]);
+        session.set_input("mask", &[1.0]);
+        session.set_input("ray_origin", &[0.1, 0.1, -1.0]);
+        session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
+        session.set_input_u32("pixel_idx_per_step", &[0]);
+        session.set_input_u32("view_idx", &[0]);
         let target = [0.4_f32, 0.6, 0.8];
         session.set_input("labels", &target);
 
@@ -2482,16 +2308,7 @@ mod tests {
     /// magnitude over 200 steps. This is the smoke test that proves
     /// gradients actually flow into per-cell density/SH and reduce error.
     ///
-    /// TODO: position-optimisation removed the `dt` input from
-    /// `build_volumetric_graph` (dt is now computed from `positions` +
-    /// ray geometry). The legacy `fit_appearance_to_pixels` path doesn't
-    /// have a camera so it can't supply the ray inputs; restoring this
-    /// test would mean either re-adding a dt-input mode or refactoring
-    /// the test to use the pixel-batched code path. The same coverage
-    /// is provided by `multi_view_training_beats_single_view_on_novel_pose`
-    /// which uses the camera-aware path.
     #[test]
-    #[ignore = "legacy precomputed-path API: dt is now computed from positions"]
     fn fit_appearance_reduces_loss() {
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping fit_appearance_reduces_loss: no GPU");
@@ -2545,37 +2362,18 @@ mod tests {
             *v = 0.0;
         }
 
-        // Record one path through the init geometry for that single pixel.
-        // The ray follows the same camera→pixel mapping render_cpu uses.
-        let ndc = glam::Vec2::new(0.0, 0.0); // pixel (0,0) of a 1x1 image
-        let tan_half = glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan());
-        let local_dir = glam::Vec3::new(ndc.x * tan_half.x, ndc.y * tan_half.y, 1.0);
-        let orientation = glam::Quat::from_xyzw(
-            cam.cam_orientation[0],
-            cam.cam_orientation[1],
-            cam.cam_orientation[2],
-            cam.cam_orientation[3],
-        );
-        let ray = vol::trace::Ray {
-            origin: glam::Vec3::from_array(cam.cam_position),
-            direction: (orientation * local_dir).normalize(),
+        let view = ViewSupervision {
+            camera: cam,
+            target_rgb: target_rgb.to_vec(),
+            width: 1,
+            height: 1,
+            start_cell: 0,
         };
-        let path = vol::trace::record_path(
-            &init,
-            ray,
-            vol::trace::TraceSettings {
-                start_point: 0,
-                max_steps: 16,
-                weight_threshold: 0.0,
-                depth: cam.depth,
-                eval_mode: vol::trace::EvalMode::Sh,
-            },
-        );
-
-        let losses = fit_appearance_to_pixels(
+        let losses = fit_appearance_multi_view(
             &mut init,
-            &target_rgb,
-            &[path],
+            &[view],
+            1,
+            1,
             16,
             AppearanceFitConfig {
                 learning_rate: 0.1,
@@ -2608,12 +2406,7 @@ mod tests {
     /// check: with appearance-only training (frozen geometry), the trained
     /// model should reproduce cell colours that *any* ray sees consistently,
     /// so a different camera should also see them.
-    ///
-    /// TODO: same as `fit_appearance_reduces_loss` — uses the legacy
-    /// precomputed-path API. `multi_view_training_beats_single_view_on_novel_pose`
-    /// covers the same generalisation check via the pixel-batched path.
     #[test]
-    #[ignore = "legacy precomputed-path API: dt is now computed from positions"]
     fn novel_pose_render_matches_ground_truth() {
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping novel_pose_render_matches_ground_truth: no GPU");
@@ -2681,24 +2474,18 @@ mod tests {
             *v = 0.0;
         }
 
-        // Record paths from the init model (geometry = gt's geometry; only
-        // appearance is being optimised, so traversal is identical).
-        let trace_settings = vol::trace::TraceSettings {
-            start_point: 0,
-            max_steps: 32,
-            weight_threshold: 0.0,
-            depth: cam_a.depth,
-            eval_mode: vol::trace::EvalMode::Sh,
+        let view = ViewSupervision {
+            camera: cam_a,
+            target_rgb: target_a_rgb,
+            width: w,
+            height: h,
+            start_cell: 0,
         };
-        let paths_a: Vec<_> = rays_for_view(&cam_a, w, h)
-            .into_iter()
-            .map(|ray| vol::trace::record_path(&init, ray, trace_settings))
-            .collect();
-
-        fit_appearance_to_pixels(
+        fit_appearance_multi_view(
             &mut init,
-            &target_a_rgb,
-            &paths_a,
+            &[view],
+            w,
+            h,
             32,
             AppearanceFitConfig {
                 learning_rate: 0.1,
