@@ -15,6 +15,8 @@
 //! - Plane selection identical to upstream RadFoam / Power Foam: the *radical
 //!   plane* between weighted spheres degenerates to the standard bisector when
 //!   both radii are zero.
+//! - PowerFoam segments are clipped to each site's support sphere; an absent
+//!   `radii` array retains RadFoam's unbounded Voronoi cells.
 //! - Segment-wise volumetric integration per cell with piecewise constant
 //!   density (`alpha = 1 - exp(-s * dt)`).
 //! - Termination on weight threshold / step cap / no exit face / `t0 > depth`.
@@ -89,6 +91,35 @@ fn read_radius(model: &PointCloudModel, point_idx: u32) -> f32 {
         .radii
         .as_deref()
         .map_or(0.0, |r| r[point_idx as usize])
+}
+
+/// Intersect a power-cell interval with its site's support sphere. Plain
+/// RadFoam has no radii and therefore keeps the complete cell interval.
+fn support_interval(
+    bounded: bool,
+    ray_origin: glam::Vec3,
+    ray_dir: glam::Vec3,
+    center: glam::Vec3,
+    radius: f32,
+    t0: f32,
+    t1: f32,
+) -> Option<(f32, f32)> {
+    if !bounded {
+        return (t1 > t0).then_some((t0, t1));
+    }
+    let oc = ray_origin - center;
+    let b = oc.dot(ray_dir);
+    let c = oc.length_squared() - radius * radius;
+    let discriminant = b * b - c;
+    if discriminant <= 0.0 {
+        return None;
+    }
+    let root = discriminant.sqrt();
+    let near = -b - root;
+    let far = -b + root;
+    let clipped_start = t0.max(near);
+    let clipped_end = t1.min(far);
+    (clipped_end > clipped_start).then_some((clipped_start, clipped_end))
 }
 
 /// SH basis constants for degrees up to 3 (16 components). These match the
@@ -303,6 +334,7 @@ pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -
     let p = model.points[current as usize];
     let mut current_pos = glam::Vec3::new(p.x, p.y, p.z);
     let mut current_radius = read_radius(model, current);
+    let bounded = model.radii.is_some();
 
     let mut steps = 0u32;
     while steps < settings.max_steps {
@@ -339,10 +371,18 @@ pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -
         }
 
         let Some(j) = next_face else {
-            if best_t1 > t0 {
+            if let Some((segment_start, segment_end)) = support_interval(
+                bounded,
+                ray.origin,
+                dir,
+                current_pos,
+                current_radius,
+                t0,
+                best_t1,
+            ) {
                 entries.push(PathEntry {
                     cell: current,
-                    dt: best_t1 - t0,
+                    dt: segment_end - segment_start,
                 });
             }
             break;
@@ -352,9 +392,19 @@ pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -
         let next_p = model.points[next_idx_u32 as usize];
         let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
 
-        if best_t1 > t0 {
-            let dt = (best_t1 - t0).max(0.0);
-            entries.push(PathEntry { cell: current, dt });
+        if let Some((segment_start, segment_end)) = support_interval(
+            bounded,
+            ray.origin,
+            dir,
+            current_pos,
+            current_radius,
+            t0,
+            best_t1,
+        ) {
+            entries.push(PathEntry {
+                cell: current,
+                dt: segment_end - segment_start,
+            });
         }
 
         t0 = t0.max(best_t1);
@@ -403,6 +453,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
     let p = model.points[current as usize];
     let mut current_pos = glam::Vec3::new(p.x, p.y, p.z);
     let mut current_radius = read_radius(model, current);
+    let bounded = model.radii.is_some();
 
     let mut steps = 0u32;
 
@@ -443,10 +494,18 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
             }
         }
 
-        if best_t1 > t0 {
+        if let Some((segment_start, segment_end)) = support_interval(
+            bounded,
+            ray.origin,
+            dir,
+            current_pos,
+            current_radius,
+            t0,
+            best_t1,
+        ) {
             let s = read_density(model, current);
             if s > 1e-6 {
-                let dt = (best_t1 - t0).max(0.0);
+                let dt = segment_end - segment_start;
                 let alpha = 1.0 - (-s * dt).exp();
                 let w = transmittance * alpha;
                 let rgb = match settings.eval_mode {
@@ -614,5 +673,36 @@ mod path_tests {
         let expected_alpha = 1.0 - (-6.0_f32).exp();
         assert!((traced.rgba.w - expected_alpha).abs() < 1e-6);
         assert_eq!(traced.t_end, 3.0);
+    }
+
+    #[test]
+    fn power_foam_clips_cell_integration_to_support_sphere() {
+        let model = PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 2.0)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: Some(vec![1.0]),
+        };
+        let ray = Ray {
+            origin: glam::Vec3::new(0.0, 0.0, -2.0),
+            direction: glam::Vec3::Z,
+        };
+        let settings = TraceSettings {
+            depth: 10.0,
+            ..settings_for(0)
+        };
+        let path = record_path(&model, ray, settings);
+        assert_eq!(path.entries.len(), 1);
+        assert!((path.entries[0].dt - 2.0).abs() < 1e-6);
+
+        let traced = trace_one_ray(&model, ray, settings);
+        let expected_alpha = 1.0 - (-4.0_f32).exp();
+        assert!((traced.rgba.w - expected_alpha).abs() < 1e-6);
+        assert_eq!(traced.t_end, 10.0);
     }
 }

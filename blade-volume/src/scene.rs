@@ -342,13 +342,18 @@ impl Scene {
             // Scale radius by max scale component
             let max_scale = obj.transform.scale.max_element();
             let world_radius = obj.local_radius * max_scale;
+            let bounded = if obj.object_type == ObjectType::RadFoam {
+                self.radfoam_clouds[obj.data_index as usize].is_power_foam as u32
+            } else {
+                0
+            };
 
             bounds_data.push(ObjectBounds {
                 center: world_center.into(),
                 radius: world_radius,
                 object_type: obj.object_type as u32,
                 data_index: obj.data_index,
-                pad: [0, 0],
+                pad: [bounded, 0],
             });
 
             transforms_data.push(obj.transform.to_gpu_transform());

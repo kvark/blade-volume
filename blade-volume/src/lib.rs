@@ -106,6 +106,16 @@ impl PointCloudModel {
     /// and GPU boundaries call this before indexing parallel arrays.
     pub fn validate(&self) -> Result<(), String> {
         let count = self.points.len();
+        if let Some((index, _)) = self
+            .points
+            .iter()
+            .enumerate()
+            .find(|item| !item.1.is_finite() || item.1.w < 0.0)
+        {
+            return Err(format!(
+                "point {index} must have finite coordinates and non-negative density/opacity"
+            ));
+        }
         if self.sh_degree > MAX_SH_DEGREE {
             return Err(format!(
                 "SH degree {} exceeds supported degree {MAX_SH_DEGREE}",
@@ -119,6 +129,9 @@ impl PointCloudModel {
                 self.sh_coefficients.len()
             ));
         }
+        if self.sh_coefficients.iter().any(|value| !value.is_finite()) {
+            return Err("SH coefficients must be finite".to_string());
+        }
         if let Some(ref transforms) = self.transforms {
             if transforms.rotations.len() != count || transforms.scales.len() != count {
                 return Err(format!(
@@ -127,6 +140,17 @@ impl PointCloudModel {
                     transforms.scales.len()
                 ));
             }
+            if transforms
+                .rotations
+                .iter()
+                .any(|rotation| !rotation.is_finite())
+                || transforms
+                    .scales
+                    .iter()
+                    .any(|scale| !scale.is_finite() || scale.min_element() <= 0.0)
+            {
+                return Err("transforms must have finite rotations and positive scales".to_string());
+            }
         }
         if let Some(ref radii) = self.radii {
             if radii.len() != count {
@@ -134,6 +158,12 @@ impl PointCloudModel {
                     "radius length is {}, expected {count}",
                     radii.len()
                 ));
+            }
+            if radii
+                .iter()
+                .any(|radius| !radius.is_finite() || *radius < 0.0)
+            {
+                return Err("radii must be finite and non-negative".to_string());
             }
         }
         if let Some(ref adjacency) = self.adjacency {
@@ -283,5 +313,20 @@ mod model_tests {
             offsets: vec![0, 1],
         });
         assert!(model.validate().unwrap_err().contains("out of range"));
+    }
+
+    #[test]
+    fn model_validation_rejects_non_finite_and_negative_values() {
+        let mut model = valid_model();
+        model.points[0].w = -1.0;
+        assert!(model.validate().unwrap_err().contains("non-negative"));
+
+        let mut model = valid_model();
+        model.radii = Some(vec![f32::NAN]);
+        assert!(model.validate().unwrap_err().contains("radii"));
+
+        let mut model = valid_model();
+        model.sh_coefficients[0] = f32::INFINITY;
+        assert!(model.validate().unwrap_err().contains("finite"));
     }
 }

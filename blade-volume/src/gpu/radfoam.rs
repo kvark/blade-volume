@@ -25,6 +25,7 @@ pub struct RadFoamGpuCloud {
     pub attr_dim: usize,
     pub num_points: usize,
     pub num_adjacency: usize,
+    pub is_power_foam: bool,
 }
 
 impl RadFoamGpuCloud {
@@ -202,6 +203,7 @@ impl RadFoamGpuCloud {
             attr_dim,
             num_points,
             num_adjacency,
+            is_power_foam: model.radii.is_some(),
         }
     }
 

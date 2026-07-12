@@ -5,6 +5,7 @@
 //
 //   fn rf_get_point(idx: u32) -> vec3<f32>;
 //   fn rf_get_radius(idx: u32) -> f32;
+//   fn rf_is_bounded() -> bool;
 //   fn rf_get_density(idx: u32) -> f32;
 //   fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32>;
 //   fn rf_adjacency_begin(idx: u32) -> u32;
@@ -31,6 +32,28 @@ struct RadFoamTraceParams {
 struct RadFoamTraceResult {
     color: vec4<f32>,    // rgb + alpha
     cells_visited: u32,
+}
+
+fn rf_support_interval(
+    ray_origin: vec3<f32>,
+    ray_dir: vec3<f32>,
+    center: vec3<f32>,
+    radius: f32,
+    t0: f32,
+    t1: f32,
+) -> vec2<f32> {
+    if (!rf_is_bounded()) {
+        return vec2<f32>(t0, t1);
+    }
+    let oc = ray_origin - center;
+    let b = dot(oc, ray_dir);
+    let c = dot(oc, oc) - radius * radius;
+    let discriminant = b * b - c;
+    if (discriminant <= 0.0) {
+        return vec2<f32>(t0, t0);
+    }
+    let root = sqrt(discriminant);
+    return vec2<f32>(max(t0, -b - root), min(t1, -b + root));
 }
 
 // Core Voronoi cell traversal
@@ -84,11 +107,14 @@ fn radfoam_trace(
             }
         }
 
-        if (t1 > t0) {
+        let support = rf_support_interval(
+            ray_origin, ray_dir, current_pos, current_radius, t0, t1,
+        );
+        if (support.y > support.x) {
             cells_visited += 1u;
             let s = rf_get_density(current);
             if (s > 1e-6) {
-                let dt = max(t1 - t0, 0.0);
+                let dt = support.y - support.x;
                 let alpha = 1.0 - exp(-s * dt);
                 let w = transmittance * alpha;
                 let rgb = rf_get_color(current, ray_dir);

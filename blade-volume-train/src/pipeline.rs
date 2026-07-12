@@ -385,6 +385,44 @@ pub struct TrainOutcome {
     pub training_loss: Vec<f32>,
 }
 
+fn rebuild_adjacency(model: &mut vol::PointCloudModel, kind: AdjacencyKind) {
+    match kind {
+        AdjacencyKind::Delaunay => {
+            log::info!(
+                "computing Delaunay adjacency for {} points...",
+                model.points.len()
+            );
+            model.radii = None;
+            model.compute_adjacency_default();
+        }
+        AdjacencyKind::DelaunayQhull => {
+            log::info!(
+                "computing Qhull Delaunay adjacency for {} points...",
+                model.points.len()
+            );
+            model.radii = None;
+            model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
+        }
+        AdjacencyKind::Knn(k) => {
+            log::info!(
+                "computing symmetric k-NN adjacency (k={k}) for {} points...",
+                model.points.len()
+            );
+            model.radii = None;
+            model.adjacency = Some(vol::compute_knn(&model.points, k));
+        }
+        AdjacencyKind::Cech { radius_factor } => {
+            log::info!(
+                "computing Cech adjacency (radius_factor={radius_factor}) for {} points...",
+                model.points.len()
+            );
+            let radii = vol::radii_from_nearest_neighbour(&model.points, radius_factor);
+            model.adjacency = Some(vol::compute_cech_default(&model.points, &radii));
+            model.radii = Some(radii);
+        }
+    }
+}
+
 /// Convenience wrapper that calls [`train_colmap_appearance_split`] with no
 /// test views. Returns just the trained model for backwards compatibility.
 pub fn train_colmap_appearance(
@@ -458,40 +496,7 @@ pub fn train_colmap_appearance_split(
         }
     }
     let t0 = std::time::Instant::now();
-    match config.adjacency {
-        AdjacencyKind::Delaunay => {
-            log::info!(
-                "computing Delaunay adjacency for {} points...",
-                model.points.len()
-            );
-            model.compute_adjacency_default();
-        }
-        AdjacencyKind::DelaunayQhull => {
-            log::info!(
-                "computing Qhull Delaunay adjacency for {} points...",
-                model.points.len()
-            );
-            let adj = vol::compute_adjacency_qhull_default(&model.points);
-            model.adjacency = Some(adj);
-        }
-        AdjacencyKind::Knn(k) => {
-            log::info!(
-                "computing symmetric k-NN adjacency (k={k}) for {} points...",
-                model.points.len()
-            );
-            let adj = vol::compute_knn(&model.points, k);
-            model.adjacency = Some(adj);
-        }
-        AdjacencyKind::Cech { radius_factor } => {
-            log::info!(
-                "computing Cech adjacency (radius_factor={radius_factor}) for {} points...",
-                model.points.len()
-            );
-            let radii = vol::radii_from_nearest_neighbour(&model.points, radius_factor);
-            let adj = vol::compute_cech_default(&model.points, &radii);
-            model.adjacency = Some(adj);
-        }
-    }
+    rebuild_adjacency(&mut model, config.adjacency);
     log::info!(
         "adjacency done in {:.2}s ({} edges)",
         t0.elapsed().as_secs_f32(),
@@ -573,6 +578,20 @@ mod tests {
             radii: None,
             points,
         }
+    }
+
+    #[test]
+    fn cech_selection_preserves_radii_and_other_modes_clear_them() {
+        let mut model = tiny_model_far_apart();
+        rebuild_adjacency(&mut model, AdjacencyKind::Cech { radius_factor: 0.6 });
+        let radii = model.radii.as_ref().expect("Cech model must keep weights");
+        assert_eq!(radii.len(), model.points.len());
+        assert!(radii.iter().all(|&r| (r - 6.0).abs() < 1e-6));
+        model.validate().unwrap();
+
+        rebuild_adjacency(&mut model, AdjacencyKind::Delaunay);
+        assert!(model.radii.is_none());
+        model.validate().unwrap();
     }
 
     #[test]

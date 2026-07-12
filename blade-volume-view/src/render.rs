@@ -314,7 +314,7 @@ impl RadFoamBackend {
             max_steps: settings.max_steps,
             start_point: 0,
             debug_mode: settings.debug_mode as u32,
-            pad: [0; 7],
+            pad: [point_cloud.is_power_foam as u32, 0, 0, 0, 0, 0, 0],
         };
 
         Self {

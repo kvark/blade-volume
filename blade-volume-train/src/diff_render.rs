@@ -73,9 +73,9 @@ pub struct VolumetricGraph {
     pub target: mn::NodeId,
 
     pub loss: mn::NodeId,
-    /// Graph-computed `dt` per (pixel, step) shape `[P, L]`. Exposed as
-    /// the second output so callers can compare against the shader's
-    /// `dt` for the position-optimisation sanity check.
+    /// Selected `dt` per (pixel, step) shape `[P, L]`. Unweighted models
+    /// compute it differentiably from positions; weighted models use the
+    /// recorder's radical-plane/sphere-clipped interval.
     pub dt_from_positions: mn::NodeId,
 }
 
@@ -113,6 +113,7 @@ pub fn build_volumetric_graph(
     grad_loss_weight: f32,
     opacity_weight: f32,
     softplus_beta: f32,
+    use_recorded_dt: bool,
 ) -> VolumetricGraph {
     assert!(
         sh_degree <= 3,
@@ -296,9 +297,20 @@ pub fn build_volumetric_graph(
     let ones_for_gate = g.constant(vec![1.0_f32; pl], &[p, l]);
     let terminal_gate = g.add(ones_for_gate, neg_normal_gate);
     let recorded_dt_2d = g.reshape(recorded_dt, &[p, l]);
-    let face_dt = g.mul(dt_clamped, normal_gate);
-    let terminal_dt = g.mul(recorded_dt_2d, terminal_gate);
-    let selected_dt = g.add(face_dt, terminal_dt);
+    let selected_dt = if use_recorded_dt {
+        // Power-cell intervals depend on per-site weights and, for bounded
+        // PowerFoam, sphere intersections. Until radii become graph
+        // parameters, the GPU recorder is the authoritative forward value.
+        // Retain a zero-valued dependency on positions so the parameter
+        // remains present in checkpoints with a well-defined zero gradient.
+        let zero = g.constant(vec![0.0_f32; p * l], &[p, l]);
+        let position_dependency = g.mul(dt_clamped, zero);
+        g.add(recorded_dt_2d, position_dependency)
+    } else {
+        let face_dt = g.mul(dt_clamped, normal_gate);
+        let terminal_dt = g.mul(recorded_dt_2d, terminal_gate);
+        g.add(face_dt, terminal_dt)
+    };
     let dt_2d = g.mul(selected_dt, mask_2d); // zero out invalid steps
     let dt_from_positions = dt_2d;
 
@@ -1020,6 +1032,14 @@ pub fn fit_appearance_multi_view(
         config.position_lr_ratio == 0.0 || config.geometry_rebuild_every > 0,
         "position optimisation requires geometry_rebuild_every > 0"
     );
+    assert!(
+        model.radii.is_none() || config.position_lr_ratio == 0.0,
+        "weighted-cloud position optimisation requires differentiable radii and is not supported"
+    );
+    assert!(
+        model.radii.is_none() || config.densify.is_none(),
+        "weighted-cloud densification requires a radius split policy and is not supported"
+    );
     if config.pixel_batch.is_none() {
         config.steps_per_view = config.epochs;
     }
@@ -1530,6 +1550,7 @@ fn build_train_session(
         grad_loss_weight,
         opacity_weight,
         softplus_beta,
+        model.radii.is_some(),
     );
     let (mut session, _report) = mn::build(
         &g,
@@ -2332,7 +2353,7 @@ mod tests {
             let max_steps = 4usize;
             let num_views = 5usize;
             let vg = build_volumetric_graph(
-                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0, 0.0, 0.0,
+                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0, 0.0, 0.0, false,
             );
             assert_eq!(vg.sh_degree, sh_degree);
             assert_eq!(vg.n_cells, n_cells);
@@ -2357,7 +2378,9 @@ mod tests {
         let mut g = mn::Graph::new();
         let patch_size = 4usize;
         let n_pixels = patch_size * patch_size;
-        let vg = build_volumetric_graph(&mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0);
+        let vg = build_volumetric_graph(
+            &mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0, false,
+        );
         assert_eq!(vg.n_pixels, n_pixels);
     }
 
@@ -2444,7 +2467,8 @@ mod tests {
         let p = 1usize;
 
         let mut g = mn::Graph::new();
-        let _vg = build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0);
+        let _vg =
+            build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0, false);
 
         let (mut session, _report) = mn::build(
             &g,
@@ -2491,6 +2515,50 @@ mod tests {
             position_grad.iter().any(|v| v.abs() > 1e-7),
             "interior face integration must produce a position gradient"
         );
+    }
+
+    #[test]
+    fn weighted_graph_uses_recorded_intervals() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping weighted_graph_uses_recorded_intervals: no GPU");
+            return;
+        };
+        let model = tiny_model();
+        let n_cells = model.points.len();
+        let mut g = mn::Graph::new();
+        let vg = build_volumetric_graph(&mut g, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, true);
+        let dt_output = g.reshape(vg.dt_from_positions, &[1]);
+        g.set_outputs(vec![dt_output]);
+        let (mut session, _) = mn::build(
+            &g,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        upload_model_parameters(&mut session, &model, 0.0);
+        for channel in ["exposure_r", "exposure_g", "exposure_b"] {
+            session.set_parameter(channel, &[1.0]);
+        }
+        session.set_input_u32("cell_indices", &[0]);
+        session.set_input_u32("next_cell_indices", &[3]);
+        session.set_input("recorded_dt", &[7.5]);
+        session.set_input("mask", &[1.0]);
+        session.set_input("ray_origin", &[0.1, 0.1, -1.0]);
+        session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
+        session.set_input_u32("pixel_idx_per_step", &[0]);
+        session.set_input_u32("view_idx", &[0]);
+        session.set_input("labels", &[0.4, 0.6, 0.8]);
+        session.set_adam(0.0, 0.9, 0.999, 1e-8);
+        session.step();
+        session.wait();
+
+        let outputs = session.read_output(1);
+        assert!((outputs[0] - 7.5).abs() < 1e-5, "outputs={outputs:?}");
+        let mut position_grad = vec![0.0_f32; n_cells * 3];
+        session.read_param_grad("positions", &mut position_grad);
+        assert!(position_grad.iter().all(|&v| v == 0.0));
     }
 
     /// End-to-end: a small target image is the ground-truth render of a

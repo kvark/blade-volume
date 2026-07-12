@@ -50,7 +50,7 @@ struct RecordParams {
     image_height: u32,
     max_path_dt: f32,
     depth: f32,
-    _pad: u32,
+    power_foam: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -125,7 +125,7 @@ impl PathRecorder {
             image_height: args.image_height,
             max_path_dt: args.max_path_dt,
             depth: args.depth,
-            _pad: 0,
+            power_foam: cloud.is_power_foam as u32,
         };
 
         let mut pass = encoder.compute("radfoam-record-paths");

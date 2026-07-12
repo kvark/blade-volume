@@ -40,7 +40,8 @@ struct RecordParams {
     max_path_dt: f32,
     /// Far plane of the camera frustum.
     depth: f32,
-    _pad: u32,
+    /// Non-zero for bounded PowerFoam support spheres.
+    power_foam: u32,
 };
 
 struct Camera {
@@ -84,6 +85,28 @@ fn ray_dir_for_pixel(pidx: u32) -> vec3<f32> {
     return normalize(qrot(g_camera.orientation, local));
 }
 
+fn support_interval(
+    ray_origin: vec3<f32>,
+    ray_dir: vec3<f32>,
+    center: vec3<f32>,
+    radius: f32,
+    t0: f32,
+    t1: f32,
+) -> vec2<f32> {
+    if (g_params.power_foam == 0u) {
+        return vec2<f32>(t0, t1);
+    }
+    let oc = ray_origin - center;
+    let b = dot(oc, ray_dir);
+    let c = dot(oc, oc) - radius * radius;
+    let discriminant = b * b - c;
+    if (discriminant <= 0.0) {
+        return vec2<f32>(t0, t0);
+    }
+    let root = sqrt(discriminant);
+    return vec2<f32>(max(t0, -b - root), min(t1, -b + root));
+}
+
 @compute @workgroup_size(64)
 fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
     let p_id = gid.x;
@@ -101,6 +124,7 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
     var current_radius = g_points[current].w;
 
     let row_start = p_id * g_params.max_steps;
+    var output_step: u32 = 0u;
 
     // The CPU `record_path` walks until t1 >= depth, no more faces,
     // or it has emitted `max_steps` entries. Mirror that here.
@@ -139,18 +163,24 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
             break;
         }
 
-        var dt = t1 - t0;
-        if (dt > g_params.max_path_dt) {
-            dt = g_params.max_path_dt;
-        }
         var next_idx = current;
         if (next_face != 0xffffffffu) {
             next_idx = g_adjacency[next_face];
         }
-        g_cells_out[row_start + step] = current;
-        g_next_cells_out[row_start + step] = next_idx;
-        g_dts_out[row_start + step] = dt;
-        g_mask_out[row_start + step] = 1.0;
+        let support = support_interval(
+            ray_origin, ray_dir, current_pos, current_radius, t0, t1,
+        );
+        if (support.y > support.x) {
+            var dt = support.y - support.x;
+            if (dt > g_params.max_path_dt) {
+                dt = g_params.max_path_dt;
+            }
+            g_cells_out[row_start + output_step] = current;
+            g_next_cells_out[row_start + output_step] = next_idx;
+            g_dts_out[row_start + output_step] = dt;
+            g_mask_out[row_start + output_step] = 1.0;
+            output_step += 1u;
+        }
 
         if (next_face == 0xffffffffu) {
             break;

@@ -144,8 +144,7 @@ fn rays_for_pixels(
         .collect()
 }
 
-#[test]
-fn gpu_path_record_matches_cpu_on_grid() {
+fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
     let Some(ctx) = try_init_gpu() else {
         eprintln!("skipping: no GPU");
         return;
@@ -158,20 +157,24 @@ fn gpu_path_record_matches_cpu_on_grid() {
     let height = 64u32;
     let depth = 100.0f32;
 
-    let model = build_grid_model(n);
+    assert_eq!(model.points.len(), n);
     let camera = make_camera_looking_along_x(depth);
     let pixels = pixel_indices_for_rays(width, height, num_pixels);
     let rays = rays_for_pixels(&camera, &pixels, width, height);
 
     let (cpu_cells, cpu_dts, cpu_mask) = cpu_record(&model, &rays, 0, max_steps, depth);
+    assert!(
+        cpu_mask.iter().any(|&m| m != 0.0),
+        "fixture records no segments"
+    );
 
     let mut encoder = ctx.create_command_encoder(gpu::CommandEncoderDesc {
         name: "gpu-path-record-test",
         buffer_count: 1,
     });
-    let cloud = RadFoamGpuCloud::new(&model, &ctx, &mut encoder);
-    let recorder = PathRecorder::new(&ctx);
-    let bufs = PathRecordBuffers::new(&ctx, num_pixels, max_steps as u32);
+    let mut cloud = RadFoamGpuCloud::new(&model, &ctx, &mut encoder);
+    let mut recorder = PathRecorder::new(&ctx);
+    let mut bufs = PathRecordBuffers::new(&ctx, num_pixels, max_steps as u32);
     bufs.write_pixel_indices(&pixels);
 
     encoder.start();
@@ -283,4 +286,28 @@ fn gpu_path_record_matches_cpu_on_grid() {
         "GPU path-record differs from CPU on {} of {} slots",
         mismatches, pl
     );
+
+    ctx.destroy_buffer(cells_dl);
+    ctx.destroy_buffer(dts_dl);
+    ctx.destroy_buffer(mask_dl);
+    bufs.destroy(&ctx);
+    recorder.destroy(&ctx);
+    cloud.deinit(&ctx);
+    ctx.destroy_command_encoder(&mut encoder);
+}
+
+#[test]
+fn gpu_path_record_matches_cpu_on_grid() {
+    assert_gpu_path_record_matches_cpu(build_grid_model(12));
+}
+
+#[test]
+fn gpu_path_record_matches_bounded_powerfoam() {
+    let mut model = build_grid_model(12);
+    model.radii = Some(
+        (0..model.points.len())
+            .map(|i| 0.2 + 0.03 * (i % 3) as f32)
+            .collect(),
+    );
+    assert_gpu_path_record_matches_cpu(model);
 }

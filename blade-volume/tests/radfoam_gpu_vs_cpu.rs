@@ -239,7 +239,7 @@ fn assert_gpu_matches_cpu(
         start_point: 0,
         debug_mode: 0, // Normal rendering, not debug visualization
         _align_pad: [0, 0, 0],
-        pad: [0, 0, 0],
+        pad: [model.radii.is_some() as u32, 0, 0],
         _size_pad: 0,
     };
 

@@ -191,6 +191,7 @@ fn sort_hits(hits: ptr<function, array<ObjectHit, MAX_SCENE_HITS>>, count: u32) 
 
 // Current RadFoam object index for binding array access
 var<private> g_rf_obj: u32;
+var<private> g_rf_bounded: bool;
 
 fn rf_get_point(idx: u32) -> vec3<f32> {
     return g_radfoam_points[g_rf_obj].data[idx].xyz;
@@ -198,6 +199,10 @@ fn rf_get_point(idx: u32) -> vec3<f32> {
 
 fn rf_get_radius(idx: u32) -> f32 {
     return g_radfoam_points[g_rf_obj].data[idx].w;
+}
+
+fn rf_is_bounded() -> bool {
+    return g_rf_bounded;
 }
 
 fn rf_get_density(idx: u32) -> f32 {
@@ -240,9 +245,10 @@ fn rf_get_neighbor(adj_idx: u32) -> u32 {
 
 fn scene_trace_radfoam(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
                        t_start: f32, t_end: f32,
-                       data_index: u32) -> vec4<f32> {
+                       data_index: u32, bounded: bool) -> vec4<f32> {
     // Set the current object for accessor functions
     g_rf_obj = data_index;
+    g_rf_bounded = bounded;
 
     var params: RadFoamTraceParams;
     params.start_point = 0u;  // Could be improved with proper entry point search
@@ -355,7 +361,8 @@ fn trace_scene(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
                 // RadFoam uses object-space coordinates
                 // data_index identifies which RadFoam object's buffers to use
                 result = scene_trace_radfoam(obj_ray_origin, obj_ray_dir,
-                                             hit.t_near, hit.t_far, bounds.data_index);
+                                             hit.t_near, hit.t_far, bounds.data_index,
+                                             bounds.pad.x != 0u);
             }
             default: {
                 // Unsupported object type - skip
