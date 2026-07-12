@@ -242,7 +242,7 @@ pub fn build_volumetric_graph(
     // Broadcast ray_origin [1,3] → [P*L, 3] via matmul with [P*L, 1] ones.
     let ones_pl1 = g.constant(vec![1.0_f32; pl], &[pl, 1]);
     let ray_origin_pl = g.matmul(ones_pl1, ray_origin); // [P*L, 3]
-    // Gather ray_dir [P, 3] → [P*L, 3] via embedding with pixel_idx_per_step.
+                                                        // Gather ray_dir [P, 3] → [P*L, 3] via embedding with pixel_idx_per_step.
     let ray_dir_pl = g.embedding(pixel_idx_per_step, ray_dir_per_pixel);
 
     let neg_ray_origin_pl = g.neg(ray_origin_pl);
@@ -254,8 +254,8 @@ pub fn build_volumetric_graph(
     let dot_num = g.matmul(mn_prod, ones_3_1); // [P*L, 1]
     let nd_prod = g.mul(normal, ray_dir_pl);
     let dot_den_raw = g.matmul(nd_prod, ones_3_1); // [P*L, 1]
-    // ε regularisation: for invalid steps `dot_den_raw = 0`; downstream
-    // mask zeros the result, but the division itself must stay finite.
+                                                   // ε regularisation: for invalid steps `dot_den_raw = 0`; downstream
+                                                   // mask zeros the result, but the division itself must stay finite.
     let eps_pl1 = g.constant(vec![1.0e-6_f32; pl], &[pl, 1]);
     let dot_den = g.add(dot_den_raw, eps_pl1);
     let t_pl1 = g.div(dot_num, dot_den);
@@ -391,11 +391,7 @@ pub fn build_volumetric_graph(
     let (pixel_r, pixel_g, pixel_b) = if opacity_weight > 0.0 {
         let neg_op = g.neg(opacity);
         let bg = g.add(ones_p1, neg_op); // [P,1] = 1 − opacity
-        (
-            g.add(pixel_r, bg),
-            g.add(pixel_g, bg),
-            g.add(pixel_b, bg),
-        )
+        (g.add(pixel_r, bg), g.add(pixel_g, bg), g.add(pixel_b, bg))
     } else {
         (pixel_r, pixel_g, pixel_b)
     };
@@ -497,14 +493,10 @@ fn strict_lower_triangular_ones(l: usize) -> Vec<f32> {
 /// constant `[q, q-1]` band matrix on the right. `diff_y[i, j] = X[i+1, j]
 /// - X[i, j]` uses a `[q-1, q]` band matrix on the left. The matmuls are
 /// differentiable end-to-end — `SplitA`/`SplitB` cannot be used here
+///
 /// because their autodiff backward is empty (gradients would silently
 /// drop to zero before reaching the rendered pixels).
-fn patch_grad_l1(
-    g: &mut mn::Graph,
-    pred: mn::NodeId,
-    target: mn::NodeId,
-    q: usize,
-) -> mn::NodeId {
+fn patch_grad_l1(g: &mut mn::Graph, pred: mn::NodeId, target: mn::NodeId, q: usize) -> mn::NodeId {
     // Reshape flat [q*q, 1] → [q, q] (rows × cols).
     let pred_2d = g.reshape(pred, &[q, q]);
     let target_2d = g.reshape(target, &[q, q]);
@@ -636,7 +628,7 @@ pub fn sh_basis(dir: glam::Vec3, num_components: usize) -> Vec<f32> {
 fn channel_pixel_sh(
     g: &mut mn::Graph,
     cell_indices: mn::NodeId,
-    sh_chans: &[mn::NodeId], // K parameter tables [N, 1]
+    sh_chans: &[mn::NodeId],     // K parameter tables [N, 1]
     basis_inputs: &[mn::NodeId], // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
     weight: mn::NodeId,
     ones_l1: mn::NodeId, // [L, 1] for the final reduce
@@ -745,6 +737,7 @@ pub enum LrSchedule {
     /// Cosine decay from `learning_rate` to `learning_rate * lr_min_ratio`
     /// over `total_steps` Adam updates: `lr(t) = lr_min + (lr_max - lr_min)
     /// * (1 + cos(π t / T)) / 2`. Default in most NeRF / 3DGS recipes;
+    ///
     /// lets early training move fast and late training fine-tune.
     Cosine,
 }
@@ -1036,8 +1029,18 @@ pub fn fit_appearance_multi_view(
     }
 
     let mut g = mn::Graph::new();
-    let _vg =
-        build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, views.len().max(1), 0, 0.0, 0.0, 0.0);
+    let _vg = build_volumetric_graph(
+        &mut g,
+        n_cells,
+        p,
+        max_steps,
+        0,
+        views.len().max(1),
+        0,
+        0.0,
+        0.0,
+        0.0,
+    );
     let (mut session, _report) = mn::build(
         &g,
         mn::SessionConfig {
@@ -1137,10 +1140,7 @@ fn upload_model_parameters(
 /// Atomically write a model to `path` as a binary PLY: write to a
 /// sibling `.tmp` then rename, so a crash mid-write can't leave a
 /// truncated checkpoint clobbering the previous good one.
-fn save_checkpoint(
-    path: &std::path::Path,
-    model: &vol::PointCloudModel,
-) -> Result<(), String> {
+fn save_checkpoint(path: &std::path::Path, model: &vol::PointCloudModel) -> Result<(), String> {
     let tmp = path.with_extension("ply.tmp");
     blade_volume_convert::save_ply_with_options(
         &tmp,
@@ -1176,9 +1176,7 @@ fn bake_mean_exposure_into_sh(
     if (mean_r - 1.0).abs() < 1e-6 && (mean_g - 1.0).abs() < 1e-6 && (mean_b - 1.0).abs() < 1e-6 {
         return;
     }
-    eprintln!(
-        "baking mean exposure into SH DC: r={mean_r:.4} g={mean_g:.4} b={mean_b:.4}"
-    );
+    eprintln!("baking mean exposure into SH DC: r={mean_r:.4} g={mean_g:.4} b={mean_b:.4}");
     let num_components = model.sh_component_count();
     let row_stride = num_components * 3;
     let mean_per_channel = [mean_r, mean_g, mean_b];
@@ -1439,8 +1437,6 @@ struct AdamSnapshot {
     entries: Vec<AdamEntry>,
     /// Adam step counter (bias-correction `t`).
     t: u32,
-    /// Cell count at snapshot time.
-    n_cells: usize,
 }
 
 struct AdamEntry {
@@ -1464,7 +1460,6 @@ fn save_adam_state(session: &mn::Session, sh_degree: usize, n_cells: usize) -> A
     AdamSnapshot {
         entries,
         t: session.adam_step_count(),
-        n_cells,
     }
 }
 
@@ -1487,10 +1482,10 @@ fn restore_adam_state_remap(
     let n_new = new_to_old.len();
     let names = per_cell_param_names_with_stride(sh_degree);
     debug_assert_eq!(names.len(), snap.entries.len());
-    for (i, (_name, stride)) in names.iter().enumerate() {
+    for (i, name_and_stride) in names.iter().enumerate() {
         let entry = &snap.entries[i];
-        debug_assert_eq!(entry.stride, *stride);
-        let s = *stride;
+        debug_assert_eq!(entry.stride, name_and_stride.1);
+        let s = name_and_stride.1;
         let mut m = vec![0.0_f32; n_new * s];
         let mut v = vec![0.0_f32; n_new * s];
         for (j, &oi) in new_to_old.iter().enumerate() {
@@ -1894,7 +1889,12 @@ fn fit_appearance_pixel_batched(
             // a session field), and per-parameter LR multipliers (set
             // once at build_train_session) survive across set_adam.
             let lr_now = lr_at_step(&config, step, total_steps);
-            session.set_adam(lr_now, config.adam_beta1, config.adam_beta2, config.adam_eps);
+            session.set_adam(
+                lr_now,
+                config.adam_beta1,
+                config.adam_beta2,
+                config.adam_eps,
+            );
             session.step();
             session.wait();
             let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
@@ -1932,7 +1932,7 @@ fn fit_appearance_pixel_batched(
         // the live `model` mid-cycle is harmless (host state is only
         // pushed back to the GPU at densify rebuilds); exposure is baked
         // into a throwaway clone so the live model is never mutated.
-        if let Some(ckpt) = &config.checkpoint_path {
+        if let Some(ref ckpt) = config.checkpoint_path {
             download_model_parameters(&session, model, config.softplus_beta);
             let mut snapshot = model.clone();
             bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
@@ -2170,7 +2170,10 @@ mod tests {
         sess.wait();
 
         eprintln!("param_names: {:?}", sess.param_names());
-        eprintln!("has_param_grad(log_density): {}", sess.has_param_grad("log_density"));
+        eprintln!(
+            "has_param_grad(log_density): {}",
+            sess.has_param_grad("log_density")
+        );
         eprintln!("adam_step_count: {}", sess.adam_step_count());
 
         let mut param_after = vec![0.0_f32; n];
@@ -2212,7 +2215,11 @@ mod tests {
         sess.set_input("labels", &vec![0.6_f32; n]);
         sess.step();
         sess.wait();
-        assert_eq!(sess.adam_step_count(), 43, "step counter must increment from 42");
+        assert_eq!(
+            sess.adam_step_count(),
+            43,
+            "step counter must increment from 42"
+        );
     }
 
     fn tiny_model() -> vol::PointCloudModel {
@@ -2251,7 +2258,7 @@ mod tests {
         // inherit from their parents, verify the layout.
         let n_cells_old = 4usize;
         let stride = 3usize; // position-like
-        // Per-cell values: cell i gets [10*i + 0, 10*i + 1, 10*i + 2]
+                             // Per-cell values: cell i gets [10*i + 0, 10*i + 1, 10*i + 2]
         let mut old = Vec::with_capacity(n_cells_old * stride);
         for i in 0..n_cells_old {
             for c in 0..stride {
@@ -2259,7 +2266,7 @@ mod tests {
             }
         }
         // Append 2 new cells; both inherit from parent index 2.
-        let parents = vec![2usize, 2usize];
+        let parents = [2usize, 2usize];
         let n_new = n_cells_old + parents.len();
         let mut padded = vec![0.0_f32; n_new * stride];
         padded[..n_cells_old * stride].copy_from_slice(&old);
@@ -2380,7 +2387,10 @@ mod tests {
         let qtr = lr_at_step(&cfg, total / 4, total);
         let three_qtr = lr_at_step(&cfg, 3 * total / 4, total);
         assert!(qtr > at_mid, "qtr {qtr} should exceed mid {at_mid}");
-        assert!(at_mid > three_qtr, "mid {at_mid} should exceed 3qtr {three_qtr}");
+        assert!(
+            at_mid > three_qtr,
+            "mid {at_mid} should exceed 3qtr {three_qtr}"
+        );
     }
 
     #[test]

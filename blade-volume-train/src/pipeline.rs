@@ -166,20 +166,6 @@ impl PipelineConfig {
     }
 }
 
-/// Return at most `cap` evenly-spaced indices from `[0, n)`.
-fn subsample_indices(n: usize, cap: usize) -> Vec<usize> {
-    if n <= cap {
-        return (0..n).collect();
-    }
-    let mut out = Vec::with_capacity(cap);
-    for k in 0..cap {
-        // floor((k + 0.5) * n / cap) — places samples in the middle of each bin.
-        let idx = ((k as u64 * 2 + 1) * n as u64) / (2 * cap as u64);
-        out.push((idx as usize).min(n - 1));
-    }
-    out
-}
-
 /// Partition the existence-filtered, COLMAP-ordered image list into
 /// `(train, test)` slices. With `test_every > 0`, every `test_every`-th
 /// image is held out (the standard NVS "llffhold" protocol); train is the
@@ -192,10 +178,7 @@ pub fn split_train_test<'a>(
     max_views: Option<usize>,
     test_views: usize,
     test_every: usize,
-) -> (
-    Vec<&'a colmap::ColmapImage>,
-    Vec<&'a colmap::ColmapImage>,
-) {
+) -> (Vec<&'a colmap::ColmapImage>, Vec<&'a colmap::ColmapImage>) {
     let existing: Vec<&colmap::ColmapImage> = reconstruction
         .images
         .iter()
@@ -364,7 +347,7 @@ pub fn train_colmap_appearance_split(
     // COLMAP cloud. Cameras/views still come from `recon`; the PLY already
     // carries the densified, trained cell set, so we skip the COLMAP
     // subsample. Adjacency is (re)built below either way.
-    let mut model = if let Some(ply) = &config.init_ply {
+    let mut model = if let Some(ref ply) = config.init_ply {
         let path_str = ply.to_string_lossy().to_string();
         let m = vol::io::load_radfoam(&path_str);
         log::info!(
@@ -380,31 +363,31 @@ pub fn train_colmap_appearance_split(
     if config.init_ply.is_none() {
         if let Some(cap) = config.max_initial_points {
             if model.points.len() > cap {
-            let n_before = model.points.len();
-            // Pick the highest-track-length COLMAP points first. Track
-            // length = how many images saw this 3D point during SfM, so
-            // it's a cheap proxy for "how many training rays will hit
-            // the cell built around this point". Stride-sampling picks
-            // many points the training cameras never look at, and those
-            // cells stay at init values and pollute the path-trace.
-            let mut order: Vec<usize> = (0..n_before).collect();
-            order.sort_by(|&a, &b| recon.points[b].track_len.cmp(&recon.points[a].track_len));
-            order.truncate(cap);
-            order.sort_unstable();
-            let indices = order;
-            let mut new_points = Vec::with_capacity(indices.len());
-            let mut new_sh = Vec::with_capacity(indices.len() * 3);
-            for &i in &indices {
-                new_points.push(model.points[i]);
-                new_sh.extend_from_slice(&model.sh_coefficients[i * 3..i * 3 + 3]);
-            }
-            model.points = new_points;
-            model.sh_coefficients = new_sh;
-            log::info!(
-                "subsampled COLMAP cloud {} → {} points (top-track-length)",
-                n_before,
-                model.points.len()
-            );
+                let n_before = model.points.len();
+                // Pick the highest-track-length COLMAP points first. Track
+                // length = how many images saw this 3D point during SfM, so
+                // it's a cheap proxy for "how many training rays will hit
+                // the cell built around this point". Stride-sampling picks
+                // many points the training cameras never look at, and those
+                // cells stay at init values and pollute the path-trace.
+                let mut order: Vec<usize> = (0..n_before).collect();
+                order.sort_by(|&a, &b| recon.points[b].track_len.cmp(&recon.points[a].track_len));
+                order.truncate(cap);
+                order.sort_unstable();
+                let indices = order;
+                let mut new_points = Vec::with_capacity(indices.len());
+                let mut new_sh = Vec::with_capacity(indices.len() * 3);
+                for &i in &indices {
+                    new_points.push(model.points[i]);
+                    new_sh.extend_from_slice(&model.sh_coefficients[i * 3..i * 3 + 3]);
+                }
+                model.points = new_points;
+                model.sh_coefficients = new_sh;
+                log::info!(
+                    "subsampled COLMAP cloud {} → {} points (top-track-length)",
+                    n_before,
+                    model.points.len()
+                );
             }
         }
     }
@@ -461,13 +444,8 @@ pub fn train_colmap_appearance_split(
     );
 
     let views = if config.test_every > 0 {
-        let (train_imgs, test_imgs) = split_train_test(
-            &recon,
-            images_dir,
-            config.max_views,
-            0,
-            config.test_every,
-        );
+        let (train_imgs, test_imgs) =
+            split_train_test(&recon, images_dir, config.max_views, 0, config.test_every);
         log::info!(
             "every-{}th held-out split: {} train / {} test images",
             config.test_every,

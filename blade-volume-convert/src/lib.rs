@@ -1110,7 +1110,9 @@ mod tests {
         ];
         // Distinct values per cell × component × channel so any layout
         // swap shows up.
-        let sh_coefficients: Vec<f32> = (0..n * sh_block).map(|i| 0.001 * (i as f32) - 0.5).collect();
+        let sh_coefficients: Vec<f32> = (0..n * sh_block)
+            .map(|i| 0.001 * (i as f32) - 0.5)
+            .collect();
         let model = vol::PointCloudModel {
             points,
             sh_coefficients: sh_coefficients.clone(),

@@ -356,10 +356,7 @@ pub fn compute_adjacency_qhull(points: &[glam::Vec4], config: &AdjacencyConfig) 
             Some(v) => v,
             None => continue,
         };
-        let ids: Vec<usize> = vs
-            .iter()
-            .filter_map(|v| v.index(&qh))
-            .collect();
+        let ids: Vec<usize> = vs.iter().filter_map(|v| v.index(&qh)).collect();
         if ids.len() != 4 {
             continue;
         }
@@ -387,7 +384,10 @@ pub fn compute_adjacency_qhull(points: &[glam::Vec4], config: &AdjacencyConfig) 
         validate_csr(&offsets, &neighbours, num_points);
     }
 
-    Adjacency { neighbors: neighbours, offsets }
+    Adjacency {
+        neighbors: neighbours,
+        offsets,
+    }
 }
 
 /// [`compute_adjacency_qhull`] with the default [`AdjacencyConfig`].
@@ -912,15 +912,6 @@ mod tests {
         }
         let a = compute_adjacency_default(&points);
         let b = compute_adjacency_qhull_default(&points);
-        let edges_a: std::collections::HashSet<(u32, u32)> = a
-            .neighbors
-            .iter()
-            .enumerate()
-            .flat_map(|(_, &n)| std::iter::once(n))
-            .zip(0..)
-            .map(|(_n, _i)| (0u32, 0u32)) // placeholder, we'll do it differently
-            .collect();
-        let _ = edges_a;
         // Count agreement at the (i, neighbour) pair level.
         let mut shared = 0usize;
         let mut only_a = 0usize;
@@ -1011,17 +1002,15 @@ mod tests {
         let neighbours = &adj.neighbors[a..b];
         // The 6 face neighbours must all be present (possibly with extras
         // from corners coming in via symmetrisation).
-        let want: Vec<u32> = [
-            (1 * 5 + 2) * 5 + 2, // x-1
-            (3 * 5 + 2) * 5 + 2, // x+1
-            (2 * 5 + 1) * 5 + 2, // y-1
-            (2 * 5 + 3) * 5 + 2, // y+1
-            (2 * 5 + 2) * 5 + 1, // z-1
-            (2 * 5 + 2) * 5 + 3, // z+1
-        ]
-        .iter()
-        .map(|&v| v as u32)
-        .collect();
+        let index = |x, y, z| ((x * 5 + y) * 5 + z) as u32;
+        let want = [
+            index(1, 2, 2), // x-1
+            index(3, 2, 2), // x+1
+            index(2, 1, 2), // y-1
+            index(2, 3, 2), // y+1
+            index(2, 2, 1), // z-1
+            index(2, 2, 3), // z+1
+        ];
         for w in want {
             assert!(
                 neighbours.contains(&w),

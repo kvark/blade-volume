@@ -290,28 +290,30 @@ fn main() {
     // continue the schedule from — explicit --resume-step wins, else the
     // `<ply>.step` sidecar the checkpoint writer dropped, else 0.
     let init_ply = args.init_ply.as_deref().map(path::PathBuf::from);
-    let resume_step = match (&init_ply, args.resume_step) {
-        (_, Some(s)) => s,
-        (Some(ply), None) => {
-            let sidecar = ply.with_extension("ply.step");
-            match std::fs::read_to_string(&sidecar)
-                .ok()
-                .and_then(|s| s.trim().parse::<usize>().ok())
-            {
-                Some(s) => {
-                    eprintln!("resume: read step {s} from {}", sidecar.display());
-                    s
-                }
-                None => {
-                    eprintln!(
-                        "resume: no readable step sidecar at {}, starting schedule at 0",
-                        sidecar.display()
-                    );
-                    0
+    let resume_step = match args.resume_step {
+        Some(s) => s,
+        None => match init_ply {
+            Some(ref ply) => {
+                let sidecar = ply.with_extension("ply.step");
+                match std::fs::read_to_string(&sidecar)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<usize>().ok())
+                {
+                    Some(s) => {
+                        eprintln!("resume: read step {s} from {}", sidecar.display());
+                        s
+                    }
+                    None => {
+                        eprintln!(
+                            "resume: no readable step sidecar at {}, starting schedule at 0",
+                            sidecar.display()
+                        );
+                        0
+                    }
                 }
             }
-        }
-        (None, None) => 0,
+            None => 0,
+        },
     };
 
     let config = pipeline::PipelineConfig {

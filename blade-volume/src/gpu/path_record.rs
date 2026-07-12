@@ -185,12 +185,7 @@ impl PathRecordBuffers {
         Self::new_with(context, num_pixels, max_steps, true)
     }
 
-    fn new_with(
-        context: &gpu::Context,
-        num_pixels: u32,
-        max_steps: u32,
-        external: bool,
-    ) -> Self {
+    fn new_with(context: &gpu::Context, num_pixels: u32, max_steps: u32, external: bool) -> Self {
         let pl = (num_pixels as u64) * (max_steps as u64);
         let cells_bytes = pl * mem::size_of::<u32>() as u64;
         let dts_bytes = pl * mem::size_of::<f32>() as u64;

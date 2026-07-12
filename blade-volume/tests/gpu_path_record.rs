@@ -20,7 +20,12 @@ fn make_camera_looking_along_x(depth: f32) -> vol::CameraParams {
     vol::CameraParams {
         cam_position: [-2.0, 0.0, 0.0],
         depth,
-        cam_orientation: [0.0, 0.7071068, 0.0, 0.7071068], // 90 deg about Y → forward = +X
+        cam_orientation: [
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+        ], // 90 deg about Y → forward = +X
         fov: [0.8, 0.8],
         pad: [0, 0],
     }
@@ -154,8 +159,7 @@ fn gpu_path_record_matches_cpu_on_grid() {
     let pixels = pixel_indices_for_rays(width, height, num_pixels);
     let rays = rays_for_pixels(&camera, &pixels, width, height);
 
-    let (cpu_cells, cpu_dts, cpu_mask) =
-        cpu_record(&model, &rays, 0, max_steps, depth);
+    let (cpu_cells, cpu_dts, cpu_mask) = cpu_record(&model, &rays, 0, max_steps, depth);
 
     let mut encoder = ctx.create_command_encoder(gpu::CommandEncoderDesc {
         name: "gpu-path-record-test",
@@ -228,15 +232,12 @@ fn gpu_path_record_matches_cpu_on_grid() {
     let sync = ctx.submit(&mut encoder);
     let _ = ctx.wait_for(&sync, !0);
 
-    let gpu_cells: Vec<u32> = unsafe {
-        std::slice::from_raw_parts(cells_dl.data() as *const u32, pl as usize).to_vec()
-    };
-    let gpu_dts: Vec<f32> = unsafe {
-        std::slice::from_raw_parts(dts_dl.data() as *const f32, pl as usize).to_vec()
-    };
-    let gpu_mask: Vec<f32> = unsafe {
-        std::slice::from_raw_parts(mask_dl.data() as *const f32, pl as usize).to_vec()
-    };
+    let gpu_cells: Vec<u32> =
+        unsafe { std::slice::from_raw_parts(cells_dl.data() as *const u32, pl as usize).to_vec() };
+    let gpu_dts: Vec<f32> =
+        unsafe { std::slice::from_raw_parts(dts_dl.data() as *const f32, pl as usize).to_vec() };
+    let gpu_mask: Vec<f32> =
+        unsafe { std::slice::from_raw_parts(mask_dl.data() as *const f32, pl as usize).to_vec() };
 
     let mut mismatches = 0usize;
     for i in 0..pl as usize {
@@ -256,10 +257,7 @@ fn gpu_path_record_matches_cpu_on_grid() {
         if cpu_cells[i] != gpu_cells[i] {
             mismatches += 1;
             if mismatches <= 8 {
-                eprintln!(
-                    "slot {i}: cell cpu={} gpu={}",
-                    cpu_cells[i], gpu_cells[i]
-                );
+                eprintln!("slot {i}: cell cpu={} gpu={}", cpu_cells[i], gpu_cells[i]);
             }
             continue;
         }

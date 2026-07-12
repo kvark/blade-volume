@@ -199,7 +199,7 @@ fn main() {
         println!("  test {}: {:.2} dB", img.name, p);
     }
 
-    if let Some(dir) = &args.dump_dir {
+    if let Some(ref dir) = args.dump_dir {
         let dir = path::Path::new(dir);
         if let Err(e) = std::fs::create_dir_all(dir) {
             eprintln!("could not create dump dir {}: {e}", dir.display());
