@@ -13,6 +13,17 @@ pub struct GaussianGpuCloud {
     pub gauss_buf: gpu::Buffer,
     blas: gpu::AccelerationStructure,
     pub tlas: gpu::AccelerationStructure,
+    /// Number of opacity-visible Gaussians packed into the TLAS/data buffer.
+    pub num_points: usize,
+}
+
+fn visible_point_indices(model: &crate::PointCloudModel, min_opacity: f32) -> Vec<usize> {
+    model
+        .points
+        .iter()
+        .enumerate()
+        .filter_map(|(index, point)| (point.w > min_opacity).then_some(index))
+        .collect()
 }
 
 impl GaussianGpuCloud {
@@ -32,8 +43,18 @@ impl GaussianGpuCloud {
             .transforms
             .as_ref()
             .expect("GaussianGpuCloud requires transforms");
+        assert!(
+            params.min_opacity.is_finite() && params.min_opacity > 0.0,
+            "Gaussian min_opacity must be finite and positive"
+        );
 
-        let count = model.len();
+        let visible_indices = visible_point_indices(model, params.min_opacity);
+        let count = visible_indices.len();
+        assert!(
+            count > 0,
+            "Gaussian model has no points above min_opacity {}",
+            params.min_opacity
+        );
         let gauss_total_size = (count * mem::size_of::<crate::GaussianGpu>()) as u64;
         let gauss_buf = context.create_buffer(gpu::BufferDesc {
             name: "gauss-blobs",
@@ -49,13 +70,14 @@ impl GaussianGpuCloud {
             let gaussians_gpu = unsafe {
                 slice::from_raw_parts_mut(gauss_scratch.data() as *mut crate::GaussianGpu, count)
             };
-            for (i, gg) in gaussians_gpu.iter_mut().enumerate() {
-                let point = model.points[i];
+            for (packed_index, gg) in gaussians_gpu.iter_mut().enumerate() {
+                let model_index = visible_indices[packed_index];
+                let point = model.points[model_index];
                 gg.mean = [point.x, point.y, point.z];
-                gg.rotation = transforms.rotations[i].into();
-                gg.scale = transforms.scales[i].into();
+                gg.rotation = transforms.rotations[model_index].into();
+                gg.scale = transforms.scales[model_index].into();
                 gg.opacity = point.w; // density/opacity stored in w
-                let shc = model.get_sh_coefficients(i);
+                let shc = model.get_sh_coefficients(model_index);
                 for (h, c) in gg.harmonics.iter_mut().zip(shc.iter()) {
                     *h = (*c, 0)
                 }
@@ -90,11 +112,12 @@ impl GaussianGpuCloud {
         });
 
         // Build instances
-        let instances = (0..count)
-            .map(|i| {
-                let point = model.points[i];
-                let rotation = transforms.rotations[i];
-                let scale = transforms.scales[i];
+        let instances = visible_indices
+            .iter()
+            .map(|&model_index| {
+                let point = model.points[model_index];
+                let rotation = transforms.rotations[model_index];
+                let scale = transforms.scales[model_index];
                 let opacity = point.w;
                 let mean = glam::Vec3::new(point.x, point.y, point.z);
 
@@ -190,6 +213,7 @@ impl GaussianGpuCloud {
             gauss_buf,
             blas,
             tlas,
+            num_points: count,
         }
     }
 
@@ -199,5 +223,87 @@ impl GaussianGpuCloud {
         context.destroy_buffer(self.instance_buf);
         context.destroy_acceleration_structure(self.blas);
         context.destroy_acceleration_structure(self.tlas);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filter_model() -> crate::PointCloudModel {
+        let points = vec![
+            glam::Vec4::new(10.0, 0.0, 0.0, 0.001),
+            glam::Vec4::new(20.0, 0.0, 0.0, 0.5),
+            glam::Vec4::new(30.0, 0.0, 0.0, 0.01),
+            glam::Vec4::new(40.0, 0.0, 0.0, 0.8),
+        ];
+        crate::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: Some(crate::Transforms {
+                rotations: vec![glam::Quat::IDENTITY; points.len()],
+                scales: vec![glam::Vec3::ONE; points.len()],
+            }),
+            adjacency: None,
+            radii: None,
+            points,
+        }
+    }
+
+    #[test]
+    fn opacity_filter_preserves_model_order_for_instance_indices() {
+        let model = filter_model();
+        assert_eq!(visible_point_indices(&model, 0.01), vec![1, 3]);
+    }
+
+    #[test]
+    fn gpu_data_uses_the_same_filtered_order_as_instances() {
+        let Some(context) = (unsafe {
+            gpu::Context::init(gpu::ContextDesc {
+                ray_tracing: true,
+                ..gpu::ContextDesc::default()
+            })
+            .ok()
+        }) else {
+            eprintln!("skipping Gaussian filtering GPU test: no ray-query GPU");
+            return;
+        };
+        let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+            name: "gaussian-filter-test",
+            buffer_count: 1,
+        });
+        let mut cloud = GaussianGpuCloud::new(
+            &filter_model(),
+            &InitParameters { min_opacity: 0.01 },
+            &context,
+            &mut encoder,
+        );
+        assert_eq!(cloud.num_points, 2);
+        let size = (cloud.num_points * mem::size_of::<crate::GaussianGpu>()) as u64;
+        let readback = context.create_buffer(gpu::BufferDesc {
+            name: "gaussian-filter-readback",
+            size,
+            memory: gpu::Memory::Shared,
+        });
+        encoder.start();
+        if let mut transfer = encoder.transfer("gaussian-filter-readback") {
+            transfer.copy_buffer_to_buffer(cloud.gauss_buf.at(0), readback.at(0), size);
+        }
+        let sync = context.submit(&mut encoder);
+        let _ = context.wait_for(&sync, !0);
+        let packed = unsafe {
+            slice::from_raw_parts(
+                readback.data() as *const crate::GaussianGpu,
+                cloud.num_points,
+            )
+        };
+        assert_eq!(packed[0].mean, [20.0, 0.0, 0.0]);
+        assert_eq!(packed[1].mean, [40.0, 0.0, 0.0]);
+        assert_eq!(packed[0].opacity, 0.5);
+        assert_eq!(packed[1].opacity, 0.8);
+
+        context.destroy_buffer(readback);
+        cloud.deinit(&context);
+        context.destroy_command_encoder(&mut encoder);
     }
 }
