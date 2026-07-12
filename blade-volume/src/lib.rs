@@ -99,6 +99,75 @@ pub struct PointCloudModel {
 }
 
 impl PointCloudModel {
+    /// Validate all cross-field lengths and CSR indices.
+    ///
+    /// Public fields intentionally keep model construction lightweight, so IO
+    /// and GPU boundaries call this before indexing parallel arrays.
+    pub fn validate(&self) -> Result<(), String> {
+        let count = self.points.len();
+        if self.sh_degree > MAX_SH_DEGREE {
+            return Err(format!(
+                "SH degree {} exceeds supported degree {MAX_SH_DEGREE}",
+                self.sh_degree
+            ));
+        }
+        let expected_sh = count * 3 * self.sh_component_count();
+        if self.sh_coefficients.len() != expected_sh {
+            return Err(format!(
+                "SH coefficient length is {}, expected {expected_sh}",
+                self.sh_coefficients.len()
+            ));
+        }
+        if let Some(ref transforms) = self.transforms {
+            if transforms.rotations.len() != count || transforms.scales.len() != count {
+                return Err(format!(
+                    "transform lengths are rotations={} scales={}, expected {count}",
+                    transforms.rotations.len(),
+                    transforms.scales.len()
+                ));
+            }
+        }
+        if let Some(ref radii) = self.radii {
+            if radii.len() != count {
+                return Err(format!(
+                    "radius length is {}, expected {count}",
+                    radii.len()
+                ));
+            }
+        }
+        if let Some(ref adjacency) = self.adjacency {
+            if adjacency.offsets.len() != count + 1 {
+                return Err(format!(
+                    "adjacency offset length is {}, expected {}",
+                    adjacency.offsets.len(),
+                    count + 1
+                ));
+            }
+            if adjacency.offsets.first().copied() != Some(0) {
+                return Err("adjacency offsets must start at zero".to_string());
+            }
+            if adjacency.offsets.last().copied() != Some(adjacency.neighbors.len() as u32) {
+                return Err("last adjacency offset must equal neighbor count".to_string());
+            }
+            if adjacency
+                .offsets
+                .windows(2)
+                .any(|window| window[0] > window[1])
+            {
+                return Err("adjacency offsets must be monotonic".to_string());
+            }
+            if let Some(neighbor) = adjacency
+                .neighbors
+                .iter()
+                .copied()
+                .find(|&neighbor| neighbor as usize >= count)
+            {
+                return Err(format!("adjacency neighbor {neighbor} is out of range"));
+            }
+        }
+        Ok(())
+    }
+
     /// Returns the packed per-point attribute row length for RadFoam: `sh_dim + 1`.
     /// This is used when packing attributes for the GPU shader.
     pub fn attribute_dim(&self) -> usize {
@@ -176,4 +245,42 @@ pub struct GaussianGpu {
     pub scale: [f32; 3],
     pub opacity: f32,
     pub harmonics: [(glam::Vec3, u32); MAX_SH_COMPONENTS],
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+
+    fn valid_model() -> PointCloudModel {
+        PointCloudModel {
+            points: vec![glam::Vec4::ZERO],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: Some(vec![1.0]),
+        }
+    }
+
+    #[test]
+    fn model_validation_accepts_consistent_parallel_arrays() {
+        assert!(valid_model().validate().is_ok());
+    }
+
+    #[test]
+    fn model_validation_rejects_bad_sh_and_adjacency_indices() {
+        let mut model = valid_model();
+        model.sh_coefficients.pop();
+        assert!(model.validate().unwrap_err().contains("SH coefficient"));
+
+        let mut model = valid_model();
+        model.adjacency = Some(Adjacency {
+            neighbors: vec![1],
+            offsets: vec![0, 1],
+        });
+        assert!(model.validate().unwrap_err().contains("out of range"));
+    }
 }

@@ -25,6 +25,9 @@ impl GaussianGpuCloud {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Self {
+        model
+            .validate()
+            .unwrap_or_else(|err| panic!("invalid Gaussian model: {err}"));
         let transforms = model
             .transforms
             .as_ref()

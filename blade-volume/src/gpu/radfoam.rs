@@ -36,6 +36,9 @@ impl RadFoamGpuCloud {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Self {
+        model
+            .validate()
+            .unwrap_or_else(|err| panic!("invalid RadFoam model: {err}"));
         let adjacency = model
             .adjacency
             .as_ref()
