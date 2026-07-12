@@ -13,6 +13,15 @@ pub enum VolumeKind {
     RadFoam,
 }
 
+/// Coordinate conventions used by common Gaussian interchange files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GaussianCoordinateSystem {
+    /// Right, up, back: default SPZ storage / Three.js convention.
+    Rub,
+    /// Right, down, front: standard Gaussian PLY convention.
+    Rdf,
+}
+
 /// Detected file format information.
 #[derive(Debug, Clone)]
 pub struct FormatInfo {
@@ -123,6 +132,57 @@ pub fn load_gaussian(file_name: &str) -> crate::PointCloudModel {
     }
 }
 
+/// Load a Gaussian and convert it to an explicit coordinate convention.
+///
+/// Legacy/default SPZ storage is RUB; Gaussian PLY is RDF. SPZ files carrying
+/// a coordinate-system extension are currently decoded as stored and emit a
+/// warning, so callers should not request conversion for such files until the
+/// extension is exposed by this loader.
+pub fn load_gaussian_with_coordinates(
+    file_name: &str,
+    target: GaussianCoordinateSystem,
+) -> crate::PointCloudModel {
+    let (mut model, source) = if file_name.ends_with(".ply") {
+        (ply::load(file_name), GaussianCoordinateSystem::Rdf)
+    } else if file_name.ends_with(".spz") {
+        (spz::load(file_name), GaussianCoordinateSystem::Rub)
+    } else {
+        panic!("Unsupported file name for Gaussian loader: {file_name}");
+    };
+    if source != target {
+        convert_rub_rdf(&mut model);
+    }
+    model
+}
+
+fn convert_rub_rdf(model: &mut crate::PointCloudModel) {
+    // RUB ↔ RDF is a 180-degree rotation around X and is its own inverse.
+    for point in model.points.iter_mut() {
+        point.y = -point.y;
+        point.z = -point.z;
+    }
+    if let Some(ref mut transforms) = model.transforms {
+        for rotation in transforms.rotations.iter_mut() {
+            *rotation = glam::Quat::from_xyzw(rotation.x, -rotation.y, -rotation.z, rotation.w);
+        }
+    }
+    // Real-SH sign changes for the standard 3DGS basis, excluding DC.
+    const SIGNS: [f32; 15] = [
+        -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0,
+    ];
+    let components = model.sh_component_count();
+    let stride = components * 3;
+    for point_index in 0..model.points.len() {
+        for component in 1..components {
+            let sign = SIGNS[component - 1];
+            let base = point_index * stride + component * 3;
+            for channel in 0..3 {
+                model.sh_coefficients[base + channel] *= sign;
+            }
+        }
+    }
+}
+
 /// Load a RadFoam model from a PLY file.
 ///
 /// Returns a `PointCloudModel` with `adjacency` set.
@@ -135,5 +195,41 @@ pub fn load_radfoam(file_name: &str) -> crate::PointCloudModel {
         radfoam_ply::load(file_name)
     } else {
         panic!("Unsupported file name for RadFoam loader: {}", file_name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rub_rdf_conversion_preserves_sh_function() {
+        let mut model = crate::PointCloudModel {
+            points: vec![glam::Vec4::new(1.0, 2.0, 3.0, 0.5)],
+            sh_coefficients: (0..48).map(|index| index as f32 * 0.01 - 0.2).collect(),
+            sh_degree: 3,
+            transforms: Some(crate::Transforms {
+                rotations: vec![glam::Quat::from_xyzw(0.1, 0.2, -0.3, 0.9).normalize()],
+                scales: vec![glam::Vec3::new(1.0, 2.0, 3.0)],
+            }),
+            adjacency: None,
+            radii: None,
+        };
+        let original = model.clone();
+        let rub_direction = glam::Vec3::new(0.3, -0.4, 0.8).normalize();
+        let rub_color = crate::trace::eval_rgb_sh(&model, 0, rub_direction);
+
+        convert_rub_rdf(&mut model);
+        assert_eq!(model.points[0].truncate(), glam::Vec3::new(1.0, -2.0, -3.0));
+        let rdf_direction = glam::Vec3::new(rub_direction.x, -rub_direction.y, -rub_direction.z);
+        let rdf_color = crate::trace::eval_rgb_sh(&model, 0, rdf_direction);
+        assert!((rub_color - rdf_color).abs().max_element() < 1e-5);
+
+        convert_rub_rdf(&mut model);
+        assert_eq!(model.points, original.points);
+        assert_eq!(model.sh_coefficients, original.sh_coefficients);
+        let rotation = model.transforms.as_ref().unwrap().rotations[0];
+        let original_rotation = original.transforms.as_ref().unwrap().rotations[0];
+        assert!(rotation.dot(original_rotation).abs() > 1.0 - 1e-6);
     }
 }
