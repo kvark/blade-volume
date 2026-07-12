@@ -52,7 +52,27 @@ fn unpack_sh(raw: u8) -> f32 {
     (raw as f32 - 128.0) / 128.0
 }
 
-/// Load a legacy gzip-compressed SPZ v2 cloud.
+fn unpack_quaternion_smallest_three(bytes: &[u8]) -> glam::Quat {
+    let mut packed = u32::from_le_bytes(bytes.try_into().unwrap());
+    let largest = (packed >> 30) as usize;
+    let mut components = [0.0_f32; 4];
+    let mut sum_squares = 0.0;
+    for index in (0..4).rev() {
+        if index == largest {
+            continue;
+        }
+        let magnitude = packed & 0x1ff;
+        let negative = (packed >> 9) & 1 != 0;
+        packed >>= 10;
+        let value = std::f32::consts::FRAC_1_SQRT_2 * magnitude as f32 / 511.0;
+        components[index] = if negative { -value } else { value };
+        sum_squares += value * value;
+    }
+    components[largest] = (1.0 - sum_squares).max(0.0).sqrt();
+    glam::Quat::from_xyzw(components[0], components[1], components[2], components[3])
+}
+
+/// Load a legacy gzip-compressed SPZ v2 or v3 cloud.
 ///
 /// Values remain in SPZ's stored coordinate system (RUB unless an extension
 /// says otherwise). Coordinate-system conversion is deliberately separate
@@ -67,7 +87,10 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
     let header = Header::read(&mut reader);
     log::info!("SPZ header: {:?}", header);
     assert_eq!(header.magic, MAGIC, "invalid SPZ magic");
-    assert_eq!(header.version, 2, "only SPZ version 2 is supported");
+    assert!(
+        matches!(header.version, 2 | 3),
+        "only gzip SPZ versions 2 and 3 are supported"
+    );
     assert!(
         header.sh_degree as usize <= crate::MAX_SH_DEGREE,
         "SPZ SH degree {} exceeds supported degree {}",
@@ -87,7 +110,8 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
     let packed_alphas = read_bytes(&mut reader, count);
     let packed_colors = read_bytes(&mut reader, count * 3);
     let packed_scales = read_bytes(&mut reader, count * 3);
-    let packed_rotations = read_bytes(&mut reader, count * 3);
+    let rotation_bytes = if header.version >= 3 { 4 } else { 3 };
+    let packed_rotations = read_bytes(&mut reader, count * rotation_bytes);
     let packed_sh = read_bytes(&mut reader, count * sh_rest_count);
 
     let mut points = Vec::with_capacity(count);
@@ -121,18 +145,25 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
             + SCALE_LOG_OFFSET;
         scales.push(log_scale.exp());
 
-        let rotation_base = i * 3;
-        let xyz = glam::Vec3::new(
-            packed_rotations[rotation_base] as f32 / 127.5 - 1.0,
-            packed_rotations[rotation_base + 1] as f32 / 127.5 - 1.0,
-            packed_rotations[rotation_base + 2] as f32 / 127.5 - 1.0,
-        );
-        rotations.push(glam::Quat::from_xyzw(
-            xyz.x,
-            xyz.y,
-            xyz.z,
-            (1.0 - xyz.length_squared()).max(0.0).sqrt(),
-        ));
+        let rotation_base = i * rotation_bytes;
+        let rotation = if header.version >= 3 {
+            unpack_quaternion_smallest_three(
+                &packed_rotations[rotation_base..rotation_base + rotation_bytes],
+            )
+        } else {
+            let xyz = glam::Vec3::new(
+                packed_rotations[rotation_base] as f32 / 127.5 - 1.0,
+                packed_rotations[rotation_base + 1] as f32 / 127.5 - 1.0,
+                packed_rotations[rotation_base + 2] as f32 / 127.5 - 1.0,
+            );
+            glam::Quat::from_xyzw(
+                xyz.x,
+                xyz.y,
+                xyz.z,
+                (1.0 - xyz.length_squared()).max(0.0).sqrt(),
+            )
+        };
+        rotations.push(rotation);
 
         let color_base = i * 3;
         sh_coefficients.push(unpack_color(packed_colors[color_base]));
@@ -152,7 +183,7 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
         assert!(trailing.is_empty(), "unexpected trailing SPZ data");
     } else {
         log::warn!(
-            "ignoring {} bytes of SPZ v2 extensions; coordinate metadata may be lost",
+            "ignoring {} bytes of legacy SPZ extensions; coordinate metadata may be lost",
             trailing.len()
         );
     }
@@ -212,5 +243,43 @@ mod tests {
         assert!((transforms.scales[0].z - 1.0_f32.exp()).abs() < 1e-6);
         assert!(transforms.rotations[0].is_finite());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn loads_v3_smallest_three_quaternion_stream() {
+        let path =
+            std::env::temp_dir().join(format!("blade-volume-spz-v3-{}.spz", std::process::id()));
+        let file = fs::File::create(&path).unwrap();
+        let mut writer = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        writer.write_all(&MAGIC.to_le_bytes()).unwrap();
+        writer.write_all(&3u32.to_le_bytes()).unwrap();
+        writer.write_all(&1u32.to_le_bytes()).unwrap();
+        writer.write_all(&[0, 8, 0, 0]).unwrap();
+        for fixed in [256, 512, -256] {
+            writer.write_all(&pack_fixed_24(fixed)).unwrap();
+        }
+        writer.write_all(&[255]).unwrap();
+        writer.write_all(&[128, 128, 128]).unwrap();
+        writer.write_all(&[160, 160, 160]).unwrap();
+        // Largest component is w (index 3); all stored components are zero.
+        writer.write_all(&0xC000_0000_u32.to_le_bytes()).unwrap();
+        writer.finish().unwrap();
+
+        let model = load(path.to_str().unwrap());
+        assert_eq!(model.points[0].truncate(), glam::Vec3::new(1.0, 2.0, -1.0));
+        let rotation = model.transforms.unwrap().rotations[0];
+        assert!(rotation.dot(glam::Quat::IDENTITY).abs() > 1.0 - 1e-6);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn smallest_three_decoder_reconstructs_largest_component() {
+        let rotation = unpack_quaternion_smallest_three(&0_u32.to_le_bytes());
+        assert!(
+            rotation
+                .dot(glam::Quat::from_xyzw(1.0, 0.0, 0.0, 0.0))
+                .abs()
+                > 1.0 - 1e-6
+        );
     }
 }
