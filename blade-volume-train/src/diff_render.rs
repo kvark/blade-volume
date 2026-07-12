@@ -860,15 +860,13 @@ pub struct AppearanceFitConfig {
 }
 
 /// Adaptive densification: every `every` training steps after `warmup`
-/// steps, split the top-`fraction` cells by accumulated `|log_density|`
-/// gradient by inserting a sibling cell at `pos + jitter`. The sibling
-/// inherits density and SH coefficients, so the colour stays continuous
-/// across the split.
+/// steps, split cells sampled by accumulated `|grad(position)| × cell_radius`
+/// by inserting a sibling near the farthest face. The sibling inherits density
+/// and SH coefficients, so colour stays continuous across the split.
 ///
 /// The accumulator runs in parallel with training and is reset every
-/// cycle. Each split rebuilds the meganeura session, GPU cloud, and
-/// (via Qhull) Voronoi adjacency — about 3 s overhead per cycle at 100K
-/// cells, amortised over the `every` steps in between.
+/// cycle. Each split rebuilds the meganeura session, GPU cloud, and exact
+/// Voronoi adjacency, amortised over the `every` steps in between.
 #[derive(Clone, Copy, Debug)]
 pub struct DensifyConfig {
     /// Steps between densify rounds.

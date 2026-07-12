@@ -246,35 +246,48 @@ pub fn lloyd_relax(model: &mut crate::PointCloudModel, iterations: usize, step: 
 /// shrinks cells in dense regions.
 pub fn radii_from_nearest_neighbour(points: &[glam::Vec4], factor: f32) -> Vec<f32> {
     let n = points.len();
-    // Linear O(N^2) scan rather than kiddo: mesh-derived clouds frequently
-    // have coincident points (interior grid sampler) and kiddo panics on
-    // "too many same-position points" by default. For N up to ~50K this is
-    // a sub-second one-time pass anyway.
-    let mut radii = vec![0.0_f32; n];
-    for (i, pi) in points.iter().enumerate() {
-        let mut best_sq = f32::INFINITY;
-        for (j, pj) in points.iter().enumerate() {
-            if i == j {
-                continue;
-            }
-            let dx = pi.x - pj.x;
-            let dy = pi.y - pj.y;
-            let dz = pi.z - pj.z;
-            let sq = dx * dx + dy * dy + dz * dz;
-            // Coincident points (sq == 0) give zero radius; skip them so
-            // we report the next-nearest distance.
-            if sq > 0.0 && sq < best_sq {
-                best_sq = sq;
-            }
-        }
-        let dist = if best_sq.is_finite() {
-            best_sq.sqrt()
-        } else {
-            0.0
-        };
-        radii[i] = (dist * factor).max(0.0);
+    if n < 2 {
+        return vec![0.0; n];
     }
-    radii
+
+    // Insert each exact position once. Besides reducing work, this avoids a
+    // fixed-bucket k-d tree degenerating when reconstruction/conversion emits
+    // many coincident sites. Every duplicate receives the distance to the
+    // nearest *distinct* position, matching the old quadratic implementation.
+    let coordinate_key = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
+    let mut unique_indices = std::collections::HashMap::new();
+    let mut unique_positions = Vec::new();
+    for point in points {
+        let key = (
+            coordinate_key(point.x),
+            coordinate_key(point.y),
+            coordinate_key(point.z),
+        );
+        if let std::collections::hash_map::Entry::Vacant(entry) = unique_indices.entry(key) {
+            entry.insert(unique_positions.len());
+            unique_positions.push([point.x, point.y, point.z]);
+        }
+    }
+    if unique_positions.len() < 2 {
+        return vec![0.0; n];
+    }
+
+    let mut tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
+    for (index, position) in unique_positions.iter().enumerate() {
+        tree.add(position, index as u64);
+    }
+    points
+        .iter()
+        .map(|point| {
+            let query = [point.x, point.y, point.z];
+            let nearest_distinct = tree
+                .nearest_n::<kiddo::SquaredEuclidean>(&query, 2)
+                .into_iter()
+                .find(|hit| hit.distance > 0.0)
+                .map_or(0.0, |hit| hit.distance.sqrt());
+            (nearest_distinct * factor).max(0.0)
+        })
+        .collect()
 }
 
 /// Computes the Čech-complex adjacency for a set of weighted points (Power Foam).
@@ -335,9 +348,10 @@ pub fn compute_cech_default(points: &[glam::Vec4], radii: &[f32]) -> Adjacency {
 /// Qhull-backed Delaunay tetrahedralisation.
 ///
 /// Returns the exact Voronoi adjacency (each point's neighbour set is the
-/// set of points sharing a Delaunay edge with it). Memory and time are
-/// O(N log N) in 3D, scaling to millions of points where the
-/// `simple_delaunay_lib` backend OOMs around 7 K.
+/// set of points sharing a Delaunay edge with it). Typical well-behaved 3D
+/// inputs are near O(N log N + output), but Delaunay output and worst-case
+/// time/space are quadratic. In practice this scales materially beyond the
+/// `simple_delaunay_lib` backend; callers still need a point budget.
 ///
 /// Adjacency output matches [`compute_adjacency`] modulo Qhull's joggle:
 /// degenerate (cocircular / coplanar) configurations are perturbed by
@@ -813,6 +827,15 @@ mod tests {
         assert!((radii[0] - 0.5).abs() < 1e-5);
         assert!((radii[1] - 0.5).abs() < 1e-5);
         assert!((radii[2] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn radii_from_nearest_neighbour_handles_many_coincident_sites() {
+        let mut points = vec![glam::Vec4::new(0.0, -0.0, 0.0, 1.0); 64];
+        points.push(glam::Vec4::new(2.0, 0.0, 0.0, 1.0));
+        let radii = radii_from_nearest_neighbour(&points, 0.5);
+        assert_eq!(radii.len(), points.len());
+        assert!(radii.iter().all(|&radius| (radius - 1.0).abs() < 1e-6));
     }
 
     #[test]

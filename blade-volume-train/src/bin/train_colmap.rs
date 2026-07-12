@@ -92,10 +92,10 @@ struct Args {
     #[argh(option, default = "2000")]
     max_points: usize,
 
-    /// use Qhull (O(N log N)) instead of the default
-    /// `simple_delaunay_lib` (O(N^1.5)) Delaunay backend. Required
-    /// for >7K-cell training; both produce exact Voronoi adjacency
-    /// (so path-tracing stays correct).
+    /// use Qhull instead of the default `simple_delaunay_lib` Delaunay
+    /// backend. Qhull scales better on typical large clouds, though exact
+    /// 3D Delaunay has quadratic worst-case output. Both produce exact
+    /// Voronoi adjacency, so traversal remains correct.
     #[argh(switch)]
     qhull: bool,
 
@@ -136,7 +136,7 @@ struct Args {
     /// times cell radius
     /// are split — each parent gets a sibling cell at `pos + jitter`
     /// with the same density and SH coefficients, and adjacency is
-    /// rebuilt (Qhull, ~2 s @ 100K cells). Requires `--pixel-batch`.
+    /// rebuilt with the configured exact backend. Requires `--pixel-batch`.
     #[argh(option, default = "0")]
     densify_every: usize,
 
