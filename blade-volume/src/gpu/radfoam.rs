@@ -20,6 +20,7 @@ pub struct RadFoamGpuCloud {
     attributes_buf: gpu::Buffer,
     point_adjacency_buf: gpu::Buffer,
     point_adjacency_offsets_buf: gpu::Buffer,
+    point_tree: kiddo::KdTree<f32, 3>,
 
     pub sh_degree: usize,
     pub attr_dim: usize,
@@ -63,6 +64,10 @@ impl RadFoamGpuCloud {
         let attrs_size = (num_points * attr_dim * mem::size_of::<f32>()) as u64;
         let adj_size = (num_adjacency * mem::size_of::<u32>()) as u64;
         let adj_off_size = (adjacency.offsets.len() * mem::size_of::<u32>()) as u64;
+        let mut point_tree = kiddo::KdTree::new();
+        for (index, point) in model.points.iter().enumerate() {
+            point_tree.add(&[point.x, point.y, point.z], index as u64);
+        }
 
         // Device buffers
         let points_buf = context.create_buffer(gpu::BufferDesc {
@@ -199,6 +204,7 @@ impl RadFoamGpuCloud {
             attributes_buf,
             point_adjacency_buf,
             point_adjacency_offsets_buf,
+            point_tree,
             sh_degree: model.sh_degree,
             attr_dim,
             num_points,
@@ -232,5 +238,12 @@ impl RadFoamGpuCloud {
     /// Storage buffer view for CSR offsets.
     pub fn point_adjacency_offsets(&self) -> gpu::BufferPiece {
         self.point_adjacency_offsets_buf.into()
+    }
+
+    /// Nearest site to a local-space position, used to seed cell traversal.
+    pub fn nearest_point(&self, position: glam::Vec3) -> u32 {
+        self.point_tree
+            .nearest_one::<kiddo::SquaredEuclidean>(&position.to_array())
+            .item as u32
     }
 }

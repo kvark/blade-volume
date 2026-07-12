@@ -12,7 +12,6 @@ bytemuck.workspace = true
 glam.workspace = true
 log.workspace = true
 winit.workspace = true
-kiddo.workspace = true
 argh.workspace = true
 env_logger.workspace = true
 

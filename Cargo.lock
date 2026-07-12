@@ -599,7 +599,6 @@ dependencies = [
  "egui-winit",
  "env_logger",
  "glam",
- "kiddo",
  "log",
  "winit",
 ]

@@ -230,7 +230,6 @@ struct Background {
 
 pub struct RadFoamBackend {
     point_cloud: vol::RadFoamGpuCloud,
-    kd_tree: kiddo::KdTree<f32, 3>,
     trace_pipeline: gpu::ComputePipeline,
     blit_pipeline: gpu::RenderPipeline,
     hdr_tex: gpu::Texture,
@@ -265,11 +264,6 @@ impl RadFoamBackend {
         surface_format: gpu::TextureFormat,
         size: RenderSize,
     ) -> Self {
-        let mut kd_tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
-        for (i, p) in model.points.iter().enumerate() {
-            kd_tree.add(&[p.x, p.y, p.z], i as u64);
-        }
-
         let (hdr_tex, hdr_view) = Self::create_hdr_target(context, size);
 
         let sampler = context.create_sampler(gpu::SamplerDesc {
@@ -334,7 +328,6 @@ impl RadFoamBackend {
 
         Self {
             point_cloud,
-            kd_tree,
             trace_pipeline,
             blit_pipeline,
             hdr_tex,
@@ -398,11 +391,7 @@ impl RadFoamBackend {
         camera_position: glam::Vec3,
         size: RenderSize,
     ) {
-        {
-            let q = [camera_position.x, camera_position.y, camera_position.z];
-            let nearest = self.kd_tree.nearest_one::<kiddo::SquaredEuclidean>(&q);
-            self.trace_params.start_point = nearest.item as u32;
-        }
+        self.trace_params.start_point = self.point_cloud.nearest_point(camera_position);
 
         encoder.init_texture(self.hdr_tex);
 
