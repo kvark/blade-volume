@@ -109,6 +109,15 @@ pub struct SceneBlitData {
     pub g_src: gpu::TextureView,
     /// Texture sampler.
     pub g_sampler: gpu::Sampler,
+    /// Explicit linear RGB background.
+    pub g_background: SceneBackground,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct SceneBackground {
+    pub color: [f32; 3],
+    pub pad: f32,
 }
 
 /// Unified scene renderer.
@@ -127,6 +136,8 @@ pub struct SceneRenderer {
     hdr_view: gpu::TextureView,
     /// Texture sampler for blit.
     sampler: gpu::Sampler,
+    /// Linear RGB presentation background.
+    pub background_rgb: [f32; 3],
     /// Rendering parameters.
     pub params: SceneParams,
 }
@@ -196,6 +207,7 @@ impl SceneRenderer {
             hdr_tex,
             hdr_view,
             sampler,
+            background_rgb: [0.0; 3],
             params: SceneParams::default(),
         }
     }
@@ -380,6 +392,10 @@ impl SceneRenderer {
                 &SceneBlitData {
                     g_src: self.hdr_view,
                     g_sampler: self.sampler,
+                    g_background: SceneBackground {
+                        color: self.background_rgb,
+                        pad: 0.0,
+                    },
                 },
             );
             pen.draw(0, 3, 0, 1);
@@ -394,5 +410,33 @@ impl SceneRenderer {
         context.destroy_texture(self.hdr_tex);
         context.destroy_compute_pipeline(&mut self.traverse_pipeline);
         context.destroy_render_pipeline(&mut self.blit_pipeline);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scene_pipelines_compile_with_explicit_background_binding() {
+        let Some(context) = (unsafe {
+            gpu::Context::init(gpu::ContextDesc {
+                ray_tracing: true,
+                ..gpu::ContextDesc::default()
+            })
+            .ok()
+        }) else {
+            eprintln!("skipping scene shader compilation: no ray-query GPU");
+            return;
+        };
+        let renderer = SceneRenderer::new(
+            &context,
+            gpu::TextureFormat::Rgba16Float,
+            RenderSize {
+                width: 4,
+                height: 4,
+            },
+        );
+        renderer.destroy(&context);
     }
 }

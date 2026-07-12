@@ -117,6 +117,11 @@ At the audited revision:
 - Mixed SH layouts, more than sixteen objects, and overlapping cloud volumes
   are not handled robustly.
 - Scene tests check state but not rendered pixels.
+- A 2026-07-12 RadFoam-only dispatch probe reached a driver fault even after
+  reducing the compute entry point to a constant texture write. Pipeline
+  creation succeeds, so Stage 5 must replace/audit the prototype descriptor
+  arrays and add a readback test before enabling scene rendering; dummy ray
+  tracing resources are not an acceptable workaround.
 
 ### Project constraints
 
