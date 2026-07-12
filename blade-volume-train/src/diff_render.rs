@@ -19,10 +19,10 @@
 //! 6. L1 loss against ground-truth pixels.
 //!
 //! The cell-walk traversal is the non-differentiable part and stays in
-//! `vol::trace::record_path`. Positions, radii, and adjacency are *frozen*
-//! during a training step — only per-cell appearance (density + SH DC)
-//! is optimised. Updating geometry needs a different scheme (PowerFoam's
-//! raytrace-mode trick: detach the traversal, keep the integration smooth).
+//! `vol::trace::record_path`. Adjacency and the discrete cell walk are frozen
+//! during one training cycle. Positions may be optimised through the smooth
+//! face-intersection calculation, provided the caller periodically rebuilds
+//! adjacency and recorded paths between cycles.
 
 use blade_volume as vol;
 use meganeura as mn;
@@ -816,6 +816,19 @@ pub struct AppearanceFitConfig {
     /// that dip to negative log-density keep a gradient and recover
     /// instead of dying — important for stable densification.
     pub softplus_beta: f32,
+    /// Position learning rate as a fraction of `learning_rate`. `0.0`
+    /// (default) freezes geometry. A positive value requires
+    /// `geometry_rebuild_every > 0`, because the discrete adjacency and
+    /// recorded cell walks must be refreshed as points move.
+    pub position_lr_ratio: f32,
+    /// Number of Adam steps between adjacency, GPU-cloud, and path-buffer
+    /// rebuilds while positions are trainable. Ignored when
+    /// `position_lr_ratio == 0.0`.
+    pub geometry_rebuild_every: usize,
+    /// Use Qhull for geometry/densification rebuilds. This is the practical
+    /// exact backend for large unweighted clouds; the Rust backend remains
+    /// available for small dependency-minimal jobs.
+    pub rebuild_with_qhull: bool,
     /// When `Some(path)`, write an interchange PLY plus a lossless
     /// `.safetensors` parameter/Adam sidecar at the end of every densify cycle.
     /// Exposure is baked only into the PLY clone. `None` disables checkpoints.
@@ -909,6 +922,9 @@ impl Default for AppearanceFitConfig {
             grad_loss_weight: 0.0,
             opacity_weight: 0.0,
             softplus_beta: 0.0,
+            position_lr_ratio: 0.0,
+            geometry_rebuild_every: 0,
+            rebuild_with_qhull: false,
             checkpoint_path: None,
             resume_step: 0,
             resume_state_path: None,
@@ -996,6 +1012,14 @@ pub fn fit_appearance_multi_view(
     }
     let pixel_batch = config.pixel_batch.unwrap_or(p);
     assert!(pixel_batch > 0, "pixel_batch must be greater than zero");
+    assert!(
+        config.position_lr_ratio.is_finite() && config.position_lr_ratio >= 0.0,
+        "position_lr_ratio must be finite and non-negative"
+    );
+    assert!(
+        config.position_lr_ratio == 0.0 || config.geometry_rebuild_every > 0,
+        "position optimisation requires geometry_rebuild_every > 0"
+    );
     if config.pixel_batch.is_none() {
         config.steps_per_view = config.epochs;
     }
@@ -1361,6 +1385,10 @@ struct AdamSnapshot {
     /// name, the per-cell stride (1 or 3), and flat (m, v) buffers of
     /// length `n_cells * stride`.
     entries: Vec<AdamEntry>,
+    /// View-sized parameters are not represented in `PointCloudModel`, so
+    /// their values and moments must be carried explicitly across a graph
+    /// rebuild as well.
+    exposure_entries: Vec<FixedAdamEntry>,
     /// Adam step counter (bias-correction `t`).
     t: u32,
 }
@@ -1372,7 +1400,19 @@ struct AdamEntry {
     v: Vec<f32>,
 }
 
-fn save_adam_state(session: &mn::Session, sh_degree: usize, n_cells: usize) -> AdamSnapshot {
+struct FixedAdamEntry {
+    name: &'static str,
+    parameter: Vec<f32>,
+    m: Vec<f32>,
+    v: Vec<f32>,
+}
+
+fn save_adam_state(
+    session: &mn::Session,
+    sh_degree: usize,
+    n_cells: usize,
+    num_views: usize,
+) -> AdamSnapshot {
     let names = per_cell_param_names_with_stride(sh_degree);
     let mut entries = Vec::with_capacity(names.len());
     for (name, stride) in names {
@@ -1383,8 +1423,26 @@ fn save_adam_state(session: &mn::Session, sh_degree: usize, n_cells: usize) -> A
         session.read_adam_v(&name, &mut v);
         entries.push(AdamEntry { name, stride, m, v });
     }
+    let exposure_entries = ["exposure_r", "exposure_g", "exposure_b"]
+        .into_iter()
+        .map(|name| {
+            let mut parameter = vec![0.0_f32; num_views];
+            let mut m = vec![0.0_f32; num_views];
+            let mut v = vec![0.0_f32; num_views];
+            session.read_param(name, &mut parameter);
+            session.read_adam_m(name, &mut m);
+            session.read_adam_v(name, &mut v);
+            FixedAdamEntry {
+                name,
+                parameter,
+                m,
+                v,
+            }
+        })
+        .collect();
     AdamSnapshot {
         entries,
+        exposure_entries,
         t: session.adam_step_count(),
     }
 }
@@ -1400,7 +1458,7 @@ fn save_adam_state(session: &mn::Session, sh_degree: usize, n_cells: usize) -> A
 /// The Adam step counter is preserved exactly so bias correction stays
 /// continuous.
 fn restore_adam_state_remap(
-    session: &mn::Session,
+    session: &mut mn::Session,
     snap: &AdamSnapshot,
     new_to_old: &[usize],
     sh_degree: usize,
@@ -1420,6 +1478,19 @@ fn restore_adam_state_remap(
         }
         session.write_adam_m(&entry.name, &m);
         session.write_adam_v(&entry.name, &v);
+    }
+    for entry in &snap.exposure_entries {
+        session.set_parameter(entry.name, &entry.parameter);
+        session.write_adam_m(entry.name, &entry.m);
+        session.write_adam_v(entry.name, &entry.v);
+    }
+}
+
+fn rebuild_training_adjacency(model: &mut vol::PointCloudModel, use_qhull: bool) {
+    if model.radii.is_some() || !use_qhull {
+        model.compute_adjacency_default();
+    } else {
+        model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
     }
 }
 
@@ -1443,6 +1514,7 @@ fn build_train_session(
     gpu: &std::sync::Arc<blade_graphics::Context>,
     path_bufs: &vol::gpu::PathRecordBuffers,
     lr: f32,
+    position_lr_ratio: f32,
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
@@ -1502,18 +1574,6 @@ fn build_train_session(
             session.set_lr_multiplier(chan, 0.1);
         }
     }
-    // Positions are differentiable parameters but frozen by default.
-    // Unfreezing requires periodically rebuilding adjacency (the GPU
-    // path-record walks a CSR captured at training start). The May
-    // 2026 50K-cell × 128² A/B at ratio=0.01 dropped train PSNR from
-    // 20.88 → 9.69 dB and test PSNR from 17.77 → 7.36 dB versus the
-    // ratio=0 baseline: the trained gradient targets a geometry that
-    // doesn't survive a fresh trace. Opt in via
-    // `BLADE_VOLUME_POSITION_LR_RATIO=0.01` once in-loop rebuilds land.
-    let position_lr_ratio = std::env::var("BLADE_VOLUME_POSITION_LR_RATIO")
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(0.0);
     session.set_lr_multiplier("positions", position_lr_ratio);
 
     // Per-view exposure: init to 1.0 (identity). Defaults to enabled
@@ -1676,6 +1736,7 @@ fn fit_appearance_pixel_batched(
         &gpu,
         &path_bufs,
         config.learning_rate,
+        config.position_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
     );
     if let Some(ref state_path) = config.resume_state_path {
@@ -1695,7 +1756,7 @@ fn fit_appearance_pixel_batched(
     session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
 
     while steps_done < total_steps {
-        let cycle_budget = match densify {
+        let densify_budget = match densify {
             Some(d) => {
                 if steps_done < d.warmup {
                     (d.warmup - steps_done).min(total_steps - steps_done)
@@ -1705,6 +1766,13 @@ fn fit_appearance_pixel_batched(
             }
             None => total_steps - steps_done,
         };
+        let geometry_budget = if config.position_lr_ratio > 0.0 {
+            let every = config.geometry_rebuild_every;
+            (every - steps_done % every).min(total_steps - steps_done)
+        } else {
+            total_steps - steps_done
+        };
+        let cycle_budget = densify_budget.min(geometry_budget);
 
         for cycle_step in 0..cycle_budget {
             let step = steps_done + cycle_step;
@@ -1885,44 +1953,10 @@ fn fit_appearance_pixel_batched(
         steps_done += cycle_budget;
         cycle += 1;
 
-        // Crash-safety checkpoint: write the current model to disk at the
-        // end of every cycle so a reboot/suspend during a multi-hour run
-        // loses at most one cycle's progress, not the whole run. The PLY
-        // only gets written at the very end otherwise. Downloading into
-        // the live `model` mid-cycle is harmless (host state is only
-        // pushed back to the GPU at densify rebuilds); exposure is baked
-        // into a throwaway clone so the live model is never mutated.
-        if let Some(ref ckpt) = config.checkpoint_path {
-            download_model_parameters(&session, model, config.softplus_beta);
-            let mut snapshot = model.clone();
-            bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
-            match save_checkpoint(ckpt, &snapshot)
-                .and_then(|()| save_optimizer_checkpoint(&mut session, ckpt))
-            {
-                Ok(state_path) => {
-                    // Sidecar with the absolute step so a relaunch can
-                    // resume the schedule (see `resume_step`). Written
-                    // after the PLY rename so it never points past a
-                    // half-written checkpoint.
-                    let step_path = ckpt.with_extension("ply.step");
-                    if let Err(err) = std::fs::write(&step_path, steps_done.to_string()) {
-                        log::warn!("checkpoint step-sidecar write failed: {err:?}");
-                    }
-                    log::info!(
-                        "checkpoint: wrote {} and {} ({} cells) at step {}",
-                        ckpt.display(),
-                        state_path.display(),
-                        snapshot.points.len(),
-                        steps_done,
-                    );
-                }
-                Err(err) => log::warn!("checkpoint save failed: {err:?}"),
-            }
-        }
-
         // Prune + densify, gated by the RadFoam schedule: only between
         // `warmup` and `densify_until`, and only while under the point
         // budget. Past that it's a refinement-only phase (no rebuilds).
+        let mut topology_rebuilt = false;
         if let Some(d) = densify {
             let gate = steps_done >= d.warmup
                 && steps_done < total_steps
@@ -1933,7 +1967,7 @@ fn fit_appearance_pixel_batched(
                 // prune+densify remaps `model.points`.
                 let n_old = model.points.len();
                 download_model_parameters(&session, model, config.softplus_beta);
-                let adam_snap = save_adam_state(&session, sh_degree, n_old);
+                let adam_snap = save_adam_state(&session, sh_degree, n_old, views.len());
 
                 let (new_to_old, pruned, added) =
                     prune_and_densify(model, &grad_accum, &d, &mut rng_split);
@@ -1947,8 +1981,7 @@ fn fit_appearance_pixel_batched(
                 );
                 // Rebuild Voronoi adjacency for the new cell set so the
                 // GPU path-record sees real neighbours of the new cells.
-                let adj = vol::compute_adjacency_qhull_default(&model.points);
-                model.adjacency = Some(adj);
+                rebuild_training_adjacency(model, config.rebuild_with_qhull);
                 grad_accum = vec![0.0f32; model.points.len()];
                 grad_scratch = vec![0.0f32; model.points.len()];
 
@@ -1976,6 +2009,7 @@ fn fit_appearance_pixel_batched(
                     &gpu,
                     &path_bufs,
                     config.learning_rate,
+                    config.position_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
                 );
                 session = rebuilt.0;
@@ -1988,8 +2022,91 @@ fn fit_appearance_pixel_batched(
                 // children inherit their parent's, via the new_to_old
                 // remap. Bias-correction `t` is preserved so the
                 // optimiser doesn't think it's step 1 again.
-                restore_adam_state_remap(&session, &adam_snap, &new_to_old, sh_degree);
+                restore_adam_state_remap(&mut session, &adam_snap, &new_to_old, sh_degree);
                 session.set_adam_step_count(adam_snap.t);
+                topology_rebuilt = true;
+            }
+        }
+
+        // Position gradients are only locally valid for the discrete cell
+        // walk recorded against the current CSR. At the configured cadence,
+        // download moved points, rebuild exact topology, and recreate all
+        // traversal resources. The final cycle only needs the host-side
+        // topology refresh because no further optimiser step will run.
+        let geometry_due = config.position_lr_ratio > 0.0
+            && (steps_done.is_multiple_of(config.geometry_rebuild_every)
+                || steps_done == total_steps);
+        if geometry_due && !topology_rebuilt {
+            let n_cells = model.points.len();
+            download_model_parameters(&session, model, config.softplus_beta);
+            let adam_snap = (steps_done < total_steps)
+                .then(|| save_adam_state(&session, sh_degree, n_cells, views.len()));
+            rebuild_training_adjacency(model, config.rebuild_with_qhull);
+            log::info!(
+                "geometry cycle {}: rebuilt adjacency for {} moved points at step {}",
+                cycle,
+                n_cells,
+                steps_done,
+            );
+
+            if let Some(adam_snap) = adam_snap {
+                drop(session);
+                gpu_cloud.deinit(&gpu);
+                path_bufs.destroy(&gpu);
+                path_bufs = vol::gpu::PathRecordBuffers::new_external(
+                    &gpu,
+                    pixel_batch as u32,
+                    max_steps as u32,
+                );
+                let rebuilt = build_train_session(
+                    model,
+                    pixel_batch,
+                    max_steps,
+                    sh_degree,
+                    views.len(),
+                    patch_size,
+                    grad_loss_weight,
+                    config.opacity_weight,
+                    config.softplus_beta,
+                    &gpu,
+                    &path_bufs,
+                    config.learning_rate,
+                    config.position_lr_ratio,
+                    (config.adam_beta1, config.adam_beta2, config.adam_eps),
+                );
+                session = rebuilt.0;
+                gpu_cloud = rebuilt.1;
+                session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
+                let identity: Vec<usize> = (0..n_cells).collect();
+                restore_adam_state_remap(&mut session, &adam_snap, &identity, sh_degree);
+                session.set_adam_step_count(adam_snap.t);
+            }
+        }
+
+        // Write checkpoints after topology maintenance so every PLY pairs
+        // its point positions with matching adjacency. Exposure is baked
+        // into a throwaway clone; the exact sidecar retains the live values.
+        if let Some(ref ckpt) = config.checkpoint_path {
+            download_model_parameters(&session, model, config.softplus_beta);
+            let mut snapshot = model.clone();
+            bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
+            match save_checkpoint(ckpt, &snapshot)
+                .and_then(|()| save_optimizer_checkpoint(&mut session, ckpt))
+            {
+                Ok(state_path) => {
+                    let step_path = ckpt.with_extension("ply.step");
+                    if let Err(err) = std::fs::write(&step_path, steps_done.to_string()) {
+                        log::warn!("checkpoint step-sidecar write failed: {err:?}");
+                    }
+                    log::info!(
+                        "checkpoint: wrote {} and {} ({} cells) at step {}",
+                        ckpt.display(),
+                        state_path.display(),
+                        snapshot.points.len(),
+                        steps_done,
+                    );
+                }
+                Err(err) => log::warn!("checkpoint save failed: {err:?}"),
             }
         }
     }
@@ -2366,6 +2483,14 @@ mod tests {
         session.set_adam(0.1, 0.9, 0.999, 1e-8);
         session.step();
         session.wait();
+
+        let mut position_grad = vec![0.0_f32; n_cells * 3];
+        session.read_param_grad("positions", &mut position_grad);
+        assert!(position_grad.iter().all(|v| v.is_finite()));
+        assert!(
+            position_grad.iter().any(|v| v.abs() > 1e-7),
+            "interior face integration must produce a position gradient"
+        );
     }
 
     /// End-to-end: a small target image is the ground-truth render of a
@@ -2456,6 +2581,56 @@ mod tests {
             last < first * 0.1,
             "loss did not drop enough: first {first}, last {last}"
         );
+    }
+
+    #[test]
+    fn position_training_rebuilds_valid_topology() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping position_training_rebuilds_valid_topology: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        let positions_before: Vec<[f32; 3]> =
+            model.points.iter().map(|p| [p.x, p.y, p.z]).collect();
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: [0.0, 0.0, 0.0, 1.0],
+                fov: [0.5, 0.5],
+                principal: [0.0, 0.0],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            width: 1,
+            height: 1,
+            start_cell: 0,
+        };
+        fit_appearance_multi_view(
+            &mut model,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                learning_rate: 0.01,
+                epochs: 4,
+                position_lr_ratio: 1.0,
+                geometry_rebuild_every: 2,
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        model.validate().unwrap();
+        assert!(model
+            .points
+            .iter()
+            .zip(positions_before)
+            .any(|(after, before)| {
+                (after.x - before[0]).abs() > 1e-7
+                    || (after.y - before[1]).abs() > 1e-7
+                    || (after.z - before[2]).abs() > 1e-7
+            }));
     }
 
     fn mean_l1(a: &[f32], b: &[f32]) -> f32 {

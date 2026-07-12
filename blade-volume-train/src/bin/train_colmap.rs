@@ -18,8 +18,8 @@
 //! 3. Computes Delaunay adjacency.
 //! 4. For up to `--views` images, loads the file under `--images/`,
 //!    downsamples to `(--width, --height)`, and uses it as a training view.
-//! 5. Runs `--epochs` epochs of multi-view appearance training (Adam, L1
-//!    against per-pixel RGB) — geometry stays fixed.
+//! 5. Runs multi-view point-cloud training (Adam, L1 against per-pixel RGB).
+//!    Geometry is fixed unless position optimisation is explicitly enabled.
 //! 6. Saves the trained model as a RadFoam PLY at `--output`.
 //! 7. Renders the trained model from a *novel* pose interpolated between
 //!    the first two training cameras and saves it as `--novel-out`.
@@ -223,6 +223,17 @@ struct Args {
     #[argh(option, default = "0.0")]
     softplus_beta: f32,
 
+    /// position learning rate as a fraction of the main learning rate
+    /// (default 0 = fixed geometry). Experimental: validate on a held-out
+    /// split before using for production checkpoints.
+    #[argh(option, default = "0.0")]
+    position_lr_ratio: f32,
+
+    /// steps between adjacency/path rebuilds during position optimisation
+    /// (default 100). Ignored when --position-lr-ratio is 0.
+    #[argh(option, default = "100")]
+    geometry_rebuild_every: usize,
+
     /// optional checkpoint PLY path written with an exact safetensors optimizer
     /// sidecar at every densify cycle. Defaults to <output>.ckpt.ply when
     /// --densify-every > 0; pass "none" to disable.
@@ -333,6 +344,9 @@ fn main() {
             grad_loss_weight: args.grad_loss_weight,
             opacity_weight: args.opacity_weight,
             softplus_beta: args.softplus_beta,
+            position_lr_ratio: args.position_lr_ratio,
+            geometry_rebuild_every: args.geometry_rebuild_every,
+            rebuild_with_qhull: args.qhull,
             resume_step,
             resume_state_path,
             checkpoint_path: match args.checkpoint.as_deref() {
@@ -374,29 +388,13 @@ fn main() {
 
     let sparse = path::Path::new(&args.sparse);
     let images = path::Path::new(&args.images);
-    let mut outcome = pipeline::train_colmap_appearance_split(
+    let outcome = pipeline::train_colmap_appearance_split(
         sparse,
         images,
         &config,
         args.test_views,
         gpu.clone(),
     );
-
-    // Rebuild adjacency from the final positions so the saved PLY +
-    // eval below operate on the geometry actually optimized — a
-    // no-op when positions are frozen, essential when they aren't.
-    if std::env::var("BLADE_VOLUME_POSITION_LR_RATIO")
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(0.0)
-        > 0.0
-    {
-        eprintln!(
-            "rebuilding adjacency after position-opt for {} points...",
-            outcome.model.len()
-        );
-        outcome.model.adjacency = Some(vol::compute_adjacency_qhull_default(&outcome.model.points));
-    }
 
     let output = path::Path::new(&args.output);
     convert::save_ply_with_options(
