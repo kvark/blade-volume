@@ -174,7 +174,7 @@ fn camera_from_bounds(model: &vol::PointCloudModel) -> vol::CameraParams {
         depth: distance + radius * 2.0,
         cam_orientation: orientation.into(),
         fov: [1.0, 1.0],
-        pad: [0, 0],
+        principal: [0.0, 0.0],
     }
 }
 

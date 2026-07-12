@@ -564,6 +564,7 @@ struct RayConstants {
     origin: glam::Vec3,
     orientation: glam::Quat,
     tan_half: glam::Vec2,
+    principal: glam::Vec2,
 }
 
 fn ray_constants(cam: &vol::CameraParams) -> RayConstants {
@@ -576,6 +577,7 @@ fn ray_constants(cam: &vol::CameraParams) -> RayConstants {
             cam.cam_orientation[3],
         ),
         tan_half: glam::Vec2::new((0.5 * cam.fov[0]).tan(), (0.5 * cam.fov[1]).tan()),
+        principal: glam::Vec2::from_array(cam.principal),
     }
 }
 
@@ -583,7 +585,8 @@ fn ray_dir_for_pixel(c: &RayConstants, ix: u32, iy: u32, w: u32, h: u32) -> glam
     let px = (ix as f32 + 0.5) / w as f32;
     let py = (iy as f32 + 0.5) / h as f32;
     let ndc = glam::Vec2::new(px * 2.0 - 1.0, py * 2.0 - 1.0);
-    let local = glam::Vec3::new(ndc.x * c.tan_half.x, ndc.y * c.tan_half.y, 1.0);
+    let local_xy = (ndc - c.principal) * c.tan_half;
+    let local = glam::Vec3::new(local_xy.x, local_xy.y, 1.0);
     let _ = c.origin;
     (c.orientation * local).normalize()
 }
@@ -2335,7 +2338,7 @@ mod tests {
             depth: 100.0,
             cam_orientation: [0.0, 0.0, 0.0, 1.0],
             fov: [0.5, 0.5],
-            pad: [0, 0],
+            principal: [0.0, 0.0],
         };
         let target_pixels = crate::render::render_cpu(
             &gt,
@@ -2436,7 +2439,7 @@ mod tests {
             depth: 100.0,
             cam_orientation: [0.0, 0.0, 0.0, 1.0],
             fov: [0.5, 0.5],
-            pad: [0, 0],
+            principal: [0.0, 0.0],
         };
         // View B: yaw camera 90° so it looks along +X instead of +Z, from a
         // different starting position. Same fov / depth.
@@ -2447,7 +2450,7 @@ mod tests {
             depth: 100.0,
             cam_orientation: [rot.x, rot.y, rot.z, rot.w],
             fov: [0.5, 0.5],
-            pad: [0, 0],
+            principal: [0.0, 0.0],
         };
 
         let w = 8u32;
@@ -2569,7 +2572,7 @@ mod tests {
                 depth: 100.0,
                 cam_orientation: [q.x, q.y, q.z, q.w],
                 fov: [0.6, 0.6],
-                pad: [0, 0],
+                principal: [0.0, 0.0],
             }
         }
 

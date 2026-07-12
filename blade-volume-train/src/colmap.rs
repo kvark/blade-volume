@@ -394,7 +394,7 @@ impl Reconstruction {
         let q_wfc = q_cfw.inverse();
         let cam_pos_world = q_wfc * (-t_cfw);
 
-        let (fx, fy, _cx, _cy) = cam.model.fxfycxcy(&cam.params);
+        let (fx, fy, cx, cy) = cam.model.fxfycxcy(&cam.params);
         let fov_x = 2.0 * ((cam.width as f64) / (2.0 * fx)).atan();
         let fov_y = 2.0 * ((cam.height as f64) / (2.0 * fy)).atan();
 
@@ -412,7 +412,10 @@ impl Reconstruction {
                 q_wfc.w as f32,
             ],
             fov: [fov_x as f32, fov_y as f32],
-            pad: [0, 0],
+            principal: [
+                (2.0 * cx / cam.width as f64 - 1.0) as f32,
+                (2.0 * cy / cam.height as f64 - 1.0) as f32,
+            ],
         }
     }
 }
@@ -659,5 +662,20 @@ mod tests {
         assert!(p.cam_position[0].abs() < 1e-5);
         assert!(p.cam_position[1].abs() < 1e-5);
         assert!((p.cam_position[2] - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn camera_params_preserve_off_center_principal_point() {
+        let dir = tmpdir("cam-principal");
+        write_fixture(&dir);
+        let mut r = load_reconstruction(&dir);
+        let camera = r.cameras.get_mut(&1).unwrap();
+        camera.params[2] = 400.0;
+        camera.params[3] = 180.0;
+        let p = r.camera_params_for(&r.images[0], 100.0);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!((p.principal[0] - 0.25).abs() < 1e-6);
+        assert!((p.principal[1] + 0.25).abs() < 1e-6);
     }
 }

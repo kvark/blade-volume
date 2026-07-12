@@ -27,7 +27,7 @@ fn make_camera_looking_along_x(depth: f32) -> vol::CameraParams {
             std::f32::consts::FRAC_1_SQRT_2,
         ], // 90 deg about Y → forward = +X
         fov: [0.8, 0.8],
-        pad: [0, 0],
+        principal: [0.05, -0.025],
     }
 }
 
@@ -131,7 +131,11 @@ fn rays_for_pixels(
             let py = (iy as f32 + 0.5) / hf;
             let ndc_x = px * 2.0 - 1.0;
             let ndc_y = py * 2.0 - 1.0;
-            let local = glam::Vec3::new(ndc_x * tan_half.x, ndc_y * tan_half.y, 1.0);
+            let local = glam::Vec3::new(
+                (ndc_x - cam.principal[0]) * tan_half.x,
+                (ndc_y - cam.principal[1]) * tan_half.y,
+                1.0,
+            );
             vol::trace::Ray {
                 origin,
                 direction: (q * local).normalize(),

@@ -7,7 +7,7 @@ struct Camera {
     depth: f32,
     orientation: vec4<f32>, // quaternion (x,y,z,w)
     fov: vec2<f32>,         // (fov_x, fov_y) where local_dir = (ndc * tan(0.5*fov), 1)
-    pad: vec2<u32>,
+    principal: vec2<f32>,   // optical center in NDC; zero is image center
 }
 
 // ---- Quaternion helpers ----

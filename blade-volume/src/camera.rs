@@ -11,5 +11,8 @@ pub struct CameraParams {
     pub depth: f32,
     pub cam_orientation: [f32; 4],
     pub fov: [f32; 2],
-    pub pad: [u32; 2],
+    /// Optical principal point in normalized device coordinates. `[0, 0]`
+    /// is the image center; COLMAP `(cx, cy)` maps to
+    /// `[2*cx/width - 1, 2*cy/height - 1]`.
+    pub principal: [f32; 2],
 }

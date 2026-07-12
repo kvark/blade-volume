@@ -69,7 +69,7 @@ fn draw_vs(@builtin(vertex_index) vi: u32) -> VertexOutput {
     var vo = VertexOutput();
     let tc = vec2f(vec2u(vi) & vec2u(1u, 2u)) * vec2f(1.0, 0.5);
     let ndc = 4.0 * tc - 1.0;
-    let local_dir = vec3f(ndc * tan(0.5 * g_camera.fov), 1.0);
+    let local_dir = vec3f((ndc - g_camera.principal) * tan(0.5 * g_camera.fov), 1.0);
     vo.clip_pos = vec4f(ndc.x, -ndc.y, 0.0, 1.0);
     vo.direction = qrot(g_camera.orientation, local_dir);
     return vo;

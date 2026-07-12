@@ -89,7 +89,11 @@ pub fn render_cpu(
         for ix in 0..w {
             let px = (ix as f32 + 0.5) / wf;
             let ndc_x = px * 2.0 - 1.0;
-            let local_dir = glam::Vec3::new(ndc_x * tan_half.x, ndc_y * tan_half.y, 1.0);
+            let local_dir = glam::Vec3::new(
+                (ndc_x - camera.principal[0]) * tan_half.x,
+                (ndc_y - camera.principal[1]) * tan_half.y,
+                1.0,
+            );
             let ray_dir = (orientation * local_dir).normalize();
             let ray = vol::trace::Ray {
                 origin,
@@ -148,7 +152,7 @@ mod tests {
             depth: 100.0,
             cam_orientation: [0.0, 0.0, 0.0, 1.0], // identity, +Z forward
             fov: [1.0, 1.0],
-            pad: [0, 0],
+            principal: [0.0, 0.0],
         }
     }
 

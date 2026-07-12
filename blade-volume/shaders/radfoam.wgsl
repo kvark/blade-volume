@@ -131,7 +131,7 @@ fn trace_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ndc = vec2<f32>(px * 2.0 - 1.0, py * 2.0 - 1.0);
 
     let tan_half = tan(0.5 * g_camera.fov);
-    let local_dir = vec3<f32>(ndc * tan_half, 1.0);
+    let local_dir = vec3<f32>((ndc - g_camera.principal) * tan_half, 1.0);
     let ray_dir = normalize(qrot(g_camera.orientation, local_dir));
     let ray_origin = g_camera.position;
 

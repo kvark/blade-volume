@@ -105,7 +105,7 @@ impl ControlledCamera {
             depth: self.depth,
             cam_orientation: self.orientation.into(),
             fov: [aspect * self.fov_y, self.fov_y],
-            pad: [0; 2],
+            principal: [0.0, 0.0],
         }
     }
 }

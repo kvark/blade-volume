@@ -555,6 +555,9 @@ fn interp_camera(a: &vol::CameraParams, b: &vol::CameraParams, t: f32) -> vol::C
             a.fov[0] * (1.0 - t) + b.fov[0] * t,
             a.fov[1] * (1.0 - t) + b.fov[1] * t,
         ],
-        pad: [0, 0],
+        principal: [
+            a.principal[0] * (1.0 - t) + b.principal[0] * t,
+            a.principal[1] * (1.0 - t) + b.principal[1] * t,
+        ],
     }
 }

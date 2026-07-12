@@ -48,7 +48,7 @@ struct Camera {
     _pad0: f32,
     orientation: vec4<f32>,
     fov: vec2<f32>,
-    _pad1: vec2<f32>,
+    principal: vec2<f32>,
 };
 
 var<storage, read> g_points: array<vec4<f32>>;
@@ -76,7 +76,11 @@ fn ray_dir_for_pixel(pidx: u32) -> vec3<f32> {
     let ndc_x = px * 2.0 - 1.0;
     let ndc_y = py * 2.0 - 1.0;
     let tan_half = vec2<f32>(tan(0.5 * g_camera.fov.x), tan(0.5 * g_camera.fov.y));
-    let local = vec3<f32>(ndc_x * tan_half.x, ndc_y * tan_half.y, 1.0);
+    let local = vec3<f32>(
+        (ndc_x - g_camera.principal.x) * tan_half.x,
+        (ndc_y - g_camera.principal.y) * tan_half.y,
+        1.0,
+    );
     return normalize(qrot(g_camera.orientation, local));
 }
 

@@ -48,7 +48,7 @@ struct CameraParams {
     depth: f32,
     orientation: [f32; 4],
     fov: [f32; 2],
-    pad: [u32; 2],
+    principal: [f32; 2],
 }
 
 /// Trace parameters matching the production shader.
@@ -227,7 +227,7 @@ fn assert_gpu_matches_cpu(
         depth: 100.0,
         orientation: glam::Quat::IDENTITY.into(),
         fov: [1.0, 1.0],
-        pad: [0, 0],
+        principal: [0.08, -0.04],
     };
 
     // Start point:
@@ -311,14 +311,15 @@ fn assert_gpu_matches_cpu(
 
         // CPU ray for this pixel matches shader mapping:
         //   px = (x+0.5)/W; py=(y+0.5)/H; ndc = (px*2-1, py*2-1)
-        //   local_dir = (ndc * tan(0.5*fov), 1)
+        //   local_dir = ((ndc - principal) * tan(0.5*fov), 1)
         //   ray_dir = normalize(qrot(orientation, local_dir))
         let x = ix as f32;
         let y = iy as f32;
         let px = (x + 0.5) / w;
         let py = (y + 0.5) / h;
         let ndc = glam::Vec2::new(px * 2.0 - 1.0, py * 2.0 - 1.0);
-        let local_dir = glam::Vec3::new(ndc.x * tan_half.x, ndc.y * tan_half.y, 1.0);
+        let local_xy = (ndc - glam::Vec2::from_array(cam.principal)) * tan_half;
+        let local_dir = glam::Vec3::new(local_xy.x, local_xy.y, 1.0);
         let ray_dir = local_dir.normalize(); // identity orientation
 
         let cpu_ray = cpu::Ray {
