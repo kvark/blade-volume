@@ -95,7 +95,7 @@ impl CameraModel {
 
     /// `(fx, fy, cx, cy)` from the raw params, using each model's convention.
     /// "Simple" variants share a single focal length across both axes.
-    fn fxfycxcy(self, params: &[f64]) -> (f64, f64, f64, f64) {
+    pub(crate) fn fxfycxcy(self, params: &[f64]) -> (f64, f64, f64, f64) {
         match self {
             CameraModel::SimplePinhole
             | CameraModel::SimpleRadial
@@ -124,6 +124,164 @@ pub struct ColmapCamera {
     pub width: u64,
     pub height: u64,
     pub params: Vec<f64>,
+}
+
+impl ColmapCamera {
+    /// Project a camera-space direction `(u, v, 1)` into the source image,
+    /// including the camera model's forward distortion.
+    pub fn project_camera_plane(&self, u: f64, v: f64) -> Option<[f64; 2]> {
+        let (fx, fy, cx, cy) = self.model.fxfycxcy(&self.params);
+        let extra_start = match self.model {
+            CameraModel::SimplePinhole
+            | CameraModel::SimpleFisheye
+            | CameraModel::SimpleDivision => 3,
+            CameraModel::Pinhole | CameraModel::Fisheye | CameraModel::Division => 4,
+            CameraModel::SimpleRadial
+            | CameraModel::Radial
+            | CameraModel::SimpleRadialFisheye
+            | CameraModel::RadialFisheye => 3,
+            CameraModel::Opencv
+            | CameraModel::OpencvFisheye
+            | CameraModel::FullOpencv
+            | CameraModel::Fov
+            | CameraModel::ThinPrismFisheye
+            | CameraModel::RadTanThinPrismFisheye => 4,
+        };
+        let extra = &self.params[extra_start..];
+
+        let project = |x: f64, y: f64| [fx * x + cx, fy * y + cy];
+        let radial = |x: f64, y: f64, coefficients: &[f64]| {
+            let r2 = x * x + y * y;
+            let mut power = r2;
+            let mut factor = 0.0;
+            for coefficient in coefficients {
+                factor += coefficient * power;
+                power *= r2;
+            }
+            [x * (1.0 + factor), y * (1.0 + factor)]
+        };
+        let fisheye = |x: f64, y: f64| {
+            let radius = x.hypot(y);
+            if radius > f64::EPSILON {
+                let scale = radius.atan() / radius;
+                [x * scale, y * scale]
+            } else {
+                [x, y]
+            }
+        };
+
+        let distorted = match self.model {
+            CameraModel::SimplePinhole | CameraModel::Pinhole => [u, v],
+            CameraModel::SimpleRadial => radial(u, v, &extra[..1]),
+            CameraModel::Radial => radial(u, v, &extra[..2]),
+            CameraModel::Opencv => {
+                let [k1, k2, p1, p2] = extra[..4] else {
+                    unreachable!()
+                };
+                let u2 = u * u;
+                let uv = u * v;
+                let v2 = v * v;
+                let r2 = u2 + v2;
+                let factor = k1 * r2 + k2 * r2 * r2;
+                [
+                    u * (1.0 + factor) + 2.0 * p1 * uv + p2 * (r2 + 2.0 * u2),
+                    v * (1.0 + factor) + 2.0 * p2 * uv + p1 * (r2 + 2.0 * v2),
+                ]
+            }
+            CameraModel::FullOpencv => {
+                let [k1, k2, p1, p2, k3, k4, k5, k6] = extra[..8] else {
+                    unreachable!()
+                };
+                let u2 = u * u;
+                let uv = u * v;
+                let v2 = v * v;
+                let r2 = u2 + v2;
+                let r4 = r2 * r2;
+                let r6 = r4 * r2;
+                let factor =
+                    (1.0 + k1 * r2 + k2 * r4 + k3 * r6) / (1.0 + k4 * r2 + k5 * r4 + k6 * r6);
+                [
+                    u * factor + 2.0 * p1 * uv + p2 * (r2 + 2.0 * u2),
+                    v * factor + 2.0 * p2 * uv + p1 * (r2 + 2.0 * v2),
+                ]
+            }
+            CameraModel::Fov => {
+                let omega = extra[0];
+                let radius = u.hypot(v);
+                let factor = if omega.abs() < 1e-8 || radius < 1e-8 {
+                    1.0
+                } else {
+                    (radius * 2.0 * (omega * 0.5).tan()).atan() / (radius * omega)
+                };
+                [u * factor, v * factor]
+            }
+            CameraModel::SimpleDivision | CameraModel::Division => {
+                let k = extra[0];
+                let rho = u.hypot(v);
+                let discriminant = 1.0 - 4.0 * rho * rho * k;
+                if discriminant < 0.0 {
+                    return None;
+                }
+                let scale = 2.0 / (1.0 + discriminant.sqrt());
+                [u * scale, v * scale]
+            }
+            CameraModel::SimpleFisheye | CameraModel::Fisheye => fisheye(u, v),
+            CameraModel::SimpleRadialFisheye => {
+                let theta = fisheye(u, v);
+                radial(theta[0], theta[1], &extra[..1])
+            }
+            CameraModel::RadialFisheye => {
+                let theta = fisheye(u, v);
+                radial(theta[0], theta[1], &extra[..2])
+            }
+            CameraModel::OpencvFisheye => {
+                let theta = fisheye(u, v);
+                radial(theta[0], theta[1], &extra[..4])
+            }
+            CameraModel::ThinPrismFisheye => {
+                let [k1, k2, p1, p2, k3, k4, sx1, sy1] = extra[..8] else {
+                    unreachable!()
+                };
+                let [x, y] = fisheye(u, v);
+                let x2 = x * x;
+                let xy = x * y;
+                let y2 = y * y;
+                let r2 = x2 + y2;
+                let r4 = r2 * r2;
+                let radial = k1 * r2 + k2 * r4 + k3 * r4 * r2 + k4 * r4 * r4;
+                [
+                    x * (1.0 + radial) + 2.0 * p1 * xy + p2 * (r2 + 2.0 * x2) + sx1 * r2,
+                    y * (1.0 + radial) + 2.0 * p2 * xy + p1 * (r2 + 2.0 * y2) + sy1 * r2,
+                ]
+            }
+            CameraModel::RadTanThinPrismFisheye => {
+                let [k0, k1, k2, k3, k4, k5, p0, p1, s0, s1, s2, s3] = extra[..12] else {
+                    unreachable!()
+                };
+                let [theta_x, theta_y] = fisheye(u, v);
+                let theta2 = theta_x * theta_x + theta_y * theta_y;
+                let coefficients = [k0, k1, k2, k3, k4, k5];
+                let mut theta_power = theta2;
+                let mut theta_radial = 1.0;
+                for coefficient in coefficients {
+                    theta_radial += coefficient * theta_power;
+                    theta_power *= theta2;
+                }
+                let x = theta_radial * theta_x;
+                let y = theta_radial * theta_y;
+                let x2 = x * x;
+                let xy = x * y;
+                let y2 = y * y;
+                let r2 = x2 + y2;
+                let r4 = r2 * r2;
+                [
+                    x + 2.0 * p1 * xy + p0 * (r2 + 2.0 * x2) + s0 * r2 + s1 * r4,
+                    y + 2.0 * p0 * xy + p1 * (r2 + 2.0 * y2) + s2 * r2 + s3 * r4,
+                ]
+            }
+        };
+        Some(project(distorted[0], distorted[1]))
+    }
 }
 
 /// Per-image record. We drop the `points2D` array on read since we don't use
@@ -677,5 +835,33 @@ mod tests {
 
         assert!((p.principal[0] - 0.25).abs() < 1e-6);
         assert!((p.principal[1] + 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn simple_radial_projection_matches_colmap_equation() {
+        let camera = ColmapCamera {
+            id: 1,
+            model: CameraModel::SimpleRadial,
+            width: 100,
+            height: 80,
+            params: vec![100.0, 50.0, 40.0, 0.1],
+        };
+        let projected = camera.project_camera_plane(1.0, 0.5).unwrap();
+        assert!((projected[0] - 162.5).abs() < 1e-10);
+        assert!((projected[1] - 96.25).abs() < 1e-10);
+    }
+
+    #[test]
+    fn equidistant_fisheye_projection_uses_theta_radius() {
+        let camera = ColmapCamera {
+            id: 1,
+            model: CameraModel::SimpleFisheye,
+            width: 100,
+            height: 80,
+            params: vec![100.0, 50.0, 40.0],
+        };
+        let projected = camera.project_camera_plane(1.0, 0.0).unwrap();
+        assert!((projected[0] - (50.0 + 100.0 * std::f64::consts::FRAC_PI_4)).abs() < 1e-10);
+        assert!((projected[1] - 40.0).abs() < 1e-10);
     }
 }

@@ -60,6 +60,61 @@ pub fn load_and_downsample_image(
     Ok(out)
 }
 
+fn sample_bilinear(image: &image::RgbImage, x: f64, y: f64) -> [f32; 3] {
+    if x < 0.0 || y < 0.0 || x > (image.width() - 1) as f64 || y > (image.height() - 1) as f64 {
+        return [0.0; 3];
+    }
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(image.width() - 1);
+    let y1 = (y0 + 1).min(image.height() - 1);
+    let tx = (x - x0 as f64) as f32;
+    let ty = (y - y0 as f64) as f32;
+    let mut result = [0.0; 3];
+    for (channel, output) in result.iter_mut().enumerate() {
+        let p00 = image.get_pixel(x0, y0)[channel] as f32 / 255.0;
+        let p10 = image.get_pixel(x1, y0)[channel] as f32 / 255.0;
+        let p01 = image.get_pixel(x0, y1)[channel] as f32 / 255.0;
+        let p11 = image.get_pixel(x1, y1)[channel] as f32 / 255.0;
+        let top = p00 * (1.0 - tx) + p10 * tx;
+        let bottom = p01 * (1.0 - tx) + p11 * tx;
+        *output = top * (1.0 - ty) + bottom * ty;
+    }
+    result
+}
+
+/// Load and rectify a COLMAP image onto the camera's undistorted pinhole
+/// plane. The output camera retains its calibrated focal length and principal
+/// point, so all renderers can use one pinhole ray generator while supervision
+/// remains aligned for radial, tangential, division, and fisheye models.
+pub fn load_and_rectify_image(
+    path: &path::Path,
+    width: u32,
+    height: u32,
+    camera: &colmap::ColmapCamera,
+) -> Result<Vec<f32>, image::ImageError> {
+    let source = image::open(path)?.to_rgb8();
+    let (fx, fy, cx, cy) = camera.model.fxfycxcy(&camera.params);
+    let mut result = Vec::with_capacity((width * height * 3) as usize);
+    for iy in 0..height {
+        for ix in 0..width {
+            let source_u = (ix as f64 + 0.5) * camera.width as f64 / width as f64;
+            let source_v = (iy as f64 + 0.5) * camera.height as f64 / height as f64;
+            let normal_u = (source_u - cx) / fx;
+            let normal_v = (source_v - cy) / fy;
+            let color = if let Some(projected) = camera.project_camera_plane(normal_u, normal_v) {
+                let sample_x = projected[0] * source.width() as f64 / camera.width as f64 - 0.5;
+                let sample_y = projected[1] * source.height() as f64 / camera.height as f64 - 0.5;
+                sample_bilinear(&source, sample_x, sample_y)
+            } else {
+                [0.0; 3]
+            };
+            result.extend_from_slice(&color);
+        }
+    }
+    Ok(result)
+}
+
 #[derive(Clone, Debug)]
 pub struct PipelineConfig {
     /// Training resolution per view (width, height). Images are downsampled
@@ -252,16 +307,28 @@ pub fn build_views_from<'a>(
 ) -> Vec<diff_render::ViewSupervision> {
     let mut views = Vec::new();
     for image in images {
+        let camera = reconstruction
+            .cameras
+            .get(&image.camera_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "image {} references unknown camera_id {}",
+                    image.id, image.camera_id
+                )
+            });
         let target_path = images_dir.join(&image.name);
-        let target_rgb =
-            match load_and_downsample_image(&target_path, config.resolution.0, config.resolution.1)
-            {
-                Ok(rgb) => rgb,
-                Err(err) => {
-                    log::warn!("skipping image {}: {err}", image.name);
-                    continue;
-                }
-            };
+        let target_rgb = match load_and_rectify_image(
+            &target_path,
+            config.resolution.0,
+            config.resolution.1,
+            camera,
+        ) {
+            Ok(rgb) => rgb,
+            Err(err) => {
+                log::warn!("skipping image {}: {err}", image.name);
+                continue;
+            }
+        };
         let cam = reconstruction.camera_params_for(image, config.far_plane);
         let start_cell = pick_start_cell(initial_model, glam::Vec3::from_array(cam.cam_position));
         views.push(diff_render::ViewSupervision {
