@@ -802,9 +802,9 @@ pub struct AppearanceFitConfig {
     /// the cost of `(1+sh_degree)²` per-cell parameters per RGB
     /// channel.
     pub sh_degree: usize,
-    /// Adaptive densification: split the highest-gradient cells
-    /// periodically during training. `None` disables densification
-    /// entirely (geometry stays frozen at initialisation count).
+    /// Adaptive densification: split cells with the largest accumulated
+    /// position-gradient magnitude times cell radius. `None` disables
+    /// densification entirely (geometry stays at its initial cell count).
     pub densify: Option<DensifyConfig>,
     /// Patch-based sampling + structural-gradient L1 loss. When
     /// `patch_size > 0`, each Adam step samples a single contiguous
@@ -1734,8 +1734,8 @@ fn fit_appearance_pixel_batched(
             model.points.len(),
         );
     }
-    let mut grad_accum = vec![0.0f32; model.points.len()];
-    let mut grad_scratch = vec![0.0f32; model.points.len()];
+    let mut position_grad_accum = vec![0.0f32; model.points.len()];
+    let mut position_grad_scratch = vec![0.0f32; model.points.len() * 3];
     let mut rng_split: u64 = 0xCAFE_F00D_DEAD_BEEF;
     let mut cycle = 0usize;
 
@@ -1949,10 +1949,14 @@ fn fit_appearance_pixel_batched(
             let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
             losses.push(loss);
 
-            if densify.is_some() && session.has_param_grad("log_density") {
-                session.read_param_grad("log_density", &mut grad_scratch);
-                for (a, g) in grad_accum.iter_mut().zip(grad_scratch.iter()) {
-                    *a += g.abs();
+            if densify.is_some() && session.has_param_grad("positions") {
+                session.read_param_grad("positions", &mut position_grad_scratch);
+                for (i, accumulated) in position_grad_accum.iter_mut().enumerate() {
+                    let base = i * 3;
+                    let x = position_grad_scratch[base];
+                    let y = position_grad_scratch[base + 1];
+                    let z = position_grad_scratch[base + 2];
+                    *accumulated += (x * x + y * y + z * z).sqrt();
                 }
             }
 
@@ -1991,7 +1995,7 @@ fn fit_appearance_pixel_batched(
                 let adam_snap = save_adam_state(&session, sh_degree, n_old, views.len());
 
                 let (new_to_old, pruned, added) =
-                    prune_and_densify(model, &grad_accum, &d, &mut rng_split);
+                    prune_and_densify(model, &position_grad_accum, &d, &mut rng_split);
                 log::info!(
                     "densify cycle {}: {} cells (-{} pruned, +{} split) → {} total",
                     cycle,
@@ -2003,8 +2007,8 @@ fn fit_appearance_pixel_batched(
                 // Rebuild Voronoi adjacency for the new cell set so the
                 // GPU path-record sees real neighbours of the new cells.
                 rebuild_training_adjacency(model, config.rebuild_with_qhull);
-                grad_accum = vec![0.0f32; model.points.len()];
-                grad_scratch = vec![0.0f32; model.points.len()];
+                position_grad_accum = vec![0.0f32; model.points.len()];
+                position_grad_scratch = vec![0.0f32; model.points.len() * 3];
 
                 // Topology changed: tear down and rebuild the
                 // cell-count-dependent resources, then remap Adam moments
@@ -2326,6 +2330,26 @@ mod tests {
                 assert_eq!(got, want, "new cell {k} c{c}");
             }
         }
+    }
+
+    #[test]
+    fn densification_selects_position_gradient_times_radius_signal() {
+        let mut model = tiny_model();
+        let mut rng = 0x1234_5678_9ABC_DEF0;
+        let config = DensifyConfig {
+            fraction: 0.25,
+            target_points: 5,
+            prune: false,
+            ..DensifyConfig::default()
+        };
+        let gradients = [0.0, 0.0, 1.0e20, 0.0];
+        let (new_to_old, pruned, added) =
+            prune_and_densify(&mut model, &gradients, &config, &mut rng);
+        assert_eq!(pruned, 0);
+        assert_eq!(added, 1);
+        assert_eq!(new_to_old.last().copied(), Some(2));
+        assert_eq!(model.points.len(), 5);
+        assert_eq!(model.sh_coefficients.len(), 15);
     }
 
     #[test]
@@ -2699,6 +2723,53 @@ mod tests {
                     || (after.y - before[1]).abs() > 1e-7
                     || (after.z - before[2]).abs() > 1e-7
             }));
+    }
+
+    #[test]
+    fn densification_rebuilds_and_continues_training() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping densification_rebuilds_and_continues_training: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: [0.0, 0.0, 0.0, 1.0],
+                fov: [0.5, 0.5],
+                principal: [0.0, 0.0],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            width: 1,
+            height: 1,
+            start_cell: 0,
+        };
+        let losses = fit_appearance_multi_view(
+            &mut model,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                learning_rate: 0.01,
+                epochs: 3,
+                densify: Some(DensifyConfig {
+                    every: 1,
+                    fraction: 0.25,
+                    warmup: 1,
+                    target_points: 5,
+                    prune: false,
+                    ..DensifyConfig::default()
+                }),
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        assert_eq!(losses.len(), 3);
+        assert_eq!(model.points.len(), 5);
+        model.validate().unwrap();
     }
 
     fn mean_l1(a: &[f32], b: &[f32]) -> f32 {
