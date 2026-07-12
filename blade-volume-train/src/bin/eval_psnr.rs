@@ -18,7 +18,7 @@
 
 use argh::FromArgs;
 use blade_volume as vol;
-use blade_volume_train::{colmap, metrics, pipeline, render};
+use blade_volume_train::{colmap, diff_render, metrics, pipeline, render};
 use std::path;
 
 /// Evaluate PSNR of a trained RadFoam PLY against existing COLMAP images.
@@ -78,6 +78,10 @@ struct Args {
     /// split the PLY was trained with or train/test numbers are polluted.
     #[argh(option, default = "0")]
     test_every: usize,
+
+    /// composite predictions on white instead of the default black background
+    #[argh(switch)]
+    white_background: bool,
 }
 
 /// Write a side-by-side `[GT | rendered]` PNG. Both inputs are row-major
@@ -164,6 +168,14 @@ fn main() {
         max_views: Some(args.train),
         max_initial_points: Some(model.points.len()),
         far_plane: args.far_plane,
+        fit: diff_render::AppearanceFitConfig {
+            background_rgb: if args.white_background {
+                [1.0; 3]
+            } else {
+                [0.0; 3]
+            },
+            ..diff_render::AppearanceFitConfig::default()
+        },
         ..pipeline::PipelineConfig::default()
     };
 
@@ -216,7 +228,7 @@ fn main() {
                         weight_threshold: 1e-4,
                     },
                 );
-                let pred = metrics::rgba_to_rgb(&rgba);
+                let pred = metrics::rgba_over_background(&rgba, config.fit.background_rgb);
                 let stem = path::Path::new(&img.name)
                     .file_stem()
                     .map(|s| s.to_string_lossy().into_owned())

@@ -46,13 +46,19 @@ pub fn psnr(pred: &[f32], target: &[f32]) -> f32 {
 /// Drop the alpha channel from RGBA pixels produced by `render_cpu`,
 /// returning `N*3` floats in `[0, 1]`.
 pub fn rgba_to_rgb(rgba: &[f32]) -> Vec<f32> {
+    rgba_over_background(rgba, [0.0; 3])
+}
+
+/// Composite premultiplied RGBA cloud output over a linear RGB background.
+pub fn rgba_over_background(rgba: &[f32], background: [f32; 3]) -> Vec<f32> {
     assert!(rgba.len().is_multiple_of(4), "rgba_to_rgb: not RGBA");
     let n_px = rgba.len() / 4;
     let mut rgb = Vec::with_capacity(n_px * 3);
     for px in 0..n_px {
-        rgb.push(rgba[px * 4]);
-        rgb.push(rgba[px * 4 + 1]);
-        rgb.push(rgba[px * 4 + 2]);
+        let remaining = 1.0 - rgba[px * 4 + 3].clamp(0.0, 1.0);
+        rgb.push(rgba[px * 4] + remaining * background[0]);
+        rgb.push(rgba[px * 4 + 1] + remaining * background[1]);
+        rgb.push(rgba[px * 4 + 2] + remaining * background[2]);
     }
     rgb
 }
@@ -90,5 +96,11 @@ mod tests {
         let rgba = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
         let rgb = rgba_to_rgb(&rgba);
         assert_eq!(rgb, vec![0.1, 0.2, 0.3, 0.5, 0.6, 0.7]);
+    }
+
+    #[test]
+    fn rgba_composites_premultiplied_color_over_background() {
+        let rgb = rgba_over_background(&[0.2, 0.1, 0.0, 0.25], [1.0, 0.5, 0.0]);
+        assert_eq!(rgb, vec![0.95, 0.475, 0.0]);
     }
 }

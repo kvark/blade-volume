@@ -27,6 +27,12 @@ fn vs(@builtin(vertex_index) vi: u32) -> VSOut {
 var g_src: texture_2d<f32>;
 var g_sampler: sampler;
 
+struct Background {
+    color: vec3<f32>,
+    pad: f32,
+};
+var<uniform> g_background: Background;
+
 fn tonemap_reinhard(x: vec3<f32>) -> vec3<f32> {
     return x / (1.0 + x);
 }
@@ -43,12 +49,9 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
     let hdr_rgb = sample.xyz;
     let alpha = clamp(sample.w, 0.0, 1.0);
 
-    // Simple sky-like background (linear space)
-    let sky = vec3<f32>(0.65, 0.75, 0.90);
-
     // "Over" compositing with premultiplied assumption:
     // output = rgb + (1 - alpha) * bg
-    let hdr_composited = hdr_rgb + (1.0 - alpha) * sky;
+    let hdr_composited = hdr_rgb + (1.0 - alpha) * g_background.color;
 
     let ldr = tonemap_reinhard(max(hdr_composited, vec3<f32>(0.0)));
     return vec4<f32>(ldr, 1.0);

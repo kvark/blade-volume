@@ -113,6 +113,7 @@ pub fn build_volumetric_graph(
     grad_loss_weight: f32,
     opacity_weight: f32,
     softplus_beta: f32,
+    background_rgb: [f32; 3],
     use_recorded_dt: bool,
 ) -> VolumetricGraph {
     assert!(
@@ -414,17 +415,23 @@ pub fn build_volumetric_graph(
     let exp_b_p = g.matmul(ones_p1, exp_b_11);
     let pixel_b = g.mul(pixel_b, exp_b_p);
 
-    // White-background compositing (RadFoam): add (1 − opacity) per channel
-    // so rays that accumulate little opacity read as white. Active only
-    // alongside the opacity loss; otherwise the legacy un-composited path
-    // is preserved exactly.
-    let (pixel_r, pixel_g, pixel_b) = if opacity_weight > 0.0 {
-        let neg_op = g.neg(opacity);
-        let bg = g.add(ones_p1, neg_op); // [P,1] = 1 − opacity
-        (g.add(pixel_r, bg), g.add(pixel_g, bg), g.add(pixel_b, bg))
-    } else {
-        (pixel_r, pixel_g, pixel_b)
+    // Explicit premultiplied-alpha background compositing. Opacity
+    // regularization is independent: changing its weight must not silently
+    // change the supervised image convention.
+    let neg_op = g.neg(opacity);
+    let remaining = g.add(ones_p1, neg_op); // [P,1] = 1 − opacity
+    let composite = |g: &mut mn::Graph, pixel, channel: f32| {
+        if channel == 0.0 {
+            pixel
+        } else {
+            let background = g.constant(vec![channel; p], &[p, 1]);
+            let uncovered = g.mul(remaining, background);
+            g.add(pixel, uncovered)
+        }
     };
+    let pixel_r = composite(g, pixel_r, background_rgb[0]);
+    let pixel_g = composite(g, pixel_g, background_rgb[1]);
+    let pixel_b = composite(g, pixel_b, background_rgb[2]);
 
     let loss_r = g.l1_loss(pixel_r, target_r);
     let loss_g = g.l1_loss(pixel_g, target_g);
@@ -828,6 +835,9 @@ pub struct AppearanceFitConfig {
     /// that dip to negative log-density keep a gradient and recover
     /// instead of dying — important for stable densification.
     pub softplus_beta: f32,
+    /// Linear RGB background composited behind premultiplied cloud radiance.
+    /// Default black. Use `[1.0; 3]` for datasets prepared on white.
+    pub background_rgb: [f32; 3],
     /// Position learning rate as a fraction of `learning_rate`. `0.0`
     /// (default) freezes geometry. A positive value requires
     /// `geometry_rebuild_every > 0`, because the discrete adjacency and
@@ -932,6 +942,7 @@ impl Default for AppearanceFitConfig {
             grad_loss_weight: 0.0,
             opacity_weight: 0.0,
             softplus_beta: 0.0,
+            background_rgb: [0.0; 3],
             position_lr_ratio: 0.0,
             geometry_rebuild_every: 0,
             rebuild_with_qhull: false,
@@ -1022,6 +1033,13 @@ pub fn fit_appearance_multi_view(
     }
     let pixel_batch = config.pixel_batch.unwrap_or(p);
     assert!(pixel_batch > 0, "pixel_batch must be greater than zero");
+    assert!(
+        config
+            .background_rgb
+            .iter()
+            .all(|&channel| channel.is_finite() && channel >= 0.0),
+        "background_rgb must be finite and non-negative"
+    );
     assert!(
         config.position_lr_ratio.is_finite() && config.position_lr_ratio >= 0.0,
         "position_lr_ratio must be finite and non-negative"
@@ -1529,6 +1547,7 @@ fn build_train_session(
     grad_loss_weight: f32,
     opacity_weight: f32,
     softplus_beta: f32,
+    background_rgb: [f32; 3],
     gpu: &std::sync::Arc<blade_graphics::Context>,
     path_bufs: &vol::gpu::PathRecordBuffers,
     lr: f32,
@@ -1548,6 +1567,7 @@ fn build_train_session(
         grad_loss_weight,
         opacity_weight,
         softplus_beta,
+        background_rgb,
         model.radii.is_some(),
     );
     let (mut session, _report) = mn::build(
@@ -1752,6 +1772,7 @@ fn fit_appearance_pixel_batched(
         grad_loss_weight,
         config.opacity_weight,
         config.softplus_beta,
+        config.background_rgb,
         &gpu,
         &path_bufs,
         config.learning_rate,
@@ -2029,6 +2050,7 @@ fn fit_appearance_pixel_batched(
                     grad_loss_weight,
                     config.opacity_weight,
                     config.softplus_beta,
+                    config.background_rgb,
                     &gpu,
                     &path_bufs,
                     config.learning_rate,
@@ -2091,6 +2113,7 @@ fn fit_appearance_pixel_batched(
                     grad_loss_weight,
                     config.opacity_weight,
                     config.softplus_beta,
+                    config.background_rgb,
                     &gpu,
                     &path_bufs,
                     config.learning_rate,
@@ -2375,7 +2398,8 @@ mod tests {
             let max_steps = 4usize;
             let num_views = 5usize;
             let vg = build_volumetric_graph(
-                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0, 0.0, 0.0, false,
+                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0, 0.0, 0.0,
+                [0.0; 3], false,
             );
             assert_eq!(vg.sh_degree, sh_degree);
             assert_eq!(vg.n_cells, n_cells);
@@ -2401,7 +2425,7 @@ mod tests {
         let patch_size = 4usize;
         let n_pixels = patch_size * patch_size;
         let vg = build_volumetric_graph(
-            &mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0, false,
+            &mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0, [0.0; 3], false,
         );
         assert_eq!(vg.n_pixels, n_pixels);
     }
@@ -2489,8 +2513,9 @@ mod tests {
         let p = 1usize;
 
         let mut g = mn::Graph::new();
-        let _vg =
-            build_volumetric_graph(&mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0, false);
+        let _vg = build_volumetric_graph(
+            &mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0, [0.0; 3], false,
+        );
 
         let (mut session, _report) = mn::build(
             &g,
@@ -2548,7 +2573,9 @@ mod tests {
         let model = tiny_model();
         let n_cells = model.points.len();
         let mut g = mn::Graph::new();
-        let vg = build_volumetric_graph(&mut g, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, true);
+        let vg = build_volumetric_graph(
+            &mut g, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, [0.0; 3], true,
+        );
         let dt_output = g.reshape(vg.dt_from_positions, &[1]);
         g.set_outputs(vec![dt_output]);
         let (mut session, _) = mn::build(
@@ -2581,6 +2608,66 @@ mod tests {
         let mut position_grad = vec![0.0_f32; n_cells * 3];
         session.read_param_grad("positions", &mut position_grad);
         assert!(position_grad.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn graph_composites_the_configured_background() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping graph_composites_the_configured_background: no GPU");
+            return;
+        };
+        let evaluate = |background_rgb| {
+            let mut model = tiny_model();
+            for point in model.points.iter_mut() {
+                point.w = 0.0;
+            }
+            let n_cells = model.points.len();
+            let mut graph = mn::Graph::new();
+            build_volumetric_graph(
+                &mut graph,
+                n_cells,
+                1,
+                1,
+                0,
+                1,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                background_rgb,
+                true,
+            );
+            let (mut session, _) = mn::build(
+                &graph,
+                mn::SessionConfig {
+                    mode: mn::Mode::Training,
+                    gpu: Some(gpu.clone()),
+                    ..Default::default()
+                },
+            );
+            upload_model_parameters(&mut session, &model, 0.0);
+            for channel in ["exposure_r", "exposure_g", "exposure_b"] {
+                session.set_parameter(channel, &[1.0]);
+            }
+            session.set_input_u32("cell_indices", &[0]);
+            session.set_input_u32("next_cell_indices", &[0]);
+            session.set_input("recorded_dt", &[1.0]);
+            session.set_input("mask", &[1.0]);
+            session.set_input("ray_origin", &[0.0, 0.0, -1.0]);
+            session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
+            session.set_input_u32("pixel_idx_per_step", &[0]);
+            session.set_input_u32("view_idx", &[0]);
+            session.set_input("labels", &[1.0, 1.0, 1.0]);
+            session.set_adam(0.0, 0.9, 0.999, 1e-8);
+            session.step();
+            session.wait();
+            session.read_output(1)[0]
+        };
+
+        let black_loss = evaluate([0.0; 3]);
+        let white_loss = evaluate([1.0; 3]);
+        assert!(black_loss > 1.0, "black loss={black_loss}");
+        assert!(white_loss < 1e-6, "white loss={white_loss}");
     }
 
     /// End-to-end: a small target image is the ground-truth render of a

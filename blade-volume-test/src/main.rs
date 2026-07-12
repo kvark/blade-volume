@@ -160,6 +160,7 @@ fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32, debug
         max_steps: 256,
         weight_threshold: 0.05,
         debug_mode: radfoam_debug_mode,
+        background_rgb: [0.0; 3],
     };
 
     let mut backend = view::RenderBackend::new_for_model(

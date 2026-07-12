@@ -35,6 +35,8 @@ pub struct RadFoamSettings {
     pub max_steps: u32,
     pub weight_threshold: f32,
     pub debug_mode: DebugMode,
+    /// Linear RGB presentation background.
+    pub background_rgb: [f32; 3],
 }
 
 #[repr(C)]
@@ -216,6 +218,14 @@ struct RadFoamTraceData {
 struct RadFoamBlitData {
     g_src: gpu::TextureView,
     g_sampler: gpu::Sampler,
+    g_background: Background,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct Background {
+    color: [f32; 3],
+    pad: f32,
 }
 
 pub struct RadFoamBackend {
@@ -227,6 +237,7 @@ pub struct RadFoamBackend {
     hdr_view: gpu::TextureView,
     sampler: gpu::Sampler,
     trace_params: RadFoamTraceParams,
+    background: Background,
 }
 
 impl RadFoamBackend {
@@ -316,6 +327,10 @@ impl RadFoamBackend {
             debug_mode: settings.debug_mode as u32,
             pad: [point_cloud.is_power_foam as u32, 0, 0, 0, 0, 0, 0],
         };
+        let background = Background {
+            color: settings.background_rgb,
+            pad: 0.0,
+        };
 
         Self {
             point_cloud,
@@ -326,6 +341,7 @@ impl RadFoamBackend {
             hdr_view,
             sampler,
             trace_params,
+            background,
         }
     }
 
@@ -427,6 +443,7 @@ impl RadFoamBackend {
                 &RadFoamBlitData {
                     g_src: self.hdr_view,
                     g_sampler: self.sampler,
+                    g_background: self.background,
                 },
             );
             pen.draw(0, 3, 0, 1);
@@ -546,5 +563,56 @@ impl RenderBackend {
             RenderBackend::Gaussian(backend) => backend.destroy(context),
             RenderBackend::RadFoam(backend) => backend.destroy(context),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn radfoam_backend_compiles_explicit_background_shader() {
+        let Some(context) = (unsafe { gpu::Context::init(gpu::ContextDesc::default()).ok() })
+        else {
+            eprintln!("skipping RadFoam shader compilation: no GPU");
+            return;
+        };
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 1.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 0.0, 1.0, 1.0),
+        ];
+        let mut model = vol::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: None,
+            radii: None,
+            points,
+        };
+        model.compute_adjacency_default();
+        let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+            name: "radfoam-background-test",
+            buffer_count: 1,
+        });
+        let backend = RadFoamBackend::new(
+            &model,
+            RadFoamSettings {
+                max_steps: 16,
+                weight_threshold: 0.001,
+                debug_mode: DebugMode::Off,
+                background_rgb: [1.0; 3],
+            },
+            &context,
+            &mut encoder,
+            gpu::TextureFormat::Rgba16Float,
+            RenderSize {
+                width: 4,
+                height: 4,
+            },
+        );
+        backend.destroy(&context);
+        context.destroy_command_encoder(&mut encoder);
     }
 }

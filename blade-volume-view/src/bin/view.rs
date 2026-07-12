@@ -66,6 +66,9 @@ struct Arguments {
     /// start in debug mode (particle density visualization)
     #[argh(switch)]
     debug: bool,
+    /// composite RadFoam on white instead of the default black background
+    #[argh(switch)]
+    white_background: bool,
 }
 
 fn parse_vec<const N: usize, T: Copy + Default + str::FromStr>(string: &str) -> [T; N]
@@ -218,6 +221,11 @@ impl Example {
             max_steps: args.max_steps,
             weight_threshold: args.weight_threshold,
             debug_mode,
+            background_rgb: if args.white_background {
+                [1.0; 3]
+            } else {
+                [0.0; 3]
+            },
         };
 
         let backend = view::RenderBackend::new_for_model(

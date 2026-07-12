@@ -212,11 +212,16 @@ struct Args {
     #[argh(option, default = "0.2")]
     grad_loss_weight: f32,
 
-    /// weight on the RadFoam opacity loss `mean((opacity-1)^2)` + white-
-    /// background compositing (default 0 = off). Pushes rays to full
-    /// opacity, suppressing semi-transparent floaters. Try 0.1-1.0.
+    /// weight on the RadFoam opacity loss `mean((opacity-1)^2)` (default 0 =
+    /// off). Pushes rays to full opacity and suppresses
+    /// semi-transparent floaters independently of the background choice.
     #[argh(option, default = "0.0")]
     opacity_weight: f32,
+
+    /// composite training, held-out evaluation, and novel renders on white
+    /// instead of the default black background
+    #[argh(switch)]
+    white_background: bool,
 
     /// softplus beta for density activation (default 0 = legacy ReLU).
     /// RadFoam uses 10. Keeps a gradient for negative log-density so cells
@@ -345,6 +350,11 @@ fn main() {
             grad_loss_weight: args.grad_loss_weight,
             opacity_weight: args.opacity_weight,
             softplus_beta: args.softplus_beta,
+            background_rgb: if args.white_background {
+                [1.0; 3]
+            } else {
+                [0.0; 3]
+            },
             position_lr_ratio: args.position_lr_ratio,
             geometry_rebuild_every: args.geometry_rebuild_every,
             rebuild_with_qhull: args.qhull,
@@ -514,14 +524,15 @@ fn render_novel_at(
         weight_threshold: 1e-4,
     };
     let pixels = blade_volume_train::render::render_cpu(model, &novel, settings);
+    let rgb = blade_volume_train::metrics::rgba_over_background(&pixels, config.fit.background_rgb);
 
     let w = config.resolution.0;
     let h = config.resolution.1;
     let mut img = image::RgbImage::new(w, h);
     for (i, px) in img.pixels_mut().enumerate() {
-        let r = (pixels[i * 4] * 255.0).clamp(0.0, 255.0) as u8;
-        let g = (pixels[i * 4 + 1] * 255.0).clamp(0.0, 255.0) as u8;
-        let b = (pixels[i * 4 + 2] * 255.0).clamp(0.0, 255.0) as u8;
+        let r = (rgb[i * 3] * 255.0).clamp(0.0, 255.0) as u8;
+        let g = (rgb[i * 3 + 1] * 255.0).clamp(0.0, 255.0) as u8;
+        let b = (rgb[i * 3 + 2] * 255.0).clamp(0.0, 255.0) as u8;
         *px = image::Rgb([r, g, b]);
     }
     if let Err(err) = img.save(novel_path) {

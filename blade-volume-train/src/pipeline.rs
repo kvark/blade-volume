@@ -367,7 +367,7 @@ pub fn evaluate_views(
                 weight_threshold: 1e-4,
             },
         );
-        let mut pred = metrics::rgba_to_rgb(&pixels);
+        let mut pred = metrics::rgba_over_background(&pixels, config.fit.background_rgb);
         for p in pred.iter_mut() {
             *p = p.clamp(0.0, 1.0);
         }
