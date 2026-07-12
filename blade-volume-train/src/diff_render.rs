@@ -136,6 +136,7 @@ pub fn build_volumetric_graph(
 
     let cell_indices = g.input_u32("cell_indices", &[pl]);
     let next_cell_indices = g.input_u32("next_cell_indices", &[pl]);
+    let recorded_dt = g.input("recorded_dt", &[pl]);
     let mask = g.input("mask", &[pl]);
     // Target is fed as [1, P*3] to match meganeura's "batch × dim" convention
     // for L1 loss; we reshape rather than introduce a batch dimension upstream.
@@ -238,6 +239,7 @@ pub fn build_volumetric_graph(
     let midpoint = g.mul(pos_sum, half_pl3);
     let neg_pos_cell = g.neg(pos_cell);
     let normal = g.add(pos_next, neg_pos_cell);
+    let normal_squared = g.mul(normal, normal);
 
     // Broadcast ray_origin [1,3] → [P*L, 3] via matmul with [P*L, 1] ones.
     let ones_pl1 = g.constant(vec![1.0_f32; pl], &[pl, 1]);
@@ -250,6 +252,7 @@ pub fn build_volumetric_graph(
 
     // dot products via element-wise mul then matmul against [3, 1] ones.
     let ones_3_1 = g.constant(vec![1.0_f32; 3], &[3, 1]);
+    let normal_length_squared = g.matmul(normal_squared, ones_3_1);
     let mn_prod = g.mul(mo_diff, normal);
     let dot_num = g.matmul(mn_prod, ones_3_1); // [P*L, 1]
     let nd_prod = g.mul(normal, ray_dir_pl);
@@ -281,7 +284,22 @@ pub fn build_volumetric_graph(
     let over_cap = g.relu(cap_minus_dt);
     let neg_over_cap = g.neg(over_cap);
     let dt_clamped = g.add(max_dt_pl, neg_over_cap); // = min(dt_pos, MAX_PATH_DT)
-    let dt_2d = g.mul(dt_clamped, mask_2d); // zero out invalid steps
+
+    // A terminal segment has `next_cell == cell`, so its face normal is zero
+    // and its end is the fixed far plane rather than a differentiable face.
+    // Blend to the recorder's exact dt in that case. For real faces the gate
+    // is effectively one; the epsilon keeps the expression finite.
+    let normal_gate_denominator = g.add(normal_length_squared, eps_pl1);
+    let normal_gate_flat = g.div(normal_length_squared, normal_gate_denominator);
+    let normal_gate = g.reshape(normal_gate_flat, &[p, l]);
+    let neg_normal_gate = g.neg(normal_gate);
+    let ones_for_gate = g.constant(vec![1.0_f32; pl], &[p, l]);
+    let terminal_gate = g.add(ones_for_gate, neg_normal_gate);
+    let recorded_dt_2d = g.reshape(recorded_dt, &[p, l]);
+    let face_dt = g.mul(dt_clamped, normal_gate);
+    let terminal_dt = g.mul(recorded_dt_2d, terminal_gate);
+    let selected_dt = g.add(face_dt, terminal_dt);
+    let dt_2d = g.mul(selected_dt, mask_2d); // zero out invalid steps
     let dt_from_positions = dt_2d;
 
     let raw = g.mul(density, dt_2d); // [P, L], non-negative
@@ -1461,13 +1479,13 @@ fn build_train_session(
         cloud
     };
 
-    // The graph computes `dt` from `positions` (differentiable), so the
-    // shader's `dt` output isn't bound as a meganeura input anymore. We
-    // still let the shader write it (cheap; useful for sanity checks).
+    // Interior dt is computed from positions. The recorded stream supplies
+    // the fixed far-plane interval for terminal segments (`next == cell`).
     let pl_bytes = (pixel_batch as u64) * (max_steps as u64) * 4;
     for (slot, buf) in [
         ("cell_indices", path_bufs.cells),
         ("next_cell_indices", path_bufs.next_cells),
+        ("recorded_dt", path_bufs.dts),
         ("mask", path_bufs.mask),
     ] {
         let source = gpu
@@ -2336,6 +2354,7 @@ mod tests {
 
         session.set_input_u32("cell_indices", &[0]);
         session.set_input_u32("next_cell_indices", &[3]);
+        session.set_input("recorded_dt", &[1.25]);
         session.set_input("mask", &[1.0]);
         session.set_input("ray_origin", &[0.1, 0.1, -1.0]);
         session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);

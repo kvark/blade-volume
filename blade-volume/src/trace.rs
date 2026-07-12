@@ -314,7 +314,7 @@ pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -
         let begin = adjacency.offsets[current as usize] as usize;
         let end = adjacency.offsets[current as usize + 1] as usize;
 
-        let mut best_t1 = f32::MAX;
+        let mut best_t1 = settings.depth;
         let mut next_face: Option<usize> = None;
         let r_i_sq = current_radius * current_radius;
 
@@ -339,6 +339,12 @@ pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -
         }
 
         let Some(j) = next_face else {
+            if best_t1 > t0 {
+                entries.push(PathEntry {
+                    cell: current,
+                    dt: best_t1 - t0,
+                });
+            }
             break;
         };
 
@@ -409,7 +415,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
         let begin = adjacency.offsets[current as usize] as usize;
         let end = adjacency.offsets[current as usize + 1] as usize;
 
-        let mut best_t1 = f32::MAX;
+        let mut best_t1 = settings.depth;
         let mut next_face: Option<usize> = None;
         let r_i_sq = current_radius * current_radius;
 
@@ -437,15 +443,6 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
             }
         }
 
-        let Some(j) = next_face else {
-            break;
-        };
-
-        let next_idx_u32 = adjacency.neighbors[begin + j];
-        let next_idx = next_idx_u32;
-        let next_p = model.points[next_idx as usize];
-        let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
-
         if best_t1 > t0 {
             let s = read_density(model, current);
             if s > 1e-6 {
@@ -460,6 +457,16 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
                 transmittance *= 1.0 - alpha;
             }
         }
+
+        let Some(j) = next_face else {
+            t0 = best_t1;
+            break;
+        };
+
+        let next_idx_u32 = adjacency.neighbors[begin + j];
+        let next_idx = next_idx_u32;
+        let next_p = model.points[next_idx as usize];
+        let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
 
         t0 = t0.max(best_t1);
         current = next_idx;
@@ -575,5 +582,37 @@ mod path_tests {
         settings.max_steps = 2;
         let path = record_path(&model, ray, settings);
         assert!(path.entries.len() <= 2);
+    }
+
+    #[test]
+    fn terminal_cell_integrates_to_depth_without_an_exit_face() {
+        let model = PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 2.0)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: None,
+        };
+        let ray = Ray {
+            origin: glam::Vec3::ZERO,
+            direction: glam::Vec3::Z,
+        };
+        let settings = TraceSettings {
+            depth: 3.0,
+            ..settings_for(0)
+        };
+        let path = record_path(&model, ray, settings);
+        assert_eq!(path.entries.len(), 1);
+        assert_eq!(path.entries[0].cell, 0);
+        assert_eq!(path.entries[0].dt, 3.0);
+
+        let traced = trace_one_ray(&model, ray, settings);
+        let expected_alpha = 1.0 - (-6.0_f32).exp();
+        assert!((traced.rgba.w - expected_alpha).abs() < 1e-6);
+        assert_eq!(traced.t_end, 3.0);
     }
 }

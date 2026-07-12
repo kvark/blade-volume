@@ -84,13 +84,6 @@ fn radfoam_trace(
             }
         }
 
-        if (next_face == 0xffffffffu) {
-            break;
-        }
-
-        let next_idx = rf_get_neighbor(begin + next_face);
-        let next_pos = rf_get_point(next_idx);
-
         if (t1 > t0) {
             cells_visited += 1u;
             let s = rf_get_density(current);
@@ -103,6 +96,14 @@ fn radfoam_trace(
                 transmittance *= (1.0 - alpha);
             }
         }
+
+        if (next_face == 0xffffffffu) {
+            t0 = t1;
+            break;
+        }
+
+        let next_idx = rf_get_neighbor(begin + next_face);
+        let next_pos = rf_get_point(next_idx);
 
         t0 = max(t0, t1);
         current = next_idx;

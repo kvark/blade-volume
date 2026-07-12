@@ -135,9 +135,6 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        if (next_face == 0xffffffffu) {
-            break;
-        }
         if (t1 <= t0) {
             break;
         }
@@ -146,11 +143,18 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (dt > g_params.max_path_dt) {
             dt = g_params.max_path_dt;
         }
-        let next_idx = g_adjacency[next_face];
+        var next_idx = current;
+        if (next_face != 0xffffffffu) {
+            next_idx = g_adjacency[next_face];
+        }
         g_cells_out[row_start + step] = current;
         g_next_cells_out[row_start + step] = next_idx;
         g_dts_out[row_start + step] = dt;
         g_mask_out[row_start + step] = 1.0;
+
+        if (next_face == 0xffffffffu) {
+            break;
+        }
 
         t0 = t1;
         current = next_idx;
