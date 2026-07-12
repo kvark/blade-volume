@@ -798,11 +798,9 @@ pub struct AppearanceFitConfig {
     /// that dip to negative log-density keep a gradient and recover
     /// instead of dying — important for stable densification.
     pub softplus_beta: f32,
-    /// When `Some(path)`, write a PLY checkpoint at the end of every
-    /// densify cycle (≈ every `densify.every` steps) so a crash/reboot
-    /// during a long run loses at most one cycle instead of the whole
-    /// run. Exposure is baked into a clone, never the live model. `None`
-    /// (default) disables intermediate checkpoints.
+    /// When `Some(path)`, write an interchange PLY plus a lossless
+    /// `.safetensors` parameter/Adam sidecar at the end of every densify cycle.
+    /// Exposure is baked only into the PLY clone. `None` disables checkpoints.
     pub checkpoint_path: Option<std::path::PathBuf>,
     /// Absolute step to resume training from (default 0). When resuming a
     /// model loaded from a checkpoint PLY, this offsets the loop counter
@@ -810,9 +808,12 @@ pub struct AppearanceFitConfig {
     /// continue from where the interrupted run left off instead of
     /// restarting at step 0 with peak LR. The total step count is
     /// unchanged, so a resume runs `total_steps − resume_step` more
-    /// steps. Adam state starts fresh, which is identical to how every
-    /// densify cycle already behaves.
+    /// steps.
     pub resume_step: usize,
+    /// Optional meganeura safetensors checkpoint paired with `init_ply`.
+    /// Restores exact parameters, Adam moments, and the Adam step counter
+    /// after the graph has been rebuilt for the checkpoint's cell count.
+    pub resume_state_path: Option<std::path::PathBuf>,
 }
 
 /// Adaptive densification: every `every` training steps after `warmup`
@@ -892,6 +893,7 @@ impl Default for AppearanceFitConfig {
             softplus_beta: 0.0,
             checkpoint_path: None,
             resume_step: 0,
+            resume_state_path: None,
         }
     }
 }
@@ -1045,6 +1047,19 @@ fn save_checkpoint(path: &std::path::Path, model: &vol::PointCloudModel) -> Resu
     .map_err(|e| format!("{e:?}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("{e:?}"))?;
     Ok(())
+}
+
+fn save_optimizer_checkpoint(
+    session: &mut mn::Session,
+    model_path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let path = model_path.with_extension("safetensors");
+    let tmp = model_path.with_extension("safetensors.tmp");
+    session
+        .save_checkpoint(&tmp)
+        .map_err(|err| format!("{err:?}"))?;
+    std::fs::rename(&tmp, &path).map_err(|err| format!("{err:?}"))?;
+    Ok(path)
 }
 
 fn bake_mean_exposure_into_sh(
@@ -1614,7 +1629,7 @@ fn fit_appearance_pixel_batched(
     let mut steps_done = config.resume_step.min(total_steps.saturating_sub(1));
     if steps_done > 0 {
         log::info!(
-            "resuming at step {}/{} with {} cells (Adam re-warms, as at any densify cycle)",
+            "resuming at step {}/{} with {} cells",
             steps_done,
             total_steps,
             model.points.len(),
@@ -1645,6 +1660,16 @@ fn fit_appearance_pixel_batched(
         config.learning_rate,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
     );
+    if let Some(ref state_path) = config.resume_state_path {
+        session
+            .load_checkpoint(state_path)
+            .unwrap_or_else(|err| panic!("failed to load {}: {err:?}", state_path.display()));
+        log::info!(
+            "resume: restored parameters and Adam state from {} at Adam step {}",
+            state_path.display(),
+            session.adam_step_count()
+        );
+    }
 
     // `pixel_idx_per_step` is constant across all training steps —
     // upload once. The new session built for each densify cycle gets
@@ -1853,8 +1878,10 @@ fn fit_appearance_pixel_batched(
             download_model_parameters(&session, model, config.softplus_beta);
             let mut snapshot = model.clone();
             bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
-            match save_checkpoint(ckpt, &snapshot) {
-                Ok(()) => {
+            match save_checkpoint(ckpt, &snapshot)
+                .and_then(|()| save_optimizer_checkpoint(&mut session, ckpt))
+            {
+                Ok(state_path) => {
                     // Sidecar with the absolute step so a relaunch can
                     // resume the schedule (see `resume_step`). Written
                     // after the PLY rename so it never points past a
@@ -1864,8 +1891,9 @@ fn fit_appearance_pixel_batched(
                         log::warn!("checkpoint step-sidecar write failed: {err:?}");
                     }
                     log::info!(
-                        "checkpoint: wrote {} ({} cells) at step {}",
+                        "checkpoint: wrote {} and {} ({} cells) at step {}",
                         ckpt.display(),
+                        state_path.display(),
                         snapshot.points.len(),
                         steps_done,
                     );
@@ -1907,10 +1935,8 @@ fn fit_appearance_pixel_batched(
                 grad_scratch = vec![0.0f32; model.points.len()];
 
                 // Topology changed: tear down and rebuild the
-                // cell-count-dependent resources. Adam state is reset
-                // here (meganeura's optimizer state lives in the
-                // session); the first few-hundred steps of the next
-                // cycle pay that cost re-warming momentum.
+                // cell-count-dependent resources, then remap Adam moments
+                // from survivors and split parents into the new session.
                 drop(session);
                 gpu_cloud.deinit(&gpu);
                 path_bufs.destroy(&gpu);
@@ -2042,6 +2068,24 @@ mod tests {
             );
         }
         assert_eq!(sess.adam_step_count(), 42);
+
+        let checkpoint = std::env::temp_dir().join(format!(
+            "blade-volume-adam-roundtrip-{}.safetensors",
+            std::process::id()
+        ));
+        sess.save_checkpoint(&checkpoint).unwrap();
+        sess.set_parameter("log_density", &vec![9.0_f32; n]);
+        sess.write_adam_m("log_density", &vec![0.0_f32; n]);
+        sess.set_adam_step_count(0);
+        sess.load_checkpoint(&checkpoint).unwrap();
+        let mut restored_param = vec![0.0_f32; n];
+        sess.read_param("log_density", &mut restored_param);
+        let mut restored_m = vec![0.0_f32; n];
+        sess.read_adam_m("log_density", &mut restored_m);
+        assert_eq!(restored_param, param_after);
+        assert_eq!(restored_m, pattern);
+        assert_eq!(sess.adam_step_count(), 42);
+        std::fs::remove_file(checkpoint).unwrap();
 
         // Verify the step counter survives across step(): bias correction
         // uses `t`, so if my set_adam_step_count isn't being respected,

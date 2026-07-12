@@ -223,17 +223,14 @@ struct Args {
     #[argh(option, default = "0.0")]
     softplus_beta: f32,
 
-    /// optional PLY checkpoint path written at the end of every densify
-    /// cycle (≈ every --densify-every steps) so a reboot/suspend during a
-    /// long run loses at most one cycle. Defaults to <output>.ckpt.ply
-    /// when --densify-every > 0; pass "none" to disable.
+    /// optional checkpoint PLY path written with an exact safetensors optimizer
+    /// sidecar at every densify cycle. Defaults to <output>.ckpt.ply when
+    /// --densify-every > 0; pass "none" to disable.
     #[argh(option)]
     checkpoint: Option<String>,
 
-    /// resume: load the initial foam from this checkpoint PLY (positions,
-    /// densities, SH) instead of the COLMAP cloud. Cameras still come from
-    /// --sparse/--images. Pairs with --resume-step (auto-read from the
-    /// `<ply>.step` sidecar if that flag is omitted).
+    /// resume from a checkpoint PLY. A sibling `.safetensors` file is loaded
+    /// automatically when present to restore exact parameters and Adam state.
     #[argh(option)]
     init_ply: Option<String>,
 
@@ -314,6 +311,10 @@ fn main() {
             None => 0,
         },
     };
+    let resume_state_path = init_ply.as_ref().and_then(|ply| {
+        let state = ply.with_extension("safetensors");
+        state.is_file().then_some(state)
+    });
 
     let config = pipeline::PipelineConfig {
         resolution: (args.width, args.height),
@@ -333,6 +334,7 @@ fn main() {
             opacity_weight: args.opacity_weight,
             softplus_beta: args.softplus_beta,
             resume_step,
+            resume_state_path,
             checkpoint_path: match args.checkpoint.as_deref() {
                 Some("none") => None,
                 Some(p) => Some(path::PathBuf::from(p)),

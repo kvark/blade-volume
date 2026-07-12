@@ -143,8 +143,9 @@ pub struct PipelineConfig {
     /// Resume: when `Some(path)`, load the initial foam from this RadFoam
     /// PLY (a prior checkpoint) instead of building it from the COLMAP
     /// reconstruction. Cameras/views still come from `--sparse`/`--images`;
-    /// only the point cloud (positions, densities, SH) is taken from the
-    /// PLY. Pairs with `fit.resume_step` to continue the schedule.
+    /// only the point cloud topology is taken from the PLY. Pairs with
+    /// `fit.resume_state_path` for lossless parameters/Adam and
+    /// `fit.resume_step` to continue the schedule.
     pub init_ply: Option<path::PathBuf>,
     /// Standard NVS held-out split: when `> 0`, every `test_every`-th image
     /// (index `% test_every == 0` over the existence-filtered, COLMAP-ordered
@@ -723,6 +724,7 @@ mod tests {
         let images = dir.join("images");
         let _ = std::fs::remove_dir_all(&dir);
         write_colmap_fixture(&sparse, &images);
+        let checkpoint = dir.join("checkpoint.ply");
 
         let config = PipelineConfig {
             resolution: (8, 8),
@@ -733,6 +735,7 @@ mod tests {
             fit: diff_render::AppearanceFitConfig {
                 learning_rate: 0.1,
                 epochs: 20,
+                checkpoint_path: Some(checkpoint.clone()),
                 ..diff_render::AppearanceFitConfig::default()
             },
             far_plane: 50.0,
@@ -740,7 +743,7 @@ mod tests {
             init_ply: None,
             test_every: 0,
         };
-        let trained = train_colmap_appearance(&sparse, &images, &config, gpu);
+        let trained = train_colmap_appearance(&sparse, &images, &config, gpu.clone());
 
         // Initial model has SH derived from the points3D RGB; training should
         // adjust at least one cell measurably.
@@ -761,6 +764,23 @@ mod tests {
             },
         );
         assert!(pixels.iter().all(|p| p.is_finite()));
+
+        let optimizer_checkpoint = checkpoint.with_extension("safetensors");
+        assert!(checkpoint.is_file());
+        assert!(optimizer_checkpoint.is_file());
+        assert!(checkpoint.with_extension("ply.step").is_file());
+
+        let mut resume_config = config.clone();
+        resume_config.init_ply = Some(checkpoint.clone());
+        resume_config.fit.resume_state_path = Some(optimizer_checkpoint);
+        resume_config.fit.resume_step = resume_config.total_adam_steps(2) - 1;
+        resume_config.fit.checkpoint_path = None;
+        let resumed = train_colmap_appearance(&sparse, &images, &resume_config, gpu);
+        assert_eq!(resumed.points.len(), trained.points.len());
+        assert!(resumed
+            .sh_coefficients
+            .iter()
+            .all(|value| value.is_finite()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
