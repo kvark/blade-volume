@@ -11,7 +11,9 @@ use simple_delaunay_lib::delaunay_3d::{
 /// Configuration for adjacency computation.
 #[derive(Clone, Debug)]
 pub struct AdjacencyConfig {
-    /// Maximum number of neighbors per point (default: 64).
+    /// Maximum number of neighbors per point. The default is unbounded and
+    /// preserves exact topology. A finite cap is approximate; shortest edges
+    /// are selected globally while keeping the graph symmetric.
     pub max_neighbors: usize,
     /// Whether to validate the resulting CSR structure (default: true).
     pub validate: bool,
@@ -20,10 +22,61 @@ pub struct AdjacencyConfig {
 impl Default for AdjacencyConfig {
     fn default() -> Self {
         Self {
-            max_neighbors: 64,
+            max_neighbors: usize::MAX,
             validate: true,
         }
     }
+}
+
+fn build_symmetric_csr(
+    points: &[glam::Vec4],
+    neighbor_sets: &mut [Vec<u32>],
+    config: &AdjacencyConfig,
+) -> Adjacency {
+    let mut edges = Vec::new();
+    for (i, neighbors) in neighbor_sets.iter_mut().enumerate() {
+        neighbors.sort_unstable();
+        neighbors.dedup();
+        for &neighbor in neighbors.iter() {
+            let j = neighbor as usize;
+            if i == j {
+                continue;
+            }
+            edges.push((i.min(j), i.max(j)));
+        }
+    }
+    edges.sort_unstable();
+    edges.dedup();
+    edges.sort_by(|&(a0, b0), &(a1, b1)| {
+        let p0 = points[a0].truncate();
+        let q0 = points[b0].truncate();
+        let p1 = points[a1].truncate();
+        let q1 = points[b1].truncate();
+        p0.distance_squared(q0)
+            .total_cmp(&p1.distance_squared(q1))
+            .then_with(|| (a0, b0).cmp(&(a1, b1)))
+    });
+
+    let mut selected = vec![Vec::new(); points.len()];
+    for (a, b) in edges {
+        if selected[a].len() < config.max_neighbors && selected[b].len() < config.max_neighbors {
+            selected[a].push(b as u32);
+            selected[b].push(a as u32);
+        }
+    }
+
+    let mut offsets = Vec::with_capacity(points.len() + 1);
+    let mut neighbors = Vec::new();
+    offsets.push(0);
+    for list in selected.iter_mut() {
+        list.sort_unstable();
+        neighbors.extend_from_slice(list);
+        offsets.push(neighbors.len() as u32);
+    }
+    if config.validate {
+        validate_csr(&offsets, &neighbors, points.len());
+    }
+    Adjacency { neighbors, offsets }
 }
 
 /// Computes adjacency from point positions using Delaunay tetrahedralization.
@@ -32,7 +85,7 @@ impl Default for AdjacencyConfig {
 /// 1. Convert `Vec4` positions (xyz) to `[f64; 3]` format
 /// 2. Compute 3D Delaunay tetrahedralization
 /// 3. Extract edges from tetrahedra (Delaunay edges = Voronoi neighbor pairs)
-/// 4. Build CSR adjacency: sort, dedup, clamp to max_neighbors
+/// 4. Build symmetric CSR adjacency, optionally capped by shortest edge
 /// 5. Optionally validate using CSR invariants
 ///
 /// # Panics
@@ -91,28 +144,7 @@ pub fn compute_adjacency(points: &[glam::Vec4], config: &AdjacencyConfig) -> Adj
         }
     }
 
-    // Build CSR: sort, dedup, clamp to max_neighbors
-    let mut offsets = Vec::with_capacity(num_points + 1);
-    let mut neighbors = Vec::new();
-    offsets.push(0u32);
-
-    for neighbor_list in neighbor_sets.iter_mut() {
-        // Sort and remove duplicates
-        neighbor_list.sort_unstable();
-        neighbor_list.dedup();
-
-        // Clamp to max_neighbors
-        let count = neighbor_list.len().min(config.max_neighbors);
-        neighbors.extend_from_slice(&neighbor_list[..count]);
-        offsets.push(neighbors.len() as u32);
-    }
-
-    // Validate CSR structure if requested
-    if config.validate {
-        validate_csr(&offsets, &neighbors, num_points);
-    }
-
-    Adjacency { neighbors, offsets }
+    build_symmetric_csr(points, &mut neighbor_sets, config)
 }
 
 /// Computes adjacency with default configuration.
@@ -292,22 +324,7 @@ pub fn compute_cech(points: &[glam::Vec4], radii: &[f32], config: &AdjacencyConf
         }
     }
 
-    let mut offsets = Vec::with_capacity(num_points + 1);
-    let mut neighbors = Vec::new();
-    offsets.push(0u32);
-    for neighbor_list in neighbor_sets.iter_mut() {
-        neighbor_list.sort_unstable();
-        neighbor_list.dedup();
-        let count = neighbor_list.len().min(config.max_neighbors);
-        neighbors.extend_from_slice(&neighbor_list[..count]);
-        offsets.push(neighbors.len() as u32);
-    }
-
-    if config.validate {
-        validate_csr(&offsets, &neighbors, num_points);
-    }
-
-    Adjacency { neighbors, offsets }
+    build_symmetric_csr(points, &mut neighbor_sets, config)
 }
 
 /// [`compute_cech`] with the default [`AdjacencyConfig`].
@@ -370,25 +387,7 @@ pub fn compute_adjacency_qhull(points: &[glam::Vec4], config: &AdjacencyConfig) 
         }
     }
 
-    let mut offsets = Vec::with_capacity(num_points + 1);
-    let mut neighbours = Vec::new();
-    offsets.push(0u32);
-    for list in neighbour_sets.iter_mut() {
-        list.sort_unstable();
-        list.dedup();
-        let count = list.len().min(config.max_neighbors);
-        neighbours.extend_from_slice(&list[..count]);
-        offsets.push(neighbours.len() as u32);
-    }
-
-    if config.validate {
-        validate_csr(&offsets, &neighbours, num_points);
-    }
-
-    Adjacency {
-        neighbors: neighbours,
-        offsets,
-    }
+    build_symmetric_csr(points, &mut neighbour_sets, config)
 }
 
 /// [`compute_adjacency_qhull`] with the default [`AdjacencyConfig`].
@@ -503,10 +502,31 @@ pub fn validate_csr(offsets: &[u32], neighbors: &[u32], num_points: usize) {
         }
     }
 
-    // Validate adjacency indices are in-bounds
-    for (k, &idx) in neighbors.iter().enumerate() {
-        if (idx as usize) >= num_points {
-            panic!("Adjacency index out of bounds at entry {k}: {idx} (num_points={num_points})");
+    for i in 0..num_points {
+        let begin = offsets[i] as usize;
+        let end = offsets[i + 1] as usize;
+        let list = &neighbors[begin..end];
+        if list.windows(2).any(|window| window[0] >= window[1]) {
+            panic!("Adjacency list for point {i} must be sorted and unique");
+        }
+        for (local_index, &neighbor) in list.iter().enumerate() {
+            if neighbor as usize >= num_points {
+                let entry = begin + local_index;
+                panic!(
+                    "Adjacency index out of bounds at entry {entry}: {neighbor} (num_points={num_points})"
+                );
+            }
+            if neighbor as usize == i {
+                panic!("Adjacency list for point {i} contains a self-edge");
+            }
+            let reverse_begin = offsets[neighbor as usize] as usize;
+            let reverse_end = offsets[neighbor as usize + 1] as usize;
+            if neighbors[reverse_begin..reverse_end]
+                .binary_search(&(i as u32))
+                .is_err()
+            {
+                panic!("Adjacency edge {i}->{neighbor} has no reverse edge");
+            }
         }
     }
 }
@@ -843,6 +863,11 @@ mod tests {
                 neighbor_count,
                 config.max_neighbors
             );
+            for &neighbor in &adjacency.neighbors[start..end] {
+                let reverse_start = adjacency.offsets[neighbor as usize] as usize;
+                let reverse_end = adjacency.offsets[neighbor as usize + 1] as usize;
+                assert!(adjacency.neighbors[reverse_start..reverse_end].contains(&(i as u32)));
+            }
         }
     }
 
