@@ -1,0 +1,46 @@
+schema = 1
+name = "bonsai-radfoam-quality-v1"
+purpose = "Matched internal go/no-go baseline for reference-faithful RadFoam"
+dataset = "Mip-NeRF 360 / bonsai"
+dataset_path = "etc/data/bonsai"
+
+[split]
+protocol = "existence-filtered COLMAP order, every Nth held out"
+test_every = 8
+max_train_views = 64
+max_test_views = 8
+
+[model]
+backend = "radfoam"
+initial_points = 50000
+target_points = 200000
+adjacency = "qhull-delaunay-exact"
+sh_degree = 3
+position_lr_ratio = 0.01
+geometry_rebuild_every = 100
+densify_every = 500
+densify_warmup = 2000
+densify_until = 11000
+densify_fraction = 0.15
+prune = true
+
+[training]
+width = 128
+height = 128
+pixel_batch = 256
+steps_per_view = 250
+learning_rate = 0.1
+lr_schedule = "cosine"
+lr_min_ratio = 0.01
+max_steps = 256
+far_plane = 100.0
+background = "black"
+opacity_weight = 1.0
+distortion_weight = 0.0001
+softplus_beta = 10.0
+sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
+densification_seed = "0xCAFE_F00D_DEAD_BEEF"
+
+[result]
+status = "pending"
+required = ["git_commit", "gpu", "driver", "wall_seconds", "cells", "train_psnr", "test_psnr"]

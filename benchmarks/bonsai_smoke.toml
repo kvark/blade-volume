@@ -1,0 +1,40 @@
+schema = 1
+name = "bonsai-smoke-v1"
+purpose = "Fast end-to-end regression; not a quality claim"
+dataset = "Mip-NeRF 360 / bonsai"
+dataset_path = "etc/data/bonsai"
+
+[split]
+protocol = "existence-filtered COLMAP order, every Nth held out"
+test_every = 8
+max_train_views = 8
+max_test_views = 2
+
+[model]
+backend = "radfoam"
+initial_points = 2000
+adjacency = "rust-delaunay-exact"
+sh_degree = 0
+position_lr_ratio = 0.0
+densification = false
+
+[training]
+width = 32
+height = 32
+pixel_batch = 256
+steps_per_view = 25
+learning_rate = 0.1
+lr_schedule = "cosine"
+lr_min_ratio = 0.01
+max_steps = 128
+far_plane = 100.0
+background = "black"
+opacity_weight = 0.0
+distortion_weight = 0.0
+softplus_beta = 0.0
+sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
+
+[result]
+status = "pending"
+required = ["git_commit", "gpu", "driver", "wall_seconds", "cells", "train_psnr", "test_psnr"]
+
