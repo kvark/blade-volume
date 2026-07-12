@@ -718,7 +718,8 @@ fn write_gaussian_ply_binary(
 
     let count = model.len();
     let sh_component_count = vol::get_sh_component_count(model.sh_degree);
-    let sh_rest_count = sh_component_count.saturating_sub(1) * 3;
+    let sh_rest_per_channel = sh_component_count.saturating_sub(1);
+    let sh_rest_count = sh_rest_per_channel * 3;
     let ply_rotation =
         glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
     let inv_rotation = ply_rotation.inverse();
@@ -782,12 +783,10 @@ fn write_gaussian_ply_binary(
         file.write_all(&rotation.y.to_le_bytes())?;
         file.write_all(&rotation.z.to_le_bytes())?;
 
-        for j in 0..sh_rest_count {
-            let coeff = model
-                .sh_coefficients
-                .get(base + 3 + j)
-                .copied()
-                .unwrap_or(0.0);
+        for property in 0..sh_rest_count {
+            let channel = property / sh_rest_per_channel;
+            let component = property % sh_rest_per_channel + 1;
+            let coeff = model.sh_coefficients[base + component * 3 + channel];
             file.write_all(&coeff.to_le_bytes())?;
         }
     }
@@ -807,7 +806,8 @@ fn write_gaussian_ply_ascii(
 
     let count = model.len();
     let sh_component_count = vol::get_sh_component_count(model.sh_degree);
-    let sh_rest_count = sh_component_count.saturating_sub(1) * 3;
+    let sh_rest_per_channel = sh_component_count.saturating_sub(1);
+    let sh_rest_count = sh_rest_per_channel * 3;
     let ply_rotation =
         glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
     let inv_rotation = ply_rotation.inverse();
@@ -875,12 +875,10 @@ fn write_gaussian_ply_ascii(
             rotation.z
         )?;
 
-        for j in 0..sh_rest_count {
-            let coeff = model
-                .sh_coefficients
-                .get(base + 3 + j)
-                .copied()
-                .unwrap_or(0.0);
+        for property in 0..sh_rest_count {
+            let channel = property / sh_rest_per_channel;
+            let component = property % sh_rest_per_channel + 1;
+            let coeff = model.sh_coefficients[base + component * 3 + channel];
             write!(file, " {}", coeff)?;
         }
         writeln!(file)?;
@@ -1091,6 +1089,33 @@ mod tests {
         assert_eq!(loaded.len(), model.len());
         assert!(loaded.transforms.is_some());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn gaussian_ply_roundtrip_preserves_sh3_layout() {
+        let points = vec![glam::Vec4::new(0.25, -0.5, 1.0, 0.8)];
+        let sh_coefficients: Vec<f32> = (0..48).map(|i| i as f32 * 0.125 - 2.0).collect();
+        let transforms = vol::Transforms {
+            rotations: vec![glam::Quat::from_rotation_x(0.3)],
+            scales: vec![glam::Vec3::new(0.1, 0.2, 0.3)],
+        };
+        let model = vol::PointCloudModel {
+            points,
+            sh_coefficients: sh_coefficients.clone(),
+            sh_degree: 3,
+            transforms: Some(transforms),
+            adjacency: None,
+            radii: None,
+        };
+
+        let path = std::env::temp_dir().join("blade_volume_convert_roundtrip_sh3.ply");
+        save_ply(&path, &model).expect("save ply");
+        let loaded = vol::io::load_gaussian(path.to_str().unwrap());
+
+        assert_eq!(loaded.sh_degree, 3);
+        assert_eq!(loaded.sh_coefficients, sh_coefficients);
+        assert!((loaded.points[0].w - model.points[0].w).abs() < 1e-6);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
