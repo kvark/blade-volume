@@ -705,4 +705,87 @@ mod path_tests {
         assert!((traced.rgba.w - expected_alpha).abs() < 1e-6);
         assert_eq!(traced.t_end, 10.0);
     }
+
+    #[test]
+    fn power_foam_walk_matches_brute_force_bounded_cells() {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(2.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(4.0, 0.0, 0.0, 1.0),
+        ];
+        let model = PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: vec![1, 2, 0, 2, 0, 1],
+                offsets: vec![0, 2, 4, 6],
+            }),
+            radii: Some(vec![1.4, 0.9, 1.6]),
+            points,
+        };
+        let ray = Ray {
+            origin: glam::Vec3::new(-2.0, 0.0, 0.0),
+            direction: glam::Vec3::X,
+        };
+        let settings = TraceSettings {
+            depth: 8.0,
+            ..settings_for(0)
+        };
+        let walked = record_path(&model, ray, settings);
+
+        // Independent O(N²) oracle: intersect each site's full power cell
+        // against every radical half-space, then against its support sphere.
+        let mut oracle = Vec::new();
+        for (i, point_i) in model.points.iter().enumerate() {
+            let center_i = point_i.truncate();
+            let radius_i = model.radii.as_ref().unwrap()[i];
+            let mut near = 0.0_f32;
+            let mut far = settings.depth;
+            for (j, point_j) in model.points.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let center_j = point_j.truncate();
+                let radius_j = model.radii.as_ref().unwrap()[j];
+                let offset = center_j - center_i;
+                let shift = 0.5
+                    + 0.5 * (radius_i * radius_i - radius_j * radius_j) / offset.length_squared();
+                let face = center_i + shift * offset;
+                let denominator = offset.dot(ray.direction);
+                let t = (face - ray.origin).dot(offset) / denominator;
+                if denominator > 0.0 {
+                    far = far.min(t);
+                } else if denominator < 0.0 {
+                    near = near.max(t);
+                }
+            }
+            if let Some((start, end)) = support_interval(
+                true,
+                ray.origin,
+                ray.direction,
+                center_i,
+                radius_i,
+                near,
+                far,
+            ) {
+                oracle.push((
+                    start,
+                    PathEntry {
+                        cell: i as u32,
+                        dt: end - start,
+                    },
+                ));
+            }
+        }
+        oracle.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+        assert_eq!(walked.entries.len(), oracle.len());
+        for pair in walked.entries.iter().zip(oracle.iter()) {
+            let walked_entry = pair.0;
+            let oracle_entry = &pair.1 .1;
+            assert_eq!(walked_entry.cell, oracle_entry.cell);
+            assert!((walked_entry.dt - oracle_entry.dt).abs() < 1e-5);
+        }
+    }
 }
