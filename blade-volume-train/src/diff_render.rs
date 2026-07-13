@@ -2627,6 +2627,100 @@ mod tests {
     }
 
     #[test]
+    fn position_gradient_matches_central_finite_difference_for_fixed_path() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping position gradient check: no GPU");
+            return;
+        };
+        let model = tiny_model();
+        let n_cells = model.points.len();
+        let mut graph = mn::Graph::new();
+        build_volumetric_graph(
+            &mut graph, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
+        );
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        upload_model_parameters(&mut session, &model, 0.0);
+        for channel in ["exposure_r", "exposure_g", "exposure_b"] {
+            session.set_parameter(channel, &[1.0]);
+        }
+
+        let set_inputs = |session: &mut mn::Session| {
+            // Cell 0 -> cell 3 crosses the horizontal bisector at z=0.25.
+            // The ray is well away from a parallel face, clamp, topology, or
+            // L1 kink, so a small perturbation stays in one smooth branch.
+            session.set_input_u32("cell_indices", &[0]);
+            session.set_input_u32("next_cell_indices", &[3]);
+            session.set_input("recorded_dt", &[1.25]);
+            session.set_input("mask", &[1.0]);
+            session.set_input("ray_origin", &[0.1, 0.1, -1.0]);
+            session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
+            session.set_input_u32("pixel_idx_per_step", &[0]);
+            session.set_input_u32("view_idx", &[0]);
+            session.set_input("labels", &[0.1, 0.2, 0.3]);
+        };
+        session.set_adam(0.0, 0.9, 0.999, 1e-8);
+
+        let mut baseline = vec![0.0_f32; n_cells * 3];
+        session.read_param("positions", &mut baseline);
+        set_inputs(&mut session);
+        session.step();
+        session.wait();
+        let mut analytical = vec![0.0_f32; baseline.len()];
+        session.read_param_grad("positions", &mut analytical);
+
+        const EPSILON: f32 = 5.0e-3;
+        let mut numerical = vec![0.0_f32; baseline.len()];
+        let mut perturbed = baseline.clone();
+        for index in 0..baseline.len() {
+            perturbed[index] = baseline[index] + EPSILON;
+            session.set_parameter("positions", &perturbed);
+            set_inputs(&mut session);
+            session.step();
+            session.wait();
+            let plus = session.read_loss();
+
+            perturbed[index] = baseline[index] - EPSILON;
+            session.set_parameter("positions", &perturbed);
+            set_inputs(&mut session);
+            session.step();
+            session.wait();
+            let minus = session.read_loss();
+
+            numerical[index] = (plus - minus) / (2.0 * EPSILON);
+            perturbed[index] = baseline[index];
+        }
+        session.set_parameter("positions", &baseline);
+
+        assert!(analytical.iter().all(|value| value.is_finite()));
+        assert!(numerical.iter().all(|value| value.is_finite()));
+        assert!(
+            numerical.iter().any(|value| value.abs() > 1.0e-3),
+            "fixture must exercise a material position derivative"
+        );
+        for index in 0..baseline.len() {
+            let absolute = (analytical[index] - numerical[index]).abs();
+            let scale = analytical[index]
+                .abs()
+                .max(numerical[index].abs())
+                .max(1.0e-4);
+            let relative = absolute / scale;
+            assert!(
+                absolute < 5.0e-3 || relative < 2.0e-2,
+                "position[{index}] gradient mismatch: analytical={} numerical={} absolute={absolute} relative={relative}",
+                analytical[index],
+                numerical[index],
+            );
+        }
+    }
+
+    #[test]
     fn weighted_graph_uses_recorded_intervals() {
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping weighted_graph_uses_recorded_intervals: no GPU");
