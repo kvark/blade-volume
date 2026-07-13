@@ -52,11 +52,11 @@ struct Args {
 
     /// spring-relaxation iterations after Delaunay (try 3-5)
     #[argh(option, default = "0")]
-    lloyd_iterations: usize,
+    spring_iterations: usize,
 
     /// per-iter relaxation step (try 0.3)
     #[argh(option, default = "0.3")]
-    lloyd_step: f32,
+    spring_step: f32,
 
     /// populate per-cell radii (Power Foam mode) from nearest-neighbour distance
     #[argh(switch)]
@@ -86,8 +86,8 @@ fn main() {
             surface_opacity: 0.95,
             interior_opacity: 0.6,
             curvature_boost: args.curvature_boost,
-            lloyd_iterations: args.lloyd_iterations,
-            lloyd_step: args.lloyd_step,
+            spring_iterations: args.spring_iterations,
+            spring_step: args.spring_step,
             assign_radii: args.assign_radii,
             ..Default::default()
         };

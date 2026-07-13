@@ -50,23 +50,21 @@ At the audited revision:
 - Native RadFoam PLY adjacency and radius round-trips are covered.
 - The standalone RadFoam renderer and path recorder form a useful base.
 
-## Blocking findings
+## Current status and remaining gaps
 
 ### Training
 
-- The default whole-image path uses the obsolete precomputed-`dt` graph API.
-- The working pixel-batched path is not the default and lacks equivalent
-  end-to-end convergence coverage.
-- Positions are differentiable but frozen. Moving them without synchronizing
-  paths and adjacency produces stale-topology gradients.
-- Densification is driven by density gradients rather than the reference
-  position-gradient and cell-size signal.
-- Reference RadFoam geometry optimization, quantile regularization, and
-  incremental topology updates are missing.
-- Optional white-background training disagrees with black/uncomposited
-  evaluation and viewer output.
-- PLY is a lossy training checkpoint for the DC coefficient and carries no Adam
-  state.
+- Whole-image and pixel-batched fitting now use the maintained current-path
+  recorder; deterministic convergence and end-to-end COLMAP tests cover it.
+- Optional position/radius optimization downloads geometry, rebuilds topology
+  and paths on an explicit cadence, and validates active-path Jacobians against
+  finite differences.
+- Densification uses position-gradient × cell-radius signal, contribution-aware
+  pruning, optimizer ancestry, and the weighted copied-radius split policy.
+- Quantile regularization, explicit background compositing, lossless DC SH, and
+  versioned parameter/Adam/RNG checkpoints are implemented.
+- The blocker is quality evidence: the corrected trainer still needs a matched
+  reference RadFoam protocol and a completed full-scene run on a stable GPU.
 
 ### Remaining PowerFoam gaps
 
@@ -89,17 +87,29 @@ At the audited revision:
 - Model-boundary CSR validation now requires monotonic ranges, in-range sorted
   unique lists, no self-edges, and a reverse edge for every neighbor. It cannot
   prove geometric completeness without rebuilding topology.
+- Čech construction uses an immutable k-d tree that tolerates coincident and
+  quantized sites. Mesh conversion now rebuilds Čech adjacency after assigning
+  radii instead of retaining the preceding unweighted Delaunay graph.
 - Traversal now integrates the terminal cell up to the requested end depth
   when no later face is found.
-- `lloyd_relax` is a global spring relaxation rather than a Lloyd/CVT step.
-- Nearest-neighbor radius estimation is quadratic.
+- The former `lloyd_relax` API was renamed to `spring_relax` so it no longer
+  claims to implement centroidal Voronoi tessellation. A true bounded Lloyd/CVT
+  operation remains unimplemented.
+- Nearest-neighbor radius estimation now uses an exact duplicate-safe k-d tree
+  query instead of the original quadratic scan.
 
 ### Cameras and color
 
-- Principal point and COLMAP distortion parameters are discarded.
-- Source pixels and SH colors are optimized in an implicit nonlinear RGB space.
-- Camera, background, and color conventions are not encoded in a shared model
-  used by training, evaluation, and viewing.
+- COLMAP intrinsics preserve principal point and all current camera-model
+  parameters; supervised images are rectified onto the explicit pinhole camera
+  used by CPU and WGSL ray generation. Model-specific projection tests cover
+  off-center, radial, and fisheye cases.
+- Training, SH evaluation, image output, PSNR, backgrounds, and viewers now
+  explicitly use display-referred sRGB code values without a hidden transfer
+  function or tone map. Linear-light clients must decode explicitly.
+- Distorted projection is handled in the reconstruction/training boundary; the
+  runtime `PointCloudModel` intentionally carries cloud data rather than source
+  capture-camera calibration.
 
 ### Remaining Gaussian backend gaps
 
@@ -157,16 +167,18 @@ At the audited revision:
   interleaved volume integration and a scalable software TLAS remain open.
 - Scene tests check state but not rendered pixels.
 - A 2026-07-12 RadFoam-only dispatch probe reached a driver fault even after
-  reducing the compute entry point to a constant texture write. Pipeline
-  creation succeeds, so Stage 5 must replace/audit the prototype descriptor
-  arrays and add a readback test before enabling scene rendering; dummy ray
-  tracing resources are not an acceptable workaround.
+  reducing the compute entry point to a constant texture write. The scene has
+  since split out a no-ray-query RadFoam pipeline and removed dummy resources,
+  but this new path has only static validation until the driver is recovered.
+  A physical readback test remains the enabling gate.
 
 ### Project constraints
 
-- `qhull-sys` introduces C into a project whose stated dependency policy is
-  Rust-only. It must be isolated behind a non-default feature, moved out of the
-  core library, or replaced.
+- The C-backed Qhull path is isolated behind the non-default `qhull` feature;
+  the default dependency graph is Rust-only. Production-size exact Delaunay
+  training currently opts into that feature because the available pure-Rust
+  implementation exceeded the measured memory budget. A scalable Rust
+  replacement remains preferable.
 
 ## Implementation stages
 
@@ -267,10 +279,12 @@ paper-matched hyperparameters.
 ### Stage 0: trustworthy baseline
 
 1. Make the maintained pixel-batched trainer the default public workflow.
-2. Remove or update the obsolete whole-image implementation.
+   (Done.)
+2. Remove or update the obsolete whole-image implementation. (Done.)
 3. Restore convergence tests on the maintained path and add an end-to-end
-   COLMAP training test.
-4. Fix formatting, clippy, and GPU resource lifetime failures.
+   COLMAP training test. (Done.)
+4. Fix formatting, clippy, and GPU resource lifetime failures. (Done for all
+   reproducible software issues; the host driver incident remains external.)
 5. Add deterministic benchmark manifests recording dataset, split, cell count,
    resolution, optimizer steps, seed, hardware, and metrics.
 
@@ -281,16 +295,17 @@ behavior rather than silent gaps.
 ### Stage 1: cameras, formats, and model invariants
 
 1. Represent pixel-to-ray projection explicitly, including principal point and
-   the supported COLMAP distortion models.
+   the supported COLMAP distortion models. (Done.)
 2. Share camera and background conventions between training, CPU evaluation,
-   and WGSL rendering.
+   and WGSL rendering. (Done for the rectified pinhole runtime contract.)
 3. Validate model vector lengths and supported SH degrees at IO boundaries.
    (Done for Gaussian PLY, SPZ v2-v4, and RadFoam/PowerFoam PLY.)
 4. Correct standard Gaussian PLY SH layout with external fixtures. (Done.)
 5. Correct and complete SPZ v2 decoding with known-good fixtures. (Done;
    v3/v4 and an official production-size v4 sample are covered as well.)
 6. Introduce a lossless native training checkpoint with optimizer state.
-7. Isolate the C-backed Qhull option from the default Rust-only build.
+   (Done, including RNG state.)
+7. Isolate the C-backed Qhull option from the default Rust-only build. (Done.)
 
 Acceptance gate: external Gaussian PLY and SPZ fixtures reproduce known values;
 off-center and distorted camera rays match a CPU oracle; checkpoint resume is

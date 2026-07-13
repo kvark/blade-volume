@@ -31,10 +31,10 @@ pub struct ConvertOptions {
     pub curvature_boost: f32,
     /// Number of spring-relaxation iterations applied after Delaunay (RadFoam
     /// path only). `0` skips the relaxation entirely.
-    pub lloyd_iterations: usize,
-    /// Per-iteration step size for [`vol::lloyd_relax`].
-    pub lloyd_step: f32,
-    /// When `true`, populate `model.radii` from the post-Lloyd nearest-
+    pub spring_iterations: usize,
+    /// Per-iteration step size for [`vol::spring_relax`].
+    pub spring_step: f32,
+    /// When `true`, populate `model.radii` from the post-relaxation nearest-
     /// neighbour distance (Power Foam mode). When `false`, leave `radii`
     /// as `None` (plain Voronoi).
     pub assign_radii: bool,
@@ -58,8 +58,8 @@ impl Default for ConvertOptions {
             interior_scale: 1.0,
             surface_normal_scale: 1.0,
             curvature_boost: 0.0,
-            lloyd_iterations: 0,
-            lloyd_step: 0.3,
+            spring_iterations: 0,
+            spring_step: 0.3,
             assign_radii: false,
             radius_factor: 0.5,
         }
@@ -389,17 +389,18 @@ pub fn convert_gltf(
         }
         OutputKind::RadFoam => {
             model.adjacency = Some(vol::compute_adjacency_default(&model.points));
-            if options.lloyd_iterations > 0 {
-                vol::lloyd_relax(&mut model, options.lloyd_iterations, options.lloyd_step);
+            if options.spring_iterations > 0 {
+                vol::spring_relax(&mut model, options.spring_iterations, options.spring_step);
             }
             if options.assign_radii {
                 model.radii = Some(vol::radii_from_nearest_neighbour(
                     &model.points,
                     options.radius_factor,
                 ));
-                // Keep Delaunay adjacency: it's a superset of Čech for radii
-                // ≤ nearest-neighbour, and kiddo panics on the coincident
-                // grid-interior points the converter emits.
+                // Radius assignment changes the representation to PowerFoam;
+                // rebuild the required ball-overlap graph instead of retaining
+                // an unrelated unweighted Delaunay graph.
+                model.compute_adjacency_default();
             }
         }
     }

@@ -157,18 +157,16 @@ pub fn compute_adjacency_default(points: &[glam::Vec4]) -> Adjacency {
 /// length. After each iteration the adjacency is rebuilt to reflect the new
 /// positions.
 ///
-/// This is the cluster-spreading effect a true Lloyd's CVT pass would
-/// achieve. True Lloyd's moves sites to their Voronoi cell centroids, which
-/// needs the Delaunay *tetrahedra* (we only keep edges); this spring model
-/// is the standard cheap substitute. Strong, dense clusters get pushed
-/// apart; well-distributed regions stabilise.
+/// This is a cheap cluster-spreading heuristic, not a Lloyd/CVT pass. True
+/// Lloyd relaxation moves sites to Voronoi cell centroids and needs the dual
+/// cell geometry; this routine only uses graph edges.
 ///
 /// `step` in `(0, 1]` is the per-iteration relaxation rate. `0.3` is a
 /// reasonable default. Density (`w`) and other model state are preserved.
-pub fn lloyd_relax(model: &mut crate::PointCloudModel, iterations: usize, step: f32) {
+pub fn spring_relax(model: &mut crate::PointCloudModel, iterations: usize, step: f32) {
     assert!(
         (0.0..=1.0).contains(&step),
-        "lloyd_relax: step {step} must be in [0, 1]"
+        "spring_relax: step {step} must be in [0, 1]"
     );
     for _ in 0..iterations {
         if model.adjacency.is_none() {
@@ -313,10 +311,13 @@ pub fn compute_cech(points: &[glam::Vec4], radii: &[f32], config: &AdjacencyConf
     let radii: Vec<f32> = radii.iter().map(|&r| r.max(0.0)).collect();
     let r_max = radii.iter().copied().fold(0.0_f32, f32::max);
 
-    let mut kd_tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
-    for (i, p) in points.iter().enumerate() {
-        kd_tree.add(&[p.x, p.y, p.z], i as u64);
-    }
+    // Immutable construction handles quantized/coincident coordinates without
+    // overflowing the mutable tree's fixed leaf buckets.
+    let positions = points
+        .iter()
+        .map(|point| [point.x, point.y, point.z])
+        .collect::<Vec<_>>();
+    let kd_tree = kiddo::ImmutableKdTree::new_from_slice(&positions);
 
     let mut neighbor_sets: Vec<Vec<u32>> = vec![Vec::new(); num_points];
 
@@ -785,6 +786,26 @@ mod tests {
     }
 
     #[test]
+    fn cech_handles_many_coincident_sites() {
+        let points = vec![glam::Vec4::new(1.0, 2.0, 3.0, 1.0); 128];
+        let radii = vec![0.0; points.len()];
+        let adjacency = compute_cech(
+            &points,
+            &radii,
+            &AdjacencyConfig {
+                max_neighbors: usize::MAX,
+                validate: true,
+            },
+        );
+        validate_csr(&adjacency.offsets, &adjacency.neighbors, points.len());
+        assert_eq!(adjacency.neighbors.len(), points.len() * (points.len() - 1));
+        assert!(adjacency
+            .offsets
+            .windows(2)
+            .all(|range| range[1] - range[0] == points.len() as u32 - 1));
+    }
+
+    #[test]
     fn cech_dispatch_via_model() {
         // PointCloudModel::compute_adjacency_default chooses Čech when radii is Some.
         let points = vec![
@@ -811,9 +832,9 @@ mod tests {
     }
 
     #[test]
-    fn lloyd_relax_increases_min_pairwise_distance() {
+    fn spring_relax_increases_min_pairwise_distance() {
         // Eight points: four at the corners of a unit cube + four
-        // tightly-clustered near the origin. Lloyd's pushes the cluster
+        // tightly-clustered near the origin. Spring relaxation pushes the cluster
         // apart, raising the smallest pairwise distance in the cloud.
         let pts = vec![
             glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
@@ -849,11 +870,11 @@ mod tests {
             adjacency: None,
             radii: None,
         };
-        lloyd_relax(&mut model, 8, 0.5);
+        spring_relax(&mut model, 8, 0.5);
         let after = min_pairwise(&model.points);
         assert!(
             after > before * 2.0,
-            "lloyd_relax should spread the cluster; min pairwise {before} → {after}"
+            "spring_relax should spread the cluster; min pairwise {before} → {after}"
         );
     }
 
