@@ -401,7 +401,28 @@ pub fn compute_adjacency_qhull(points: &[glam::Vec4], config: &AdjacencyConfig) 
         }
     }
 
-    build_symmetric_csr(points, &mut neighbour_sets, config)
+    let adjacency = build_symmetric_csr(points, &mut neighbour_sets, config);
+
+    // `qhull` 0.4's `Drop` calls `qh_freeqhull` but omits the required
+    // `qh_memfreeshort`, retaining Qhull's short-allocation arena after every
+    // topology rebuild. Position training rebuilds hundreds of times, so that
+    // leak grows to gigabytes. Free both arenas explicitly. `qh_freeqhull`
+    // zeros every non-allocator field; the crate's later Drop call is
+    // therefore a harmless no-op over the cleared structure and still drops
+    // its Rust-owned coordinate and IO buffers normally.
+    unsafe {
+        let raw = qhull::Qh::raw_ptr(&qh);
+        qhull::sys::qh_freeqhull(raw, !qhull::sys::qh_ALL);
+        let mut current_long = 0;
+        let mut total_long = 0;
+        qhull::sys::qh_memfreeshort(raw, &mut current_long, &mut total_long);
+        assert_eq!(
+            current_long, 0,
+            "Qhull retained {current_long} long allocations ({total_long} bytes)",
+        );
+    }
+
+    adjacency
 }
 
 /// [`compute_adjacency_qhull`] with the default [`AdjacencyConfig`].
@@ -1026,6 +1047,29 @@ mod tests {
                 "point {i} has only {} neighbours after qhull build",
                 b - a,
             );
+        }
+    }
+
+    #[cfg(feature = "qhull")]
+    #[test]
+    fn compute_adjacency_qhull_can_rebuild_repeatedly() {
+        let mut points = Vec::new();
+        for ix in 0..5 {
+            for iy in 0..5 {
+                for iz in 0..5 {
+                    let j = ((ix * 31 + iy * 7 + iz) as f32) * 1e-3;
+                    points.push(glam::Vec4::new(
+                        ix as f32 + j,
+                        iy as f32 + j * 0.7,
+                        iz as f32 + j * 1.3,
+                        1.0,
+                    ));
+                }
+            }
+        }
+        for _ in 0..16 {
+            let adjacency = compute_adjacency_qhull_default(&points);
+            assert_eq!(adjacency.offsets.len(), points.len() + 1);
         }
     }
 

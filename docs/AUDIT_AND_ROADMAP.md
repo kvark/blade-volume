@@ -164,6 +164,18 @@ Weighted position/radius gradients and external checkpoint validation remain,
 so weighted geometry optimization and densification intentionally fail fast
 rather than train an incorrect objective.
 
+Long-running topology optimization is now memory-bounded. The upstream
+`qhull` 0.4 destructor omits Qhull's required short-arena cleanup, which leaked
+about 70 MiB per 50,000-site rebuild in the quality run. The wrapper performs
+the complete Qhull teardown explicitly, and a 16-rebuild Bonsai stress test
+held cgroup memory at roughly 197–200 MiB after initialization (204 MiB peak,
+zero swap and OOM events). Densification boundaries are also scheduled from
+their own warmup/cadence instead of firing at every position-topology boundary;
+checkpoints follow that independent cadence. The failed Radeon quality probes
+were GPU ring timeouts at low host-memory use, not cgroup OOMs. Production-size
+training is therefore isolated and pinned to the NVIDIA device while the AMD
+driver path remains excluded from long runs.
+
 ### Stage 0: trustworthy baseline
 
 1. Make the maintained pixel-batched trainer the default public workflow.

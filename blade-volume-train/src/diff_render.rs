@@ -1111,6 +1111,24 @@ fn lr_at_step(config: &AppearanceFitConfig, t: usize, total: usize) -> f32 {
     }
 }
 
+fn densify_due(config: DensifyConfig, steps_done: usize) -> bool {
+    steps_done >= config.warmup && (steps_done - config.warmup).is_multiple_of(config.every)
+}
+
+fn steps_until_densify(config: DensifyConfig, steps_done: usize) -> usize {
+    if steps_done < config.warmup {
+        config.warmup - steps_done
+    } else {
+        let elapsed = steps_done - config.warmup;
+        let remainder = elapsed % config.every;
+        if remainder == 0 {
+            config.every
+        } else {
+            config.every - remainder
+        }
+    }
+}
+
 /// One supervised view: a camera + the pixel image we want the trained model
 /// to reproduce at that camera. `target_rgb` is `width * height * 3` floats
 /// in row-major RGB order. `start_cell` is the index of the Voronoi cell the
@@ -2268,13 +2286,7 @@ fn fit_appearance_pixel_batched(
 
     while steps_done < total_steps {
         let densify_budget = match densify {
-            Some(d) => {
-                if steps_done < d.warmup {
-                    (d.warmup - steps_done).min(total_steps - steps_done)
-                } else {
-                    d.every.min(total_steps - steps_done)
-                }
-            }
+            Some(d) => steps_until_densify(d, steps_done).min(total_steps - steps_done),
             None => total_steps - steps_done,
         };
         let geometry_budget = if config.position_lr_ratio > 0.0 {
@@ -2486,7 +2498,7 @@ fn fit_appearance_pixel_batched(
         // budget. Past that it's a refinement-only phase (no rebuilds).
         let mut topology_rebuilt = false;
         if let Some(d) = densify {
-            let gate = steps_done >= d.warmup
+            let gate = densify_due(d, steps_done)
                 && steps_done < total_steps
                 && steps_done < d.densify_until
                 && model.points.len() < d.target_points;
@@ -2662,27 +2674,31 @@ fn fit_appearance_pixel_batched(
         // Write checkpoints after topology maintenance so every PLY pairs
         // its point positions with matching adjacency. Exposure is baked
         // into a throwaway clone; the exact sidecar retains the live values.
-        if let Some(ref ckpt) = config.checkpoint_path {
-            download_model_parameters(&session, model, config.softplus_beta);
-            let mut snapshot = model.clone();
-            bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
-            match save_checkpoint(ckpt, &snapshot)
-                .and_then(|()| save_optimizer_checkpoint(&mut session, ckpt))
-            {
-                Ok(state_path) => {
-                    let step_path = ckpt.with_extension("ply.step");
-                    if let Err(err) = std::fs::write(&step_path, steps_done.to_string()) {
-                        log::warn!("checkpoint step-sidecar write failed: {err:?}");
+        let checkpoint_due = steps_done == total_steps
+            || densify.is_some_and(|config| densify_due(config, steps_done));
+        if checkpoint_due {
+            if let Some(ref ckpt) = config.checkpoint_path {
+                download_model_parameters(&session, model, config.softplus_beta);
+                let mut snapshot = model.clone();
+                bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
+                match save_checkpoint(ckpt, &snapshot)
+                    .and_then(|()| save_optimizer_checkpoint(&mut session, ckpt))
+                {
+                    Ok(state_path) => {
+                        let step_path = ckpt.with_extension("ply.step");
+                        if let Err(err) = std::fs::write(&step_path, steps_done.to_string()) {
+                            log::warn!("checkpoint step-sidecar write failed: {err:?}");
+                        }
+                        log::info!(
+                            "checkpoint: wrote {} and {} ({} cells) at step {}",
+                            ckpt.display(),
+                            state_path.display(),
+                            snapshot.points.len(),
+                            steps_done,
+                        );
                     }
-                    log::info!(
-                        "checkpoint: wrote {} and {} ({} cells) at step {}",
-                        ckpt.display(),
-                        state_path.display(),
-                        snapshot.points.len(),
-                        steps_done,
-                    );
+                    Err(err) => log::warn!("checkpoint save failed: {err:?}"),
                 }
-                Err(err) => log::warn!("checkpoint save failed: {err:?}"),
             }
         }
     }
@@ -3102,6 +3118,27 @@ mod tests {
             at_mid > three_qtr,
             "mid {at_mid} should exceed 3qtr {three_qtr}"
         );
+    }
+
+    #[test]
+    fn densify_schedule_is_independent_of_geometry_boundaries() {
+        let config = DensifyConfig {
+            warmup: 2000,
+            every: 500,
+            ..DensifyConfig::default()
+        };
+        assert_eq!(steps_until_densify(config, 0), 2000);
+        assert_eq!(steps_until_densify(config, 1900), 100);
+        assert!(densify_due(config, 2000));
+        for geometry_boundary in [2100, 2200, 2300, 2400] {
+            assert!(!densify_due(config, geometry_boundary));
+            assert_eq!(
+                steps_until_densify(config, geometry_boundary),
+                2500 - geometry_boundary,
+            );
+        }
+        assert!(densify_due(config, 2500));
+        assert_eq!(steps_until_densify(config, 2500), 500);
     }
 
     #[test]
