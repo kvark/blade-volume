@@ -17,7 +17,7 @@
 #                            /tmp/blade-volume-gpu-<pid>.log
 #   --icd PATH               pin one Vulkan ICD explicitly (optional)
 #   --allow-software         permit a software-only Vulkan installation
-#   --cpu-only               skip probes and deny GPU/device access in scope
+#   --cpu-only               skip probes, hide Vulkan ICDs, and deny GPU/device access
 #   --probe-timeout SECONDS  abort if a GPU probe stalls; default 10
 #   --no-xid-watch           skip the background GPU-fault watcher
 #
@@ -30,7 +30,9 @@
 #   - Watches kernel logs for NVIDIA Xid and AMD GPU fault/reset events.
 #   - Aborts if Vulkan or NVIDIA telemetry stops responding, without waiting
 #     for an unkillable driver task.
-#   - Denies non-standard device access in `--cpu-only` scopes.
+#   - Hides Vulkan ICDs and denies non-standard device access in `--cpu-only`
+#     scopes. The explicit loader barrier matters when a wedged vendor driver
+#     can hang before a denied device open returns.
 #   - Samples the named cgroup's current/peak/swap memory every second,
 #     plus NVIDIA telemetry when nvidia-smi is available.
 set -euo pipefail
@@ -77,6 +79,17 @@ fi
 if [ "$CPU_ONLY" -eq 1 ] && [ -n "$ICD" ]; then
   echo "--cpu-only and --icd cannot be used together" >&2
   exit 2
+fi
+
+if [ "$CPU_ONLY" -eq 1 ]; then
+  # DevicePolicy alone is not a sufficient isolation boundary for a wedged
+  # Vulkan stack: the loader can dlopen a vendor ICD and enter driver code
+  # before the first denied character-device open. Hide every ICD as well,
+  # and give blade-volume entry points an explicit early-out that is easy to
+  # assert in tests and diagnostics.
+  export BLADE_VOLUME_DISABLE_GPU=1
+  export VK_DRIVER_FILES=/dev/null
+  export VK_ICD_FILENAMES=/dev/null
 fi
 
 : "${GPU_LOG:=/tmp/blade-volume-gpu-$$.log}"
@@ -183,6 +196,8 @@ fi
   echo "=== cgroup_run start $(date -Is) ==="
   echo "command: $*"
   echo "cpu_only=$CPU_ONLY"
+  echo "BLADE_VOLUME_DISABLE_GPU=${BLADE_VOLUME_DISABLE_GPU:-(unset)}"
+  echo "VK_DRIVER_FILES=${VK_DRIVER_FILES:-(unset)}"
   echo "VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-(unset)}"
   echo "--- Vulkan summary ---"
   if [ "$CPU_ONLY" -eq 1 ]; then

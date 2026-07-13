@@ -11,6 +11,9 @@ use blade_volume as vol;
 use vol::gpu::{PathRecordBuffers, PathRecorder, RadFoamGpuCloud, RecordPathsArgs};
 
 fn try_init_gpu() -> Option<gpu::Context> {
+    if vol::gpu::access_disabled() {
+        return None;
+    }
     let desc = gpu::ContextDesc::default();
     unsafe { gpu::Context::init(desc) }.ok()
 }

@@ -128,6 +128,10 @@ impl Example {
     }
 
     fn init(window: &winit::window::Window, args: Arguments) -> Self {
+        assert!(
+            !vol::gpu::access_disabled(),
+            "GPU access disabled by BLADE_VOLUME_DISABLE_GPU"
+        );
         let mut camera = view::ControlledCamera::default();
         if let Some(ref arg) = args.cam_pose {
             let v = parse_vec::<6, f32>(arg);

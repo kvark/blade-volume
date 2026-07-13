@@ -41,6 +41,10 @@ use std::sync;
 /// real GPU and was responsible for ~43 h of wasted training runs after the
 /// May-18 Xid 62 crash. Set `BLADE_VOLUME_ALLOW_SOFTWARE=1` to override.
 pub fn try_init_gpu() -> Option<sync::Arc<gpu::Context>> {
+    if blade_volume::gpu::access_disabled() {
+        eprintln!("try_init_gpu: GPU access disabled by BLADE_VOLUME_DISABLE_GPU");
+        return None;
+    }
     let ctx = mn::init_gpu_context().ok()?;
     let info = ctx.device_information();
     let allow_sw = std::env::var("BLADE_VOLUME_ALLOW_SOFTWARE")

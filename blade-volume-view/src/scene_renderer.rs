@@ -419,6 +419,10 @@ mod tests {
 
     #[test]
     fn scene_pipelines_compile_with_explicit_background_binding() {
+        if vol::gpu::access_disabled() {
+            eprintln!("skipping scene shader compilation: GPU access disabled");
+            return;
+        }
         let Some(context) = (unsafe {
             gpu::Context::init(gpu::ContextDesc {
                 ray_tracing: true,

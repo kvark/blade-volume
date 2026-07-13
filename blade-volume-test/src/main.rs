@@ -121,6 +121,10 @@ fn compute_psnr(a: &[u8], b: &[u8]) -> f32 {
 }
 
 fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32, debug: bool) -> Vec<u8> {
+    assert!(
+        !vol::gpu::access_disabled(),
+        "GPU access disabled by BLADE_VOLUME_DISABLE_GPU"
+    );
     let context = unsafe {
         gpu::Context::init(gpu::ContextDesc {
             presentation: false,

@@ -561,6 +561,10 @@ mod tests {
 
     #[test]
     fn radfoam_backend_compiles_explicit_background_shader() {
+        if vol::gpu::access_disabled() {
+            eprintln!("skipping RadFoam shader compilation: GPU access disabled");
+            return;
+        }
         let Some(context) = (unsafe { gpu::Context::init(gpu::ContextDesc::default()).ok() })
         else {
             eprintln!("skipping RadFoam shader compilation: no GPU");

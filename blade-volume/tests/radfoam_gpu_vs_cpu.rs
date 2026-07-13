@@ -84,6 +84,9 @@ struct TraceData {
 ///
 /// Note: we keep validation enabled in debug to catch issues early.
 fn make_test_context() -> Option<gpu::Context> {
+    if vol::gpu::access_disabled() {
+        return None;
+    }
     unsafe {
         match gpu::Context::init(gpu::ContextDesc {
             presentation: false,

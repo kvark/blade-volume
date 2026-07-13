@@ -258,6 +258,10 @@ mod tests {
 
     #[test]
     fn gpu_data_uses_the_same_filtered_order_as_instances() {
+        if crate::gpu::access_disabled() {
+            eprintln!("skipping Gaussian filtering GPU test: GPU access disabled");
+            return;
+        }
         let Some(context) = (unsafe {
             gpu::Context::init(gpu::ContextDesc {
                 ray_tracing: true,
