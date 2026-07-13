@@ -135,15 +135,25 @@ Each stage lands as one or more focused commits. Every commit must pass its
 targeted tests and formatting; stage boundaries require workspace formatting,
 clippy with warnings denied, and the full practical test suite.
 
-Progress through 2026-07-12: Stages 0 and 1 are substantially complete. Stage
-2 now has topology-safe opt-in position optimization, exact symmetric
-adjacency caps, and terminal-segment integration; the reference densification
-signal, regularizers, and matched benchmark remain. Stage 3 now persists Čech
-radii and clips PowerFoam intervals to support spheres consistently on CPU,
-production WGSL, and the GPU training recorder. Weighted position/radius
-gradients and external checkpoint validation remain, so weighted geometry
-optimization and densification intentionally fail fast rather than train an
-incorrect objective.
+Progress through 2026-07-13: Stages 0 and 1 are substantially complete. The
+first versioned Bonsai smoke result now evaluates a freshly serialized PLY at
+16.58 dB train / 17.00 dB held out, identical to live evaluation; exact DC SH
+extension properties removed the prior 0.90/0.94 dB serialization loss. The
+run used a 2 GiB/no-swap cgroup and peaked at 68.6 MiB. A controlled pure-Rust
+Delaunay attempt reached its 8 GiB limit before training, while exact Qhull
+completed adjacency in 0.02 seconds, so production benchmark protocols select
+the isolated Qhull feature explicitly.
+
+Stage 2 now has topology-safe opt-in position optimization, exact symmetric
+adjacency caps, terminal-segment integration, reference position-gradient ×
+cell-radius densification, explicit background compositing, and opt-in smooth
+depth-variance regularization. Finite-difference gradient validation,
+contribution-based reference pruning, path diagnostics, and a matched reference
+benchmark remain. Stage 3 now persists Čech radii and clips PowerFoam intervals
+to support spheres consistently on CPU, production WGSL, and the GPU training
+recorder. Weighted position/radius gradients and external checkpoint validation
+remain, so weighted geometry optimization and densification intentionally fail
+fast rather than train an incorrect objective.
 
 ### Stage 0: trustworthy baseline
 

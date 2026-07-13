@@ -1,0 +1,48 @@
+schema = 1
+manifest = "benchmarks/bonsai_smoke.toml"
+manifest_name = "bonsai-smoke-v1"
+timestamp_utc = "2026-07-13T15:25:30Z"
+git_commit = "99aaf02b2e3843b4d6bfdf3c198e38b8548fbdba"
+os = "Linux 7.0.0-27-generic x86_64"
+gpu = "AMD Radeon 610M (RADV RAPHAEL_MENDOCINO)"
+driver = "radv / Mesa 26.0.3-1ubuntu1"
+vulkan_api = "1.4.335"
+
+[isolation]
+kind = "systemd user service cgroup v2"
+memory_max_bytes = 2147483648
+memory_peak_mib = 68.6
+memory_swap_max_bytes = 0
+oom_kill = false
+
+[training]
+wall_seconds = 9.36
+cells = 2000
+adjacency_entries = 28068
+first_loss = 1.6566
+last_loss = 0.2688
+
+[artifact]
+path = "/tmp/blade-volume-bonsai-smoke.ply"
+sha256 = "55d49bde464b6a5477ca2de4d421fc726215dfb9f99076772e889ab899ee514b"
+fresh_ply_evaluation = true
+
+[metrics]
+train_views = 8
+test_views = 2
+train_psnr_db = 16.58
+test_psnr_db = 17.00
+
+[[metrics.test_frames]]
+name = "frame_00057.jpg"
+psnr_db = 17.54
+
+[[metrics.test_frames]]
+name = "frame_00060.jpg"
+psnr_db = 16.46
+
+[comparison]
+live_train_psnr_db = 16.58
+live_test_psnr_db = 17.00
+serialization_delta_train_db = 0.0
+serialization_delta_test_db = 0.0
