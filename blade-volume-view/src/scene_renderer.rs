@@ -298,11 +298,13 @@ impl SceneRenderer {
         encoder: &mut gpu::CommandEncoder,
         frame_view: gpu::TextureView,
         camera_params: vol::CameraParams,
-        _camera_position: glam::Vec3,
+        camera_position: glam::Vec3,
         window_size: RenderSize,
         context: &gpu::Context,
     ) {
-        // Prepare scene (uploads bounds/transforms if dirty)
+        // Seed each adjacency traversal from the camera-containing local cell,
+        // then upload bounds/transforms if either camera or objects changed.
+        self.scene.update_camera(camera_position);
         self.scene.prepare(context, encoder);
 
         // Get render data

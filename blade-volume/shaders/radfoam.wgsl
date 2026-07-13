@@ -106,6 +106,7 @@ fn trace_ray(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
     params.start_point = g_params.start_point;
     params.max_steps = g_params.max_steps;
     params.weight_threshold = g_params.weight_threshold;
+    params.integration_start = 0.0;
 
     let result = radfoam_trace(
         ray_origin,

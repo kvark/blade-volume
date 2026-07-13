@@ -129,10 +129,16 @@ At the audited revision:
 - RadFoam-only scenes do not render through `SceneRenderer`.
 - Only the first Gaussian TLAS is bound.
 - Gaussian object transforms are not applied dynamically.
-- RadFoam objects start traversal at cell zero.
-- Ray intervals are incorrect under object scaling.
-- Mixed SH layouts, more than sixteen objects, and overlapping cloud volumes
-  are not handled robustly.
+- RadFoam scene objects now seed traversal from the camera-containing local
+  cell, carry per-object SH/attribute metadata, and traverse from the camera
+  while clipping integration to their software-TLAS interval. Physical-GPU
+  validation remains pending.
+- Affine-transformed rays now preserve the world-distance parameter under
+  uniform and nonuniform scale; bounded support intersections accept the
+  resulting non-unit object-space direction. Bounds include PowerFoam support
+  radii and finite Gaussian proxy extents.
+- More than sixteen objects and overlapping cloud volumes are not handled
+  robustly.
 - Scene tests check state but not rendered pixels.
 - A 2026-07-12 RadFoam-only dispatch probe reached a driver fault even after
   reducing the compute entry point to a constant texture write. Pipeline

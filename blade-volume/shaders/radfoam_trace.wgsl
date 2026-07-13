@@ -26,7 +26,7 @@ struct RadFoamTraceParams {
     start_point: u32,
     max_steps: u32,
     weight_threshold: f32,
-    pad: u32,
+    integration_start: f32,
 }
 
 struct RadFoamTraceResult {
@@ -114,11 +114,12 @@ fn radfoam_trace(
         let support = rf_support_interval(
             ray_origin, ray_dir, current_pos, current_radius, t0, t1,
         );
-        if (support.y > support.x) {
+        let integration_begin = max(support.x, params.integration_start);
+        if (support.y > integration_begin) {
             cells_visited += 1u;
             let s = rf_get_density(current);
             if (s > 1e-6) {
-                let dt = support.y - support.x;
+                let dt = support.y - integration_begin;
                 let alpha = 1.0 - exp(-s * dt);
                 let w = transmittance * alpha;
                 let rgb = rf_get_color(current, normalize(ray_dir));

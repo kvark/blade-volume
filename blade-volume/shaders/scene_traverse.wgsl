@@ -37,7 +37,12 @@ struct ObjectBounds {
     radius: f32,
     object_type: u32,
     data_index: u32,
-    pad: vec2<u32>,
+    sh_degree: u32,
+    attribute_stride: u32,
+    flags: u32,
+    point_count: u32,
+    start_point: u32,
+    pad: u32,
 }
 
 struct GpuTransform {
@@ -192,6 +197,8 @@ fn sort_hits(hits: ptr<function, array<ObjectHit, MAX_SCENE_HITS>>, count: u32) 
 // Current RadFoam object index for binding array access
 var<private> g_rf_obj: u32;
 var<private> g_rf_bounded: bool;
+var<private> g_rf_sh_degree: u32;
+var<private> g_rf_attribute_stride: u32;
 
 fn rf_get_point(idx: u32) -> vec3<f32> {
     return g_radfoam_points[g_rf_obj].data[idx].xyz;
@@ -206,15 +213,15 @@ fn rf_is_bounded() -> bool {
 }
 
 fn rf_get_density(idx: u32) -> f32 {
-    let attr_dim = g_scene_params.radfoam_attr_dim;
-    let comps = min(sh_component_count(g_scene_params.sh_degree), MAX_SH_COMPONENTS);
+    let attr_dim = g_rf_attribute_stride;
+    let comps = min(sh_component_count(g_rf_sh_degree), MAX_SH_COMPONENTS);
     let sh_dim = 3u * comps;
     return g_radfoam_attributes[g_rf_obj].data[idx * attr_dim + sh_dim];
 }
 
 fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32> {
-    let attr_dim = g_scene_params.radfoam_attr_dim;
-    let comps = min(sh_component_count(g_scene_params.sh_degree), MAX_SH_COMPONENTS);
+    let attr_dim = g_rf_attribute_stride;
+    let comps = min(sh_component_count(g_rf_sh_degree), MAX_SH_COMPONENTS);
     let base = idx * attr_dim;
 
     var coeffs: array<vec3<f32>, MAX_SH_COMPONENTS>;
@@ -226,7 +233,7 @@ fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32> {
             g_radfoam_attributes[g_rf_obj].data[offset + 2u]
         );
     }
-    return 0.5 + sh_eval_color(coeffs, dir, g_scene_params.sh_degree);
+    return 0.5 + sh_eval_color(coeffs, dir, g_rf_sh_degree);
 }
 
 fn rf_adjacency_begin(idx: u32) -> u32 {
@@ -245,17 +252,22 @@ fn rf_get_neighbor(adj_idx: u32) -> u32 {
 
 fn scene_trace_radfoam(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
                        t_start: f32, t_end: f32,
-                       data_index: u32, bounded: bool) -> vec4<f32> {
+                       bounds: ObjectBounds) -> vec4<f32> {
     // Set the current object for accessor functions
-    g_rf_obj = data_index;
-    g_rf_bounded = bounded;
+    g_rf_obj = bounds.data_index;
+    g_rf_bounded = (bounds.flags & 1u) != 0u;
+    g_rf_sh_degree = bounds.sh_degree;
+    g_rf_attribute_stride = bounds.attribute_stride;
 
     var params: RadFoamTraceParams;
-    params.start_point = 0u;  // Could be improved with proper entry point search
+    params.start_point = bounds.start_point;
     params.max_steps = g_scene_params.max_steps;
     params.weight_threshold = g_scene_params.weight_threshold;
+    params.integration_start = t_start;
 
-    let result = radfoam_trace(ray_origin, ray_dir, t_start, t_end, params);
+    // Traverse from the camera-containing cell so topology is correct, but
+    // clip integration to the object's software-TLAS interval.
+    let result = radfoam_trace(ray_origin, ray_dir, 0.0, t_end, params);
     return result.color;
 }
 
@@ -364,8 +376,7 @@ fn trace_scene(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
                 // RadFoam uses object-space coordinates
                 // data_index identifies which RadFoam object's buffers to use
                 result = scene_trace_radfoam(obj_ray_origin, obj_ray_dir,
-                                             hit.t_near, hit.t_far, bounds.data_index,
-                                             bounds.pad.x != 0u);
+                                             hit.t_near, hit.t_far, bounds);
             }
             default: {
                 // Unsupported object type - skip
