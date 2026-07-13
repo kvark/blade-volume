@@ -27,33 +27,21 @@ const MAX_CLOUD_OBJECTS: gpu::ResourceIndex = 64;
 pub struct SceneParams {
     /// Number of objects in the scene.
     pub object_count: u32,
-    /// SH degree for color evaluation.
-    pub sh_degree: u32,
     /// Stop when transmittance <= threshold.
     pub weight_threshold: f32,
     /// Maximum cell transitions for RadFoam.
     pub max_steps: u32,
     /// Debug visualization mode.
     pub debug_mode: u32,
-    /// RadFoam per-point attribute dimension (sh_dim + 1).
-    pub radfoam_attr_dim: u32,
-    /// Minimum opacity for Gaussian rendering.
-    pub gaussian_min_opacity: f32,
-    /// Padding.
-    pub pad: u32,
 }
 
 impl Default for SceneParams {
     fn default() -> Self {
         Self {
             object_count: 0,
-            sh_degree: 0,
             weight_threshold: 0.001,
             max_steps: 1024,
             debug_mode: 0,
-            radfoam_attr_dim: 0,
-            gaussian_min_opacity: 0.01,
-            pad: 0,
         }
     }
 }
@@ -68,8 +56,6 @@ pub enum SceneDebugMode {
     Bounds = 1,
     /// Color by object type.
     ObjectType = 2,
-    /// Backend-specific density visualization.
-    BackendDensity = 3,
 }
 
 /// Shader data layout for scene traversal.
@@ -306,9 +292,6 @@ impl SceneRenderer {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> vol::ObjectHandle {
-        // Update SH degree in params
-        self.params.sh_degree = model.sh_degree as u32;
-
         self.scene.add_radfoam(model, context, encoder)
     }
 
@@ -326,10 +309,6 @@ impl SceneRenderer {
             self.mixed_traverse_pipeline.is_some(),
             "Gaussian scenes require Vulkan compute ray queries and acceleration-structure arrays"
         );
-        // Update params
-        self.params.sh_degree = model.sh_degree as u32;
-        self.params.gaussian_min_opacity = min_opacity;
-
         self.scene
             .add_gaussian(model, min_opacity, context, encoder)
     }
@@ -384,11 +363,6 @@ impl SceneRenderer {
             radfoam_attributes.alloc(cloud.attributes());
             radfoam_adjacency.alloc(cloud.point_adjacency());
             radfoam_adjacency_offsets.alloc(cloud.point_adjacency_offsets());
-        }
-
-        // Set attr_dim from first RadFoam object (assumes all have same SH degree)
-        if let Some(cloud) = render_data.radfoam_clouds.first() {
-            self.params.radfoam_attr_dim = cloud.attr_dim as u32;
         }
 
         let dispatch = [
@@ -503,6 +477,11 @@ impl SceneRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_params_match_one_wgsl_uniform_block() {
+        assert_eq!(std::mem::size_of::<SceneParams>(), 16);
+    }
 
     #[test]
     fn scene_pipelines_compile_with_explicit_background_binding() {

@@ -170,6 +170,9 @@ At the audited revision:
   Gaussian and RadFoam/PowerFoam. Polygon meshes remain offline conversion
   input rather than a runtime scene-object escape hatch; a future SDF backend
   should add a concrete point-sampled representation instead of a placeholder.
+- Scene traversal uses per-object SH/attribute metadata. Obsolete global
+  metadata and the unimplemented backend-density debug mode were removed so
+  public controls correspond to shader behavior.
 - A 2026-07-12 RadFoam-only dispatch probe reached a driver fault even after
   reducing the compute entry point to a constant texture write. The scene has
   since split out a no-ray-query RadFoam pipeline and removed dummy resources,

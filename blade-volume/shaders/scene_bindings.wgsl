@@ -24,13 +24,9 @@ struct GpuTransform {
 
 struct SceneParams {
     object_count: u32,
-    sh_degree: u32,
     weight_threshold: f32,
     max_steps: u32,
     debug_mode: u32,
-    radfoam_attr_dim: u32,
-    gaussian_min_opacity: f32,
-    pad: u32,
 }
 
 var<uniform> g_camera: Camera;

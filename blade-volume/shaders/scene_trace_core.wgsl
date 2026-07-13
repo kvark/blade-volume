@@ -4,7 +4,6 @@
 const DEBUG_MODE_OFF: u32 = 0u;
 const DEBUG_MODE_BOUNDS: u32 = 1u;
 const DEBUG_MODE_OBJECT_TYPE: u32 = 2u;
-const DEBUG_MODE_BACKEND_DENSITY: u32 = 3u;
 
 struct SphereHit {
     hit: bool,
