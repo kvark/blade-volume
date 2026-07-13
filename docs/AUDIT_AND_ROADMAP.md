@@ -377,6 +377,13 @@ itself distinguish an application-triggered driver defect from an independent
 driver failure. The exact PLY and Adam-state checkpoint at step 9,000 was
 verified intact, so the run is resumable after GPU recovery.
 
+The final trainer task remained in kernel/driver execution even after its scope
+received `SIGKILL`: one thread, roughly 172 MiB current host memory, zero swap,
+and no cgroup OOM. Systemd accepted a 1% runtime CPU quota on its isolated scope,
+but a subsequent five-second sample still accrued five CPU-seconds: the stuck
+kernel execution is not yielding to the quota. Reclaiming its core and memory
+requires the NVIDIA driver to unwind or the host to reboot.
+
 That incident exposed a fault in the benchmark harness: a synchronous
 `nvidia-smi` sampler can hang in the same driver wait as the workload. GPU and
 Vulkan probes now have deadlines, a telemetry timeout terminates the isolated
