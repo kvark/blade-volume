@@ -1963,7 +1963,8 @@ fn collect_path_contributions(
             }
         }
         let mut view_contribution = vec![0.0_f32; model.points.len()];
-        let start_point = gpu_cloud.nearest_point(glam::Vec3::from_array(view.camera.cam_position));
+        let start_point =
+            gpu_cloud.containing_point(glam::Vec3::from_array(view.camera.cam_position));
 
         for pixel_batch in sampled_pixels.chunks(capacity) {
             buffers.write_pixel_indices_prefix(pixel_batch);
@@ -2902,7 +2903,7 @@ fn fit_appearance_pixel_batched(
                 vol::gpu::RecordPathsArgs {
                     camera: v.camera,
                     start_point: gpu_cloud
-                        .nearest_point(glam::Vec3::from_array(v.camera.cam_position)),
+                        .containing_point(glam::Vec3::from_array(v.camera.cam_position)),
                     max_steps: max_steps as u32,
                     image_width: v.width,
                     image_height: v.height,

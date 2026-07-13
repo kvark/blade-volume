@@ -20,13 +20,77 @@ pub struct RadFoamGpuCloud {
     attributes_buf: gpu::Buffer,
     point_adjacency_buf: gpu::Buffer,
     point_adjacency_offsets_buf: gpu::Buffer,
-    point_tree: kiddo::ImmutableKdTree<f32, 3>,
+    point_index: PointIndex,
 
     pub sh_degree: usize,
     pub attr_dim: usize,
     pub num_points: usize,
     pub num_adjacency: usize,
     pub is_power_foam: bool,
+}
+
+struct PointIndex {
+    tree: kiddo::ImmutableKdTree<f32, 3>,
+    radii: Option<Vec<f32>>,
+    max_radius_squared: f32,
+}
+
+impl PointIndex {
+    fn new(points: &[glam::Vec4], radii: Option<&[f32]>) -> Self {
+        let positions: Vec<[f32; 3]> = points
+            .iter()
+            .map(|point| [point.x, point.y, point.z])
+            .collect();
+        let radii = radii.map(<[f32]>::to_vec);
+        let max_radius_squared = radii
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|radius| radius * radius)
+            .fold(0.0_f32, f32::max);
+        Self {
+            tree: kiddo::ImmutableKdTree::new_from_slice(&positions),
+            radii,
+            max_radius_squared,
+        }
+    }
+
+    fn containing_point(&self, position: glam::Vec3) -> u32 {
+        let query = position.to_array();
+        let nearest = self.tree.nearest_one::<kiddo::SquaredEuclidean>(&query);
+        let mut best_index = nearest.item as u32;
+        let initial_radius = self
+            .radii
+            .as_deref()
+            .map_or(0.0, |radii| radii[best_index as usize]);
+        let mut best_power_distance = nearest.distance - initial_radius * initial_radius;
+        let search_distance = if self.radii.is_some() {
+            (best_power_distance + self.max_radius_squared).max(0.0)
+        } else {
+            nearest.distance
+        };
+
+        // Any omitted point has d² greater than search_distance. Even at the
+        // global maximum radius its power distance cannot improve the current
+        // best, so this bounded Euclidean query is an exact power-nearest query.
+        for hit in self
+            .tree
+            .within_unsorted::<kiddo::SquaredEuclidean>(&query, search_distance)
+        {
+            let index = hit.item as u32;
+            let radius = self
+                .radii
+                .as_deref()
+                .map_or(0.0, |radii| radii[index as usize]);
+            let power_distance = hit.distance - radius * radius;
+            let ordering = power_distance.total_cmp(&best_power_distance);
+            if ordering.is_lt() || (ordering.is_eq() && index < best_index) {
+                best_power_distance = power_distance;
+                best_index = index;
+            }
+        }
+        best_index
+    }
 }
 
 impl RadFoamGpuCloud {
@@ -68,12 +132,7 @@ impl RadFoamGpuCloud {
         // many repeated coordinates along one axis (regular grids, planes,
         // and quantized scans). The immutable builder explicitly supports
         // that distribution and assigns each input row its original index.
-        let point_positions: Vec<[f32; 3]> = model
-            .points
-            .iter()
-            .map(|point| [point.x, point.y, point.z])
-            .collect();
-        let point_tree = kiddo::ImmutableKdTree::new_from_slice(&point_positions);
+        let point_index = PointIndex::new(&model.points, model.radii.as_deref());
 
         // Device buffers
         let points_buf = context.create_buffer(gpu::BufferDesc {
@@ -210,7 +269,7 @@ impl RadFoamGpuCloud {
             attributes_buf,
             point_adjacency_buf,
             point_adjacency_offsets_buf,
-            point_tree,
+            point_index,
             sh_degree: model.sh_degree,
             attr_dim,
             num_points,
@@ -246,10 +305,65 @@ impl RadFoamGpuCloud {
         self.point_adjacency_offsets_buf.into()
     }
 
-    /// Nearest site to a local-space position, used to seed cell traversal.
-    pub fn nearest_point(&self, position: glam::Vec3) -> u32 {
-        self.point_tree
-            .nearest_one::<kiddo::SquaredEuclidean>(&position.to_array())
-            .item as u32
+    /// Site whose Voronoi or power cell contains a local-space position.
+    pub fn containing_point(&self, position: glam::Vec3) -> u32 {
+        self.point_index.containing_point(position)
+    }
+}
+
+#[cfg(test)]
+mod point_index_tests {
+    use super::PointIndex;
+
+    #[test]
+    fn weighted_index_finds_non_euclidean_power_cell() {
+        let points = [
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(10.0, 0.0, 0.0, 1.0),
+        ];
+        let unweighted = PointIndex::new(&points, None);
+        assert_eq!(unweighted.containing_point(glam::Vec3::ZERO), 0);
+
+        let weighted = PointIndex::new(&points, Some(&[0.0, 20.0]));
+        assert_eq!(weighted.containing_point(glam::Vec3::ZERO), 1);
+    }
+
+    #[test]
+    fn weighted_index_matches_exhaustive_power_distance() {
+        let points = (0..32)
+            .map(|index| {
+                let x = (index * 17 % 23) as f32 - 11.0;
+                let y = (index * 11 % 19) as f32 - 9.0;
+                let z = (index * 7 % 13) as f32 - 6.0;
+                glam::Vec4::new(x, y, z, 1.0)
+            })
+            .collect::<Vec<_>>();
+        let radii = (0..points.len())
+            .map(|index| (index * 5 % 9) as f32 * 0.75)
+            .collect::<Vec<_>>();
+        let index = PointIndex::new(&points, Some(&radii));
+
+        for query_index in 0..40 {
+            let query = glam::Vec3::new(
+                query_index as f32 * 0.37 - 7.0,
+                query_index as f32 * -0.19 + 3.0,
+                query_index as f32 * 0.11 - 2.0,
+            );
+            let expected = points
+                .iter()
+                .enumerate()
+                .min_by(|&(left_index, left), &(right_index, right)| {
+                    let left_distance =
+                        query.distance_squared(left.truncate()) - radii[left_index].powi(2);
+                    let right_distance =
+                        query.distance_squared(right.truncate()) - radii[right_index].powi(2);
+                    left_distance
+                        .total_cmp(&right_distance)
+                        .then_with(|| left_index.cmp(&right_index))
+                })
+                .unwrap()
+                .0 as u32;
+            assert_eq!(index.containing_point(query), expected);
+        }
     }
 }

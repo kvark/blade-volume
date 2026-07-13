@@ -191,6 +191,27 @@ impl PointCloudModel {
         self.points.is_empty()
     }
 
+    /// Returns the site whose Voronoi or power cell contains `position`.
+    ///
+    /// Weighted clouds minimize `|position - point|² - radius²`; unweighted
+    /// clouds reduce to ordinary Euclidean nearest-site selection.
+    pub fn containing_cell(&self, position: glam::Vec3) -> u32 {
+        assert!(!self.points.is_empty(), "point cloud is empty");
+        assert!(position.is_finite(), "query position must be finite");
+        let radii = self.radii.as_deref();
+        let mut best_index = 0u32;
+        let mut best_distance = f32::INFINITY;
+        for (index, point) in self.points.iter().enumerate() {
+            let radius = radii.map_or(0.0, |values| values[index]);
+            let distance = position.distance_squared(point.truncate()) - radius * radius;
+            if distance.total_cmp(&best_distance).is_lt() {
+                best_distance = distance;
+                best_index = index as u32;
+            }
+        }
+        best_index
+    }
+
     /// Returns the number of SH components based on degree.
     pub fn sh_component_count(&self) -> usize {
         get_sh_component_count(self.sh_degree)
@@ -328,6 +349,18 @@ mod model_tests {
             offsets: vec![0, 1, 1],
         });
         assert!(model.validate().unwrap_err().contains("no reverse edge"));
+    }
+
+    #[test]
+    fn containing_cell_uses_power_distance_for_weighted_clouds() {
+        let mut model = valid_two_point_model();
+        model.points[0] = glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
+        model.points[1] = glam::Vec4::new(10.0, 0.0, 0.0, 1.0);
+        model.radii = None;
+        assert_eq!(model.containing_cell(glam::Vec3::ZERO), 0);
+
+        model.radii = Some(vec![0.0, 20.0]);
+        assert_eq!(model.containing_cell(glam::Vec3::ZERO), 1);
     }
 
     #[test]

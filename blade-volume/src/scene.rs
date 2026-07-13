@@ -400,7 +400,7 @@ impl Scene {
                 .inverse()
                 .transform_point3(world_position);
             let start_point =
-                self.radfoam_clouds[object.data_index as usize].nearest_point(local_position);
+                self.radfoam_clouds[object.data_index as usize].containing_point(local_position);
             if object.start_point != start_point {
                 object.start_point = start_point;
                 self.dirty = true;

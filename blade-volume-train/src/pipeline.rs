@@ -1,8 +1,8 @@
 //! End-to-end COLMAP → trained foam → render-novel-pose pipeline.
 //!
 //! Components:
-//! - [`pick_start_cell`] picks the Voronoi cell each per-view ray starts in
-//!   (nearest cell to the camera origin via a kd-tree)
+//! - [`pick_start_cell`] picks the Voronoi or power cell containing each
+//!   camera origin
 //! - [`load_and_downsample_image`] loads an image file with the `image`
 //!   crate and resizes to the training resolution
 //! - [`train_colmap_appearance`] is the orchestrator: load reconstruction
@@ -16,29 +16,15 @@ use blade_graphics as gpu;
 use blade_volume as vol;
 use std::{path, sync};
 
-/// Returns the Voronoi cell whose site is closest to `camera_origin`. Use
-/// this as the `start_cell` of every ray for the view at that camera —
-/// rays parametrically advance forward, so starting in the cell nearest
-/// the eye keeps the trace inside the scene's depth budget.
+/// Returns the Voronoi or power cell containing `camera_origin`. Use this as
+/// the `start_cell` of every ray for the view at that camera. Weighted clouds
+/// minimize power distance rather than Euclidean distance.
 ///
 /// Linear scan over every point; cheap enough for our scales (sub-millisecond
 /// for 100K points) and avoids the kiddo "too many points at same position"
-/// panic on mesh-derived clouds where grid-sampled interior points often
-/// share coordinates.
+/// panic on quantized clouds with many coincident sites.
 pub fn pick_start_cell(model: &vol::PointCloudModel, camera_origin: glam::Vec3) -> u32 {
-    let mut best_idx = 0u32;
-    let mut best_sq = f32::INFINITY;
-    for (i, p) in model.points.iter().enumerate() {
-        let dx = p.x - camera_origin.x;
-        let dy = p.y - camera_origin.y;
-        let dz = p.z - camera_origin.z;
-        let sq = dx * dx + dy * dy + dz * dz;
-        if sq < best_sq {
-            best_sq = sq;
-            best_idx = i as u32;
-        }
-    }
-    best_idx
+    model.containing_cell(camera_origin)
 }
 
 /// Load `path` as an RGB image, downsample to `(width, height)`, and return
@@ -621,6 +607,13 @@ mod tests {
         assert_eq!(pick_start_cell(&model, glam::Vec3::new(9.0, 0.0, 0.0)), 1);
         assert_eq!(pick_start_cell(&model, glam::Vec3::new(0.0, 9.0, 0.0)), 2);
         assert_eq!(pick_start_cell(&model, glam::Vec3::new(0.0, 0.0, 9.0)), 3);
+    }
+
+    #[test]
+    fn pick_start_cell_uses_power_distance() {
+        let mut model = tiny_model_far_apart();
+        model.radii = Some(vec![0.0, 20.0, 0.0, 0.0]);
+        assert_eq!(pick_start_cell(&model, glam::Vec3::ZERO), 1);
     }
 
     /// Write a minimal COLMAP fixture: one PINHOLE camera, two images

@@ -391,7 +391,7 @@ impl RadFoamBackend {
         camera_position: glam::Vec3,
         size: RenderSize,
     ) {
-        self.trace_params.start_point = self.point_cloud.nearest_point(camera_position);
+        self.trace_params.start_point = self.point_cloud.containing_point(camera_position);
 
         encoder.init_texture(self.hdr_tex);
 

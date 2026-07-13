@@ -141,9 +141,11 @@ At the audited revision:
   Metal, so the multi-cloud scene layer remains Vulkan-only and needs a scalar
   or native bindless Metal path.
 - RadFoam scene objects now seed traversal from the camera-containing local
-  cell, carry per-object SH/attribute metadata, and traverse from the camera
-  while clipping integration to their software-TLAS interval. Physical-GPU
-  validation remains pending.
+  cell, using Euclidean distance for Voronoi clouds and exact power distance
+  `|x-p|²-r²` for weighted clouds. The same seed rule is shared by standalone
+  viewing, training path recording, CPU evaluation, and transformed scenes.
+  They traverse from the camera while clipping integration to their
+  software-TLAS interval. Physical-GPU validation remains pending.
 - Affine-transformed rays now preserve the world-distance parameter under
   uniform and nonuniform scale; bounded support intersections accept the
   resulting non-unit object-space direction. Bounds include PowerFoam support
