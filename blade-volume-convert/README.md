@@ -1,10 +1,11 @@
 # blade-volume-convert
 
-Mesh-to-volume conversion for `blade-volume`.
+Offline mesh-to-point-cloud conversion for `blade-volume`.
 
 This crate ingests triangle meshes (glTF) and produces `blade_volume::PointCloudModel`
 for either the Gaussian or RadFoam backend. The initial model uses Lambert shading with
-ambient baked into the constant SH term (degree 0).
+ambient baked into the constant SH term (degree 0). The mesh is not retained or used by
+the runtime renderer.
 
 ## Example
 
@@ -29,7 +30,8 @@ cargo run -p blade-volume-convert -- scene.glb -k gaussian -o scene.ply -f binar
 
 ## Notes
 
-- Alpha is used as a discard threshold; samples below `alpha_threshold` are dropped.
+- glTF `OPAQUE`, `MASK`, and `BLEND` alpha semantics determine point coverage;
+  `alpha_threshold` additionally drops negligible-coverage samples.
 - Surface samples come from mesh triangles, interior samples are a coarse voxel fill.
 - Output uses SH degree 0; higher-degree SH will be added later.
 

@@ -1,10 +1,14 @@
 # blade-volume
 
-Volumetric rendering methods based on Blade graphics.
+Point-cloud-native volumetric rendering methods based on Blade graphics. The
+runtime scene contains clouds only: Gaussian, RadFoam, PowerFoam, and future
+point-sampled representations. Triangle meshes are accepted solely as offline
+conversion input, never as a runtime geometry fallback.
 
 The longer-term goal is a phone-video → reconstruction → interactive viewer pipeline.
-Training will live in a separate crate built on [meganeura](https://github.com/kvark/meganeura);
-no Python, no Burn. See `AGENTS.md` for the roadmap.
+Training lives in a separate crate built on [meganeura](https://github.com/kvark/meganeura);
+no Python, no Burn. See `docs/AUDIT_AND_ROADMAP.md` for the audited status and
+stage gates.
 
 ## Workspace Structure
 
@@ -36,7 +40,8 @@ Outputs a binary RadFoam PLY plus a 5-frame interpolated-camera strip
 above. See `docs/PIPELINE.md` for the design and `docs/MESH_TO_FOAM.md`
 for the parallel mesh-to-foam path.
 
-CI enforces `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`.
+CI enforces workspace formatting, all-feature clippy with warnings denied,
+default and all-feature tests, and a RustSec dependency audit.
 The clippy policy mirrors `blade-graphics/src/lib.rs` and lives in the root `Cargo.toml`'s
 `[workspace.lints]` block — keep both in sync.
 
