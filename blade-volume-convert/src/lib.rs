@@ -270,6 +270,9 @@ struct Triangle {
     uv0: glam::Vec2,
     uv1: glam::Vec2,
     uv2: glam::Vec2,
+    color0: glam::Vec4,
+    color1: glam::Vec4,
+    color2: glam::Vec4,
     normal: glam::Vec3,
     material: usize,
     area: f32,
@@ -448,9 +451,8 @@ pub fn convert_gltf(
                 let (u, v) = sample_barycentric(&mut rng);
                 let w = 1.0 - u - v;
                 let p = tri.v0 * u + tri.v1 * v + tri.v2 * w;
-                let uv = tri.uv0 * u + tri.uv1 * v + tri.uv2 * w;
                 let mat = &materials[tri.material];
-                let base = sample_material_color(mat, uv);
+                let base = sample_triangle_color(tri, mat, u, v, w);
                 let color = display_color(base.truncate(), options.ambient);
                 let coverage = material_alpha_coverage(mat, base.w);
                 if coverage <= 0.0 || coverage < options.alpha_threshold {
@@ -592,6 +594,15 @@ fn gather_node_triangles(
                 }
                 None => vec![glam::Vec2::ZERO; positions.len()],
             };
+            let colors = reader
+                .read_colors(0)
+                .map(|colors| {
+                    colors
+                        .into_rgba_f32()
+                        .map(glam::Vec4::from)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| vec![glam::Vec4::ONE; positions.len()]);
             let normals = reader
                 .read_normals()
                 .map(|n| {
@@ -634,6 +645,9 @@ fn gather_node_triangles(
                     uv0: *uvs.get(i0).ok_or(ConvertError::MissingMeshData)?,
                     uv1: *uvs.get(i1).ok_or(ConvertError::MissingMeshData)?,
                     uv2: *uvs.get(i2).ok_or(ConvertError::MissingMeshData)?,
+                    color0: *colors.get(i0).ok_or(ConvertError::MissingMeshData)?,
+                    color1: *colors.get(i1).ok_or(ConvertError::MissingMeshData)?,
+                    color2: *colors.get(i2).ok_or(ConvertError::MissingMeshData)?,
                     normal,
                     material: material_index,
                     area,
@@ -675,10 +689,23 @@ struct Bounds {
 
 fn compute_average_color(triangles: &[Triangle], materials: &[MaterialInfo]) -> glam::Vec3 {
     let mut sum = glam::Vec3::ZERO;
+    let mut total_area = 0.0;
     for triangle in triangles {
-        sum += materials[triangle.material].base_color.truncate();
+        let color = sample_triangle_color(
+            triangle,
+            &materials[triangle.material],
+            1.0 / 3.0,
+            1.0 / 3.0,
+            1.0 / 3.0,
+        );
+        sum += color.truncate() * triangle.area;
+        total_area += triangle.area;
     }
-    sum / triangles.len() as f32
+    if total_area > 0.0 {
+        sum / total_area
+    } else {
+        glam::Vec3::ZERO
+    }
 }
 
 fn is_point_inside_mesh(point: glam::Vec3, triangles: &[Triangle]) -> bool {
@@ -746,6 +773,18 @@ fn sample_material_color(material: &MaterialInfo, uv: glam::Vec2) -> glam::Vec4 
     } else {
         material.base_color
     }
+}
+
+fn sample_triangle_color(
+    triangle: &Triangle,
+    material: &MaterialInfo,
+    u: f32,
+    v: f32,
+    w: f32,
+) -> glam::Vec4 {
+    let uv = triangle.uv0 * u + triangle.uv1 * v + triangle.uv2 * w;
+    let vertex_color = triangle.color0 * u + triangle.color1 * v + triangle.color2 * w;
+    sample_material_color(material, uv) * vertex_color
 }
 
 fn material_alpha_coverage(material: &MaterialInfo, alpha: f32) -> f32 {
@@ -1401,6 +1440,36 @@ mod tests {
     }
 
     #[test]
+    fn vertex_color_interpolates_and_multiplies_base_color() {
+        let material = MaterialInfo {
+            base_color: glam::Vec4::new(0.5, 1.0, 0.25, 0.8),
+            base_color_texture: None,
+            tex_coord: 0,
+            uv_transform: UvTransform::identity(),
+            alpha_mode: gltf::material::AlphaMode::Blend,
+            alpha_cutoff: 0.5,
+        };
+        let triangle = Triangle {
+            v0: glam::Vec3::ZERO,
+            v1: glam::Vec3::X,
+            v2: glam::Vec3::Y,
+            uv0: glam::Vec2::ZERO,
+            uv1: glam::Vec2::X,
+            uv2: glam::Vec2::Y,
+            color0: glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            color1: glam::Vec4::new(0.0, 1.0, 0.0, 0.5),
+            color2: glam::Vec4::new(0.0, 0.0, 1.0, 0.0),
+            normal: glam::Vec3::Z,
+            material: 0,
+            area: 0.5,
+        };
+        assert_eq!(
+            sample_triangle_color(&triangle, &material, 0.5, 0.25, 0.25),
+            glam::Vec4::new(0.25, 0.25, 0.0625, 0.5)
+        );
+    }
+
+    #[test]
     fn decoded_gltf_image_formats_preserve_color_and_alpha() {
         let luma_alpha = gltf::image::Data {
             pixels: vec![64, 128],
@@ -1774,6 +1843,9 @@ mod tests {
             uv0: glam::Vec2::ZERO,
             uv1: glam::Vec2::ZERO,
             uv2: glam::Vec2::ZERO,
+            color0: glam::Vec4::ONE,
+            color1: glam::Vec4::ONE,
+            color2: glam::Vec4::ONE,
             normal: glam::Vec3::X,
             material: 0,
             area: 0.5,
@@ -1794,6 +1866,9 @@ mod tests {
                 uv0: glam::Vec2::ZERO,
                 uv1: glam::Vec2::ZERO,
                 uv2: glam::Vec2::ZERO,
+                color0: glam::Vec4::ONE,
+                color1: glam::Vec4::ONE,
+                color2: glam::Vec4::ONE,
                 normal: glam::Vec3::Z,
                 material: 0,
                 area: 0.5,
@@ -1805,6 +1880,9 @@ mod tests {
                 uv0: glam::Vec2::ZERO,
                 uv1: glam::Vec2::ZERO,
                 uv2: glam::Vec2::ZERO,
+                color0: glam::Vec4::ONE,
+                color1: glam::Vec4::ONE,
+                color2: glam::Vec4::ONE,
                 normal: glam::Vec3::X,
                 material: 0,
                 area: 0.5,
@@ -1816,6 +1894,9 @@ mod tests {
                 uv0: glam::Vec2::ZERO,
                 uv1: glam::Vec2::ZERO,
                 uv2: glam::Vec2::ZERO,
+                color0: glam::Vec4::ONE,
+                color1: glam::Vec4::ONE,
+                color2: glam::Vec4::ONE,
                 normal: glam::Vec3::Y,
                 material: 0,
                 area: 0.5,
@@ -1827,6 +1908,9 @@ mod tests {
                 uv0: glam::Vec2::ZERO,
                 uv1: glam::Vec2::ZERO,
                 uv2: glam::Vec2::ZERO,
+                color0: glam::Vec4::ONE,
+                color1: glam::Vec4::ONE,
+                color2: glam::Vec4::ONE,
                 normal: glam::Vec3::new(1.0, 1.0, 1.0).normalize(),
                 material: 0,
                 area: 0.5,

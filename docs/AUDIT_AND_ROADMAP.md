@@ -168,7 +168,9 @@ At the audited revision:
   [`KHR_texture_transform`](https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_texture_transform/README.md)
   offset, rotation, scale, and texture-coordinate-set override semantics.
   `OPAQUE`, `MASK`, and `BLEND` alpha modes respectively ignore alpha, apply
-  the declared cutoff, and modulate generated point opacity.
+  the declared cutoff, and modulate generated point opacity. `COLOR_0` is
+  interpolated and multiplied into sampled base color; interior fallback color
+  uses area-weighted triangle-centroid samples rather than tessellation count.
 - Distorted projection is handled in the reconstruction/training boundary; the
   runtime `PointCloudModel` intentionally carries cloud data rather than source
   capture-camera calibration.
