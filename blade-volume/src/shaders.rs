@@ -28,7 +28,7 @@ const INCLUDES: &[(&str, &str)] = &[
 const MAX_INCLUDE_DEPTH: usize = 10;
 
 /// Expand `// #include "<name>"` directives in a WGSL source by inlining fragments
-/// from [`INCLUDES`]. Nested includes are supported up to [`MAX_INCLUDE_DEPTH`].
+/// from the internal include table. Nested includes have a fixed depth limit.
 ///
 /// Panics if the include name is unknown or the recursion depth is exceeded.
 pub fn compose(source: &str) -> String {

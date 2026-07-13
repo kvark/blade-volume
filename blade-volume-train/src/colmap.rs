@@ -648,7 +648,7 @@ const DEFAULT_INITIAL_DENSITY: f32 = 0.1;
 impl Reconstruction {
     /// Build a starting `PointCloudModel` from the sparse 3D points:
     /// - positions taken straight from `points3D.bin`
-    /// - density is a uniform [`DEFAULT_INITIAL_DENSITY`]
+    /// - density is a uniform internal default
     /// - SH degree 0; DC computed so the rendered colour equals the COLMAP RGB
     ///   (modulo the renderer's `0.5 +` bias)
     /// - no transforms, no adjacency, no radii — the trainer fills those in
@@ -656,7 +656,7 @@ impl Reconstruction {
         self.to_initial_model_with_density(DEFAULT_INITIAL_DENSITY)
     }
 
-    /// As [`to_initial_model`] but with a caller-chosen uniform density.
+    /// As [`Self::to_initial_model`] but with a caller-chosen uniform density.
     /// Higher values give larger initial per-cell alpha at typical COLMAP
     /// scales — useful when the training loss plateaus too early.
     pub fn to_initial_model_with_density(&self, initial_density: f32) -> vol::PointCloudModel {

@@ -77,13 +77,13 @@ fn softplus(x: f32) -> f32 {
 /// Positions and SH coefficients are free parameters; density/radius are stored
 /// in their `softplus` pre-image so the optimiser doesn't have to fight the
 /// positivity constraint. Use [`to_model`](Self::to_model) to materialise a
-/// renderer-ready [`PointCloudModel`].
+/// renderer-ready [`blade_volume::PointCloudModel`].
 #[derive(Clone, Debug)]
 pub struct TrainerState {
     /// Position per point. Free parameter.
     pub positions: Vec<glam::Vec3>,
 
-    /// `inverse_softplus(density)` per point. Apply [`softplus`] to recover
+    /// `inverse_softplus(density)` per point. Apply `softplus` to recover
     /// the value the renderer consumes.
     pub log_density: Vec<f32>,
 

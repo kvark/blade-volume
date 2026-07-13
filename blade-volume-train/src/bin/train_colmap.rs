@@ -49,7 +49,7 @@ struct Args {
     #[argh(option)]
     novel_out: Option<String>,
 
-    /// optional output prefix for a strip of novel poses (writes <prefix>_NN.png)
+    /// optional output prefix for a strip of novel poses (writes `<prefix>_NN.png`)
     #[argh(option)]
     novel_strip_prefix: Option<String>,
 
@@ -261,7 +261,7 @@ struct Args {
 
     /// optional checkpoint PLY path written with exact safetensors optimizer
     /// and deterministic trainer-state sidecars at every densify cycle and
-    /// bounded invocation endpoint. Defaults to <output>.ckpt.ply when either
+    /// bounded invocation endpoint. Defaults to `<output>.ckpt.ply` when either
     /// --densify-every or --stop-after-steps is nonzero; pass "none" to
     /// disable when running through the full budget.
     #[argh(option)]

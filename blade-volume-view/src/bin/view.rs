@@ -5,7 +5,7 @@
 //! A mismatch can cause validation asserts or GPU crashes.
 //!
 //! Usage:
-//!   cargo run -p blade-volume-view -- <input_file> [options]
+//! `cargo run -p blade-volume-view -- <input_file> [options]`
 //!
 //! The rendering method is automatically detected based on file contents:
 //!   - PLY files are examined to detect RadFoam vs Gaussian format

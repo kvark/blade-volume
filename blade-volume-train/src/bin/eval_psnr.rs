@@ -85,7 +85,7 @@ struct Args {
 }
 
 /// Write a side-by-side `[GT | rendered]` PNG. Both inputs are row-major
-/// RGB f32 in [0,1] of size `w*h*3`.
+/// RGB f32 in `[0,1]` of size `w*h*3`.
 fn dump_comparison(path: &path::Path, gt: &[f32], pred: &[f32], w: u32, h: u32) {
     let (wu, hu) = (w as usize, h as usize);
     let gap = 8usize;
