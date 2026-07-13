@@ -298,6 +298,11 @@ fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
 
+    if args.qhull && !cfg!(feature = "qhull") {
+        eprintln!("--qhull requires building blade-volume-train with --features qhull");
+        std::process::exit(2);
+    }
+
     if args.stop_after_steps > 0 && args.checkpoint.as_deref() == Some("none") {
         eprintln!("--stop-after-steps requires checkpoints; remove --checkpoint none");
         std::process::exit(2);

@@ -403,7 +403,12 @@ fn rebuild_adjacency(model: &mut vol::PointCloudModel, kind: AdjacencyKind) {
                 model.points.len()
             );
             model.radii = None;
-            model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
+            #[cfg(feature = "qhull")]
+            {
+                model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
+            }
+            #[cfg(not(feature = "qhull"))]
+            panic!("Qhull adjacency requires blade-volume-train feature `qhull`");
         }
         AdjacencyKind::Knn(k) => {
             log::info!(

@@ -117,10 +117,22 @@ fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
 
-    let mut model = vol::io::load_radfoam(&args.ply);
+    let model = vol::io::load_radfoam(&args.ply);
+    #[cfg(feature = "qhull")]
+    let mut model = model;
     if args.rebuild_adjacency {
-        eprintln!("rebuilding adjacency from points (Qhull)…");
-        model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
+        #[cfg(feature = "qhull")]
+        {
+            eprintln!("rebuilding adjacency from points (Qhull)…");
+            model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
+        }
+        #[cfg(not(feature = "qhull"))]
+        {
+            eprintln!(
+                "--rebuild-adjacency requires building blade-volume-train with --features qhull"
+            );
+            std::process::exit(2);
+        }
     }
     println!(
         "loaded {} ({} cells, sh_degree {}, adjacency {})",

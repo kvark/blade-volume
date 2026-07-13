@@ -196,10 +196,10 @@ At the audited revision:
 ### Project constraints
 
 - The C-backed Qhull path is isolated behind the non-default `qhull` feature;
-  the default dependency graph is Rust-only. Production-size exact Delaunay
-  training currently opts into that feature because the available pure-Rust
-  implementation exceeded the measured memory budget. A scalable Rust
-  replacement remains preferable.
+  both the core library and training crate keep it out of their default
+  dependency graphs. Production-size exact Delaunay training opts into that
+  feature explicitly because the available pure-Rust implementation exceeded
+  the measured memory budget. A scalable Rust replacement remains preferable.
 
 ## Implementation stages
 
@@ -307,7 +307,8 @@ paper-matched hyperparameters.
 4. Fix formatting, clippy, and GPU resource lifetime failures. (Done for all
    reproducible software issues; the host driver incident remains external.)
 5. Add deterministic benchmark manifests recording dataset, split, cell count,
-   resolution, optimizer steps, seed, hardware, and metrics.
+   resolution, optimizer steps, seed, hardware, and metrics. (Done; Qhull
+   benchmark commands also opt into the non-default feature explicitly.)
 
 Acceptance gate: documented training commands run; workspace fmt and clippy
 pass; all non-hardware-optional tests pass; GPU tests have explicit skip

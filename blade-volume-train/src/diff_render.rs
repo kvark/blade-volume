@@ -2366,7 +2366,12 @@ fn rebuild_training_adjacency(model: &mut vol::PointCloudModel, use_qhull: bool)
     if model.radii.is_some() || !use_qhull {
         model.compute_adjacency_default();
     } else {
-        model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
+        #[cfg(feature = "qhull")]
+        {
+            model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
+        }
+        #[cfg(not(feature = "qhull"))]
+        panic!("Qhull adjacency requires blade-volume-train feature `qhull`");
     }
 }
 
