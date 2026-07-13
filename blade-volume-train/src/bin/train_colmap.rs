@@ -157,18 +157,23 @@ struct Args {
     #[argh(option, default = "0")]
     densify_until: usize,
 
-    /// prune small near-transparent cells each densify round (RadFoam's
-    /// floater remover). Off by default for backward compatibility.
+    /// prune small cells with no measured ray contribution, while protecting
+    /// contributing cells and their neighbours. Off by default.
     #[argh(switch)]
     prune: bool,
 
-    /// prune a cell only if its post-activation density is below this
-    /// (default 0.01). Requires `--prune`.
+    /// per-view ray-weight threshold that protects a cell and its neighbours
+    /// from pruning (default 0.01). Requires `--prune`.
     #[argh(option, default = "0.01")]
-    prune_density: f32,
+    prune_contribution: f32,
+
+    /// contribution threshold below which a cell's density parameter is
+    /// suppressed before splitting (default 0.001). Requires `--prune`.
+    #[argh(option, default = "0.001")]
+    suppress_contribution: f32,
 
     /// also require farthest-neighbour radius below this (default 0.1) to
-    /// prune — only cull small dim cells, never large empty background ones.
+    /// prune — only cull small unsupported cells, never large background ones.
     #[argh(option, default = "0.1")]
     prune_radius: f32,
 
@@ -388,7 +393,8 @@ fn main() {
                         args.densify_until
                     },
                     prune: args.prune,
-                    prune_density: args.prune_density,
+                    prune_contribution: args.prune_contribution,
+                    suppress_contribution: args.suppress_contribution,
                     prune_radius: args.prune_radius,
                 })
             } else {

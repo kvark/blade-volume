@@ -935,13 +935,18 @@ pub struct DensifyConfig {
     /// Stop densifying after this step (refinement-only phase follows).
     /// RadFoam densifies iters 2000–11000 of 20000 (~55 %).
     pub densify_until: usize,
-    /// Prune near-transparent small cells each densify round (the floater
-    /// remover RadFoam has and we previously lacked).
+    /// Prune low-contribution small cells each densify round, while
+    /// protecting visible cells and their direct neighbours.
     pub prune: bool,
-    /// Prune a cell only if its post-activation density is below this.
-    pub prune_density: f32,
-    /// …and its farthest-neighbour radius is below this (only cull small
-    /// dim cells; large empty background cells are kept).
+    /// A cell with at least this much maximum per-view ray weight protects
+    /// itself and its direct adjacency neighbours from pruning.
+    pub prune_contribution: f32,
+    /// Cells below this contribution have their density parameter suppressed
+    /// before splitting, matching RadFoam's dead-cell handling.
+    pub suppress_contribution: f32,
+    /// Only cull an unprotected cell when its farthest-neighbour radius is
+    /// below this value; large empty background cells remain as traversal
+    /// support.
     pub prune_radius: f32,
 }
 
@@ -955,7 +960,8 @@ impl Default for DensifyConfig {
             target_points: 2_097_152,
             densify_until: usize::MAX,
             prune: true,
-            prune_density: 0.01,
+            prune_contribution: 0.01,
+            suppress_contribution: 0.001,
             prune_radius: 0.1,
         }
     }
@@ -1071,6 +1077,7 @@ pub fn fit_appearance_multi_view(
     }
     let pixel_batch = config.pixel_batch.unwrap_or(p);
     assert!(pixel_batch > 0, "pixel_batch must be greater than zero");
+    assert!(max_steps > 0, "max_steps must be greater than zero");
     assert!(
         config.learning_rate.is_finite() && config.learning_rate >= 0.0,
         "learning_rate must be finite and non-negative"
@@ -1111,6 +1118,18 @@ pub fn fit_appearance_multi_view(
         assert!(
             densify.fraction.is_finite() && densify.fraction >= 0.0,
             "densify.fraction must be finite and non-negative"
+        );
+        assert!(
+            densify.prune_contribution.is_finite() && densify.prune_contribution >= 0.0,
+            "densify.prune_contribution must be finite and non-negative"
+        );
+        assert!(
+            densify.suppress_contribution.is_finite() && densify.suppress_contribution >= 0.0,
+            "densify.suppress_contribution must be finite and non-negative"
+        );
+        assert!(
+            densify.prune_radius.is_finite() && densify.prune_radius >= 0.0,
+            "densify.prune_radius must be finite and non-negative"
         );
     }
     if config.pixel_batch.is_none() {
@@ -1358,11 +1377,232 @@ fn per_cell_farthest(model: &vol::PointCloudModel) -> (Vec<f32>, Vec<usize>) {
     (radius, farthest)
 }
 
+#[derive(Debug)]
+struct PathContributionStats {
+    per_cell: Vec<f32>,
+    rays: usize,
+    segments: usize,
+    truncated_rays: usize,
+    max_steps_used: usize,
+}
+
+fn accumulate_path_contributions(
+    cells: &[u32],
+    next_cells: &[u32],
+    dts: &[f32],
+    mask: &[f32],
+    points: &[glam::Vec4],
+    max_steps: usize,
+    view_contribution: &mut [f32],
+    stats: &mut PathContributionStats,
+) {
+    assert_eq!(cells.len(), next_cells.len());
+    assert_eq!(cells.len(), dts.len());
+    assert_eq!(cells.len(), mask.len());
+    assert_eq!(cells.len() % max_steps, 0);
+    for ray in 0..cells.len() / max_steps {
+        let base = ray * max_steps;
+        let mut transmittance = 1.0_f32;
+        let mut steps_used = 0usize;
+        for step in 0..max_steps {
+            let slot = base + step;
+            if mask[slot] <= 0.0 {
+                break;
+            }
+            let cell = cells[slot] as usize;
+            assert!(cell < points.len(), "path recorder returned invalid cell");
+            let optical_depth = points[cell].w.max(0.0) * dts[slot].max(0.0);
+            let attenuation = (-optical_depth).exp();
+            let weight = transmittance * (1.0 - attenuation);
+            view_contribution[cell] += weight;
+            transmittance *= attenuation;
+            steps_used += 1;
+        }
+        stats.rays += 1;
+        stats.segments += steps_used;
+        stats.max_steps_used = stats.max_steps_used.max(steps_used);
+        if steps_used == max_steps {
+            let last = base + max_steps - 1;
+            if cells[last] != next_cells[last] {
+                stats.truncated_rays += 1;
+            }
+        }
+    }
+}
+
+/// Measure the same per-cell contribution signal used by RadFoam pruning:
+/// sum volumetric ray weights within each view, then retain the maximum over
+/// views. Each view uses one deterministic 2× downsample phase, matching the
+/// reference collector without burdening every Adam mini-batch with a
+/// readback. The readback is bounded to 4096 rays (16 MiB per device/shared
+/// path set at 256 steps) and reused across views.
+fn collect_path_contributions(
+    context: &blade_graphics::Context,
+    recorder: &vol::gpu::PathRecorder,
+    gpu_cloud: &vol::gpu::RadFoamGpuCloud,
+    model: &vol::PointCloudModel,
+    views: &[ViewSupervision],
+    max_steps: usize,
+    cycle: usize,
+) -> PathContributionStats {
+    const MAX_RAYS_PER_BATCH: usize = 4096;
+
+    let max_sampled_pixels = views
+        .iter()
+        .map(|view| view.width.div_ceil(2) as usize * view.height.div_ceil(2) as usize)
+        .max()
+        .unwrap_or(1);
+    let capacity = max_sampled_pixels.clamp(1, MAX_RAYS_PER_BATCH);
+    let mut buffers = vol::gpu::PathRecordBuffers::new(context, capacity as u32, max_steps as u32);
+    let pl_capacity = capacity as u64 * max_steps as u64;
+    let readback_size = pl_capacity * std::mem::size_of::<u32>() as u64;
+    let cells_readback = context.create_buffer(blade_graphics::BufferDesc {
+        name: "contribution-cells-readback",
+        size: readback_size,
+        memory: blade_graphics::Memory::Shared,
+    });
+    let next_cells_readback = context.create_buffer(blade_graphics::BufferDesc {
+        name: "contribution-next-cells-readback",
+        size: readback_size,
+        memory: blade_graphics::Memory::Shared,
+    });
+    let dts_readback = context.create_buffer(blade_graphics::BufferDesc {
+        name: "contribution-dts-readback",
+        size: readback_size,
+        memory: blade_graphics::Memory::Shared,
+    });
+    let mask_readback = context.create_buffer(blade_graphics::BufferDesc {
+        name: "contribution-mask-readback",
+        size: readback_size,
+        memory: blade_graphics::Memory::Shared,
+    });
+    let mut encoder = context.create_command_encoder(blade_graphics::CommandEncoderDesc {
+        name: "collect-path-contributions",
+        buffer_count: 1,
+    });
+    let mut stats = PathContributionStats {
+        per_cell: vec![0.0; model.points.len()],
+        rays: 0,
+        segments: 0,
+        truncated_rays: 0,
+        max_steps_used: 0,
+    };
+
+    for (view_index, view) in views.iter().enumerate() {
+        let phase = cycle
+            .wrapping_mul(0x9E37_79B9)
+            .wrapping_add(view_index.wrapping_mul(0x85EB_CA6B));
+        let x_offset = if view.width > 1 { phase as u32 & 1 } else { 0 };
+        let y_offset = if view.height > 1 {
+            (phase as u32 >> 1) & 1
+        } else {
+            0
+        };
+        let mut sampled_pixels =
+            Vec::with_capacity(view.width.div_ceil(2) as usize * view.height.div_ceil(2) as usize);
+        for y in (y_offset..view.height).step_by(2) {
+            for x in (x_offset..view.width).step_by(2) {
+                sampled_pixels.push(y * view.width + x);
+            }
+        }
+        let mut view_contribution = vec![0.0_f32; model.points.len()];
+        let start_point = gpu_cloud.nearest_point(glam::Vec3::from_array(view.camera.cam_position));
+
+        for pixel_batch in sampled_pixels.chunks(capacity) {
+            buffers.write_pixel_indices_prefix(pixel_batch);
+            let num_pixels = pixel_batch.len();
+            let pl = num_pixels * max_steps;
+            let path_bytes = (pl * std::mem::size_of::<u32>()) as u64;
+            encoder.start();
+            {
+                let mut transfer = encoder.transfer("contribution-path-prepare");
+                transfer.copy_buffer_to_buffer(
+                    buffers.pixel_indices_stage.at(0),
+                    buffers.pixel_indices.at(0),
+                    std::mem::size_of_val(pixel_batch) as u64,
+                );
+                transfer.fill_buffer(buffers.cells.at(0), path_bytes, 0);
+                transfer.fill_buffer(buffers.next_cells.at(0), path_bytes, 0);
+                transfer.fill_buffer(buffers.dts.at(0), path_bytes, 0);
+                transfer.fill_buffer(buffers.mask.at(0), path_bytes, 0);
+            }
+            recorder.dispatch(
+                &mut encoder,
+                gpu_cloud,
+                buffers.pixel_indices.into(),
+                buffers.cells.into(),
+                buffers.next_cells.into(),
+                buffers.dts.into(),
+                buffers.mask.into(),
+                vol::gpu::RecordPathsArgs {
+                    camera: view.camera,
+                    start_point,
+                    max_steps: max_steps as u32,
+                    image_width: view.width,
+                    image_height: view.height,
+                    max_path_dt: MAX_PATH_DT,
+                    depth: view.camera.depth,
+                    num_pixels: num_pixels as u32,
+                },
+            );
+            {
+                let mut transfer = encoder.transfer("contribution-path-readback");
+                transfer.copy_buffer_to_buffer(
+                    buffers.cells.at(0),
+                    cells_readback.at(0),
+                    path_bytes,
+                );
+                transfer.copy_buffer_to_buffer(
+                    buffers.next_cells.at(0),
+                    next_cells_readback.at(0),
+                    path_bytes,
+                );
+                transfer.copy_buffer_to_buffer(buffers.dts.at(0), dts_readback.at(0), path_bytes);
+                transfer.copy_buffer_to_buffer(buffers.mask.at(0), mask_readback.at(0), path_bytes);
+            }
+            let sync = context.submit(&mut encoder);
+            let completed = context
+                .wait_for(&sync, !0)
+                .expect("contribution path readback failed");
+            assert!(completed, "contribution path readback timed out");
+            let cells =
+                unsafe { std::slice::from_raw_parts(cells_readback.data() as *const u32, pl) };
+            let next_cells =
+                unsafe { std::slice::from_raw_parts(next_cells_readback.data() as *const u32, pl) };
+            let dts = unsafe { std::slice::from_raw_parts(dts_readback.data() as *const f32, pl) };
+            let mask =
+                unsafe { std::slice::from_raw_parts(mask_readback.data() as *const f32, pl) };
+            accumulate_path_contributions(
+                cells,
+                next_cells,
+                dts,
+                mask,
+                &model.points,
+                max_steps,
+                &mut view_contribution,
+                &mut stats,
+            );
+        }
+        for (maximum, contribution) in stats.per_cell.iter_mut().zip(view_contribution) {
+            *maximum = maximum.max(contribution);
+        }
+    }
+
+    context.destroy_command_encoder(&mut encoder);
+    context.destroy_buffer(cells_readback);
+    context.destroy_buffer(next_cells_readback);
+    context.destroy_buffer(dts_readback);
+    context.destroy_buffer(mask_readback);
+    buffers.destroy(context);
+    stats
+}
+
 /// One RadFoam-style prune+densify round on the post-download `model`
 /// (positions in `points.xyz`, density in `points.w`, current adjacency).
 ///
-/// 1. **Prune** small near-transparent cells (`density < prune_density &&
-///    cell_radius < prune_radius`) — the floater remover.
+/// 1. **Prune** small cells with neither direct nor adjacent measured ray
+///    contribution (`contribution <= prune_contribution && cell_radius <
+///    prune_radius`) — the RadFoam floater remover.
 /// 2. **Densify** by appending `fraction × survivors` children, parents
 ///    drawn by weighted multinomial (without replacement) on
 ///    `grad_accum × cell_radius`. Each child sits 0.25× toward the
@@ -1376,10 +1616,14 @@ fn per_cell_farthest(model: &vol::PointCloudModel) -> (Vec<f32>, Vec<usize>) {
 fn prune_and_densify(
     model: &mut vol::PointCloudModel,
     grad_accum: &[f32],
+    contribution: &[f32],
     cfg: &DensifyConfig,
     rng_state: &mut u64,
+    softplus_beta: f32,
 ) -> (Vec<usize>, usize, usize) {
     let n_old = model.points.len();
+    assert_eq!(grad_accum.len(), n_old);
+    assert_eq!(contribution.len(), n_old);
     let sh_block = model.sh_component_count() * 3;
     let (radius, farthest) = per_cell_farthest(model);
 
@@ -1391,18 +1635,49 @@ fn prune_and_densify(
     };
 
     // --- Prune ---
-    let survivors: Vec<usize> = (0..n_old)
+    // RadFoam retains cells which contribute materially in any view and
+    // their one-ring neighbours. Neighbour protection preserves traversal
+    // support around visible surfaces instead of punching holes merely
+    // because a support cell's own density/weight is low.
+    let protected: Vec<bool> = contribution
+        .iter()
+        .map(|&value| value > cfg.prune_contribution)
+        .collect();
+    let adjacency = model.adjacency.as_ref();
+    let mut survivors: Vec<usize> = (0..n_old)
         .filter(|&i| {
             if !cfg.prune {
                 return true;
             }
-            let dim = model.points[i].w < cfg.prune_density;
+            let protected_by_neighbor = adjacency.is_some_and(|adj| {
+                let start = adj.offsets[i] as usize;
+                let end = adj.offsets[i + 1] as usize;
+                adj.neighbors[start..end]
+                    .iter()
+                    .any(|&neighbor| protected[neighbor as usize])
+            });
+            let unprotected = !protected[i] && !protected_by_neighbor;
             let small = radius[i] < cfg.prune_radius;
-            !(dim && small)
+            !(unprotected && small)
         })
         .collect();
+    if survivors.is_empty() {
+        let keep = (0..n_old)
+            .max_by(|&a, &b| contribution[a].total_cmp(&contribution[b]))
+            .expect("densification requires at least one point");
+        survivors.push(keep);
+    }
     let n_surv = survivors.len();
     let pruned = n_old - n_surv;
+
+    if cfg.prune {
+        let suppressed_density = density_activation(-1.0, softplus_beta);
+        for (point, &value) in model.points.iter_mut().zip(contribution) {
+            if value < cfg.suppress_contribution {
+                point.w = suppressed_density;
+            }
+        }
+    }
 
     // --- Densify: weighted sampling without replacement (Efraimidis–
     // Spirakis: key = ln(u)/w, take the top-`want` keys). ---
@@ -1432,10 +1707,23 @@ fn prune_and_densify(
     let n_new = n_surv + added;
     let mut new_points = Vec::with_capacity(n_new);
     let mut new_sh = Vec::with_capacity(n_new * sh_block);
+    let mut new_radii = model.radii.as_ref().map(|_| Vec::with_capacity(n_new));
+    let mut new_transforms = model.transforms.as_ref().map(|_| vol::Transforms {
+        rotations: Vec::with_capacity(n_new),
+        scales: Vec::with_capacity(n_new),
+    });
     let mut new_to_old = Vec::with_capacity(n_new);
     for &oi in &survivors {
         new_points.push(model.points[oi]);
         new_sh.extend_from_slice(&model.sh_coefficients[oi * sh_block..(oi + 1) * sh_block]);
+        if let Some(ref mut radii) = new_radii {
+            radii.push(model.radii.as_ref().unwrap()[oi]);
+        }
+        if let Some(ref mut transforms) = new_transforms {
+            let old = model.transforms.as_ref().unwrap();
+            transforms.rotations.push(old.rotations[oi]);
+            transforms.scales.push(old.scales[oi]);
+        }
         new_to_old.push(oi);
     }
     for &local in &parents_local {
@@ -1448,10 +1736,21 @@ fn prune_and_densify(
         let off = toward + kick;
         new_points.push(glam::Vec4::new(p.x + off.x, p.y + off.y, p.z + off.z, p.w));
         new_sh.extend_from_slice(&model.sh_coefficients[oi * sh_block..(oi + 1) * sh_block]);
+        if let Some(ref mut radii) = new_radii {
+            radii.push(model.radii.as_ref().unwrap()[oi]);
+        }
+        if let Some(ref mut transforms) = new_transforms {
+            let old = model.transforms.as_ref().unwrap();
+            transforms.rotations.push(old.rotations[oi]);
+            transforms.scales.push(old.scales[oi]);
+        }
         new_to_old.push(oi);
     }
     model.points = new_points;
     model.sh_coefficients = new_sh;
+    model.radii = new_radii;
+    model.transforms = new_transforms;
+    model.adjacency = None;
     (new_to_old, pruned, added)
 }
 
@@ -1999,7 +2298,8 @@ fn fit_appearance_pixel_batched(
                 path_bufs.mask.into(),
                 vol::gpu::RecordPathsArgs {
                     camera: v.camera,
-                    start_point: v.start_cell,
+                    start_point: gpu_cloud
+                        .nearest_point(glam::Vec3::from_array(v.camera.cam_position)),
                     max_steps: max_steps as u32,
                     image_width: v.width,
                     image_height: v.height,
@@ -2073,8 +2373,50 @@ fn fit_appearance_pixel_batched(
                 download_model_parameters(&session, model, config.softplus_beta);
                 let adam_snap = save_adam_state(&session, sh_degree, n_old, views.len());
 
-                let (new_to_old, pruned, added) =
-                    prune_and_densify(model, &position_grad_accum, &d, &mut rng_split);
+                let contribution = if d.prune {
+                    let stats = collect_path_contributions(
+                        &gpu, &recorder, &gpu_cloud, model, views, max_steps, cycle,
+                    );
+                    let truncated_percent = if stats.rays == 0 {
+                        0.0
+                    } else {
+                        100.0 * stats.truncated_rays as f32 / stats.rays as f32
+                    };
+                    let mean_segments = if stats.rays == 0 {
+                        0.0
+                    } else {
+                        stats.segments as f32 / stats.rays as f32
+                    };
+                    log::info!(
+                        "contribution cycle {}: {} rays, {:.1} mean segments, max {}, \
+                         {} truncated ({:.3}%)",
+                        cycle,
+                        stats.rays,
+                        mean_segments,
+                        stats.max_steps_used,
+                        stats.truncated_rays,
+                        truncated_percent,
+                    );
+                    if stats.truncated_rays > 0 {
+                        log::warn!(
+                            "{} contribution rays hit max_steps={}; pruning may miss cells \
+                             beyond the recorded path",
+                            stats.truncated_rays,
+                            max_steps,
+                        );
+                    }
+                    stats.per_cell
+                } else {
+                    vec![f32::INFINITY; n_old]
+                };
+                let (new_to_old, pruned, added) = prune_and_densify(
+                    model,
+                    &position_grad_accum,
+                    &contribution,
+                    &d,
+                    &mut rng_split,
+                    config.softplus_beta,
+                );
                 log::info!(
                     "densify cycle {}: {} cells (-{} pruned, +{} split) → {} total",
                     cycle,
@@ -2426,13 +2768,112 @@ mod tests {
             ..DensifyConfig::default()
         };
         let gradients = [0.0, 0.0, 1.0e20, 0.0];
-        let (new_to_old, pruned, added) =
-            prune_and_densify(&mut model, &gradients, &config, &mut rng);
+        let contribution = [1.0; 4];
+        let (new_to_old, pruned, added) = prune_and_densify(
+            &mut model,
+            &gradients,
+            &contribution,
+            &config,
+            &mut rng,
+            0.0,
+        );
         assert_eq!(pruned, 0);
         assert_eq!(added, 1);
         assert_eq!(new_to_old.last().copied(), Some(2));
         assert_eq!(model.points.len(), 5);
         assert_eq!(model.sh_coefficients.len(), 15);
+    }
+
+    #[test]
+    fn contribution_integration_matches_volumetric_weights_and_flags_truncation() {
+        let points = [
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 2.0),
+        ];
+        let cells = [0, 1, 0, 0];
+        let next_cells = [1, 2, 0, 0];
+        let dts = [
+            std::f32::consts::LN_2,
+            std::f32::consts::LN_2,
+            2.0 * std::f32::consts::LN_2,
+            0.0,
+        ];
+        let mask = [1.0, 1.0, 1.0, 0.0];
+        let mut contribution = [0.0; 2];
+        let mut stats = PathContributionStats {
+            per_cell: Vec::new(),
+            rays: 0,
+            segments: 0,
+            truncated_rays: 0,
+            max_steps_used: 0,
+        };
+        accumulate_path_contributions(
+            &cells,
+            &next_cells,
+            &dts,
+            &mask,
+            &points,
+            2,
+            &mut contribution,
+            &mut stats,
+        );
+
+        assert!((contribution[0] - 1.25).abs() < 1.0e-6);
+        assert!((contribution[1] - 0.375).abs() < 1.0e-6);
+        assert_eq!(stats.rays, 2);
+        assert_eq!(stats.segments, 3);
+        assert_eq!(stats.max_steps_used, 2);
+        assert_eq!(stats.truncated_rays, 1);
+    }
+
+    #[test]
+    fn contribution_pruning_protects_direct_neighbors_and_parallel_data() {
+        let points: Vec<glam::Vec4> = (0..4)
+            .map(|i| glam::Vec4::new(i as f32 * 0.01, 0.0, 0.0, 4.0))
+            .collect();
+        let mut model = vol::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: Some(vol::Transforms {
+                rotations: vec![glam::Quat::IDENTITY; points.len()],
+                scales: vec![glam::Vec3::ONE; points.len()],
+            }),
+            adjacency: Some(vol::Adjacency {
+                neighbors: vec![1, 0, 2, 1, 3, 2],
+                offsets: vec![0, 1, 3, 5, 6],
+            }),
+            radii: Some(vec![0.02; points.len()]),
+            points,
+        };
+        let config = DensifyConfig {
+            fraction: 0.0,
+            target_points: 4,
+            prune: true,
+            prune_contribution: 0.01,
+            suppress_contribution: 0.001,
+            prune_radius: 0.1,
+            ..DensifyConfig::default()
+        };
+        let mut rng = 7;
+        let (new_to_old, pruned, added) = prune_and_densify(
+            &mut model,
+            &[0.0; 4],
+            &[0.02, 0.0, 0.0, 0.0],
+            &config,
+            &mut rng,
+            0.0,
+        );
+
+        assert_eq!(new_to_old, [0, 1]);
+        assert_eq!(pruned, 2);
+        assert_eq!(added, 0);
+        assert_eq!(model.points.len(), 2);
+        assert_eq!(model.radii.as_ref().unwrap().len(), 2);
+        assert_eq!(model.transforms.as_ref().unwrap().rotations.len(), 2);
+        assert_eq!(model.transforms.as_ref().unwrap().scales.len(), 2);
+        assert_eq!(model.points[0].w, 4.0);
+        assert_eq!(model.points[1].w, 0.0);
+        assert!(model.adjacency.is_none());
     }
 
     #[test]
@@ -3064,7 +3505,7 @@ mod tests {
                     fraction: 0.25,
                     warmup: 1,
                     target_points: 5,
-                    prune: false,
+                    prune: true,
                     ..DensifyConfig::default()
                 }),
                 ..AppearanceFitConfig::default()

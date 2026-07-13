@@ -362,7 +362,7 @@ pub fn evaluate_views(
             render::RenderSettings {
                 width: config.resolution.0,
                 height: config.resolution.1,
-                start_point: v.start_cell,
+                start_point: pick_start_cell(model, glam::Vec3::from_array(v.camera.cam_position)),
                 max_steps: config.max_steps as u32,
                 weight_threshold: 1e-4,
             },

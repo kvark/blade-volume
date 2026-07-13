@@ -261,6 +261,17 @@ impl PathRecordBuffers {
             self.num_pixels as usize,
             "pixel index slice length must equal num_pixels",
         );
+        self.write_pixel_indices_prefix(indices);
+    }
+
+    /// Write an active prefix of pixel indices for a partial dispatch.
+    /// The dispatch's `num_pixels` must equal `indices.len()`; unused
+    /// capacity is left untouched and must not be dispatched.
+    pub fn write_pixel_indices_prefix(&self, indices: &[u32]) {
+        assert!(
+            indices.len() <= self.num_pixels as usize,
+            "pixel index prefix exceeds buffer capacity",
+        );
         unsafe {
             let dst = slice::from_raw_parts_mut(
                 self.pixel_indices_stage.data() as *mut u32,

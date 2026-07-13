@@ -148,10 +148,13 @@ Stage 2 now has topology-safe opt-in position optimization, exact symmetric
 adjacency caps, terminal-segment integration, reference position-gradient ×
 cell-radius densification, explicit background compositing, and opt-in smooth
 depth-variance regularization. Analytical unweighted position gradients now
-match central finite differences on a fixed, smooth cell path. Contribution-
-based reference pruning, path diagnostics, and a matched reference benchmark
-remain. Stage 3 now persists Čech radii and clips PowerFoam intervals to support
-spheres consistently on CPU, production WGSL, and the GPU training recorder.
+match central finite differences on a fixed, smooth cell path. Densification
+now collects maximum per-view ray contribution on the GPU at a deterministic
+2× downsample, protects contributing cells and their adjacency neighbours,
+suppresses dead-cell density, and reports max-step truncation. A matched
+reference benchmark remains. Stage 3 now persists Čech radii and clips
+PowerFoam intervals to support spheres consistently on CPU, production WGSL,
+and the GPU training recorder.
 Weighted position/radius gradients and external checkpoint validation remain,
 so weighted geometry optimization and densification intentionally fail fast
 rather than train an incorrect objective.
