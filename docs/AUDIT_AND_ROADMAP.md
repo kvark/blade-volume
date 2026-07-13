@@ -73,8 +73,8 @@ At the audited revision:
 - Bounded traversal, persistent radii, exact active-path Jacobians, and
   trainable positive radii are implemented, but the new WGSL-Jacobian-to-
   meganeura integration test still needs to run on a recovered physical GPU.
-- Weighted-cloud densification remains disabled until a radius-preserving split
-  policy is defined and validated.
+- Weighted-cloud densification follows the reference resampler's copied-radius,
+  5%-support-scale split; a real-scene ablation remains outstanding.
 - No official pretrained checkpoint is published by the reference project, so
   cross-rendering and a matched training ablation remain outstanding.
 - The reference quaternion, texel-site, and spherical-Voronoi appearance model
@@ -174,8 +174,10 @@ WGSL recorder stores those same position/radius Jacobians, and the meganeura
 graph optimizes radii through a beta=100 softplus while periodically rebuilding
 the discrete Čech graph and recorded paths. Static WGSL validation and the full
 CPU-isolated workspace suite pass. Physical-GPU execution of the new integrated
-gradient test is deferred until the wedged NVIDIA driver is recovered; weighted
-densification and reference-checkpoint validation still remain.
+gradient test is deferred until the wedged NVIDIA driver is recovered. Weighted
+densification copies the parent's radius and optimizer ancestry while applying
+the reference 5%-of-radius perturbation; reference-checkpoint and real-scene
+training validation still remain.
 
 Long-running topology optimization is now memory-bounded. The upstream
 `qhull` 0.4 destructor omits Qhull's required short-arena cleanup, which leaked
@@ -284,9 +286,9 @@ with no systematic streaking from stale topology.
 
 Items 1-5 are implemented at the CPU-oracle, production-WGSL, recorder, and
 training-graph levels. The physical-GPU integration test for items 3-4 is
-compiled but intentionally not run while the host driver is wedged. Items 6-7,
-a real-scene radius-learning ablation, and a weighted densification split policy
-remain.
+compiled but intentionally not run while the host driver is wedged. Weighted
+densification now uses the reference copied-radius split policy. Items 6-7 and a
+real-scene radius-learning/densification ablation remain.
 
 Acceptance gate: CPU, GPU, and brute-force bounded traversal agree; a reference
 checkpoint renders within a defined image tolerance; trained radii improve a

@@ -173,15 +173,13 @@ struct Args {
     suppress_contribution: f32,
 
     /// also require farthest-neighbour radius below this (default 0.1) to
-    /// prune — only cull small unsupported cells, never large background ones.
+    /// prune. Uses the explicit support radius for weighted clouds and the
+    /// farthest-neighbour radius otherwise, preserving large background cells.
     #[argh(option, default = "0.1")]
     prune_radius: f32,
 
-    /// per-cell jitter for split siblings, in units of the parent's
-    /// nearest-neighbour distance (default 0.5). A small fraction of
-    /// the cell scale keeps the new cell inside the parent's Voronoi
-    /// neighbourhood; too large and it pops out into unrelated
-    /// territory.
+    /// legacy no-op sibling-jitter flag, retained for CLI compatibility.
+    /// Placement now follows fixed method-specific RadFoam/PowerFoam rules.
     #[argh(option, default = "0.5")]
     densify_jitter: f32,
 

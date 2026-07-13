@@ -1169,9 +1169,11 @@ pub struct AppearanceFitConfig {
 }
 
 /// Adaptive densification: every `every` training steps after `warmup`
-/// steps, split cells sampled by accumulated `|grad(position)| × cell_radius`
-/// by inserting a sibling near the farthest face. The sibling inherits density
-/// and SH coefficients, so colour stays continuous across the split.
+/// steps, split cells sampled by accumulated `|grad(position)| × cell_radius`.
+/// RadFoam inserts a sibling near the farthest face. PowerFoam copies the
+/// support radius and perturbs both sites by 5% of that radius, following the
+/// reference resampler without introducing its deferred normal semantics. The
+/// sibling inherits density and SH coefficients, so colour stays continuous.
 ///
 /// The accumulator runs in parallel with training and is reset every
 /// cycle. Each split rebuilds the meganeura session, GPU cloud, and exact
@@ -1182,11 +1184,11 @@ pub struct DensifyConfig {
     pub every: usize,
     /// Per-round growth factor: each round adds `fraction × current_cells`
     /// new cells (RadFoam uses 0.15 = +15%/round), selected by weighted
-    /// multinomial on `accumulated|grad(log_density)| × cell_radius`.
+    /// multinomial on `accumulated|grad(position)| × cell_radius`.
     pub fraction: f32,
-    /// Unused legacy knob (sibling jitter); the RadFoam-style child
-    /// placement (0.25× toward the farthest neighbour + a 0.1× random
-    /// kick) is now hardcoded. Kept for CLI compatibility.
+    /// Unused legacy knob (sibling jitter). RadFoam placement and PowerFoam's
+    /// 5%-of-support-radius resampling are method-specific and fixed. Kept for
+    /// CLI compatibility.
     pub jitter_scale: f32,
     /// Skip the first `warmup` steps before the first densify (lets
     /// the per-cell gradient signal settle). RadFoam: 2000.
@@ -1206,9 +1208,9 @@ pub struct DensifyConfig {
     /// Cells below this contribution have their density parameter suppressed
     /// before splitting, matching RadFoam's dead-cell handling.
     pub suppress_contribution: f32,
-    /// Only cull an unprotected cell when its farthest-neighbour radius is
-    /// below this value; large empty background cells remain as traversal
-    /// support.
+    /// Only cull an unprotected cell when its farthest-neighbour radius
+    /// (RadFoam) or explicit support radius (PowerFoam) is below this value;
+    /// large empty background cells remain as traversal support.
     pub prune_radius: f32,
 }
 
@@ -1462,10 +1464,6 @@ pub fn fit_appearance_multi_view(
         (config.position_lr_ratio == 0.0 && config.radius_lr_ratio == 0.0)
             || config.geometry_rebuild_every > 0,
         "geometry optimisation requires geometry_rebuild_every > 0"
-    );
-    assert!(
-        model.radii.is_none() || config.densify.is_none(),
-        "weighted-cloud densification requires a radius split policy and is not supported"
     );
     if let Some(ref densify) = config.densify {
         assert!(densify.every > 0, "densify.every must be greater than zero");
@@ -1801,9 +1799,9 @@ fn download_model_parameters(
 }
 
 /// Per-cell farthest-neighbour distance (`cell_radius`) and the index of
-/// that farthest neighbour, from the current adjacency CSR. `cell_radius`
-/// weights densification (big high-error cells get subdivided) and the
-/// farthest-neighbour direction is where RadFoam places the split child.
+/// that farthest neighbour, from the current adjacency CSR. Unweighted
+/// RadFoam uses `cell_radius` to weight densification and place the split
+/// child. PowerFoam uses its explicit support radius instead.
 fn per_cell_farthest(model: &vol::PointCloudModel) -> (Vec<f32>, Vec<usize>) {
     let n = model.points.len();
     let mut radius = vec![0.0f32; n];
@@ -2066,9 +2064,11 @@ fn collect_path_contributions(
 ///    prune_radius`) — the RadFoam floater remover.
 /// 2. **Densify** by appending `fraction × survivors` children, parents
 ///    drawn by weighted multinomial (without replacement) on
-///    `grad_accum × cell_radius`. Each child sits 0.25× toward the
-///    parent's farthest neighbour plus a small random kick, inheriting the
-///    parent's density + SH.
+///    `grad_accum × cell_radius`. Unweighted children sit 0.25× toward the
+///    parent's farthest neighbour plus a small random kick. Weighted parent
+///    and child sites each move by 0.05× the copied support radius, adapting
+///    PowerFoam's reference resampling to the current normal-free SH model.
+///    Density, appearance, radius, and optimizer ancestry are inherited.
 ///
 /// Returns `(new_to_old, pruned, added)`: `new_to_old[j]` is the OLD cell
 /// index whose Adam (m,v) the rebuilt cell `j` should inherit (survivor →
@@ -2086,7 +2086,9 @@ fn prune_and_densify(
     assert_eq!(grad_accum.len(), n_old);
     assert_eq!(contribution.len(), n_old);
     let sh_block = model.sh_component_count() * 3;
-    let (radius, farthest) = per_cell_farthest(model);
+    let (neighbor_radius, farthest) = per_cell_farthest(model);
+    let weighted = model.radii.is_some();
+    let cell_radius = model.radii.clone().unwrap_or(neighbor_radius);
 
     let mut next_unit = || {
         *rng_state = rng_state
@@ -2118,7 +2120,7 @@ fn prune_and_densify(
                     .any(|&neighbor| protected[neighbor as usize])
             });
             let unprotected = !protected[i] && !protected_by_neighbor;
-            let small = radius[i] < cfg.prune_radius;
+            let small = cell_radius[i] < cfg.prune_radius;
             !(unprotected && small)
         })
         .collect();
@@ -2150,7 +2152,7 @@ fn prune_and_densify(
         let mut keyed: Vec<(f32, usize)> = (0..n_surv)
             .map(|local| {
                 let oi = survivors[local];
-                let w = (grad_accum[oi] * radius[oi]).max(1e-12);
+                let w = (grad_accum[oi] * cell_radius[oi]).max(1e-12);
                 let u = (next_unit() * 0.5 + 0.5).clamp(1e-6, 1.0); // (0,1]
                 (u.ln() / w, local)
             })
@@ -2163,6 +2165,18 @@ fn prune_and_densify(
         keyed.into_iter().map(|(_, local)| local).collect()
     };
     let added = parents_local.len();
+    let mut is_split_parent = vec![false; n_old];
+    for &local in &parents_local {
+        is_split_parent[survivors[local]] = true;
+    }
+
+    let random_unit = |next_unit: &mut dyn FnMut() -> f32| loop {
+        let value = glam::Vec3::new(next_unit(), next_unit(), next_unit());
+        let length_squared = value.length_squared();
+        if length_squared > 1.0e-12 && length_squared <= 1.0 {
+            break value / length_squared.sqrt();
+        }
+    };
 
     // --- Rebuild model arrays: survivors compacted, then children ---
     let n_new = n_surv + added;
@@ -2175,7 +2189,14 @@ fn prune_and_densify(
     });
     let mut new_to_old = Vec::with_capacity(n_new);
     for &oi in &survivors {
-        new_points.push(model.points[oi]);
+        let mut point = model.points[oi];
+        if weighted && is_split_parent[oi] {
+            let offset = random_unit(&mut next_unit) * (0.05 * cell_radius[oi].max(1.0e-5));
+            point.x += offset.x;
+            point.y += offset.y;
+            point.z += offset.z;
+        }
+        new_points.push(point);
         new_sh.extend_from_slice(&model.sh_coefficients[oi * sh_block..(oi + 1) * sh_block]);
         if let Some(ref mut radii) = new_radii {
             radii.push(model.radii.as_ref().unwrap()[oi]);
@@ -2190,11 +2211,15 @@ fn prune_and_densify(
     for &local in &parents_local {
         let oi = survivors[local];
         let p = model.points[oi];
-        let pf = model.points[farthest[oi]];
-        let toward = glam::Vec3::new(pf.x - p.x, pf.y - p.y, pf.z - p.z) * 0.25;
-        let kick_scale = (toward.length() * 0.1).max(1e-5);
-        let kick = glam::Vec3::new(next_unit(), next_unit(), next_unit()) * kick_scale;
-        let off = toward + kick;
+        let off = if weighted {
+            random_unit(&mut next_unit) * (0.05 * cell_radius[oi].max(1.0e-5))
+        } else {
+            let pf = model.points[farthest[oi]];
+            let toward = glam::Vec3::new(pf.x - p.x, pf.y - p.y, pf.z - p.z) * 0.25;
+            let kick_scale = (toward.length() * 0.1).max(1e-5);
+            let kick = glam::Vec3::new(next_unit(), next_unit(), next_unit()) * kick_scale;
+            toward + kick
+        };
         new_points.push(glam::Vec4::new(p.x + off.x, p.y + off.y, p.z + off.z, p.w));
         new_sh.extend_from_slice(&model.sh_coefficients[oi * sh_block..(oi + 1) * sh_block]);
         if let Some(ref mut radii) = new_radii {
@@ -3430,6 +3455,56 @@ mod tests {
     }
 
     #[test]
+    fn weighted_densification_copies_radius_and_uses_small_support_scale_offsets() {
+        let mut model = tiny_model();
+        model.radii = Some(vec![0.4, 0.3, 0.2, 0.1]);
+        model.compute_adjacency_default();
+        let parent = 2;
+        let parent_point = model.points[parent];
+        let parent_sh = model.sh_coefficients[parent * 3..parent * 3 + 3].to_vec();
+        let mut rng = 0x1234_5678_9ABC_DEF0;
+        let config = DensifyConfig {
+            fraction: 0.25,
+            target_points: 5,
+            prune: false,
+            ..DensifyConfig::default()
+        };
+        let gradients = [0.0, 0.0, 1.0e20, 0.0];
+        let contribution = [1.0; 4];
+
+        let (new_to_old, pruned, added) = prune_and_densify(
+            &mut model,
+            &gradients,
+            &contribution,
+            &config,
+            &mut rng,
+            0.0,
+        );
+
+        assert_eq!(pruned, 0);
+        assert_eq!(added, 1);
+        assert_eq!(new_to_old, [0, 1, 2, 3, 2]);
+        let radii = model.radii.as_ref().unwrap();
+        assert_eq!(radii, &[0.4, 0.3, 0.2, 0.1, 0.2]);
+        for index in [parent, 4] {
+            let point = model.points[index];
+            let offset = glam::Vec3::new(
+                point.x - parent_point.x,
+                point.y - parent_point.y,
+                point.z - parent_point.z,
+            );
+            assert!((offset.length() - 0.01).abs() < 1.0e-6);
+            assert_eq!(point.w, parent_point.w);
+            assert_eq!(
+                &model.sh_coefficients[index * 3..index * 3 + 3],
+                parent_sh.as_slice()
+            );
+        }
+        assert_ne!(model.points[parent], model.points[4]);
+        assert!(model.adjacency.is_none());
+    }
+
+    #[test]
     fn contribution_integration_matches_volumetric_weights_and_flags_truncation() {
         let points = [
             glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
@@ -3519,6 +3594,40 @@ mod tests {
         assert_eq!(model.points[0].w, 4.0);
         assert_eq!(model.points[1].w, 0.0);
         assert!(model.adjacency.is_none());
+    }
+
+    #[test]
+    fn weighted_pruning_uses_explicit_support_radius() {
+        let points: Vec<glam::Vec4> = (0..4)
+            .map(|i| glam::Vec4::new(i as f32 * 0.01, 0.0, 0.0, 1.0))
+            .collect();
+        let mut model = vol::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(vol::Adjacency {
+                neighbors: vec![1, 0, 2, 1, 3, 2],
+                offsets: vec![0, 1, 3, 5, 6],
+            }),
+            radii: Some(vec![1.0; points.len()]),
+            points,
+        };
+        let config = DensifyConfig {
+            fraction: 0.0,
+            target_points: 4,
+            prune: true,
+            prune_contribution: 0.01,
+            prune_radius: 0.1,
+            ..DensifyConfig::default()
+        };
+        let mut rng = 7;
+
+        let (new_to_old, pruned, added) =
+            prune_and_densify(&mut model, &[0.0; 4], &[0.0; 4], &config, &mut rng, 0.0);
+
+        assert_eq!(new_to_old, [0, 1, 2, 3]);
+        assert_eq!(pruned, 0);
+        assert_eq!(added, 0);
     }
 
     #[test]

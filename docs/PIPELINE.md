@@ -119,8 +119,10 @@ reader to a tool crate. No Python runtime becomes part of this project.
   path layout.
 - Weighted training optimizes a beta=100 softplus radius parameter and uses the
   recorder value plus its local geometry tangent between periodic Čech/path
-  rebuilds. Radius and position learning rates are independent; weighted
-  densification remains rejected until it has an explicit radius split policy.
+  rebuilds. Radius and position learning rates are independent. Weighted
+  densification copies the parent radius and optimizer ancestry and perturbs
+  both sites at 5% of the support radius, matching the reference resampler's
+  geometry policy without introducing its deferred normal semantics.
 - Static WGSL validation and CPU-isolated workspace tests pass. The physical-
   GPU Jacobian/meganeura integration test is compiled but must be rerun after
   the currently wedged NVIDIA driver is recovered.
