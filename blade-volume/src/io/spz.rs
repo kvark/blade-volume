@@ -372,10 +372,6 @@ pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
     }
 }
 
-pub fn load(file_path: &str) -> crate::PointCloudModel {
-    try_load(file_path).unwrap_or_else(|error| panic!("failed to load '{file_path}': {error}"))
-}
-
 fn load_legacy(file: fs::File) -> Result<crate::PointCloudModel, LoadError> {
     let source = io::BufReader::new(file);
     let mut decoder = flate2::read::GzDecoder::new(source);
@@ -604,7 +600,7 @@ mod tests {
             .unwrap();
         writer.finish().unwrap();
 
-        let model = load(path.to_str().unwrap());
+        let model = try_load(path.to_str().unwrap()).unwrap();
         assert_eq!(model.sh_degree, 1);
         assert_eq!(model.sh_coefficients.len(), 12);
         assert_eq!(model.points[0].truncate(), glam::Vec3::new(1.5, -2.0, 0.25));
@@ -638,7 +634,7 @@ mod tests {
         writer.write_all(&0xC000_0000_u32.to_le_bytes()).unwrap();
         writer.finish().unwrap();
 
-        let model = load(path.to_str().unwrap());
+        let model = try_load(path.to_str().unwrap()).unwrap();
         assert_eq!(model.points[0].truncate(), glam::Vec3::new(1.0, 2.0, -1.0));
         let rotation = model.transforms.unwrap().rotations[0];
         assert!(rotation.dot(glam::Quat::IDENTITY).abs() > 1.0 - 1e-6);
@@ -697,7 +693,7 @@ mod tests {
             std::env::temp_dir().join(format!("blade-volume-spz-v4-{}.spz", std::process::id()));
         fs::write(&path, file).unwrap();
 
-        let model = load(path.to_str().unwrap());
+        let model = try_load(path.to_str().unwrap()).unwrap();
         assert_eq!(model.points[0].truncate(), glam::Vec3::new(-1.0, 0.5, 3.0));
         assert!((model.points[0].w - 128.0 / 255.0).abs() < 1e-6);
         assert_eq!(model.sh_coefficients.len(), 3);

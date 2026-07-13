@@ -359,10 +359,6 @@ pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
     Ok(model)
 }
 
-pub fn load(file_path: &str) -> crate::PointCloudModel {
-    try_load(file_path).unwrap_or_else(|error| panic!("failed to load '{file_path}': {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

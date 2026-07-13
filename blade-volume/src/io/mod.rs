@@ -2,19 +2,28 @@ mod ply;
 mod radfoam_ply;
 mod spz;
 
-use std::{error, fmt, fs, io};
+use std::{error, fmt, fs, io, path};
+
+const MAX_DETECTION_HEADER_BYTES: usize = 1024 * 1024;
 
 /// Asset-loading failure with preserved IO causes and explicit format errors.
 #[derive(Debug)]
 pub enum LoadError {
+    /// The file could not be opened or read.
     Io(io::Error),
+    /// The container or decoded model violates its declared format.
     InvalidData(String),
+    /// The path does not select a supported asset format.
     UnsupportedFormat(String),
 }
 
 impl LoadError {
     pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self::InvalidData(message.into())
+    }
+
+    fn unsupported(message: impl Into<String>) -> Self {
+        Self::UnsupportedFormat(message.into())
     }
 }
 
@@ -74,35 +83,40 @@ pub struct FormatInfo {
 ///
 /// Returns `VolumeKind::RadFoam` if the file contains RadFoam-specific properties
 /// like `density` and `adjacency_offset`, otherwise returns `VolumeKind::Gaussian`.
-fn detect_ply_format(file_path: &str) -> VolumeKind {
-    use io::BufRead as _;
-
-    let file = match fs::File::open(file_path) {
-        Ok(f) => f,
-        Err(_) => return VolumeKind::Gaussian, // Default on error
-    };
-    let reader = io::BufReader::new(file);
+fn detect_ply_format(file_path: &str) -> Result<VolumeKind, LoadError> {
+    let file = fs::File::open(file_path)?;
+    let mut reader = io::BufReader::new(file);
 
     let mut has_density = false;
     let mut has_adjacency_offset = false;
     let mut has_adjacency_element = false;
+    let mut header_bytes = 0usize;
+    let mut saw_magic = false;
+    let mut saw_end = false;
+    let mut line = String::new();
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
-        let trimmed = line.trim();
-
-        // Stop at end of header
-        if trimmed == "end_header" {
+    loop {
+        line.clear();
+        let remaining = MAX_DETECTION_HEADER_BYTES.saturating_sub(header_bytes);
+        let mut limited = io::Read::take(&mut reader, (remaining + 1) as u64);
+        let bytes = io::BufRead::read_line(&mut limited, &mut line)?;
+        if bytes == 0 {
             break;
         }
-
-        let mut words = trimmed.split_whitespace();
+        header_bytes += bytes;
+        if header_bytes > MAX_DETECTION_HEADER_BYTES {
+            return Err(LoadError::invalid(format!(
+                "PLY header exceeds {MAX_DETECTION_HEADER_BYTES} bytes"
+            )));
+        }
+        let mut words = line.split_whitespace();
         match words.next() {
+            Some("ply") if !saw_magic && header_bytes == bytes => saw_magic = true,
+            Some("end_header") => {
+                saw_end = true;
+                break;
+            }
             Some("property") => {
-                // Skip type, get name
                 let _ty = words.next();
                 if let Some(name) = words.next() {
                     match name {
@@ -122,55 +136,88 @@ fn detect_ply_format(file_path: &str) -> VolumeKind {
             _ => {}
         }
     }
-
-    // RadFoam PLY files have density, adjacency_offset, and an adjacency element
+    if !saw_magic {
+        return Err(LoadError::invalid("file is missing the PLY magic"));
+    }
+    if !saw_end {
+        return Err(LoadError::invalid("PLY header has no end_header"));
+    }
     if has_density && has_adjacency_offset && has_adjacency_element {
-        VolumeKind::RadFoam
+        Ok(VolumeKind::RadFoam)
     } else {
-        VolumeKind::Gaussian
+        Ok(VolumeKind::Gaussian)
     }
 }
 
+fn extension(file_path: &str) -> Option<&str> {
+    path::Path::new(file_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+}
+
+fn has_extension(file_path: &str, expected: &str) -> bool {
+    extension(file_path).is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
+}
+
 /// Detect the format of a file based on its extension and contents.
-pub fn detect_format(file_path: &str) -> FormatInfo {
-    let kind = if file_path.ends_with(".ply") {
-        detect_ply_format(file_path)
-    } else if file_path.ends_with(".spz") {
+pub fn try_detect_format(file_path: &str) -> Result<FormatInfo, LoadError> {
+    let kind = if has_extension(file_path, "ply") {
+        detect_ply_format(file_path)?
+    } else if has_extension(file_path, "spz") {
         VolumeKind::Gaussian
     } else {
-        // Default to Gaussian for unknown formats
-        VolumeKind::Gaussian
+        return Err(LoadError::unsupported(format!(
+            "'{file_path}' has no supported .ply or .spz extension"
+        )));
     };
-
-    FormatInfo {
+    Ok(FormatInfo {
         kind,
         path: file_path.to_string(),
-    }
+    })
+}
+
+/// Detect a format, panicking on IO, malformed headers, or unsupported paths.
+pub fn detect_format(file_path: &str) -> FormatInfo {
+    try_detect_format(file_path)
+        .unwrap_or_else(|error| panic!("failed to detect format for '{file_path}': {error}"))
 }
 
 /// Load volumetric data, automatically detecting the format.
 ///
 /// For PLY files, examines the header to determine if it's a RadFoam or Gaussian format.
 /// SPZ files are always loaded as Gaussian format.
-pub fn load(file_path: &str) -> crate::PointCloudModel {
-    let info = detect_format(file_path);
+pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
+    let info = try_detect_format(file_path)?;
     match info.kind {
-        VolumeKind::Gaussian => load_gaussian(file_path),
-        VolumeKind::RadFoam => load_radfoam(file_path),
+        VolumeKind::Gaussian => try_load_gaussian(file_path),
+        VolumeKind::RadFoam => try_load_radfoam(file_path),
     }
+}
+
+/// Load volumetric data, panicking if detection, IO, or validation fails.
+pub fn load(file_path: &str) -> crate::PointCloudModel {
+    try_load(file_path).unwrap_or_else(|error| panic!("failed to load '{file_path}': {error}"))
 }
 
 /// Load a Gaussian splatting model from a PLY or SPZ file.
 ///
 /// Returns a `PointCloudModel` with `transforms` set (rotation + scale).
-pub fn load_gaussian(file_name: &str) -> crate::PointCloudModel {
-    if file_name.ends_with(".ply") {
-        ply::load(file_name)
-    } else if file_name.ends_with(".spz") {
-        spz::load(file_name)
+pub fn try_load_gaussian(file_name: &str) -> Result<crate::PointCloudModel, LoadError> {
+    if has_extension(file_name, "ply") {
+        ply::try_load(file_name)
+    } else if has_extension(file_name, "spz") {
+        spz::try_load(file_name)
     } else {
-        panic!("Unsupported file name for Gaussian loader: {}", file_name);
+        Err(LoadError::unsupported(format!(
+            "Gaussian loader does not support '{file_name}'"
+        )))
     }
+}
+
+/// Load a Gaussian, panicking if IO or validation fails.
+pub fn load_gaussian(file_name: &str) -> crate::PointCloudModel {
+    try_load_gaussian(file_name)
+        .unwrap_or_else(|error| panic!("failed to load Gaussian '{file_name}': {error}"))
 }
 
 /// Load a Gaussian and convert it to an explicit coordinate convention.
@@ -179,21 +226,33 @@ pub fn load_gaussian(file_name: &str) -> crate::PointCloudModel {
 /// a coordinate-system extension are currently decoded as stored and emit a
 /// warning, so callers should not request conversion for such files until the
 /// extension is exposed by this loader.
-pub fn load_gaussian_with_coordinates(
+pub fn try_load_gaussian_with_coordinates(
     file_name: &str,
     target: GaussianCoordinateSystem,
-) -> crate::PointCloudModel {
-    let (mut model, source) = if file_name.ends_with(".ply") {
-        (ply::load(file_name), GaussianCoordinateSystem::Rdf)
-    } else if file_name.ends_with(".spz") {
-        (spz::load(file_name), GaussianCoordinateSystem::Rub)
+) -> Result<crate::PointCloudModel, LoadError> {
+    let (mut model, source) = if has_extension(file_name, "ply") {
+        (ply::try_load(file_name)?, GaussianCoordinateSystem::Rdf)
+    } else if has_extension(file_name, "spz") {
+        (spz::try_load(file_name)?, GaussianCoordinateSystem::Rub)
     } else {
-        panic!("Unsupported file name for Gaussian loader: {file_name}");
+        return Err(LoadError::unsupported(format!(
+            "Gaussian loader does not support '{file_name}'"
+        )));
     };
     if source != target {
         convert_rub_rdf(&mut model);
     }
-    model
+    Ok(model)
+}
+
+/// Load and convert a Gaussian, panicking if IO or validation fails.
+pub fn load_gaussian_with_coordinates(
+    file_name: &str,
+    target: GaussianCoordinateSystem,
+) -> crate::PointCloudModel {
+    try_load_gaussian_with_coordinates(file_name, target).unwrap_or_else(|error| {
+        panic!("failed to load Gaussian '{file_name}' with coordinates: {error}")
+    })
 }
 
 fn convert_rub_rdf(model: &mut crate::PointCloudModel) {
@@ -231,17 +290,67 @@ fn convert_rub_rdf(model: &mut crate::PointCloudModel) {
 /// This expects the PLY format emitted by upstream `RadFoamScene.save_ply()`:
 /// - a `vertex` element with `x,y,z`, `density`, `adjacency_offset`, and `color_sh_*`
 /// - an `adjacency` element containing the flattened `uint32` neighbor indices.
-pub fn load_radfoam(file_name: &str) -> crate::PointCloudModel {
-    if file_name.ends_with(".ply") {
-        radfoam_ply::load(file_name)
+pub fn try_load_radfoam(file_name: &str) -> Result<crate::PointCloudModel, LoadError> {
+    if has_extension(file_name, "ply") {
+        radfoam_ply::try_load(file_name)
     } else {
-        panic!("Unsupported file name for RadFoam loader: {}", file_name);
+        Err(LoadError::unsupported(format!(
+            "RadFoam loader does not support '{file_name}'"
+        )))
     }
+}
+
+/// Load a RadFoam or PowerFoam cloud, panicking if IO or validation fails.
+pub fn load_radfoam(file_name: &str) -> crate::PointCloudModel {
+    try_load_radfoam(file_name)
+        .unwrap_or_else(|error| panic!("failed to load RadFoam '{file_name}': {error}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn path(name: &str, extension: &str) -> path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "blade-volume-format-{name}-{}-{:?}.{extension}",
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
+    #[test]
+    fn result_api_reports_formats_and_failures() {
+        let radfoam = format!(
+            "{}/tests/data/radfoam_tiny_ascii.ply",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        assert_eq!(
+            try_detect_format(&radfoam).unwrap().kind,
+            VolumeKind::RadFoam
+        );
+        assert!(try_load(&radfoam).is_ok());
+
+        let gaussian = path("gaussian", "PLY");
+        fs::write(
+            &gaussian,
+            b"ply\nformat binary_little_endian 1.0\nelement vertex 0\nend_header\n",
+        )
+        .unwrap();
+        assert_eq!(
+            try_detect_format(gaussian.to_str().unwrap()).unwrap().kind,
+            VolumeKind::Gaussian
+        );
+        fs::remove_file(gaussian).unwrap();
+
+        assert!(matches!(
+            try_detect_format("unsupported.cloud"),
+            Err(LoadError::UnsupportedFormat(_))
+        ));
+        assert!(matches!(
+            try_detect_format("missing.ply"),
+            Err(LoadError::Io(_))
+        ));
+    }
 
     #[test]
     fn rub_rdf_conversion_preserves_sh_function() {

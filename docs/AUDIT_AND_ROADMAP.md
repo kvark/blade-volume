@@ -106,6 +106,14 @@ At the audited revision:
   candidates and pressure on the five-hit window.
 - Standard channel-major 3DGS SH PLY and SPZ v2-v4 signed positions, opacity,
   higher SH, and quaternion streams now have known-value regression fixtures.
+- Gaussian PLY, SPZ, and RadFoam/PowerFoam PLY now validate bounded headers,
+  checked body sizes, complete schemas, model arrays, and fallible allocations.
+  Public `try_detect_format` and `try_load*` entry points preserve IO and data
+  errors; the original panic wrappers remain for compatibility. SPZ decoding
+  streams attributes directly into the final model instead of retaining the
+  compressed file and a second packed copy. The official Niantic
+  `racoonfamily.spz` sample (932,560 points, SH3) validated in a CPU-only
+  cgroup at a 212 MiB warm-run memory peak with zero swap or OOM events.
 - Gaussian compositing now has an exhaustive CPU oracle ordered by each
   particle's maximum-response depth, matching the
   [official 3DGRUT implementation](https://github.com/nv-tlabs/3dgrut). The
@@ -255,8 +263,10 @@ behavior rather than silent gaps.
 2. Share camera and background conventions between training, CPU evaluation,
    and WGSL rendering.
 3. Validate model vector lengths and supported SH degrees at IO boundaries.
-4. Correct standard Gaussian PLY SH layout with external fixtures.
-5. Correct and complete SPZ v2 decoding with known-good fixtures.
+   (Done for Gaussian PLY, SPZ v2-v4, and RadFoam/PowerFoam PLY.)
+4. Correct standard Gaussian PLY SH layout with external fixtures. (Done.)
+5. Correct and complete SPZ v2 decoding with known-good fixtures. (Done;
+   v3/v4 and an official production-size v4 sample are covered as well.)
 6. Introduce a lossless native training checkpoint with optimizer state.
 7. Isolate the C-backed Qhull option from the default Rust-only build.
 
