@@ -16,15 +16,17 @@ rendered. Both link `blade-volume` for shared types and shaders.
 ## Non-goals
 
 - No Python, no PyTorch, no Burn.
-- No new representations beyond what we render. The trainer optimises one of:
-  Gaussian (current), RadFoam (current), or PowerFoam (M2). We will not invent a new one.
+- No new representations beyond what we render. The maintained trainer
+  optimises RadFoam or bounded PowerFoam. Gaussian import/rendering exists, but
+  Gaussian reconstruction does not; it remains a later go/no-go decision.
 - No on-device capture code initially — phone capture stays manual (record + transfer).
   We'll automate that later if and only if the rest of the pipeline is solid.
 
 ## Milestones
 
 Each milestone is sized to fit in a handful of focused sessions and lands behind passing
-`cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`.
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`, default
+and all-feature workspace tests, and workspace formatting.
 
 ### M1 — Shader modularisation (foundation)
 
@@ -153,8 +155,10 @@ reverse.
 - Camera intrinsics + per-image extrinsics → `vol::CameraParams`. Inverts
   `cam_from_world` (COLMAP) to `world_from_cam` (renderer convention) and
   converts focal length + width/height to full-angle fov.
-- All 16 COLMAP camera models are recognised; distortion coefficients are
-  read into the struct but ignored downstream (renderer is pinhole).
+- Every camera ID in COLMAP's current model registry is recognised. Distorted
+  source images are rectified onto the explicit pinhole training camera;
+  equirectangular records are parsed but skipped because they cannot be
+  represented by that runtime camera.
 - `Reconstruction::to_initial_model` builds a starting `PointCloudModel`
   with positions + DC-only SH from RGB + uniform initial density.
 - The per-image `points2D` array and per-point `track` are skipped on read —
@@ -223,9 +227,10 @@ Broken into sub-steps:
     resume validates that the optimizer, trainer state, and absolute schedule
     step agree before taking another update.
 
-  Known meganeura matmul shape bug: P×L when P≥784 and L≥16 produces
-  NaN. Workaround is to keep P or L below those bounds (default
-  resolution/max-steps does so). To be reported upstream.
+  A historical whole-image graph exposed a meganeura matmul shape bug for P×L
+  with P≥784 and L≥16. The maintained trainer is pixel-batched and uses the
+  current path recorder, so production training no longer relies on that
+  obsolete whole-image workaround.
 
 #### M3d — Online viewer attach
 
