@@ -18,6 +18,35 @@ one complete reconstruction and rendering path reproduce its reference method.
 The reusable scene and engine layers should then be built on top of validated
 cloud backends.
 
+## Verdict
+
+The idea is worth pursuing as a stage-gated, point-cloud-native research and
+runtime project. It is not yet justified as a production-ready general graphics
+engine. The shared `PointCloudModel` boundary, cloud-only scene taxonomy,
+RadFoam/PowerFoam traversal, imported Gaussian path, and Rust-native training
+pipeline form a coherent technical direction; the maintained trainer also
+demonstrably learns a recognizable held-out reconstruction.
+
+The unresolved risk is empirical rather than architectural. Current training
+quality is below the reference target, the corrected GPU paths still need
+physical execution after driver recovery, whole-cloud layering is not exact
+interleaved volume compositing, and the Metal multi-cloud binding design is
+open. New rendering methods and broad scene features should therefore remain
+behind these gates:
+
+1. Match reference RadFoam within the Stage 2 quality tolerance on a complete,
+   reproducible scene.
+2. Demonstrate that learned PowerFoam radii improve a fixed held-out ablation.
+3. Pass physical-GPU parity and transformed-scene pixel tests without driver
+   faults or unbounded memory growth.
+4. Define correct overlapping-cloud compositing before presenting the scene
+   layer as general volumetric composition.
+
+Failure at the first two gates should pause algorithm expansion and trigger a
+focused comparison with the reference trainers. Success would justify
+productionizing the point-cloud engine API without weakening the cloud-only
+constraint.
+
 ## Audit baseline
 
 The audit covered the Rust model and IO code, adjacency builders, CPU and WGSL
