@@ -287,6 +287,26 @@ pub struct PathEntry {
     pub dt: f32,
 }
 
+/// One recorded segment together with the local derivative of its length.
+///
+/// The three `dt_d_*` vectors differentiate `dt` with respect to the selected
+/// site's `(x, y, z, radius)` and the two sites defining its entry and exit
+/// radical planes. A repeated index is a sentinel for a fixed boundary:
+/// `previous_cell == cell` means the ray starts at `t = 0`, while
+/// `next_cell == cell` means it terminates at the configured depth. The
+/// corresponding derivative is zero unless the site's support sphere is the
+/// active clip.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PathJacobianEntry {
+    pub previous_cell: u32,
+    pub cell: u32,
+    pub next_cell: u32,
+    pub dt: f32,
+    pub dt_d_previous: glam::Vec4,
+    pub dt_d_current: glam::Vec4,
+    pub dt_d_next: glam::Vec4,
+}
+
 /// Record-only result of a ray trace: the sequence of `(cell, dt)` segments
 /// the ray covers, plus the normalised ray direction (used for view-dependent
 /// SH evaluation downstream). Unlike [`TraceResult`] this performs no
@@ -302,11 +322,190 @@ pub struct PathResult {
     pub ray_dir: glam::Vec3,
 }
 
+/// Record-only path with exact local segment-length Jacobians.
+///
+/// The cell sequence remains discrete. Derivatives are for the active branch
+/// of that fixed sequence: radical-plane entry/exit faces and PowerFoam
+/// support-sphere clips. Re-record after geometry changes enough to alter a
+/// face choice or clipping branch.
+#[derive(Clone, Debug)]
+pub struct PathJacobianResult {
+    pub entries: Vec<PathJacobianEntry>,
+    pub ray_dir: glam::Vec3,
+}
+
+fn vec4_xyz_w(xyz: glam::Vec3, w: f32) -> glam::Vec4 {
+    glam::Vec4::new(xyz.x, xyz.y, xyz.z, w)
+}
+
+/// Derivative of one radical-plane intersection `t` with respect to the
+/// current and adjacent sites. This is the closed form used by PowerFoam's
+/// reference backward pass.
+fn face_intersection_jacobians(
+    ray_origin: glam::Vec3,
+    ray_dir: glam::Vec3,
+    current_pos: glam::Vec3,
+    current_radius: f32,
+    adjacent_pos: glam::Vec3,
+    adjacent_radius: f32,
+    t: f32,
+) -> (glam::Vec4, glam::Vec4) {
+    let normal = adjacent_pos - current_pos;
+    let denominator = ray_dir.dot(normal);
+    if !denominator.is_finite() || denominator.abs() <= 1e-20 {
+        return (glam::Vec4::ZERO, glam::Vec4::ZERO);
+    }
+    let current_xyz = (ray_origin - current_pos + t * ray_dir) / denominator;
+    let adjacent_xyz = (adjacent_pos - ray_origin - t * ray_dir) / denominator;
+    (
+        vec4_xyz_w(current_xyz, current_radius / denominator),
+        vec4_xyz_w(adjacent_xyz, -adjacent_radius / denominator),
+    )
+}
+
+/// Near/far sphere intersections and their derivatives with respect to the
+/// sphere's `(center, radius)`. `ray_dir` must be normalized.
+fn sphere_intersection_jacobians(
+    ray_origin: glam::Vec3,
+    ray_dir: glam::Vec3,
+    center: glam::Vec3,
+    radius: f32,
+) -> Option<(f32, f32, glam::Vec4, glam::Vec4)> {
+    let oc = ray_origin - center;
+    let b = oc.dot(ray_dir);
+    let discriminant = b * b - (oc.length_squared() - radius * radius);
+    if discriminant <= 0.0 || !discriminant.is_finite() {
+        return None;
+    }
+    let root = discriminant.sqrt();
+    let perpendicular = oc - b * ray_dir;
+    let root_d_center = perpendicular / root;
+    let root_d_radius = radius / root;
+    let base_d_center = ray_dir;
+    Some((
+        -b - root,
+        -b + root,
+        vec4_xyz_w(base_d_center - root_d_center, -root_d_radius),
+        vec4_xyz_w(base_d_center + root_d_center, root_d_radius),
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn path_interval_jacobian(
+    model: &PointCloudModel,
+    ray_origin: glam::Vec3,
+    ray_dir: glam::Vec3,
+    bounded: bool,
+    previous_cell: u32,
+    cell: u32,
+    next_cell: u32,
+    t0: f32,
+    t1: f32,
+) -> Option<PathJacobianEntry> {
+    let current_pos = model.points[cell as usize].truncate();
+    let current_radius = read_radius(model, cell);
+    let mut start = t0;
+    let mut end = t1;
+    let mut start_sphere_jacobian = None;
+    let mut end_sphere_jacobian = None;
+
+    if bounded {
+        let (sphere_near, sphere_far, near_jacobian, far_jacobian) =
+            sphere_intersection_jacobians(ray_origin, ray_dir, current_pos, current_radius)?;
+        if sphere_near > start {
+            start = sphere_near;
+            start_sphere_jacobian = Some(near_jacobian);
+        }
+        if sphere_far < end {
+            end = sphere_far;
+            end_sphere_jacobian = Some(far_jacobian);
+        }
+    }
+    if end <= start || !start.is_finite() || !end.is_finite() {
+        return None;
+    }
+
+    let mut dt_d_previous = glam::Vec4::ZERO;
+    let mut dt_d_current = glam::Vec4::ZERO;
+    let mut dt_d_next = glam::Vec4::ZERO;
+
+    if let Some(jacobian) = start_sphere_jacobian {
+        dt_d_current -= jacobian;
+    } else if previous_cell != cell {
+        let previous_pos = model.points[previous_cell as usize].truncate();
+        let previous_radius = read_radius(model, previous_cell);
+        let (current_jacobian, previous_jacobian) = face_intersection_jacobians(
+            ray_origin,
+            ray_dir,
+            current_pos,
+            current_radius,
+            previous_pos,
+            previous_radius,
+            t0,
+        );
+        dt_d_current -= current_jacobian;
+        dt_d_previous -= previous_jacobian;
+    }
+
+    if let Some(jacobian) = end_sphere_jacobian {
+        dt_d_current += jacobian;
+    } else if next_cell != cell {
+        let next_pos = model.points[next_cell as usize].truncate();
+        let next_radius = read_radius(model, next_cell);
+        let (current_jacobian, next_jacobian) = face_intersection_jacobians(
+            ray_origin,
+            ray_dir,
+            current_pos,
+            current_radius,
+            next_pos,
+            next_radius,
+            t1,
+        );
+        dt_d_current += current_jacobian;
+        dt_d_next += next_jacobian;
+    }
+
+    Some(PathJacobianEntry {
+        previous_cell,
+        cell,
+        next_cell,
+        dt: end - start,
+        dt_d_previous,
+        dt_d_current,
+        dt_d_next,
+    })
+}
+
 /// Trace a ray and record per-segment `(cell, dt)` pairs without integrating.
 /// Termination rules match [`trace_one_ray`] but the weight-threshold early-
 /// out is disabled — the consumer decides when transmittance has decayed
 /// enough to stop, so it needs the whole path.
 pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -> PathResult {
+    let result = record_path_jacobians(model, ray, settings);
+    PathResult {
+        entries: result
+            .entries
+            .into_iter()
+            .map(|entry| PathEntry {
+                cell: entry.cell,
+                dt: entry.dt,
+            })
+            .collect(),
+        ray_dir: result.ray_dir,
+    }
+}
+
+/// Trace a ray and record exact local `dt` derivatives for its fixed cell walk.
+///
+/// This is the CPU correctness oracle for the differentiable GPU path
+/// recorder. In particular, `previous_cell` tracks the actual entry face even
+/// when one or more traversed power cells have no support-sphere overlap and
+/// therefore emit no segment.
+pub fn record_path_jacobians(
+    model: &PointCloudModel,
+    ray: Ray,
+    settings: TraceSettings,
+) -> PathJacobianResult {
     assert!(!model.points.is_empty(), "model has no points");
     assert!(
         (settings.start_point as usize) < model.points.len(),
@@ -316,13 +515,13 @@ pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -
     let adjacency = model
         .adjacency
         .as_ref()
-        .expect("record_path requires adjacency");
+        .expect("record_path_jacobians requires adjacency");
 
     let mut entries = Vec::new();
     let mut dir = ray.direction;
     let dir_len = dir.length();
     if dir_len <= 0.0 || !dir_len.is_finite() {
-        return PathResult {
+        return PathJacobianResult {
             entries,
             ray_dir: glam::Vec3::ZERO,
         };
@@ -331,6 +530,7 @@ pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -
 
     let mut t0 = 0.0f32;
     let mut current = settings.start_point;
+    let mut previous = current;
     let p = model.points[current as usize];
     let mut current_pos = glam::Vec3::new(p.x, p.y, p.z);
     let mut current_radius = read_radius(model, current);
@@ -370,50 +570,37 @@ pub fn record_path(model: &PointCloudModel, ray: Ray, settings: TraceSettings) -
             }
         }
 
-        let Some(j) = next_face else {
-            if let Some((segment_start, segment_end)) = support_interval(
-                bounded,
-                ray.origin,
-                dir,
-                current_pos,
-                current_radius,
-                t0,
-                best_t1,
-            ) {
-                entries.push(PathEntry {
-                    cell: current,
-                    dt: segment_end - segment_start,
-                });
-            }
-            break;
-        };
-
-        let next_idx_u32 = adjacency.neighbors[begin + j];
-        let next_p = model.points[next_idx_u32 as usize];
-        let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
-
-        if let Some((segment_start, segment_end)) = support_interval(
-            bounded,
+        let next_idx_u32 = next_face
+            .map(|j| adjacency.neighbors[begin + j])
+            .unwrap_or(current);
+        if let Some(entry) = path_interval_jacobian(
+            model,
             ray.origin,
             dir,
-            current_pos,
-            current_radius,
+            bounded,
+            previous,
+            current,
+            next_idx_u32,
             t0,
             best_t1,
         ) {
-            entries.push(PathEntry {
-                cell: current,
-                dt: segment_end - segment_start,
-            });
+            entries.push(entry);
+        }
+
+        if next_face.is_none() {
+            break;
         }
 
         t0 = t0.max(best_t1);
+        previous = current;
         current = next_idx_u32;
+        let next_p = model.points[next_idx_u32 as usize];
+        let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
         current_pos = next_pos;
         current_radius = read_radius(model, next_idx_u32);
     }
 
-    PathResult {
+    PathJacobianResult {
         entries,
         ray_dir: dir,
     }
@@ -787,5 +974,186 @@ mod path_tests {
             assert_eq!(walked_entry.cell, oracle_entry.cell);
             assert!((walked_entry.dt - oracle_entry.dt).abs() < 1e-5);
         }
+    }
+
+    fn perturb_site(model: &mut PointCloudModel, cell: u32, component: usize, delta: f32) {
+        let index = cell as usize;
+        match component {
+            0 => model.points[index].x += delta,
+            1 => model.points[index].y += delta,
+            2 => model.points[index].z += delta,
+            3 => model.radii.as_mut().unwrap()[index] += delta,
+            _ => panic!("invalid site component {component}"),
+        }
+    }
+
+    fn recorded_dt_for_cell(
+        model: &PointCloudModel,
+        ray: Ray,
+        settings: TraceSettings,
+        cell: u32,
+    ) -> f32 {
+        let path = record_path_jacobians(model, ray, settings);
+        path.entries
+            .iter()
+            .find(|entry| entry.cell == cell)
+            .unwrap_or_else(|| panic!("perturbation removed cell {cell} from the fixed path"))
+            .dt
+    }
+
+    fn assert_site_jacobian_matches_finite_difference(
+        model: &PointCloudModel,
+        ray: Ray,
+        settings: TraceSettings,
+        target_cell: u32,
+        parameter_cell: u32,
+        analytical: glam::Vec4,
+    ) {
+        const EPSILON: f32 = 1.0e-3;
+        for component in 0..4 {
+            let mut plus = model.clone();
+            perturb_site(&mut plus, parameter_cell, component, EPSILON);
+            let plus_dt = recorded_dt_for_cell(&plus, ray, settings, target_cell);
+            let mut minus = model.clone();
+            perturb_site(&mut minus, parameter_cell, component, -EPSILON);
+            let minus_dt = recorded_dt_for_cell(&minus, ray, settings, target_cell);
+            let numerical = (plus_dt - minus_dt) / (2.0 * EPSILON);
+            let expected = analytical[component];
+            let absolute = (expected - numerical).abs();
+            let scale = expected.abs().max(numerical.abs()).max(1.0e-4);
+            assert!(
+                absolute < 2.0e-3 || absolute / scale < 1.0e-2,
+                "cell {target_cell}, parameter cell {parameter_cell}, component {component}: \
+                 analytical={expected}, numerical={numerical}, absolute={absolute}",
+            );
+        }
+    }
+
+    #[test]
+    fn power_foam_face_jacobians_match_central_finite_differences() {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(2.0, 0.0, 0.0, 1.0),
+        ];
+        let model = PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: vec![1, 0, 2, 1],
+                offsets: vec![0, 1, 3, 4],
+            }),
+            radii: Some(vec![2.0, 2.0, 2.0]),
+            points,
+        };
+        let ray = Ray {
+            origin: glam::Vec3::new(-3.0, 0.2, -0.1),
+            direction: glam::Vec3::new(1.0, 0.05, 0.02),
+        };
+        let settings = TraceSettings {
+            depth: 10.0,
+            ..settings_for(0)
+        };
+        let result = record_path_jacobians(&model, ray, settings);
+        let entry = *result.entries.iter().find(|entry| entry.cell == 1).unwrap();
+        assert_eq!(entry.previous_cell, 0);
+        assert_eq!(entry.next_cell, 2);
+        assert_site_jacobian_matches_finite_difference(
+            &model,
+            ray,
+            settings,
+            entry.cell,
+            entry.previous_cell,
+            entry.dt_d_previous,
+        );
+        assert_site_jacobian_matches_finite_difference(
+            &model,
+            ray,
+            settings,
+            entry.cell,
+            entry.cell,
+            entry.dt_d_current,
+        );
+        assert_site_jacobian_matches_finite_difference(
+            &model,
+            ray,
+            settings,
+            entry.cell,
+            entry.next_cell,
+            entry.dt_d_next,
+        );
+    }
+
+    #[test]
+    fn power_foam_sphere_jacobian_matches_central_finite_differences() {
+        let model = PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 1.0)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: Some(vec![1.0]),
+        };
+        let ray = Ray {
+            origin: glam::Vec3::new(0.2, 0.1, -2.0),
+            direction: glam::Vec3::Z,
+        };
+        let settings = TraceSettings {
+            depth: 10.0,
+            ..settings_for(0)
+        };
+        let entry = record_path_jacobians(&model, ray, settings).entries[0];
+        assert_eq!(entry.previous_cell, entry.cell);
+        assert_eq!(entry.next_cell, entry.cell);
+        assert_eq!(entry.dt_d_previous, glam::Vec4::ZERO);
+        assert_eq!(entry.dt_d_next, glam::Vec4::ZERO);
+        assert_site_jacobian_matches_finite_difference(
+            &model,
+            ray,
+            settings,
+            entry.cell,
+            entry.cell,
+            entry.dt_d_current,
+        );
+    }
+
+    #[test]
+    fn path_jacobian_keeps_true_entry_neighbor_across_skipped_cells() {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(2.0, 0.0, 0.0, 1.0),
+        ];
+        let model = PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: vec![1, 0, 2, 1],
+                offsets: vec![0, 1, 3, 4],
+            }),
+            radii: Some(vec![0.95, 0.1, 0.95]),
+            points,
+        };
+        let ray = Ray {
+            origin: glam::Vec3::new(-2.0, 0.2, 0.0),
+            direction: glam::Vec3::X,
+        };
+        let result = record_path_jacobians(
+            &model,
+            ray,
+            TraceSettings {
+                depth: 6.0,
+                ..settings_for(0)
+            },
+        );
+        let cells: Vec<u32> = result.entries.iter().map(|entry| entry.cell).collect();
+        assert_eq!(cells, vec![0, 2]);
+        assert_eq!(result.entries[1].previous_cell, 1);
+        assert_ne!(result.entries[1].previous_cell, result.entries[0].cell);
     }
 }
