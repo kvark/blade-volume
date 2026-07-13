@@ -198,6 +198,12 @@ Broken into sub-steps:
     at 24×24, 2000 subsampled cells. Outputs a binary PLY + an
     interpolated-camera novel-view strip.
 
+    Training checkpoints pair the interchange PLY with a meganeura
+    `.safetensors` parameter/Adam sidecar, a versioned `.trainstate` sidecar
+    for all deterministic RNG streams, and a legacy `.ply.step` marker. A
+    resume validates that the optimizer, trainer state, and absolute schedule
+    step agree before taking another update.
+
   Known meganeura matmul shape bug: P×L when P≥784 and L≥16 produces
   NaN. Workaround is to keep P or L below those bounds (default
   resolution/max-steps does so). To be reported upstream.

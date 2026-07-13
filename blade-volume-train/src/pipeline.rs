@@ -808,6 +808,9 @@ mod tests {
         assert!(checkpoint.is_file());
         assert!(optimizer_checkpoint.is_file());
         assert!(checkpoint.with_extension("ply.step").is_file());
+        assert!(checkpoint.with_extension("trainstate").is_file());
+        let trainer_state = diff_render::load_training_state(&checkpoint).unwrap();
+        assert_eq!(trainer_state.step, config.total_adam_steps(2));
 
         let mut resume_config = config.clone();
         resume_config.init_ply = Some(checkpoint.clone());

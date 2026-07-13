@@ -902,6 +902,28 @@ pub enum LrSchedule {
     Cosine,
 }
 
+const SAMPLING_RNG_SEED: u64 = 0xDEAD_BEEF_F00D_CAFE;
+const QUANTILE_RNG_SEED: u64 = 0x51A7_E5D0_9B3C_2468;
+const DENSIFY_RNG_SEED: u64 = 0xCAFE_F00D_DEAD_BEEF;
+const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+const LCG_INCREMENT: u64 = 1_442_695_040_888_963_407;
+const TRAINING_STATE_HEADER: &str = "blade-volume-training-state-v1";
+
+/// Deterministic trainer state which is not owned by meganeura.
+///
+/// Parameter values, Adam moments, and the Adam counter live in the paired
+/// safetensors checkpoint. These RNG states preserve view/pixel sampling,
+/// quantile regularization, and densification decisions across a process
+/// restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrainingState {
+    pub step: usize,
+    pub cycle: usize,
+    pub sampling_rng: u64,
+    pub quantile_rng: u64,
+    pub densify_rng: u64,
+}
+
 /// Knobs for [`fit_appearance_multi_view`].
 #[derive(Clone, Debug)]
 pub struct AppearanceFitConfig {
@@ -998,6 +1020,9 @@ pub struct AppearanceFitConfig {
     /// Restores exact parameters, Adam moments, and the Adam step counter
     /// after the graph has been rebuilt for the checkpoint's cell count.
     pub resume_state_path: Option<std::path::PathBuf>,
+    /// Optional deterministic trainer state paired with `init_ply`.
+    /// Restores the sampling, quantile, and densification RNG streams.
+    pub resume_training_state: Option<TrainingState>,
 }
 
 /// Adaptive densification: every `every` training steps after `warmup`
@@ -1088,8 +1113,48 @@ impl Default for AppearanceFitConfig {
             checkpoint_path: None,
             resume_step: 0,
             resume_state_path: None,
+            resume_training_state: None,
         }
     }
+}
+
+fn next_lcg_u32(state: &mut u64) -> u32 {
+    *state = state
+        .wrapping_mul(LCG_MULTIPLIER)
+        .wrapping_add(LCG_INCREMENT);
+    (*state >> 32) as u32
+}
+
+fn next_quantile(state: &mut u64) -> f32 {
+    let bits = next_lcg_u32(state);
+    (((bits as f64 + 0.5) / (u32::MAX as f64 + 1.0)) as f32)
+        .clamp(f32::MIN_POSITIVE, 1.0 - f32::EPSILON)
+}
+
+/// Advance the affine LCG by `delta` draws in O(log delta), preserving the
+/// exact wrapping-u64 sequence. This reconstructs sampling state for legacy
+/// checkpoints which predate the training-state sidecar.
+fn advance_lcg(state: u64, mut delta: u64) -> u64 {
+    let mut current_multiplier = LCG_MULTIPLIER;
+    let mut current_increment = LCG_INCREMENT;
+    let mut accumulated_multiplier = 1_u64;
+    let mut accumulated_increment = 0_u64;
+    while delta > 0 {
+        if delta & 1 != 0 {
+            accumulated_multiplier = accumulated_multiplier.wrapping_mul(current_multiplier);
+            accumulated_increment = accumulated_increment
+                .wrapping_mul(current_multiplier)
+                .wrapping_add(current_increment);
+        }
+        current_increment = current_multiplier
+            .wrapping_add(1)
+            .wrapping_mul(current_increment);
+        current_multiplier = current_multiplier.wrapping_mul(current_multiplier);
+        delta >>= 1;
+    }
+    accumulated_multiplier
+        .wrapping_mul(state)
+        .wrapping_add(accumulated_increment)
 }
 
 /// Effective learning rate at Adam step `t` (1-indexed) given `total`
@@ -1330,6 +1395,82 @@ fn save_optimizer_checkpoint(
         .save_checkpoint(&tmp)
         .map_err(|err| format!("{err:?}"))?;
     std::fs::rename(&tmp, &path).map_err(|err| format!("{err:?}"))?;
+    Ok(path)
+}
+
+fn save_checkpoint_step(model_path: &std::path::Path, step: usize) -> Result<(), String> {
+    let path = model_path.with_extension("ply.step");
+    let tmp = model_path.with_extension("ply.step.tmp");
+    std::fs::write(&tmp, step.to_string())
+        .map_err(|err| format!("failed to write {}: {err}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|err| format!("failed to rename {}: {err}", path.display()))
+}
+
+fn training_state_path(model_path: &std::path::Path) -> std::path::PathBuf {
+    model_path.with_extension("trainstate")
+}
+
+fn encode_training_state(state: TrainingState) -> String {
+    format!(
+        "{TRAINING_STATE_HEADER}\nstep {}\ncycle {}\nsampling_rng {}\nquantile_rng {}\ndensify_rng {}\n",
+        state.step, state.cycle, state.sampling_rng, state.quantile_rng, state.densify_rng,
+    )
+}
+
+fn decode_training_state(text: &str) -> Result<TrainingState, String> {
+    let mut lines = text.lines();
+    if lines.next() != Some(TRAINING_STATE_HEADER) {
+        return Err("unsupported or missing training-state header".to_string());
+    }
+    let mut read_value = |expected: &str| -> Result<u64, String> {
+        let line = lines
+            .next()
+            .ok_or_else(|| format!("missing training-state field {expected}"))?;
+        let mut words = line.split_whitespace();
+        let name = words.next().unwrap_or_default();
+        let value = words.next().unwrap_or_default();
+        if name != expected || words.next().is_some() {
+            return Err(format!("expected training-state field {expected}"));
+        }
+        value
+            .parse::<u64>()
+            .map_err(|err| format!("invalid training-state field {expected}: {err}"))
+    };
+    let step_u64 = read_value("step")?;
+    let state = TrainingState {
+        step: usize::try_from(step_u64)
+            .map_err(|_| format!("training-state step {step_u64} does not fit usize"))?,
+        cycle: usize::try_from(read_value("cycle")?)
+            .map_err(|_| "training-state cycle does not fit usize".to_string())?,
+        sampling_rng: read_value("sampling_rng")?,
+        quantile_rng: read_value("quantile_rng")?,
+        densify_rng: read_value("densify_rng")?,
+    };
+    if lines.any(|line| !line.trim().is_empty()) {
+        return Err("unexpected trailing training-state data".to_string());
+    }
+    Ok(state)
+}
+
+/// Load the deterministic trainer-state sidecar paired with `model_path`.
+pub fn load_training_state(model_path: &std::path::Path) -> Result<TrainingState, String> {
+    let path = training_state_path(model_path);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    decode_training_state(&text).map_err(|err| format!("{}: {err}", path.display()))
+}
+
+fn save_training_state(
+    model_path: &std::path::Path,
+    state: TrainingState,
+) -> Result<std::path::PathBuf, String> {
+    let path = training_state_path(model_path);
+    let tmp = model_path.with_extension("trainstate.tmp");
+    std::fs::write(&tmp, encode_training_state(state))
+        .map_err(|err| format!("failed to write {}: {err}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|err| format!("failed to rename {}: {err}", path.display()))?;
     Ok(path)
 }
 
@@ -2138,6 +2279,15 @@ fn fit_appearance_pixel_batched(
     let n_cells = model.points.len();
     let total_steps = config.steps_per_view.max(1) * views.len();
     let full_image_batch = config.pixel_batch.is_none();
+    assert!(
+        config.resume_step <= total_steps,
+        "resume_step {} exceeds the configured total step budget {}",
+        config.resume_step,
+        total_steps,
+    );
+    // A checkpoint at the completed step budget is already final; do not
+    // repeat its last update.
+    let mut steps_done = config.resume_step;
 
     // The model's existing SH degree drives the graph: callers wanting to
     // expand a SH-0 model to a higher degree must reshape
@@ -2179,23 +2329,54 @@ fn fit_appearance_pixel_batched(
         buffer_count: 2,
     });
 
-    // Deterministic LCG so reruns produce identical results.
-    let mut state: u64 = 0xDEAD_BEEF_F00D_CAFE;
-    let mut next_u32 = || {
-        state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        (state >> 32) as u32
+    // Restore all trainer-owned stochastic state. Legacy checkpoints have no
+    // sidecar, but view/pixel and quantile streams have a fixed number of
+    // draws per completed step and can therefore be reconstructed exactly.
+    // Densification depends on prior prune counts, so only the new sidecar can
+    // preserve that stream across a restart.
+    let sampling_draws_per_step = if config.patch_size > 0 {
+        3_u64 // view + x/y patch origin
+    } else if full_image_batch {
+        1_u64 // view only
+    } else {
+        1_u64.saturating_add(pixel_batch as u64) // view + each sampled pixel
     };
-    let mut quantile_state: u64 = 0x51A7_E5D0_9B3C_2468;
-    let mut next_quantile = || {
-        quantile_state = quantile_state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        let bits = (quantile_state >> 32) as u32;
-        (((bits as f64 + 0.5) / (u32::MAX as f64 + 1.0)) as f32)
-            .clamp(f32::MIN_POSITIVE, 1.0 - f32::EPSILON)
+    let quantile_draws_per_step = if config.quantile_weight > 0.0 {
+        (pixel_batch as u64).saturating_mul(2)
+    } else {
+        0
     };
+    let legacy_sampling_draws = (steps_done as u64).saturating_mul(sampling_draws_per_step);
+    let legacy_quantile_draws = (steps_done as u64).saturating_mul(quantile_draws_per_step);
+    let (mut sampling_rng, mut quantile_rng, mut rng_split, mut cycle) =
+        match config.resume_training_state {
+            Some(state) => {
+                assert_eq!(
+                    state.step, steps_done,
+                    "training-state step must match resume_step"
+                );
+                (
+                    state.sampling_rng,
+                    state.quantile_rng,
+                    state.densify_rng,
+                    state.cycle,
+                )
+            }
+            None => {
+                if steps_done > 0 && config.densify.is_some() {
+                    log::warn!(
+                        "resume has no trainer-state sidecar: reconstructing sampling streams, \
+                         but future densification decisions may differ"
+                    );
+                }
+                (
+                    advance_lcg(SAMPLING_RNG_SEED, legacy_sampling_draws),
+                    advance_lcg(QUANTILE_RNG_SEED, legacy_quantile_draws),
+                    DENSIFY_RNG_SEED,
+                    0,
+                )
+            }
+        };
 
     let mut target_buf = vec![0.0f32; pixel_batch * 3];
     let mut pixel_indices = vec![0u32; pixel_batch];
@@ -2227,11 +2408,8 @@ fn fit_appearance_pixel_batched(
     // only torn down and rebuilt when a split actually changes the cell
     // count.
     let densify = config.densify;
-    // Resume: start the loop counter at the checkpoint's absolute step so
-    // the cosine LR and densify schedule pick up where the interrupted
-    // run stopped. Clamped so a stale/overshooting sidecar can't skip the
-    // whole run.
-    let mut steps_done = config.resume_step.min(total_steps.saturating_sub(1));
+    // Resume at the checkpoint's absolute step so the cosine LR and densify
+    // schedule pick up where the interrupted run stopped.
     if steps_done > 0 {
         log::info!(
             "resuming at step {}/{} with {} cells",
@@ -2242,9 +2420,6 @@ fn fit_appearance_pixel_batched(
     }
     let mut position_grad_accum = vec![0.0f32; model.points.len()];
     let mut position_grad_scratch = vec![0.0f32; model.points.len() * 3];
-    let mut rng_split: u64 = 0xCAFE_F00D_DEAD_BEEF;
-    let mut cycle = 0usize;
-
     let _ = n_cells;
     let mut path_bufs =
         vol::gpu::PathRecordBuffers::new_external(&gpu, pixel_batch as u32, max_steps as u32);
@@ -2273,6 +2448,13 @@ fn fit_appearance_pixel_batched(
         session
             .load_checkpoint(state_path)
             .unwrap_or_else(|err| panic!("failed to load {}: {err:?}", state_path.display()));
+        if let Some(state) = config.resume_training_state {
+            assert_eq!(
+                session.adam_step_count() as usize,
+                state.step,
+                "optimizer and trainer-state checkpoints disagree on the completed step"
+            );
+        }
         log::info!(
             "resume: restored parameters and Adam state from {} at Adam step {}",
             state_path.display(),
@@ -2300,7 +2482,7 @@ fn fit_appearance_pixel_batched(
 
         for cycle_step in 0..cycle_budget {
             let step = steps_done + cycle_step;
-            let vi = (next_u32() as usize) % views.len();
+            let vi = (next_lcg_u32(&mut sampling_rng) as usize) % views.len();
             let v = &views[vi];
             let img_size = v.width * v.height;
 
@@ -2320,8 +2502,8 @@ fn fit_appearance_pixel_batched(
                 let q = patch_size as u32;
                 let max_x = v.width.saturating_sub(q);
                 let max_y = v.height.saturating_sub(q);
-                let x0 = next_u32() % (max_x + 1);
-                let y0 = next_u32() % (max_y + 1);
+                let x0 = next_lcg_u32(&mut sampling_rng) % (max_x + 1);
+                let y0 = next_lcg_u32(&mut sampling_rng) % (max_y + 1);
                 for ky in 0..q {
                     for kx in 0..q {
                         let k = (ky * q + kx) as usize;
@@ -2370,7 +2552,7 @@ fn fit_appearance_pixel_batched(
                 }
             } else {
                 for k in 0..pixel_batch {
-                    let pidx = next_u32() % img_size;
+                    let pidx = next_lcg_u32(&mut sampling_rng) % img_size;
                     pixel_indices[k] = pidx;
                     let base = (pidx as usize) * 3;
                     target_buf[k * 3] = v.target_rgb[base];
@@ -2439,8 +2621,8 @@ fn fit_appearance_pixel_batched(
             session.set_input_u32("view_idx", &[vi as u32]);
             if config.quantile_weight > 0.0 {
                 for (near, far) in quantile_near.iter_mut().zip(quantile_far.iter_mut()) {
-                    let qa = next_quantile();
-                    let qb = next_quantile();
+                    let qa = next_quantile(&mut quantile_rng);
+                    let qb = next_quantile(&mut quantile_rng);
                     *near = -qa.max(qb).ln();
                     *far = -qa.min(qb).ln();
                 }
@@ -2685,18 +2867,30 @@ fn fit_appearance_pixel_batched(
                 match save_checkpoint(ckpt, &snapshot)
                     .and_then(|()| save_optimizer_checkpoint(&mut session, ckpt))
                 {
-                    Ok(state_path) => {
-                        let step_path = ckpt.with_extension("ply.step");
-                        if let Err(err) = std::fs::write(&step_path, steps_done.to_string()) {
-                            log::warn!("checkpoint step-sidecar write failed: {err:?}");
+                    Ok(optimizer_path) => {
+                        if let Err(err) = save_checkpoint_step(ckpt, steps_done) {
+                            log::warn!("checkpoint step-sidecar write failed: {err}");
                         }
-                        log::info!(
-                            "checkpoint: wrote {} and {} ({} cells) at step {}",
-                            ckpt.display(),
-                            state_path.display(),
-                            snapshot.points.len(),
-                            steps_done,
-                        );
+                        let trainer_state = TrainingState {
+                            step: steps_done,
+                            cycle,
+                            sampling_rng,
+                            quantile_rng,
+                            densify_rng: rng_split,
+                        };
+                        match save_training_state(ckpt, trainer_state) {
+                            Ok(trainer_path) => log::info!(
+                                "checkpoint: wrote {}, {}, and {} ({} cells) at step {}",
+                                ckpt.display(),
+                                optimizer_path.display(),
+                                trainer_path.display(),
+                                snapshot.points.len(),
+                                steps_done,
+                            ),
+                            Err(err) => log::warn!(
+                                "checkpoint trainer-state save failed after model/optimizer: {err}"
+                            ),
+                        }
                     }
                     Err(err) => log::warn!("checkpoint save failed: {err:?}"),
                 }
@@ -3119,6 +3313,50 @@ mod tests {
             at_mid > three_qtr,
             "mid {at_mid} should exceed 3qtr {three_qtr}"
         );
+    }
+
+    #[test]
+    fn lcg_jump_matches_iterated_draws() {
+        for count in [0_u64, 1, 2, 3, 17, 1_000, 1_000_001] {
+            let mut iterated = SAMPLING_RNG_SEED;
+            for _ in 0..count {
+                let _ = next_lcg_u32(&mut iterated);
+            }
+            assert_eq!(advance_lcg(SAMPLING_RNG_SEED, count), iterated);
+        }
+    }
+
+    #[test]
+    fn training_state_text_roundtrips_and_rejects_trailing_data() {
+        let state = TrainingState {
+            step: 9_000,
+            cycle: 94,
+            sampling_rng: 11,
+            quantile_rng: 22,
+            densify_rng: 33,
+        };
+        let encoded = encode_training_state(state);
+        assert_eq!(decode_training_state(&encoded).unwrap(), state);
+        assert!(decode_training_state(&(encoded + "unexpected 1\n")).is_err());
+    }
+
+    #[test]
+    fn training_state_sidecar_roundtrips_atomically() {
+        let model_path = std::env::temp_dir().join(format!(
+            "blade-volume-training-state-{}.ply",
+            std::process::id(),
+        ));
+        let state = TrainingState {
+            step: 321,
+            cycle: 7,
+            sampling_rng: u64::MAX,
+            quantile_rng: 123,
+            densify_rng: 456,
+        };
+        let path = save_training_state(&model_path, state).unwrap();
+        assert_eq!(load_training_state(&model_path).unwrap(), state);
+        assert!(!model_path.with_extension("trainstate.tmp").exists());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -255,14 +255,16 @@ struct Args {
     #[argh(option, default = "100")]
     geometry_rebuild_every: usize,
 
-    /// optional checkpoint PLY path written with an exact safetensors optimizer
-    /// sidecar at every densify cycle. Defaults to <output>.ckpt.ply when
-    /// --densify-every > 0; pass "none" to disable.
+    /// optional checkpoint PLY path written with exact safetensors optimizer
+    /// and deterministic trainer-state sidecars at every densify cycle.
+    /// Defaults to <output>.ckpt.ply when --densify-every > 0; pass "none"
+    /// to disable.
     #[argh(option)]
     checkpoint: Option<String>,
 
-    /// resume from a checkpoint PLY. A sibling `.safetensors` file is loaded
-    /// automatically when present to restore exact parameters and Adam state.
+    /// resume from a checkpoint PLY. Sibling `.safetensors` and `.trainstate`
+    /// files are loaded automatically when present to restore parameters,
+    /// Adam state, and deterministic RNG streams.
     #[argh(option)]
     init_ply: Option<String>,
 
@@ -314,12 +316,33 @@ fn main() {
             std::process::exit(2);
         }
     };
-    // Resume bookkeeping: when --init-ply is given, determine the step to
-    // continue the schedule from — explicit --resume-step wins, else the
-    // `<ply>.step` sidecar the checkpoint writer dropped, else 0.
+    // Resume bookkeeping: load deterministic trainer state first, then
+    // determine the schedule step. Explicit --resume-step wins, followed by
+    // the versioned trainer state and the legacy `<ply>.step` sidecar.
     let init_ply = args.init_ply.as_deref().map(path::PathBuf::from);
+    let resume_training_state = init_ply.as_ref().and_then(|ply| {
+        let state_path = ply.with_extension("trainstate");
+        if !state_path.is_file() {
+            return None;
+        }
+        match diff_render::load_training_state(ply) {
+            Ok(state) => {
+                eprintln!(
+                    "resume: loaded trainer state at step {} from {}",
+                    state.step,
+                    state_path.display(),
+                );
+                Some(state)
+            }
+            Err(err) => {
+                eprintln!("resume: invalid trainer state: {err}");
+                std::process::exit(2);
+            }
+        }
+    });
     let resume_step = match args.resume_step {
         Some(s) => s,
+        None if resume_training_state.is_some() => resume_training_state.unwrap().step,
         None => match init_ply {
             Some(ref ply) => {
                 let sidecar = ply.with_extension("ply.step");
@@ -343,10 +366,23 @@ fn main() {
             None => 0,
         },
     };
+    if let Some(state) = resume_training_state {
+        if state.step != resume_step {
+            eprintln!(
+                "resume: --resume-step {} disagrees with trainer-state step {}",
+                resume_step, state.step,
+            );
+            std::process::exit(2);
+        }
+    }
     let resume_state_path = init_ply.as_ref().and_then(|ply| {
         let state = ply.with_extension("safetensors");
         state.is_file().then_some(state)
     });
+    if resume_training_state.is_some() && resume_state_path.is_none() {
+        eprintln!("resume: trainer state exists but the paired safetensors checkpoint is missing");
+        std::process::exit(2);
+    }
 
     let config = pipeline::PipelineConfig {
         resolution: (args.width, args.height),
@@ -377,6 +413,7 @@ fn main() {
             rebuild_with_qhull: args.qhull,
             resume_step,
             resume_state_path,
+            resume_training_state,
             checkpoint_path: match args.checkpoint.as_deref() {
                 Some("none") => None,
                 Some(p) => Some(path::PathBuf::from(p)),

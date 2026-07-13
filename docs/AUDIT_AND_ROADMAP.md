@@ -160,9 +160,12 @@ ramp; the earlier smooth depth-variance term remains available as a separate
 ablation. The color contract now explicitly follows reference RadFoam/3DGS:
 training, SH appearance, backgrounds, PNG output, and PSNR use display-referred
 sRGB code values. The viewer no longer applies an extra Reinhard curve to the
-RadFoam backend. Stage 3 now persists Čech radii and clips PowerFoam intervals to
-support spheres consistently on CPU, production WGSL, and the GPU training
-recorder.
+RadFoam backend. Lossless checkpoints now include a versioned trainer-state
+sidecar for the sampling, quantile, and densification RNG streams as well as
+the existing parameter/Adam safetensors; legacy resumes reconstruct fixed-draw
+sampling streams by jumping the LCG to the absolute step. Stage 3 now persists
+Čech radii and clips PowerFoam intervals to support spheres consistently on
+CPU, production WGSL, and the GPU training recorder.
 Weighted position/radius gradients and external checkpoint validation remain,
 so weighted geometry optimization and densification intentionally fail fast
 rather than train an incorrect objective.
