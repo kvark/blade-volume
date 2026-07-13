@@ -3,6 +3,8 @@ name = "blade-volume-view"
 version = "0.1.0"
 edition = "2021"
 description = "Viewer utilities for blade-volume (camera control, input handling)"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 blade-volume = { path = "../blade-volume" }

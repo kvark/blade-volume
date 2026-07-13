@@ -290,6 +290,13 @@ At the audited revision:
   workspace formatting, and a RustSec gate. The gate explicitly exempts only
   the two documented build-time `quick-xml` findings so any new advisory still
   fails the workflow.
+- Workspace crates now expose the repository and MIT package metadata, and the
+  regression harness is explicitly non-publishable. A crates.io package is
+  still intentionally blocked: the core depends on the pinned, unreleased
+  `blade-graphics` revision without a registry version requirement. Embedding by
+  git/path is supported; publishing requires a compatible Blade release and
+  versioned internal path dependencies rather than silently stripping the git
+  pin during `cargo package`.
 
 ## Implementation stages
 

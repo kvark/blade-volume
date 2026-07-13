@@ -2,6 +2,9 @@
 name = "blade-volume-convert"
 version = "0.1.0"
 edition = "2021"
+description = "Offline glTF to point-cloud conversion for blade-volume"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 blade-volume = { path = "../blade-volume" }

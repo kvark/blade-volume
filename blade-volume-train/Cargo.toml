@@ -3,6 +3,8 @@ name = "blade-volume-train"
 version = "0.1.0"
 edition = "2021"
 description = "Training pipeline for blade-volume point clouds (meganeura backend)"
+license.workspace = true
+repository.workspace = true
 
 [features]
 default = []

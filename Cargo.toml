@@ -8,6 +8,10 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+license = "MIT"
+repository = "https://github.com/kvark/blade-volume"
+
 # Mirror the lint policy from blade-graphics/src/lib.rs.
 [workspace.lints.clippy]
 match_like_matches_macro = "allow"
