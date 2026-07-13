@@ -102,7 +102,7 @@ Some assets can be found in [GSOP](https://github.com/cgnomads/GSOPs/tree/91e1c3
 
 ## Radiant Foam
 
-Implementing [Radiant Foam paper](https://radiantfoam.github.io/) with pure compute.
+Implementing the [Radiant Foam paper](https://radfoam.github.io/) with pure compute.
 
 ![bike](/etc/rf-bike.jpg)
 
