@@ -269,8 +269,10 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
             continue;
         }
         let ddiff = (cpu_dts[i] - gpu_dts[i]).abs();
-        // f32 + radical-plane math: allow a few ULPs.
-        if ddiff > 1e-4 {
+        // CPU and GPU normalize the ray independently, then evaluate a
+        // square root at the support-sphere boundary. Near-tangent segments
+        // amplify the backend rounding difference beyond a few ULPs.
+        if ddiff > 2e-4 {
             mismatches += 1;
             if mismatches <= 8 {
                 eprintln!(
