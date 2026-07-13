@@ -99,12 +99,13 @@ At the audited revision:
 - Camera, background, and color conventions are not encoded in a shared model
   used by training, evaluation, and viewing.
 
-### Gaussian backend and formats
+### Remaining Gaussian backend gaps
 
-- Standard 3DGS higher-order SH PLY import/export uses the wrong coefficient
-  layout.
-- SPZ signed positions and opacity are decoded incorrectly, and higher SH is
-  ignored.
+- The shared icosahedron BLAS proxy now has the requested insphere radius; the
+  original formula inflated every proxy axis by sqrt(3), increasing false RT
+  candidates and pressure on the five-hit window.
+- Standard channel-major 3DGS SH PLY and SPZ v2-v4 signed positions, opacity,
+  higher SH, and quaternion streams now have known-value regression fixtures.
 - The five-hit hardware-RT sorting window has not been measured against a
   trusted renderer.
 - No Gaussian training implementation exists.
