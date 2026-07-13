@@ -46,14 +46,18 @@ fn rf_support_interval(
         return vec2<f32>(t0, t1);
     }
     let oc = ray_origin - center;
+    let a = dot(ray_dir, ray_dir);
+    if (a <= 0.0) {
+        return vec2<f32>(t0, t0);
+    }
     let b = dot(oc, ray_dir);
     let c = dot(oc, oc) - radius * radius;
-    let discriminant = b * b - c;
+    let discriminant = b * b - a * c;
     if (discriminant <= 0.0) {
         return vec2<f32>(t0, t0);
     }
     let root = sqrt(discriminant);
-    return vec2<f32>(max(t0, -b - root), min(t1, -b + root));
+    return vec2<f32>(max(t0, (-b - root) / a), min(t1, (-b + root) / a));
 }
 
 // Core Voronoi cell traversal
@@ -117,7 +121,7 @@ fn radfoam_trace(
                 let dt = support.y - support.x;
                 let alpha = 1.0 - exp(-s * dt);
                 let w = transmittance * alpha;
-                let rgb = rf_get_color(current, ray_dir);
+                let rgb = rf_get_color(current, normalize(ray_dir));
                 accum_rgb += w * rgb;
                 transmittance *= (1.0 - alpha);
             }

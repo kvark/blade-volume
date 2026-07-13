@@ -348,7 +348,10 @@ fn trace_scene(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
 
         // Transform ray to object space
         let obj_ray_origin = (transform.world_to_object * vec4<f32>(ray_origin, 1.0)).xyz;
-        let obj_ray_dir = normalize((transform.world_to_object * vec4<f32>(ray_dir, 0.0)).xyz);
+        // Keep the affine-transformed direction unnormalized: object-space
+        // origin + t * direction then uses the same world-ray parameter t,
+        // including under nonuniform scale.
+        let obj_ray_dir = (transform.world_to_object * vec4<f32>(ray_dir, 0.0)).xyz;
 
         var result: vec4<f32>;
 

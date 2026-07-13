@@ -148,15 +148,19 @@ fn support_interval(
         return (t1 > t0).then_some((t0, t1));
     }
     let oc = ray_origin - center;
+    let a = ray_dir.length_squared();
+    if !a.is_finite() || a <= 0.0 {
+        return None;
+    }
     let b = oc.dot(ray_dir);
     let c = oc.length_squared() - radius * radius;
-    let discriminant = b * b - c;
+    let discriminant = b * b - a * c;
     if discriminant <= 0.0 {
         return None;
     }
     let root = discriminant.sqrt();
-    let near = -b - root;
-    let far = -b + root;
+    let near = (-b - root) / a;
+    let far = (-b + root) / a;
     let clipped_start = t0.max(near);
     let clipped_end = t1.min(far);
     (clipped_end > clipped_start).then_some((clipped_start, clipped_end))
@@ -1150,6 +1154,25 @@ mod path_tests {
         let expected_alpha = 1.0 - (-4.0_f32).exp();
         assert!((traced.rgba.w - expected_alpha).abs() < 1e-6);
         assert_eq!(traced.t_end, 10.0);
+    }
+
+    #[test]
+    fn support_sphere_preserves_non_unit_ray_parameterization() {
+        let origin = glam::Vec3::new(0.0, 0.0, -2.0);
+        let center = glam::Vec3::ZERO;
+        let unit = support_interval(true, origin, glam::Vec3::Z, center, 1.0, 0.0, 10.0).unwrap();
+        let scaled =
+            support_interval(true, origin, 2.0 * glam::Vec3::Z, center, 1.0, 0.0, 10.0).unwrap();
+        assert_eq!(unit, (1.0, 3.0));
+        assert_eq!(scaled, (0.5, 1.5));
+        assert_eq!(
+            origin + unit.0 * glam::Vec3::Z,
+            origin + scaled.0 * 2.0 * glam::Vec3::Z
+        );
+        assert_eq!(
+            origin + unit.1 * glam::Vec3::Z,
+            origin + scaled.1 * 2.0 * glam::Vec3::Z
+        );
     }
 
     #[test]

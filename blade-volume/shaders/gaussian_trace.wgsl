@@ -147,7 +147,7 @@ fn gaussian_trace(
             let g_pos = g_origin + effective_t * g_dir;
             let alpha = gs.opacity * exp(-0.5 * dot(g_pos, g_pos));
 
-            let color = gaussian_eval_sh(gs, ray_dir);
+            let color = gaussian_eval_sh(gs, normalize(ray_dir));
             radiance += alpha * transmittance * color;
             transmittance *= 1.0 - alpha;
             hits_total += 1u;
