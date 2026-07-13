@@ -16,6 +16,8 @@
 
 enable wgpu_ray_query;
 
+// #gaussian_query array g_gaussian_tlas g_gs_obj 64
+
 // #include "common.wgsl"
 // #include "sh_eval.wgsl"
 
@@ -96,7 +98,7 @@ var<storage, read> g_radfoam_adjacency: binding_array<RadFoamAdjacencyBuffer>;
 var<storage, read> g_radfoam_adjacency_offsets: binding_array<RadFoamAdjacencyOffsetsBuffer>;
 
 // ============================================================================
-// Gaussian Backend Buffers (MVP: single object)
+// Gaussian Backend Buffers (one TLAS and data buffer per object)
 // ============================================================================
 
 struct Gaussian {
@@ -108,8 +110,12 @@ struct Gaussian {
     harmonics: array<vec4f, MAX_SH_COMPONENTS>,
 }
 
-var g_gaussian_tlas: acceleration_structure;
-var<storage, read> g_gaussian_data: array<Gaussian>;
+struct GaussianBuffer {
+    data: array<Gaussian>,
+}
+
+var g_gaussian_tlas: binding_array<acceleration_structure>;
+var<storage, read> g_gaussian_data: binding_array<GaussianBuffer>;
 
 // Output HDR image
 var g_out: texture_storage_2d<rgba16float, write>;
@@ -166,10 +172,8 @@ fn ray_sphere_intersect(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
 }
 
 // ============================================================================
-// Sorting helpers for object hits
+// Object-hit ordering helpers
 // ============================================================================
-
-const MAX_SCENE_HITS: u32 = 16u;
 
 struct ObjectHit {
     t_near: f32,
@@ -177,17 +181,30 @@ struct ObjectHit {
     object_idx: u32,
 }
 
-// Insertion sort for small arrays
-fn sort_hits(hits: ptr<function, array<ObjectHit, MAX_SCENE_HITS>>, count: u32) {
-    for (var i = 1u; i < count; i += 1u) {
-        let key = (*hits)[i];
-        var j = i;
-        while (j > 0u && (*hits)[j - 1u].t_near > key.t_near) {
-            (*hits)[j] = (*hits)[j - 1u];
-            j -= 1u;
+fn object_hit_less(a: ObjectHit, b: ObjectHit) -> bool {
+    return a.t_near < b.t_near ||
+        (a.t_near == b.t_near && a.object_idx < b.object_idx);
+}
+
+fn find_next_object_hit(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
+                        cursor_valid: bool, cursor: ObjectHit) -> ObjectHit {
+    var best = ObjectHit(0.0, 0.0, 0xFFFFFFFFu);
+    for (var i = 0u; i < g_scene_params.object_count; i += 1u) {
+        let bounds = g_bounds[i];
+        let sphere_hit = ray_sphere_intersect(ray_origin, ray_dir, bounds.center, bounds.radius);
+        if (!sphere_hit.hit) {
+            continue;
         }
-        (*hits)[j] = key;
+
+        let candidate = ObjectHit(sphere_hit.t_near, sphere_hit.t_far, i);
+        if (cursor_valid && !object_hit_less(cursor, candidate)) {
+            continue;
+        }
+        if (best.object_idx == 0xFFFFFFFFu || object_hit_less(candidate, best)) {
+            best = candidate;
+        }
     }
+    return best;
 }
 
 // ============================================================================
@@ -275,12 +292,15 @@ fn scene_trace_radfoam(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
 // Gaussian Backend (accessor functions for shared gaussian_trace module)
 // ============================================================================
 
+var<private> g_gs_obj: u32;
+var<private> g_gs_sh_degree: u32;
+
 fn gs_get_gaussian(idx: u32) -> Gaussian {
-    return g_gaussian_data[idx];
+    return g_gaussian_data[g_gs_obj].data[idx];
 }
 
 fn gs_get_sh_degree() -> u32 {
-    return g_scene_params.sh_degree;
+    return g_gs_sh_degree;
 }
 
 fn gs_get_weight_threshold() -> f32 {
@@ -290,7 +310,11 @@ fn gs_get_weight_threshold() -> f32 {
 // #include "gaussian_trace.wgsl"
 
 fn scene_trace_gaussian(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
-                        t_start: f32, t_end: f32) -> vec4<f32> {
+                        t_start: f32, t_end: f32,
+                        bounds: ObjectBounds) -> vec4<f32> {
+    g_gs_obj = bounds.data_index;
+    g_gs_sh_degree = bounds.sh_degree;
+
     var params: GaussianTraceParams;
     params.t_start = t_start;
     params.t_end = t_end;
@@ -304,16 +328,13 @@ fn scene_trace_gaussian(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
 // ============================================================================
 
 fn trace_scene(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
-    // Collect all object bounds intersections
-    var hits: array<ObjectHit, MAX_SCENE_HITS>;
     var hit_count: u32 = 0u;
 
-    for (var i = 0u; i < g_scene_params.object_count && i < MAX_SCENE_HITS; i += 1u) {
+    for (var i = 0u; i < g_scene_params.object_count; i += 1u) {
         let bounds = g_bounds[i];
         let sphere_hit = ray_sphere_intersect(ray_origin, ray_dir, bounds.center, bounds.radius);
 
         if (sphere_hit.hit) {
-            hits[hit_count] = ObjectHit(sphere_hit.t_near, sphere_hit.t_far, i);
             hit_count += 1u;
         }
     }
@@ -322,18 +343,18 @@ fn trace_scene(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    // Sort by t_near
-    sort_hits(&hits, hit_count);
+    let first_hit = find_next_object_hit(
+        ray_origin, ray_dir, false, ObjectHit(0.0, 0.0, 0u));
 
     // Debug mode: bounds visualization
     if (g_scene_params.debug_mode == DEBUG_MODE_BOUNDS) {
-        let density = f32(hit_count) / f32(MAX_SCENE_HITS);
+        let density = f32(hit_count) / f32(max(g_scene_params.object_count, 1u));
         return vec4<f32>(heatmap_color(density), 1.0);
     }
 
     // Debug mode: object type visualization
     if (g_scene_params.debug_mode == DEBUG_MODE_OBJECT_TYPE) {
-        let bounds = g_bounds[hits[0].object_idx];
+        let bounds = g_bounds[first_hit.object_idx];
         var type_color: vec3<f32>;
         switch (bounds.object_type) {
             case OBJECT_TYPE_GAUSSIAN: { type_color = vec3<f32>(1.0, 0.3, 0.3); }  // Red
@@ -349,12 +370,16 @@ fn trace_scene(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
     var total_radiance = vec3<f32>(0.0);
     var total_transmittance = 1.0;
 
+    var cursor_valid = false;
+    var cursor = ObjectHit(0.0, 0.0, 0u);
     for (var i = 0u; i < hit_count; i += 1u) {
         if (total_transmittance < g_scene_params.weight_threshold) {
             break;
         }
 
-        let hit = hits[i];
+        let hit = find_next_object_hit(ray_origin, ray_dir, cursor_valid, cursor);
+        cursor = hit;
+        cursor_valid = true;
         let bounds = g_bounds[hit.object_idx];
         let transform = g_transforms[hit.object_idx];
 
@@ -369,8 +394,8 @@ fn trace_scene(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
 
         switch (bounds.object_type) {
             case OBJECT_TYPE_GAUSSIAN: {
-                // Gaussian uses world-space coordinates (transform is baked into instances)
-                result = scene_trace_gaussian(ray_origin, ray_dir, hit.t_near, hit.t_far);
+                result = scene_trace_gaussian(obj_ray_origin, obj_ray_dir,
+                                              hit.t_near, hit.t_far, bounds);
             }
             case OBJECT_TYPE_RADFOAM: {
                 // RadFoam uses object-space coordinates

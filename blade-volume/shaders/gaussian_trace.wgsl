@@ -1,12 +1,13 @@
 // Gaussian splatting ray traversal algorithm using hardware RT.
 //
 // This shared module provides the core traversal logic. The including file must:
-// 1. Define `var g_gaussian_tlas: acceleration_structure;` (required name)
-// 2. Define accessor functions BEFORE including this file:
+// 1. Define accessor functions BEFORE including this file:
 //
 //    fn gs_get_gaussian(idx: u32) -> Gaussian;
 //    fn gs_get_sh_degree() -> u32;
 //    fn gs_get_weight_threshold() -> f32;
+// 2. Select its acceleration-structure layout with a parent
+//    `// #gaussian_query scalar ...` or `// #gaussian_query array ...` directive.
 //
 // The Gaussian struct must also be defined before including this file.
 
@@ -83,7 +84,7 @@ fn gaussian_trace(
         // collapses the two faces.
         let ray_flags = RAY_FLAG_FORCE_NO_OPAQUE;
         let desc = RayDesc(ray_flags, 0xFFu, params.t_start, params.t_end, ray_origin, ray_dir);
-        rayQueryInitialize(&rq, g_gaussian_tlas, desc);
+        // #initialize_gaussian_query
 
         var hit_count = 0u;
         var hits: array<GaussianHit, GAUSSIAN_HIT_WINDOW>;

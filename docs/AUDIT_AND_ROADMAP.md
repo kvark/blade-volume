@@ -127,8 +127,12 @@ At the audited revision:
 ### Scene layer
 
 - RadFoam-only scenes do not render through `SceneRenderer`.
-- Only the first Gaussian TLAS is bound.
-- Gaussian object transforms are not applied dynamically.
+- All Gaussian clouds now bind independent TLAS and data-buffer array entries
+  on Vulkan. Gaussian rays are transformed into each cloud's local space, so
+  per-frame scene transforms do not rebuild point data or per-cloud TLASes.
+  Static WGSL validation passes; rendered-pixel validation remains blocked on
+  driver recovery. Blade does not yet implement acceleration-structure arrays
+  on Metal, so the scene backend split must retain a scalar Metal path.
 - RadFoam scene objects now seed traversal from the camera-containing local
   cell, carry per-object SH/attribute metadata, and traverse from the camera
   while clipping integration to their software-TLAS interval. Physical-GPU
@@ -137,8 +141,11 @@ At the audited revision:
   uniform and nonuniform scale; bounded support intersections accept the
   resulting non-unit object-space direction. Bounds include PowerFoam support
   radii and finite Gaussian proxy extents.
-- More than sixteen objects and overlapping cloud volumes are not handled
-  robustly.
+- The fixed first-sixteen-object scan is removed. Traversal deterministically
+  visits every intersected object in lexicographic `(bounds entry, object
+  index)` order without a fixed hit array. This is correctness-first O(N²)
+  selection and treats whole overlapping clouds as ordered layers; physically
+  interleaved volume integration and a scalable software TLAS remain open.
 - Scene tests check state but not rendered pixels.
 - A 2026-07-12 RadFoam-only dispatch probe reached a driver fault even after
   reducing the compute entry point to a constant texture write. Pipeline
@@ -327,18 +334,25 @@ fixed ablation rather than merely changing topology.
 
 The CPU maximum-response oracle and exact batched ordering are implemented.
 Cross-rendering a recognized checkpoint against official 3DGRUT, physical-GPU
-pixel parity, and the hit-window performance sweep remain.
+pixel parity, and the hit-window performance sweep remain. Scene traversal now
+applies Gaussian cloud transforms without rebuilding point data or the local
+TLAS, but its rendered-pixel transform tests still require GPU recovery.
 
 Acceptance gate: imported standard checkpoints match the oracle at documented
 quality and performance; transformations pass rendered-pixel tests.
 
 ### Stage 5: multi-cloud engine
 
-1. Support RadFoam-only and multiple-Gaussian scenes.
+1. Support RadFoam-only and multiple-Gaussian scenes. (Multiple Gaussian
+   clouds are implemented for the Vulkan array path; RadFoam-only and the
+   scalar Metal path remain.)
 2. Bind per-object layouts and locate correct RadFoam entry cells.
-3. Preserve ray parameterization and optical depth under transforms.
-4. Define exact ordering for intersecting cloud volumes.
+3. Preserve ray parameterization and optical depth under transforms. (Done in
+   CPU logic and statically validated WGSL; rendered-pixel validation remains.)
+4. Define exact ordering for intersecting cloud volumes. (Deterministic
+   whole-cloud layering is defined; physical interleaving remains.)
 5. Replace the first-sixteen-object scan with bounded actual-hit collection.
+   (Done with exhaustive cursor selection; acceleration remains future work.)
 6. Add rendered-pixel tests for translation, rotation, uniform scale,
    nonuniform scale, mixed backends, and overlapping volumes.
 

@@ -4,6 +4,8 @@
 
 enable wgpu_ray_query;
 
+// #gaussian_query scalar g_gaussian_tlas
+
 // #include "common.wgsl"
 // #include "sh_eval.wgsl"
 

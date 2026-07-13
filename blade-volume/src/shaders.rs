@@ -23,7 +23,51 @@ const MAX_INCLUDE_DEPTH: usize = 10;
 ///
 /// Panics if the include name is unknown or the recursion depth is exceeded.
 pub fn compose(source: &str) -> String {
-    compose_recursive(source, 0)
+    let mut result = compose_recursive(source, 0);
+    if let Some(query) = source
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("// #gaussian_query "))
+    {
+        result = result.replace(
+            "// #initialize_gaussian_query",
+            &compose_gaussian_query(query),
+        );
+    }
+    result
+}
+
+fn compose_gaussian_query(query: &str) -> String {
+    let mut words = query.split_whitespace();
+    match words.next() {
+        Some("scalar") => {
+            let tlas = words.next().expect("missing scalar Gaussian TLAS name");
+            assert!(words.next().is_none(), "invalid scalar Gaussian query");
+            format!("rayQueryInitialize(&rq, {tlas}, desc);")
+        }
+        Some("array") => {
+            let tlas = words.next().expect("missing Gaussian TLAS array name");
+            let index = words.next().expect("missing Gaussian TLAS array index");
+            let count = words
+                .next()
+                .expect("missing Gaussian TLAS array size")
+                .parse::<u32>()
+                .expect("invalid Gaussian TLAS array size");
+            assert!(count > 0, "Gaussian TLAS array must not be empty");
+            assert!(words.next().is_none(), "invalid array Gaussian query");
+
+            let mut output = format!("switch ({index}) {{\n");
+            for i in 0..count {
+                output.push_str(&format!(
+                    "case {i}u: {{ rayQueryInitialize(&rq, {tlas}[{i}], desc); }}\n"
+                ));
+            }
+            output.push_str(&format!(
+                "default: {{ rayQueryInitialize(&rq, {tlas}[0], desc); }}\n}}"
+            ));
+            output
+        }
+        _ => panic!("invalid Gaussian query declaration: {query}"),
+    }
 }
 
 fn compose_recursive(source: &str, depth: usize) -> String {
@@ -78,5 +122,22 @@ mod tests {
     fn leaves_unrelated_lines_alone() {
         let src = "fn main() {}\n";
         assert_eq!(compose(src), src);
+    }
+
+    #[test]
+    fn expands_scalar_gaussian_query() {
+        let src = "// #gaussian_query scalar tlas\n// #initialize_gaussian_query\n";
+        let out = compose(src);
+        assert!(out.contains("rayQueryInitialize(&rq, tlas, desc);"));
+    }
+
+    #[test]
+    fn expands_array_gaussian_query_with_constant_indices() {
+        let src = "// #gaussian_query array tlas index 2\n// #initialize_gaussian_query\n";
+        let out = compose(src);
+        assert!(out.contains("switch (index)"));
+        assert!(out.contains("tlas[0]"));
+        assert!(out.contains("tlas[1]"));
+        assert!(!out.contains("tlas[2]"));
     }
 }

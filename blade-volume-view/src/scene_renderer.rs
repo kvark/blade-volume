@@ -18,8 +18,8 @@ use crate::RenderSize;
 use blade_graphics as gpu;
 use blade_volume as vol;
 
-/// Maximum number of RadFoam objects supported via binding arrays.
-const MAX_RADFOAM_OBJECTS: gpu::ResourceIndex = 64;
+/// Maximum number of objects supported per point-cloud backend.
+const MAX_CLOUD_OBJECTS: gpu::ResourceIndex = 64;
 
 /// Parameters passed to the scene traversal shader.
 #[repr(C)]
@@ -87,17 +87,17 @@ pub struct SceneTraverseData<'a> {
     /// Object transforms buffer.
     pub g_transforms: gpu::BufferPiece,
     /// RadFoam points buffers (binding array).
-    pub g_radfoam_points: &'a gpu::BufferArray<MAX_RADFOAM_OBJECTS>,
+    pub g_radfoam_points: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     /// RadFoam attributes buffers (binding array).
-    pub g_radfoam_attributes: &'a gpu::BufferArray<MAX_RADFOAM_OBJECTS>,
+    pub g_radfoam_attributes: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     /// RadFoam adjacency buffers (binding array).
-    pub g_radfoam_adjacency: &'a gpu::BufferArray<MAX_RADFOAM_OBJECTS>,
+    pub g_radfoam_adjacency: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     /// RadFoam adjacency offsets buffers (binding array).
-    pub g_radfoam_adjacency_offsets: &'a gpu::BufferArray<MAX_RADFOAM_OBJECTS>,
-    /// Gaussian TLAS (first object).
-    pub g_gaussian_tlas: gpu::AccelerationStructure,
-    /// Gaussian data buffer.
-    pub g_gaussian_data: gpu::BufferPiece,
+    pub g_radfoam_adjacency_offsets: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
+    /// Gaussian TLASes (binding array).
+    pub g_gaussian_tlas: &'a gpu::AccelerationStructureArray<MAX_CLOUD_OBJECTS>,
+    /// Gaussian data buffers (binding array).
+    pub g_gaussian_data: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     /// Output HDR texture.
     pub g_out: gpu::TextureView,
 }
@@ -318,10 +318,18 @@ impl SceneRenderer {
         encoder.init_texture(self.hdr_tex);
 
         // Build RadFoam binding arrays from all objects
-        let mut radfoam_points: gpu::BufferArray<MAX_RADFOAM_OBJECTS> = gpu::BufferArray::new();
-        let mut radfoam_attributes: gpu::BufferArray<MAX_RADFOAM_OBJECTS> = gpu::BufferArray::new();
-        let mut radfoam_adjacency: gpu::BufferArray<MAX_RADFOAM_OBJECTS> = gpu::BufferArray::new();
-        let mut radfoam_adjacency_offsets: gpu::BufferArray<MAX_RADFOAM_OBJECTS> =
+        assert!(
+            render_data.radfoam_clouds.len() <= MAX_CLOUD_OBJECTS as usize,
+            "SceneRenderer supports at most {MAX_CLOUD_OBJECTS} RadFoam objects"
+        );
+        assert!(
+            render_data.gaussian_clouds.len() <= MAX_CLOUD_OBJECTS as usize,
+            "SceneRenderer supports at most {MAX_CLOUD_OBJECTS} Gaussian objects"
+        );
+        let mut radfoam_points: gpu::BufferArray<MAX_CLOUD_OBJECTS> = gpu::BufferArray::new();
+        let mut radfoam_attributes: gpu::BufferArray<MAX_CLOUD_OBJECTS> = gpu::BufferArray::new();
+        let mut radfoam_adjacency: gpu::BufferArray<MAX_CLOUD_OBJECTS> = gpu::BufferArray::new();
+        let mut radfoam_adjacency_offsets: gpu::BufferArray<MAX_CLOUD_OBJECTS> =
             gpu::BufferArray::new();
 
         for cloud in render_data.radfoam_clouds {
@@ -336,19 +344,30 @@ impl SceneRenderer {
             self.params.radfoam_attr_dim = cloud.attr_dim as u32;
         }
 
-        // Get first Gaussian object's data (binding arrays not yet supported for AS)
-        let (gaussian_tlas, gaussian_buf) = if let Some(cloud) = render_data.gaussian_clouds.first()
-        {
-            (cloud.tlas, cloud.gauss_buf.into())
-        } else if render_data.radfoam_clouds.is_empty() {
-            // No objects at all - skip rendering
-            return;
-        } else {
-            // RadFoam only - we need a valid TLAS placeholder
-            // For now, skip if no Gaussian objects
-            // TODO: support RadFoam-only scenes by creating a dummy TLAS
+        // This mixed pipeline contains ray-query bindings and therefore requires
+        // at least one Gaussian. RadFoam-only rendering uses a separate pipeline
+        // in the next scene-backend split, rather than dummy geometry.
+        let Some(first_gaussian) = render_data.gaussian_clouds.first() else {
             return;
         };
+
+        let mut gaussian_tlas: gpu::AccelerationStructureArray<MAX_CLOUD_OBJECTS> =
+            gpu::AccelerationStructureArray::new();
+        let mut gaussian_data: gpu::BufferArray<MAX_CLOUD_OBJECTS> = gpu::BufferArray::new();
+        for cloud in render_data.gaussian_clouds {
+            gaussian_tlas.alloc(cloud.tlas);
+            gaussian_data.alloc(cloud.gauss_buf.into());
+        }
+
+        // Vulkan descriptor arrays must not be empty. These entries are never
+        // indexed when the scene has no RadFoam objects.
+        if render_data.radfoam_clouds.is_empty() {
+            let fallback = first_gaussian.gauss_buf.into();
+            radfoam_points.alloc(fallback);
+            radfoam_attributes.alloc(fallback);
+            radfoam_adjacency.alloc(fallback);
+            radfoam_adjacency_offsets.alloc(fallback);
+        }
 
         // Compute traverse into HDR texture
         if let mut pass = encoder.compute("scene-traverse") {
@@ -365,8 +384,8 @@ impl SceneRenderer {
                     g_radfoam_attributes: &radfoam_attributes,
                     g_radfoam_adjacency: &radfoam_adjacency,
                     g_radfoam_adjacency_offsets: &radfoam_adjacency_offsets,
-                    g_gaussian_tlas: gaussian_tlas,
-                    g_gaussian_data: gaussian_buf,
+                    g_gaussian_tlas: &gaussian_tlas,
+                    g_gaussian_data: &gaussian_data,
                     g_out: self.hdr_view,
                 },
             );
