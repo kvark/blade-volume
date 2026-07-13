@@ -80,6 +80,10 @@ pub struct PointCloudModel {
     pub points: Vec<glam::Vec4>,
 
     /// Packed SH coefficients: 3 floats (RGB) per SH component, per point.
+    /// Evaluated RGB follows the reference RadFoam and 3DGS convention:
+    /// display-referred sRGB code values. Rendering and training do not apply
+    /// an implicit transfer function or tone map; linear-light consumers must
+    /// decode these values explicitly.
     /// Layout: `[p0_c0_r, p0_c0_g, p0_c0_b, p0_c1_r, ..., p1_c0_r, ...]`
     /// Length: `N * 3 * sh_component_count(sh_degree)`
     pub sh_coefficients: Vec<f32>,

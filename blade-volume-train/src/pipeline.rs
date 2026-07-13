@@ -42,7 +42,9 @@ pub fn pick_start_cell(model: &vol::PointCloudModel, camera_origin: glam::Vec3) 
 }
 
 /// Load `path` as an RGB image, downsample to `(width, height)`, and return
-/// `width * height * 3` floats in `[0, 1]`, row-major.
+/// `width * height * 3` display-referred sRGB code values in `[0, 1]`,
+/// row-major. Resizing intentionally matches reference NVS loaders by
+/// filtering encoded image samples without a hidden linear-light conversion.
 pub fn load_and_downsample_image(
     path: &path::Path,
     width: u32,

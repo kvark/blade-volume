@@ -109,7 +109,7 @@ pub struct SceneBlitData {
     pub g_src: gpu::TextureView,
     /// Texture sampler.
     pub g_sampler: gpu::Sampler,
-    /// Explicit linear RGB background.
+    /// Explicit display-referred sRGB-code-value background.
     pub g_background: SceneBackground,
 }
 
@@ -136,7 +136,7 @@ pub struct SceneRenderer {
     hdr_view: gpu::TextureView,
     /// Texture sampler for blit.
     sampler: gpu::Sampler,
-    /// Linear RGB presentation background.
+    /// Display-referred sRGB-code-value presentation background.
     pub background_rgb: [f32; 3],
     /// Rendering parameters.
     pub params: SceneParams,

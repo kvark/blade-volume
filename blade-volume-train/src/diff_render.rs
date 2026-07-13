@@ -965,8 +965,9 @@ pub struct AppearanceFitConfig {
     /// that dip to negative log-density keep a gradient and recover
     /// instead of dying — important for stable densification.
     pub softplus_beta: f32,
-    /// Linear RGB background composited behind premultiplied cloud radiance.
-    /// Default black. Use `[1.0; 3]` for datasets prepared on white.
+    /// Display-referred sRGB-code-value background composited behind
+    /// premultiplied cloud color. Default black. Use `[1.0; 3]` for datasets
+    /// prepared on white.
     pub background_rgb: [f32; 3],
     /// Position learning rate as a fraction of `learning_rate`. `0.0`
     /// (default) freezes geometry. A positive value requires

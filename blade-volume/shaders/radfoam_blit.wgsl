@@ -1,4 +1,4 @@
-// RadFoam blit shader: HDR -> LDR with tonemapping
+// RadFoam blit shader: composite the traced cloud for presentation.
 
 struct VSOut {
     @builtin(position) pos: vec4<f32>,
@@ -33,10 +33,6 @@ struct Background {
 };
 var<uniform> g_background: Background;
 
-fn tonemap_reinhard(x: vec3<f32>) -> vec3<f32> {
-    return x / (1.0 + x);
-}
-
 @fragment
 fn fs(in: VSOut) -> @location(0) vec4<f32> {
     // The compute pass writes RGBA into the HDR texture:
@@ -51,8 +47,13 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
 
     // "Over" compositing with premultiplied assumption:
     // output = rgb + (1 - alpha) * bg
-    let hdr_composited = hdr_rgb + (1.0 - alpha) * g_background.color;
+    let composited = hdr_rgb + (1.0 - alpha) * g_background.color;
 
-    let ldr = tonemap_reinhard(max(hdr_composited, vec3<f32>(0.0)));
-    return vec4<f32>(ldr, 1.0);
+    // Point-cloud SH appearance follows the reference RadFoam/3DGS
+    // convention: values are display-referred sRGB code values. The
+    // swapchain is an unorm surface advertised with an sRGB presentation
+    // colour space, so write the clamped code values directly. Applying an
+    // HDR tonemap here would change both trained colours and the evaluation
+    // convention.
+    return vec4<f32>(clamp(composited, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }

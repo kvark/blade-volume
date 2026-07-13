@@ -49,7 +49,9 @@ pub fn rgba_to_rgb(rgba: &[f32]) -> Vec<f32> {
     rgba_over_background(rgba, [0.0; 3])
 }
 
-/// Composite premultiplied RGBA cloud output over a linear RGB background.
+/// Composite premultiplied RGBA cloud output over an sRGB-code-value
+/// background. This is the same display-referred domain used by training
+/// images, SH appearance, and PSNR evaluation.
 pub fn rgba_over_background(rgba: &[f32], background: [f32; 3]) -> Vec<f32> {
     assert!(rgba.len().is_multiple_of(4), "rgba_to_rgb: not RGBA");
     let n_px = rgba.len() / 4;

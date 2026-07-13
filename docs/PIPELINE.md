@@ -243,7 +243,11 @@ M1 ──▶ M2a ──▶ M2b ──▶ M2c ──▶ M2d
 - Čech-complex builder: roll our own AABB tree, or pull `rstar`? Decide at M2b.
 - meganeura API: tensors-of-vec3 or flat tensor-of-f32? Decide at M3a after reading
   meganeura's actual surface.
-- Loss-domain (linear vs. sRGB) and tonemap: punt to M3c.
+- Color contract (resolved): match reference RadFoam and standard 3DGS by
+  optimizing and evaluating display-referred sRGB code values. Cloud SH,
+  backgrounds, PNG output, and PSNR all use that domain. Presentation clamps
+  directly to the sRGB-advertised unorm swapchain; there is no implicit
+  transfer function or tone map. Linear-light consumers decode explicitly.
 
 ## Test data
 

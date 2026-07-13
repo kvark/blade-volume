@@ -35,7 +35,7 @@ pub struct RadFoamSettings {
     pub max_steps: u32,
     pub weight_threshold: f32,
     pub debug_mode: DebugMode,
-    /// Linear RGB presentation background.
+    /// Display-referred sRGB-code-value presentation background.
     pub background_rgb: [f32; 3],
 }
 
