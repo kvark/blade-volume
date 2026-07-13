@@ -1364,18 +1364,16 @@ fn steps_until_densify(config: DensifyConfig, steps_done: usize) -> usize {
     }
 }
 
-/// One supervised view: a camera + the pixel image we want the trained model
-/// to reproduce at that camera. `target_rgb` is `width * height * 3` floats
-/// in row-major RGB order. `start_cell` is the index of the Voronoi cell the
-/// per-pixel rays of this view should start in — caller picks (usually via
-/// a kd-tree from the camera origin).
+/// One supervised view: a camera plus the pixel image the trained model should
+/// reproduce there. `target_rgb` is `width * height * 3` floats in row-major
+/// RGB order. Path recording derives the containing cell from the current
+/// model, so topology and radius updates cannot leave a stale seed here.
 #[derive(Clone)]
 pub struct ViewSupervision {
     pub camera: vol::CameraParams,
     pub target_rgb: Vec<f32>,
     pub width: u32,
     pub height: u32,
-    pub start_cell: u32,
 }
 
 /// Fit per-cell density and SH coefficients of `model` so it reproduces every
@@ -1399,12 +1397,7 @@ pub fn fit_appearance_multi_view(
         !views.is_empty(),
         "fit_appearance_multi_view needs >=1 view"
     );
-    let n_cells = model.points.len();
     for v in views {
-        assert!(
-            (v.start_cell as usize) < n_cells,
-            "view start_cell out of range"
-        );
         assert_eq!(
             v.target_rgb.len() as u32,
             v.width * v.height * 3,
@@ -4365,7 +4358,6 @@ mod tests {
             target_rgb: target_rgb.to_vec(),
             width: 1,
             height: 1,
-            start_cell: 0,
         };
         let losses = fit_appearance_multi_view(
             &mut init,
@@ -4410,7 +4402,6 @@ mod tests {
             target_rgb: vec![0.9, 0.2, 0.1],
             width: 1,
             height: 1,
-            start_cell: 0,
         };
         fit_appearance_multi_view(
             &mut model,
@@ -4458,7 +4449,6 @@ mod tests {
             target_rgb: vec![0.9, 0.2, 0.1],
             width: 1,
             height: 1,
-            start_cell: 0,
         };
         let losses = fit_appearance_multi_view(
             &mut model,
@@ -4574,7 +4564,6 @@ mod tests {
             target_rgb: target_a_rgb,
             width: w,
             height: h,
-            start_cell: 0,
         };
         fit_appearance_multi_view(
             &mut init,
@@ -4690,7 +4679,6 @@ mod tests {
                     target_rgb: strip_alpha(&rgba),
                     width: w,
                     height: h,
-                    start_cell: 0,
                 }
             })
             .collect();

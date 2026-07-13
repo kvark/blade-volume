@@ -268,7 +268,6 @@ pub fn split_train_test<'a>(
 pub fn build_views(
     reconstruction: &colmap::Reconstruction,
     images_dir: &path::Path,
-    initial_model: &vol::PointCloudModel,
     config: &PipelineConfig,
 ) -> Vec<diff_render::ViewSupervision> {
     // Filter to images that actually exist on disk before taking
@@ -282,7 +281,7 @@ pub fn build_views(
         .iter()
         .filter(|img| images_dir.join(&img.name).is_file())
         .take(config.max_views.unwrap_or(reconstruction.images.len()));
-    build_views_from(reconstruction, images_dir, initial_model, config, images)
+    build_views_from(reconstruction, images_dir, config, images)
 }
 
 /// Build a custom slice of views — same machinery as [`build_views`] but the
@@ -291,7 +290,6 @@ pub fn build_views(
 pub fn build_views_from<'a>(
     reconstruction: &colmap::Reconstruction,
     images_dir: &path::Path,
-    initial_model: &vol::PointCloudModel,
     config: &PipelineConfig,
     images: impl IntoIterator<Item = &'a colmap::ColmapImage>,
 ) -> Vec<diff_render::ViewSupervision> {
@@ -320,13 +318,11 @@ pub fn build_views_from<'a>(
             }
         };
         let cam = reconstruction.camera_params_for(image, config.far_plane);
-        let start_cell = pick_start_cell(initial_model, glam::Vec3::from_array(cam.cam_position));
         views.push(diff_render::ViewSupervision {
             camera: cam,
             target_rgb,
             width: config.resolution.0,
             height: config.resolution.1,
-            start_cell,
         });
     }
     views
@@ -529,9 +525,9 @@ pub fn train_colmap_appearance_split(
             train_imgs.len(),
             test_imgs.len(),
         );
-        build_views_from(&recon, images_dir, &model, config, train_imgs)
+        build_views_from(&recon, images_dir, config, train_imgs)
     } else {
-        build_views(&recon, images_dir, &model, config)
+        build_views(&recon, images_dir, config)
     };
     if views.is_empty() {
         log::warn!("no usable training views — returning untrained initial model");
@@ -731,17 +727,12 @@ mod tests {
         assert_eq!(model.points.len(), 4);
 
         let config = PipelineConfig::default();
-        let views = build_views(&recon, &images, &model, &config);
+        let views = build_views(&recon, &images, &config);
         assert_eq!(views.len(), 2);
         assert!(
             views[0].target_rgb.len()
                 == config.resolution.0 as usize * config.resolution.1 as usize * 3
         );
-        // start_cell sits within the model.
-        for v in &views {
-            assert!((v.start_cell as usize) < model.points.len());
-        }
-
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -548,7 +548,6 @@ fn main() {
         let test_views = pipeline::build_views_from(
             &outcome.reconstruction,
             images,
-            &outcome.model,
             &config,
             test_images.iter().copied(),
         );
@@ -560,7 +559,6 @@ fn main() {
             let train_views = pipeline::build_views_from(
                 &outcome.reconstruction,
                 images,
-                &outcome.model,
                 &config,
                 train_images.iter().copied(),
             );

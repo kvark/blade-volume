@@ -179,20 +179,10 @@ fn main() {
         ..pipeline::PipelineConfig::default()
     };
 
-    let train_views = pipeline::build_views_from(
-        &recon,
-        images_dir,
-        &model,
-        &config,
-        train_slice.iter().copied(),
-    );
-    let test_views = pipeline::build_views_from(
-        &recon,
-        images_dir,
-        &model,
-        &config,
-        test_slice.iter().copied(),
-    );
+    let train_views =
+        pipeline::build_views_from(&recon, images_dir, &config, train_slice.iter().copied());
+    let test_views =
+        pipeline::build_views_from(&recon, images_dir, &config, test_slice.iter().copied());
 
     let train_psnrs = pipeline::evaluate_views(&model, &train_views, &config);
     let test_psnrs = pipeline::evaluate_views(&model, &test_views, &config);
