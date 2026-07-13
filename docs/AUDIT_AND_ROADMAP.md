@@ -83,11 +83,13 @@ At the audited revision:
 
 ### Adjacency and traversal
 
-- Exact adjacency builders truncate sorted point indices to 64 neighbors. This
-  can remove required faces and independently break graph symmetry.
-- CSR validation is structural only; it does not enforce symmetry, uniqueness,
-  absence of self-edges, or geometric completeness.
-- Traversal does not integrate the last segment up to the requested end depth
+- Exact adjacency builders now preserve unbounded topology by default. An
+  explicit finite cap greedily selects shortest undirected edges without
+  breaking graph symmetry, but remains an approximate topology option.
+- Model-boundary CSR validation now requires monotonic ranges, in-range sorted
+  unique lists, no self-edges, and a reverse edge for every neighbor. It cannot
+  prove geometric completeness without rebuilding topology.
+- Traversal now integrates the terminal cell up to the requested end depth
   when no later face is found.
 - `lloyd_relax` is a global spring relaxation rather than a Lloyd/CVT step.
 - Nearest-neighbor radius estimation is quadratic.

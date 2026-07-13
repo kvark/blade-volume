@@ -171,34 +171,7 @@ impl PointCloudModel {
             }
         }
         if let Some(ref adjacency) = self.adjacency {
-            if adjacency.offsets.len() != count + 1 {
-                return Err(format!(
-                    "adjacency offset length is {}, expected {}",
-                    adjacency.offsets.len(),
-                    count + 1
-                ));
-            }
-            if adjacency.offsets.first().copied() != Some(0) {
-                return Err("adjacency offsets must start at zero".to_string());
-            }
-            if adjacency.offsets.last().copied() != Some(adjacency.neighbors.len() as u32) {
-                return Err("last adjacency offset must equal neighbor count".to_string());
-            }
-            if adjacency
-                .offsets
-                .windows(2)
-                .any(|window| window[0] > window[1])
-            {
-                return Err("adjacency offsets must be monotonic".to_string());
-            }
-            if let Some(neighbor) = adjacency
-                .neighbors
-                .iter()
-                .copied()
-                .find(|&neighbor| neighbor as usize >= count)
-            {
-                return Err(format!("adjacency neighbor {neighbor} is out of range"));
-            }
+            adjacency::validate_csr_result(&adjacency.offsets, &adjacency.neighbors, count)?;
         }
         Ok(())
     }
@@ -300,6 +273,20 @@ mod model_tests {
         }
     }
 
+    fn valid_two_point_model() -> PointCloudModel {
+        PointCloudModel {
+            points: vec![glam::Vec4::ZERO; 2],
+            sh_coefficients: vec![0.0; 6],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(Adjacency {
+                neighbors: vec![1, 0],
+                offsets: vec![0, 1, 2],
+            }),
+            radii: Some(vec![1.0; 2]),
+        }
+    }
+
     #[test]
     fn model_validation_accepts_consistent_parallel_arrays() {
         assert!(valid_model().validate().is_ok());
@@ -316,7 +303,31 @@ mod model_tests {
             neighbors: vec![1],
             offsets: vec![0, 1],
         });
-        assert!(model.validate().unwrap_err().contains("out of range"));
+        assert!(model.validate().unwrap_err().contains("out of bounds"));
+    }
+
+    #[test]
+    fn model_validation_rejects_non_simple_or_asymmetric_adjacency() {
+        let mut model = valid_two_point_model();
+        model.adjacency = Some(Adjacency {
+            neighbors: vec![0, 0],
+            offsets: vec![0, 1, 2],
+        });
+        assert!(model.validate().unwrap_err().contains("self-edge"));
+
+        let mut model = valid_two_point_model();
+        model.adjacency = Some(Adjacency {
+            neighbors: vec![1, 1, 0],
+            offsets: vec![0, 2, 3],
+        });
+        assert!(model.validate().unwrap_err().contains("sorted and unique"));
+
+        let mut model = valid_two_point_model();
+        model.adjacency = Some(Adjacency {
+            neighbors: vec![1],
+            offsets: vec![0, 1, 1],
+        });
+        assert!(model.validate().unwrap_err().contains("no reverse edge"));
     }
 
     #[test]

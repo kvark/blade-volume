@@ -507,63 +507,85 @@ pub fn compute_knn(points: &[glam::Vec4], k: usize) -> Adjacency {
 /// # Panics
 /// Panics if the CSR structure is invalid.
 pub fn validate_csr(offsets: &[u32], neighbors: &[u32], num_points: usize) {
-    // Validate CSR offsets
+    validate_csr_result(offsets, neighbors, num_points).unwrap_or_else(|error| panic!("{error}"));
+}
+
+pub(crate) fn validate_csr_result(
+    offsets: &[u32],
+    neighbors: &[u32],
+    num_points: usize,
+) -> Result<(), String> {
     if offsets.is_empty() || offsets.len() != num_points + 1 {
-        panic!(
+        return Err(format!(
             "Invalid adjacency_offsets length: expected {}, got {}",
             num_points + 1,
             offsets.len()
-        );
+        ));
     }
     if offsets[0] != 0 {
-        panic!(
+        return Err(format!(
             "Invalid adjacency_offsets[0]: expected 0, got {}",
             offsets[0]
-        );
+        ));
     }
     let last = offsets[num_points] as usize;
     if last != neighbors.len() {
-        panic!(
+        return Err(format!(
             "Invalid adjacency_offsets[N]: expected {}, got {}",
             neighbors.len(),
             last
-        );
+        ));
     }
     for i in 0..num_points {
         let a = offsets[i] as usize;
         let b = offsets[i + 1] as usize;
         if b < a || b > neighbors.len() {
-            panic!("Invalid adjacency offset range for point {i}: [{a}, {b})");
+            return Err(format!(
+                "Invalid adjacency offset range for point {i}: [{a}, {b})"
+            ));
+        }
+    }
+
+    // Validate every list before using binary search for reverse edges.
+    for i in 0..num_points {
+        let begin = offsets[i] as usize;
+        let end = offsets[i + 1] as usize;
+        let list = &neighbors[begin..end];
+        if list.windows(2).any(|window| window[0] >= window[1]) {
+            return Err(format!(
+                "Adjacency list for point {i} must be sorted and unique"
+            ));
+        }
+        for (local_index, &neighbor) in list.iter().enumerate() {
+            if neighbor as usize >= num_points {
+                let entry = begin + local_index;
+                return Err(format!(
+                    "Adjacency index out of bounds at entry {entry}: {neighbor} (num_points={num_points})"
+                ));
+            }
+            if neighbor as usize == i {
+                return Err(format!("Adjacency list for point {i} contains a self-edge"));
+            }
         }
     }
 
     for i in 0..num_points {
         let begin = offsets[i] as usize;
         let end = offsets[i + 1] as usize;
-        let list = &neighbors[begin..end];
-        if list.windows(2).any(|window| window[0] >= window[1]) {
-            panic!("Adjacency list for point {i} must be sorted and unique");
-        }
-        for (local_index, &neighbor) in list.iter().enumerate() {
-            if neighbor as usize >= num_points {
-                let entry = begin + local_index;
-                panic!(
-                    "Adjacency index out of bounds at entry {entry}: {neighbor} (num_points={num_points})"
-                );
-            }
-            if neighbor as usize == i {
-                panic!("Adjacency list for point {i} contains a self-edge");
-            }
+        for &neighbor in &neighbors[begin..end] {
             let reverse_begin = offsets[neighbor as usize] as usize;
             let reverse_end = offsets[neighbor as usize + 1] as usize;
             if neighbors[reverse_begin..reverse_end]
                 .binary_search(&(i as u32))
                 .is_err()
             {
-                panic!("Adjacency edge {i}->{neighbor} has no reverse edge");
+                return Err(format!(
+                    "Adjacency edge {i}->{neighbor} has no reverse edge"
+                ));
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
