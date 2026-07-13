@@ -114,6 +114,10 @@ At the audited revision:
   wrap modes, supports non-indexed triangle primitives, uses the specified
   white default material, and rejects incomplete/out-of-range attribute data
   instead of indexing it unchecked.
+- All decoded glTF image channel formats are converted from their raw 8-bit,
+  16-bit, or float representation; luma-alpha channels retain alpha. The old
+  path mistakenly reparsed raw high-bit-depth pixels as an encoded image and
+  silently substituted black on failure.
 - Distorted projection is handled in the reconstruction/training boundary; the
   runtime `PointCloudModel` intentionally carries cloud data rather than source
   capture-camera calibration.

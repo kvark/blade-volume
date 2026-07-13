@@ -721,6 +721,14 @@ fn push_point(
 }
 
 fn rgba8_from_gltf_image(image: &gltf::image::Data) -> Vec<u8> {
+    let unorm16 = |bytes: &[u8]| {
+        let value = u16::from_ne_bytes([bytes[0], bytes[1]]);
+        ((u32::from(value) * 255 + 32_767) / 65_535) as u8
+    };
+    let float32 = |bytes: &[u8]| {
+        let value = f32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        (value.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
     match image.format {
         gltf::image::Format::R8G8B8A8 => image.pixels.clone(),
         gltf::image::Format::R8G8B8 => image
@@ -731,18 +739,63 @@ fn rgba8_from_gltf_image(image: &gltf::image::Data) -> Vec<u8> {
         gltf::image::Format::R8G8 => image
             .pixels
             .chunks_exact(2)
-            .flat_map(|c| [c[0], c[1], 0, 255])
+            .flat_map(|c| [c[0], c[0], c[0], c[1]])
             .collect(),
         gltf::image::Format::R8 => image
             .pixels
             .iter()
             .flat_map(|c| [*c, *c, *c, 255])
             .collect(),
-        _ => {
-            let img = image::load_from_memory(&image.pixels)
-                .unwrap_or_else(|_| image::DynamicImage::new_rgba8(image.width, image.height));
-            img.to_rgba8().into_raw()
-        }
+        gltf::image::Format::R16 => image
+            .pixels
+            .chunks_exact(2)
+            .flat_map(|c| {
+                let value = unorm16(c);
+                [value, value, value, 255]
+            })
+            .collect(),
+        gltf::image::Format::R16G16 => image
+            .pixels
+            .chunks_exact(4)
+            .flat_map(|c| {
+                let value = unorm16(&c[..2]);
+                [value, value, value, unorm16(&c[2..])]
+            })
+            .collect(),
+        gltf::image::Format::R16G16B16 => image
+            .pixels
+            .chunks_exact(6)
+            .flat_map(|c| [unorm16(&c[..2]), unorm16(&c[2..4]), unorm16(&c[4..]), 255])
+            .collect(),
+        gltf::image::Format::R16G16B16A16 => image
+            .pixels
+            .chunks_exact(8)
+            .flat_map(|c| {
+                [
+                    unorm16(&c[..2]),
+                    unorm16(&c[2..4]),
+                    unorm16(&c[4..6]),
+                    unorm16(&c[6..]),
+                ]
+            })
+            .collect(),
+        gltf::image::Format::R32G32B32FLOAT => image
+            .pixels
+            .chunks_exact(12)
+            .flat_map(|c| [float32(&c[..4]), float32(&c[4..8]), float32(&c[8..]), 255])
+            .collect(),
+        gltf::image::Format::R32G32B32A32FLOAT => image
+            .pixels
+            .chunks_exact(16)
+            .flat_map(|c| {
+                [
+                    float32(&c[..4]),
+                    float32(&c[4..8]),
+                    float32(&c[8..12]),
+                    float32(&c[12..]),
+                ]
+            })
+            .collect(),
     }
 }
 
@@ -1195,6 +1248,41 @@ mod tests {
             wrap_coordinate(1.25, gltf::texture::WrappingMode::ClampToEdge),
             1.0
         );
+    }
+
+    #[test]
+    fn decoded_gltf_image_formats_preserve_color_and_alpha() {
+        let luma_alpha = gltf::image::Data {
+            pixels: vec![64, 128],
+            format: gltf::image::Format::R8G8,
+            width: 1,
+            height: 1,
+        };
+        assert_eq!(rgba8_from_gltf_image(&luma_alpha), [64, 64, 64, 128]);
+
+        let mut unorm_pixels = Vec::new();
+        for value in [0_u16, 32_768, 65_535, 16_384] {
+            unorm_pixels.extend_from_slice(&value.to_ne_bytes());
+        }
+        let unorm = gltf::image::Data {
+            pixels: unorm_pixels,
+            format: gltf::image::Format::R16G16B16A16,
+            width: 1,
+            height: 1,
+        };
+        assert_eq!(rgba8_from_gltf_image(&unorm), [0, 128, 255, 64]);
+
+        let mut float_pixels = Vec::new();
+        for value in [-1.0_f32, 0.5, 2.0, 0.25] {
+            float_pixels.extend_from_slice(&value.to_ne_bytes());
+        }
+        let float = gltf::image::Data {
+            pixels: float_pixels,
+            format: gltf::image::Format::R32G32B32A32FLOAT,
+            width: 1,
+            height: 1,
+        };
+        assert_eq!(rgba8_from_gltf_image(&float), [0, 128, 255, 64]);
     }
 
     #[test]

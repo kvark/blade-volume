@@ -553,7 +553,6 @@ dependencies = [
  "blade-volume",
  "glam",
  "gltf",
- "image",
  "rand 0.10.1",
 ]
 
