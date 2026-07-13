@@ -123,6 +123,23 @@ impl UvTransform {
     }
 }
 
+fn texture_info_uv_transform(info: &gltf::texture::Info<'_>) -> (u32, UvTransform) {
+    let texture_transform = info.texture_transform();
+    let tex_coord = texture_transform
+        .as_ref()
+        .and_then(gltf::texture::TextureTransform::tex_coord)
+        .unwrap_or_else(|| info.tex_coord());
+    let uv_transform = match texture_transform {
+        Some(ref transform) => UvTransform {
+            offset: glam::Vec2::from(transform.offset()),
+            rotation: transform.rotation(),
+            scale: glam::Vec2::from(transform.scale()),
+        },
+        None => UvTransform::identity(),
+    };
+    (tex_coord, uv_transform)
+}
+
 struct Texture {
     width: u32,
     height: u32,
@@ -294,19 +311,7 @@ pub fn convert_gltf(
                 let image = texture.source();
                 let sampler = texture.sampler();
                 let data = &images[image.index()];
-                let texture_transform = info.texture_transform();
-                let tex_coord = texture_transform
-                    .as_ref()
-                    .and_then(gltf::texture::TextureTransform::tex_coord)
-                    .unwrap_or_else(|| info.tex_coord());
-                let uv_transform = match texture_transform {
-                    Some(ref transform) => UvTransform {
-                        offset: glam::Vec2::from(transform.offset()),
-                        rotation: transform.rotation(),
-                        scale: glam::Vec2::from(transform.scale()),
-                    },
-                    None => UvTransform::identity(),
-                };
+                let (tex_coord, uv_transform) = texture_info_uv_transform(&info);
                 (
                     Some(Texture {
                         width: data.width,
@@ -1420,6 +1425,42 @@ mod tests {
     }
 
     #[test]
+    fn texture_transform_parser_honors_texcoord_override() {
+        let source = br#"{
+            "asset": {"version": "2.0"},
+            "extensionsUsed": ["KHR_texture_transform"],
+            "extensionsRequired": ["KHR_texture_transform"],
+            "images": [{"uri": "unused.png"}],
+            "textures": [{"source": 0}],
+            "materials": [{
+                "pbrMetallicRoughness": {
+                    "baseColorTexture": {
+                        "index": 0,
+                        "texCoord": 0,
+                        "extensions": {
+                            "KHR_texture_transform": {
+                                "offset": [0, 1],
+                                "rotation": 1.57079632679,
+                                "scale": [0.5, 0.5],
+                                "texCoord": 1
+                            }
+                        }
+                    }
+                }
+            }]
+        }"#;
+        let gltf = gltf::Gltf::from_slice(source).unwrap();
+        let material = gltf.document.materials().next().unwrap();
+        let info = material
+            .pbr_metallic_roughness()
+            .base_color_texture()
+            .unwrap();
+        let (tex_coord, transform) = texture_info_uv_transform(&info);
+        assert_eq!(tex_coord, 1);
+        assert!((transform.apply(glam::Vec2::X) - glam::Vec2::new(0.0, 1.5)).length() < 1e-6);
+    }
+
+    #[test]
     fn material_alpha_modes_produce_gltf_coverage() {
         let mut material = MaterialInfo {
             base_color: glam::Vec4::ONE,
@@ -1560,6 +1601,89 @@ mod tests {
             .sh_coefficients
             .iter()
             .all(|&coefficient| (coefficient - white_dc).abs() < 1e-6));
+        std::fs::remove_file(gltf_path).unwrap();
+        std::fs::remove_file(bin_path).unwrap();
+    }
+
+    #[test]
+    fn gltf_color_accessor_reaches_point_appearance() {
+        let stem = format!("blade_volume_vertex_color_{}", std::process::id());
+        let directory = std::env::temp_dir();
+        let bin_path = directory.join(format!("{stem}.bin"));
+        let gltf_path = directory.join(format!("{stem}.gltf"));
+        let mut attributes = Vec::new();
+        for value in [
+            0.0_f32, 0.0, 0.0, // v0
+            1.0, 0.0, 0.0, // v1
+            0.0, 1.0, 0.0, // v2
+        ] {
+            attributes.extend_from_slice(&value.to_le_bytes());
+        }
+        for _ in 0..3 {
+            for value in [0.25_f32, 0.25, 0.25, 0.5] {
+                attributes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        std::fs::write(&bin_path, attributes).unwrap();
+        let document = format!(
+            r#"{{
+                "asset": {{"version": "2.0"}},
+                "buffers": [{{"uri": "{stem}.bin", "byteLength": 84}}],
+                "bufferViews": [
+                    {{"buffer": 0, "byteOffset": 0, "byteLength": 36}},
+                    {{"buffer": 0, "byteOffset": 36, "byteLength": 48}}
+                ],
+                "accessors": [
+                    {{
+                        "bufferView": 0,
+                        "componentType": 5126,
+                        "count": 3,
+                        "type": "VEC3",
+                        "min": [0, 0, 0],
+                        "max": [1, 1, 0]
+                    }},
+                    {{
+                        "bufferView": 1,
+                        "componentType": 5126,
+                        "count": 3,
+                        "type": "VEC4"
+                    }}
+                ],
+                "materials": [{{
+                    "alphaMode": "BLEND",
+                    "pbrMetallicRoughness": {{
+                        "baseColorFactor": [1, 1, 1, 0.5]
+                    }}
+                }}],
+                "meshes": [{{"primitives": [{{
+                    "attributes": {{"POSITION": 0, "COLOR_0": 1}},
+                    "material": 0
+                }}]}}],
+                "nodes": [{{"mesh": 0}}],
+                "scenes": [{{"nodes": [0]}}],
+                "scene": 0
+            }}"#,
+        );
+        std::fs::write(&gltf_path, document).unwrap();
+
+        let model = convert_gltf(
+            &gltf_path,
+            &ConvertOptions {
+                density: 1.0,
+                interior_density_scale: 0.0,
+                ambient: glam::Vec3::ONE,
+                ..ConvertOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(model.len(), 1);
+        let expected = (linear_to_srgb(0.25) - 0.5) / SH_C0;
+        assert!(model
+            .sh_coefficients
+            .iter()
+            .all(|&coefficient| (coefficient - expected).abs() < 1e-6));
+        assert_eq!(model.points[0].w, 0.25);
         std::fs::remove_file(gltf_path).unwrap();
         std::fs::remove_file(bin_path).unwrap();
     }
