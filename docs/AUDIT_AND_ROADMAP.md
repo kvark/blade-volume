@@ -256,6 +256,15 @@ At the audited revision:
   dependency graphs. Production-size exact Delaunay training opts into that
   feature explicitly because the available pure-Rust implementation exceeded
   the measured memory budget. A scalable Rust replacement remains preferable.
+- The default `blade-volume` normal graph has ten direct dependencies and no
+  repository-owned build script. Repository production `unsafe` is confined to
+  Blade GPU context/resource mapping and the feature-gated Qhull teardown;
+  converter, format, camera, and CPU traversal code remain safe Rust.
+- Whole-workspace duplication is concentrated outside the core: the current
+  viewer/autograd graph carries crates.io and git-source copies of
+  `blade-macros`, two Wayland/calloop generations, and several normal transitive
+  version splits. Align the Blade/egui pins before packaging, but do not churn
+  working upstream revisions during algorithm validation.
 
 ## Implementation stages
 
