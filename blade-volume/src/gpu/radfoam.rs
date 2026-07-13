@@ -20,7 +20,7 @@ pub struct RadFoamGpuCloud {
     attributes_buf: gpu::Buffer,
     point_adjacency_buf: gpu::Buffer,
     point_adjacency_offsets_buf: gpu::Buffer,
-    point_tree: kiddo::KdTree<f32, 3>,
+    point_tree: kiddo::ImmutableKdTree<f32, 3>,
 
     pub sh_degree: usize,
     pub attr_dim: usize,
@@ -64,10 +64,16 @@ impl RadFoamGpuCloud {
         let attrs_size = (num_points * attr_dim * mem::size_of::<f32>()) as u64;
         let adj_size = (num_adjacency * mem::size_of::<u32>()) as u64;
         let adj_off_size = (adjacency.offsets.len() * mem::size_of::<u32>()) as u64;
-        let mut point_tree = kiddo::KdTree::new();
-        for (index, point) in model.points.iter().enumerate() {
-            point_tree.add(&[point.x, point.y, point.z], index as u64);
-        }
+        // The mutable tree's fixed leaf buckets panic on point clouds with
+        // many repeated coordinates along one axis (regular grids, planes,
+        // and quantized scans). The immutable builder explicitly supports
+        // that distribution and assigns each input row its original index.
+        let point_positions: Vec<[f32; 3]> = model
+            .points
+            .iter()
+            .map(|point| [point.x, point.y, point.z])
+            .collect();
+        let point_tree = kiddo::ImmutableKdTree::new_from_slice(&point_positions);
 
         // Device buffers
         let points_buf = context.create_buffer(gpu::BufferDesc {
