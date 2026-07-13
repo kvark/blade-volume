@@ -2,7 +2,48 @@ mod ply;
 mod radfoam_ply;
 mod spz;
 
-use std::{fs, io};
+use std::{error, fmt, fs, io};
+
+/// Asset-loading failure with preserved IO causes and explicit format errors.
+#[derive(Debug)]
+pub enum LoadError {
+    Io(io::Error),
+    InvalidData(String),
+    UnsupportedFormat(String),
+}
+
+impl LoadError {
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
+        Self::InvalidData(message.into())
+    }
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Io(ref source) => write!(formatter, "{source}"),
+            Self::InvalidData(ref message) => write!(formatter, "invalid asset: {message}"),
+            Self::UnsupportedFormat(ref message) => {
+                write!(formatter, "unsupported format: {message}")
+            }
+        }
+    }
+}
+
+impl error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match *self {
+            Self::Io(ref source) => Some(source),
+            Self::InvalidData(_) | Self::UnsupportedFormat(_) => None,
+        }
+    }
+}
+
+impl From<io::Error> for LoadError {
+    fn from(source: io::Error) -> Self {
+        Self::Io(source)
+    }
+}
 
 /// The kind of volumetric data format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
