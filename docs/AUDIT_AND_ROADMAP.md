@@ -285,6 +285,11 @@ At the audited revision:
   reports unmaintained `number_prefix`, `paste`, and `ttf-parser` transitively
   through meganeura/tokenizers/image and the viewer stack; replacing them is an
   upstream dependency-alignment task, not a core renderer change.
+- CI no longer relies on the archived `actions-rs` toolchain and cargo actions.
+  It exercises both default and all-feature workspace tests, all-feature clippy,
+  workspace formatting, and a RustSec gate. The gate explicitly exempts only
+  the two documented build-time `quick-xml` findings so any new advisory still
+  fails the workflow.
 
 ## Implementation stages
 

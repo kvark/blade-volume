@@ -3,71 +3,59 @@ name: check
 on:
   push:
     branches: ["main"]
-    tags: [v0.*]
+    tags: ["v0.*"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - name: Linux
-            os: ubuntu-latest
-
-    runs-on: ${{ matrix.os }}
-
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    env:
+      BLADE_VOLUME_DISABLE_GPU: "1"
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
-
-      - name: Test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --workspace --all-features
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Test default features
+        run: cargo +stable test --workspace
+      - name: Test all features
+        run: cargo +stable test --workspace --all-features
 
   fmt:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - name: checkout repo
-        uses: actions/checkout@v3
-
-      - name: install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          components: rustfmt
-
-      - name: run rustfmt
-        run: |
-          cargo fmt -- --check
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+      - name: Run rustfmt
+        run: cargo +stable fmt --all -- --check
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - name: checkout repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component clippy
+      - name: Run clippy
+        run: cargo +stable clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: install rust
-        uses: actions-rs/toolchain@v1
+  security:
+    name: Security audit
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          components: clippy
-
-      - name: run clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --workspace --all-targets -- -D warnings
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # quick-xml is build-only through wayland-scanner 0.31.10. Remove
+          # these exceptions as soon as wayland-scanner adopts quick-xml 0.41.
+          ignore: RUSTSEC-2026-0194,RUSTSEC-2026-0195
