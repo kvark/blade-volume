@@ -12,7 +12,8 @@ manifests and commits have deterministic sampling decisions.
 Run the smoke protocol with:
 
 ```text
-cargo run --release -p blade-volume-train --bin train_colmap -- \
+etc/cgroup_run.sh --mem 2G -- \
+  cargo run --release -p blade-volume-train --bin train_colmap -- \
   --sparse etc/data/bonsai/sparse/0 \
   --images etc/data/bonsai/images \
   --output /tmp/blade-volume-bonsai-smoke.ply \
@@ -20,7 +21,8 @@ cargo run --release -p blade-volume-train --bin train_colmap -- \
   --max-points 2000 --max-steps 128 --pixel-batch 256 \
   --steps-per-view 25 --learning-rate 0.1 --sh-degree 0 --qhull
 
-cargo run --release -p blade-volume-train --bin eval_psnr -- \
+etc/cgroup_run.sh --mem 1G -- \
+  cargo run --release -p blade-volume-train --bin eval_psnr -- \
   --ply /tmp/blade-volume-bonsai-smoke.ply \
   --sparse etc/data/bonsai/sparse/0 \
   --images etc/data/bonsai/images \
