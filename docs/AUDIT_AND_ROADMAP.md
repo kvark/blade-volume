@@ -317,6 +317,13 @@ were GPU ring timeouts at low host-memory use, not cgroup OOMs. Production-size
 training is therefore isolated and pinned to the NVIDIA device while the AMD
 driver path remains excluded from long runs.
 
+The final combined CPU-only workspace gate (all-target/all-feature clippy,
+default tests, and all-feature tests) completed under a 3 GiB hard limit with
+zero swap and zero OOM events, but reached the limit and recorded 406
+`memory.max` pressure events. CI or local combined gates should therefore use a
+4 GiB scope, or split clippy/default/all-feature tests into separate 3 GiB
+scopes; a 3 GiB combined scope is functional but needlessly reclaim-bound.
+
 A subsequent NVIDIA quality run confirmed the memory fix but did not produce a
 valid benchmark result. It grew from 50,000 to the 200,000-cell target by step
 7,500, reported no hard traversal truncation, and reduced the rolling training
