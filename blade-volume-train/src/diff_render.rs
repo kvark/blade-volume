@@ -113,6 +113,7 @@ pub fn build_volumetric_graph(
     grad_loss_weight: f32,
     opacity_weight: f32,
     distortion_weight: f32,
+    quantile_weight: f32,
     softplus_beta: f32,
     background_rgb: [f32; 3],
     use_recorded_dt: bool,
@@ -144,6 +145,15 @@ pub fn build_volumetric_graph(
     // Target is fed as [1, P*3] to match meganeura's "batch × dim" convention
     // for L1 loss; we reshape rather than introduce a batch dimension upstream.
     let target = g.input("labels", &[1, p * 3]);
+    let quantile_inputs = if quantile_weight > 0.0 {
+        Some((
+            g.input("quantile_near", &[p, 1]),
+            g.input("quantile_far", &[p, 1]),
+            g.input("quantile_scale", &[1, 1]),
+        ))
+    } else {
+        None
+    };
 
     // Ray geometry inputs — needed to compute dt from positions
     // differentiably. Set once per Adam step; the host code computes the
@@ -512,6 +522,55 @@ pub fn build_volumetric_graph(
         loss
     };
 
+    // Reference RadFoam thickness loss. Two random transmittance quantiles
+    // are sampled per ray on the host. For optical-depth target τ = -ln(q),
+    // each segment contributes `clamp((τ - prefix) / density, 0, dt)` to the
+    // distance travelled before that quantile. Summing those clamped segment
+    // distances exactly reproduces the piecewise-constant-density crossing
+    // depth without a custom traversal backward. Rays that do not reach the
+    // farther quantile are masked, matching the reference's invalid-depth
+    // handling. `quantile_scale` carries its half-training warmup schedule.
+    let loss = if let Some((quantile_near, quantile_far, quantile_scale)) = quantile_inputs {
+        let near_depth = optical_depth_quantile(
+            g,
+            quantile_near,
+            cumsum,
+            density,
+            dt_2d,
+            mask_2d,
+            ones_1l,
+            ones_l1,
+            p,
+            l,
+        );
+        let far_depth = optical_depth_quantile(
+            g,
+            quantile_far,
+            cumsum,
+            density,
+            dt_2d,
+            mask_2d,
+            ones_1l,
+            ones_l1,
+            p,
+            l,
+        );
+        let total_optical_depth = g.matmul(raw_masked, ones_l1);
+        let valid = g.greater(total_optical_depth, quantile_far);
+        let neg_near = g.neg(near_depth);
+        let spread_raw = g.add(far_depth, neg_near);
+        let spread = g.abs(spread_raw);
+        let valid_spread = g.mul(spread, valid);
+        let quantile_loss = g.mean_all(valid_spread);
+        let base_2d = g.reshape(loss, &[1, 1]);
+        let quantile_2d = g.reshape(quantile_loss, &[1, 1]);
+        let scaled = g.mul(quantile_2d, quantile_scale);
+        let total = g.add(base_2d, scaled);
+        g.reshape(total, &[1])
+    } else {
+        loss
+    };
+
     // `dt_from_positions` as a second output so callers can read it
     // back and compare against the shader-computed dt during the
     // position-optimisation sanity check.
@@ -552,6 +611,35 @@ fn strict_lower_triangular_ones(l: usize) -> Vec<f32> {
         }
     }
     data
+}
+
+#[allow(clippy::too_many_arguments)]
+fn optical_depth_quantile(
+    g: &mut mn::Graph,
+    optical_depth: mn::NodeId,
+    prefix_optical_depth: mn::NodeId,
+    density: mn::NodeId,
+    dt: mn::NodeId,
+    mask: mn::NodeId,
+    ones_1l: mn::NodeId,
+    ones_l1: mn::NodeId,
+    p: usize,
+    l: usize,
+) -> mn::NodeId {
+    let target = g.matmul(optical_depth, ones_1l);
+    let neg_prefix = g.neg(prefix_optical_depth);
+    let remaining = g.add(target, neg_prefix);
+    let density_epsilon = g.constant(vec![1.0e-8_f32; p * l], &[p, l]);
+    let safe_density = g.add(density, density_epsilon);
+    let distance_raw = g.div(remaining, safe_density);
+    let distance_positive = g.relu(distance_raw);
+    let neg_distance = g.neg(distance_positive);
+    let dt_minus_distance = g.add(dt, neg_distance);
+    let unused_distance = g.relu(dt_minus_distance);
+    let neg_unused = g.neg(unused_distance);
+    let distance_clamped = g.add(dt, neg_unused);
+    let distance_masked = g.mul(distance_clamped, mask);
+    g.matmul(distance_masked, ones_l1)
 }
 
 /// Build the L1 distance between finite-difference gradients of a single
@@ -867,6 +955,11 @@ pub struct AppearanceFitConfig {
     /// spread across floaters without requiring a non-differentiable sampled
     /// depth-quantile lookup.
     pub distortion_weight: f32,
+    /// Weight on RadFoam's random transmittance-quantile separation loss.
+    /// Two uniform quantiles are sampled per ray; the weight ramps from zero
+    /// to this value over the first half of training. The reference uses
+    /// `1e-4`. `0.0` (default) disables it.
+    pub quantile_weight: f32,
     /// Softplus β for the density activation. `0.0` (default) uses legacy
     /// ReLU; `> 0` (RadFoam uses 10) uses `(1/β)·softplus(βx)` so cells
     /// that dip to negative log-density keep a gradient and recover
@@ -985,6 +1078,7 @@ impl Default for AppearanceFitConfig {
             grad_loss_weight: 0.0,
             opacity_weight: 0.0,
             distortion_weight: 0.0,
+            quantile_weight: 0.0,
             softplus_beta: 0.0,
             background_rgb: [0.0; 3],
             position_lr_ratio: 0.0,
@@ -1089,6 +1183,10 @@ pub fn fit_appearance_multi_view(
     assert!(
         config.distortion_weight.is_finite() && config.distortion_weight >= 0.0,
         "distortion_weight must be finite and non-negative"
+    );
+    assert!(
+        config.quantile_weight.is_finite() && config.quantile_weight >= 0.0,
+        "quantile_weight must be finite and non-negative"
     );
     assert!(
         config
@@ -1903,6 +2001,7 @@ fn build_train_session(
     grad_loss_weight: f32,
     opacity_weight: f32,
     distortion_weight: f32,
+    quantile_weight: f32,
     softplus_beta: f32,
     background_rgb: [f32; 3],
     gpu: &std::sync::Arc<blade_graphics::Context>,
@@ -1924,6 +2023,7 @@ fn build_train_session(
         grad_loss_weight,
         opacity_weight,
         distortion_weight,
+        quantile_weight,
         softplus_beta,
         background_rgb,
         model.radii.is_some(),
@@ -2068,9 +2168,20 @@ fn fit_appearance_pixel_batched(
             .wrapping_add(1_442_695_040_888_963_407);
         (state >> 32) as u32
     };
+    let mut quantile_state: u64 = 0x51A7_E5D0_9B3C_2468;
+    let mut next_quantile = || {
+        quantile_state = quantile_state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let bits = (quantile_state >> 32) as u32;
+        (((bits as f64 + 0.5) / (u32::MAX as f64 + 1.0)) as f32)
+            .clamp(f32::MIN_POSITIVE, 1.0 - f32::EPSILON)
+    };
 
     let mut target_buf = vec![0.0f32; pixel_batch * 3];
     let mut pixel_indices = vec![0u32; pixel_batch];
+    let mut quantile_near = vec![0.0_f32; pixel_batch];
+    let mut quantile_far = vec![0.0_f32; pixel_batch];
     let mut basis_inputs: Vec<Vec<f32>> = (1..num_components)
         .map(|_| vec![0.0_f32; pixel_batch])
         .collect();
@@ -2130,6 +2241,7 @@ fn fit_appearance_pixel_batched(
         grad_loss_weight,
         config.opacity_weight,
         config.distortion_weight,
+        config.quantile_weight,
         config.softplus_beta,
         config.background_rgb,
         &gpu,
@@ -2312,6 +2424,18 @@ fn fit_appearance_pixel_batched(
 
             session.set_input("labels", &target_buf);
             session.set_input_u32("view_idx", &[vi as u32]);
+            if config.quantile_weight > 0.0 {
+                for (near, far) in quantile_near.iter_mut().zip(quantile_far.iter_mut()) {
+                    let qa = next_quantile();
+                    let qb = next_quantile();
+                    *near = -qa.max(qb).ln();
+                    *far = -qa.min(qb).ln();
+                }
+                let ramp = (2.0 * step as f32 / total_steps as f32).min(1.0);
+                session.set_input("quantile_near", &quantile_near);
+                session.set_input("quantile_far", &quantile_far);
+                session.set_input("quantile_scale", &[config.quantile_weight * ramp]);
+            }
             // Apply LR schedule: re-set Adam every step with the
             // current effective LR. `set_adam` is cheap (just updates
             // a session field), and per-parameter LR multipliers (set
@@ -2452,6 +2576,7 @@ fn fit_appearance_pixel_batched(
                     grad_loss_weight,
                     config.opacity_weight,
                     config.distortion_weight,
+                    config.quantile_weight,
                     config.softplus_beta,
                     config.background_rgb,
                     &gpu,
@@ -2516,6 +2641,7 @@ fn fit_appearance_pixel_batched(
                     grad_loss_weight,
                     config.opacity_weight,
                     config.distortion_weight,
+                    config.quantile_weight,
                     config.softplus_beta,
                     config.background_rgb,
                     &gpu,
@@ -2902,7 +3028,7 @@ mod tests {
             let num_views = 5usize;
             let vg = build_volumetric_graph(
                 &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0, 0.0, 0.0, 0.0,
-                [0.0; 3], false,
+                0.0, [0.0; 3], false,
             );
             assert_eq!(vg.sh_degree, sh_degree);
             assert_eq!(vg.n_cells, n_cells);
@@ -2928,7 +3054,7 @@ mod tests {
         let patch_size = 4usize;
         let n_pixels = patch_size * patch_size;
         let vg = build_volumetric_graph(
-            &mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0, 0.0, [0.0; 3], false,
+            &mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
         );
         assert_eq!(vg.n_pixels, n_pixels);
     }
@@ -3017,7 +3143,7 @@ mod tests {
 
         let mut g = mn::Graph::new();
         let _vg = build_volumetric_graph(
-            &mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
+            &mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
         );
 
         let (mut session, _report) = mn::build(
@@ -3077,7 +3203,7 @@ mod tests {
         let n_cells = model.points.len();
         let mut graph = mn::Graph::new();
         build_volumetric_graph(
-            &mut graph, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
+            &mut graph, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
         );
         let (mut session, _) = mn::build(
             &graph,
@@ -3171,7 +3297,7 @@ mod tests {
         let n_cells = model.points.len();
         let mut g = mn::Graph::new();
         let vg = build_volumetric_graph(
-            &mut g, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], true,
+            &mut g, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], true,
         );
         let dt_output = g.reshape(vg.dt_from_positions, &[1]);
         g.set_outputs(vec![dt_output]);
@@ -3228,6 +3354,7 @@ mod tests {
                 0,
                 1,
                 0,
+                0.0,
                 0.0,
                 0.0,
                 0.0,
@@ -3292,6 +3419,7 @@ mod tests {
                 0.0,
                 distortion_weight,
                 0.0,
+                0.0,
                 [0.0; 3],
                 true,
             );
@@ -3328,6 +3456,84 @@ mod tests {
         assert!(
             regularized > base + 1e-3,
             "base={base} regularized={regularized}"
+        );
+    }
+
+    #[test]
+    fn quantile_loss_matches_piecewise_constant_crossing_depths() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping quantile_loss_matches_piecewise_constant_crossing_depths: no GPU");
+            return;
+        };
+        let evaluate = |quantiles: Option<[f32; 2]>| {
+            let mut model = tiny_model();
+            for point in model.points.iter_mut() {
+                point.w = 1.0;
+            }
+            let mut graph = mn::Graph::new();
+            build_volumetric_graph(
+                &mut graph,
+                model.points.len(),
+                1,
+                2,
+                0,
+                1,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                if quantiles.is_some() { 1.0 } else { 0.0 },
+                0.0,
+                [0.0; 3],
+                true,
+            );
+            let (mut session, _) = mn::build(
+                &graph,
+                mn::SessionConfig {
+                    mode: mn::Mode::Training,
+                    gpu: Some(gpu.clone()),
+                    ..Default::default()
+                },
+            );
+            upload_model_parameters(&mut session, &model, 0.0);
+            for channel in ["exposure_r", "exposure_g", "exposure_b"] {
+                session.set_parameter(channel, &[1.0]);
+            }
+            session.set_input_u32("cell_indices", &[0, 1]);
+            session.set_input_u32("next_cell_indices", &[0, 1]);
+            session.set_input("recorded_dt", &[1.0, 4.0]);
+            session.set_input("mask", &[1.0, 1.0]);
+            session.set_input("ray_origin", &[0.0, 0.0, -1.0]);
+            session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
+            session.set_input_u32("pixel_idx_per_step", &[0, 0]);
+            session.set_input_u32("view_idx", &[0]);
+            session.set_input("labels", &[0.0, 0.0, 0.0]);
+            if let Some([near, far]) = quantiles {
+                session.set_input("quantile_near", &[near]);
+                session.set_input("quantile_far", &[far]);
+                session.set_input("quantile_scale", &[1.0]);
+            }
+            session.set_adam(0.0, 0.9, 0.999, 1e-8);
+            session.step();
+            session.wait();
+            session.read_output(1)[0]
+        };
+
+        let base = evaluate(None);
+        // Density is one: τ=0.5 crosses at depth 0.5, while τ=2 crosses
+        // one unit into the second segment at depth 2.
+        let regularized = evaluate(Some([0.5, 2.0]));
+        // The full path has optical depth 5, so τ=6 is invalid and must not
+        // contribute to the mean, matching the reference's depth > 0 mask.
+        let invalid = evaluate(Some([0.5, 6.0]));
+        assert!(base.is_finite() && regularized.is_finite());
+        assert!(
+            (regularized - base - 1.5).abs() < 1.0e-4,
+            "base={base} regularized={regularized}"
+        );
+        assert!(
+            (invalid - base).abs() < 1.0e-5,
+            "base={base} invalid={invalid}"
         );
     }
 

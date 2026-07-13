@@ -228,6 +228,11 @@ struct Args {
     #[argh(option, default = "0.0")]
     distortion_weight: f32,
 
+    /// weight on RadFoam's random transmittance-quantile depth separation
+    /// loss (default 0 = off; reference value 0.0001).
+    #[argh(option, default = "0.0")]
+    quantile_weight: f32,
+
     /// composite training, held-out evaluation, and novel renders on white
     /// instead of the default black background
     #[argh(switch)]
@@ -360,6 +365,7 @@ fn main() {
             grad_loss_weight: args.grad_loss_weight,
             opacity_weight: args.opacity_weight,
             distortion_weight: args.distortion_weight,
+            quantile_weight: args.quantile_weight,
             softplus_beta: args.softplus_beta,
             background_rgb: if args.white_background {
                 [1.0; 3]

@@ -152,9 +152,12 @@ match central finite differences on a fixed, smooth cell path. Densification
 now collects maximum per-view ray contribution on the GPU at a deterministic
 2× downsample, protects contributing cells and their adjacency neighbours,
 suppresses dead-cell density, and reports max-step truncation. A matched
-reference benchmark remains. Stage 3 now persists Čech radii and clips
-PowerFoam intervals to support spheres consistently on CPU, production WGSL,
-and the GPU training recorder.
+reference benchmark remains. The trainer now also implements RadFoam's exact
+random transmittance-quantile depth-separation loss and half-training weight
+ramp; the earlier smooth depth-variance term remains available as a separate
+ablation. Stage 3 now persists Čech radii and clips PowerFoam intervals to
+support spheres consistently on CPU, production WGSL, and the GPU training
+recorder.
 Weighted position/radius gradients and external checkpoint validation remain,
 so weighted geometry optimization and densification intentionally fail fast
 rather than train an incorrect objective.

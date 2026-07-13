@@ -31,6 +31,7 @@ far_plane = 100.0
 background = "black"
 opacity_weight = 0.0
 distortion_weight = 0.0
+quantile_weight = 0.0
 softplus_beta = 0.0
 sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
 
