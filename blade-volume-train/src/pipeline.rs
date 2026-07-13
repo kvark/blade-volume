@@ -356,7 +356,7 @@ pub fn evaluate_views(
 ) -> Vec<f32> {
     let mut out = Vec::with_capacity(views.len());
     for v in views {
-        let pixels = render::render_cpu(
+        let rendered = render::render_cpu_with_diagnostics(
             model,
             &v.camera,
             render::RenderSettings {
@@ -367,7 +367,24 @@ pub fn evaluate_views(
                 weight_threshold: 1e-4,
             },
         );
-        let mut pred = metrics::rgba_over_background(&pixels, config.fit.background_rgb);
+        let diagnostics = rendered.traversal;
+        let mean_steps = diagnostics.total_steps as f32 / diagnostics.rays.max(1) as f32;
+        log::debug!(
+            "evaluation traversal: {} rays, {:.1} mean steps, max {}",
+            diagnostics.rays,
+            mean_steps,
+            diagnostics.max_steps_used,
+        );
+        if diagnostics.truncated_rays > 0 {
+            log::warn!(
+                "evaluation truncated {} / {} rays ({:.3}%) at max_steps={}",
+                diagnostics.truncated_rays,
+                diagnostics.rays,
+                100.0 * diagnostics.truncated_rays as f32 / diagnostics.rays.max(1) as f32,
+                config.max_steps,
+            );
+        }
+        let mut pred = metrics::rgba_over_background(&rendered.rgba, config.fit.background_rgb);
         for p in pred.iter_mut() {
             *p = p.clamp(0.0, 1.0);
         }

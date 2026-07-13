@@ -44,6 +44,22 @@ impl Default for RenderSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TraversalDiagnostics {
+    pub rays: usize,
+    pub total_steps: u64,
+    pub max_steps_used: u32,
+    /// Rays which exhausted `RenderSettings::max_steps` while still before
+    /// the far plane and above the transmittance early-out threshold.
+    pub truncated_rays: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RenderResult {
+    pub rgba: Vec<f32>,
+    pub traversal: TraversalDiagnostics,
+}
+
 /// Render `model` from `camera` at the resolution in `settings`. Returns
 /// `width * height * 4` RGBA floats in row-major order (top-left first).
 ///
@@ -59,9 +75,24 @@ pub fn render_cpu(
     camera: &vol::CameraParams,
     settings: RenderSettings,
 ) -> Vec<f32> {
+    render_cpu_with_diagnostics(model, camera, settings).rgba
+}
+
+/// Render like [`render_cpu`] and retain aggregate traversal diagnostics.
+/// A ray is counted as truncated only when the step cap—not opacity, the far
+/// plane, or a terminal cell—stopped it.
+pub fn render_cpu_with_diagnostics(
+    model: &vol::PointCloudModel,
+    camera: &vol::CameraParams,
+    settings: RenderSettings,
+) -> RenderResult {
     let w = settings.width as usize;
     let h = settings.height as usize;
     let mut out = vec![0.0f32; w * h * 4];
+    let mut traversal = TraversalDiagnostics {
+        rays: w * h,
+        ..TraversalDiagnostics::default()
+    };
 
     let tan_half = glam::Vec2::new((0.5 * camera.fov[0]).tan(), (0.5 * camera.fov[1]).tan());
     let orientation = glam::Quat::from_xyzw(
@@ -100,6 +131,15 @@ pub fn render_cpu(
                 direction: ray_dir,
             };
             let res = vol::trace::trace_one_ray(model, ray, trace_settings);
+            traversal.total_steps += res.steps as u64;
+            traversal.max_steps_used = traversal.max_steps_used.max(res.steps);
+            let remaining_transmittance = 1.0 - res.rgba.w;
+            if res.steps >= settings.max_steps
+                && res.t_end < camera.depth
+                && remaining_transmittance > settings.weight_threshold
+            {
+                traversal.truncated_rays += 1;
+            }
             let base = (iy * w + ix) * 4;
             out[base] = res.rgba.x;
             out[base + 1] = res.rgba.y;
@@ -108,7 +148,10 @@ pub fn render_cpu(
         }
     }
 
-    out
+    RenderResult {
+        rgba: out,
+        traversal,
+    }
 }
 
 #[cfg(test)]
@@ -194,5 +237,38 @@ mod tests {
         );
         let any_alpha = pixels.chunks_exact(4).any(|px| px[3] > 0.0);
         assert!(any_alpha, "render produced an entirely transparent image");
+    }
+
+    #[test]
+    fn traversal_diagnostics_distinguish_step_cap_from_terminal_exit() {
+        let model = unit_sphere_model();
+        let cam = camera_at(-1.0);
+        let capped = render_cpu_with_diagnostics(
+            &model,
+            &cam,
+            RenderSettings {
+                width: 16,
+                height: 16,
+                max_steps: 1,
+                weight_threshold: 0.0,
+                ..RenderSettings::default()
+            },
+        );
+        assert_eq!(capped.traversal.rays, 16 * 16);
+        assert!(capped.traversal.truncated_rays > 0);
+        assert_eq!(capped.traversal.max_steps_used, 1);
+
+        let complete = render_cpu_with_diagnostics(
+            &model,
+            &cam,
+            RenderSettings {
+                width: 16,
+                height: 16,
+                max_steps: 32,
+                weight_threshold: 0.0,
+                ..RenderSettings::default()
+            },
+        );
+        assert_eq!(complete.traversal.truncated_rays, 0);
     }
 }

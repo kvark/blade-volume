@@ -223,7 +223,10 @@ fn main() {
                     render::RenderSettings {
                         width: args.width,
                         height: args.height,
-                        start_point: view.start_cell,
+                        start_point: pipeline::pick_start_cell(
+                            &model,
+                            glam::Vec3::from_array(view.camera.cam_position),
+                        ),
                         max_steps: args.max_steps as u32,
                         weight_threshold: 1e-4,
                     },
