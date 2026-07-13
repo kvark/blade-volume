@@ -28,6 +28,30 @@ impl Default for AdjacencyConfig {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdjacencyError {
+    TooFewPoints { count: usize },
+    TriangulationFailed(String),
+}
+
+impl std::fmt::Display for AdjacencyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            AdjacencyError::TooFewPoints { count } => {
+                write!(
+                    formatter,
+                    "need at least 4 points for 3D Delaunay adjacency, got {count}"
+                )
+            }
+            AdjacencyError::TriangulationFailed(ref message) => {
+                write!(formatter, "3D Delaunay triangulation failed: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AdjacencyError {}
+
 fn build_symmetric_csr(
     points: &[glam::Vec4],
     neighbor_sets: &mut [Vec<u32>],
@@ -88,16 +112,14 @@ fn build_symmetric_csr(
 /// 4. Build symmetric CSR adjacency, optionally capped by shortest edge
 /// 5. Optionally validate using CSR invariants
 ///
-/// # Panics
-/// Panics if fewer than 4 points are provided (minimum for a tetrahedron).
-pub fn compute_adjacency(points: &[glam::Vec4], config: &AdjacencyConfig) -> Adjacency {
+pub fn try_compute_adjacency(
+    points: &[glam::Vec4],
+    config: &AdjacencyConfig,
+) -> Result<Adjacency, AdjacencyError> {
     let num_points = points.len();
 
     if num_points < 4 {
-        panic!(
-            "Cannot compute adjacency with fewer than 4 points (got {})",
-            num_points
-        );
+        return Err(AdjacencyError::TooFewPoints { count: num_points });
     }
 
     // Convert to f64 for Delaunay computation
@@ -110,7 +132,7 @@ pub fn compute_adjacency(points: &[glam::Vec4], config: &AdjacencyConfig) -> Adj
     let mut delaunay = DelaunayStructure3D::new();
     delaunay
         .insert_vertices(&points_f64, true)
-        .expect("Delaunay tetrahedralization failed");
+        .map_err(|error| AdjacencyError::TriangulationFailed(format!("{error:?}")))?;
 
     // Build neighbor sets from tetrahedra edges
     let mut neighbor_sets: Vec<Vec<u32>> = vec![Vec::new(); num_points];
@@ -144,12 +166,24 @@ pub fn compute_adjacency(points: &[glam::Vec4], config: &AdjacencyConfig) -> Adj
         }
     }
 
-    build_symmetric_csr(points, &mut neighbor_sets, config)
+    Ok(build_symmetric_csr(points, &mut neighbor_sets, config))
+}
+
+/// Computes adjacency from point positions using Delaunay tetrahedralization.
+///
+/// # Panics
+/// Panics when [`try_compute_adjacency`] cannot construct exact 3D topology.
+pub fn compute_adjacency(points: &[glam::Vec4], config: &AdjacencyConfig) -> Adjacency {
+    try_compute_adjacency(points, config).unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// Computes adjacency with default configuration.
 pub fn compute_adjacency_default(points: &[glam::Vec4]) -> Adjacency {
     compute_adjacency(points, &AdjacencyConfig::default())
+}
+
+pub fn try_compute_adjacency_default(points: &[glam::Vec4]) -> Result<Adjacency, AdjacencyError> {
+    try_compute_adjacency(points, &AdjacencyConfig::default())
 }
 
 /// Spring-relaxation: each point pushes its Delaunay neighbours apart along
@@ -691,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Cannot compute adjacency with fewer than 4 points")]
+    #[should_panic(expected = "need at least 4 points for 3D Delaunay adjacency, got 3")]
     fn test_too_few_points() {
         let points = vec![
             glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
@@ -700,6 +734,15 @@ mod tests {
         ];
 
         compute_adjacency_default(&points);
+    }
+
+    #[test]
+    fn try_adjacency_reports_too_few_points() {
+        let points = vec![glam::Vec4::ZERO; 3];
+        assert!(matches!(
+            try_compute_adjacency_default(&points),
+            Err(AdjacencyError::TooFewPoints { count: 3 })
+        ));
     }
 
     fn neighbors_of(adj: &Adjacency, i: usize) -> Vec<u32> {

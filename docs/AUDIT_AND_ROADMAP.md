@@ -113,6 +113,10 @@ At the audited revision:
 - Exact adjacency builders now preserve unbounded topology by default. An
   explicit finite cap greedily selects shortest undirected edges without
   breaking graph symmetry, but remains an approximate topology option.
+- Pure-Rust Delaunay construction has fallible `try_compute_adjacency*` entry
+  points beneath the compatibility wrappers. Offline RadFoam conversion now
+  reports undersized or failed exact topology through `ConvertError` instead of
+  panicking or silently substituting an approximate graph.
 - Model-boundary CSR validation now requires monotonic ranges, in-range sorted
   unique lists, no self-edges, and a reverse edge for every neighbor. It cannot
   prove geometric completeness without rebuilding topology.

@@ -74,6 +74,7 @@ pub enum ConvertError {
     MissingMeshData,
     UnsupportedPrimitiveMode,
     MissingOutputData,
+    Adjacency(vol::AdjacencyError),
 }
 
 impl From<std::io::Error> for ConvertError {
@@ -85,6 +86,12 @@ impl From<std::io::Error> for ConvertError {
 impl From<gltf::Error> for ConvertError {
     fn from(err: gltf::Error) -> Self {
         ConvertError::Gltf(err)
+    }
+}
+
+impl From<vol::AdjacencyError> for ConvertError {
+    fn from(err: vol::AdjacencyError) -> Self {
+        ConvertError::Adjacency(err)
     }
 }
 
@@ -495,7 +502,7 @@ pub fn convert_gltf(
             model.transforms = Some(vol::Transforms { rotations, scales });
         }
         OutputKind::RadFoam => {
-            model.adjacency = Some(vol::compute_adjacency_default(&model.points));
+            model.adjacency = Some(vol::try_compute_adjacency_default(&model.points)?);
             if options.spring_iterations > 0 {
                 vol::spring_relax(&mut model, options.spring_iterations, options.spring_step);
             }
@@ -1607,6 +1614,23 @@ mod tests {
             .sh_coefficients
             .iter()
             .all(|&coefficient| (coefficient - white_dc).abs() < 1e-6));
+
+        let error = match convert_gltf(
+            &gltf_path,
+            &ConvertOptions {
+                output: OutputKind::RadFoam,
+                density: 1.0,
+                interior_density_scale: 0.0,
+                ..ConvertOptions::default()
+            },
+        ) {
+            Ok(_) => panic!("undersized RadFoam conversion unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            ConvertError::Adjacency(vol::AdjacencyError::TooFewPoints { count: 1 })
+        ));
         std::fs::remove_file(gltf_path).unwrap();
         std::fs::remove_file(bin_path).unwrap();
     }
