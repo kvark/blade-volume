@@ -240,6 +240,10 @@ At the audited revision:
   Gaussian and RadFoam/PowerFoam. Polygon meshes remain offline conversion
   input rather than a runtime scene-object escape hatch; a future SDF backend
   should add a concrete point-sampled representation instead of a placeholder.
+- Gaussian hardware tracing does use one shared icosahedron triangle BLAS as a
+  conservative candidate-generation envelope. It is an acceleration proxy for
+  point indices, not user-visible polygonal geometry: there is no mesh scene
+  object, triangle material, or polygon surface in the model/API contract.
 - Scene traversal uses per-object SH/attribute metadata. Obsolete global
   metadata and the unimplemented backend-density debug mode were removed so
   public controls correspond to shader behavior.
