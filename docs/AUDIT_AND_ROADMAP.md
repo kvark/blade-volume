@@ -209,6 +209,15 @@ budget. A segment is rejected if it would discard a partially accumulated
 densification window; once the target count or densification cutoff is reached,
 arbitrary endpoints are safe.
 
+Benchmark provenance is now split explicitly. The original local Bonsai
+fixture has 80 image files for a 292-image COLMAP reconstruction and remains a
+subset smoke/quality protocol. A separate pinned `nvs-bench/mipnerf360`
+fetch and manifest cover the complete scene: 292 image files, 292 registered
+names with zero mismatches, one camera, and 206,613 sparse points. The 373 MB
+download completed in a 1 GiB/no-swap scope at a 546 MiB memory peak with zero
+OOM events. Its initial blade-volume budget is still internal, not a claim of
+paper-matched hyperparameters.
+
 ### Stage 0: trustworthy baseline
 
 1. Make the maintained pixel-batched trainer the default public workflow.

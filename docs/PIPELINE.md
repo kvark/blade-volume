@@ -263,13 +263,18 @@ layout (not just raw images):
 
 | Repo | Scene | Images | Size | Notes |
 |---|---|---:|---:|---|
-| [`yuangjia/mipnerf-bonsai`](https://hf.co/datasets/yuangjia/mipnerf-bonsai) | bonsai | 292 | 280 MB | **default smoke test**; single Mip-NeRF-360 scene, full COLMAP outputs, no licence stamp |
+| [`yuangjia/mipnerf-bonsai`](https://hf.co/datasets/yuangjia/mipnerf-bonsai) | bonsai subset | 80 | — | **default smoke test**; COLMAP reconstruction references 292 frames, but only 80 images are present |
 | [`pablovela5620/example-colmap-glomap`](https://hf.co/datasets/pablovela5620/example-colmap-glomap) | mixed | 104 | 420 MB | ships both `colmap/` and `glomap/` outputs for cross-checking |
 | [`nvs-bench/mipnerf360`](https://hf.co/datasets/nvs-bench/mipnerf360) | all 9 Mip-NeRF-360 scenes | 1.9K | 1.9 GB | full benchmark; MIT licence |
 | [`DL3DV/DL3DV-ALL-ColmapCache`](https://hf.co/datasets/DL3DV/DL3DV-ALL-ColmapCache) | 10K scenes | — | >1 TB | gated; use the `DL3DV-10K-Sample` companion if/when needed |
 
 `etc/fetch_test_dataset.sh <scene>` pulls one of these into `etc/data/<scene>/`.
 Nothing in this directory is checked in.
+
+Use `etc/fetch_test_dataset.sh bonsai-full` for the pinned complete Bonsai
+scene. It is intentionally separate from the small `bonsai` fixture so the
+80-image subset and 292-image full-scene benchmark cannot share a result
+manifest accidentally.
 
 ## Out-of-scope (for now)
 

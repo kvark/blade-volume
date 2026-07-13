@@ -53,3 +53,10 @@ COLMAP reconstruction describes 292. The quality manifest is therefore a
 controlled subset protocol, not a full Mip-NeRF-360 or paper-comparable
 benchmark. Published-quality comparisons require all 292 corresponding images
 and a separate manifest that records that provenance explicitly.
+
+Fetch the pinned 292-image scene with
+`etc/fetch_test_dataset.sh bonsai-full`. The script sparse-checks out only the
+373 MB Bonsai directory and exposes the canonical
+`etc/data/bonsai-full/{images,sparse}` layout. Use
+`bonsai_full_quality.toml` for this data; it deliberately remains an internal
+budget rather than claiming published-method comparability.
