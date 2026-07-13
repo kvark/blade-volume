@@ -51,8 +51,8 @@ pub enum CameraModel {
 }
 
 impl CameraModel {
-    fn from_id(id: i32) -> Self {
-        match id {
+    fn try_from_id(id: i32) -> Option<Self> {
+        Some(match id {
             0 => CameraModel::SimplePinhole,
             1 => CameraModel::Pinhole,
             2 => CameraModel::SimpleRadial,
@@ -71,8 +71,8 @@ impl CameraModel {
             15 => CameraModel::Fisheye,
             16 => CameraModel::Eucm,
             17 => CameraModel::Equirectangular,
-            other => panic!("Unknown COLMAP camera model id: {other}"),
-        }
+            _ => return None,
+        })
     }
 
     fn param_count(self) -> usize {
@@ -360,69 +360,136 @@ pub struct Reconstruction {
 
 // --- Binary reader helpers -------------------------------------------------
 
-fn read_u8<R: io::Read>(r: &mut R) -> u8 {
+const MAX_IMAGE_NAME_BYTES: usize = 1024 * 1024;
+
+fn invalid_data(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+fn read_u8<R: io::Read>(r: &mut R) -> io::Result<u8> {
     let mut b = [0u8; 1];
-    r.read_exact(&mut b).expect("EOF reading u8");
-    b[0]
+    r.read_exact(&mut b)?;
+    Ok(b[0])
 }
-fn read_u32<R: io::Read>(r: &mut R) -> u32 {
+fn read_u32<R: io::Read>(r: &mut R) -> io::Result<u32> {
     let mut b = [0u8; 4];
-    r.read_exact(&mut b).expect("EOF reading u32");
-    u32::from_le_bytes(b)
+    r.read_exact(&mut b)?;
+    Ok(u32::from_le_bytes(b))
 }
-fn read_i32<R: io::Read>(r: &mut R) -> i32 {
+fn read_i32<R: io::Read>(r: &mut R) -> io::Result<i32> {
     let mut b = [0u8; 4];
-    r.read_exact(&mut b).expect("EOF reading i32");
-    i32::from_le_bytes(b)
+    r.read_exact(&mut b)?;
+    Ok(i32::from_le_bytes(b))
 }
-fn read_u64<R: io::Read>(r: &mut R) -> u64 {
+fn read_u64<R: io::Read>(r: &mut R) -> io::Result<u64> {
     let mut b = [0u8; 8];
-    r.read_exact(&mut b).expect("EOF reading u64");
-    u64::from_le_bytes(b)
+    r.read_exact(&mut b)?;
+    Ok(u64::from_le_bytes(b))
 }
-fn read_f64<R: io::Read>(r: &mut R) -> f64 {
+fn read_f64<R: io::Read>(r: &mut R) -> io::Result<f64> {
     let mut b = [0u8; 8];
-    r.read_exact(&mut b).expect("EOF reading f64");
-    f64::from_le_bytes(b)
+    r.read_exact(&mut b)?;
+    Ok(f64::from_le_bytes(b))
 }
-fn read_cstr<R: io::Read>(r: &mut R) -> String {
+fn read_cstr<R: io::Read>(r: &mut R) -> io::Result<String> {
     let mut out = Vec::with_capacity(64);
     let mut byte = [0u8; 1];
-    loop {
-        r.read_exact(&mut byte).expect("EOF reading c-string");
+    for _ in 0..MAX_IMAGE_NAME_BYTES {
+        r.read_exact(&mut byte)?;
         if byte[0] == 0 {
-            break;
+            return String::from_utf8(out)
+                .map_err(|_| invalid_data("COLMAP image name is not UTF-8"));
         }
         out.push(byte[0]);
     }
-    String::from_utf8(out).expect("image name is not UTF-8")
+    Err(invalid_data(format!(
+        "COLMAP image name exceeds {MAX_IMAGE_NAME_BYTES} bytes"
+    )))
 }
-fn skip<R: io::Read>(r: &mut R, n: u64) {
+fn skip<R: io::Read>(r: &mut R, n: u64) -> io::Result<()> {
     let mut remaining = n;
-    let mut scratch = [0u8; 1024];
+    let mut scratch = [0u8; 64 * 1024];
     while remaining > 0 {
         let chunk = remaining.min(scratch.len() as u64) as usize;
-        r.read_exact(&mut scratch[..chunk])
-            .expect("failed to skip bytes");
+        r.read_exact(&mut scratch[..chunk])?;
         remaining -= chunk as u64;
     }
+    Ok(())
+}
+
+fn checked_record_count(
+    count: u64,
+    file_size: u64,
+    minimum_record_size: u64,
+    record_name: &str,
+) -> io::Result<usize> {
+    let available = file_size
+        .checked_sub(8)
+        .ok_or_else(|| invalid_data("COLMAP binary file is shorter than its count header"))?;
+    let maximum = available / minimum_record_size;
+    if count > maximum {
+        return Err(invalid_data(format!(
+            "COLMAP {record_name} count {count} exceeds the file-size limit {maximum}"
+        )));
+    }
+    usize::try_from(count)
+        .map_err(|_| invalid_data(format!("COLMAP {record_name} count does not fit usize")))
+}
+
+fn reserve_records<T>(capacity: usize, record_name: &str) -> io::Result<Vec<T>> {
+    let mut records = Vec::new();
+    records.try_reserve_exact(capacity).map_err(|error| {
+        invalid_data(format!(
+            "cannot reserve space for {capacity} COLMAP {record_name} records: {error}"
+        ))
+    })?;
+    Ok(records)
 }
 
 // --- Loaders ---------------------------------------------------------------
 
-pub fn load_cameras(path: &path::Path) -> Vec<ColmapCamera> {
-    let mut file = io::BufReader::new(fs::File::open(path).expect("open cameras.bin"));
-    let n = read_u64(&mut file);
-    let mut out = Vec::with_capacity(n as usize);
+pub fn try_load_cameras(path: &path::Path) -> io::Result<Vec<ColmapCamera>> {
+    let raw_file = fs::File::open(path)?;
+    let file_size = raw_file.metadata()?.len();
+    let mut file = io::BufReader::new(raw_file);
+    let n = read_u64(&mut file)?;
+    let capacity = checked_record_count(n, file_size, 40, "camera")?;
+    let mut out = reserve_records(capacity, "camera")?;
     for _ in 0..n {
-        let id = read_u32(&mut file);
-        let model = CameraModel::from_id(read_i32(&mut file));
-        let width = read_u64(&mut file);
-        let height = read_u64(&mut file);
+        let id = read_u32(&mut file)?;
+        let model_id = read_i32(&mut file)?;
+        let model = CameraModel::try_from_id(model_id)
+            .ok_or_else(|| invalid_data(format!("unknown COLMAP camera model id {model_id}")))?;
+        let width = read_u64(&mut file)?;
+        let height = read_u64(&mut file)?;
         let pcount = model.param_count();
         let mut params = Vec::with_capacity(pcount);
         for _ in 0..pcount {
-            params.push(read_f64(&mut file));
+            params.push(read_f64(&mut file)?);
+        }
+        if width == 0 || height == 0 {
+            return Err(invalid_data(format!(
+                "COLMAP camera {id} has zero image dimensions"
+            )));
+        }
+        if params.iter().any(|value| !value.is_finite()) {
+            return Err(invalid_data(format!(
+                "COLMAP camera {id} has non-finite parameters"
+            )));
+        }
+        if model == CameraModel::Equirectangular {
+            if params[0] <= 0.0 || params[1] <= 0.0 {
+                return Err(invalid_data(format!(
+                    "COLMAP equirectangular camera {id} has non-positive dimensions"
+                )));
+            }
+        } else {
+            let (fx, fy, _, _) = model.fxfycxcy(&params);
+            if fx <= 0.0 || fy <= 0.0 {
+                return Err(invalid_data(format!(
+                    "COLMAP camera {id} has non-positive focal length"
+                )));
+            }
         }
         out.push(ColmapCamera {
             id,
@@ -432,55 +499,95 @@ pub fn load_cameras(path: &path::Path) -> Vec<ColmapCamera> {
             params,
         });
     }
-    out
+    Ok(out)
 }
 
-pub fn load_images(path: &path::Path) -> Vec<ColmapImage> {
-    let mut file = io::BufReader::new(fs::File::open(path).expect("open images.bin"));
-    let n = read_u64(&mut file);
-    let mut out = Vec::with_capacity(n as usize);
+pub fn load_cameras(path: &path::Path) -> Vec<ColmapCamera> {
+    try_load_cameras(path).unwrap_or_else(|error| panic!("load {}: {error}", path.display()))
+}
+
+pub fn try_load_images(path: &path::Path) -> io::Result<Vec<ColmapImage>> {
+    let raw_file = fs::File::open(path)?;
+    let file_size = raw_file.metadata()?.len();
+    let mut file = io::BufReader::new(raw_file);
+    let n = read_u64(&mut file)?;
+    let capacity = checked_record_count(n, file_size, 73, "image")?;
+    let mut out = reserve_records(capacity, "image")?;
     for _ in 0..n {
-        let id = read_u32(&mut file);
-        let qw = read_f64(&mut file);
-        let qx = read_f64(&mut file);
-        let qy = read_f64(&mut file);
-        let qz = read_f64(&mut file);
-        let tx = read_f64(&mut file);
-        let ty = read_f64(&mut file);
-        let tz = read_f64(&mut file);
-        let camera_id = read_u32(&mut file);
-        let name = read_cstr(&mut file);
-        let num_points2d = read_u64(&mut file);
+        let id = read_u32(&mut file)?;
+        let qw = read_f64(&mut file)?;
+        let qx = read_f64(&mut file)?;
+        let qy = read_f64(&mut file)?;
+        let qz = read_f64(&mut file)?;
+        let tx = read_f64(&mut file)?;
+        let ty = read_f64(&mut file)?;
+        let tz = read_f64(&mut file)?;
+        let camera_id = read_u32(&mut file)?;
+        let name = read_cstr(&mut file)?;
+        let num_points2d = read_u64(&mut file)?;
         // Each point2D record is 8 + 8 + 8 = 24 bytes (xy as f64, point3D_id as u64).
-        skip(&mut file, num_points2d * 24);
+        let observation_bytes = num_points2d
+            .checked_mul(24)
+            .ok_or_else(|| invalid_data("COLMAP points2D byte count overflows u64"))?;
+        skip(&mut file, observation_bytes)?;
+        let quat_wxyz = [qw, qx, qy, qz];
+        let translation = [tx, ty, tz];
+        if quat_wxyz.iter().any(|value| !value.is_finite())
+            || translation.iter().any(|value| !value.is_finite())
+        {
+            return Err(invalid_data(format!(
+                "COLMAP image {id} has a non-finite pose"
+            )));
+        }
+        let quat_norm_squared = quat_wxyz.iter().map(|value| value * value).sum::<f64>();
+        if !quat_norm_squared.is_finite() || quat_norm_squared <= f64::EPSILON {
+            return Err(invalid_data(format!(
+                "COLMAP image {id} has a zero-length orientation quaternion"
+            )));
+        }
         out.push(ColmapImage {
             id,
             camera_id,
             name,
-            quat_wxyz: [qw, qx, qy, qz],
-            translation: [tx, ty, tz],
+            quat_wxyz,
+            translation,
             num_points2d,
         });
     }
-    out
+    Ok(out)
 }
 
-pub fn load_points3d(path: &path::Path) -> Vec<ColmapPoint3D> {
-    let mut file = io::BufReader::new(fs::File::open(path).expect("open points3D.bin"));
-    let n = read_u64(&mut file);
-    let mut out = Vec::with_capacity(n as usize);
+pub fn load_images(path: &path::Path) -> Vec<ColmapImage> {
+    try_load_images(path).unwrap_or_else(|error| panic!("load {}: {error}", path.display()))
+}
+
+pub fn try_load_points3d(path: &path::Path) -> io::Result<Vec<ColmapPoint3D>> {
+    let raw_file = fs::File::open(path)?;
+    let file_size = raw_file.metadata()?.len();
+    let mut file = io::BufReader::new(raw_file);
+    let n = read_u64(&mut file)?;
+    let capacity = checked_record_count(n, file_size, 51, "point3D")?;
+    let mut out = reserve_records(capacity, "point3D")?;
     for _ in 0..n {
-        let id = read_u64(&mut file);
-        let x = read_f64(&mut file);
-        let y = read_f64(&mut file);
-        let z = read_f64(&mut file);
-        let r = read_u8(&mut file);
-        let g = read_u8(&mut file);
-        let b = read_u8(&mut file);
-        let error = read_f64(&mut file);
-        let track_len = read_u64(&mut file);
+        let id = read_u64(&mut file)?;
+        let x = read_f64(&mut file)?;
+        let y = read_f64(&mut file)?;
+        let z = read_f64(&mut file)?;
+        let r = read_u8(&mut file)?;
+        let g = read_u8(&mut file)?;
+        let b = read_u8(&mut file)?;
+        let error = read_f64(&mut file)?;
+        let track_len = read_u64(&mut file)?;
         // Each track entry is image_id (u32) + point2D_idx (u32) = 8 bytes.
-        skip(&mut file, track_len * 8);
+        let track_bytes = track_len
+            .checked_mul(8)
+            .ok_or_else(|| invalid_data("COLMAP point3D track byte count overflows u64"))?;
+        skip(&mut file, track_bytes)?;
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() || !error.is_finite() || error < 0.0 {
+            return Err(invalid_data(format!(
+                "COLMAP point3D {id} has invalid coordinates or error"
+            )));
+        }
         out.push(ColmapPoint3D {
             id,
             xyz: [x, y, z],
@@ -489,23 +596,43 @@ pub fn load_points3d(path: &path::Path) -> Vec<ColmapPoint3D> {
             track_len,
         });
     }
-    out
+    Ok(out)
+}
+
+pub fn load_points3d(path: &path::Path) -> Vec<ColmapPoint3D> {
+    try_load_points3d(path).unwrap_or_else(|error| panic!("load {}: {error}", path.display()))
 }
 
 /// Read `<sparse_dir>/cameras.bin`, `images.bin`, `points3D.bin`.
-pub fn load_reconstruction(sparse_dir: &path::Path) -> Reconstruction {
-    let cameras_vec = load_cameras(&sparse_dir.join("cameras.bin"));
-    let images = load_images(&sparse_dir.join("images.bin"));
-    let points = load_points3d(&sparse_dir.join("points3D.bin"));
+pub fn try_load_reconstruction(sparse_dir: &path::Path) -> io::Result<Reconstruction> {
+    let cameras_vec = try_load_cameras(&sparse_dir.join("cameras.bin"))?;
+    let images = try_load_images(&sparse_dir.join("images.bin"))?;
+    let points = try_load_points3d(&sparse_dir.join("points3D.bin"))?;
     let mut cameras = HashMap::with_capacity(cameras_vec.len());
     for c in cameras_vec {
-        cameras.insert(c.id, c);
+        let id = c.id;
+        if cameras.insert(id, c).is_some() {
+            return Err(invalid_data(format!("duplicate COLMAP camera id {id}")));
+        }
     }
-    Reconstruction {
+    for image in &images {
+        if !cameras.contains_key(&image.camera_id) {
+            return Err(invalid_data(format!(
+                "COLMAP image {} references unknown camera id {}",
+                image.id, image.camera_id
+            )));
+        }
+    }
+    Ok(Reconstruction {
         cameras,
         images,
         points,
-    }
+    })
+}
+
+pub fn load_reconstruction(sparse_dir: &path::Path) -> Reconstruction {
+    try_load_reconstruction(sparse_dir)
+        .unwrap_or_else(|error| panic!("load {}: {error}", sparse_dir.display()))
 }
 
 // --- Conversion to native blade-volume types -------------------------------
@@ -803,6 +930,140 @@ mod tests {
     }
 
     #[test]
+    fn fallible_loaders_reject_implausible_counts_and_models() {
+        let dir = tmpdir("invalid-header");
+        fs::create_dir_all(&dir).unwrap();
+
+        let count_path = dir.join("count.bin");
+        fs::write(&count_path, u64::MAX.to_le_bytes()).unwrap();
+        let count_error = try_load_cameras(&count_path).unwrap_err();
+        assert_eq!(count_error.kind(), io::ErrorKind::InvalidData);
+        assert!(count_error.to_string().contains("file-size limit"));
+
+        let model_path = dir.join("model.bin");
+        let mut bytes = Vec::new();
+        put_u64(&mut bytes, 1);
+        put_u32(&mut bytes, 7);
+        put_i32(&mut bytes, 99);
+        put_u64(&mut bytes, 640);
+        put_u64(&mut bytes, 480);
+        put_f64(&mut bytes, 1.0);
+        put_f64(&mut bytes, 1.0);
+        fs::write(&model_path, bytes).unwrap();
+        let model_error = try_load_cameras(&model_path).unwrap_err();
+        assert_eq!(model_error.kind(), io::ErrorKind::InvalidData);
+        assert!(model_error.to_string().contains("camera model id 99"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fallible_loaders_reject_invalid_numeric_records() {
+        let dir = tmpdir("invalid-numeric");
+        fs::create_dir_all(&dir).unwrap();
+
+        let camera_path = dir.join("camera.bin");
+        let mut bytes = Vec::new();
+        put_u64(&mut bytes, 1);
+        put_u32(&mut bytes, 1);
+        put_i32(&mut bytes, 1);
+        put_u64(&mut bytes, 640);
+        put_u64(&mut bytes, 480);
+        for &value in &[f64::NAN, 500.0, 320.0, 240.0] {
+            put_f64(&mut bytes, value);
+        }
+        fs::write(&camera_path, bytes).unwrap();
+        let camera_error = try_load_cameras(&camera_path).unwrap_err();
+        assert!(camera_error.to_string().contains("non-finite parameters"));
+
+        let image_path = dir.join("image.bin");
+        let mut bytes = Vec::new();
+        put_u64(&mut bytes, 1);
+        put_u32(&mut bytes, 10);
+        for _ in 0..7 {
+            put_f64(&mut bytes, 0.0);
+        }
+        put_u32(&mut bytes, 1);
+        put_cstr(&mut bytes, "frame.png");
+        put_u64(&mut bytes, 0);
+        fs::write(&image_path, bytes).unwrap();
+        let image_error = try_load_images(&image_path).unwrap_err();
+        assert!(image_error
+            .to_string()
+            .contains("zero-length orientation quaternion"));
+
+        let point_path = dir.join("point.bin");
+        let mut bytes = Vec::new();
+        put_u64(&mut bytes, 1);
+        put_u64(&mut bytes, 100);
+        for &value in &[0.0_f64, f64::INFINITY, 0.0] {
+            put_f64(&mut bytes, value);
+        }
+        bytes.extend_from_slice(&[255, 255, 255]);
+        put_f64(&mut bytes, 0.0);
+        put_u64(&mut bytes, 0);
+        fs::write(&point_path, bytes).unwrap();
+        let point_error = try_load_points3d(&point_path).unwrap_err();
+        assert!(point_error
+            .to_string()
+            .contains("invalid coordinates or error"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn variable_length_fields_are_bounded() {
+        let dir = tmpdir("invalid-image");
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut image_prefix = Vec::new();
+        put_u64(&mut image_prefix, 1);
+        put_u32(&mut image_prefix, 10);
+        for &value in &[1.0_f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] {
+            put_f64(&mut image_prefix, value);
+        }
+        put_u32(&mut image_prefix, 1);
+
+        let name_path = dir.join("name.bin");
+        let mut bytes = image_prefix.clone();
+        bytes.resize(bytes.len() + MAX_IMAGE_NAME_BYTES, b'a');
+        fs::write(&name_path, bytes).unwrap();
+        let name_error = try_load_images(&name_path).unwrap_err();
+        assert_eq!(name_error.kind(), io::ErrorKind::InvalidData);
+        assert!(name_error.to_string().contains("image name exceeds"));
+
+        let observations_path = dir.join("observations.bin");
+        let mut bytes = image_prefix;
+        put_cstr(&mut bytes, "frame.png");
+        put_u64(&mut bytes, u64::MAX);
+        fs::write(&observations_path, bytes).unwrap();
+        let observations_error = try_load_images(&observations_path).unwrap_err();
+        assert_eq!(observations_error.kind(), io::ErrorKind::InvalidData);
+        assert!(observations_error
+            .to_string()
+            .contains("byte count overflows"));
+
+        let track_path = dir.join("track.bin");
+        let mut bytes = Vec::new();
+        put_u64(&mut bytes, 1);
+        put_u64(&mut bytes, 100);
+        for &value in &[0.0_f64, 0.0, 0.0] {
+            put_f64(&mut bytes, value);
+        }
+        bytes.extend_from_slice(&[255, 255, 255]);
+        put_f64(&mut bytes, 0.0);
+        put_u64(&mut bytes, u64::MAX);
+        fs::write(&track_path, bytes).unwrap();
+        let track_error = try_load_points3d(&track_path).unwrap_err();
+        assert_eq!(track_error.kind(), io::ErrorKind::InvalidData);
+        assert!(track_error
+            .to_string()
+            .contains("track byte count overflows"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn initial_model_matches_points3d() {
         let dir = tmpdir("model");
         write_fixture(&dir);
@@ -935,9 +1196,12 @@ mod tests {
 
     #[test]
     fn equirectangular_projection_maps_forward_and_quarter_turn() {
-        assert_eq!(CameraModel::from_id(16), CameraModel::Eucm);
+        assert_eq!(CameraModel::try_from_id(16), Some(CameraModel::Eucm));
         assert_eq!(CameraModel::Eucm.param_count(), 6);
-        assert_eq!(CameraModel::from_id(17), CameraModel::Equirectangular);
+        assert_eq!(
+            CameraModel::try_from_id(17),
+            Some(CameraModel::Equirectangular)
+        );
         assert_eq!(CameraModel::Equirectangular.param_count(), 2);
         let camera = ColmapCamera {
             id: 1,

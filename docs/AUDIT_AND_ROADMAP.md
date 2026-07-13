@@ -109,6 +109,12 @@ At the audited revision:
   The single-focal `RADIAL_FISHEYE` layout is corrected, EUCM is supported,
   and equirectangular records are parsed/projectable but skipped by training
   because a 360-degree panorama cannot be represented by the pinhole runtime.
+- COLMAP binary parsing now has fallible entry points beneath the compatibility
+  wrappers. File-size-bounded record counts, fallible reservations, bounded
+  image names, checked variable-array sizes, model IDs, duplicate cameras, and
+  image-to-camera references are validated before data reaches training;
+  invalid dimensions, focal lengths, poses, coordinates, and errors are
+  rejected before they can seed NaNs.
 - Training, SH evaluation, image output, PSNR, backgrounds, and viewers now
   explicitly use display-referred sRGB code values without a hidden transfer
   function or tone map. Linear-light clients must decode explicitly.
