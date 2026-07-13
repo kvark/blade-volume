@@ -91,18 +91,21 @@ impl From<gltf::Error> for ConvertError {
 struct MaterialInfo {
     base_color: glam::Vec4,
     base_color_texture: Option<Texture>,
+    tex_coord: u32,
 }
 
 struct Texture {
     width: u32,
     height: u32,
     data: Vec<u8>,
+    wrap_s: gltf::texture::WrappingMode,
+    wrap_t: gltf::texture::WrappingMode,
 }
 
 impl Texture {
     fn sample(&self, uv: glam::Vec2) -> glam::Vec4 {
-        let u = uv.x.fract().clamp(0.0, 0.999_999);
-        let v = uv.y.fract().clamp(0.0, 0.999_999);
+        let u = wrap_coordinate(uv.x, self.wrap_s);
+        let v = wrap_coordinate(uv.y, self.wrap_t);
         let x = u * (self.width as f32 - 1.0);
         let y = (1.0 - v) * (self.height as f32 - 1.0);
         let x0 = x.floor() as u32;
@@ -129,6 +132,21 @@ impl Texture {
         let b = self.data[idx + 2] as f32 / 255.0;
         let a = self.data[idx + 3] as f32 / 255.0;
         glam::Vec4::new(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b), a)
+    }
+}
+
+fn wrap_coordinate(value: f32, mode: gltf::texture::WrappingMode) -> f32 {
+    match mode {
+        gltf::texture::WrappingMode::ClampToEdge => value.clamp(0.0, 1.0),
+        gltf::texture::WrappingMode::MirroredRepeat => {
+            let phase = value.rem_euclid(2.0);
+            if phase <= 1.0 {
+                phase
+            } else {
+                2.0 - phase
+            }
+        }
+        gltf::texture::WrappingMode::Repeat => value.rem_euclid(1.0),
     }
 }
 
@@ -219,27 +237,40 @@ pub fn convert_gltf(
     for material in document.materials() {
         let pbr = material.pbr_metallic_roughness();
         let base_color = pbr.base_color_factor();
-        let base_color_texture = pbr.base_color_texture().map(|tex| {
-            let image = tex.texture().source();
-            let data = &images[image.index()];
-            Texture {
-                width: data.width,
-                height: data.height,
-                data: rgba8_from_gltf_image(data),
+        let (base_color_texture, tex_coord) = match pbr.base_color_texture() {
+            Some(info) => {
+                let texture = info.texture();
+                let image = texture.source();
+                let sampler = texture.sampler();
+                let data = &images[image.index()];
+                (
+                    Some(Texture {
+                        width: data.width,
+                        height: data.height,
+                        data: rgba8_from_gltf_image(data),
+                        wrap_s: sampler.wrap_s(),
+                        wrap_t: sampler.wrap_t(),
+                    }),
+                    info.tex_coord(),
+                )
             }
-        });
+            None => (None, 0),
+        };
         materials.push(MaterialInfo {
             base_color: glam::Vec4::from(base_color),
             base_color_texture,
+            tex_coord,
         });
     }
 
-    if materials.is_empty() {
-        materials.push(MaterialInfo {
-            base_color: glam::Vec4::ONE,
-            base_color_texture: None,
-        });
-    }
+    // A primitive with no material uses glTF's default white PBR material,
+    // regardless of whether unrelated named materials exist in the asset.
+    let default_material = materials.len();
+    materials.push(MaterialInfo {
+        base_color: glam::Vec4::ONE,
+        base_color_texture: None,
+        tex_coord: 0,
+    });
 
     let mut triangles = Vec::new();
 
@@ -250,6 +281,7 @@ pub fn convert_gltf(
                 glam::Mat4::IDENTITY,
                 &buffers,
                 &materials,
+                default_material,
                 &mut triangles,
             )?;
         }
@@ -265,7 +297,7 @@ pub fn convert_gltf(
     }
 
     let bbox = compute_bounds(&triangles);
-    let avg_color = compute_average_color(&materials);
+    let avg_color = compute_average_color(&triangles, &materials);
 
     let interior_density = density * options.interior_density_scale;
     let mut points = Vec::new();
@@ -461,6 +493,7 @@ fn gather_node_triangles(
     parent: glam::Mat4,
     buffers: &[gltf::buffer::Data],
     materials: &[MaterialInfo],
+    default_material: usize,
     triangles: &mut Vec<Triangle>,
 ) -> Result<(), ConvertError> {
     let local = glam::Mat4::from_cols_array_2d(&node.transform().matrix());
@@ -479,10 +512,17 @@ fn gather_node_triangles(
                 .ok_or(ConvertError::MissingMeshData)?
                 .map(|p| transform.transform_point3(glam::Vec3::from(p)))
                 .collect::<Vec<_>>();
-            let uvs = reader
-                .read_tex_coords(0)
-                .map(|uv| uv.into_f32().map(glam::Vec2::from).collect::<Vec<_>>())
-                .unwrap_or_else(|| vec![glam::Vec2::ZERO; positions.len()]);
+            let material_index = primitive.material().index().unwrap_or(default_material);
+            let material = materials
+                .get(material_index)
+                .ok_or(ConvertError::MissingMeshData)?;
+            let uvs = match reader.read_tex_coords(material.tex_coord) {
+                Some(uv) => uv.into_f32().map(glam::Vec2::from).collect::<Vec<_>>(),
+                None if material.base_color_texture.is_some() => {
+                    return Err(ConvertError::MissingMeshData);
+                }
+                None => vec![glam::Vec2::ZERO; positions.len()],
+            };
             let normals = reader
                 .read_normals()
                 .map(|n| {
@@ -493,24 +533,26 @@ fn gather_node_triangles(
                     .collect::<Vec<_>>()
                 })
                 .unwrap_or_else(|| vec![glam::Vec3::ZERO; positions.len()]);
-            let indices = reader
-                .read_indices()
-                .ok_or(ConvertError::MissingMeshData)?
-                .into_u32()
-                .collect::<Vec<_>>();
-
-            let material_index = primitive.material().index().unwrap_or(0);
-            let material_index = material_index.min(materials.len() - 1);
+            let indices = reader.read_indices().map_or_else(
+                || (0..positions.len() as u32).collect::<Vec<_>>(),
+                |indices| indices.into_u32().collect::<Vec<_>>(),
+            );
+            if indices.len() % 3 != 0 {
+                return Err(ConvertError::MissingMeshData);
+            }
 
             for tri in indices.chunks_exact(3) {
                 let i0 = tri[0] as usize;
                 let i1 = tri[1] as usize;
                 let i2 = tri[2] as usize;
-                let v0 = positions[i0];
-                let v1 = positions[i1];
-                let v2 = positions[i2];
-                let normal = if normals[i0] != glam::Vec3::ZERO {
-                    let n = (normals[i0] + normals[i1] + normals[i2]) / 3.0;
+                let v0 = *positions.get(i0).ok_or(ConvertError::MissingMeshData)?;
+                let v1 = *positions.get(i1).ok_or(ConvertError::MissingMeshData)?;
+                let v2 = *positions.get(i2).ok_or(ConvertError::MissingMeshData)?;
+                let n0 = *normals.get(i0).ok_or(ConvertError::MissingMeshData)?;
+                let n1 = *normals.get(i1).ok_or(ConvertError::MissingMeshData)?;
+                let n2 = *normals.get(i2).ok_or(ConvertError::MissingMeshData)?;
+                let normal = if n0 != glam::Vec3::ZERO {
+                    let n = (n0 + n1 + n2) / 3.0;
                     n.normalize_or_zero()
                 } else {
                     (v1 - v0).cross(v2 - v0).normalize_or_zero()
@@ -520,9 +562,9 @@ fn gather_node_triangles(
                     v0,
                     v1,
                     v2,
-                    uv0: uvs[i0],
-                    uv1: uvs[i1],
-                    uv2: uvs[i2],
+                    uv0: *uvs.get(i0).ok_or(ConvertError::MissingMeshData)?,
+                    uv1: *uvs.get(i1).ok_or(ConvertError::MissingMeshData)?,
+                    uv2: *uvs.get(i2).ok_or(ConvertError::MissingMeshData)?,
                     normal,
                     material: material_index,
                     area,
@@ -532,7 +574,14 @@ fn gather_node_triangles(
     }
 
     for child in node.children() {
-        gather_node_triangles(&child, transform, buffers, materials, triangles)?;
+        gather_node_triangles(
+            &child,
+            transform,
+            buffers,
+            materials,
+            default_material,
+            triangles,
+        )?;
     }
 
     Ok(())
@@ -555,12 +604,12 @@ struct Bounds {
     max: glam::Vec3,
 }
 
-fn compute_average_color(materials: &[MaterialInfo]) -> glam::Vec3 {
+fn compute_average_color(triangles: &[Triangle], materials: &[MaterialInfo]) -> glam::Vec3 {
     let mut sum = glam::Vec3::ZERO;
-    for material in materials {
-        sum += material.base_color.truncate();
+    for triangle in triangles {
+        sum += materials[triangle.material].base_color.truncate();
     }
-    sum / materials.len() as f32
+    sum / triangles.len() as f32
 }
 
 fn is_point_inside_mesh(point: glam::Vec3, triangles: &[Triangle]) -> bool {
@@ -1118,6 +1167,94 @@ mod tests {
         assert!((color.x - 0.735_357).abs() < 1e-6);
         assert!((color.y - 0.735_357).abs() < 1e-6);
         assert_eq!(color.z, 0.0);
+    }
+
+    #[test]
+    fn texture_coordinates_follow_gltf_wrap_modes() {
+        assert_eq!(
+            wrap_coordinate(-0.25, gltf::texture::WrappingMode::Repeat),
+            0.75
+        );
+        assert_eq!(
+            wrap_coordinate(1.25, gltf::texture::WrappingMode::Repeat),
+            0.25
+        );
+        assert_eq!(
+            wrap_coordinate(-0.25, gltf::texture::WrappingMode::MirroredRepeat),
+            0.25
+        );
+        assert_eq!(
+            wrap_coordinate(1.25, gltf::texture::WrappingMode::MirroredRepeat),
+            0.75
+        );
+        assert_eq!(
+            wrap_coordinate(-0.25, gltf::texture::WrappingMode::ClampToEdge),
+            0.0
+        );
+        assert_eq!(
+            wrap_coordinate(1.25, gltf::texture::WrappingMode::ClampToEdge),
+            1.0
+        );
+    }
+
+    #[test]
+    fn unindexed_gltf_primitive_without_material_uses_white_default() {
+        let stem = format!("blade_volume_unindexed_{}", std::process::id());
+        let directory = std::env::temp_dir();
+        let bin_path = directory.join(format!("{stem}.bin"));
+        let gltf_path = directory.join(format!("{stem}.gltf"));
+        let mut positions = Vec::new();
+        for value in [
+            0.0_f32, 0.0, 0.0, // v0
+            1.0, 0.0, 0.0, // v1
+            0.0, 1.0, 0.0, // v2
+        ] {
+            positions.extend_from_slice(&value.to_le_bytes());
+        }
+        std::fs::write(&bin_path, positions).unwrap();
+        let document = format!(
+            r#"{{
+                "asset": {{"version": "2.0"}},
+                "buffers": [{{"uri": "{stem}.bin", "byteLength": 36}}],
+                "bufferViews": [{{"buffer": 0, "byteOffset": 0, "byteLength": 36}}],
+                "accessors": [{{
+                    "bufferView": 0,
+                    "componentType": 5126,
+                    "count": 3,
+                    "type": "VEC3",
+                    "min": [0, 0, 0],
+                    "max": [1, 1, 0]
+                }}],
+                "materials": [{{
+                    "pbrMetallicRoughness": {{"baseColorFactor": [1, 0, 0, 1]}}
+                }}],
+                "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}}}]}}],
+                "nodes": [{{"mesh": 0}}],
+                "scenes": [{{"nodes": [0]}}],
+                "scene": 0
+            }}"#,
+        );
+        std::fs::write(&gltf_path, document).unwrap();
+
+        let model = convert_gltf(
+            &gltf_path,
+            &ConvertOptions {
+                density: 1.0,
+                interior_density_scale: 0.0,
+                ambient: glam::Vec3::ONE,
+                ..ConvertOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!model.is_empty());
+        let white_dc = 0.5 / SH_C0;
+        assert!(model
+            .sh_coefficients
+            .iter()
+            .all(|&coefficient| (coefficient - white_dc).abs() < 1e-6));
+        std::fs::remove_file(gltf_path).unwrap();
+        std::fs::remove_file(bin_path).unwrap();
     }
 
     #[test]

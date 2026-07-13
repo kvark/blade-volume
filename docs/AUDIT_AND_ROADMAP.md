@@ -110,6 +110,10 @@ At the audited revision:
 - The glTF converter decodes texture samples, combines base-color factors and
   ambient gain in linear light, then encodes once at the `PointCloudModel`
   boundary. It no longer stores linear midtones in an sRGB-coded model.
+- glTF conversion now respects each base-color texture's coordinate set and
+  wrap modes, supports non-indexed triangle primitives, uses the specified
+  white default material, and rejects incomplete/out-of-range attribute data
+  instead of indexing it unchecked.
 - Distorted projection is handled in the reconstruction/training boundary; the
   runtime `PointCloudModel` intentionally carries cloud data rather than source
   capture-camera calibration.
