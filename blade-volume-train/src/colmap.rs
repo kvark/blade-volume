@@ -25,9 +25,8 @@ use std::{collections::HashMap, fs, io, path};
 // --- Camera models ---------------------------------------------------------
 //
 // Numeric IDs and parameter counts mirror `src/colmap/sensor/models.h`. The
-// only values we actually consume downstream are the focal length(s) and
-// principal point; distortion coefficients are kept on the struct for callers
-// that want them but the renderer ignores them.
+// Training rectifies perspective models onto a pinhole grid before rendering;
+// the full parameter vector is therefore consumed by forward projection.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraModel {
@@ -47,6 +46,8 @@ pub enum CameraModel {
     Division,
     SimpleFisheye,
     Fisheye,
+    Eucm,
+    Equirectangular,
 }
 
 impl CameraModel {
@@ -68,6 +69,8 @@ impl CameraModel {
             13 => CameraModel::Division,
             14 => CameraModel::SimpleFisheye,
             15 => CameraModel::Fisheye,
+            16 => CameraModel::Eucm,
+            17 => CameraModel::Equirectangular,
             other => panic!("Unknown COLMAP camera model id: {other}"),
         }
     }
@@ -90,7 +93,13 @@ impl CameraModel {
             CameraModel::Division => 5,
             CameraModel::SimpleFisheye => 3,
             CameraModel::Fisheye => 4,
+            CameraModel::Eucm => 6,
+            CameraModel::Equirectangular => 2,
         }
+    }
+
+    pub fn supports_pinhole_rectification(self) -> bool {
+        self != CameraModel::Equirectangular
     }
 
     /// `(fx, fy, cx, cy)` from the raw params, using each model's convention.
@@ -99,6 +108,7 @@ impl CameraModel {
         match self {
             CameraModel::SimplePinhole
             | CameraModel::SimpleRadial
+            | CameraModel::RadialFisheye
             | CameraModel::SimpleRadialFisheye
             | CameraModel::SimpleFisheye
             | CameraModel::SimpleDivision => (params[0], params[0], params[1], params[2]),
@@ -107,12 +117,15 @@ impl CameraModel {
             | CameraModel::OpencvFisheye
             | CameraModel::FullOpencv
             | CameraModel::Fov
-            | CameraModel::RadialFisheye
             | CameraModel::ThinPrismFisheye
             | CameraModel::RadTanThinPrismFisheye
             | CameraModel::Division
-            | CameraModel::Fisheye => (params[0], params[1], params[2], params[3]),
+            | CameraModel::Fisheye
+            | CameraModel::Eucm => (params[0], params[1], params[2], params[3]),
             CameraModel::Radial => (params[0], params[0], params[1], params[2]),
+            CameraModel::Equirectangular => {
+                panic!("equirectangular cameras do not have pinhole intrinsics")
+            }
         }
     }
 }
@@ -130,6 +143,15 @@ impl ColmapCamera {
     /// Project a camera-space direction `(u, v, 1)` into the source image,
     /// including the camera model's forward distortion.
     pub fn project_camera_plane(&self, u: f64, v: f64) -> Option<[f64; 2]> {
+        if self.model == CameraModel::Equirectangular {
+            let length = (u * u + v * v + 1.0).sqrt();
+            let theta = u.atan2(1.0);
+            let phi = (-v / length).asin();
+            return Some([
+                self.params[0] * (theta / std::f64::consts::TAU + 0.5),
+                self.params[1] * (0.5 - phi / std::f64::consts::PI),
+            ]);
+        }
         let (fx, fy, cx, cy) = self.model.fxfycxcy(&self.params);
         let extra_start = match self.model {
             CameraModel::SimplePinhole
@@ -146,6 +168,8 @@ impl ColmapCamera {
             | CameraModel::Fov
             | CameraModel::ThinPrismFisheye
             | CameraModel::RadTanThinPrismFisheye => 4,
+            CameraModel::Eucm => 4,
+            CameraModel::Equirectangular => unreachable!(),
         };
         let extra = &self.params[extra_start..];
 
@@ -279,6 +303,21 @@ impl ColmapCamera {
                     y + 2.0 * p0 * xy + p1 * (r2 + 2.0 * y2) + s2 * r2 + s3 * r4,
                 ]
             }
+            CameraModel::Eucm => {
+                let [alpha, beta] = extra[..2] else {
+                    unreachable!()
+                };
+                let rho_squared = beta * (u * u + v * v) + 1.0;
+                if rho_squared < 0.0 {
+                    return None;
+                }
+                let denominator = alpha * rho_squared.sqrt() + 1.0 - alpha;
+                if denominator <= f64::EPSILON {
+                    return None;
+                }
+                [u / denominator, v / denominator]
+            }
+            CameraModel::Equirectangular => unreachable!(),
         };
         Some(project(distorted[0], distorted[1]))
     }
@@ -536,6 +575,11 @@ impl Reconstruction {
                 image.id, image.camera_id
             )
         });
+        assert!(
+            cam.model.supports_pinhole_rectification(),
+            "equirectangular camera {} cannot use the pinhole runtime camera",
+            cam.id,
+        );
 
         let q_cfw = glam::DQuat::from_xyzw(
             image.quat_wxyz[1],
@@ -849,6 +893,64 @@ mod tests {
         let projected = camera.project_camera_plane(1.0, 0.5).unwrap();
         assert!((projected[0] - 162.5).abs() < 1e-10);
         assert!((projected[1] - 96.25).abs() < 1e-10);
+    }
+
+    #[test]
+    fn radial_fisheye_uses_single_focal_intrinsic_layout() {
+        let camera = ColmapCamera {
+            id: 1,
+            model: CameraModel::RadialFisheye,
+            width: 640,
+            height: 480,
+            params: vec![500.0, 321.0, 239.0, 0.0, 0.0],
+        };
+        assert_eq!(
+            camera.model.fxfycxcy(&camera.params),
+            (500.0, 500.0, 321.0, 239.0)
+        );
+        let projected = camera.project_camera_plane(1.0, 0.0).unwrap();
+        assert!((projected[0] - (321.0 + 500.0 * std::f64::consts::FRAC_PI_4)).abs() < 1e-10);
+        assert_eq!(projected[1], 239.0);
+    }
+
+    #[test]
+    fn eucm_projection_matches_unified_camera_limits() {
+        let mut camera = ColmapCamera {
+            id: 1,
+            model: CameraModel::Eucm,
+            width: 640,
+            height: 480,
+            params: vec![500.0, 600.0, 320.0, 240.0, 0.0, 1.0],
+        };
+        let pinhole = camera.project_camera_plane(0.2, -0.1).unwrap();
+        assert!((pinhole[0] - 420.0).abs() < 1e-10);
+        assert!((pinhole[1] - 180.0).abs() < 1e-10);
+
+        camera.params[4] = 1.0;
+        let projected = camera.project_camera_plane(0.2, -0.1).unwrap();
+        let norm = (1.0_f64 + 0.2 * 0.2 + 0.1 * 0.1).sqrt();
+        assert!((projected[0] - (320.0 + 500.0 * 0.2 / norm)).abs() < 1e-10);
+        assert!((projected[1] - (240.0 - 600.0 * 0.1 / norm)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn equirectangular_projection_maps_forward_and_quarter_turn() {
+        assert_eq!(CameraModel::from_id(16), CameraModel::Eucm);
+        assert_eq!(CameraModel::Eucm.param_count(), 6);
+        assert_eq!(CameraModel::from_id(17), CameraModel::Equirectangular);
+        assert_eq!(CameraModel::Equirectangular.param_count(), 2);
+        let camera = ColmapCamera {
+            id: 1,
+            model: CameraModel::Equirectangular,
+            width: 800,
+            height: 400,
+            params: vec![800.0, 400.0],
+        };
+        assert!(!camera.model.supports_pinhole_rectification());
+        assert_eq!(camera.project_camera_plane(0.0, 0.0), Some([400.0, 200.0]));
+        let projected = camera.project_camera_plane(1.0, 0.0).unwrap();
+        assert!((projected[0] - 500.0).abs() < 1e-10);
+        assert!((projected[1] - 200.0).abs() < 1e-10);
     }
 
     #[test]

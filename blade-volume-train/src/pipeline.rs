@@ -304,6 +304,14 @@ pub fn build_views_from<'a>(
                     image.id, image.camera_id
                 )
             });
+        if !camera.model.supports_pinhole_rectification() {
+            log::warn!(
+                "skipping image {}: {:?} cannot be represented by the pinhole training camera",
+                image.name,
+                camera.model,
+            );
+            continue;
+        }
         let target_path = images_dir.join(&image.name);
         let target_rgb = match load_and_rectify_image(
             &target_path,
@@ -738,6 +746,24 @@ mod tests {
             views[0].target_rgb.len()
                 == config.resolution.0 as usize * config.resolution.1 as usize * 3
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_views_skips_equirectangular_cameras() {
+        let dir = std::env::temp_dir().join("blade-volume-train-equirectangular");
+        let sparse = dir.join("sparse/0");
+        let images = dir.join("images");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_colmap_fixture(&sparse, &images);
+
+        let mut recon = crate::colmap::load_reconstruction(&sparse);
+        let camera = recon.cameras.get_mut(&1).unwrap();
+        camera.model = crate::colmap::CameraModel::Equirectangular;
+        camera.params = vec![camera.width as f64, camera.height as f64];
+
+        let views = build_views(&recon, &images, &PipelineConfig::default());
+        assert!(views.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

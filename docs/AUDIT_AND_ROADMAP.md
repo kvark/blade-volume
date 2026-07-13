@@ -104,6 +104,11 @@ At the audited revision:
   parameters; supervised images are rectified onto the explicit pinhole camera
   used by CPU and WGSL ray generation. Model-specific projection tests cover
   off-center, radial, and fisheye cases.
+- Camera model IDs and projection equations were rechecked against current
+  [COLMAP `models.h`](https://github.com/colmap/colmap/blob/main/src/colmap/sensor/models.h).
+  The single-focal `RADIAL_FISHEYE` layout is corrected, EUCM is supported,
+  and equirectangular records are parsed/projectable but skipped by training
+  because a 360-degree panorama cannot be represented by the pinhole runtime.
 - Training, SH evaluation, image output, PSNR, backgrounds, and viewers now
   explicitly use display-referred sRGB code values without a hidden transfer
   function or tone map. Linear-light clients must decode explicitly.
