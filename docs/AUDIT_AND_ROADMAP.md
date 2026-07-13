@@ -272,6 +272,19 @@ At the audited revision:
   `blade-macros`, two Wayland/calloop generations, and several normal transitive
   version splits. Align the Blade/egui pins before packaging, but do not churn
   working upstream revisions during algorithm validation.
+- A current RustSec scan found four patchable lockfile issues; `anyhow`,
+  `crossbeam-epoch`, `memmap2`, and the otherwise-unused target-specific
+  `quinn-proto` entry are updated to their fixed releases. Two high-severity
+  denial-of-service advisories remain in `quick-xml` 0.39.4
+  ([RUSTSEC-2026-0194](https://rustsec.org/advisories/RUSTSEC-2026-0194),
+  [RUSTSEC-2026-0195](https://rustsec.org/advisories/RUSTSEC-2026-0195)). It is
+  present only through `wayland-scanner`'s build-time protocol generator, not a
+  runtime untrusted-XML input, and the latest `wayland-scanner` 0.31.10 still
+  pins the affected minor series. Track its upstream migration to
+  `quick-xml >=0.41` instead of carrying a local parser fork. The scan also
+  reports unmaintained `number_prefix`, `paste`, and `ttf-parser` transitively
+  through meganeura/tokenizers/image and the viewer stack; replacing them is an
+  upstream dependency-alignment task, not a core renderer change.
 
 ## Implementation stages
 
