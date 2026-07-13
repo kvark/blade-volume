@@ -198,8 +198,16 @@ That incident exposed a fault in the benchmark harness: a synchronous
 `nvidia-smi` sampler can hang in the same driver wait as the workload. GPU and
 Vulkan probes now have deadlines, a telemetry timeout terminates the isolated
 scope without waiting for the stuck probe, and `--cpu-only` retains cgroup
-memory telemetry while skipping every GPU probe. Synthetic stalled-probe tests
-cover the preflight and in-run failure paths.
+memory telemetry while skipping every GPU probe and denying GPU character
+devices at the cgroup boundary. Synthetic stalled-probe tests cover the
+preflight and in-run failure paths.
+
+Long runs can also be divided into bounded process lifetimes with
+`--stop-after-steps`. Segment endpoints force an exact checkpoint while the LR,
+densification, and regularization schedules retain their original global step
+budget. A segment is rejected if it would discard a partially accumulated
+densification window; once the target count or densification cutoff is reached,
+arbitrary endpoints are safe.
 
 ### Stage 0: trustworthy baseline
 

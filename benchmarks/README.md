@@ -36,6 +36,14 @@ the pure-Rust `simple_delaunay_lib` path exceeded 8 GiB while constructing
 400 MiB for the complete smoke run. Run benchmarks in a dedicated cgroup and
 record its memory peak and OOM events alongside the required result fields.
 
+For long-lived GPU drivers, `train_colmap --stop-after-steps N` ends the
+current process cleanly after `N` updates while retaining the original global
+LR schedule. It writes `<output>.ckpt.{ply,safetensors,trainstate}` by default;
+continue with the identical training arguments plus
+`--init-ply <output>.ckpt.ply`. When densification can still run, each segment
+must end on a densification boundary so its accumulated geometry signal is not
+discarded. The CLI rejects unsafe endpoints.
+
 `bonsai_quality.toml` is the first meaningful go/no-go protocol. Do not compare
 its numbers with the historical audit run: camera rectification, terminal
 integration, adjacency, and training semantics have changed since that run.

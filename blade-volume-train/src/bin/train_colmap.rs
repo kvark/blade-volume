@@ -256,9 +256,10 @@ struct Args {
     geometry_rebuild_every: usize,
 
     /// optional checkpoint PLY path written with exact safetensors optimizer
-    /// and deterministic trainer-state sidecars at every densify cycle.
-    /// Defaults to <output>.ckpt.ply when --densify-every > 0; pass "none"
-    /// to disable.
+    /// and deterministic trainer-state sidecars at every densify cycle and
+    /// bounded invocation endpoint. Defaults to <output>.ckpt.ply when either
+    /// --densify-every or --stop-after-steps is nonzero; pass "none" to
+    /// disable when running through the full budget.
     #[argh(option)]
     checkpoint: Option<String>,
 
@@ -273,6 +274,12 @@ struct Args {
     #[argh(option)]
     resume_step: Option<usize>,
 
+    /// stop after this many Adam updates in the current process and write a
+    /// resumable checkpoint (default 0 = run to the global step budget).
+    /// With active densification, choose a count that ends on its cadence.
+    #[argh(option, default = "0")]
+    stop_after_steps: usize,
+
     /// hold out every Nth image for testing (standard NVS "llffhold"
     /// protocol; Mip-NeRF-360 uses 8) and train on the rest. Default 0 =
     /// legacy contiguous split (first --views train, next --test-views
@@ -286,6 +293,11 @@ struct Args {
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
+
+    if args.stop_after_steps > 0 && args.checkpoint.as_deref() == Some("none") {
+        eprintln!("--stop-after-steps requires checkpoints; remove --checkpoint none");
+        std::process::exit(2);
+    }
 
     let Some(gpu) = fit::try_init_gpu() else {
         eprintln!("no supported GPU device — cannot train");
@@ -412,13 +424,15 @@ fn main() {
             geometry_rebuild_every: args.geometry_rebuild_every,
             rebuild_with_qhull: args.qhull,
             resume_step,
+            stop_after_steps: (args.stop_after_steps > 0).then_some(args.stop_after_steps),
             resume_state_path,
             resume_training_state,
             checkpoint_path: match args.checkpoint.as_deref() {
                 Some("none") => None,
                 Some(p) => Some(path::PathBuf::from(p)),
-                // Default: checkpoint next to the output when densifying.
-                None if args.densify_every > 0 => {
+                // Default: checkpoint next to the output when densifying or
+                // ending this invocation before the global budget.
+                None if args.densify_every > 0 || args.stop_after_steps > 0 => {
                     Some(path::Path::new(&args.output).with_extension("ckpt.ply"))
                 }
                 None => None,

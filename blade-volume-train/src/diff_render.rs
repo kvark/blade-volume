@@ -1004,9 +1004,10 @@ pub struct AppearanceFitConfig {
     /// exact backend for large unweighted clouds; the Rust backend remains
     /// available for small dependency-minimal jobs.
     pub rebuild_with_qhull: bool,
-    /// When `Some(path)`, write an interchange PLY plus a lossless
-    /// `.safetensors` parameter/Adam sidecar at the end of every densify cycle.
-    /// Exposure is baked only into the PLY clone. `None` disables checkpoints.
+    /// When `Some(path)`, write an interchange PLY plus lossless parameter,
+    /// Adam, and trainer-state sidecars at every densify boundary and at this
+    /// invocation's endpoint. Exposure is baked only into the PLY clone.
+    /// `None` disables checkpoints and is invalid for a bounded invocation.
     pub checkpoint_path: Option<std::path::PathBuf>,
     /// Absolute step to resume training from (default 0). When resuming a
     /// model loaded from a checkpoint PLY, this offsets the loop counter
@@ -1016,6 +1017,11 @@ pub struct AppearanceFitConfig {
     /// unchanged, so a resume runs `total_steps − resume_step` more
     /// steps.
     pub resume_step: usize,
+    /// Maximum Adam updates to execute in this process. `None` runs through
+    /// the full global budget. A bounded invocation keeps LR and topology
+    /// schedules based on the unchanged global step count and writes a
+    /// resumable checkpoint at its endpoint.
+    pub stop_after_steps: Option<usize>,
     /// Optional meganeura safetensors checkpoint paired with `init_ply`.
     /// Restores exact parameters, Adam moments, and the Adam step counter
     /// after the graph has been rebuilt for the checkpoint's cell count.
@@ -1112,6 +1118,7 @@ impl Default for AppearanceFitConfig {
             rebuild_with_qhull: false,
             checkpoint_path: None,
             resume_step: 0,
+            stop_after_steps: None,
             resume_state_path: None,
             resume_training_state: None,
         }
@@ -1179,6 +1186,28 @@ fn lr_at_step(config: &AppearanceFitConfig, t: usize, total: usize) -> f32 {
 
 fn densify_due(config: DensifyConfig, steps_done: usize) -> bool {
     steps_done >= config.warmup && (steps_done - config.warmup).is_multiple_of(config.every)
+}
+
+fn invocation_end_step(
+    total_steps: usize,
+    resume_step: usize,
+    stop_after_steps: Option<usize>,
+) -> usize {
+    stop_after_steps
+        .map(|count| resume_step.saturating_add(count).min(total_steps))
+        .unwrap_or(total_steps)
+}
+
+fn segment_preserves_densify_accumulator(
+    config: DensifyConfig,
+    current_points: usize,
+    end_step: usize,
+    total_steps: usize,
+) -> bool {
+    end_step >= total_steps
+        || current_points >= config.target_points
+        || end_step >= config.densify_until
+        || densify_due(config, end_step)
 }
 
 fn steps_until_densify(config: DensifyConfig, steps_done: usize) -> usize {
@@ -2285,9 +2314,41 @@ fn fit_appearance_pixel_batched(
         config.resume_step,
         total_steps,
     );
+    if let Some(stop_after_steps) = config.stop_after_steps {
+        assert!(
+            stop_after_steps > 0,
+            "stop_after_steps must be greater than zero"
+        );
+    }
     // A checkpoint at the completed step budget is already final; do not
     // repeat its last update.
     let mut steps_done = config.resume_step;
+    let invocation_end =
+        invocation_end_step(total_steps, config.resume_step, config.stop_after_steps);
+    if invocation_end < total_steps {
+        assert!(
+            config.checkpoint_path.is_some(),
+            "a bounded training invocation requires checkpoint_path"
+        );
+        if let Some(densify) = config.densify {
+            assert!(
+                segment_preserves_densify_accumulator(
+                    densify,
+                    model.points.len(),
+                    invocation_end,
+                    total_steps,
+                ),
+                "bounded invocation must end on a densification boundary while future \
+                 densification remains enabled"
+            );
+        }
+        log::info!(
+            "bounded training invocation: steps {}..{} of {}",
+            steps_done,
+            invocation_end,
+            total_steps,
+        );
+    }
 
     // The model's existing SH degree drives the graph: callers wanting to
     // expand a SH-0 model to a higher degree must reshape
@@ -2396,7 +2457,7 @@ fn fit_appearance_pixel_batched(
         .map(|i| (i / max_steps) as u32)
         .collect();
 
-    let mut losses = Vec::with_capacity(total_steps);
+    let mut losses = Vec::with_capacity(invocation_end.saturating_sub(steps_done));
     // Frequent loss readouts (every ~2000 steps) so long multi-hour runs
     // surface their trajectory instead of only ~10 lines total.
     let log_every = 2000.min(total_steps).max(1);
@@ -2467,16 +2528,16 @@ fn fit_appearance_pixel_batched(
     // its own upload below.
     session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
 
-    while steps_done < total_steps {
+    while steps_done < invocation_end {
         let densify_budget = match densify {
-            Some(d) => steps_until_densify(d, steps_done).min(total_steps - steps_done),
-            None => total_steps - steps_done,
+            Some(d) => steps_until_densify(d, steps_done).min(invocation_end - steps_done),
+            None => invocation_end - steps_done,
         };
         let geometry_budget = if config.position_lr_ratio > 0.0 {
             let every = config.geometry_rebuild_every;
-            (every - steps_done % every).min(total_steps - steps_done)
+            (every - steps_done % every).min(invocation_end - steps_done)
         } else {
-            total_steps - steps_done
+            invocation_end - steps_done
         };
         let cycle_budget = densify_budget.min(geometry_budget);
 
@@ -2800,14 +2861,15 @@ fn fit_appearance_pixel_batched(
         // walk recorded against the current CSR. At the configured cadence,
         // download moved points, rebuild exact topology, and recreate all
         // traversal resources. The final cycle only needs the host-side
-        // topology refresh because no further optimiser step will run.
+        // topology refresh because no further optimiser step will run in this
+        // invocation.
         let geometry_due = config.position_lr_ratio > 0.0
             && (steps_done.is_multiple_of(config.geometry_rebuild_every)
-                || steps_done == total_steps);
+                || steps_done == invocation_end);
         if geometry_due && !topology_rebuilt {
             let n_cells = model.points.len();
             download_model_parameters(&session, model, config.softplus_beta);
-            let adam_snap = (steps_done < total_steps)
+            let adam_snap = (steps_done < invocation_end)
                 .then(|| save_adam_state(&session, sh_degree, n_cells, views.len()));
             rebuild_training_adjacency(model, config.rebuild_with_qhull);
             log::info!(
@@ -2857,7 +2919,7 @@ fn fit_appearance_pixel_batched(
         // Write checkpoints after topology maintenance so every PLY pairs
         // its point positions with matching adjacency. Exposure is baked
         // into a throwaway clone; the exact sidecar retains the live values.
-        let checkpoint_due = steps_done == total_steps
+        let checkpoint_due = steps_done == invocation_end
             || densify.is_some_and(|config| densify_due(config, steps_done));
         if checkpoint_due {
             if let Some(ref ckpt) = config.checkpoint_path {
@@ -2896,6 +2958,14 @@ fn fit_appearance_pixel_batched(
                 }
             }
         }
+    }
+
+    if invocation_end < total_steps {
+        log::info!(
+            "training segment complete at step {}/{}; resume from the checkpoint to continue",
+            invocation_end,
+            total_steps,
+        );
     }
 
     debug_dump_exposure(&session, views.len());
@@ -3378,6 +3448,40 @@ mod tests {
         }
         assert!(densify_due(config, 2500));
         assert_eq!(steps_until_densify(config, 2500), 500);
+    }
+
+    #[test]
+    fn bounded_invocation_keeps_global_step_budget() {
+        assert_eq!(invocation_end_step(16_000, 0, None), 16_000);
+        assert_eq!(invocation_end_step(16_000, 9_000, Some(1_000)), 10_000);
+        assert_eq!(invocation_end_step(16_000, 15_500, Some(1_000)), 16_000);
+        assert_eq!(invocation_end_step(16_000, 16_000, Some(1_000)), 16_000);
+    }
+
+    #[test]
+    fn bounded_invocation_requires_complete_densify_window() {
+        let config = DensifyConfig {
+            every: 500,
+            warmup: 2_000,
+            target_points: 200_000,
+            densify_until: 11_000,
+            ..DensifyConfig::default()
+        };
+        assert!(segment_preserves_densify_accumulator(
+            config, 100_000, 10_000, 16_000,
+        ));
+        assert!(!segment_preserves_densify_accumulator(
+            config, 100_000, 10_100, 16_000,
+        ));
+        assert!(segment_preserves_densify_accumulator(
+            config, 200_000, 10_100, 16_000,
+        ));
+        assert!(segment_preserves_densify_accumulator(
+            config, 100_000, 11_000, 16_000,
+        ));
+        assert!(segment_preserves_densify_accumulator(
+            config, 100_000, 16_000, 16_000,
+        ));
     }
 
     #[test]
