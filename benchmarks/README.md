@@ -18,7 +18,7 @@ cargo run --release -p blade-volume-train --bin train_colmap -- \
   --output /tmp/blade-volume-bonsai-smoke.ply \
   --width 32 --height 32 --views 8 --test-views 2 --test-every 8 \
   --max-points 2000 --max-steps 128 --pixel-batch 256 \
-  --steps-per-view 25 --learning-rate 0.1 --sh-degree 0
+  --steps-per-view 25 --learning-rate 0.1 --sh-degree 0 --qhull
 
 cargo run --release -p blade-volume-train --bin eval_psnr -- \
   --ply /tmp/blade-volume-bonsai-smoke.ply \
@@ -28,7 +28,12 @@ cargo run --release -p blade-volume-train --bin eval_psnr -- \
   --max-steps 128
 ```
 
+The explicit Qhull backend is part of the protocol. On this Bonsai subset,
+the pure-Rust `simple_delaunay_lib` path exceeded 8 GiB while constructing
+2,000-site adjacency; Qhull produced the same exact Delaunay class in under
+400 MiB for the complete smoke run. Run benchmarks in a dedicated cgroup and
+record its memory peak and OOM events alongside the required result fields.
+
 `bonsai_quality.toml` is the first meaningful go/no-go protocol. Do not compare
 its numbers with the historical audit run: camera rectification, terminal
 integration, adjacency, and training semantics have changed since that run.
-

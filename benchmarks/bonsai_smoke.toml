@@ -13,7 +13,7 @@ max_test_views = 2
 [model]
 backend = "radfoam"
 initial_points = 2000
-adjacency = "rust-delaunay-exact"
+adjacency = "qhull-delaunay-exact"
 sh_degree = 0
 position_lr_ratio = 0.0
 densification = false
@@ -37,4 +37,3 @@ sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
 [result]
 status = "pending"
 required = ["git_commit", "gpu", "driver", "wall_seconds", "cells", "train_psnr", "test_psnr"]
-
