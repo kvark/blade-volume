@@ -251,6 +251,13 @@ At the audited revision:
 
 ### Project constraints
 
+- A source-wide stub inventory found no repository-owned `TODO`/`FIXME` markers
+  or executable `todo!`/`unimplemented!` placeholders in the implemented
+  paths. The remaining deliberate panics are compatibility loaders/builders,
+  documented representation preconditions, and internal shader or training
+  invariants; new integration code should prefer the available fallible IO and
+  Delaunay entry points. Exportable training buffers remain Vulkan-only because
+  the upstream Metal/GLES allocation path is not implemented.
 - The C-backed Qhull path is isolated behind the non-default `qhull` feature;
   both the core library and training crate keep it out of their default
   dependency graphs. Production-size exact Delaunay training opts into that
