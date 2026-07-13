@@ -23,11 +23,11 @@ pub struct ConvertOptions {
     pub surface_scale: f32,
     pub interior_scale: f32,
     pub surface_normal_scale: f32,
-    /// Curvature exponent for per-triangle surface sampling. `0` keeps the
-    /// uniform-by-area density. `>0` boosts the sample count on triangles
-    /// that are at a high dihedral angle to their (vertex-shared) neighbours,
-    /// at the cost of sparser sampling on flat regions. Total sample budget
-    /// stays roughly the same; mass is just redistributed.
+    /// Curvature multiplier for per-triangle surface sampling. `0` keeps the
+    /// uniform-by-area density. `>0` boosts the sample count on triangles that
+    /// are at a high dihedral angle to their (vertex-shared) neighbours, at
+    /// the cost of sparser sampling on flat regions. Area-weight normalization
+    /// keeps the total sample budget roughly constant before integer rounding.
     pub curvature_boost: f32,
     /// Number of spring-relaxation iterations applied after Delaunay (RadFoam
     /// path only). `0` skips the relaxation entirely.
@@ -215,6 +215,25 @@ fn compute_triangle_curvatures(triangles: &[Triangle]) -> Vec<f32> {
     out
 }
 
+fn normalized_curvature_factors(areas: &[f32], curvatures: &[f32], boost: f32) -> Vec<f32> {
+    assert_eq!(areas.len(), curvatures.len());
+    let total_area = areas.iter().sum::<f32>();
+    let weighted_area = areas
+        .iter()
+        .zip(curvatures)
+        .map(|(&area, &curvature)| area * (1.0 + boost * curvature))
+        .sum::<f32>();
+    let normalization = if weighted_area > 0.0 {
+        total_area / weighted_area
+    } else {
+        1.0
+    };
+    curvatures
+        .iter()
+        .map(|&curvature| (1.0 + boost * curvature) * normalization)
+        .collect()
+}
+
 struct Triangle {
     v0: glam::Vec3,
     v1: glam::Vec3,
@@ -363,18 +382,18 @@ pub fn convert_gltf(
     let surface_density = density.powf(2.0 / 3.0) * options.surface_density_scale;
     if surface_density > 0.0 {
         let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(options.seed);
-        let curvatures = if options.curvature_boost > 0.0 {
-            compute_triangle_curvatures(&triangles)
+        let curvature_factors = if options.curvature_boost > 0.0 {
+            let curvatures = compute_triangle_curvatures(&triangles);
+            let areas = triangles
+                .iter()
+                .map(|triangle| triangle.area)
+                .collect::<Vec<_>>();
+            normalized_curvature_factors(&areas, &curvatures, options.curvature_boost)
         } else {
-            vec![0.0_f32; triangles.len()]
+            vec![1.0; triangles.len()]
         };
         for (ti, tri) in triangles.iter().enumerate() {
-            let factor = if options.curvature_boost > 0.0 {
-                1.0 + options.curvature_boost * curvatures[ti]
-            } else {
-                1.0
-            };
-            let count = (tri.area * surface_density * factor).ceil() as u32;
+            let count = (tri.area * surface_density * curvature_factors[ti]).ceil() as u32;
             for _ in 0..count {
                 let (u, v) = sample_barycentric(&mut rng);
                 let w = 1.0 - u - v;
@@ -1220,6 +1239,23 @@ mod tests {
         assert!((color.x - 0.735_357).abs() < 1e-6);
         assert!((color.y - 0.735_357).abs() < 1e-6);
         assert_eq!(color.z, 0.0);
+    }
+
+    #[test]
+    fn curvature_factors_redistribute_without_changing_area_budget() {
+        let areas = [1.0, 3.0];
+        let factors = normalized_curvature_factors(&areas, &[0.0, 1.0], 3.0);
+        assert!(factors[1] > factors[0]);
+        let weighted_area = areas
+            .iter()
+            .zip(&factors)
+            .map(|(&area, &factor)| area * factor)
+            .sum::<f32>();
+        assert!((weighted_area - areas.iter().sum::<f32>()).abs() < 1e-6);
+        assert_eq!(
+            normalized_curvature_factors(&areas, &[0.25, 1.0], 0.0),
+            [1.0, 1.0]
+        );
     }
 
     #[test]

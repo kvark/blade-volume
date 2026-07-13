@@ -118,6 +118,9 @@ At the audited revision:
   16-bit, or float representation; luma-alpha channels retain alpha. The old
   path mistakenly reparsed raw high-bit-depth pixels as an encoded image and
   silently substituted black on failure.
+- Curvature-aware surface sampling now normalizes its area-weighted boost, so
+  it redistributes a fixed pre-rounding point budget toward features instead
+  of silently growing the cloud as the boost increases.
 - Distorted projection is handled in the reconstruction/training boundary; the
   runtime `PointCloudModel` intentionally carries cloud data rather than source
   capture-camera calibration.
