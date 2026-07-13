@@ -68,13 +68,24 @@ fn build_grid_model(n: usize) -> vol::PointCloudModel {
     }
 }
 
+struct CpuRecord {
+    previous_cells: Vec<u32>,
+    cells: Vec<u32>,
+    next_cells: Vec<u32>,
+    dts: Vec<f32>,
+    mask: Vec<f32>,
+    dt_grad_previous: Vec<[f32; 4]>,
+    dt_grad_current: Vec<[f32; 4]>,
+    dt_grad_next: Vec<[f32; 4]>,
+}
+
 fn cpu_record(
     model: &vol::PointCloudModel,
     rays: &[vol::trace::Ray],
     start_cell: u32,
     max_steps: usize,
     depth: f32,
-) -> (Vec<u32>, Vec<f32>, Vec<f32>) {
+) -> CpuRecord {
     let settings = vol::trace::TraceSettings {
         start_point: start_cell,
         max_steps: max_steps as u32,
@@ -83,21 +94,42 @@ fn cpu_record(
         eval_mode: vol::trace::EvalMode::Sh,
     };
     let p = rays.len();
+    let mut previous_cells = vec![0u32; p * max_steps];
     let mut cells = vec![0u32; p * max_steps];
+    let mut next_cells = vec![0u32; p * max_steps];
     let mut dts = vec![0.0f32; p * max_steps];
     let mut mask = vec![0.0f32; p * max_steps];
+    let mut dt_grad_previous = vec![[0.0; 4]; p * max_steps];
+    let mut dt_grad_current = vec![[0.0; 4]; p * max_steps];
+    let mut dt_grad_next = vec![[0.0; 4]; p * max_steps];
     for (k, ray) in rays.iter().enumerate() {
-        let path = vol::trace::record_path(model, *ray, settings);
+        let path = vol::trace::record_path_jacobians(model, *ray, settings);
         for (idx, e) in path.entries.iter().take(max_steps).enumerate() {
             let slot = k * max_steps + idx;
+            previous_cells[slot] = e.previous_cell;
             cells[slot] = e.cell;
+            next_cells[slot] = e.next_cell;
             if e.dt.is_finite() && e.dt > 0.0 {
                 dts[slot] = e.dt.min(50.0);
                 mask[slot] = 1.0;
+                if e.dt <= 50.0 {
+                    dt_grad_previous[slot] = e.dt_d_previous.to_array();
+                    dt_grad_current[slot] = e.dt_d_current.to_array();
+                    dt_grad_next[slot] = e.dt_d_next.to_array();
+                }
             }
         }
     }
-    (cells, dts, mask)
+    CpuRecord {
+        previous_cells,
+        cells,
+        next_cells,
+        dts,
+        mask,
+        dt_grad_previous,
+        dt_grad_current,
+        dt_grad_next,
+    }
 }
 
 fn pixel_indices_for_rays(width: u32, height: u32, count: u32) -> Vec<u32> {
@@ -165,9 +197,10 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
     let pixels = pixel_indices_for_rays(width, height, num_pixels);
     let rays = rays_for_pixels(&camera, &pixels, width, height);
 
-    let (cpu_cells, cpu_dts, cpu_mask) = cpu_record(&model, &rays, 0, max_steps, depth);
+    let weighted = model.radii.is_some();
+    let cpu = cpu_record(&model, &rays, 0, max_steps, depth);
     assert!(
-        cpu_mask.iter().any(|&m| m != 0.0),
+        cpu.mask.iter().any(|&m| m != 0.0),
         "fixture records no segments"
     );
 
@@ -192,19 +225,19 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
         // Zero the outputs (shader only writes the steps it actually
         // takes; leftover slots must be zero).
         let pl = (num_pixels as u64) * (max_steps as u64);
+        tx.fill_buffer(bufs.previous_cells.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.cells.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.next_cells.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.dts.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.mask.at(0), pl * 4, 0);
+        tx.fill_buffer(bufs.dt_grad_previous.at(0), pl * 16, 0);
+        tx.fill_buffer(bufs.dt_grad_current.at(0), pl * 16, 0);
+        tx.fill_buffer(bufs.dt_grad_next.at(0), pl * 16, 0);
     }
     recorder.dispatch(
         &mut encoder,
         &cloud,
-        bufs.pixel_indices.into(),
-        bufs.cells.into(),
-        bufs.next_cells.into(),
-        bufs.dts.into(),
-        bufs.mask.into(),
+        &bufs,
         RecordPathsArgs {
             camera,
             start_point: 0,
@@ -218,8 +251,18 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
     );
     // Read back via download staging buffers.
     let pl = (num_pixels as u64) * (max_steps as u64);
+    let previous_cells_dl = ctx.create_buffer(gpu::BufferDesc {
+        name: "previous-cells-download",
+        size: pl * 4,
+        memory: gpu::Memory::Shared,
+    });
     let cells_dl = ctx.create_buffer(gpu::BufferDesc {
         name: "cells-download",
+        size: pl * 4,
+        memory: gpu::Memory::Shared,
+    });
+    let next_cells_dl = ctx.create_buffer(gpu::BufferDesc {
+        name: "next-cells-download",
         size: pl * 4,
         memory: gpu::Memory::Shared,
     });
@@ -233,45 +276,93 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
         size: pl * 4,
         memory: gpu::Memory::Shared,
     });
+    let dt_grad_previous_dl = ctx.create_buffer(gpu::BufferDesc {
+        name: "dt-grad-previous-download",
+        size: pl * 16,
+        memory: gpu::Memory::Shared,
+    });
+    let dt_grad_current_dl = ctx.create_buffer(gpu::BufferDesc {
+        name: "dt-grad-current-download",
+        size: pl * 16,
+        memory: gpu::Memory::Shared,
+    });
+    let dt_grad_next_dl = ctx.create_buffer(gpu::BufferDesc {
+        name: "dt-grad-next-download",
+        size: pl * 16,
+        memory: gpu::Memory::Shared,
+    });
     {
         let mut tx = encoder.transfer("download-outputs");
+        tx.copy_buffer_to_buffer(bufs.previous_cells.at(0), previous_cells_dl.at(0), pl * 4);
         tx.copy_buffer_to_buffer(bufs.cells.at(0), cells_dl.at(0), pl * 4);
+        tx.copy_buffer_to_buffer(bufs.next_cells.at(0), next_cells_dl.at(0), pl * 4);
         tx.copy_buffer_to_buffer(bufs.dts.at(0), dts_dl.at(0), pl * 4);
         tx.copy_buffer_to_buffer(bufs.mask.at(0), mask_dl.at(0), pl * 4);
+        tx.copy_buffer_to_buffer(
+            bufs.dt_grad_previous.at(0),
+            dt_grad_previous_dl.at(0),
+            pl * 16,
+        );
+        tx.copy_buffer_to_buffer(
+            bufs.dt_grad_current.at(0),
+            dt_grad_current_dl.at(0),
+            pl * 16,
+        );
+        tx.copy_buffer_to_buffer(bufs.dt_grad_next.at(0), dt_grad_next_dl.at(0), pl * 16);
     }
     let sync = ctx.submit(&mut encoder);
     let _ = ctx.wait_for(&sync, !0);
 
+    let gpu_previous_cells: Vec<u32> = unsafe {
+        std::slice::from_raw_parts(previous_cells_dl.data() as *const u32, pl as usize).to_vec()
+    };
     let gpu_cells: Vec<u32> =
         unsafe { std::slice::from_raw_parts(cells_dl.data() as *const u32, pl as usize).to_vec() };
+    let gpu_next_cells: Vec<u32> = unsafe {
+        std::slice::from_raw_parts(next_cells_dl.data() as *const u32, pl as usize).to_vec()
+    };
     let gpu_dts: Vec<f32> =
         unsafe { std::slice::from_raw_parts(dts_dl.data() as *const f32, pl as usize).to_vec() };
     let gpu_mask: Vec<f32> =
         unsafe { std::slice::from_raw_parts(mask_dl.data() as *const f32, pl as usize).to_vec() };
+    let gpu_dt_grad_previous: Vec<f32> = unsafe {
+        std::slice::from_raw_parts(dt_grad_previous_dl.data() as *const f32, pl as usize * 4)
+            .to_vec()
+    };
+    let gpu_dt_grad_current: Vec<f32> = unsafe {
+        std::slice::from_raw_parts(dt_grad_current_dl.data() as *const f32, pl as usize * 4)
+            .to_vec()
+    };
+    let gpu_dt_grad_next: Vec<f32> = unsafe {
+        std::slice::from_raw_parts(dt_grad_next_dl.data() as *const f32, pl as usize * 4).to_vec()
+    };
 
     let mut mismatches = 0usize;
     for i in 0..pl as usize {
-        if cpu_mask[i] != gpu_mask[i] {
+        if cpu.mask[i] != gpu_mask[i] {
             mismatches += 1;
             if mismatches <= 8 {
                 eprintln!(
                     "slot {i}: mask cpu={} gpu={} cells cpu={} gpu={} dt cpu={} gpu={}",
-                    cpu_mask[i], gpu_mask[i], cpu_cells[i], gpu_cells[i], cpu_dts[i], gpu_dts[i]
+                    cpu.mask[i], gpu_mask[i], cpu.cells[i], gpu_cells[i], cpu.dts[i], gpu_dts[i]
                 );
             }
             continue;
         }
-        if cpu_mask[i] == 0.0 {
+        if cpu.mask[i] == 0.0 {
             continue;
         }
-        if cpu_cells[i] != gpu_cells[i] {
+        if cpu.cells[i] != gpu_cells[i] || cpu.next_cells[i] != gpu_next_cells[i] {
             mismatches += 1;
             if mismatches <= 8 {
-                eprintln!("slot {i}: cell cpu={} gpu={}", cpu_cells[i], gpu_cells[i]);
+                eprintln!(
+                    "slot {i}: cells cpu={}→{} gpu={}→{}",
+                    cpu.cells[i], cpu.next_cells[i], gpu_cells[i], gpu_next_cells[i],
+                );
             }
             continue;
         }
-        let ddiff = (cpu_dts[i] - gpu_dts[i]).abs();
+        let ddiff = (cpu.dts[i] - gpu_dts[i]).abs();
         // CPU and GPU normalize the ray independently, then evaluate a
         // square root at the support-sphere boundary. Near-tangent segments
         // amplify the backend rounding difference beyond a few ULPs.
@@ -280,8 +371,53 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
             if mismatches <= 8 {
                 eprintln!(
                     "slot {i}: dt cpu={} gpu={} diff={}",
-                    cpu_dts[i], gpu_dts[i], ddiff
+                    cpu.dts[i], gpu_dts[i], ddiff
                 );
+            }
+        }
+        if weighted {
+            if cpu.previous_cells[i] != gpu_previous_cells[i] {
+                mismatches += 1;
+                if mismatches <= 8 {
+                    eprintln!(
+                        "slot {i}: previous cell cpu={} gpu={}",
+                        cpu.previous_cells[i], gpu_previous_cells[i],
+                    );
+                }
+                continue;
+            }
+            for (name, cpu_gradient, gpu_gradient) in [
+                (
+                    "previous",
+                    cpu.dt_grad_previous[i],
+                    &gpu_dt_grad_previous[i * 4..i * 4 + 4],
+                ),
+                (
+                    "current",
+                    cpu.dt_grad_current[i],
+                    &gpu_dt_grad_current[i * 4..i * 4 + 4],
+                ),
+                (
+                    "next",
+                    cpu.dt_grad_next[i],
+                    &gpu_dt_grad_next[i * 4..i * 4 + 4],
+                ),
+            ] {
+                for component in 0..4 {
+                    let expected = cpu_gradient[component];
+                    let actual = gpu_gradient[component];
+                    let absolute = (expected - actual).abs();
+                    let scale = expected.abs().max(actual.abs()).max(1.0e-4);
+                    if absolute > 5.0e-4 && absolute / scale > 5.0e-3 {
+                        mismatches += 1;
+                        if mismatches <= 8 {
+                            eprintln!(
+                                "slot {i}: {name} gradient[{component}] cpu={expected} \
+                                 gpu={actual} diff={absolute}",
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -292,9 +428,14 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
         mismatches, pl
     );
 
+    ctx.destroy_buffer(previous_cells_dl);
     ctx.destroy_buffer(cells_dl);
+    ctx.destroy_buffer(next_cells_dl);
     ctx.destroy_buffer(dts_dl);
     ctx.destroy_buffer(mask_dl);
+    ctx.destroy_buffer(dt_grad_previous_dl);
+    ctx.destroy_buffer(dt_grad_current_dl);
+    ctx.destroy_buffer(dt_grad_next_dl);
     bufs.destroy(&ctx);
     recorder.destroy(&ctx);
     cloud.deinit(&ctx);

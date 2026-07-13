@@ -1,15 +1,19 @@
 //! GPU path recorder for differentiable training.
 //!
 //! Mirrors the CPU `vol::trace::record_path` walk on the GPU, writing
-//! `(cell, dt, mask)` per `(pixel, step)` into flat buffers that feed
-//! straight into the meganeura training inputs. Removes the
+//! `(cell, dt, mask)` per `(pixel, step)` into flat buffers that feed straight
+//! into the meganeura training inputs. PowerFoam paths also record the real
+//! entry neighbor and exact local interval Jacobians for position/radius
+//! training. Removes the
 //! single-threaded CPU ray-marching bottleneck that dominated each Adam
 //! step at full image resolution.
 //!
 //! Layout (row-major `[num_pixels, max_steps]`):
+//!   - `previous_cells_out[u32]` (PowerFoam only)
 //!   - `cells_out[u32]`
 //!   - `dts_out[f32]`
 //!   - `mask_out[f32]`
+//!   - three `dt_grad_*_out[vec4<f32>]` streams (PowerFoam only)
 //!
 //! The shader writes only the steps it actually takes; trailing slots
 //! keep their pre-dispatch value, which the caller zeroes before each
@@ -20,12 +24,22 @@ use std::{mem, ptr, slice};
 use crate::{shaders, CameraParams};
 use blade_graphics as gpu;
 
+fn output_bytes(num_pixels: u32, max_steps: u32, with_jacobians: bool) -> u64 {
+    let pl = num_pixels as u64 * max_steps as u64;
+    let base = pl * (2 * mem::size_of::<u32>() + 2 * mem::size_of::<f32>()) as u64;
+    if with_jacobians {
+        base + pl * (mem::size_of::<u32>() + 3 * mem::size_of::<[f32; 4]>()) as u64
+    } else {
+        base + (mem::size_of::<u32>() + 3 * mem::size_of::<[f32; 4]>()) as u64
+    }
+}
+
 /// Inputs to one path-record dispatch.
 ///
 /// Buffer fields must already live on the device (typically from a
-/// [`RadFoamGpuCloud`](crate::gpu::RadFoamGpuCloud) and three caller-
-/// owned output buffers). The recorder writes into `cells_out`,
-/// `dts_out`, and `mask_out` once per pixel, up to `max_steps` entries.
+/// [`RadFoamGpuCloud`](crate::gpu::RadFoamGpuCloud) and caller-owned output
+/// buffers). The recorder writes the base streams once per pixel, up to
+/// `max_steps` entries, plus the differential streams for weighted clouds.
 #[derive(Clone, Copy)]
 pub struct RecordPathsArgs {
     pub camera: CameraParams,
@@ -59,10 +73,14 @@ struct PathRecordData {
     g_adjacency: gpu::BufferPiece,
     g_adjacency_offsets: gpu::BufferPiece,
     g_pixel_indices: gpu::BufferPiece,
+    g_previous_cells_out: gpu::BufferPiece,
     g_cells_out: gpu::BufferPiece,
     g_next_cells_out: gpu::BufferPiece,
     g_dts_out: gpu::BufferPiece,
     g_mask_out: gpu::BufferPiece,
+    g_dt_grad_previous_out: gpu::BufferPiece,
+    g_dt_grad_current_out: gpu::BufferPiece,
+    g_dt_grad_next_out: gpu::BufferPiece,
     g_camera: CameraParams,
     g_params: RecordParams,
 }
@@ -96,27 +114,32 @@ impl PathRecorder {
         context.destroy_compute_pipeline(&mut self.pipeline);
     }
 
-    /// Record `args.num_pixels` paths into the four caller-owned output
-    /// buffers (cells, next_cells, dts, mask).
+    /// Record `args.num_pixels` paths into the caller-owned output buffers.
     ///
     /// The caller is responsible for:
-    ///   - zeroing all four output buffers before this call (the shader
+    ///   - zeroing every active output buffer before this call (the shader
     ///     only writes the steps that were actually taken);
-    ///   - making sure all five buffers (output × 4 + pixel_indices)
-    ///     are valid for the right number of bytes;
+    ///   - making sure every binding is valid for the right number of bytes;
     ///   - submitting the encoder afterwards.
-    #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
         encoder: &mut gpu::CommandEncoder,
         cloud: &crate::gpu::RadFoamGpuCloud,
-        pixel_indices: gpu::BufferPiece,
-        cells_out: gpu::BufferPiece,
-        next_cells_out: gpu::BufferPiece,
-        dts_out: gpu::BufferPiece,
-        mask_out: gpu::BufferPiece,
+        buffers: &PathRecordBuffers,
         args: RecordPathsArgs,
     ) {
+        assert!(
+            !cloud.is_power_foam || buffers.has_jacobians,
+            "PowerFoam path recording requires full Jacobian buffers"
+        );
+        assert!(
+            args.num_pixels <= buffers.num_pixels,
+            "path dispatch exceeds pixel buffer capacity"
+        );
+        assert_eq!(
+            args.max_steps, buffers.max_steps,
+            "path dispatch max_steps must match buffer layout"
+        );
         let params = RecordParams {
             start_point: args.start_point,
             max_steps: args.max_steps,
@@ -136,11 +159,15 @@ impl PathRecorder {
                 g_points: cloud.points(),
                 g_adjacency: cloud.point_adjacency(),
                 g_adjacency_offsets: cloud.point_adjacency_offsets(),
-                g_pixel_indices: pixel_indices,
-                g_cells_out: cells_out,
-                g_next_cells_out: next_cells_out,
-                g_dts_out: dts_out,
-                g_mask_out: mask_out,
+                g_pixel_indices: buffers.pixel_indices.into(),
+                g_previous_cells_out: buffers.previous_cells.into(),
+                g_cells_out: buffers.cells.into(),
+                g_next_cells_out: buffers.next_cells.into(),
+                g_dts_out: buffers.dts.into(),
+                g_mask_out: buffers.mask.into(),
+                g_dt_grad_previous_out: buffers.dt_grad_previous.into(),
+                g_dt_grad_current_out: buffers.dt_grad_current.into(),
+                g_dt_grad_next_out: buffers.dt_grad_next.into(),
                 g_camera: args.camera,
                 g_params: params,
             },
@@ -150,17 +177,21 @@ impl PathRecorder {
     }
 }
 
-/// Allocate the three flat output buffers + the pixel-index input
-/// buffer with the right sizes for `(num_pixels, max_steps)`.
+/// Allocate flat path outputs plus the pixel-index input buffer with the right
+/// sizes for `(num_pixels, max_steps)`.
 ///
 /// Caller owns lifetime and is responsible for destroying via
 /// [`gpu::Context::destroy_buffer`].
 pub struct PathRecordBuffers {
     pub pixel_indices: gpu::Buffer,
+    pub previous_cells: gpu::Buffer,
     pub cells: gpu::Buffer,
     pub next_cells: gpu::Buffer,
     pub dts: gpu::Buffer,
     pub mask: gpu::Buffer,
+    pub dt_grad_previous: gpu::Buffer,
+    pub dt_grad_current: gpu::Buffer,
+    pub dt_grad_next: gpu::Buffer,
     /// Upload-side staging for `pixel_indices` (write from CPU, copy to
     /// device via a `transfer` pass before dispatching). Persistent
     /// `Memory::Upload` is much cheaper than allocating staging every
@@ -168,28 +199,63 @@ pub struct PathRecordBuffers {
     pub pixel_indices_stage: gpu::Buffer,
     pub num_pixels: u32,
     pub max_steps: u32,
+    has_jacobians: bool,
 }
 
 impl PathRecordBuffers {
     pub fn new(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false)
+        Self::new_with(context, num_pixels, max_steps, false, true)
     }
 
-    /// Allocate the three output streams as `Memory::External(Fd(None))`
-    /// so the caller can pass each one as an
+    /// Allocate only the four always-written path streams. The derivative
+    /// bindings are valid one-element dummies, so this is only safe to dispatch
+    /// with an unweighted cloud (`RadFoamGpuCloud::is_power_foam == false`).
+    pub fn new_recorded_only(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
+        Self::new_with(context, num_pixels, max_steps, false, false)
+    }
+
+    /// Allocate every output stream as `Memory::External(Fd(None))` so the
+    /// caller can pass each one as an
     /// `ExternalMemorySource` into the consumer's `bind_external_buffer`
     /// (meganeura's slot import). Same-context external memory works on
     /// Vulkan; Metal/GLES backends `unimplemented!()` on the buffer
     /// allocation.
     pub fn new_external(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, true)
+        Self::new_with(context, num_pixels, max_steps, true, true)
     }
 
-    fn new_with(context: &gpu::Context, num_pixels: u32, max_steps: u32, external: bool) -> Self {
+    /// Allocate exportable base streams and optionally full PowerFoam
+    /// Jacobians. Set `with_jacobians` from `model.radii.is_some()`.
+    pub fn new_external_with_jacobians(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+        with_jacobians: bool,
+    ) -> Self {
+        Self::new_with(context, num_pixels, max_steps, true, with_jacobians)
+    }
+
+    fn new_with(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+        external: bool,
+        with_jacobians: bool,
+    ) -> Self {
         let pl = (num_pixels as u64) * (max_steps as u64);
         let cells_bytes = pl * mem::size_of::<u32>() as u64;
         let dts_bytes = pl * mem::size_of::<f32>() as u64;
         let mask_bytes = pl * mem::size_of::<f32>() as u64;
+        let role_bytes = if with_jacobians {
+            cells_bytes
+        } else {
+            mem::size_of::<u32>() as u64
+        };
+        let jacobian_bytes = if with_jacobians {
+            pl * mem::size_of::<[f32; 4]>() as u64
+        } else {
+            mem::size_of::<[f32; 4]>() as u64
+        };
         let pix_bytes = (num_pixels as u64) * mem::size_of::<u32>() as u64;
 
         let pixel_indices = context.create_buffer(gpu::BufferDesc {
@@ -224,6 +290,11 @@ impl PathRecordBuffers {
             size: cells_bytes,
             memory: mem(external),
         });
+        let previous_cells = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-previous-cells",
+            size: role_bytes,
+            memory: mem(external && with_jacobians),
+        });
         let next_cells = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-next-cells",
             size: cells_bytes,
@@ -239,16 +310,36 @@ impl PathRecordBuffers {
             size: mask_bytes,
             memory: mem(external),
         });
+        let dt_grad_previous = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-dt-grad-previous",
+            size: jacobian_bytes,
+            memory: mem(external && with_jacobians),
+        });
+        let dt_grad_current = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-dt-grad-current",
+            size: jacobian_bytes,
+            memory: mem(external && with_jacobians),
+        });
+        let dt_grad_next = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-dt-grad-next",
+            size: jacobian_bytes,
+            memory: mem(external && with_jacobians),
+        });
 
         Self {
             pixel_indices,
+            previous_cells,
             cells,
             next_cells,
             dts,
             mask,
+            dt_grad_previous,
+            dt_grad_current,
+            dt_grad_next,
             pixel_indices_stage,
             num_pixels,
             max_steps,
+            has_jacobians: with_jacobians,
         }
     }
 
@@ -281,18 +372,37 @@ impl PathRecordBuffers {
         }
     }
 
-    /// Total bytes of all four output streams (for sanity checks).
+    pub fn has_jacobians(&self) -> bool {
+        self.has_jacobians
+    }
+
+    /// Total allocated bytes of all output streams (for sanity checks).
     pub fn out_bytes(&self) -> u64 {
-        let pl = (self.num_pixels as u64) * (self.max_steps as u64);
-        pl * (2 * mem::size_of::<u32>() + 2 * mem::size_of::<f32>()) as u64
+        output_bytes(self.num_pixels, self.max_steps, self.has_jacobians)
     }
 
     pub fn destroy(&mut self, context: &gpu::Context) {
         context.destroy_buffer(self.pixel_indices);
         context.destroy_buffer(self.pixel_indices_stage);
+        context.destroy_buffer(self.previous_cells);
         context.destroy_buffer(self.cells);
         context.destroy_buffer(self.next_cells);
         context.destroy_buffer(self.dts);
         context.destroy_buffer(self.mask);
+        context.destroy_buffer(self.dt_grad_previous);
+        context.destroy_buffer(self.dt_grad_current);
+        context.destroy_buffer(self.dt_grad_next);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_path_buffers_do_not_scale_jacobian_storage() {
+        let slots = 4_096_u64 * 256;
+        assert_eq!(output_bytes(4_096, 256, true), slots * 68);
+        assert_eq!(output_bytes(4_096, 256, false), slots * 16 + 52);
     }
 }

@@ -1740,7 +1740,11 @@ fn collect_path_contributions(
         .max()
         .unwrap_or(1);
     let capacity = max_sampled_pixels.clamp(1, MAX_RAYS_PER_BATCH);
-    let mut buffers = vol::gpu::PathRecordBuffers::new(context, capacity as u32, max_steps as u32);
+    let mut buffers = if model.radii.is_some() {
+        vol::gpu::PathRecordBuffers::new(context, capacity as u32, max_steps as u32)
+    } else {
+        vol::gpu::PathRecordBuffers::new_recorded_only(context, capacity as u32, max_steps as u32)
+    };
     let pl_capacity = capacity as u64 * max_steps as u64;
     let readback_size = pl_capacity * std::mem::size_of::<u32>() as u64;
     let cells_readback = context.create_buffer(blade_graphics::BufferDesc {
@@ -1812,15 +1816,17 @@ fn collect_path_contributions(
                 transfer.fill_buffer(buffers.next_cells.at(0), path_bytes, 0);
                 transfer.fill_buffer(buffers.dts.at(0), path_bytes, 0);
                 transfer.fill_buffer(buffers.mask.at(0), path_bytes, 0);
+                if buffers.has_jacobians() {
+                    transfer.fill_buffer(buffers.previous_cells.at(0), path_bytes, 0);
+                    transfer.fill_buffer(buffers.dt_grad_previous.at(0), path_bytes * 4, 0);
+                    transfer.fill_buffer(buffers.dt_grad_current.at(0), path_bytes * 4, 0);
+                    transfer.fill_buffer(buffers.dt_grad_next.at(0), path_bytes * 4, 0);
+                }
             }
             recorder.dispatch(
                 &mut encoder,
                 gpu_cloud,
-                buffers.pixel_indices.into(),
-                buffers.cells.into(),
-                buffers.next_cells.into(),
-                buffers.dts.into(),
-                buffers.mask.into(),
+                &buffers,
                 vol::gpu::RecordPathsArgs {
                     camera: view.camera,
                     start_point,
@@ -2482,8 +2488,12 @@ fn fit_appearance_pixel_batched(
     let mut position_grad_accum = vec![0.0f32; model.points.len()];
     let mut position_grad_scratch = vec![0.0f32; model.points.len() * 3];
     let _ = n_cells;
-    let mut path_bufs =
-        vol::gpu::PathRecordBuffers::new_external(&gpu, pixel_batch as u32, max_steps as u32);
+    let mut path_bufs = vol::gpu::PathRecordBuffers::new_external_with_jacobians(
+        &gpu,
+        pixel_batch as u32,
+        max_steps as u32,
+        model.radii.is_some(),
+    );
     let patch_size = config.patch_size;
     let grad_loss_weight = config.grad_loss_weight;
     let (mut session, mut gpu_cloud) = build_train_session(
@@ -2655,15 +2665,17 @@ fn fit_appearance_pixel_batched(
                 tx.fill_buffer(path_bufs.next_cells.at(0), pl_bytes, 0);
                 tx.fill_buffer(path_bufs.dts.at(0), pl_bytes, 0);
                 tx.fill_buffer(path_bufs.mask.at(0), pl_bytes, 0);
+                if path_bufs.has_jacobians() {
+                    tx.fill_buffer(path_bufs.previous_cells.at(0), pl_bytes, 0);
+                    tx.fill_buffer(path_bufs.dt_grad_previous.at(0), pl_bytes * 4, 0);
+                    tx.fill_buffer(path_bufs.dt_grad_current.at(0), pl_bytes * 4, 0);
+                    tx.fill_buffer(path_bufs.dt_grad_next.at(0), pl_bytes * 4, 0);
+                }
             }
             recorder.dispatch(
                 &mut record_encoder,
                 &gpu_cloud,
-                path_bufs.pixel_indices.into(),
-                path_bufs.cells.into(),
-                path_bufs.next_cells.into(),
-                path_bufs.dts.into(),
-                path_bufs.mask.into(),
+                &path_bufs,
                 vol::gpu::RecordPathsArgs {
                     camera: v.camera,
                     start_point: gpu_cloud
@@ -2817,10 +2829,11 @@ fn fit_appearance_pixel_batched(
                 drop(session);
                 gpu_cloud.deinit(&gpu);
                 path_bufs.destroy(&gpu);
-                path_bufs = vol::gpu::PathRecordBuffers::new_external(
+                path_bufs = vol::gpu::PathRecordBuffers::new_external_with_jacobians(
                     &gpu,
                     pixel_batch as u32,
                     max_steps as u32,
+                    model.radii.is_some(),
                 );
                 let rebuilt = build_train_session(
                     model,
@@ -2883,10 +2896,11 @@ fn fit_appearance_pixel_batched(
                 drop(session);
                 gpu_cloud.deinit(&gpu);
                 path_bufs.destroy(&gpu);
-                path_bufs = vol::gpu::PathRecordBuffers::new_external(
+                path_bufs = vol::gpu::PathRecordBuffers::new_external_with_jacobians(
                     &gpu,
                     pixel_batch as u32,
                     max_steps as u32,
+                    model.radii.is_some(),
                 );
                 let rebuilt = build_train_session(
                     model,
