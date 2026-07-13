@@ -40,6 +40,8 @@ pub struct VolumetricGraph {
 
     pub log_density: mn::NodeId,
     pub positions: mn::NodeId,
+    /// Weighted-cloud-only radius parameter and differential path inputs.
+    pub weighted_path: Option<WeightedPathGraph>,
     /// `sh_coefficients[c][k]` is the `[n_cells, 1]` parameter table for
     /// channel `c` ∈ {0=R, 1=G, 2=B} and SH component `k` ∈ `0..(1+sh_degree)²`.
     pub sh_coefficients: Vec<Vec<mn::NodeId>>,
@@ -79,6 +81,19 @@ pub struct VolumetricGraph {
     pub dt_from_positions: mn::NodeId,
 }
 
+#[derive(Clone, Debug)]
+pub struct WeightedPathGraph {
+    /// Softplus pre-image of each rendered support radius.
+    pub log_radii: mn::NodeId,
+    pub previous_cell_indices: mn::NodeId,
+    pub dt_grad_previous: mn::NodeId,
+    pub dt_grad_current: mn::NodeId,
+    pub dt_grad_next: mn::NodeId,
+    /// Geometry snapshot against which the recorder evaluated its Jacobians.
+    pub reference_positions: mn::NodeId,
+    pub reference_radii: mn::NodeId,
+}
+
 /// SH-component name suffix, e.g. `parameter_name("sh_r", 0)` → `"sh_r"`,
 /// `parameter_name("sh_r", 3)` → `"sh_r_3"`. Component 0 keeps the
 /// historical bare name for backward-compat with SH-0 checkpoints.
@@ -88,6 +103,64 @@ fn parameter_name(channel: &str, k: usize) -> String {
     } else {
         format!("{channel}_{k}")
     }
+}
+
+const RADIUS_SOFTPLUS_BETA: f32 = 100.0;
+
+/// Positive activation for a flat `[count, 1]` tensor. This is the stable
+/// identity `(relu(βx) - log(sigmoid(|βx|))) / β`, which avoids needing an
+/// explicit exponential graph op.
+fn positive_activation(
+    g: &mut mn::Graph,
+    input: mn::NodeId,
+    count: usize,
+    beta: f32,
+) -> mn::NodeId {
+    if beta <= 0.0 {
+        return g.relu(input);
+    }
+    let beta_c = g.constant(vec![beta; count], &[count, 1]);
+    let bx = g.mul(input, beta_c);
+    let relu_bx = g.relu(bx);
+    let abs_bx = g.abs(bx);
+    let sig = g.sigmoid(abs_bx);
+    let log_sig = g.log(sig);
+    let neg_log_sig = g.neg(log_sig);
+    let sp = g.add(relu_bx, neg_log_sig);
+    let inv_beta = g.constant(vec![1.0 / beta; count], &[count, 1]);
+    g.mul(sp, inv_beta)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn weighted_role_tangent(
+    g: &mut mn::Graph,
+    indices: mn::NodeId,
+    actual_positions: mn::NodeId,
+    log_radii: mn::NodeId,
+    reference_positions: mn::NodeId,
+    reference_radii: mn::NodeId,
+    recorded_jacobian: mn::NodeId,
+    ones_3_1: mn::NodeId,
+    count: usize,
+) -> mn::NodeId {
+    let reference_position = g.embedding(indices, reference_positions);
+    let neg_reference_position = g.neg(reference_position);
+    let position_delta = g.add(actual_positions, neg_reference_position);
+
+    let raw_radius = g.embedding(indices, log_radii);
+    let actual_radius = positive_activation(g, raw_radius, count, RADIUS_SOFTPLUS_BETA);
+    let reference_radius = g.embedding(indices, reference_radii);
+    let neg_reference_radius = g.neg(reference_radius);
+    let radius_delta = g.add(actual_radius, neg_reference_radius);
+
+    let position_jacobian_flat = g.split_a(recorded_jacobian, count as u32, 3, 1, 1);
+    let position_jacobian = g.reshape(position_jacobian_flat, &[count, 3]);
+    let radius_jacobian_flat = g.split_b(recorded_jacobian, count as u32, 3, 1, 1);
+    let radius_jacobian = g.reshape(radius_jacobian_flat, &[count, 1]);
+    let position_product = g.mul(position_delta, position_jacobian);
+    let position_tangent = g.matmul(position_product, ones_3_1);
+    let radius_tangent = g.mul(radius_delta, radius_jacobian);
+    g.add(position_tangent, radius_tangent)
 }
 
 /// Build the volumetric forward + L1 loss subgraph and return handles.
@@ -142,6 +215,16 @@ pub fn build_volumetric_graph(
     let next_cell_indices = g.input_u32("next_cell_indices", &[pl]);
     let recorded_dt = g.input("recorded_dt", &[pl]);
     let mask = g.input("mask", &[pl]);
+    let weighted_inputs = use_recorded_dt.then(|| {
+        (
+            g.input_u32("previous_cell_indices", &[pl]),
+            g.input("dt_grad_previous", &[pl, 4]),
+            g.input("dt_grad_current", &[pl, 4]),
+            g.input("dt_grad_next", &[pl, 4]),
+            g.input("reference_positions", &[n_cells, 3]),
+            g.input("reference_radii", &[n_cells, 1]),
+        )
+    });
     // Target is fed as [1, P*3] to match meganeura's "batch × dim" convention
     // for L1 loss; we reshape rather than introduce a batch dimension upstream.
     let target = g.input("labels", &[1, p * 3]);
@@ -178,6 +261,25 @@ pub fn build_volumetric_graph(
     // have K coefficient tables per channel.
     let log_density = g.parameter("log_density", &[n_cells, 1]);
     let positions = g.parameter("positions", &[n_cells, 3]);
+    let log_radii = use_recorded_dt.then(|| g.parameter("log_radii", &[n_cells, 1]));
+    let weighted_path = weighted_inputs.map(
+        |(
+            previous_cell_indices,
+            dt_grad_previous,
+            dt_grad_current,
+            dt_grad_next,
+            reference_positions,
+            reference_radii,
+        )| WeightedPathGraph {
+            log_radii: log_radii.unwrap(),
+            previous_cell_indices,
+            dt_grad_previous,
+            dt_grad_current,
+            dt_grad_next,
+            reference_positions,
+            reference_radii,
+        },
+    );
     // Per-view RGB gain: separate `[num_views, 1]` table per channel
     // so each channel's gradient flows back through `embedding`
     // (which has a `scatter_add` backward). Folding channels into a
@@ -207,20 +309,7 @@ pub fn build_volumetric_graph(
     // (sigmoid(|βx|) ∈ [0.5,1] so the log can't overflow). At β=10,
     // log_density = 1.0 → density ≈ 1.0, preserving the ReLU init.
     let density_pre = g.embedding(cell_indices, log_density);
-    let density_flat = if softplus_beta > 0.0 {
-        let beta_c = g.constant(vec![softplus_beta; pl], &[pl, 1]);
-        let bx = g.mul(density_pre, beta_c);
-        let relu_bx = g.relu(bx);
-        let abs_bx = g.abs(bx);
-        let sig = g.sigmoid(abs_bx);
-        let log_sig = g.log(sig);
-        let neg_log_sig = g.neg(log_sig);
-        let sp = g.add(relu_bx, neg_log_sig);
-        let inv_beta = g.constant(vec![1.0 / softplus_beta; pl], &[pl, 1]);
-        g.mul(sp, inv_beta)
-    } else {
-        g.relu(density_pre) // legacy non-negative density
-    };
+    let density_flat = positive_activation(g, density_pre, pl, softplus_beta);
     let density = g.reshape(density_flat, &[p, l]);
     let mask_2d = g.reshape(mask, &[p, l]);
 
@@ -310,14 +399,57 @@ pub fn build_volumetric_graph(
     let terminal_gate = g.add(ones_for_gate, neg_normal_gate);
     let recorded_dt_2d = g.reshape(recorded_dt, &[p, l]);
     let selected_dt = if use_recorded_dt {
-        // Power-cell intervals depend on per-site weights and, for bounded
-        // PowerFoam, sphere intersections. Until radii become graph
-        // parameters, the GPU recorder is the authoritative forward value.
-        // Retain a zero-valued dependency on positions so the parameter
-        // remains present in checkpoints with a well-defined zero gradient.
-        let zero = g.constant(vec![0.0_f32; p * l], &[p, l]);
-        let position_dependency = g.mul(dt_clamped, zero);
-        g.add(recorded_dt_2d, position_dependency)
+        // The recorder evaluates the exact weighted, sphere-clipped interval
+        // and its active-branch Jacobian at the geometry snapshot used to
+        // build the GPU cloud. Reconstruct a first-order tangent around that
+        // snapshot so both positions and positive radii affect the forward
+        // value between discrete topology rebuilds.
+        let weighted = weighted_path.as_ref().unwrap();
+        let pos_previous = g.embedding(weighted.previous_cell_indices, positions);
+        let previous_tangent = weighted_role_tangent(
+            g,
+            weighted.previous_cell_indices,
+            pos_previous,
+            weighted.log_radii,
+            weighted.reference_positions,
+            weighted.reference_radii,
+            weighted.dt_grad_previous,
+            ones_3_1,
+            pl,
+        );
+        let current_tangent = weighted_role_tangent(
+            g,
+            cell_indices,
+            pos_cell,
+            weighted.log_radii,
+            weighted.reference_positions,
+            weighted.reference_radii,
+            weighted.dt_grad_current,
+            ones_3_1,
+            pl,
+        );
+        let next_tangent = weighted_role_tangent(
+            g,
+            next_cell_indices,
+            pos_next,
+            weighted.log_radii,
+            weighted.reference_positions,
+            weighted.reference_radii,
+            weighted.dt_grad_next,
+            ones_3_1,
+            pl,
+        );
+        let entry_and_current = g.add(previous_tangent, current_tangent);
+        let tangent = g.add(entry_and_current, next_tangent);
+        let recorded_dt_flat = g.reshape(recorded_dt, &[pl, 1]);
+        let linear_dt_flat = g.add(recorded_dt_flat, tangent);
+        let linear_dt = g.reshape(linear_dt_flat, &[p, l]);
+        let positive_dt = g.relu(linear_dt);
+        let neg_positive_dt = g.neg(positive_dt);
+        let remaining = g.add(max_dt_pl, neg_positive_dt);
+        let within_cap = g.relu(remaining);
+        let neg_within_cap = g.neg(within_cap);
+        g.add(max_dt_pl, neg_within_cap)
     } else {
         let face_dt = g.mul(dt_clamped, normal_gate);
         let terminal_dt = g.mul(recorded_dt_2d, terminal_gate);
@@ -571,9 +703,8 @@ pub fn build_volumetric_graph(
         loss
     };
 
-    // `dt_from_positions` as a second output so callers can read it
-    // back and compare against the shader-computed dt during the
-    // position-optimisation sanity check.
+    // `dt_from_positions` as a second output so callers can compare the graph
+    // interval against the recorder during geometry-optimisation checks.
     g.set_outputs(vec![loss, dt_from_positions]);
 
     VolumetricGraph {
@@ -584,6 +715,7 @@ pub fn build_volumetric_graph(
         num_views,
         log_density,
         positions,
+        weighted_path,
         sh_coefficients,
         exposure_r,
         exposure_g,
@@ -996,9 +1128,14 @@ pub struct AppearanceFitConfig {
     /// `geometry_rebuild_every > 0`, because the discrete adjacency and
     /// recorded cell walks must be refreshed as points move.
     pub position_lr_ratio: f32,
+    /// PowerFoam support-radius learning rate as a fraction of
+    /// `learning_rate`. Radii are optimized through a β=100 softplus and this
+    /// must remain zero for unweighted clouds. Like position optimization, a
+    /// positive value requires periodic geometry rebuilds.
+    pub radius_lr_ratio: f32,
     /// Number of Adam steps between adjacency, GPU-cloud, and path-buffer
-    /// rebuilds while positions are trainable. Ignored when
-    /// `position_lr_ratio == 0.0`.
+    /// rebuilds while positions or radii are trainable. Ignored when both
+    /// geometry learning-rate ratios are zero.
     pub geometry_rebuild_every: usize,
     /// Use Qhull for geometry/densification rebuilds. This is the practical
     /// exact backend for large unweighted clouds; the Rust backend remains
@@ -1114,6 +1251,7 @@ impl Default for AppearanceFitConfig {
             softplus_beta: 0.0,
             background_rgb: [0.0; 3],
             position_lr_ratio: 0.0,
+            radius_lr_ratio: 0.0,
             geometry_rebuild_every: 0,
             rebuild_with_qhull: false,
             checkpoint_path: None,
@@ -1313,12 +1451,17 @@ pub fn fit_appearance_multi_view(
         "position_lr_ratio must be finite and non-negative"
     );
     assert!(
-        config.position_lr_ratio == 0.0 || config.geometry_rebuild_every > 0,
-        "position optimisation requires geometry_rebuild_every > 0"
+        config.radius_lr_ratio.is_finite() && config.radius_lr_ratio >= 0.0,
+        "radius_lr_ratio must be finite and non-negative"
     );
     assert!(
-        model.radii.is_none() || config.position_lr_ratio == 0.0,
-        "weighted-cloud position optimisation requires differentiable radii and is not supported"
+        config.radius_lr_ratio == 0.0 || model.radii.is_some(),
+        "radius optimisation requires a weighted cloud"
+    );
+    assert!(
+        (config.position_lr_ratio == 0.0 && config.radius_lr_ratio == 0.0)
+            || config.geometry_rebuild_every > 0,
+        "geometry optimisation requires geometry_rebuild_every > 0"
     );
     assert!(
         model.radii.is_none() || config.densify.is_none(),
@@ -1367,6 +1510,15 @@ fn upload_model_parameters(
     }
     session.set_parameter("log_density", &init_density);
     session.set_parameter("positions", &init_positions);
+    if let Some(ref radii) = model.radii {
+        let init_radii: Vec<f32> = radii
+            .iter()
+            .map(|&radius| inv_radius_activation(radius))
+            .collect();
+        session.set_parameter("log_radii", &init_radii);
+        session.set_input("reference_positions", &init_positions);
+        session.set_input("reference_radii", radii);
+    }
 
     // `model.sh_coefficients` layout (lib.rs spec):
     //   `[p0_c0_r, p0_c0_g, p0_c0_b, p0_c1_r, p0_c1_g, p0_c1_b, ..., p1_c0_r, ...]`
@@ -1599,6 +1751,14 @@ fn inv_density_activation(y: f32, beta: f32) -> f32 {
     inv / beta
 }
 
+fn radius_activation(x: f32) -> f32 {
+    density_activation(x, RADIUS_SOFTPLUS_BETA)
+}
+
+fn inv_radius_activation(radius: f32) -> f32 {
+    inv_density_activation(radius, RADIUS_SOFTPLUS_BETA)
+}
+
 fn download_model_parameters(
     session: &mn::Session,
     model: &mut vol::PointCloudModel,
@@ -1617,6 +1777,14 @@ fn download_model_parameters(
         model.points[i].x = out_positions[i * 3];
         model.points[i].y = out_positions[i * 3 + 1];
         model.points[i].z = out_positions[i * 3 + 2];
+    }
+
+    if let Some(ref mut radii) = model.radii {
+        let mut out_radii = vec![0.0_f32; n_cells];
+        session.read_param("log_radii", &mut out_radii);
+        for (radius, &raw) in radii.iter_mut().zip(out_radii.iter()) {
+            *radius = radius_activation(raw);
+        }
     }
 
     let num_components = model.sh_component_count();
@@ -2048,12 +2216,14 @@ fn prune_and_densify(
 }
 
 /// Enumerate every per-cell parameter name with its per-cell element
-/// stride. Stride is 1 for scalar tables (`log_density`, `sh_<chan>_<k>`)
-/// and 3 for `positions`. Matches `build_volumetric_graph`'s declaration
-/// order.
-fn per_cell_param_names_with_stride(sh_degree: usize) -> Vec<(String, usize)> {
+/// stride. Stride is 1 for scalar tables (`log_density`, `log_radii`,
+/// `sh_<chan>_<k>`) and 3 for `positions`.
+fn per_cell_param_names_with_stride(sh_degree: usize, has_radii: bool) -> Vec<(String, usize)> {
     let num_components = (1 + sh_degree) * (1 + sh_degree);
     let mut names = vec![("log_density".to_string(), 1), ("positions".to_string(), 3)];
+    if has_radii {
+        names.push(("log_radii".to_string(), 1));
+    }
     for chan in ["sh_r", "sh_g", "sh_b"] {
         for k in 0..num_components {
             names.push((parameter_name(chan, k), 1));
@@ -2097,8 +2267,9 @@ fn save_adam_state(
     sh_degree: usize,
     n_cells: usize,
     num_views: usize,
+    has_radii: bool,
 ) -> AdamSnapshot {
-    let names = per_cell_param_names_with_stride(sh_degree);
+    let names = per_cell_param_names_with_stride(sh_degree, has_radii);
     let mut entries = Vec::with_capacity(names.len());
     for (name, stride) in names {
         let size = n_cells * stride;
@@ -2147,9 +2318,10 @@ fn restore_adam_state_remap(
     snap: &AdamSnapshot,
     new_to_old: &[usize],
     sh_degree: usize,
+    has_radii: bool,
 ) {
     let n_new = new_to_old.len();
-    let names = per_cell_param_names_with_stride(sh_degree);
+    let names = per_cell_param_names_with_stride(sh_degree, has_radii);
     debug_assert_eq!(names.len(), snap.entries.len());
     for (i, name_and_stride) in names.iter().enumerate() {
         let entry = &snap.entries[i];
@@ -2203,6 +2375,7 @@ fn build_train_session(
     path_bufs: &vol::gpu::PathRecordBuffers,
     lr: f32,
     position_lr_ratio: f32,
+    radius_lr_ratio: f32,
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
@@ -2243,8 +2416,9 @@ fn build_train_session(
         cloud
     };
 
-    // Interior dt is computed from positions. The recorded stream supplies
-    // the fixed far-plane interval for terminal segments (`next == cell`).
+    // Unweighted interior dt is reconstructed from positions, with recorded
+    // terminal intervals. Weighted dt is the exact recorder value plus its
+    // local position/radius tangent around this model snapshot.
     let pl_bytes = (pixel_batch as u64) * (max_steps as u64) * 4;
     for (slot, buf) in [
         ("cell_indices", path_bufs.cells),
@@ -2259,6 +2433,25 @@ fn build_train_session(
             .bind_external_buffer(meganeura::ExternalSlot::Input(slot), source, pl_bytes)
             .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
     }
+    if model.radii.is_some() {
+        assert!(
+            path_bufs.has_jacobians(),
+            "weighted training requires Jacobian path buffers"
+        );
+        for (slot, buf, size) in [
+            ("previous_cell_indices", path_bufs.previous_cells, pl_bytes),
+            ("dt_grad_previous", path_bufs.dt_grad_previous, pl_bytes * 4),
+            ("dt_grad_current", path_bufs.dt_grad_current, pl_bytes * 4),
+            ("dt_grad_next", path_bufs.dt_grad_next, pl_bytes * 4),
+        ] {
+            let source = gpu
+                .get_external_buffer_source(buf)
+                .expect("weighted path buffer must be exportable");
+            session
+                .bind_external_buffer(meganeura::ExternalSlot::Input(slot), source, size)
+                .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
+        }
+    }
 
     session.set_adam(lr, betas.0, betas.1, betas.2);
     if sh_degree >= 1 {
@@ -2267,6 +2460,9 @@ fn build_train_session(
         }
     }
     session.set_lr_multiplier("positions", position_lr_ratio);
+    if model.radii.is_some() {
+        session.set_lr_multiplier("log_radii", radius_lr_ratio);
+    }
 
     // Per-view exposure: init to 1.0 (identity). Defaults to enabled
     // (LR multiplier 1.0) when more than one view is being trained;
@@ -2475,6 +2671,7 @@ fn fit_appearance_pixel_batched(
     // only torn down and rebuilt when a split actually changes the cell
     // count.
     let densify = config.densify;
+    let geometry_trainable = config.position_lr_ratio > 0.0 || config.radius_lr_ratio > 0.0;
     // Resume at the checkpoint's absolute step so the cosine LR and densify
     // schedule pick up where the interrupted run stopped.
     if steps_done > 0 {
@@ -2513,6 +2710,7 @@ fn fit_appearance_pixel_batched(
         &path_bufs,
         config.learning_rate,
         config.position_lr_ratio,
+        config.radius_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
     );
     if let Some(ref state_path) = config.resume_state_path {
@@ -2543,7 +2741,7 @@ fn fit_appearance_pixel_batched(
             Some(d) => steps_until_densify(d, steps_done).min(invocation_end - steps_done),
             None => invocation_end - steps_done,
         };
-        let geometry_budget = if config.position_lr_ratio > 0.0 {
+        let geometry_budget = if geometry_trainable {
             let every = config.geometry_rebuild_every;
             (every - steps_done % every).min(invocation_end - steps_done)
         } else {
@@ -2763,7 +2961,13 @@ fn fit_appearance_pixel_batched(
                 // prune+densify remaps `model.points`.
                 let n_old = model.points.len();
                 download_model_parameters(&session, model, config.softplus_beta);
-                let adam_snap = save_adam_state(&session, sh_degree, n_old, views.len());
+                let adam_snap = save_adam_state(
+                    &session,
+                    sh_degree,
+                    n_old,
+                    views.len(),
+                    model.radii.is_some(),
+                );
 
                 let contribution = if d.prune {
                     let stats = collect_path_contributions(
@@ -2852,6 +3056,7 @@ fn fit_appearance_pixel_batched(
                     &path_bufs,
                     config.learning_rate,
                     config.position_lr_ratio,
+                    config.radius_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
                 );
                 session = rebuilt.0;
@@ -2864,26 +3069,38 @@ fn fit_appearance_pixel_batched(
                 // children inherit their parent's, via the new_to_old
                 // remap. Bias-correction `t` is preserved so the
                 // optimiser doesn't think it's step 1 again.
-                restore_adam_state_remap(&mut session, &adam_snap, &new_to_old, sh_degree);
+                restore_adam_state_remap(
+                    &mut session,
+                    &adam_snap,
+                    &new_to_old,
+                    sh_degree,
+                    model.radii.is_some(),
+                );
                 session.set_adam_step_count(adam_snap.t);
                 topology_rebuilt = true;
             }
         }
 
-        // Position gradients are only locally valid for the discrete cell
-        // walk recorded against the current CSR. At the configured cadence,
-        // download moved points, rebuild exact topology, and recreate all
-        // traversal resources. The final cycle only needs the host-side
-        // topology refresh because no further optimiser step will run in this
-        // invocation.
-        let geometry_due = config.position_lr_ratio > 0.0
+        // Weighted interval Jacobians and the unweighted discrete cell walk
+        // are local to the current geometry snapshot. At the configured
+        // cadence, download moved positions/radii, rebuild exact topology, and
+        // recreate traversal resources. The final cycle only needs the
+        // host-side refresh because no further optimizer step will run.
+        let geometry_due = geometry_trainable
             && (steps_done.is_multiple_of(config.geometry_rebuild_every)
                 || steps_done == invocation_end);
         if geometry_due && !topology_rebuilt {
             let n_cells = model.points.len();
             download_model_parameters(&session, model, config.softplus_beta);
-            let adam_snap = (steps_done < invocation_end)
-                .then(|| save_adam_state(&session, sh_degree, n_cells, views.len()));
+            let adam_snap = (steps_done < invocation_end).then(|| {
+                save_adam_state(
+                    &session,
+                    sh_degree,
+                    n_cells,
+                    views.len(),
+                    model.radii.is_some(),
+                )
+            });
             rebuild_training_adjacency(model, config.rebuild_with_qhull);
             log::info!(
                 "geometry cycle {}: rebuilt adjacency for {} moved points at step {}",
@@ -2919,13 +3136,20 @@ fn fit_appearance_pixel_batched(
                     &path_bufs,
                     config.learning_rate,
                     config.position_lr_ratio,
+                    config.radius_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
                 );
                 session = rebuilt.0;
                 gpu_cloud = rebuilt.1;
                 session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
                 let identity: Vec<usize> = (0..n_cells).collect();
-                restore_adam_state_remap(&mut session, &adam_snap, &identity, sh_degree);
+                restore_adam_state_remap(
+                    &mut session,
+                    &adam_snap,
+                    &identity,
+                    sh_degree,
+                    model.radii.is_some(),
+                );
                 session.set_adam_step_count(adam_snap.t);
             }
         }
@@ -3300,13 +3524,16 @@ mod tests {
     #[test]
     fn per_cell_param_names_includes_positions_with_stride_3() {
         for sh_degree in 0..=3 {
-            let names = per_cell_param_names_with_stride(sh_degree);
+            let names = per_cell_param_names_with_stride(sh_degree, false);
             // Required entries:
             assert!(names.contains(&("log_density".to_string(), 1)));
             assert!(names.contains(&("positions".to_string(), 3)));
             // Total count: 1 (density) + 1 (positions) + 3 * (1+deg)² SH params.
             let num_components = (1 + sh_degree) * (1 + sh_degree);
             assert_eq!(names.len(), 2 + 3 * num_components);
+            let weighted_names = per_cell_param_names_with_stride(sh_degree, true);
+            assert!(weighted_names.contains(&("log_radii".to_string(), 1)));
+            assert_eq!(weighted_names.len(), names.len() + 1);
         }
     }
 
@@ -3330,6 +3557,7 @@ mod tests {
             assert_eq!(vg.n_pixels, n_pixels);
             assert_eq!(vg.max_steps, max_steps);
             assert_eq!(vg.num_views, num_views);
+            assert!(vg.weighted_path.is_none());
             // SH coefficient tables: 3 channels × (1+deg)² components.
             let num_components = (1 + sh_degree) * (1 + sh_degree);
             assert_eq!(vg.sh_coefficients.len(), 3);
@@ -3338,6 +3566,24 @@ mod tests {
             }
             // basis_inputs: K-1 entries (component 0 is folded in).
             assert_eq!(vg.basis_inputs.len(), num_components - 1);
+        }
+    }
+
+    #[test]
+    fn build_volumetric_graph_constructs_weighted_tangent_path() {
+        let mut graph = mn::Graph::new();
+        let vg = build_volumetric_graph(
+            &mut graph, 16, 4, 3, 0, 2, 0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], true,
+        );
+        assert!(vg.weighted_path.is_some());
+    }
+
+    #[test]
+    fn radius_activation_roundtrips_positive_values() {
+        for radius in [1.0e-4_f32, 0.01, 0.1, 1.0, 10.0] {
+            let roundtrip = radius_activation(inv_radius_activation(radius));
+            let tolerance = 1.0e-5_f32.max(radius * 1.0e-5);
+            assert!((roundtrip - radius).abs() <= tolerance);
         }
     }
 
@@ -3682,12 +3928,14 @@ mod tests {
     }
 
     #[test]
-    fn weighted_graph_uses_recorded_intervals() {
+    fn weighted_graph_uses_recorded_intervals_and_jacobians() {
         let Some(gpu) = try_init_gpu() else {
-            eprintln!("skipping weighted_graph_uses_recorded_intervals: no GPU");
+            eprintln!("skipping weighted graph Jacobian test: no GPU");
             return;
         };
-        let model = tiny_model();
+        let mut model = tiny_model();
+        model.radii = Some(vec![1.0; model.points.len()]);
+        model.compute_adjacency_default();
         let n_cells = model.points.len();
         let mut g = mn::Graph::new();
         let vg = build_volumetric_graph(
@@ -3708,8 +3956,12 @@ mod tests {
             session.set_parameter(channel, &[1.0]);
         }
         session.set_input_u32("cell_indices", &[0]);
+        session.set_input_u32("previous_cell_indices", &[0]);
         session.set_input_u32("next_cell_indices", &[3]);
         session.set_input("recorded_dt", &[7.5]);
+        session.set_input("dt_grad_previous", &[0.0; 4]);
+        session.set_input("dt_grad_current", &[0.25, -0.5, 0.75, 1.25]);
+        session.set_input("dt_grad_next", &[0.0; 4]);
         session.set_input("mask", &[1.0]);
         session.set_input("ray_origin", &[0.1, 0.1, -1.0]);
         session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
@@ -3724,7 +3976,14 @@ mod tests {
         assert!((outputs[0] - 7.5).abs() < 1e-5, "outputs={outputs:?}");
         let mut position_grad = vec![0.0_f32; n_cells * 3];
         session.read_param_grad("positions", &mut position_grad);
-        assert!(position_grad.iter().all(|&v| v == 0.0));
+        assert!((position_grad[0] - 0.25).abs() < 1.0e-5);
+        assert!((position_grad[1] + 0.5).abs() < 1.0e-5);
+        assert!((position_grad[2] - 0.75).abs() < 1.0e-5);
+        assert!(position_grad[3..].iter().all(|&value| value == 0.0));
+        let mut radius_grad = vec![0.0_f32; n_cells];
+        session.read_param_grad("log_radii", &mut radius_grad);
+        assert!((radius_grad[0] - 1.25).abs() < 1.0e-4);
+        assert!(radius_grad[1..].iter().all(|&value| value == 0.0));
     }
 
     #[test]
@@ -3754,7 +4013,7 @@ mod tests {
                 0.0,
                 0.0,
                 background_rgb,
-                true,
+                false,
             );
             let (mut session, _) = mn::build(
                 &graph,
@@ -3815,7 +4074,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
-                true,
+                false,
             );
             let (mut session, _) = mn::build(
                 &graph,
@@ -3879,7 +4138,7 @@ mod tests {
                 if quantiles.is_some() { 1.0 } else { 0.0 },
                 0.0,
                 [0.0; 3],
-                true,
+                false,
             );
             let (mut session, _) = mn::build(
                 &graph,

@@ -9,7 +9,7 @@ phone video ──▶ COLMAP ──▶ blade-volume-train ──▶ PointCloudMo
                               (meganeura)
 ```
 
-The library boundary is `PointCloudModel` (or a PowerFoam-extended version of it). The
+The library boundary is `PointCloudModel`, including its optional PowerFoam radii. The
 viewer doesn't know how the model was produced; the trainer doesn't know how it gets
 rendered. Both link `blade-volume` for shared types and shaders.
 
@@ -104,9 +104,26 @@ trained scene we don't have. Instead we proved internal consistency:
   regression and the new radii test now share a `assert_gpu_matches_cpu(...)`
   helper.
 
-When a real PowerFoam scene shows up, the path forward is a Python script in
-`etc/` that reads PowerFoam's `model.pt` and emits our radii-extended PLY —
-deferred until that data exists.
+When a real PowerFoam scene shows up, conversion must remain Rust-only: either
+consume an upstream interchange export or add the smallest required checkpoint
+reader to a tool crate. No Python runtime becomes part of this project.
+
+#### M2e — Differentiable weighted geometry (implemented, device recheck pending)
+
+- The CPU path oracle records the exact active-branch derivative of every
+  sphere-clipped interval with respect to the previous, current, and next
+  site's position and radius. Central finite differences cover radical planes,
+  support spheres, and paths that skip non-emitting cells.
+- The GPU recorder writes the same three `vec4(position, radius)` Jacobians and
+  the actual previous traversed cell. Unweighted training keeps the compact
+  path layout.
+- Weighted training optimizes a beta=100 softplus radius parameter and uses the
+  recorder value plus its local geometry tangent between periodic Čech/path
+  rebuilds. Radius and position learning rates are independent; weighted
+  densification remains rejected until it has an explicit radius split policy.
+- Static WGSL validation and CPU-isolated workspace tests pass. The physical-
+  GPU Jacobian/meganeura integration test is compiled but must be rerun after
+  the currently wedged NVIDIA driver is recovered.
 
 ### M3 — Training crate scaffolding
 

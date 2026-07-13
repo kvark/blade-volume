@@ -250,8 +250,14 @@ struct Args {
     #[argh(option, default = "0.0")]
     position_lr_ratio: f32,
 
-    /// steps between adjacency/path rebuilds during position optimisation
-    /// (default 100). Ignored when --position-lr-ratio is 0.
+    /// radius learning rate for PowerFoam as a fraction of the main learning rate
+    /// (default 0 = fixed radii). Requires a weighted input (--cech-radius or a
+    /// weighted --init-ply) and periodic geometry rebuilds.
+    #[argh(option, default = "0.0")]
+    radius_lr_ratio: f32,
+
+    /// steps between adjacency/path rebuilds during position/radius
+    /// optimisation (default 100). Ignored when both geometry rates are 0.
     #[argh(option, default = "100")]
     geometry_rebuild_every: usize,
 
@@ -296,6 +302,24 @@ fn main() {
 
     if args.stop_after_steps > 0 && args.checkpoint.as_deref() == Some("none") {
         eprintln!("--stop-after-steps requires checkpoints; remove --checkpoint none");
+        std::process::exit(2);
+    }
+    if !args.position_lr_ratio.is_finite() || args.position_lr_ratio < 0.0 {
+        eprintln!("--position-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
+    if !args.radius_lr_ratio.is_finite() || args.radius_lr_ratio < 0.0 {
+        eprintln!("--radius-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
+    if (args.position_lr_ratio > 0.0 || args.radius_lr_ratio > 0.0)
+        && args.geometry_rebuild_every == 0
+    {
+        eprintln!("geometry optimization requires --geometry-rebuild-every > 0");
+        std::process::exit(2);
+    }
+    if args.radius_lr_ratio > 0.0 && args.cech_radius <= 0.0 && args.init_ply.is_none() {
+        eprintln!("--radius-lr-ratio requires --cech-radius or a weighted --init-ply");
         std::process::exit(2);
     }
 
@@ -416,6 +440,7 @@ fn main() {
                 [0.0; 3]
             },
             position_lr_ratio: args.position_lr_ratio,
+            radius_lr_ratio: args.radius_lr_ratio,
             geometry_rebuild_every: args.geometry_rebuild_every,
             rebuild_with_qhull: args.qhull,
             resume_step,

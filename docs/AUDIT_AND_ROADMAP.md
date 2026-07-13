@@ -68,16 +68,18 @@ At the audited revision:
 - PLY is a lossy training checkpoint for the DC coefficient and carries no Adam
   state.
 
-### PowerFoam
+### Remaining PowerFoam gaps
 
-- Traversal shifts radical planes but does not clip a cell by its radius sphere;
-  it therefore does not implement the bounded power diagram.
-- The Čech pipeline computes radii but does not store them in the model.
-- Differentiable path lengths use unweighted midplanes and have no radius
-  parameter.
-- Radii are neither optimized nor validated against a reference checkpoint.
-- The full appearance model remains intentionally deferred until geometry is
-  correct.
+- Bounded traversal, persistent radii, exact active-path Jacobians, and
+  trainable positive radii are implemented, but the new WGSL-Jacobian-to-
+  meganeura integration test still needs to run on a recovered physical GPU.
+- Weighted-cloud densification remains disabled until a radius-preserving split
+  policy is defined and validated.
+- No official pretrained checkpoint is published by the reference project, so
+  cross-rendering and a matched training ablation remain outstanding.
+- The reference quaternion, texel-site, and spherical-Voronoi appearance model
+  remains intentionally deferred until weighted geometry is validated on a
+  real scene.
 
 ### Adjacency and traversal
 
@@ -165,10 +167,15 @@ sidecar for the sampling, quantile, and densification RNG streams as well as
 the existing parameter/Adam safetensors; legacy resumes reconstruct fixed-draw
 sampling streams by jumping the LCG to the absolute step. Stage 3 now persists
 Čech radii and clips PowerFoam intervals to support spheres consistently on
-CPU, production WGSL, and the GPU training recorder.
-Weighted position/radius gradients and external checkpoint validation remain,
-so weighted geometry optimization and densification intentionally fail fast
-rather than train an incorrect objective.
+CPU, production WGSL, and the GPU training recorder. An exact CPU oracle covers
+the three active path roles (previous/current/next), radical-plane exits,
+support-sphere entry/exit, skipped cells, and central finite differences. The
+WGSL recorder stores those same position/radius Jacobians, and the meganeura
+graph optimizes radii through a beta=100 softplus while periodically rebuilding
+the discrete Čech graph and recorded paths. Static WGSL validation and the full
+CPU-isolated workspace suite pass. Physical-GPU execution of the new integrated
+gradient test is deferred until the wedged NVIDIA driver is recovered; weighted
+densification and reference-checkpoint validation still remain.
 
 Long-running topology optimization is now memory-bounded. The upstream
 `qhull` 0.4 destructor omits Qhull's required short-arena cleanup, which leaked
@@ -274,6 +281,12 @@ with no systematic streaking from stale topology.
 6. Cross-render a reference PowerFoam checkpoint.
 7. After geometry passes, add quaternion, dipole, detail-site, and
    spherical-Voronoi appearance semantics.
+
+Items 1-5 are implemented at the CPU-oracle, production-WGSL, recorder, and
+training-graph levels. The physical-GPU integration test for items 3-4 is
+compiled but intentionally not run while the host driver is wedged. Items 6-7,
+a real-scene radius-learning ablation, and a weighted densification split policy
+remain.
 
 Acceptance gate: CPU, GPU, and brute-force bounded traversal agree; a reference
 checkpoint renders within a defined image tolerance; trained radii improve a
