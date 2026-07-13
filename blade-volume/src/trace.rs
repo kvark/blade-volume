@@ -1,7 +1,9 @@
-//! CPU forward tracer for RadFoam / Power Foam point clouds.
+//! CPU forward tracers for point-cloud rendering backends.
 //!
-//! This is the reference implementation that mirrors `shaders/radfoam_trace.wgsl`
-//! step-for-step. It exists for three purposes:
+//! The RadFoam / PowerFoam implementation mirrors
+//! `shaders/radfoam_trace.wgsl` step-for-step. The Gaussian implementation is
+//! an exhaustive maximum-response-depth oracle for
+//! `shaders/gaussian_trace.wgsl`. They exist for three purposes:
 //!
 //! 1. **Correctness reference** for the GPU compute tracer. The GPU-vs-CPU test
 //!    in this repo asserts pixel-level agreement on synthetic fixtures.
@@ -73,6 +75,44 @@ pub struct TraceResult {
     pub last_point: u32,
     /// Parametric `t` at which traversal stopped.
     pub t_end: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GaussianTraceSettings {
+    /// Discard particles and ray responses at or below this opacity. This also
+    /// defines each Gaussian's finite ellipsoidal support, matching the GPU
+    /// acceleration proxy construction.
+    pub min_opacity: f32,
+    /// Stop front-to-back compositing once transmittance reaches this value.
+    pub min_transmittance: f32,
+    pub t_start: f32,
+    pub t_end: f32,
+}
+
+impl Default for GaussianTraceSettings {
+    fn default() -> Self {
+        Self {
+            min_opacity: 0.01,
+            min_transmittance: 0.01,
+            t_start: 0.0,
+            t_end: 10_000.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GaussianTraceResult {
+    /// RGB plus accumulated alpha (`1 - transmittance`).
+    pub rgba: glam::Vec4,
+    /// Number of Gaussian responses composited before early termination.
+    pub hits: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GaussianRayHit {
+    t: f32,
+    index: u32,
+    alpha: f32,
 }
 
 fn sh_component_count(deg: u32) -> u32 {
@@ -277,6 +317,225 @@ pub fn eval_rgb_sh(model: &PointCloudModel, point_idx: u32, dir: glam::Vec3) -> 
 
     // Match `rf_get_color` in radfoam.wgsl which adds a 0.5 visibility bias.
     0.5 + color
+}
+
+/// Exhaustively trace Gaussian ellipsoids and composite them in the 3DGRT
+/// reference order: the depth of maximum response along the ray, with point
+/// index as a deterministic tie-breaker.
+///
+/// This is intentionally an O(N log N) correctness oracle, not a CPU renderer.
+/// The GPU uses finite support proxies and batched ray queries, but must produce
+/// the same response set and ordering.
+pub fn trace_gaussians(
+    model: &PointCloudModel,
+    ray: Ray,
+    settings: GaussianTraceSettings,
+) -> GaussianTraceResult {
+    model
+        .validate()
+        .unwrap_or_else(|error| panic!("trace_gaussians: invalid model: {error}"));
+    let transforms = model
+        .transforms
+        .as_ref()
+        .expect("trace_gaussians requires Gaussian transforms");
+    assert!(
+        settings.min_opacity.is_finite() && settings.min_opacity > 0.0,
+        "min_opacity must be finite and positive"
+    );
+    assert!(
+        settings.min_transmittance.is_finite()
+            && settings.min_transmittance >= 0.0
+            && settings.min_transmittance <= 1.0,
+        "min_transmittance must be finite and in [0, 1]"
+    );
+    assert!(
+        settings.t_start.is_finite()
+            && settings.t_end.is_finite()
+            && settings.t_end > settings.t_start,
+        "Gaussian trace interval must be finite and non-empty"
+    );
+    let direction_length = ray.direction.length();
+    assert!(
+        direction_length.is_finite() && direction_length > 0.0,
+        "Gaussian ray direction must be finite and non-zero"
+    );
+    let direction = ray.direction / direction_length;
+
+    let mut hits = Vec::new();
+    for (index, point) in model.points.iter().copied().enumerate() {
+        if point.w <= settings.min_opacity {
+            continue;
+        }
+        let inverse_rotation = transforms.rotations[index].inverse();
+        let mean = point.truncate();
+        let local_origin = inverse_rotation * (ray.origin - mean) / transforms.scales[index];
+        let local_direction = inverse_rotation * direction / transforms.scales[index];
+        let denominator = local_direction.length_squared();
+        let t = -local_origin.dot(local_direction) / denominator;
+        if !(t > settings.t_start && t < settings.t_end) {
+            continue;
+        }
+        let closest = local_origin + t * local_direction;
+        let alpha = point.w * (-0.5 * closest.length_squared()).exp();
+        if alpha >= settings.min_opacity {
+            hits.push(GaussianRayHit {
+                t,
+                index: index as u32,
+                alpha,
+            });
+        }
+    }
+    hits.sort_by(|a, b| a.t.total_cmp(&b.t).then(a.index.cmp(&b.index)));
+
+    let mut transmittance = 1.0_f32;
+    let mut radiance = glam::Vec3::ZERO;
+    let mut hit_count = 0;
+    for hit in hits {
+        if transmittance <= settings.min_transmittance {
+            break;
+        }
+        let color = eval_rgb_sh(model, hit.index, direction);
+        radiance += hit.alpha * transmittance * color;
+        transmittance *= 1.0 - hit.alpha;
+        hit_count += 1;
+    }
+
+    GaussianTraceResult {
+        rgba: radiance.extend(1.0 - transmittance),
+        hits: hit_count,
+    }
+}
+
+#[cfg(test)]
+mod gaussian_tests {
+    use super::*;
+
+    fn dc(color: glam::Vec3) -> [f32; 3] {
+        let coefficient = (color - 0.5) / 0.282_094_8;
+        coefficient.to_array()
+    }
+
+    fn two_gaussians() -> PointCloudModel {
+        // Index order is deliberately far, near. The far particle is broad
+        // enough that its support proxy begins before the near particle's,
+        // while its maximum response is still later along the ray.
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 4.0, 0.5),
+            glam::Vec4::new(0.0, 0.0, 2.0, 0.5),
+        ];
+        let mut sh_coefficients = Vec::new();
+        sh_coefficients.extend_from_slice(&dc(glam::Vec3::new(0.0, 0.0, 1.0)));
+        sh_coefficients.extend_from_slice(&dc(glam::Vec3::new(1.0, 0.0, 0.0)));
+        PointCloudModel {
+            points,
+            sh_coefficients,
+            sh_degree: 0,
+            transforms: Some(crate::Transforms {
+                rotations: vec![glam::Quat::IDENTITY; 2],
+                scales: vec![
+                    glam::Vec3::new(1.0, 1.0, 1.0),
+                    glam::Vec3::new(1.0, 1.0, 0.1),
+                ],
+            }),
+            adjacency: None,
+            radii: None,
+        }
+    }
+
+    #[test]
+    fn gaussian_trace_orders_maximum_response_not_proxy_entry() {
+        let model = two_gaussians();
+        let settings = GaussianTraceSettings {
+            min_opacity: 0.01,
+            min_transmittance: 0.0,
+            t_start: 0.0,
+            t_end: 10.0,
+        };
+        let support_radius = (2.0 * (0.5_f32 / settings.min_opacity).ln()).sqrt();
+        let far_proxy_entry = 4.0 - support_radius;
+        let near_proxy_entry = 2.0 - 0.1 * support_radius;
+        assert!(far_proxy_entry < near_proxy_entry);
+
+        let result = trace_gaussians(
+            &model,
+            Ray {
+                origin: glam::Vec3::ZERO,
+                direction: glam::Vec3::Z,
+            },
+            settings,
+        );
+
+        // Correct maximum-response order is near red at t=2, then far blue
+        // at t=4: 0.5R + (1-0.5)*0.5B.
+        let expected = glam::Vec4::new(0.5, 0.0, 0.25, 0.75);
+        assert!((result.rgba - expected).abs().max_element() < 1.0e-6);
+        assert_eq!(result.hits, 2);
+    }
+
+    fn hit_less(a: GaussianRayHit, b: GaussianRayHit) -> bool {
+        a.t < b.t || (a.t == b.t && a.index < b.index)
+    }
+
+    fn next_batch(
+        candidates: &[GaussianRayHit],
+        cursor: Option<GaussianRayHit>,
+        window: usize,
+    ) -> Vec<GaussianRayHit> {
+        let mut selected = Vec::new();
+        for &candidate in candidates {
+            if cursor.is_some_and(|value| !hit_less(value, candidate))
+                || selected
+                    .iter()
+                    .any(|hit: &GaussianRayHit| hit.index == candidate.index)
+            {
+                continue;
+            }
+            let position = selected
+                .iter()
+                .position(|&hit| hit_less(candidate, hit))
+                .unwrap_or(selected.len());
+            if position < window {
+                selected.insert(position, candidate);
+                selected.truncate(window);
+            }
+        }
+        selected
+    }
+
+    #[test]
+    fn gaussian_batch_cursor_keeps_more_than_window_and_equal_depth_hits() {
+        let expected: Vec<GaussianRayHit> = (0..13)
+            .map(|index| GaussianRayHit {
+                t: 1.0 + (index / 3) as f32,
+                index,
+                alpha: 0.1,
+            })
+            .collect();
+        let mut candidates = Vec::new();
+        for hit in expected.iter().rev() {
+            // Front/back triangle candidates for the same instance arrive in
+            // an arbitrary order and must collapse to one particle response.
+            candidates.push(*hit);
+            candidates.push(*hit);
+        }
+
+        let mut actual = Vec::new();
+        let mut cursor = None;
+        loop {
+            let batch = next_batch(&candidates, cursor, 5);
+            if batch.is_empty() {
+                break;
+            }
+            cursor = batch.last().copied();
+            actual.extend(batch);
+        }
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert_eq!(actual.t, expected.t);
+            assert_eq!(actual.index, expected.index);
+        }
+    }
 }
 
 /// One step of the trace: the cell we were *in* during the segment and the

@@ -30,6 +30,10 @@ struct GaussianHit {
     idx: u32,
 }
 
+fn gaussian_hit_less(a: GaussianHit, b: GaussianHit) -> bool {
+    return a.t < b.t || (a.t == b.t && a.idx < b.idx);
+}
+
 // Evaluate SH color for a Gaussian
 fn gaussian_eval_sh(gs: Gaussian, dir: vec3<f32>) -> vec3<f32> {
     var coeffs: array<vec3<f32>, MAX_SH_COMPONENTS>;
@@ -39,15 +43,21 @@ fn gaussian_eval_sh(gs: Gaussian, dir: vec3<f32>) -> vec3<f32> {
     return 0.5 + sh_eval_color(coeffs, dir, gs_get_sh_degree());
 }
 
-// Check if ray actually intersects the Gaussian (not just bounding box)
-fn gaussian_check_intersection(intersection: RayIntersection,
-                               ray_pos: vec3<f32>, ray_dir: vec3<f32>) -> bool {
+// Evaluate the Gaussian's maximum-response depth and reject conservative
+// triangle-proxy hits outside its finite ellipsoidal support. Unlike a custom
+// procedural intersection, a triangle ray query reports the proxy face's t;
+// that value is not a valid particle sort key when scales overlap.
+fn gaussian_max_response_hit(intersection: RayIntersection,
+                             ray_pos: vec3<f32>, ray_dir: vec3<f32>) -> GaussianHit {
     let gs = gs_get_gaussian(intersection.instance_index);
     let object_ray_pos = intersection.world_to_object * vec4f(ray_pos, 1.0);
     let object_ray_dir = intersection.world_to_object * vec4f(ray_dir, 0.0);
     let effective_t = -dot(object_ray_pos, object_ray_dir) / dot(object_ray_dir, object_ray_dir);
     let object_pos = object_ray_pos + effective_t * object_ray_dir;
-    return dot(object_pos, object_pos) <= 1.0;
+    if (dot(object_pos, object_pos) <= 1.0) {
+        return GaussianHit(effective_t, intersection.instance_index);
+    }
+    return GaussianHit(0.0, 0xFFFFFFFFu);
 }
 
 // Core Gaussian traversal using hardware RT
@@ -56,16 +66,23 @@ fn gaussian_trace(
     ray_dir: vec3<f32>,
     params: GaussianTraceParams,
 ) -> GaussianTraceResult {
-    var t_cur = params.t_start;
     var transmittance = 1.0;
     var radiance = vec3<f32>(0.0);
     var hits_total: u32 = 0u;
     let weight_threshold = gs_get_weight_threshold();
+    var cursor_valid = false;
+    var cursor = GaussianHit(params.t_start, 0u);
 
     while (transmittance > weight_threshold) {
         var rq: ray_query;
-        let ray_flags = RAY_FLAG_CULL_BACK_FACING | RAY_FLAG_FORCE_NO_OPAQUE;
-        let desc = RayDesc(ray_flags, 0xFFu, t_cur, params.t_end, ray_origin, ray_dir);
+        // Scan the complete interval on every batch. Advancing triangle t_min
+        // to the previous proxy face can omit a broad Gaussian whose proxy
+        // starts early but whose maximum response belongs to a later batch.
+        // Front and back faces are both enabled so rays beginning inside a
+        // proxy still produce a candidate; instance-index deduplication below
+        // collapses the two faces.
+        let ray_flags = RAY_FLAG_FORCE_NO_OPAQUE;
+        let desc = RayDesc(ray_flags, 0xFFu, params.t_start, params.t_end, ray_origin, ray_dir);
         rayQueryInitialize(&rq, g_gaussian_tlas, desc);
 
         var hit_count = 0u;
@@ -78,16 +95,29 @@ fn gaussian_trace(
             if (intersection.kind == RAY_QUERY_INTERSECTION_NONE) {
                 continue;
             }
-            if (!gaussian_check_intersection(intersection, ray_origin, ray_dir)) {
+            let candidate = gaussian_max_response_hit(intersection, ray_origin, ray_dir);
+            if (candidate.idx == 0xFFFFFFFFu ||
+                candidate.t <= params.t_start || candidate.t >= params.t_end) {
+                continue;
+            }
+            if (cursor_valid && !gaussian_hit_less(cursor, candidate)) {
                 continue;
             }
 
-            hits_total += 1u;
-            var hit = GaussianHit(intersection.t, intersection.instance_index);
-            // Insertion sort to keep hits ordered by t
+            var duplicate = false;
+            for (var i = 0u; i < hit_count; i += 1u) {
+                duplicate = duplicate || hits[i].idx == candidate.idx;
+            }
+            if (duplicate) {
+                continue;
+            }
+
+            var hit = candidate;
+            // Insertion sort to retain the next K particles in exact
+            // maximum-response order, independent of BVH candidate order.
             for (var i = 0u; i < hit_count; i += 1u) {
                 let other = hits[i];
-                if (hit.t < other.t) {
+                if (gaussian_hit_less(hit, other)) {
                     hits[i] = hit;
                     hit = other;
                 }
@@ -96,13 +126,17 @@ fn gaussian_trace(
                 hits[hit_count] = hit;
                 hit_count += 1u;
             }
-            if (hit_count == GAUSSIAN_HIT_WINDOW && intersection.t >= hits[GAUSSIAN_HIT_WINDOW - 1u].t) {
-                rayQueryConfirmIntersection(&rq);
-            }
+        }
+
+        if (hit_count == 0u) {
+            break;
         }
 
         // Accumulate contributions from sorted hits
         for (var i = 0u; i < hit_count; i += 1u) {
+            if (transmittance <= weight_threshold) {
+                break;
+            }
             let hit = hits[i];
             let gs = gs_get_gaussian(hit.idx);
 
@@ -116,13 +150,11 @@ fn gaussian_trace(
             let color = gaussian_eval_sh(gs, ray_dir);
             radiance += alpha * transmittance * color;
             transmittance *= 1.0 - alpha;
-            t_cur = hit.t;
+            hits_total += 1u;
         }
 
-        t_cur *= 1.00001; // Avoid hitting the same primitive
-        if (hit_count < GAUSSIAN_HIT_WINDOW) {
-            break;
-        }
+        cursor = hits[hit_count - 1u];
+        cursor_valid = true;
     }
 
     var result: GaussianTraceResult;

@@ -106,8 +106,14 @@ At the audited revision:
   candidates and pressure on the five-hit window.
 - Standard channel-major 3DGS SH PLY and SPZ v2-v4 signed positions, opacity,
   higher SH, and quaternion streams now have known-value regression fixtures.
-- The five-hit hardware-RT sorting window has not been measured against a
-  trusted renderer.
+- Gaussian compositing now has an exhaustive CPU oracle ordered by each
+  particle's maximum-response depth, matching the
+  [official 3DGRUT implementation](https://github.com/nv-tlabs/3dgrut). The
+  triangle ray-query path uses a lexicographic `(depth, point index)` cursor and
+  complete-interval rescans, so its five-hit window changes work batching
+  rather than omitting or proxy-face-ordering particles. Static WGSL validation
+  passes; physical-GPU pixel parity and the window-size performance sweep
+  remain blocked on driver recovery.
 - No Gaussian training implementation exists.
 
 ### Scene layer
@@ -302,6 +308,10 @@ fixed ablation rather than merely changing topology.
 3. Add cloud transforms without rebuilding point data.
 4. Decide whether native Gaussian reconstruction is justified after RadFoam and
    PowerFoam quality is established.
+
+The CPU maximum-response oracle and exact batched ordering are implemented.
+Cross-rendering a recognized checkpoint against official 3DGRUT, physical-GPU
+pixel parity, and the hit-window performance sweep remain.
 
 Acceptance gate: imported standard checkpoints match the oracle at documented
 quality and performance; transformations pass rendered-pixel tests.
