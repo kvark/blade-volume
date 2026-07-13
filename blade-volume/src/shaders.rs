@@ -5,6 +5,7 @@ pub const GAUSSIAN_TRACE: &str = include_str!("../shaders/gaussian_trace.wgsl");
 pub const RADFOAM: &str = include_str!("../shaders/radfoam.wgsl");
 pub const GAUSSIAN: &str = include_str!("../shaders/gaussian.wgsl");
 pub const SCENE_TRAVERSE: &str = include_str!("../shaders/scene_traverse.wgsl");
+pub const SCENE_RADFOAM: &str = include_str!("../shaders/scene_radfoam.wgsl");
 pub const RADFOAM_BLIT: &str = include_str!("../shaders/radfoam_blit.wgsl");
 pub const RADFOAM_RECORD_PATHS: &str = include_str!("../shaders/radfoam_record_paths.wgsl");
 
@@ -14,6 +15,14 @@ const INCLUDES: &[(&str, &str)] = &[
     ("sh_eval.wgsl", SH_EVAL),
     ("radfoam_trace.wgsl", RADFOAM_TRACE),
     ("gaussian_trace.wgsl", GAUSSIAN_TRACE),
+    (
+        "scene_bindings.wgsl",
+        include_str!("../shaders/scene_bindings.wgsl"),
+    ),
+    (
+        "scene_trace_core.wgsl",
+        include_str!("../shaders/scene_trace_core.wgsl"),
+    ),
 ];
 
 const MAX_INCLUDE_DEPTH: usize = 10;
@@ -103,7 +112,7 @@ fn compose_recursive(source: &str, depth: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::compose;
+    use super::{compose, SCENE_RADFOAM, SCENE_TRAVERSE};
 
     #[test]
     fn expands_a_known_include() {
@@ -139,5 +148,18 @@ mod tests {
         assert!(out.contains("tlas[0]"));
         assert!(out.contains("tlas[1]"));
         assert!(!out.contains("tlas[2]"));
+    }
+
+    #[test]
+    fn scene_variants_keep_ray_queries_out_of_radfoam_only_shader() {
+        let radfoam = compose(SCENE_RADFOAM);
+        assert!(radfoam.contains("fn trace_scene"));
+        assert!(!radfoam.contains("enable wgpu_ray_query"));
+        assert!(!radfoam.contains("g_gaussian_tlas"));
+
+        let mixed = compose(SCENE_TRAVERSE);
+        assert!(mixed.contains("enable wgpu_ray_query"));
+        assert!(mixed.contains("g_gaussian_tlas"));
+        assert!(!mixed.contains("#initialize_gaussian_query"));
     }
 }

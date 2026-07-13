@@ -126,13 +126,18 @@ At the audited revision:
 
 ### Scene layer
 
-- RadFoam-only scenes do not render through `SceneRenderer`.
+- RadFoam/PowerFoam-only scenes now select a dedicated compute pipeline with no
+  ray-query extension, Gaussian buffers, acceleration-structure descriptors,
+  or dummy geometry. The mixed and RadFoam-only shaders share binding and
+  software-TLAS traversal modules and both pass static WGSL validation.
+  Physical-GPU readback remains pending after driver recovery.
 - All Gaussian clouds now bind independent TLAS and data-buffer array entries
   on Vulkan. Gaussian rays are transformed into each cloud's local space, so
   per-frame scene transforms do not rebuild point data or per-cloud TLASes.
   Static WGSL validation passes; rendered-pixel validation remains blocked on
-  driver recovery. Blade does not yet implement acceleration-structure arrays
-  on Metal, so the scene backend split must retain a scalar Metal path.
+  driver recovery. Blade does not yet implement resource binding arrays on
+  Metal, so the multi-cloud scene layer remains Vulkan-only and needs a scalar
+  or native bindless Metal path.
 - RadFoam scene objects now seed traversal from the camera-containing local
   cell, carry per-object SH/attribute metadata, and traverse from the camera
   while clipping integration to their software-TLAS interval. Physical-GPU
@@ -343,9 +348,9 @@ quality and performance; transformations pass rendered-pixel tests.
 
 ### Stage 5: multi-cloud engine
 
-1. Support RadFoam-only and multiple-Gaussian scenes. (Multiple Gaussian
-   clouds are implemented for the Vulkan array path; RadFoam-only and the
-   scalar Metal path remain.)
+1. Support RadFoam-only and multiple-Gaussian scenes. (Implemented for the
+   statically validated RadFoam-only and Vulkan mixed paths; physical-GPU
+   readback and a Metal resource-binding path remain.)
 2. Bind per-object layouts and locate correct RadFoam entry cells.
 3. Preserve ray parameterization and optical depth under transforms. (Done in
    CPU logic and statically validated WGSL; rendered-pixel validation remains.)

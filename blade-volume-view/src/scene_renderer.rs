@@ -102,6 +102,20 @@ pub struct SceneTraverseData<'a> {
     pub g_out: gpu::TextureView,
 }
 
+/// Shader data for the RadFoam/PowerFoam-only scene pipeline.
+#[derive(blade_macros::ShaderData)]
+pub struct RadFoamSceneTraverseData<'a> {
+    pub g_camera: vol::CameraParams,
+    pub g_scene_params: SceneParams,
+    pub g_bounds: gpu::BufferPiece,
+    pub g_transforms: gpu::BufferPiece,
+    pub g_radfoam_points: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
+    pub g_radfoam_attributes: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
+    pub g_radfoam_adjacency: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
+    pub g_radfoam_adjacency_offsets: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
+    pub g_out: gpu::TextureView,
+}
+
 /// Shader data layout for HDR to swapchain blit.
 #[derive(blade_macros::ShaderData)]
 pub struct SceneBlitData {
@@ -126,8 +140,10 @@ pub struct SceneBackground {
 pub struct SceneRenderer {
     /// The scene being rendered.
     pub scene: vol::Scene,
-    /// Traversal compute pipeline.
-    traverse_pipeline: gpu::ComputePipeline,
+    /// Mixed Gaussian/RadFoam traversal compute pipeline.
+    mixed_traverse_pipeline: Option<gpu::ComputePipeline>,
+    /// RadFoam-only traversal compute pipeline without ray-query bindings.
+    radfoam_traverse_pipeline: gpu::ComputePipeline,
     /// HDR to swapchain blit pipeline.
     blit_pipeline: gpu::RenderPipeline,
     /// HDR render target.
@@ -149,6 +165,11 @@ impl SceneRenderer {
         surface_format: gpu::TextureFormat,
         window_size: RenderSize,
     ) -> Self {
+        let capabilities = context.capabilities();
+        assert!(
+            capabilities.binding_array,
+            "SceneRenderer requires resource binding arrays"
+        );
         // Create HDR target
         let (hdr_tex, hdr_view) = Self::create_hdr_target(context, window_size);
 
@@ -160,20 +181,41 @@ impl SceneRenderer {
             ..Default::default()
         });
 
-        // Traverse compute pipeline
-        let shader = {
-            let raw_source = vol::shaders::SCENE_TRAVERSE;
-            let source = vol::shaders::compose(raw_source);
+        // Acceleration-structure arrays are currently implemented by Blade's
+        // Vulkan backend only. Keep RadFoam-only scenes usable on binding-array
+        // devices without ray queries or an unsupported mixed pipeline.
+        let mixed_traverse_pipeline = if !cfg!(target_vendor = "apple")
+            && capabilities
+                .ray_query
+                .contains(gpu::ShaderVisibility::COMPUTE)
+        {
+            let source = vol::shaders::compose(vol::shaders::SCENE_TRAVERSE);
+            let shader = context.create_shader(gpu::ShaderDesc {
+                source: &source,
+                naga_module: None,
+            });
+            let layout = <SceneTraverseData as gpu::ShaderData>::layout();
+            Some(context.create_compute_pipeline(gpu::ComputePipelineDesc {
+                name: "scene-traverse",
+                data_layouts: &[&layout],
+                compute: shader.at("main"),
+            }))
+        } else {
+            None
+        };
+
+        let radfoam_shader = {
+            let source = vol::shaders::compose(vol::shaders::SCENE_RADFOAM);
             context.create_shader(gpu::ShaderDesc {
                 source: &source,
                 naga_module: None,
             })
         };
-        let traverse_layout = <SceneTraverseData as gpu::ShaderData>::layout();
-        let traverse_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
-            name: "scene-traverse",
-            data_layouts: &[&traverse_layout],
-            compute: shader.at("main"),
+        let radfoam_traverse_layout = <RadFoamSceneTraverseData as gpu::ShaderData>::layout();
+        let radfoam_traverse_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+            name: "scene-traverse-radfoam",
+            data_layouts: &[&radfoam_traverse_layout],
+            compute: radfoam_shader.at("main"),
         });
 
         // Blit pipeline (reuse radfoam_blit shader)
@@ -202,7 +244,8 @@ impl SceneRenderer {
 
         Self {
             scene: vol::Scene::new(),
-            traverse_pipeline,
+            mixed_traverse_pipeline,
+            radfoam_traverse_pipeline,
             blit_pipeline,
             hdr_tex,
             hdr_view,
@@ -279,6 +322,10 @@ impl SceneRenderer {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> vol::ObjectHandle {
+        assert!(
+            self.mixed_traverse_pipeline.is_some(),
+            "Gaussian scenes require Vulkan compute ray queries and acceleration-structure arrays"
+        );
         // Update params
         self.params.sh_degree = model.sh_degree as u32;
         self.params.gaussian_min_opacity = min_opacity;
@@ -344,38 +391,59 @@ impl SceneRenderer {
             self.params.radfoam_attr_dim = cloud.attr_dim as u32;
         }
 
-        // This mixed pipeline contains ray-query bindings and therefore requires
-        // at least one Gaussian. RadFoam-only rendering uses a separate pipeline
-        // in the next scene-backend split, rather than dummy geometry.
-        let Some(first_gaussian) = render_data.gaussian_clouds.first() else {
-            return;
-        };
+        let dispatch = [
+            window_size.width.div_ceil(8),
+            window_size.height.div_ceil(8),
+            1,
+        ];
+        if let Some(first_gaussian) = render_data.gaussian_clouds.first() {
+            let mixed_traverse_pipeline = self
+                .mixed_traverse_pipeline
+                .as_ref()
+                .expect("Gaussian object added without a mixed scene pipeline");
+            let mut gaussian_tlas: gpu::AccelerationStructureArray<MAX_CLOUD_OBJECTS> =
+                gpu::AccelerationStructureArray::new();
+            let mut gaussian_data: gpu::BufferArray<MAX_CLOUD_OBJECTS> = gpu::BufferArray::new();
+            for cloud in render_data.gaussian_clouds {
+                gaussian_tlas.alloc(cloud.tlas);
+                gaussian_data.alloc(cloud.gauss_buf.into());
+            }
 
-        let mut gaussian_tlas: gpu::AccelerationStructureArray<MAX_CLOUD_OBJECTS> =
-            gpu::AccelerationStructureArray::new();
-        let mut gaussian_data: gpu::BufferArray<MAX_CLOUD_OBJECTS> = gpu::BufferArray::new();
-        for cloud in render_data.gaussian_clouds {
-            gaussian_tlas.alloc(cloud.tlas);
-            gaussian_data.alloc(cloud.gauss_buf.into());
-        }
+            // Vulkan descriptor arrays must not be empty. These entries are
+            // never indexed when the scene has no RadFoam objects.
+            if render_data.radfoam_clouds.is_empty() {
+                let fallback = first_gaussian.gauss_buf.into();
+                radfoam_points.alloc(fallback);
+                radfoam_attributes.alloc(fallback);
+                radfoam_adjacency.alloc(fallback);
+                radfoam_adjacency_offsets.alloc(fallback);
+            }
 
-        // Vulkan descriptor arrays must not be empty. These entries are never
-        // indexed when the scene has no RadFoam objects.
-        if render_data.radfoam_clouds.is_empty() {
-            let fallback = first_gaussian.gauss_buf.into();
-            radfoam_points.alloc(fallback);
-            radfoam_attributes.alloc(fallback);
-            radfoam_adjacency.alloc(fallback);
-            radfoam_adjacency_offsets.alloc(fallback);
-        }
-
-        // Compute traverse into HDR texture
-        if let mut pass = encoder.compute("scene-traverse") {
-            let mut pen = pass.with(&self.traverse_pipeline);
-
+            if let mut pass = encoder.compute("scene-traverse-mixed") {
+                let mut pen = pass.with(mixed_traverse_pipeline);
+                pen.bind(
+                    0,
+                    &SceneTraverseData {
+                        g_camera: camera_params,
+                        g_scene_params: self.params,
+                        g_bounds: render_data.bounds,
+                        g_transforms: render_data.transforms,
+                        g_radfoam_points: &radfoam_points,
+                        g_radfoam_attributes: &radfoam_attributes,
+                        g_radfoam_adjacency: &radfoam_adjacency,
+                        g_radfoam_adjacency_offsets: &radfoam_adjacency_offsets,
+                        g_gaussian_tlas: &gaussian_tlas,
+                        g_gaussian_data: &gaussian_data,
+                        g_out: self.hdr_view,
+                    },
+                );
+                pen.dispatch(dispatch);
+            }
+        } else if let mut pass = encoder.compute("scene-traverse-radfoam") {
+            let mut pen = pass.with(&self.radfoam_traverse_pipeline);
             pen.bind(
                 0,
-                &SceneTraverseData {
+                &RadFoamSceneTraverseData {
                     g_camera: camera_params,
                     g_scene_params: self.params,
                     g_bounds: render_data.bounds,
@@ -384,15 +452,10 @@ impl SceneRenderer {
                     g_radfoam_attributes: &radfoam_attributes,
                     g_radfoam_adjacency: &radfoam_adjacency,
                     g_radfoam_adjacency_offsets: &radfoam_adjacency_offsets,
-                    g_gaussian_tlas: &gaussian_tlas,
-                    g_gaussian_data: &gaussian_data,
                     g_out: self.hdr_view,
                 },
             );
-
-            let gx = window_size.width.div_ceil(8);
-            let gy = window_size.height.div_ceil(8);
-            pen.dispatch([gx, gy, 1]);
+            pen.dispatch(dispatch);
         }
 
         // Blit HDR -> swapchain
@@ -429,7 +492,10 @@ impl SceneRenderer {
         context.destroy_sampler(self.sampler);
         context.destroy_texture_view(self.hdr_view);
         context.destroy_texture(self.hdr_tex);
-        context.destroy_compute_pipeline(&mut self.traverse_pipeline);
+        if let Some(ref mut pipeline) = self.mixed_traverse_pipeline {
+            context.destroy_compute_pipeline(pipeline);
+        }
+        context.destroy_compute_pipeline(&mut self.radfoam_traverse_pipeline);
         context.destroy_render_pipeline(&mut self.blit_pipeline);
     }
 }
