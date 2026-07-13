@@ -299,11 +299,6 @@ fn main() {
         std::process::exit(2);
     }
 
-    let Some(gpu) = fit::try_init_gpu() else {
-        eprintln!("no supported GPU device — cannot train");
-        std::process::exit(2);
-    };
-
     let pixel_batch = if args.pixel_batch == 0 {
         None
     } else {
@@ -468,6 +463,21 @@ fn main() {
 
     let sparse = path::Path::new(&args.sparse);
     let images = path::Path::new(&args.images);
+    if !sparse.is_dir() {
+        eprintln!(
+            "sparse reconstruction directory does not exist: {}",
+            sparse.display()
+        );
+        std::process::exit(2);
+    }
+    if !images.is_dir() {
+        eprintln!("image directory does not exist: {}", images.display());
+        std::process::exit(2);
+    }
+    let Some(gpu) = fit::try_init_gpu() else {
+        eprintln!("no supported GPU device — cannot train");
+        std::process::exit(2);
+    };
     let outcome = pipeline::train_colmap_appearance_split(
         sparse,
         images,
