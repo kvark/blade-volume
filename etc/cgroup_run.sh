@@ -17,7 +17,7 @@
 #                            /tmp/blade-volume-gpu-<pid>.log
 #   --icd PATH               pin one Vulkan ICD explicitly (optional)
 #   --allow-software         permit a software-only Vulkan installation
-#   --cpu-only               skip Vulkan and GPU probes for CPU-only commands
+#   --cpu-only               skip probes and deny GPU/device access in scope
 #   --probe-timeout SECONDS  abort if a GPU probe stalls; default 10
 #   --no-xid-watch           skip the background GPU-fault watcher
 #
@@ -30,6 +30,7 @@
 #   - Watches kernel logs for NVIDIA Xid and AMD GPU fault/reset events.
 #   - Aborts if Vulkan or NVIDIA telemetry stops responding, without waiting
 #     for an unkillable driver task.
+#   - Denies non-standard device access in `--cpu-only` scopes.
 #   - Samples the named cgroup's current/peak/swap memory every second,
 #     plus NVIDIA telemetry when nvidia-smi is available.
 set -euo pipefail
@@ -306,10 +307,18 @@ MEMORY_WATCH_PID="$!"
 CHILD_PIDS+=("$MEMORY_WATCH_PID")
 
 set +e
+SCOPE_DEVICE_PROPERTIES=()
+if [ "$CPU_ONLY" -eq 1 ]; then
+  # DevicePolicy=closed keeps standard pseudo-devices available but denies
+  # GPU character devices. This makes --cpu-only an enforcement boundary,
+  # rather than merely an instruction to skip telemetry probes.
+  SCOPE_DEVICE_PROPERTIES=(-p DevicePolicy=closed)
+fi
 systemd-run --user --scope --unit="$UNIT" \
   -p MemoryMax="$MEM_CAP" \
   -p MemorySwapMax=0 \
   -p CPUWeight="$CPU_WEIGHT" \
+  "${SCOPE_DEVICE_PROPERTIES[@]}" \
   --description="blade-volume cgroup_run: $*" \
   -- "$@"
 RC=$?
