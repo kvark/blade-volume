@@ -179,6 +179,25 @@ were GPU ring timeouts at low host-memory use, not cgroup OOMs. Production-size
 training is therefore isolated and pinned to the NVIDIA device while the AMD
 driver path remains excluded from long runs.
 
+A subsequent NVIDIA quality run confirmed the memory fix but did not produce a
+valid benchmark result. It grew from 50,000 to the 200,000-cell target by step
+7,500, reported no hard traversal truncation, and reduced the rolling training
+loss from 0.7446 initially to 0.1868 at step 8,000. Near step 9,400 the NVIDIA
+management interface and trainer both stopped responding in kernel waits,
+without an Xid or other kernel fault record. Cgroup memory remained below
+1.20 GiB of its 4 GiB limit with zero swap and OOM events; sampled VRAM was
+approximately 525 MiB. This rules out host-memory exhaustion but does not by
+itself distinguish an application-triggered driver defect from an independent
+driver failure. The exact PLY and Adam-state checkpoint at step 9,000 was
+verified intact, so the run is resumable after GPU recovery.
+
+That incident exposed a fault in the benchmark harness: a synchronous
+`nvidia-smi` sampler can hang in the same driver wait as the workload. GPU and
+Vulkan probes now have deadlines, a telemetry timeout terminates the isolated
+scope without waiting for the stuck probe, and `--cpu-only` retains cgroup
+memory telemetry while skipping every GPU probe. Synthetic stalled-probe tests
+cover the preflight and in-run failure paths.
+
 ### Stage 0: trustworthy baseline
 
 1. Make the maintained pixel-batched trainer the default public workflow.

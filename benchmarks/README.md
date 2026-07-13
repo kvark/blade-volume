@@ -39,3 +39,9 @@ record its memory peak and OOM events alongside the required result fields.
 `bonsai_quality.toml` is the first meaningful go/no-go protocol. Do not compare
 its numbers with the historical audit run: camera rectification, terminal
 integration, adjacency, and training semantics have changed since that run.
+
+The checked-out `etc/data/bonsai` fixture contains 80 source images while its
+COLMAP reconstruction describes 292. The quality manifest is therefore a
+controlled subset protocol, not a full Mip-NeRF-360 or paper-comparable
+benchmark. Published-quality comparisons require all 292 corresponding images
+and a separate manifest that records that provenance explicitly.

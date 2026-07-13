@@ -6,7 +6,8 @@
 #
 # Usage:
 #   etc/cgroup_run.sh [--mem 16G] [--cpu-weight 100] [--gpu-log PATH]
-#                     [--icd PATH] [--allow-software] [--no-xid-watch]
+#                     [--icd PATH] [--allow-software] [--cpu-only]
+#                     [--probe-timeout SECONDS] [--no-xid-watch]
 #                     -- <command> [args...]
 #
 # Defaults:
@@ -16,6 +17,8 @@
 #                            /tmp/blade-volume-gpu-<pid>.log
 #   --icd PATH               pin one Vulkan ICD explicitly (optional)
 #   --allow-software         permit a software-only Vulkan installation
+#   --cpu-only               skip Vulkan and GPU probes for CPU-only commands
+#   --probe-timeout SECONDS  abort if a GPU probe stalls; default 10
 #   --no-xid-watch           skip the background GPU-fault watcher
 #
 # Example:
@@ -25,6 +28,8 @@
 #   - Rejects software-only Vulkan before launching; `--icd` can pin a
 #     specific physical adapter on multi-GPU hosts.
 #   - Watches kernel logs for NVIDIA Xid and AMD GPU fault/reset events.
+#   - Aborts if Vulkan or NVIDIA telemetry stops responding, without waiting
+#     for an unkillable driver task.
 #   - Samples the named cgroup's current/peak/swap memory every second,
 #     plus NVIDIA telemetry when nvidia-smi is available.
 set -euo pipefail
@@ -36,6 +41,8 @@ ICD=""
 ALLOW_LLVMPIPE=0
 WATCH_XID=1
 HAS_NVIDIA=0
+CPU_ONLY=0
+PROBE_TIMEOUT_SECONDS=10
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +51,8 @@ while [[ $# -gt 0 ]]; do
     --gpu-log) GPU_LOG="$2"; shift 2 ;;
     --icd) ICD="$2"; shift 2 ;;
     --allow-software|--allow-llvmpipe) ALLOW_LLVMPIPE=1; shift ;;
+    --cpu-only) CPU_ONLY=1; shift ;;
+    --probe-timeout) PROBE_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --no-xid-watch) WATCH_XID=0; shift ;;
     --) shift; break ;;
     -h|--help)
@@ -59,11 +68,56 @@ if [ $# -eq 0 ]; then
   exit 2
 fi
 
+if ! [[ "$PROBE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "probe timeout must be a positive integer" >&2
+  exit 2
+fi
+
+if [ "$CPU_ONLY" -eq 1 ] && [ -n "$ICD" ]; then
+  echo "--cpu-only and --icd cannot be used together" >&2
+  exit 2
+fi
+
 : "${GPU_LOG:=/tmp/blade-volume-gpu-$$.log}"
 UNIT="blade-volume-run-$$"
+TEMP_FILES=()
+
+remove_temp_files() {
+  for f in "${TEMP_FILES[@]:-}"; do
+    [ -n "$f" ] && rm -f "$f"
+  done
+  return 0
+}
+trap remove_temp_files EXIT
+
+# Run a diagnostic command without ever blocking on a driver task indefinitely.
+# On timeout, remove the process from bash's job table before returning: a GPU
+# ioctl may be in uninterruptible sleep and therefore ignore even SIGKILL.
+run_with_deadline() {
+  local output_path="$1"
+  shift
+  local probe_pid
+  local ticks=0
+  local max_ticks=$((PROBE_TIMEOUT_SECONDS * 10))
+
+  "$@" >"$output_path" 2>&1 &
+  probe_pid=$!
+  while kill -0 "$probe_pid" 2>/dev/null && [ "$ticks" -lt "$max_ticks" ]; do
+    sleep 0.1
+    ticks=$((ticks + 1))
+  done
+
+  if kill -0 "$probe_pid" 2>/dev/null; then
+    kill -KILL "$probe_pid" 2>/dev/null || true
+    disown "$probe_pid" 2>/dev/null || true
+    return 124
+  fi
+
+  wait "$probe_pid"
+}
 
 # ---------------------------------------------------------------- pre-flight
-if [ -n "$ICD" ]; then
+if [ "$CPU_ONLY" -eq 0 ] && [ -n "$ICD" ]; then
   if [ ! -f "$ICD" ]; then
     echo "cgroup_run: Vulkan ICD missing ($ICD)" >&2
     exit 3
@@ -72,26 +126,54 @@ if [ -n "$ICD" ]; then
   echo "cgroup_run: pinned VK_ICD_FILENAMES=$VK_ICD_FILENAMES" >&2
 fi
 
-if [ "$ALLOW_LLVMPIPE" -eq 0 ]; then
-  if ! command -v vulkaninfo >/dev/null 2>&1 || ! vulkaninfo --summary >/dev/null 2>&1; then
-    echo "cgroup_run: vulkaninfo pre-flight failed" >&2
+VULKAN_SUMMARY=""
+NVIDIA_BASELINE=""
+if [ "$CPU_ONLY" -eq 0 ]; then
+  if command -v vulkaninfo >/dev/null 2>&1; then
+    VULKAN_SUMMARY=$(mktemp /tmp/blade-volume-vulkan-XXXXXX)
+    TEMP_FILES+=("$VULKAN_SUMMARY")
+    if run_with_deadline "$VULKAN_SUMMARY" vulkaninfo --summary; then
+      :
+    else
+      rc=$?
+      if [ "$rc" -eq 124 ]; then
+        echo "cgroup_run: vulkaninfo pre-flight timed out after ${PROBE_TIMEOUT_SECONDS}s" >&2
+      else
+        echo "cgroup_run: vulkaninfo pre-flight failed (rc=$rc)" >&2
+      fi
+      exit 3
+    fi
+  elif [ "$ALLOW_LLVMPIPE" -eq 0 ]; then
+    echo "cgroup_run: vulkaninfo is required for the physical-GPU pre-flight" >&2
     exit 3
   fi
-  if ! vulkaninfo --summary 2>/dev/null | grep -E \
+
+  if [ "$ALLOW_LLVMPIPE" -eq 0 ] && ! grep -E \
       >/dev/null \
-      'deviceType[[:space:]]*=[[:space:]]*PHYSICAL_DEVICE_TYPE_(DISCRETE|INTEGRATED)_GPU'; then
+      'deviceType[[:space:]]*=[[:space:]]*PHYSICAL_DEVICE_TYPE_(DISCRETE|INTEGRATED)_GPU' \
+      "$VULKAN_SUMMARY"; then
     echo "cgroup_run: no physical Vulkan GPU found; pass --allow-software to override" >&2
     exit 3
   fi
-fi
 
-if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
-  HAS_NVIDIA=1
-  if nvidia-smi -q 2>&1 | grep -E \
-      "GPU requires reset|Pending GPU Reset|ERR!" >/dev/null; then
-    echo "cgroup_run: nvidia-smi reports the GPU needs reset:" >&2
-    nvidia-smi -q 2>&1 | grep -E "GPU requires reset|Pending GPU Reset|ERR!" >&2
-    exit 3
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    NVIDIA_BASELINE=$(mktemp /tmp/blade-volume-nvidia-XXXXXX)
+    TEMP_FILES+=("$NVIDIA_BASELINE")
+    if run_with_deadline "$NVIDIA_BASELINE" nvidia-smi -q; then
+      HAS_NVIDIA=1
+      if grep -E "GPU requires reset|Pending GPU Reset|ERR!" "$NVIDIA_BASELINE" >/dev/null; then
+        echo "cgroup_run: nvidia-smi reports the GPU needs reset:" >&2
+        grep -E "GPU requires reset|Pending GPU Reset|ERR!" "$NVIDIA_BASELINE" >&2
+        exit 3
+      fi
+    else
+      rc=$?
+      if [ "$rc" -eq 124 ]; then
+        echo "cgroup_run: nvidia-smi pre-flight timed out after ${PROBE_TIMEOUT_SECONDS}s" >&2
+        exit 3
+      fi
+      echo "cgroup_run: nvidia-smi unavailable (rc=$rc); NVIDIA sampling disabled" >&2
+    fi
   fi
 fi
 
@@ -99,18 +181,25 @@ fi
 {
   echo "=== cgroup_run start $(date -Is) ==="
   echo "command: $*"
+  echo "cpu_only=$CPU_ONLY"
   echo "VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-(unset)}"
   echo "--- Vulkan summary ---"
-  vulkaninfo --summary 2>&1 || true
+  if [ "$CPU_ONLY" -eq 1 ]; then
+    echo "skipped (--cpu-only)"
+  elif [ -n "$VULKAN_SUMMARY" ]; then
+    sed -n '1,240p' "$VULKAN_SUMMARY"
+  else
+    echo "unavailable"
+  fi
   echo "--- host memory ---"
   free -h 2>&1 || true
   if [ "$HAS_NVIDIA" -eq 1 ]; then
     echo "--- NVIDIA baseline ---"
-    nvidia-smi 2>&1 || true
+    sed -n '1,1000p' "$NVIDIA_BASELINE"
   fi
   echo "--- samples ---"
 } >>"$GPU_LOG"
-echo "cgroup_run: GPU telemetry → $GPU_LOG" >&2
+echo "cgroup_run: telemetry → $GPU_LOG" >&2
 
 # ---------------------------------------------------------------- watchers
 CHILD_PIDS=()
@@ -121,18 +210,41 @@ cleanup() {
   if systemctl --user is-active --quiet "$UNIT.scope" 2>/dev/null; then
     systemctl --user kill --kill-whom=all "$UNIT.scope" 2>/dev/null || true
   fi
+  remove_temp_files
+  return 0
 }
 trap cleanup EXIT
 
 # Periodic NVIDIA sampler when the tool is available. Cgroup memory is sampled
 # separately for every vendor below.
 if [ "$HAS_NVIDIA" -eq 1 ]; then
+  NVIDIA_SAMPLE=$(mktemp /tmp/blade-volume-nvidia-sample-XXXXXX)
+  TEMP_FILES+=("$NVIDIA_SAMPLE")
+  PARENT_PID=$$
   (
     while sleep 5; do
       ts=$(date -Is)
-      row=$(nvidia-smi --query-gpu=temperature.gpu,power.draw,memory.used,utilization.gpu,ecc.errors.uncorrected.volatile.total \
-                       --format=csv,noheader,nounits 2>/dev/null || echo "nvidia-smi-failed")
-      echo "$ts,nvidia,$row" >>"$GPU_LOG"
+      if run_with_deadline "$NVIDIA_SAMPLE" nvidia-smi \
+          --query-gpu=temperature.gpu,power.draw,memory.used,utilization.gpu,ecc.errors.uncorrected.volatile.total \
+          --format=csv,noheader,nounits; then
+        while IFS= read -r row; do
+          echo "$ts,nvidia,$row" >>"$GPU_LOG"
+        done <"$NVIDIA_SAMPLE"
+      else
+        rc=$?
+        {
+          echo "=== NVIDIA TELEMETRY FAILURE $ts rc=$rc ==="
+          if [ "$rc" -eq 124 ]; then
+            echo "nvidia-smi timed out after ${PROBE_TIMEOUT_SECONDS}s"
+          else
+            sed -n '1,80p' "$NVIDIA_SAMPLE"
+          fi
+        } >>"$GPU_LOG"
+        echo "cgroup_run: NVIDIA telemetry failed (rc=$rc), killing scope" >&2
+        systemctl --user kill --kill-whom=all "$UNIT.scope" 2>/dev/null || true
+        kill -TERM "$PARENT_PID" 2>/dev/null || true
+        break
+      fi
     done
   ) &
   CHILD_PIDS+=("$!")
@@ -143,7 +255,7 @@ fi
 # 109 (CTX switch timeout), 154 (reset required), and anything else the
 # kernel emits during the run.
 WATCH_PID=""
-if [ "$WATCH_XID" -eq 1 ]; then
+if [ "$WATCH_XID" -eq 1 ] && [ "$CPU_ONLY" -eq 0 ]; then
   PARENT_PID=$$
   (
     journalctl -k -f -o cat --since=now 2>/dev/null | while IFS= read -r line; do
@@ -208,7 +320,12 @@ wait "$MEMORY_WATCH_PID" 2>/dev/null || true
   echo "=== cgroup_run end $(date -Is) rc=$RC ==="
   journalctl --user -u "$UNIT.scope" --since="$START_TIME" --no-pager 2>&1 || true
   if [ "$HAS_NVIDIA" -eq 1 ]; then
-    nvidia-smi 2>&1 || true
+    echo "--- NVIDIA final ---"
+    if run_with_deadline "$NVIDIA_BASELINE" nvidia-smi; then
+      sed -n '1,1000p' "$NVIDIA_BASELINE"
+    else
+      echo "nvidia-smi failed or timed out after the run"
+    fi
   fi
 } >>"$GPU_LOG"
 

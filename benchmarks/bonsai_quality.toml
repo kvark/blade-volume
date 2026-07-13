@@ -1,8 +1,11 @@
 schema = 1
 name = "bonsai-radfoam-quality-v1"
-purpose = "Matched internal go/no-go baseline for reference-faithful RadFoam"
+purpose = "Controlled subset go/no-go baseline for reference-faithful RadFoam"
 dataset = "Mip-NeRF 360 / bonsai"
 dataset_path = "etc/data/bonsai"
+dataset_image_files = 80
+colmap_registered_images = 292
+comparison_scope = "internal 80-image subset; not comparable to full-scene or published metrics"
 
 [split]
 protocol = "existence-filtered COLMAP order, every Nth held out"
