@@ -286,8 +286,7 @@ pub fn convert_gltf(
                 while x <= bbox.max.x {
                     let p = glam::Vec3::new(x, y, z);
                     if is_point_inside_mesh(p, &triangles) {
-                        let color =
-                            (avg_color * options.ambient).clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
+                        let color = display_color(avg_color, options.ambient);
                         let base = p - glam::Vec3::splat(0.5 * spacing);
                         let scale = sub_spacing * 0.5 * options.interior_scale;
                         let mut iz = 0u32;
@@ -351,8 +350,7 @@ pub fn convert_gltf(
                 let uv = tri.uv0 * u + tri.uv1 * v + tri.uv2 * w;
                 let mat = &materials[tri.material];
                 let base = sample_material_color(mat, uv);
-                let color =
-                    (base.truncate() * options.ambient).clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
+                let color = display_color(base.truncate(), options.ambient);
                 let alpha = base.w;
                 if alpha < options.alpha_threshold {
                     continue;
@@ -705,6 +703,27 @@ fn srgb_to_linear(v: f32) -> f32 {
     } else {
         ((v + 0.055) / 1.055).powf(2.4)
     }
+}
+
+fn linear_to_srgb(v: f32) -> f32 {
+    if v <= 0.003_130_8 {
+        12.92 * v
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+fn display_color(linear: glam::Vec3, ambient: glam::Vec3) -> glam::Vec3 {
+    // glTF base-color factors are linear and base-color textures are decoded
+    // to linear by `Texture::fetch`. Apply lighting there, then cross the
+    // PointCloudModel boundary as the display-referred sRGB code values used
+    // by training, SH evaluation, metrics, and presentation.
+    let color = (linear * ambient).clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
+    glam::Vec3::new(
+        linear_to_srgb(color.x),
+        linear_to_srgb(color.y),
+        linear_to_srgb(color.z),
+    )
 }
 
 fn write_gaussian_ply_binary(
@@ -1081,6 +1100,25 @@ fn logit(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn srgb_transfer_roundtrips_code_values() {
+        for value in [0.0, 0.01, 0.25, 0.5, 0.9, 1.0] {
+            let roundtrip = linear_to_srgb(srgb_to_linear(value));
+            assert!((roundtrip - value).abs() < 1e-6, "{value} -> {roundtrip}");
+        }
+    }
+
+    #[test]
+    fn display_color_encodes_after_linear_ambient_gain() {
+        let color = display_color(
+            glam::Vec3::new(0.25, 0.5, 0.75),
+            glam::Vec3::new(2.0, 1.0, 0.0),
+        );
+        assert!((color.x - 0.735_357).abs() < 1e-6);
+        assert!((color.y - 0.735_357).abs() < 1e-6);
+        assert_eq!(color.z, 0.0);
+    }
 
     #[test]
     fn gaussian_ply_roundtrip_keeps_count() {

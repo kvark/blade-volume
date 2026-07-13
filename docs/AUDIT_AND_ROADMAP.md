@@ -107,6 +107,9 @@ At the audited revision:
 - Training, SH evaluation, image output, PSNR, backgrounds, and viewers now
   explicitly use display-referred sRGB code values without a hidden transfer
   function or tone map. Linear-light clients must decode explicitly.
+- The glTF converter decodes texture samples, combines base-color factors and
+  ambient gain in linear light, then encodes once at the `PointCloudModel`
+  boundary. It no longer stores linear midtones in an sRGB-coded model.
 - Distorted projection is handled in the reconstruction/training boundary; the
   runtime `PointCloudModel` intentionally carries cloud data rather than source
   capture-camera calibration.
