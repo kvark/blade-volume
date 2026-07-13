@@ -9,6 +9,9 @@
 //!   - `red`, `green`, `blue` (uchar) // DC-derived preview colors
 //! - `element adjacency <K>` with:
 //!   - `adjacency` (uint32) // flattened neighbor indices
+//! - blade-volume files additionally carry `blade_sh_dc_0..2` (float32),
+//!   preserving the exact DC coefficients while retaining the upstream RGB
+//!   preview properties for compatibility.
 //!
 //! The upstream tracer expects a packed per-point attribute row of length:
 //!     attr_dim = 1 + 3 * (1 + sh_degree)^2
@@ -22,7 +25,8 @@
 //! - `density`
 //!
 //! Therefore, this loader packs SH coefficients as:
-//! - DC approximated from `red/green/blue` preview fields (TEMPORARY; not identical to upstream DC).
+//! - DC loaded exactly from `blade_sh_dc_0..2` when present, otherwise
+//!   approximated from upstream's `red/green/blue` preview fields.
 //! - Remaining coefficients loaded from `color_sh_*` in-order.
 //! - Density appended as the last scalar.
 //!
@@ -348,12 +352,32 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
         panic!("vertex adjacency_offset must be uint32");
     }
 
-    // Optional preview color (uchar) fields, used to approximate missing DC coefficients.
-    // Upstream exports these from DC for visualization. This is TEMPORARY and won't match
-    // upstream training values exactly.
+    // Optional preview color (uchar) fields, used to approximate missing DC
+    // coefficients in upstream files.
     let red_prop = vertex_el.prop_offset("red");
     let green_prop = vertex_el.prop_offset("green");
     let blue_prop = vertex_el.prop_offset("blue");
+
+    // blade-volume extension: exact DC coefficients. All three channels must
+    // be present together so a partially-written file cannot silently mix
+    // exact and quantized channels.
+    let exact_dc_offsets = match [
+        vertex_el.prop_offset("blade_sh_dc_0"),
+        vertex_el.prop_offset("blade_sh_dc_1"),
+        vertex_el.prop_offset("blade_sh_dc_2"),
+    ] {
+        [Some((r_ty, r_off)), Some((g_ty, g_off)), Some((b_ty, b_off))] => {
+            if r_ty != PlyScalarType::Float32
+                || g_ty != PlyScalarType::Float32
+                || b_ty != PlyScalarType::Float32
+            {
+                panic!("vertex blade_sh_dc_0..2 must be float32");
+            }
+            Some([r_off, g_off, b_off])
+        }
+        [None, None, None] => None,
+        _ => panic!("vertex must contain either all or none of blade_sh_dc_0..2"),
+    };
 
     // Optional per-point radius/weight (Power Foam).
     let radius_prop = vertex_el.prop_offset("radius");
@@ -428,9 +452,9 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
     let mut points = vec![glam::Vec4::ZERO; num_points];
     let mut adjacency_offsets = vec![0u32; num_points + 1];
 
-    // SH coefficients only (no density - that goes in points.w)
-    // TEMPORARY: upstream PLY doesn't include DC SH coefficients. We approximate DC from
-    // `red/green/blue` preview fields if present, otherwise we leave DC at 0.
+    // SH coefficients only (no density - that goes in points.w). Prefer our
+    // exact extension, and approximate DC from upstream preview bytes when it
+    // is absent.
     let mut sh_coefficients = vec![0.0f32; num_points * sh_dim];
 
     let mut radii: Option<Vec<f32>> = radius_prop.map(|_| vec![0.0f32; num_points]);
@@ -454,10 +478,13 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                 adjacency_offsets[i + 1] = end_off;
 
                 // SH layout: [R_comp0, G_comp0, B_comp0, R_comp1, G_comp1, B_comp1, ...]
-                // TEMPORARY: approximate component 0 (DC) from preview RGB if present.
                 let base = i * sh_dim;
 
-                if let (Some((r_ty, r_off)), Some((g_ty, g_off)), Some((b_ty, b_off))) =
+                if let Some(offsets) = exact_dc_offsets {
+                    sh_coefficients[base] = read_f32_le(&vertex_row, offsets[0]);
+                    sh_coefficients[base + 1] = read_f32_le(&vertex_row, offsets[1]);
+                    sh_coefficients[base + 2] = read_f32_le(&vertex_row, offsets[2]);
+                } else if let (Some((r_ty, r_off)), Some((g_ty, g_off)), Some((b_ty, b_off))) =
                     (red_prop, green_prop, blue_prop)
                 {
                     if r_ty != PlyScalarType::Uint8
@@ -562,6 +589,7 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                 let mut r8_opt: Option<u8> = None;
                 let mut g8_opt: Option<u8> = None;
                 let mut b8_opt: Option<u8> = None;
+                let mut exact_dc = [0.0_f32; 3];
 
                 // SH-rest floats in order
                 let mut sh_rest_vals: Vec<f32> = Vec::with_capacity(color_sh.len());
@@ -581,6 +609,15 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
                             g8_opt = Some(tok.parse::<u8>().unwrap())
                         }
                         ("blue", PlyScalarType::Uint8) => b8_opt = Some(tok.parse::<u8>().unwrap()),
+                        ("blade_sh_dc_0", PlyScalarType::Float32) => {
+                            exact_dc[0] = tok.parse().unwrap()
+                        }
+                        ("blade_sh_dc_1", PlyScalarType::Float32) => {
+                            exact_dc[1] = tok.parse().unwrap()
+                        }
+                        ("blade_sh_dc_2", PlyScalarType::Float32) => {
+                            exact_dc[2] = tok.parse().unwrap()
+                        }
                         ("radius", PlyScalarType::Float32) => radius = Some(tok.parse().unwrap()),
                         (name, PlyScalarType::Float32) if name.starts_with("color_sh_") => {
                             sh_rest_vals.push(tok.parse().unwrap())
@@ -595,7 +632,9 @@ pub fn load(file_path: &str) -> crate::PointCloudModel {
 
                 let base = i * sh_dim;
 
-                if let (Some(r8), Some(g8), Some(b8)) = (r8_opt, g8_opt, b8_opt) {
+                if exact_dc_offsets.is_some() {
+                    sh_coefficients[base..base + 3].copy_from_slice(&exact_dc);
+                } else if let (Some(r8), Some(g8), Some(b8)) = (r8_opt, g8_opt, b8_opt) {
                     let r = (r8 as f32) / 255.0;
                     let g = (g8 as f32) / 255.0;
                     let b = (b8 as f32) / 255.0;

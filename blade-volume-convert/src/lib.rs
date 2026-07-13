@@ -915,6 +915,9 @@ fn write_radfoam_ply_ascii(
     writeln!(file, "property uchar red")?;
     writeln!(file, "property uchar green")?;
     writeln!(file, "property uchar blue")?;
+    writeln!(file, "property float blade_sh_dc_0")?;
+    writeln!(file, "property float blade_sh_dc_1")?;
+    writeln!(file, "property float blade_sh_dc_2")?;
     for k in 0..sh_rest {
         writeln!(file, "property float color_sh_{k}")?;
     }
@@ -932,12 +935,22 @@ fn write_radfoam_ply_ascii(
         let r = (color.x * 255.0).round().clamp(0.0, 255.0) as u8;
         let g = (color.y * 255.0).round().clamp(0.0, 255.0) as u8;
         let b = (color.z * 255.0).round().clamp(0.0, 255.0) as u8;
+        let base = i * sh_block;
         write!(
             file,
-            "{} {} {} {} {} {} {} {}",
-            point.x, point.y, point.z, point.w, end_off, r, g, b
+            "{} {} {} {} {} {} {} {} {} {} {}",
+            point.x,
+            point.y,
+            point.z,
+            point.w,
+            end_off,
+            r,
+            g,
+            b,
+            model.sh_coefficients[base],
+            model.sh_coefficients[base + 1],
+            model.sh_coefficients[base + 2],
         )?;
-        let base = i * sh_block;
         for j in 0..sh_rest {
             let comp = 1 + j / 3;
             let ch = j % 3;
@@ -986,6 +999,9 @@ fn write_radfoam_ply_binary(
     writeln!(file, "property uchar red")?;
     writeln!(file, "property uchar green")?;
     writeln!(file, "property uchar blue")?;
+    writeln!(file, "property float blade_sh_dc_0")?;
+    writeln!(file, "property float blade_sh_dc_1")?;
+    writeln!(file, "property float blade_sh_dc_2")?;
     for k in 0..sh_rest {
         writeln!(file, "property float color_sh_{k}")?;
     }
@@ -1003,6 +1019,7 @@ fn write_radfoam_ply_binary(
         let r = (color.x * 255.0).round().clamp(0.0, 255.0) as u8;
         let g = (color.y * 255.0).round().clamp(0.0, 255.0) as u8;
         let b = (color.z * 255.0).round().clamp(0.0, 255.0) as u8;
+        let base = i * sh_block;
 
         file.write_all(&point.x.to_le_bytes())?;
         file.write_all(&point.y.to_le_bytes())?;
@@ -1010,10 +1027,13 @@ fn write_radfoam_ply_binary(
         file.write_all(&point.w.to_le_bytes())?;
         file.write_all(&end_off.to_le_bytes())?;
         file.write_all(&[r, g, b])?;
+        file.write_all(&model.sh_coefficients[base].to_le_bytes())?;
+        file.write_all(&model.sh_coefficients[base + 1].to_le_bytes())?;
+        file.write_all(&model.sh_coefficients[base + 2].to_le_bytes())?;
         // color_sh_* layout per RadFoam upstream loader: index j maps to
-        // SH component `1 + j/3`, channel `j%3`. DC (component 0) lives
-        // in red/green/blue above (as 8-bit-quantised preview).
-        let base = i * sh_block;
+        // SH component `1 + j/3`, channel `j%3`. Exact DC lives in the
+        // blade_sh_dc_* extension above; RGB remains an upstream-compatible
+        // 8-bit preview.
         for j in 0..sh_rest {
             let comp = 1 + j / 3;
             let ch = j % 3;
@@ -1118,13 +1138,10 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
-    #[test]
-    fn radfoam_binary_roundtrip_preserves_sh3() {
+    fn assert_radfoam_sh3_roundtrip(format: PlyFormat) {
         // Two points with SH degree 3 (16 components × 3 channels per cell).
-        // The DC coefficients (component 0) round-trip through the 8-bit
-        // RGB preview path and lose a little precision; the higher-order
-        // coefficients (1..15) must survive exactly through the new
-        // `color_sh_*` properties.
+        // Exact DC uses the blade_sh_dc_* extension while the higher-order
+        // coefficients use the upstream-compatible color_sh_* properties.
         let n = 2usize;
         let sh_degree = 3usize;
         let sh_components = vol::get_sh_component_count(sh_degree);
@@ -1150,36 +1167,29 @@ mod tests {
             radii: None,
         };
 
-        let mut path = std::env::temp_dir();
-        path.push("blade_volume_convert_roundtrip_radfoam_sh3.ply");
-        save_ply_with_options(
-            &path,
-            &model,
-            &SaveOptions {
-                format: PlyFormat::Binary,
-            },
-        )
-        .expect("save ply");
+        let suffix = match format {
+            PlyFormat::Ascii => "ascii",
+            PlyFormat::Binary => "binary",
+        };
+        let path = std::env::temp_dir().join(format!(
+            "blade_volume_convert_roundtrip_radfoam_sh3_{suffix}.ply"
+        ));
+        save_ply_with_options(&path, &model, &SaveOptions { format }).expect("save ply");
         let loaded = vol::io::load_radfoam(path.to_str().unwrap());
 
         assert_eq!(loaded.sh_degree, sh_degree, "sh_degree must round-trip");
-        assert_eq!(loaded.sh_coefficients.len(), n * sh_block);
-        // Higher-order coefficients (component 1..15) must match exactly.
-        for i in 0..n {
-            let base = i * sh_block;
-            for c in 1..sh_components {
-                for ch in 0..3 {
-                    let off = base + 3 * c + ch;
-                    assert!(
-                        (loaded.sh_coefficients[off] - sh_coefficients[off]).abs() < 1e-6,
-                        "sh[{i},{c},{ch}] roundtrip mismatch: got {}, want {}",
-                        loaded.sh_coefficients[off],
-                        sh_coefficients[off],
-                    );
-                }
-            }
-        }
-        let _ = std::fs::remove_file(path);
+        assert_eq!(loaded.sh_coefficients, sh_coefficients);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn radfoam_binary_roundtrip_preserves_exact_sh3() {
+        assert_radfoam_sh3_roundtrip(PlyFormat::Binary);
+    }
+
+    #[test]
+    fn radfoam_ascii_roundtrip_preserves_exact_sh3() {
+        assert_radfoam_sh3_roundtrip(PlyFormat::Ascii);
     }
 
     #[test]
