@@ -160,7 +160,9 @@ At the audited revision:
   silently substituted black on failure.
 - Curvature-aware surface sampling now normalizes its area-weighted boost, so
   it redistributes a fixed pre-rounding point budget toward features instead
-  of silently growing the cloud as the boost increases.
+  of silently growing the cloud as the boost increases. Gaussian footprints
+  track half the local area-sampling spacing, including explicit surface-density
+  scaling and curvature redistribution.
 - glTF conversion follows the declared default scene (or the first scene when
   no default is declared), rather than merging alternative scenes into one
   cloud and duplicating or spatially mixing their geometry.

@@ -451,7 +451,8 @@ pub fn convert_gltf(
             vec![1.0; triangles.len()]
         };
         for (ti, tri) in triangles.iter().enumerate() {
-            let count = (tri.area * surface_density * curvature_factors[ti]).ceil() as u32;
+            let local_surface_density = surface_density * curvature_factors[ti];
+            let count = (tri.area * local_surface_density).ceil() as u32;
             for _ in 0..count {
                 let (u, v) = sample_barycentric(&mut rng);
                 let w = 1.0 - u - v;
@@ -472,7 +473,7 @@ pub fn convert_gltf(
                     p,
                     color,
                     options.surface_opacity * coverage,
-                    surface_point_scale(density) * options.surface_scale,
+                    surface_point_scale(local_surface_density) * options.surface_scale,
                     Some(tri.normal),
                     options,
                 );
@@ -806,9 +807,8 @@ fn material_alpha_coverage(material: &MaterialInfo, alpha: f32) -> f32 {
     }
 }
 
-fn surface_point_scale(density: f32) -> f32 {
-    let spacing = density.powf(-1.0 / 3.0);
-    spacing * 0.5
+fn surface_point_scale(surface_density: f32) -> f32 {
+    0.5 / surface_density.sqrt()
 }
 
 fn push_point(
@@ -1364,6 +1364,12 @@ mod tests {
             normalized_curvature_factors(&areas, &[0.25, 1.0], 0.0),
             [1.0, 1.0]
         );
+    }
+
+    #[test]
+    fn surface_footprint_tracks_local_area_sampling_spacing() {
+        assert_eq!(surface_point_scale(4.0), 0.25);
+        assert_eq!(surface_point_scale(16.0), 0.125);
     }
 
     #[test]
