@@ -3,8 +3,6 @@
 // Object type constants must match Rust ObjectType.
 const OBJECT_TYPE_GAUSSIAN: u32 = 0u;
 const OBJECT_TYPE_RADFOAM: u32 = 1u;
-const OBJECT_TYPE_SDF: u32 = 2u;
-const OBJECT_TYPE_MESH: u32 = 3u;
 
 struct ObjectBounds {
     center: vec3<f32>,

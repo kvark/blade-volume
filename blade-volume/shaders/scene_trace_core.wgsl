@@ -177,8 +177,6 @@ fn trace_scene(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
         switch (bounds.object_type) {
             case OBJECT_TYPE_GAUSSIAN: { type_color = vec3<f32>(1.0, 0.3, 0.3); }
             case OBJECT_TYPE_RADFOAM: { type_color = vec3<f32>(0.3, 1.0, 0.3); }
-            case OBJECT_TYPE_SDF: { type_color = vec3<f32>(0.3, 0.3, 1.0); }
-            case OBJECT_TYPE_MESH: { type_color = vec3<f32>(1.0, 1.0, 0.3); }
             default: { type_color = vec3<f32>(0.5); }
         }
         return vec4<f32>(type_color, 1.0);

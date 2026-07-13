@@ -48,10 +48,6 @@ pub enum ObjectType {
     Gaussian = 0,
     /// RadFoam volume with Voronoi traversal.
     RadFoam = 1,
-    /// Signed distance field with sphere tracing.
-    Sdf = 2,
-    /// Triangle mesh with hardware RT.
-    Mesh = 3,
 }
 
 // ============================================================================
