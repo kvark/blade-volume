@@ -92,6 +92,35 @@ struct MaterialInfo {
     base_color: glam::Vec4,
     base_color_texture: Option<Texture>,
     tex_coord: u32,
+    uv_transform: UvTransform,
+    alpha_mode: gltf::material::AlphaMode,
+    alpha_cutoff: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UvTransform {
+    offset: glam::Vec2,
+    rotation: f32,
+    scale: glam::Vec2,
+}
+
+impl UvTransform {
+    fn identity() -> Self {
+        Self {
+            offset: glam::Vec2::ZERO,
+            rotation: 0.0,
+            scale: glam::Vec2::ONE,
+        }
+    }
+
+    fn apply(self, uv: glam::Vec2) -> glam::Vec2 {
+        let scaled = uv * self.scale;
+        let (sin, cos) = self.rotation.sin_cos();
+        glam::Vec2::new(
+            cos * scaled.x - sin * scaled.y,
+            sin * scaled.x + cos * scaled.y,
+        ) + self.offset
+    }
 }
 
 struct Texture {
@@ -107,7 +136,7 @@ impl Texture {
         let u = wrap_coordinate(uv.x, self.wrap_s);
         let v = wrap_coordinate(uv.y, self.wrap_t);
         let x = u * (self.width as f32 - 1.0);
-        let y = (1.0 - v) * (self.height as f32 - 1.0);
+        let y = v * (self.height as f32 - 1.0);
         let x0 = x.floor() as u32;
         let y0 = y.floor() as u32;
         let x1 = (x0 + 1).min(self.width - 1);
@@ -256,12 +285,25 @@ pub fn convert_gltf(
     for material in document.materials() {
         let pbr = material.pbr_metallic_roughness();
         let base_color = pbr.base_color_factor();
-        let (base_color_texture, tex_coord) = match pbr.base_color_texture() {
+        let (base_color_texture, tex_coord, uv_transform) = match pbr.base_color_texture() {
             Some(info) => {
                 let texture = info.texture();
                 let image = texture.source();
                 let sampler = texture.sampler();
                 let data = &images[image.index()];
+                let texture_transform = info.texture_transform();
+                let tex_coord = texture_transform
+                    .as_ref()
+                    .and_then(gltf::texture::TextureTransform::tex_coord)
+                    .unwrap_or_else(|| info.tex_coord());
+                let uv_transform = match texture_transform {
+                    Some(ref transform) => UvTransform {
+                        offset: glam::Vec2::from(transform.offset()),
+                        rotation: transform.rotation(),
+                        scale: glam::Vec2::from(transform.scale()),
+                    },
+                    None => UvTransform::identity(),
+                };
                 (
                     Some(Texture {
                         width: data.width,
@@ -270,15 +312,19 @@ pub fn convert_gltf(
                         wrap_s: sampler.wrap_s(),
                         wrap_t: sampler.wrap_t(),
                     }),
-                    info.tex_coord(),
+                    tex_coord,
+                    uv_transform,
                 )
             }
-            None => (None, 0),
+            None => (None, 0, UvTransform::identity()),
         };
         materials.push(MaterialInfo {
             base_color: glam::Vec4::from(base_color),
             base_color_texture,
             tex_coord,
+            uv_transform,
+            alpha_mode: material.alpha_mode(),
+            alpha_cutoff: material.alpha_cutoff().unwrap_or(0.5),
         });
     }
 
@@ -289,6 +335,9 @@ pub fn convert_gltf(
         base_color: glam::Vec4::ONE,
         base_color_texture: None,
         tex_coord: 0,
+        uv_transform: UvTransform::identity(),
+        alpha_mode: gltf::material::AlphaMode::Opaque,
+        alpha_cutoff: 0.5,
     });
 
     let mut triangles = Vec::new();
@@ -403,8 +452,8 @@ pub fn convert_gltf(
                 let mat = &materials[tri.material];
                 let base = sample_material_color(mat, uv);
                 let color = display_color(base.truncate(), options.ambient);
-                let alpha = base.w;
-                if alpha < options.alpha_threshold {
+                let coverage = material_alpha_coverage(mat, base.w);
+                if coverage <= 0.0 || coverage < options.alpha_threshold {
                     continue;
                 }
 
@@ -415,7 +464,7 @@ pub fn convert_gltf(
                     &mut scales,
                     p,
                     color,
-                    options.surface_opacity,
+                    options.surface_opacity * coverage,
                     surface_point_scale(density) * options.surface_scale,
                     Some(tri.normal),
                     options,
@@ -693,9 +742,23 @@ fn sample_barycentric(rng: &mut rand::rngs::StdRng) -> (f32, f32) {
 
 fn sample_material_color(material: &MaterialInfo, uv: glam::Vec2) -> glam::Vec4 {
     if let Some(ref tex) = material.base_color_texture {
-        tex.sample(uv) * material.base_color
+        tex.sample(material.uv_transform.apply(uv)) * material.base_color
     } else {
         material.base_color
+    }
+}
+
+fn material_alpha_coverage(material: &MaterialInfo, alpha: f32) -> f32 {
+    match material.alpha_mode {
+        gltf::material::AlphaMode::Opaque => 1.0,
+        gltf::material::AlphaMode::Mask => {
+            if alpha >= material.alpha_cutoff {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        gltf::material::AlphaMode::Blend => alpha.clamp(0.0, 1.0),
     }
 }
 
@@ -1285,6 +1348,56 @@ mod tests {
             wrap_coordinate(1.25, gltf::texture::WrappingMode::ClampToEdge),
             1.0
         );
+    }
+
+    #[test]
+    fn texture_sampling_uses_the_gltf_upper_left_origin() {
+        let texture = Texture {
+            width: 1,
+            height: 2,
+            data: vec![255, 0, 0, 255, 0, 0, 255, 255],
+            wrap_s: gltf::texture::WrappingMode::ClampToEdge,
+            wrap_t: gltf::texture::WrappingMode::ClampToEdge,
+        };
+        assert_eq!(
+            texture.sample(glam::Vec2::new(0.0, 0.0)),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0)
+        );
+        assert_eq!(
+            texture.sample(glam::Vec2::new(0.0, 1.0)),
+            glam::Vec4::new(0.0, 0.0, 1.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn texture_transform_applies_scale_then_rotation_then_offset() {
+        let transform = UvTransform {
+            offset: glam::Vec2::new(0.0, 1.0),
+            rotation: std::f32::consts::FRAC_PI_2,
+            scale: glam::Vec2::splat(0.5),
+        };
+        let actual = transform.apply(glam::Vec2::X);
+        assert!((actual - glam::Vec2::new(0.0, 1.5)).length() < 1e-6);
+    }
+
+    #[test]
+    fn material_alpha_modes_produce_gltf_coverage() {
+        let mut material = MaterialInfo {
+            base_color: glam::Vec4::ONE,
+            base_color_texture: None,
+            tex_coord: 0,
+            uv_transform: UvTransform::identity(),
+            alpha_mode: gltf::material::AlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+        };
+        assert_eq!(material_alpha_coverage(&material, 0.0), 1.0);
+
+        material.alpha_mode = gltf::material::AlphaMode::Mask;
+        assert_eq!(material_alpha_coverage(&material, 0.49), 0.0);
+        assert_eq!(material_alpha_coverage(&material, 0.5), 1.0);
+
+        material.alpha_mode = gltf::material::AlphaMode::Blend;
+        assert_eq!(material_alpha_coverage(&material, 0.25), 0.25);
     }
 
     #[test]

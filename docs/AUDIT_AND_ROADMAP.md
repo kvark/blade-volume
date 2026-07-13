@@ -135,6 +135,11 @@ At the audited revision:
 - glTF conversion follows the declared default scene (or the first scene when
   no default is declared), rather than merging alternative scenes into one
   cloud and duplicating or spatially mixing their geometry.
+- Base-color sampling follows glTF's upper-left UV origin and the ratified
+  [`KHR_texture_transform`](https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_texture_transform/README.md)
+  offset, rotation, scale, and texture-coordinate-set override semantics.
+  `OPAQUE`, `MASK`, and `BLEND` alpha modes respectively ignore alpha, apply
+  the declared cutoff, and modulate generated point opacity.
 - Distorted projection is handled in the reconstruction/training boundary; the
   runtime `PointCloudModel` intentionally carries cloud data rather than source
   capture-camera calibration.

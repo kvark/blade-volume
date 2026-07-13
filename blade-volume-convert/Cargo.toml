@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 blade-volume = { path = "../blade-volume" }
 glam.workspace = true
-gltf = { version = "1", features = ["import"] }
+gltf = { version = "1", features = ["import", "KHR_texture_transform"] }
 rand = "0.10"
 
 [[bin]]
