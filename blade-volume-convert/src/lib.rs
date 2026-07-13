@@ -292,18 +292,19 @@ pub fn convert_gltf(
     });
 
     let mut triangles = Vec::new();
-
-    for scene in document.scenes() {
-        for node in scene.nodes() {
-            gather_node_triangles(
-                &node,
-                glam::Mat4::IDENTITY,
-                &buffers,
-                &materials,
-                default_material,
-                &mut triangles,
-            )?;
-        }
+    let scene = document
+        .default_scene()
+        .or_else(|| document.scenes().next())
+        .ok_or(ConvertError::MissingMeshData)?;
+    for node in scene.nodes() {
+        gather_node_triangles(
+            &node,
+            glam::Mat4::IDENTITY,
+            &buffers,
+            &materials,
+            default_material,
+            &mut triangles,
+        )?;
     }
 
     if triangles.is_empty() {
@@ -1377,6 +1378,62 @@ mod tests {
             .sh_coefficients
             .iter()
             .all(|&coefficient| (coefficient - white_dc).abs() < 1e-6));
+        std::fs::remove_file(gltf_path).unwrap();
+        std::fs::remove_file(bin_path).unwrap();
+    }
+
+    #[test]
+    fn gltf_conversion_uses_only_the_default_scene() {
+        let stem = format!("blade_volume_default_scene_{}", std::process::id());
+        let directory = std::env::temp_dir();
+        let bin_path = directory.join(format!("{stem}.bin"));
+        let gltf_path = directory.join(format!("{stem}.gltf"));
+        let mut positions = Vec::new();
+        for value in [
+            0.0_f32, 0.0, 0.0, // v0
+            1.0, 0.0, 0.0, // v1
+            0.0, 1.0, 0.0, // v2
+        ] {
+            positions.extend_from_slice(&value.to_le_bytes());
+        }
+        std::fs::write(&bin_path, positions).unwrap();
+        let document = format!(
+            r#"{{
+                "asset": {{"version": "2.0"}},
+                "buffers": [{{"uri": "{stem}.bin", "byteLength": 36}}],
+                "bufferViews": [{{"buffer": 0, "byteOffset": 0, "byteLength": 36}}],
+                "accessors": [{{
+                    "bufferView": 0,
+                    "componentType": 5126,
+                    "count": 3,
+                    "type": "VEC3",
+                    "min": [0, 0, 0],
+                    "max": [1, 1, 0]
+                }}],
+                "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}}}]}}],
+                "nodes": [
+                    {{"mesh": 0}},
+                    {{"mesh": 0, "translation": [10, 0, 0]}}
+                ],
+                "scenes": [{{"nodes": [0]}}, {{"nodes": [1]}}],
+                "scene": 1
+            }}"#,
+        );
+        std::fs::write(&gltf_path, document).unwrap();
+
+        let model = convert_gltf(
+            &gltf_path,
+            &ConvertOptions {
+                density: 1.0,
+                interior_density_scale: 0.0,
+                ambient: glam::Vec3::ONE,
+                ..ConvertOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(model.len(), 1);
+        assert!(model.points[0].x >= 10.0);
         std::fs::remove_file(gltf_path).unwrap();
         std::fs::remove_file(bin_path).unwrap();
     }

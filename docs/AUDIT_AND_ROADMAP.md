@@ -132,6 +132,9 @@ At the audited revision:
 - Curvature-aware surface sampling now normalizes its area-weighted boost, so
   it redistributes a fixed pre-rounding point budget toward features instead
   of silently growing the cloud as the boost increases.
+- glTF conversion follows the declared default scene (or the first scene when
+  no default is declared), rather than merging alternative scenes into one
+  cloud and duplicating or spatially mixing their geometry.
 - Distorted projection is handled in the reconstruction/training boundary; the
   runtime `PointCloudModel` intentionally carries cloud data rather than source
   capture-camera calibration.
