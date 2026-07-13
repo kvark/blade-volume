@@ -385,8 +385,10 @@ The final trainer task remained in kernel/driver execution even after its scope
 received `SIGKILL`: one thread, roughly 172 MiB current host memory, zero swap,
 and no cgroup OOM. Systemd accepted a 1% runtime CPU quota on its isolated scope,
 but a subsequent five-second sample still accrued five CPU-seconds: the stuck
-kernel execution is not yielding to the quota. Reclaiming its core and memory
-requires the NVIDIA driver to unwind or the host to reboot.
+kernel execution is not yielding to the quota. A later 30-second sample held
+host memory exactly steady at 180,473,856 bytes with zero swap while continuing
+to accrue one CPU-second per second. Reclaiming its core and memory requires the
+NVIDIA driver to unwind or the host to reboot.
 
 That incident exposed a fault in the benchmark harness: a synchronous
 `nvidia-smi` sampler can hang in the same driver wait as the workload. GPU and
