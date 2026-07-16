@@ -105,18 +105,38 @@ schedule warmups were compared at step parity but not ray or gradient-estimate
 parity. Continuing the unchanged bundle would not identify which factor caused
 the early deficit.
 
+The subsequent one-factor matrix isolates the main effects at the same scaled
+step-2,000 boundary:
+
+| Single change from old scaled protocol | Train PSNR | Held-out PSNR | Held-out delta |
+| --- | ---: | ---: | ---: |
+| None (baseline) | 13.08 dB | 13.08 dB | -- |
+| White background | 13.64 dB | 13.53 dB | +0.45 dB |
+| Smooth-L1 beta 1 | 13.40 dB | 13.36 dB | +0.28 dB |
+| v1 initialization, scaled to 50K | 14.59 dB | 15.11 dB | +2.03 dB |
+| v1 parameter schedule | 8.23 dB | 8.50 dB | -4.58 dB |
+
+All metrics reproduce after a fresh PLY reload. Every run completed in a 4 GiB
+zero-swap cgroup with a 382‑391 MB training peak, a 92 MB evaluation peak, zero
+memory-pressure/OOM counters, and no GPU-fault marker. The initialization gain
+is consistent across all eight held-out frames. Smooth-L1's mean gain is not
+yet sufficient evidence to adopt it: `DSCF5613.JPG` fell to 4.44 dB while the
+other held-out frames improved. The severe schedule loss explains the bundled
+regression and demonstrates step-to-ray-budget coupling at batch 256.
+
 ## Next experiments
 
-1. Re-run the scaled baseline to step 2,000 while changing exactly one of white
-   background, Smooth-L1, v1 initialization, or v1 parameter scheduling.
-2. Evaluate every serialized result with the matching background and retain
-   cumulative rays, per-frame PSNR, cells, adjacency size, wall time, and cgroup
-   telemetry.
-3. Use these curves to choose compatible factors, then repeat their combination
-   at the largest safe multi-view batch. Compare ray counts as well as steps.
-4. Add reference dynamic topology and cell-count-dependent densification only
+1. Combine the two independently supported changes—v1 initialization and white
+   background—while retaining L1 and the existing cosine optimizer.
+2. If that combination remains positive, extend its serialized curve beyond
+   step 2,000 before spending on a larger multi-view batch.
+3. Diagnose the Smooth-L1 single-view collapse, then retry it on the winning
+   initialization/background only if the failure is understood.
+4. Compare a batch-aware schedule by cumulative rays as well as updates; do not
+   use the exact v1 step schedule for batch 256.
+5. Add reference dynamic topology and cell-count-dependent densification only
    after the scaled appearance/initialization direction is positive.
-5. Move toward 190,951→2,097,152 cells and the staged
+6. Move toward 190,951→2,097,152 cells and the staged
    780×520→1559×1039 image schedule only after that direction survives a larger
    batch.
 

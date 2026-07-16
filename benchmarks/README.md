@@ -89,3 +89,13 @@ change one factor at a time from the old scaled baseline and record cumulative
 rays. Only after initialization, loss, background, and parameter scheduling
 have independent curves should they be recombined or used to justify a larger
 batch/reference-scale attempt.
+
+The first step-2,000 one-factor matrix is recorded in four additional result
+files. Against the 13.08 / 13.08 dB train/held-out baseline, v1 initialization
+alone reached 14.59 / 15.11 dB, white alone reached 13.64 / 13.53 dB, and
+Smooth-L1 alone reached 13.40 / 13.36 dB. Smooth-L1 nevertheless collapsed one
+held-out frame to 4.44 dB. The v1 schedule alone reached only 8.23 / 8.50 dB,
+confirming that its update-indexed warmup is not transferable to a 256-ray
+batch. The next controlled combination is therefore v1 initialization plus
+white on the existing L1/cosine optimizer; Smooth-L1 and the v1 schedule remain
+excluded pending larger-batch evidence.

@@ -123,6 +123,13 @@ At the audited revision:
   count. The result therefore rejects continuing that low-batch bundle; it does
   not reject reference initialization, loss, background, or learning rates in
   isolation. The next comparison matrix changes one factor at a time.
+- The first one-factor matrix identifies the main quality lever and the bundled
+  failure. Scaled v1 initialization improves the reloaded held-out result by
+  2.03 dB; white background improves it by 0.45 dB. Smooth-L1 improves the mean
+  by 0.28 dB but collapses one view to 4.44 dB, so it is not yet accepted. The
+  exact v1 step schedule loses 4.58 dB at batch 256, confirming that its warmup
+  is coupled to the official one-million-ray updates. The next candidate keeps
+  the stable L1/cosine optimizer and combines only v1 initialization with white.
 
 ### Remaining PowerFoam gaps
 
@@ -403,6 +410,13 @@ changes while retaining a 256-ray batch, and represented 512,000 rays rather
 than the official schedule's 2 billion at the same step. Stage 2 now proceeds
 with one-factor-at-a-time scaled ablations before any larger reference-budget
 run.
+
+That first one-factor matrix now shows that the reference initialization is a
+strong positive change (+2.03 dB held out) and white compositing is a smaller
+positive change (+0.45 dB). The v1 schedule is the dominant negative at this
+small batch (-4.58 dB); Smooth-L1's +0.28 dB mean is compromised by a 4.44 dB
+held-out-frame failure. The next run combines only the two robust positives on
+the existing L1/cosine path.
 
 Long-running topology optimization is now memory-bounded. The upstream
 `qhull` 0.4 destructor omits Qhull's required short-arena cleanup, which leaked
