@@ -140,6 +140,16 @@ At the audited revision:
   0.19 dB gain. It is stopped at 99,262 cells: initialization is a supported
   improvement, but not the explanation for the remaining quality plateau, and
   exhaustive contribution scanning is now the dominant scaling bottleneck.
+- An opt-in rotating stratified contribution cap is implemented while the
+  default stays exhaustive. On the same step-4K state, 32/255 views cut the
+  next boundary from 635 to 299 seconds and cost only 0.03 dB held out, but
+  retained 1,223 fewer cells and changed topology. It fails the plan's exact
+  decision-agreement gate, so it remains experimental pending larger caps and
+  multi-boundary drift measurements.
+- Smooth-L1's 4.44 dB held-out failure is unchanged at twice the traversal cap
+  and under either background. Visual comparisons identify large near-camera
+  Voronoi floaters; the loss remains opt-in until that geometry interaction is
+  understood.
 
 ### Remaining PowerFoam gaps
 
@@ -690,7 +700,9 @@ material path.
 1. Prototype deterministic stratified-view contribution sampling and an
    incremental per-cell accumulator. Keep the exhaustive all-view scan as the
    oracle; require pruning/densification decision agreement and a fixed PSNR
-   tolerance before changing the default.
+   tolerance before changing the default. (A 32/255-view rotating prototype is
+   2.12× faster and within 0.03 dB, but differs by 1,223 retained cells; the
+   default therefore remains exhaustive.)
 2. Measure exact topology cadences 100/250/500 after the cloud reaches its
    target size. Retain feature-gated Qhull as the production-size oracle while
    investigating a memory-bounded Rust implementation; runtime geometry stays

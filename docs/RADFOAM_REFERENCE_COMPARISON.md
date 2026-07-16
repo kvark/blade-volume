@@ -146,14 +146,29 @@ held out while exhaustive contribution/topology work raises its wall time to
 pressure, OOM, or GPU faults. The diagnostic curve stops here; the next dollar
 of compute is better spent on batch/schedule and oracle-scaling experiments.
 
+The Smooth-L1 outlier was re-evaluated at 512 rather than 256 traversal steps
+and on both black and white backgrounds; `DSCF5613.JPG` remained exactly 4.44
+dB. Side-by-side renders show a few huge near-camera Voronoi floaters, ruling
+out step truncation and background compositing. Smooth-L1 therefore remains an
+opt-in reference control until its geometry/floater interaction is resolved.
+
+An opt-in deterministic stratified contribution cap now addresses oracle cost
+without weakening the default. From the identical lossless step-4K state, 32
+of 255 rotating views cut the next 500-step segment from 635 to 299 seconds
+(2.12×). Fresh-PLY train/held-out PSNR changed only -0.03/-0.03 dB, but the
+sample retained 112,667 rather than 113,890 cells and its topology hash
+differed. That is promising quality neutrality, not decision agreement; the
+exhaustive collector remains the quality default.
+
 ## Next experiments
 
 1. Diagnose the Smooth-L1 single-view collapse, then retry it on the winning
    initialization/background only if the failure is understood.
 2. Compare a batch-aware schedule by cumulative rays as well as updates; do not
    use the exact v1 step schedule for batch 256.
-3. Prototype a faster contribution sampler against the exhaustive oracle before
-   extending the 100K-cell curve.
+3. Test larger stratified caps and cumulative multi-boundary drift against the
+   exhaustive oracle; do not change the default without decision agreement or
+   a deliberately revised acceptance gate.
 4. Add reference dynamic topology and cell-count-dependent densification only
    after the scaled appearance/initialization direction is positive.
 5. Move toward 190,951→2,097,152 cells and the staged

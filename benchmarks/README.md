@@ -114,3 +114,12 @@ cells grow 57,348 → 75,445 → 99,262. The advantage over the historical
 scaled curve narrows from +2.03 to +1.25 to +0.35 dB. The last 1K segment takes
 1,021 seconds for only +0.19 dB held out, so this diagnostic curve stops at 4K;
 it is not a completed manifest or reference result.
+
+`train_colmap --contribution-views N` is an experimental scaling control for
+the prune/densify oracle. `0` remains the exhaustive default. The first
+same-checkpoint comparison is recorded in
+`results/bonsai-contribution-views32-step4500-ee63217.toml`: 32 stratified,
+rotating views cut the 4K→4.5K segment from 635 to 299 seconds (2.12×), while
+fresh-PLY held-out PSNR changed from 15.69 to 15.66 dB. It retained 1,223 fewer
+cells and produced a different artifact/topology, so it has not met the
+decision-agreement gate and must not replace exhaustive scans by default.
