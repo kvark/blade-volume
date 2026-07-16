@@ -63,3 +63,10 @@ Fetch the pinned 292-image scene with
 `etc/data/bonsai-full/{images,sparse}` layout. Use
 `bonsai_full_quality.toml` for this data; it deliberately remains an internal
 budget rather than claiming published-method comparability.
+
+The first full-dataset attempt is recorded as
+`results/bonsai-full-partial-93c996f.toml`. It deliberately sets
+`benchmark_complete = false`: training stopped at step 10,000 of 20,400 after
+held-out PSNR stayed flat through three evaluations. Its final metrics do come
+from a freshly reloaded PLY and are useful diagnostic evidence, but they must
+not be presented as a completed manifest result or a reference comparison.

@@ -1,0 +1,106 @@
+schema = 1
+manifest = "benchmarks/bonsai_full_quality.toml"
+manifest_name = "bonsai-radfoam-full-v1"
+timestamp_utc = "2026-07-16T10:04:35Z"
+git_commit = "93c996fc67432c872bed8f0d27af8ce1575a38d7"
+manifest_commit = "a88d61b6144b04fac66f34f66fdf7974e2911955"
+os = "Linux 7.0.0-27-generic x86_64"
+gpu = "NVIDIA GeForce RTX 5070"
+driver = "NVIDIA 595.71.05"
+vulkan_api = "1.4.329"
+status = "partial_stopped_on_plateau"
+benchmark_complete = false
+stop_reason = "held-out PSNR was flat from step 8000 through step 10000"
+
+[dataset]
+revision = "2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
+image_files = 292
+registered_images = 292
+train_views = 255
+test_views = 8
+test_every = 8
+
+[isolation]
+kind = "systemd user service cgroup v2"
+memory_max_bytes = 4294967296
+maximum_segment_memory_peak_bytes = 1200984064
+memory_swap_max_bytes = 0
+oom = false
+oom_kill = false
+gpu_fault_marker = false
+
+[training]
+completed_steps = 10000
+planned_steps = 20400
+successful_segments = 9
+process_wall_seconds = 10136
+initial_cells = 50000
+cells = 200000
+adjacency_entries = 3035704
+
+[artifact]
+path = "target/audit-runs/bonsai-full-93c996f/model.ply"
+sha256 = "1dce5aed80241e934fc5811798e70250e4fd8e13434b63aea32c351cd0cd163f"
+fresh_ply_evaluation = true
+checkpoint_is_git_ignored = true
+
+[metrics]
+train_psnr_db = 17.50
+test_psnr_db = 16.13
+evaluation_memory_peak_bytes = 600907776
+serialization_delta_train_db = 0.0
+serialization_delta_test_db = 0.0
+
+[[progress]]
+step = 2000
+cells = 57313
+train_psnr_db = 13.08
+test_psnr_db = 13.08
+
+[[progress]]
+step = 3000
+cells = 75636
+train_psnr_db = 14.98
+test_psnr_db = 14.14
+
+[[progress]]
+step = 4000
+cells = 99798
+train_psnr_db = 16.15
+test_psnr_db = 15.23
+
+[[progress]]
+step = 5000
+cells = 131682
+train_psnr_db = 16.61
+test_psnr_db = 15.47
+
+[[progress]]
+step = 6000
+cells = 173695
+train_psnr_db = 16.43
+test_psnr_db = 15.79
+
+[[progress]]
+step = 7000
+cells = 200000
+train_psnr_db = 17.32
+test_psnr_db = 15.95
+
+[[progress]]
+step = 8000
+cells = 200000
+train_psnr_db = 17.46
+test_psnr_db = 16.15
+
+[[progress]]
+step = 9000
+cells = 200000
+train_psnr_db = 17.47
+test_psnr_db = 16.13
+
+[[progress]]
+step = 10000
+cells = 200000
+train_psnr_db = 17.50
+test_psnr_db = 16.13

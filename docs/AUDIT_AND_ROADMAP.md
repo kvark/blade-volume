@@ -1,6 +1,8 @@
 # Audit and implementation roadmap
 
-Date: 2026-07-12
+Initial audit: 2026-07-12
+
+Last updated: 2026-07-16
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -27,18 +29,22 @@ RadFoam/PowerFoam traversal, imported Gaussian path, and Rust-native training
 pipeline form a coherent technical direction; the maintained trainer also
 demonstrably learns a recognizable held-out reconstruction.
 
-The unresolved risk is empirical rather than architectural. Current training
-quality is below the reference target, the corrected GPU paths still need
-physical execution after driver recovery, whole-cloud layering is not exact
-interleaved volume compositing, and the Metal multi-cloud binding design is
-open. New rendering methods and broad scene features should therefore remain
-behind these gates:
+The unresolved risk is empirical rather than architectural. A complete-dataset
+Bonsai run now reaches 17.50 dB train / 16.13 dB held-out PSNR after a fresh
+serialized-model reload, but plateaus well below a compelling reference target.
+The corrected paths pass the targeted NVIDIA/Vulkan physical-GPU gates,
+including weighted differentiable traversal, Gaussian CPU/GPU parity, and
+transformed-scene pixel readback. Whole-cloud layering is still not exact
+interleaved volume compositing, the Metal multi-cloud binding design is open,
+and no matched reference-trainer comparison exists. New rendering methods and
+broad scene features should therefore remain behind these gates:
 
 1. Match reference RadFoam within the Stage 2 quality tolerance on a complete,
    reproducible scene.
 2. Demonstrate that learned PowerFoam radii improve a fixed held-out ablation.
-3. Pass physical-GPU parity and transformed-scene pixel tests without driver
-   faults or unbounded memory growth.
+3. Keep physical-GPU parity and transformed-scene pixel tests passing across
+   supported vendors without driver faults or unbounded memory growth. The
+   current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.
 4. Define correct overlapping-cloud compositing before presenting the scene
    layer as general volumetric composition.
 
@@ -92,14 +98,21 @@ At the audited revision:
   pruning, optimizer ancestry, and the weighted copied-radius split policy.
 - Quantile regularization, explicit background compositing, lossless DC SH, and
   versioned parameter/Adam/RNG checkpoints are implemented.
-- The blocker is quality evidence: the corrected trainer still needs a matched
-  reference RadFoam protocol and a completed full-scene run on a stable GPU.
+- The blocker is quality evidence. A fresh, segmented run over all 292
+  registered Bonsai images reached step 10,000 and the 200,000-cell target on a
+  stable NVIDIA/Vulkan path. Its held-out curve flattened near 16.1 dB by step
+  8,000, so the run was deliberately stopped before the nominal 20,400-step
+  budget rather than spending more compute on an unchanged protocol. The
+  corrected trainer still needs a reference-matched RadFoam run and controlled
+  ablations.
 
 ### Remaining PowerFoam gaps
 
 - Bounded traversal, persistent radii, exact active-path Jacobians, and
-  trainable positive radii are implemented, but the new WGSL-Jacobian-to-
-  meganeura integration test still needs to run on a recovered physical GPU.
+  trainable positive radii are implemented. The WGSL-Jacobian-to-meganeura
+  integration suite now passes on a physical NVIDIA GPU, including finite
+  differences, weighted intervals, topology rebuilds, densification, and
+  multi-view/novel-pose cases.
 - Weighted-cloud densification follows the reference resampler's copied-radius,
   5%-support-scale split; a real-scene ablation remains outstanding.
 - No official pretrained checkpoint is published by the reference project, so
@@ -125,6 +138,9 @@ At the audited revision:
   radii instead of retaining the preceding unweighted Delaunay graph.
 - Traversal now integrates the terminal cell up to the requested end depth
   when no later face is found.
+- The production path recorder applies the same maximum interval clamp to
+  unweighted terminal segments as to weighted segments; previously the
+  unweighted early-return path bypassed the configured bound.
 - The former `lloyd_relax` API was renamed to `spring_relax` so it no longer
   claims to implement centroidal Voronoi tessellation. A true bounded Lloyd/CVT
   operation remains unimplemented.
@@ -201,9 +217,15 @@ At the audited revision:
   [official 3DGRUT implementation](https://github.com/nv-tlabs/3dgrut). The
   triangle ray-query path uses a lexicographic `(depth, point index)` cursor and
   complete-interval rescans, so its five-hit window changes work batching
-  rather than omitting or proxy-face-ordering particles. Static WGSL validation
-  passes; physical-GPU pixel parity and the window-size performance sweep
-  remain blocked on driver recovery.
+  rather than omitting or proxy-face-ordering particles. Physical-GPU pixel
+  parity against the CPU oracle now passes. The official-checkpoint
+  cross-render and window-size performance sweep remain outstanding.
+- Scene Gaussian tracing now keeps its hardware query interval separate from
+  the Gaussian's semantic support interval. Reusing the finite semantic bounds
+  for triangle queries excluded conservative icosahedron proxy faces lying
+  outside the ellipsoid support and could produce zero radiance. The local TLAS
+  is now queried over the full forward interval, while maximum-response depth
+  is filtered against semantic support before compositing.
 - No Gaussian training implementation exists.
 
 ### Scene layer
@@ -211,21 +233,22 @@ At the audited revision:
 - RadFoam/PowerFoam-only scenes now select a dedicated compute pipeline with no
   ray-query extension, Gaussian buffers, acceleration-structure descriptors,
   or dummy geometry. The mixed and RadFoam-only shaders share binding and
-  software-TLAS traversal modules and both pass static WGSL validation.
-  Physical-GPU readback remains pending after driver recovery.
+  software-TLAS traversal modules and both pass static WGSL validation and
+  physical-GPU pixel readback.
 - All Gaussian clouds now bind independent TLAS and data-buffer array entries
   on Vulkan. Gaussian rays are transformed into each cloud's local space, so
   per-frame scene transforms do not rebuild point data or per-cloud TLASes.
-  Static WGSL validation passes; rendered-pixel validation remains blocked on
-  driver recovery. Blade does not yet implement resource binding arrays on
-  Metal, so the multi-cloud scene layer remains Vulkan-only and needs a scalar
-  or native bindless Metal path.
+  Static WGSL validation and rendered-pixel tests with two independently bound
+  Gaussian clouds pass. Blade does not yet implement resource binding arrays
+  on Metal, so the multi-cloud scene layer remains Vulkan-only and needs a
+  scalar or native bindless Metal path.
 - RadFoam scene objects now seed traversal from the camera-containing local
   cell, using Euclidean distance for Voronoi clouds and exact power distance
   `|x-p|²-r²` for weighted clouds. The same seed rule is shared by standalone
   viewing, training path recording, CPU evaluation, and transformed scenes.
   They traverse from the camera while clipping integration to their
-  software-TLAS interval. Physical-GPU validation remains pending.
+  software-TLAS interval. Physical-GPU validation passes for translated,
+  rotated, uniformly scaled, and nonuniformly scaled bounded PowerFoam clouds.
 - Affine-transformed rays now preserve the world-distance parameter under
   uniform and nonuniform scale; bounded support intersections accept the
   resulting non-unit object-space direction. Bounds include PowerFoam support
@@ -235,7 +258,11 @@ At the audited revision:
   index)` order without a fixed hit array. This is correctness-first O(N²)
   selection and treats whole overlapping clouds as ordered layers; physically
   interleaved volume integration and a scalable software TLAS remain open.
-- Scene tests check state but not rendered pixels.
+- Scene tests now read back rendered pixels for transformed bounded PowerFoam,
+  two independent Gaussian bindings, anisotropic Gaussian rotation without a
+  TLAS rebuild, and object-bounds/backend debug views. Exact interleaved
+  overlapping-volume composition and cross-backend image equivalence remain
+  untested.
 - The public scene object taxonomy contains only implemented cloud backends:
   Gaussian and RadFoam/PowerFoam. Polygon meshes remain offline conversion
   input rather than a runtime scene-object escape hatch; a future SDF backend
@@ -248,10 +275,12 @@ At the audited revision:
   metadata and the unimplemented backend-density debug mode were removed so
   public controls correspond to shader behavior.
 - A 2026-07-12 RadFoam-only dispatch probe reached a driver fault even after
-  reducing the compute entry point to a constant texture write. The scene has
-  since split out a no-ray-query RadFoam pipeline and removed dummy resources,
-  but this new path has only static validation until the driver is recovered.
-  A physical readback test remains the enabling gate.
+  reducing the compute entry point to a constant texture write. After rebooting
+  into NVIDIA driver 595.71.05, the split no-ray-query path and the mixed scene
+  path pass repeated physical readbacks without a fault. The fresh segmented
+  training run also crosses the old failure region. This makes a deterministic
+  application failure at that step less likely, while retaining cgroup and
+  telemetry isolation as a required long-run safeguard.
 
 ### Project constraints
 
@@ -308,7 +337,7 @@ Each stage lands as one or more focused commits. Every commit must pass its
 targeted tests and formatting; stage boundaries require workspace formatting,
 clippy with warnings denied, and the full practical test suite.
 
-Progress through 2026-07-13: Stages 0 and 1 are substantially complete. The
+Progress through 2026-07-16: Stages 0 and 1 are substantially complete. The
 first versioned Bonsai smoke result now evaluates a freshly serialized PLY at
 16.58 dB train / 17.00 dB held out, identical to live evaluation; exact DC SH
 extension properties removed the prior 0.90/0.94 dB serialization loss. The
@@ -343,12 +372,11 @@ the three active path roles (previous/current/next), radical-plane exits,
 support-sphere entry/exit, skipped cells, and central finite differences. The
 WGSL recorder stores those same position/radius Jacobians, and the meganeura
 graph optimizes radii through a beta=100 softplus while periodically rebuilding
-the discrete Čech graph and recorded paths. Static WGSL validation and the full
-CPU-isolated workspace suite pass. Physical-GPU execution of the new integrated
-gradient test is deferred until the wedged NVIDIA driver is recovered. Weighted
-densification copies the parent's radius and optimizer ancestry while applying
-the reference 5%-of-radius perturbation; reference-checkpoint and real-scene
-training validation still remain.
+the discrete Čech graph and recorded paths. Static WGSL validation, the full
+CPU-isolated workspace suite, and all 33 physical-GPU differentiable-renderer
+tests pass. Weighted densification copies the parent's radius and optimizer
+ancestry while applying the reference 5%-of-radius perturbation;
+reference-checkpoint and real-scene radius ablations still remain.
 
 Long-running topology optimization is now memory-bounded. The upstream
 `qhull` 0.4 destructor omits Qhull's required short-arena cleanup, which leaked
@@ -369,26 +397,33 @@ zero swap and zero OOM events, but reached the limit and recorded 406
 4 GiB scope, or split clippy/default/all-feature tests into separate 3 GiB
 scopes; a 3 GiB combined scope is functional but needlessly reclaim-bound.
 
-A subsequent NVIDIA quality run confirmed the memory fix but did not produce a
-valid benchmark result. It grew from 50,000 to the 200,000-cell target by step
-7,500, reported no hard traversal truncation, and reduced the rolling training
-loss from 0.7446 initially to 0.1868 at step 8,000. Near step 9,400 the NVIDIA
-management interface and trainer both stopped responding in kernel waits,
-without an Xid or other kernel fault record. Cgroup memory remained below
-1.20 GiB of its 4 GiB limit with zero swap and OOM events; sampled VRAM was
-approximately 525 MiB. This rules out host-memory exhaustion but does not by
-itself distinguish an application-triggered driver defect from an independent
-driver failure. The exact PLY and Adam-state checkpoint at step 9,000 was
-verified intact, so the run is resumable after GPU recovery.
+The final 2026-07-16 delivery gate split each command into its own 4 GiB/no-swap
+scope. Formatting peaked at 7.4 MiB, all-target/all-feature clippy at 686.4 MiB,
+default workspace tests at 3,304.6 MiB, and all-feature workspace tests at
+2,491.5 MiB. Every command passed with zero swap, OOM events, or `memory.max`
+pressure. This independently confirms that 4 GiB is an appropriate test-scope
+limit; 3 GiB is not reliably roomy enough for the default test link phase.
 
-The final trainer task remained in kernel/driver execution even after its scope
+A previous NVIDIA quality run confirmed the memory fix but ended in a driver
+incident rather than a valid benchmark result. It grew from 50,000 to the
+200,000-cell target by step 7,500, reported no hard traversal truncation, and
+reduced rolling training loss from 0.7446 initially to 0.1868 at step 8,000.
+Near step 9,400 the NVIDIA management interface and trainer both stopped
+responding in kernel waits, without an Xid or other kernel fault record. Cgroup
+memory remained below 1.20 GiB of its 4 GiB limit with zero swap and OOM events;
+sampled VRAM was approximately 525 MiB. This ruled out host-memory exhaustion
+but could not distinguish an application-triggered driver defect from an
+independent driver failure. The exact step-9,000 PLY and Adam checkpoint was
+verified before the reboot, but its `/tmp` location was intentionally
+non-durable and the file did not survive.
+
+That trainer task remained in kernel/driver execution even after its scope
 received `SIGKILL`: one thread, roughly 172 MiB current host memory, zero swap,
-and no cgroup OOM. Systemd accepted a 1% runtime CPU quota on its isolated scope,
-but a subsequent five-second sample still accrued five CPU-seconds: the stuck
-kernel execution is not yielding to the quota. A later 30-second sample held
-host memory exactly steady at 180,473,856 bytes with zero swap while continuing
-to accrue one CPU-second per second. Reclaiming its core and memory requires the
-NVIDIA driver to unwind or the host to reboot.
+and no cgroup OOM. A 1% runtime CPU quota did not throttle the stuck kernel
+execution. The 2026-07-16 host reboot cleared the task and brought up NVIDIA
+driver 595.71.05. The replacement segmented run passed step 9,400 and reached
+step 10,000 without a fault, so the old boundary is not a deterministic failure
+in the current environment.
 
 That incident exposed a fault in the benchmark harness: a synchronous
 `nvidia-smi` sampler can hang in the same driver wait as the workload. GPU and
@@ -414,6 +449,45 @@ download completed in a 1 GiB/no-swap scope at a 546 MiB memory peak with zero
 OOM events. Its initial blade-volume budget is still internal, not a claim of
 paper-matched hyperparameters.
 
+The first complete-dataset run uses that pinned 292-image reconstruction, 255
+training views, eight held-out every-eighth views, 128×128 pixels, SH degree 3,
+50,000 initial cells, a 200,000-cell target, and the schedule recorded in
+`benchmarks/bonsai_full_quality.toml`. The manifest's first segment now reaches
+the step-2,000 warmup boundary; the trainer correctly rejects an earlier
+endpoint because it would discard a partially accumulated densification
+window. All later 1,000-step segments completed normally. The following
+segment-end diagnostics evaluate the in-memory model after saving:
+
+| Global step | Cells | Train PSNR | Held-out PSNR |
+| ---: | ---: | ---: | ---: |
+| 2,000 | 57,313 | 13.08 dB | 13.08 dB |
+| 3,000 | 75,636 | 14.98 dB | 14.14 dB |
+| 4,000 | 99,798 | 16.15 dB | 15.23 dB |
+| 5,000 | 131,682 | 16.61 dB | 15.47 dB |
+| 6,000 | 173,695 | 16.43 dB | 15.79 dB |
+| 7,000 | 200,000 | 17.32 dB | 15.95 dB |
+| 8,000 | 200,000 | 17.46 dB | 16.15 dB |
+| 9,000 | 200,000 | 17.47 dB | 16.13 dB |
+| 10,000 | 200,000 | 17.50 dB | 16.13 dB |
+
+An independent CPU evaluation reloaded the final PLY and reproduced 17.50 dB
+train / 16.13 dB held out exactly. The model has 3,035,704 directed adjacency
+entries. Its durable ignored checkpoint lives under
+`target/audit-runs/bonsai-full-93c996f/` and includes PLY, safetensors,
+trainer-state, step, cycle, and RNG sidecars. The largest training segment used
+1,200,984,064 bytes (1.118 GiB) of its 4 GiB cgroup, with zero swap, OOM events,
+or GPU recovery markers. The independent evaluation peaked at 600,907,776
+bytes.
+
+The curve is effectively flat from step 8,000 through 10,000; continuing the
+same nominal 20,400-step protocol is therefore low-value until an ablation
+changes the result. Profiling also shows that exhaustive all-view contribution
+scans dominate densification as the cloud grows, while exact Qhull rebuilds
+every 100 position steps remain the main cost after reaching 200,000 cells.
+The exhaustive scan must remain the correctness oracle while a deterministic
+sampled or incremental alternative is evaluated; performance alone is not a
+reason to silently change pruning decisions.
+
 ### Stage 0: trustworthy baseline
 
 1. Make the maintained pixel-batched trainer the default public workflow.
@@ -422,7 +496,8 @@ paper-matched hyperparameters.
 3. Restore convergence tests on the maintained path and add an end-to-end
    COLMAP training test. (Done.)
 4. Fix formatting, clippy, and GPU resource lifetime failures. (Done for all
-   reproducible software issues; the host driver incident remains external.)
+   reproducible software issues; the historical driver incident is isolated
+   and the current NVIDIA physical gate passes.)
 5. Add deterministic benchmark manifests recording dataset, split, cell count,
    resolution, optimizer steps, seed, hardware, and metrics. (Done; Qhull
    benchmark commands also opt into the non-default feature explicitly.)
@@ -462,6 +537,10 @@ numerically continuous.
 6. Add truncation and topology diagnostics to training and evaluation.
 7. Run matched-protocol comparisons against the reference implementation.
 
+Items 1-6 are implemented and covered by CPU and physical-GPU tests. Item 7 is
+the gating work: the complete-dataset curve above is an internal protocol, not
+a reference-matched result.
+
 Acceptance gate: a canonical scene matches the reference implementation within
 0.5-1.0 dB at the same cell budget, split, image scale, and training budget,
 with no systematic streaking from stale topology.
@@ -478,10 +557,9 @@ with no systematic streaking from stale topology.
    spherical-Voronoi appearance semantics.
 
 Items 1-5 are implemented at the CPU-oracle, production-WGSL, recorder, and
-training-graph levels. The physical-GPU integration test for items 3-4 is
-compiled but intentionally not run while the host driver is wedged. Weighted
-densification now uses the reference copied-radius split policy. Items 6-7 and a
-real-scene radius-learning/densification ablation remain.
+training-graph levels and pass physical-GPU integration. Weighted densification
+uses the reference copied-radius split policy. Items 6-7 and a real-scene
+radius-learning/densification ablation remain.
 
 Acceptance gate: CPU, GPU, and brute-force bounded traversal agree; a reference
 checkpoint renders within a defined image tolerance; trained radii improve a
@@ -495,23 +573,22 @@ fixed ablation rather than merely changing topology.
 4. Decide whether native Gaussian reconstruction is justified after RadFoam and
    PowerFoam quality is established.
 
-The CPU maximum-response oracle and exact batched ordering are implemented.
-Cross-rendering a recognized checkpoint against official 3DGRUT, physical-GPU
-pixel parity, and the hit-window performance sweep remain. Scene traversal now
-applies Gaussian cloud transforms without rebuilding point data or the local
-TLAS, but its rendered-pixel transform tests still require GPU recovery.
+The CPU maximum-response oracle, exact batched ordering, and physical-GPU pixel
+parity are implemented. Scene traversal applies Gaussian cloud transforms
+without rebuilding point data or the local TLAS, and transformed-pixel tests
+pass. Cross-rendering a recognized checkpoint against official 3DGRUT and the
+hit-window performance sweep remain.
 
 Acceptance gate: imported standard checkpoints match the oracle at documented
 quality and performance; transformations pass rendered-pixel tests.
 
 ### Stage 5: multi-cloud engine
 
-1. Support RadFoam-only and multiple-Gaussian scenes. (Implemented for the
-   statically validated RadFoam-only and Vulkan mixed paths; physical-GPU
-   readback and a Metal resource-binding path remain.)
+1. Support RadFoam-only and multiple-Gaussian scenes. (Implemented and
+   physically read back on Vulkan; a Metal resource-binding path remains.)
 2. Bind per-object layouts and locate correct RadFoam entry cells.
 3. Preserve ray parameterization and optical depth under transforms. (Done in
-   CPU logic and statically validated WGSL; rendered-pixel validation remains.)
+   CPU logic, WGSL, and rendered-pixel validation.)
 4. Define exact ordering for intersecting cloud volumes. (Deterministic
    whole-cloud layering is defined; physical interleaving remains.)
 5. Replace the first-sixteen-object scan with bounded actual-hit collection.
@@ -519,9 +596,81 @@ quality and performance; transformations pass rendered-pixel tests.
 6. Add rendered-pixel tests for translation, rotation, uniform scale,
    nonuniform scale, mixed backends, and overlapping volumes.
 
+Translation, rotation, uniform scale, nonuniform scale, bounded PowerFoam, two
+independent Gaussian bindings, and backend/bounds debug output pass physical
+readback. Exact mixed-backend equivalence and overlapping-volume compositing
+tests remain with the interleaving design.
+
 Acceptance gate: a scene made exclusively from independently transformable
 cloud objects renders deterministically and agrees with equivalent standalone
 backend renders.
+
+## Prioritized improvement plan
+
+The next cycle should improve evidence and the existing cloud paths before
+adding another representation. Polygonal geometry remains offline conversion
+input only; none of these steps adds a triangle scene object or polygonal
+material path.
+
+### P0: explain and close the RadFoam quality gap
+
+1. Pin a reference RadFoam revision and reproduce one run on the same 292 image
+   files, train/held-out indices, scale, initial/target cell counts, SH degree,
+   backgrounds, and effective ray budget. Record reference-side serialized
+   renders and PSNR rather than quoting a paper number with a different setup.
+2. Compare initialization, optimizer parameter groups, learning-rate curves,
+   opacity parameterization, geometry update cadence, pruning decisions,
+   densification samples, and topology/path refresh timing step by step. Add a
+   small deterministic trace fixture for every discovered semantic difference.
+3. Run a controlled matrix from identical initialization: appearance-only;
+   position optimization with fixed topology; position optimization with exact
+   rebuilds; densification/pruning disabled and enabled; quantile loss disabled
+   and enabled; and topology cadences 100/250/500. Evaluate both train and
+   held-out views from a reloaded PLY and retain wall time, cell count,
+   adjacency size, truncation counts, cgroup peak, and GPU fault telemetry.
+4. Do not declare Stage 2 complete until the same-budget result is within
+   0.5–1.0 dB of the reference or the remaining difference is isolated to a
+   documented unsupported feature.
+
+### P1: remove scaling bottlenecks without changing decisions silently
+
+1. Prototype deterministic stratified-view contribution sampling and an
+   incremental per-cell accumulator. Keep the exhaustive all-view scan as the
+   oracle; require pruning/densification decision agreement and a fixed PSNR
+   tolerance before changing the default.
+2. Measure exact topology cadences 100/250/500 after the cloud reaches its
+   target size. Retain feature-gated Qhull as the production-size oracle while
+   investigating a memory-bounded Rust implementation; runtime geometry stays
+   point-cloud-only in either case.
+3. Add per-phase timing around recording, optimization, contribution scans,
+   downloads, topology construction, and evaluation so a long run explains its
+   cost without profiler-only evidence.
+
+### P1: validate PowerFoam and Gaussian semantics on real assets
+
+1. On the winning RadFoam configuration, compare fixed equal radii against
+   trainable positive radii from identical seeds. Require a held-out improvement
+   and stable cell/topology statistics before implementing the full quaternion
+   and spherical-Voronoi appearance model.
+2. Obtain or train a reference PowerFoam asset and cross-render it against the
+   bounded-power CPU oracle and production WGSL.
+3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
+   sweep the ray-query batch window for invariant pixels, query count, and frame
+   time. The conservative triangle BLAS remains an invisible point-candidate
+   accelerator, not polygonal scene geometry.
+
+### P2: finish engine-level composition
+
+1. Define exact interleaved optical-depth composition for overlapping clouds,
+   then test mixed RadFoam/PowerFoam/Gaussian scenes against standalone
+   segment oracles. Whole-cloud layer ordering is deterministic but is not the
+   final physical model.
+2. Implement a Metal-compatible per-cloud binding strategy and run the same
+   transformed-pixel suite on Metal. Accelerate the exhaustive software-TLAS
+   cursor only after pixel equivalence is locked down.
+3. Defer new SDF and compute-splat backends until the Stage 2 quality gate is
+   resolved; broadening the API before the core training result is understood
+   would increase surface area without reducing the primary project risk.
 
 ## Benchmark and go/no-go policy
 
