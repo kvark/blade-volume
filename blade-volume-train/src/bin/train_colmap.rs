@@ -219,6 +219,13 @@ struct Args {
     #[argh(option, default = "0.01")]
     lr_min_ratio: f32,
 
+    /// parameter-group multipliers for constant/cosine schedules: "legacy"
+    /// or "radfoam-v1-relative" (default legacy). The relative v1 policy
+    /// keeps the selected global curve but uses the reference initial
+    /// position/DC/higher-SH ratios and requires geometry rebuilds.
+    #[argh(option, default = "String::from(\"legacy\")")]
+    lr_groups: String,
+
     /// patch-based sampling + structural-gradient L1 loss. `0` (default) =
     /// random-pixel L1 only; `> 0` = each Adam step samples a single
     /// `--patch-size × --patch-size` contiguous patch (requires
@@ -380,8 +387,26 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let lr_groups = match args.lr_groups.as_str() {
+        "legacy" => diff_render::LrGroups::Legacy,
+        "radfoam-v1-relative" => diff_render::LrGroups::RadFoamV1Relative,
+        other => {
+            eprintln!("unknown --lr-groups '{other}' (use 'legacy' or 'radfoam-v1-relative')");
+            std::process::exit(2);
+        }
+    };
     if lr_schedule == diff_render::LrSchedule::RadFoamV1 && args.geometry_rebuild_every == 0 {
         eprintln!("--lr-schedule radfoam-v1 requires --geometry-rebuild-every > 0");
+        std::process::exit(2);
+    }
+    if lr_groups == diff_render::LrGroups::RadFoamV1Relative && args.geometry_rebuild_every == 0 {
+        eprintln!("--lr-groups radfoam-v1-relative requires --geometry-rebuild-every > 0");
+        std::process::exit(2);
+    }
+    if lr_schedule == diff_render::LrSchedule::RadFoamV1
+        && lr_groups != diff_render::LrGroups::Legacy
+    {
+        eprintln!("--lr-schedule radfoam-v1 already supplies its parameter groups");
         std::process::exit(2);
     }
     let color_loss = match args.color_loss.as_str() {
@@ -474,6 +499,7 @@ fn main() {
             sh_degree: args.sh_degree,
             color_loss,
             lr_schedule,
+            lr_groups,
             lr_min_ratio: args.lr_min_ratio,
             patch_size: args.patch_size,
             grad_loss_weight: args.grad_loss_weight,

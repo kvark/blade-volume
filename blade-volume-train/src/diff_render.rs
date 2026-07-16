@@ -1090,6 +1090,20 @@ pub enum LrSchedule {
     RadFoamV1,
 }
 
+/// Static parameter-group multipliers used with constant or cosine schedules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LrGroups {
+    /// Historical blade-volume behavior: position uses
+    /// [`AppearanceFitConfig::position_lr_ratio`], while every SH coefficient
+    /// uses `0.1×` when degree is nonzero (or `1×` at degree zero).
+    Legacy,
+    /// Ratios between the official RadFoam v1 initial rates, normalized by
+    /// its density rate: position `0.002×`, SH DC `0.05×`, higher SH
+    /// `0.005×`. The global time curve, Adam epsilon, and final-to-initial
+    /// ratio still come from the selected constant/cosine configuration.
+    RadFoamV1Relative,
+}
+
 const SAMPLING_RNG_SEED: u64 = 0xDEAD_BEEF_F00D_CAFE;
 const QUANTILE_RNG_SEED: u64 = 0x51A7_E5D0_9B3C_2468;
 const DENSIFY_RNG_SEED: u64 = 0xCAFE_F00D_DEAD_BEEF;
@@ -1122,6 +1136,10 @@ pub struct AppearanceFitConfig {
     pub adam_eps: f32,
     /// Learning-rate schedule. Default `Cosine`.
     pub lr_schedule: LrSchedule,
+    /// Static parameter groups for constant/cosine schedules. The exact
+    /// [`LrSchedule::RadFoamV1`] policy supplies its own time-varying absolute
+    /// groups and ignores this field.
+    pub lr_groups: LrGroups,
     /// Floor of the cosine schedule, as a fraction of `learning_rate`.
     /// `0.01` decays to 1 % of base by the final step. Unused when
     /// `lr_schedule == Constant`.
@@ -1312,6 +1330,7 @@ impl Default for AppearanceFitConfig {
             color_loss: ColorLoss::L1,
             densify: None,
             lr_schedule: LrSchedule::Cosine,
+            lr_groups: LrGroups::Legacy,
             lr_min_ratio: 0.01,
             patch_size: 0,
             grad_loss_weight: 0.0,
@@ -1477,6 +1496,35 @@ fn configure_optimizer(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RelativeLrMultipliers {
+    position: f32,
+    sh_dc: f32,
+    sh_rest: f32,
+}
+
+fn relative_lr_multipliers(
+    groups: LrGroups,
+    sh_degree: usize,
+    position_lr_ratio: f32,
+) -> RelativeLrMultipliers {
+    match groups {
+        LrGroups::Legacy => {
+            let sh = if sh_degree == 0 { 1.0 } else { 0.1 };
+            RelativeLrMultipliers {
+                position: position_lr_ratio,
+                sh_dc: sh,
+                sh_rest: sh,
+            }
+        }
+        LrGroups::RadFoamV1Relative => RelativeLrMultipliers {
+            position: 2.0e-3,
+            sh_dc: 5.0e-2,
+            sh_rest: 5.0e-3,
+        },
+    }
+}
+
 fn densify_due(config: DensifyConfig, steps_done: usize) -> bool {
     steps_done >= config.warmup && (steps_done - config.warmup).is_multiple_of(config.every)
 }
@@ -1607,7 +1655,9 @@ pub fn fit_appearance_multi_view(
         "radius optimisation requires a weighted cloud"
     );
     assert!(
-        (config.position_lr_ratio == 0.0 && config.radius_lr_ratio == 0.0)
+        (config.position_lr_ratio == 0.0
+            && config.radius_lr_ratio == 0.0
+            && config.lr_groups != LrGroups::RadFoamV1Relative)
             || config.geometry_rebuild_every > 0,
         "geometry optimisation requires geometry_rebuild_every > 0"
     );
@@ -2568,6 +2618,7 @@ fn build_train_session(
     gpu: &std::sync::Arc<blade_graphics::Context>,
     path_bufs: &vol::gpu::PathRecordBuffers,
     lr: f32,
+    lr_groups: LrGroups,
     position_lr_ratio: f32,
     radius_lr_ratio: f32,
     betas: (f32, f32, f32),
@@ -2649,12 +2700,14 @@ fn build_train_session(
     }
 
     session.set_adam(lr, betas.0, betas.1, betas.2);
-    if sh_degree >= 1 {
-        for chan in ["sh_r_", "sh_g_", "sh_b_"] {
-            session.set_lr_multiplier(chan, 0.1);
-        }
+    let multipliers = relative_lr_multipliers(lr_groups, sh_degree, position_lr_ratio);
+    for channel in ["sh_r_", "sh_g_", "sh_b_"] {
+        session.set_lr_multiplier(channel, multipliers.sh_rest);
     }
-    session.set_lr_multiplier("positions", position_lr_ratio);
+    for channel in ["sh_r_0", "sh_g_0", "sh_b_0"] {
+        session.set_lr_multiplier(channel, multipliers.sh_dc);
+    }
+    session.set_lr_multiplier("positions", multipliers.position);
     if model.radii.is_some() {
         session.set_lr_multiplier("log_radii", radius_lr_ratio);
     }
@@ -2868,6 +2921,7 @@ fn fit_appearance_pixel_batched(
     let densify = config.densify;
     let geometry_trainable = config.position_lr_ratio > 0.0
         || config.radius_lr_ratio > 0.0
+        || config.lr_groups == LrGroups::RadFoamV1Relative
         || config.lr_schedule == LrSchedule::RadFoamV1;
     // Resume at the checkpoint's absolute step so the cosine LR and densify
     // schedule pick up where the interrupted run stopped.
@@ -2907,6 +2961,7 @@ fn fit_appearance_pixel_batched(
         &gpu,
         &path_bufs,
         config.learning_rate,
+        config.lr_groups,
         config.position_lr_ratio,
         config.radius_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
@@ -3256,6 +3311,7 @@ fn fit_appearance_pixel_batched(
                     &gpu,
                     &path_bufs,
                     config.learning_rate,
+                    config.lr_groups,
                     config.position_lr_ratio,
                     config.radius_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
@@ -3337,6 +3393,7 @@ fn fit_appearance_pixel_batched(
                     &gpu,
                     &path_bufs,
                     config.learning_rate,
+                    config.lr_groups,
                     config.position_lr_ratio,
                     config.radius_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
@@ -4018,6 +4075,34 @@ mod tests {
         assert!(
             at_mid > three_qtr,
             "mid {at_mid} should exceed 3qtr {three_qtr}"
+        );
+    }
+
+    #[test]
+    fn relative_lr_groups_separate_legacy_and_radfoam_ratios() {
+        assert_eq!(
+            relative_lr_multipliers(LrGroups::Legacy, 0, 0.03),
+            RelativeLrMultipliers {
+                position: 0.03,
+                sh_dc: 1.0,
+                sh_rest: 1.0,
+            }
+        );
+        assert_eq!(
+            relative_lr_multipliers(LrGroups::Legacy, 3, 0.03),
+            RelativeLrMultipliers {
+                position: 0.03,
+                sh_dc: 0.1,
+                sh_rest: 0.1,
+            }
+        );
+        assert_eq!(
+            relative_lr_multipliers(LrGroups::RadFoamV1Relative, 3, 0.03),
+            RelativeLrMultipliers {
+                position: 0.002,
+                sh_dc: 0.05,
+                sh_rest: 0.005,
+            }
         );
     }
 
