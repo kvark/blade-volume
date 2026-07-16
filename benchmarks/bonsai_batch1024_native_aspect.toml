@@ -1,0 +1,80 @@
+schema = 1
+name = "bonsai-radfoam-batch1024-native-aspect-v1"
+purpose = "Compare square and Bonsai-native 3:2 training through two ray-normalized growth rounds"
+dataset = "Mip-NeRF 360 / bonsai"
+dataset_path = "etc/data/bonsai-full"
+dataset_source = "https://huggingface.co/datasets/nvs-bench/mipnerf360"
+dataset_revision = "2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
+dataset_image_files = 292
+colmap_registered_images = 292
+comparison_scope = "same optimizer rays, updates, topology cadence, and growth rounds; common 192x128 fresh-Ply evaluation"
+
+[split]
+protocol = "existence-filtered COLMAP order, every Nth held out"
+test_every = 8
+max_train_views = 255
+max_test_views = 8
+
+[model]
+backend = "radfoam"
+initial_points = 50000
+initialization = "radfoam-v1"
+target_points = 200000
+adjacency = "qhull-delaunay-exact"
+sh_degree = 3
+densify_fraction = 0.15
+prune = true
+
+[training]
+pixel_batch = 1024
+completed_steps = 625
+sampled_rays = 640000
+steps_per_view = 20
+total_steps = 5100
+learning_rate = 0.1
+lr_schedule = "cosine"
+lr_min_ratio = 0.01
+lr_groups = "legacy"
+position_lr_ratio = 0.01
+geometry_rebuild_every = 25
+geometry_rebuild_schedule = "fixed"
+densify_every = 125
+densify_warmup = 500
+densify_until = 2750
+densify_rounds = 2
+color_loss = "l1"
+max_steps = 256
+far_plane = 100.0
+background = "black"
+opacity_weight = 1.0
+distortion_weight = 0.0
+quantile_weight = 0.0001
+softplus_beta = 10.0
+sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
+densification_seed = "0xCAFE_F00D_DEAD_BEEF"
+
+[square]
+width = 128
+height = 128
+execution = "lossless segments 0..500 and 500..625"
+contribution_rays_per_round = 1044480
+
+[native]
+width = 192
+height = 128
+execution = "uninterrupted 0..625"
+contribution_rays_per_round = 1566720
+
+[evaluation]
+width = 192
+height = 128
+fresh_ply = true
+
+[execution]
+release_binary_prebuilt = true
+memory_max_bytes = 4294967296
+memory_swap_max_bytes = 0
+
+[result]
+status = "completed"
+required = ["git_commit", "gpu", "driver", "wall_seconds", "cells", "train_psnr", "test_psnr"]

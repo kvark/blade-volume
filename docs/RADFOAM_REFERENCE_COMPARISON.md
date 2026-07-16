@@ -256,14 +256,36 @@ are
 and
 [`bonsai-batch1024-optimizer-step500-6877bea.toml`](../benchmarks/results/bonsai-batch1024-optimizer-step500-6877bea.toml).
 
+The two-round/native-aspect gate does not justify increasing image area. The
+losslessly resumed 128×128 arm grows again at step 625 to 66,078 cells and
+reaches 15.55 dB train / 15.29 dB held out at its training resolution. That is
++0.29/-0.04 dB from step 500: more capacity raises fit but has not yet improved
+generalization. A from-scratch 192×128 arm uses identical optimizer rays,
+update schedule, topology cadence, and growth steps. On a common fresh-Ply
+192×128 evaluation the square-trained model reaches 15.56 / 15.28 dB, while
+native-aspect training reaches 15.42 / 15.05 dB (-0.14/-0.23 dB). The latter
+uses 1,566,720 rather than 1,044,480 contribution rays per round and takes
+1,224 seconds versus 1,026 seconds summed across the square scopes, even though
+the square total includes an extra intermediate evaluation. Final clouds are
+nearly equal at 66,086 versus 66,078 cells; all four contribution rounds have
+zero truncation. Training peaks are 519 and 451 MB, and both zero-swap scopes
+record no pressure, OOM, or GPU fault. Because rectification maps the full
+calibrated source domain to either output grid and ray directions use normalized
+pixel coordinates with the original camera field of view, square training is
+lower resolution rather than a crop. The protocol and result are
+[`bonsai_batch1024_native_aspect.toml`](../benchmarks/bonsai_batch1024_native_aspect.toml)
+and
+[`bonsai-batch1024-native-aspect-step625-07ad939.toml`](../benchmarks/results/bonsai-batch1024-native-aspect-step625-07ad939.toml).
+
 ## Next experiments
 
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle; do not change the default without decision agreement or
    a deliberately revised acceptance gate.
-2. Continue the ray-normalized batch-1,024 arm through multiple growth
-   boundaries and test the Bonsai-native 3:2 aspect ratio. Keep relative groups
-   as a paired arm only if the neutral early signal persists.
+2. Compare ray-normalized batches 256 and 1,024 at 640,000 or more sampled rays
+   under the corrected operation order, then continue only if the larger batch
+   retains a held-out advantage beyond the second growth boundary. Native 3:2
+   training is rejected for the scaled gate.
 3. Move toward 190,951→2,097,152 cells and the staged
    780×520→1559×1039 image schedule only after that direction survives a larger
    batch.

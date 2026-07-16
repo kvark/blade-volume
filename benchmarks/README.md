@@ -175,3 +175,16 @@ same-ray checkpoint by +0.66 / +0.20 dB. This is the selected direction for a
 multi-boundary and native-aspect confirmation, not yet a new default. All four
 training scopes peak between 409 and 420 MB under a 4 GiB, zero-swap cgroup and
 record no pressure, OOM, truncation, or GPU-fault event.
+
+The two-round/native-aspect follow-up is defined in
+`bonsai_batch1024_native_aspect.toml` and recorded in
+`results/bonsai-batch1024-native-aspect-step625-07ad939.toml`. The lossless
+square continuation reaches 66,078 cells and 15.55 / 15.29 dB at 128×128;
+held-out quality is 0.04 dB below its step-500 value. On a common fresh-Ply
+192×128 evaluation, square training reaches 15.56 / 15.28 dB while native 3:2
+training reaches 15.42 / 15.05 dB, a -0.14/-0.23 dB change. Native training
+uses 1,566,720 rather than 1,044,480 contribution rays per round and raises
+the training peak from 451 to 519 MB, with zero swap, pressure, OOM,
+truncation, or GPU faults in either arm. The rectifier and ray generator cover
+the full calibrated camera domain at either output shape, so 128×128 is kept
+as the efficient scaled protocol; it is not a crop of the source field.

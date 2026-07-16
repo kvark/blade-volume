@@ -189,7 +189,15 @@ At the audited revision:
   checkpoint. Fresh-Ply evaluation reproduces every score. All four training
   scopes peak between 409 and 420 MB with zero swap, pressure, OOM,
   truncation, or GPU faults. Ray-normalized larger batching advances to a
-  multi-boundary/native-aspect gate without changing the default yet.
+  multi-boundary/native-aspect gate without changing the default yet. At the
+  second boundary the square arm reaches 15.55 / 15.29 dB, a +0.29/-0.04 dB
+  change from step 500. On a common 192×128 evaluation it beats native-aspect
+  training by 0.14 dB train and 0.23 dB held out while using one-third fewer
+  contribution rays. The final clouds differ by only eight cells; both have
+  zero truncation. Native training peaks at 519 MB and square continuation at
+  451 MB, again with zero swap, pressure, OOM, or GPU faults. Because both
+  output grids cover the full calibrated camera domain, 128×128 remains the
+  efficient scaled resolution rather than a cropped geometry path.
 - When a topology and densification boundary coincide, the trainer now
   refreshes adjacency and the GPU cloud before collecting contribution and
   resampling statistics. Previously it downloaded current positions but paired
@@ -749,8 +757,10 @@ material path.
    parameter-group ratios, topology cadence, and cell-count-dependent
    densification are measured at the 256-ray boundary. At batch 1,024 the
    exact schedule remains negative, relative parameter groups become neutral,
-   and ray-normalized schedules are a positive direction awaiting a longer
-   native-aspect confirmation.)
+   and ray-normalized schedules are a positive direction. A second growth
+   boundary plateaus held-out quality and native 3:2 training is negative, so
+   the next gate is a corrected same-ray batch-256 comparison rather than more
+   native-aspect compute.)
 3. Run a controlled matrix from identical initialization: appearance-only;
    position optimization with fixed topology; position optimization with exact
    rebuilds; densification/pruning disabled and enabled; quantile loss disabled
