@@ -164,6 +164,10 @@ At the audited revision:
   resampling statistics. Previously it downloaded current positions but paired
   them with the preceding GPU geometry for that scan. A moving-geometry,
   prune-and-densify physical-GPU test covers the corrected operation order.
+- Contribution view/phase rotation is keyed by the absolute densification
+  round, not the generic session-rebuild counter. Topology-cadence ablations
+  therefore see identical contribution samples at the same global boundary;
+  segmented resumes derive the same round directly from the absolute step.
 - Smooth-L1's 4.44 dB held-out failure is unchanged at twice the traversal cap
   and under either background. Visual comparisons identify large near-camera
   Voronoi floaters; the loss remains opt-in until that geometry interaction is

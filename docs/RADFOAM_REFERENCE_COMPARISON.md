@@ -86,7 +86,9 @@ existing defaults:
   stored in the v2 trainer-state sidecar for exact segmented resumes. When a
   scheduled refresh and densification coincide, current adjacency/GPU geometry
   is rebuilt before contribution collection, matching the reference operation
-  order.
+  order. Contribution phases are keyed by absolute densification round rather
+  than topology rebuild count so cadence comparisons do not alter their
+  pruning sample.
 
 These controls do not pretend to solve the remaining batch-size or update
 cadence differences. The historical L1/top-track/unified-cosine behavior stays

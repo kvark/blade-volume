@@ -1315,9 +1315,9 @@ pub struct DensifyConfig {
     pub prune_radius: f32,
     /// Maximum training views used by the contribution collector at each
     /// prune/densify boundary. `0` (default) evaluates every view. A positive
-    /// value deterministically rotates a stratified subset between cycles;
-    /// this is an experimental scaling control and must be checked against
-    /// exhaustive decisions before use in a quality run.
+    /// value deterministically rotates a stratified subset between absolute
+    /// densification rounds; this is an experimental scaling control and must
+    /// be checked against exhaustive decisions before use in a quality run.
     pub contribution_views: usize,
 }
 
@@ -1607,6 +1607,11 @@ impl TopologyCadenceState {
 
 fn densify_due(config: DensifyConfig, steps_done: usize) -> bool {
     steps_done >= config.warmup && (steps_done - config.warmup).is_multiple_of(config.every)
+}
+
+fn densification_round(config: DensifyConfig, steps_done: usize) -> usize {
+    debug_assert!(densify_due(config, steps_done));
+    (steps_done - config.warmup) / config.every
 }
 
 fn invocation_end_step(
@@ -2190,11 +2195,11 @@ fn accumulate_path_contributions(
     }
 }
 
-fn contribution_view_indices(view_count: usize, limit: usize, cycle: usize) -> Vec<usize> {
+fn contribution_view_indices(view_count: usize, limit: usize, round: usize) -> Vec<usize> {
     if limit == 0 || limit >= view_count {
         return (0..view_count).collect();
     }
-    let offset = cycle.wrapping_mul(0x9E37_79B9) % view_count;
+    let offset = round.wrapping_mul(0x9E37_79B9) % view_count;
     (0..limit)
         .map(|slot| (slot * view_count / limit + offset) % view_count)
         .collect()
@@ -2202,10 +2207,11 @@ fn contribution_view_indices(view_count: usize, limit: usize, cycle: usize) -> V
 
 /// Measure the same per-cell contribution signal used by RadFoam pruning:
 /// sum volumetric ray weights within each view, then retain the maximum over
-/// views. Each view uses one deterministic 2× downsample phase, matching the
-/// reference collector without burdening every Adam mini-batch with a
-/// readback. The readback is bounded to 4096 rays (16 MiB per device/shared
-/// path set at 256 steps) and reused across views.
+/// views. Each view uses one deterministic 2× downsample phase keyed by the
+/// absolute densification round, matching the reference collector without
+/// burdening every Adam mini-batch with a readback. The readback is bounded to
+/// 4096 rays (16 MiB per device/shared path set at 256 steps) and reused across
+/// views.
 fn collect_path_contributions(
     context: &blade_graphics::Context,
     recorder: &vol::gpu::PathRecorder,
@@ -2213,12 +2219,12 @@ fn collect_path_contributions(
     model: &vol::PointCloudModel,
     views: &[ViewSupervision],
     max_steps: usize,
-    cycle: usize,
+    round: usize,
     view_limit: usize,
 ) -> PathContributionStats {
     const MAX_RAYS_PER_BATCH: usize = 4096;
 
-    let view_indices = contribution_view_indices(views.len(), view_limit, cycle);
+    let view_indices = contribution_view_indices(views.len(), view_limit, round);
     let max_sampled_pixels = view_indices
         .iter()
         .map(|&index| {
@@ -2269,7 +2275,7 @@ fn collect_path_contributions(
 
     for &view_index in &view_indices {
         let view = &views[view_index];
-        let phase = cycle
+        let phase = round
             .wrapping_mul(0x9E37_79B9)
             .wrapping_add(view_index.wrapping_mul(0x85EB_CA6B));
         let x_offset = if view.width > 1 { phase as u32 & 1 } else { 0 };
@@ -3354,6 +3360,7 @@ fn fit_appearance_pixel_batched(
                 && steps_done < d.densify_until
                 && model.points.len() < d.target_points;
             if gate {
+                let densification_round = densification_round(d, steps_done);
                 // Snapshot params + Adam state at the OLD size, before
                 // prune+densify remaps `model.points`.
                 let n_old = model.points.len();
@@ -3378,8 +3385,8 @@ fn fit_appearance_pixel_batched(
                         gpu_cloud = build_training_gpu_cloud(model, &gpu);
                     }
                     log::info!(
-                        "densify cycle {}: refreshed current geometry before resampling",
-                        cycle,
+                        "densify round {}: refreshed current geometry before resampling",
+                        densification_round,
                     );
                 }
 
@@ -3391,7 +3398,7 @@ fn fit_appearance_pixel_batched(
                         model,
                         views,
                         max_steps,
-                        cycle,
+                        densification_round,
                         d.contribution_views,
                     );
                     let truncated_percent = if stats.rays == 0 {
@@ -3405,11 +3412,16 @@ fn fit_appearance_pixel_batched(
                         stats.segments as f32 / stats.rays as f32
                     };
                     log::info!(
-                        "contribution cycle {}: {} of {} views, {} rays, \
+                        "contribution round {}: {} of {} views, {} rays, \
                          {:.1} mean segments, max {}, \
                          {} truncated ({:.3}%)",
-                        cycle,
-                        contribution_view_indices(views.len(), d.contribution_views, cycle).len(),
+                        densification_round,
+                        contribution_view_indices(
+                            views.len(),
+                            d.contribution_views,
+                            densification_round,
+                        )
+                        .len(),
                         views.len(),
                         stats.rays,
                         mean_segments,
@@ -3438,8 +3450,8 @@ fn fit_appearance_pixel_batched(
                     config.softplus_beta,
                 );
                 log::info!(
-                    "densify cycle {}: {} cells (-{} pruned, +{} split) → {} total",
-                    cycle,
+                    "densify round {}: {} cells (-{} pruned, +{} split) → {} total",
+                    densification_round,
                     n_old,
                     pruned,
                     added,
@@ -4406,6 +4418,7 @@ mod tests {
         assert_eq!(steps_until_densify(config, 0), 2000);
         assert_eq!(steps_until_densify(config, 1900), 100);
         assert!(densify_due(config, 2000));
+        assert_eq!(densification_round(config, 2000), 0);
         for geometry_boundary in [2100, 2200, 2300, 2400] {
             assert!(!densify_due(config, geometry_boundary));
             assert_eq!(
@@ -4414,6 +4427,7 @@ mod tests {
             );
         }
         assert!(densify_due(config, 2500));
+        assert_eq!(densification_round(config, 2500), 1);
         assert_eq!(steps_until_densify(config, 2500), 500);
     }
 
