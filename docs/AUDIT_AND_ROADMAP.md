@@ -216,7 +216,9 @@ At the audited revision:
   maxima 150–151, zero truncation, and zero swap, pressure, OOM, or GPU faults.
   The smaller batch prunes 191 cells versus 18, consistent with noisier
   geometry/contribution gradients. Batch 1,024 passes the Bonsai gate and is
-  selected as the scaled pixel-batch default.
+  selected as the scaled pixel-batch default. `train_colmap` now uses it when
+  the flag is omitted, with a parser regression test covering both the new
+  default and an explicit 256 override.
 - When a topology and densification boundary coincide, the trainer now
   refreshes adjacency and the GPU cloud before collecting contribution and
   resampling statistics. Previously it downloaded current positions but paired

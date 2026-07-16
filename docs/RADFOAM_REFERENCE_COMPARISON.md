@@ -303,7 +303,9 @@ gap. Batch 256 prunes 191 cells while batch 1,024 prunes only 18, extending the
 round-2 evidence that lower-variance gradients preserve useful contributors.
 Both 4 GiB zero-swap scopes record no pressure, OOM, or GPU fault, and fresh
 PLY evaluation reproduces every metric. This passes the Bonsai gate and
-selects batch 1,024 for the scaled trainer. The protocol and result are
+selects batch 1,024 for the scaled trainer. The CLI now uses 1,024 when
+`--pixel-batch` is omitted while preserving every explicit override. The
+protocol and result are
 [`bonsai_batch_same_ray_round3.toml`](../benchmarks/bonsai_batch_same_ray_round3.toml)
 and
 [`bonsai-same-ray-batch-step768k-ad697dd.toml`](../benchmarks/results/bonsai-same-ray-batch-step768k-ad697dd.toml).

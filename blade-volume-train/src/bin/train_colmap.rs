@@ -117,9 +117,9 @@ struct Args {
     #[argh(option, default = "0.0")]
     cech_radius: f32,
 
-    /// pixels per Adam step (default 256). Random pixel sampling keeps the
+    /// pixels per Adam step (default 1024). Random pixel sampling keeps the
     /// graph small regardless of image resolution. Set 0 to use every pixel.
-    #[argh(option, default = "256")]
+    #[argh(option, default = "1024")]
     pixel_batch: usize,
 
     /// adam steps per view in pixel-batched mode (default 200)
@@ -808,5 +808,43 @@ fn interp_camera(a: &vol::CameraParams, b: &vol::CameraParams, t: f32) -> vol::C
             a.principal[0] * (1.0 - t) + b.principal[0] * t,
             a.principal[1] * (1.0 - t) + b.principal[1] * t,
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pixel_batch_uses_selected_default_and_accepts_override() {
+        let default = <Args as argh::FromArgs>::from_args(
+            &["train_colmap"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--output",
+                "model.ply",
+            ],
+        )
+        .unwrap();
+        assert_eq!(default.pixel_batch, 1024);
+
+        let explicit = <Args as argh::FromArgs>::from_args(
+            &["train_colmap"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--output",
+                "model.ply",
+                "--pixel-batch",
+                "256",
+            ],
+        )
+        .unwrap();
+        assert_eq!(explicit.pixel_batch, 256);
     }
 }

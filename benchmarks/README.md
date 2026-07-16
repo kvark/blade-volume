@@ -209,3 +209,5 @@ dB train/held out. Ray-normalized batch 1,024 reaches 75,969 cells and 16.08 /
 continuations both take about 444–445 seconds; batch 1,024 peaks at 489 MB
 versus 475 MB. Both report zero swap, pressure, OOM, truncation, or GPU faults.
 This passes the Bonsai gate and selects 1,024 as the scaled pixel-batch default.
+`train_colmap` now uses that value when `--pixel-batch` is omitted; explicit
+values, including `0` for full-image batches, retain their existing semantics.
