@@ -91,6 +91,8 @@ fn draw_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     var params: GaussianTraceParams;
     params.t_start = 0.0;
     params.t_end = g_camera.depth;
+    params.query_t_start = params.t_start;
+    params.query_t_end = params.t_end;
 
     let result = gaussian_trace(ray_pos, ray_dir, params);
 

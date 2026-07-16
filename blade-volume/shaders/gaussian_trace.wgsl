@@ -16,7 +16,8 @@
 struct GaussianTraceParams {
     t_start: f32,
     t_end: f32,
-    pad: vec2<u32>,
+    query_t_start: f32,
+    query_t_end: f32,
 }
 
 struct GaussianTraceResult {
@@ -83,7 +84,14 @@ fn gaussian_trace(
         // proxy still produce a candidate; instance-index deduplication below
         // collapses the two faces.
         let ray_flags = RAY_FLAG_FORCE_NO_OPAQUE;
-        let desc = RayDesc(ray_flags, 0xFFu, params.t_start, params.t_end, ray_origin, ray_dir);
+        let desc = RayDesc(
+            ray_flags,
+            0xFFu,
+            params.query_t_start,
+            params.query_t_end,
+            ray_origin,
+            ray_dir,
+        );
         // #initialize_gaussian_query
 
         var hit_count = 0u;

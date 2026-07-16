@@ -26,5 +26,8 @@ blade-egui = { git = "https://github.com/kvark/blade", rev = "72c30c1", package 
 egui = "0.34"
 egui-winit = "0.34"
 
+[dev-dependencies]
+half.workspace = true
+
 [lints]
 workspace = true

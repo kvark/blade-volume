@@ -55,6 +55,12 @@ fn scene_trace_gaussian(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
     var params: GaussianTraceParams;
     params.t_start = t_start;
     params.t_end = t_end;
+    // The icosahedron is a conservative proxy whose triangle faces can be
+    // outside the semantic Gaussian-support interval. Query the complete
+    // forward local TLAS, then retain only maximum-response depths inside the
+    // software-bound interval through t_start/t_end above.
+    params.query_t_start = 0.0;
+    params.query_t_end = 1.0e30;
     return gaussian_trace(ray_origin, ray_dir, params).color;
 }
 

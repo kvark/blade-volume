@@ -599,6 +599,7 @@ dependencies = [
  "egui-winit",
  "env_logger",
  "glam",
+ "half",
  "log",
  "winit",
 ]
