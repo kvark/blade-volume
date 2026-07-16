@@ -10,6 +10,11 @@ use blade_graphics as gpu;
 use blade_volume as vol;
 use vol::gpu::{PathRecordBuffers, PathRecorder, RadFoamGpuCloud, RecordPathsArgs};
 
+// Some physical GPU drivers can busy-wait when two contexts are initialized
+// concurrently in one test process. Keep these hardware tests independent
+// without forcing the rest of the workspace test suite to run serially.
+static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn try_init_gpu() -> Option<gpu::Context> {
     if vol::gpu::access_disabled() {
         return None;
@@ -180,6 +185,9 @@ fn rays_for_pixels(
 }
 
 fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
+    let _gpu_test_guard = GPU_TEST_LOCK
+        .lock()
+        .expect("GPU path-record test lock poisoned");
     let Some(ctx) = try_init_gpu() else {
         eprintln!("skipping: no GPU");
         return;

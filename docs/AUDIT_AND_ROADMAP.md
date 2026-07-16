@@ -219,6 +219,14 @@ At the audited revision:
   selected as the scaled pixel-batch default. `train_colmap` now uses it when
   the flag is omitted, with a parser regression test covering both the new
   default and an explicit 256 override.
+- The physical path-record integration tests used to initialize two GPU
+  contexts concurrently under Cargo's default test threading. On this NVIDIA
+  driver that can leave one test busy-waiting indefinitely even though its
+  4 GiB scope stayed below 620 MB and recorded zero swap, pressure, OOM, or GPU
+  faults. A process-local mutex now serializes only those two hardware tests.
+  They pass in 3.61 seconds with a 259 MB peak; the unmodified concurrent
+  workspace command subsequently passes in 25.82 seconds with a 476 MB peak
+  and zero swap, pressure, OOM, or GPU faults.
 - When a topology and densification boundary coincide, the trainer now
   refreshes adjacency and the GPU cloud before collecting contribution and
   resampling statistics. Previously it downloaded current positions but paired
