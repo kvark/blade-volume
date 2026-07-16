@@ -228,14 +228,42 @@ and
 This retains the dynamic policy as a reference-scale control while selecting
 fixed cadence for the current scaled protocol.
 
+The first larger-batch gate separates update-indexed reference controls from
+a same-ray schedule. At batch 1,024 and 512,000 sampled training rays, keeping
+the original 20,400-update horizon and fixed-100 topology cadence gives these
+fresh-Ply results:
+
+| Optimizer control | Train PSNR | Held-out PSNR | Delta vs cosine/legacy |
+| --- | ---: | ---: | ---: |
+| Cosine, legacy groups | 15.11 dB | 14.89 dB | — |
+| Exact v1 schedules | 9.97 dB | 10.53 dB | -5.14 / -4.36 dB |
+| Cosine, v1-relative groups | 14.94 dB | 14.95 dB | -0.17 / +0.06 dB |
+
+The exact schedule remains decisively rejected. Relative groups change from a
+0.62 dB held-out loss at batch 256 to a neutral 0.06 dB gain, which is worth
+retaining but too small and early to select. A fourth arm scales all relevant
+update-indexed controls by four: 5,100 total cosine updates, exact topology
+every 25 steps, a 125-step post-warmup densification cadence, and a 2,750-step
+growth horizon. It performs the same 512,000 training rays and 20 topology
+refreshes as the corrected batch-256 fixed-cadence checkpoint. The result is
+15.26 dB train / 15.33 dB held out, +0.66/+0.20 dB, with 57,485 cells. All
+four arms report zero truncated rays, use fresh serialized PLY evaluation,
+peak between 409 and 420 MB in 4 GiB zero-swap scopes, and record no pressure,
+OOM, or GPU fault. This selects ray-normalized larger batching for a longer
+confirmation without changing the current default. The protocol and result
+are
+[`bonsai_batch1024_optimizer.toml`](../benchmarks/bonsai_batch1024_optimizer.toml)
+and
+[`bonsai-batch1024-optimizer-step500-6877bea.toml`](../benchmarks/results/bonsai-batch1024-optimizer-step500-6877bea.toml).
+
 ## Next experiments
 
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle; do not change the default without decision agreement or
    a deliberately revised acceptance gate.
-2. Increase batch size and compare schedules by cumulative rays as well as
-   updates; the exact v1 schedule and its initial relative groups are both
-   rejected at batch 256, not at reference scale.
+2. Continue the ray-normalized batch-1,024 arm through multiple growth
+   boundaries and test the Bonsai-native 3:2 aspect ratio. Keep relative groups
+   as a paired arm only if the neutral early signal persists.
 3. Move toward 190,951→2,097,152 cells and the staged
    780×520→1559×1039 image schedule only after that direction survives a larger
    batch.

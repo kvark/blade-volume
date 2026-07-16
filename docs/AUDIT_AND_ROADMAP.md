@@ -179,6 +179,17 @@ At the audited revision:
   scopes peaked near 481 MB without swap, OOM, or GPU faults. Fixed cadence
   remains the scaled default; the dynamic policy remains a reference-scale
   control.
+- A batch-1,024 gate now distinguishes update-indexed controls from schedules
+  normalized by sampled rays. At 512,000 rays, the exact v1 schedule remains
+  decisively negative at 9.97 / 10.53 dB train/held out versus 15.11 / 14.89
+  dB for cosine/legacy. Relative v1 parameter groups are neutral at 14.94 /
+  14.95 dB (-0.17/+0.06 dB). Scaling the cosine horizon, exact-topology
+  cadence, and densification timeline by four yields 15.26 / 15.33 dB, a
+  +0.66/+0.20 dB same-ray improvement over the corrected batch-256
+  checkpoint. Fresh-Ply evaluation reproduces every score. All four training
+  scopes peak between 409 and 420 MB with zero swap, pressure, OOM,
+  truncation, or GPU faults. Ray-normalized larger batching advances to a
+  multi-boundary/native-aspect gate without changing the default yet.
 - When a topology and densification boundary coincide, the trainer now
   refreshes adjacency and the GPU cloud before collecting contribution and
   resampling statistics. Previously it downloaded current positions but paired
@@ -736,9 +747,10 @@ material path.
    small deterministic trace fixture for every discovered semantic difference.
    (Initialization, background, loss, exact schedule, and separated initial
    parameter-group ratios, topology cadence, and cell-count-dependent
-   densification are measured at the 256-ray boundary. Each reference control
-   was neutral-to-negative there and remains available for larger-batch
-   work.)
+   densification are measured at the 256-ray boundary. At batch 1,024 the
+   exact schedule remains negative, relative parameter groups become neutral,
+   and ray-normalized schedules are a positive direction awaiting a longer
+   native-aspect confirmation.)
 3. Run a controlled matrix from identical initialization: appearance-only;
    position optimization with fixed topology; position optimization with exact
    rebuilds; densification/pruning disabled and enabled; quantile loss disabled

@@ -158,3 +158,20 @@ cadence changed train/held-out PSNR from 16.34 / 16.25 to 16.11 / 16.18 dB.
 Its 13.2-second wall-time reduction is only 1.2%, and both training peaks were
 about 481 MB with zero swap, OOM, or GPU faults. Fixed cadence remains the
 scaled default.
+
+The first larger-batch gate is defined in `bonsai_batch1024_optimizer.toml`
+and recorded in `results/bonsai-batch1024-optimizer-step500-6877bea.toml`.
+All arms process 512,000 sampled training rays and use the same exhaustive
+round-0 contribution sample. With the original update-indexed 20,400-step
+horizon and fixed-100 topology cadence, the exact v1 schedule reaches only
+9.97 / 10.53 dB train/held out, versus 15.11 / 14.89 dB for cosine/legacy.
+Relative v1 parameter groups under cosine are neutral at 14.94 / 14.95 dB:
+-0.17 dB train and +0.06 dB held out. Neither changes the default.
+
+A fourth arm normalizes schedules by sampled rays: 5,100 total updates,
+fixed-25 topology refreshes, and a 125-step post-warmup densification cadence.
+At batch 1,024 it reaches 15.26 / 15.33 dB, improving the corrected batch-256
+same-ray checkpoint by +0.66 / +0.20 dB. This is the selected direction for a
+multi-boundary and native-aspect confirmation, not yet a new default. All four
+training scopes peak between 409 and 420 MB under a 4 GiB, zero-swap cgroup and
+record no pressure, OOM, truncation, or GPU-fault event.
