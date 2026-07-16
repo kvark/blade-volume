@@ -132,3 +132,12 @@ winning v1-initialization/black/L1/cosine setup it reached 14.72 dB train /
 14.49 dB held out, versus 14.59 / 15.11 dB with legacy groups. The +0.13 dB
 train and -0.62 dB held-out change rejects it as the 256-ray default while
 preserving it as a larger-batch reference control.
+
+`train_colmap --geometry-rebuild-schedule radfoam-v1` reproduces the reference
+1, 3, 5, ... 99, 101 topology-update periods and persists its phase in the v2
+trainer-state sidecar. The clean isolated comparison is
+`results/bonsai-radfoam-v1-topology-cadence-step2000-e50e965.toml`. Contribution
+view and pixel phase are keyed by absolute densification round in both runs.
+Dynamic cadence used 44 rather than 20 scheduled updates, cost 24 seconds
+(+3.7%), and changed train/held-out PSNR from 14.60 / 15.13 to 14.58 / 15.05
+dB. Fixed-100 therefore remains the scaled default.
