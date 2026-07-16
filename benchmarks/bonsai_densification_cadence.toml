@@ -1,0 +1,81 @@
+schema = 1
+name = "bonsai-radfoam-v1-densification-cadence-v1"
+purpose = "Isolate fixed-500 and RadFoam-v1 densification cadence through two growth rounds"
+dataset = "Mip-NeRF 360 / bonsai"
+dataset_path = "etc/data/bonsai-full"
+dataset_source = "https://huggingface.co/datasets/nvs-bench/mipnerf360"
+dataset_revision = "2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
+dataset_image_files = 292
+colmap_registered_images = 292
+comparison_scope = "same-update, same-ray, same-round cadence ablation; not a reference-scale quality result"
+
+[split]
+protocol = "existence-filtered COLMAP order, every Nth held out"
+test_every = 8
+max_train_views = 255
+max_test_views = 8
+
+[model]
+backend = "radfoam"
+initial_points = 50000
+initialization = "radfoam-v1"
+target_points = 200000
+adjacency = "qhull-delaunay-exact"
+sh_degree = 3
+position_lr_ratio = 0.01
+geometry_rebuild_every = 100
+geometry_rebuild_schedule = "fixed"
+densify_warmup = 2000
+densify_until = 11000
+densify_fraction = 0.15
+prune = true
+
+[training]
+width = 128
+height = 128
+pixel_batch = 256
+steps_per_view = 11
+total_steps = 2805
+sampled_rays = 718080
+learning_rate = 0.1
+lr_schedule = "cosine"
+lr_min_ratio = 0.01
+lr_groups = "legacy"
+color_loss = "l1"
+max_steps = 256
+far_plane = 100.0
+background = "black"
+opacity_weight = 1.0
+distortion_weight = 0.0
+quantile_weight = 0.0001
+softplus_beta = 10.0
+sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
+densification_seed = "0xCAFE_F00D_DEAD_BEEF"
+
+[contribution]
+views = 255
+resolution_scale = 2
+rays_per_round = 1044480
+rounds = 2
+sampling_phase = "absolute densification round"
+
+[fixed]
+densify_schedule = "fixed"
+densify_every = 500
+expected_steps = [2000, 2500]
+
+[dynamic]
+densify_schedule = "radfoam-v1"
+densify_every = 500
+expected_first_step = 2000
+expected_interval_floor = 100
+stop_fraction = 0.9
+
+[execution]
+release_binary_prebuilt = true
+memory_max_bytes = 4294967296
+memory_swap_max_bytes = 0
+
+[result]
+status = "completed"
+required = ["git_commit", "gpu", "driver", "wall_seconds", "cells", "train_psnr", "test_psnr"]

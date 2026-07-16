@@ -138,10 +138,23 @@ train and -0.62 dB held-out change rejects it as the 256-ray default while
 preserving it as a larger-batch reference control.
 
 `train_colmap --geometry-rebuild-schedule radfoam-v1` reproduces the reference
-1, 3, 5, ... 99, 101 topology-update periods and persists its phase in the v2
+1, 3, 5, ... 99, 101 topology-update periods and persists its phase in the v3
 trainer-state sidecar. The clean isolated comparison is
 `results/bonsai-radfoam-v1-topology-cadence-step2000-e50e965.toml`. Contribution
 view and pixel phase are keyed by absolute densification round in both runs.
 Dynamic cadence used 44 rather than 20 scheduled updates, cost 24 seconds
 (+3.7%), and changed train/held-out PSNR from 14.60 / 15.13 to 14.58 / 15.05
 dB. Fixed-100 therefore remains the scaled default.
+
+`train_colmap --densify-schedule radfoam-v1` implements the reference
+cell-count-dependent growth interval independently from topology cadence. The
+two-round protocol and result are recorded in
+`bonsai_densification_cadence.toml` and
+`results/bonsai-radfoam-v1-densification-cadence-step2805-11a7118.toml`.
+Fixed-500 grew at steps 2,000 and 2,500; the dynamic arm used the identical
+first contribution round and delayed the second growth to step 2,517. Both
+ended with 66,054 cells after the same 718,080 sampled training rays. Dynamic
+cadence changed train/held-out PSNR from 16.34 / 16.25 to 16.11 / 16.18 dB.
+Its 13.2-second wall-time reduction is only 1.2%, and both training peaks were
+about 481 MB with zero swap, OOM, or GPU faults. Fixed cadence remains the
+scaled default.

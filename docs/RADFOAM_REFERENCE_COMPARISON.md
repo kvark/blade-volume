@@ -211,17 +211,32 @@ This rejects dynamic cadence as the 256-ray default, not as part of a future
 reference-scale protocol. The versioned result is
 [`bonsai-radfoam-v1-topology-cadence-step2000-e50e965.toml`](../benchmarks/results/bonsai-radfoam-v1-topology-cadence-step2000-e50e965.toml).
 
+The independently isolated densification cadence is also negative at the
+256-ray scale. Fixed-500 and `radfoam-v1` use identical data, initialization,
+718,080 sampled training rays, fixed-100 topology cadence, and two exhaustive
+contribution rounds. Their first step-2,000 growth decision is identical. The
+reference formula then schedules its second growth at step 2,517 rather than
+2,500; both arms finish at step 2,805 with 66,054 cells. Dynamic cadence
+reaches 16.11 dB train / 16.18 dB held out, versus 16.34 / 16.25 dB for fixed
+cadence. It takes 1,087 rather than 1,101 seconds, a 1.2% difference that does
+not compensate for the quality loss. Fresh-Ply evaluation reproduces the
+scores exactly. Both 4 GiB scopes peak near 481 MB and record zero swap,
+pressure, OOM, or GPU faults. The dedicated protocol and versioned result are
+[`bonsai_densification_cadence.toml`](../benchmarks/bonsai_densification_cadence.toml)
+and
+[`bonsai-radfoam-v1-densification-cadence-step2805-11a7118.toml`](../benchmarks/results/bonsai-radfoam-v1-densification-cadence-step2805-11a7118.toml).
+This retains the dynamic policy as a reference-scale control while selecting
+fixed cadence for the current scaled protocol.
+
 ## Next experiments
 
-1. Compare the new cell-count-dependent densification control against fixed
-   cadence without bundling it with dynamic topology.
-2. Test larger stratified caps and cumulative multi-boundary drift against the
+1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle; do not change the default without decision agreement or
    a deliberately revised acceptance gate.
-3. Increase batch size and compare schedules by cumulative rays as well as
+2. Increase batch size and compare schedules by cumulative rays as well as
    updates; the exact v1 schedule and its initial relative groups are both
    rejected at batch 256, not at reference scale.
-4. Move toward 190,951→2,097,152 cells and the staged
+3. Move toward 190,951→2,097,152 cells and the staged
    780×520→1559×1039 image schedule only after that direction survives a larger
    batch.
 

@@ -172,8 +172,13 @@ At the audited revision:
   bit-identical to uninterrupted cloud parameters and adjacency. All 81
   trainer tests passed on the pinned RTX 5070 at a 985,112,576-byte cgroup
   peak; the full all-feature workspace suite peaked at 1,182,797,824 bytes.
-  Both recorded zero swap, OOM, or GPU faults. Quality selection still awaits
-  the isolated Bonsai comparison; fixed cadence remains the default.
+  Both recorded zero swap, OOM, or GPU faults. In the isolated two-round
+  Bonsai comparison, the dynamic policy delayed the second growth from step
+  2,500 to 2,517 and finished with the same 66,054 cells, but changed
+  train/held-out PSNR from 16.34 / 16.25 to 16.11 / 16.18 dB. Both training
+  scopes peaked near 481 MB without swap, OOM, or GPU faults. Fixed cadence
+  remains the scaled default; the dynamic policy remains a reference-scale
+  control.
 - When a topology and densification boundary coincide, the trainer now
   refreshes adjacency and the GPU cloud before collecting contribution and
   resampling statistics. Previously it downloaded current positions but paired
@@ -730,9 +735,10 @@ material path.
    densification samples, and topology/path refresh timing step by step. Add a
    small deterministic trace fixture for every discovered semantic difference.
    (Initialization, background, loss, exact schedule, and separated initial
-   parameter-group ratios and topology cadence are measured at the 256-ray
-   boundary; cell-count-dependent densification is implemented and awaits its
-   isolated measurement.)
+   parameter-group ratios, topology cadence, and cell-count-dependent
+   densification are measured at the 256-ray boundary. Each reference control
+   was neutral-to-negative there and remains available for larger-batch
+   work.)
 3. Run a controlled matrix from identical initialization: appearance-only;
    position optimization with fixed topology; position optimization with exact
    rebuilds; densification/pruning disabled and enabled; quantile loss disabled
