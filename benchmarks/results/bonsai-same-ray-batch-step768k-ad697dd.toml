@@ -1,0 +1,169 @@
+schema = 1
+manifest = "benchmarks/bonsai_batch_same_ray_round3.toml"
+manifest_name = "bonsai-radfoam-same-ray-batch-round3-v1"
+experiment = "same-ray-batch-three-round"
+timestamp_utc = "2026-07-16T17:33:25Z"
+git_commit = "ad697dd7843f00697c1686338472d8dbb82035fa"
+os = "Linux 7.0.0-27-generic x86_64"
+gpu = "NVIDIA GeForce RTX 5070"
+driver = "NVIDIA 595.71.05"
+vulkan_api = "1.4.329"
+status = "completed_select_batch1024"
+benchmark_complete = false
+default_change_recommended = true
+default_changed = false
+reason_default_change = "batch 1024 gains 0.90 dB held out at equal rays, improves seven of eight test frames, matches wall time, and adds only 14 MB peak memory"
+
+[isolation]
+kind = "systemd user service cgroup v2"
+memory_max_bytes = 4294967296
+memory_swap_max_bytes = 0
+oom = false
+oom_kill = false
+memory_limit_pressure = false
+gpu_fault_marker = false
+
+[protocol]
+cumulative_sampled_training_rays = 768000
+training_views = 255
+test_views = 8
+resolution = "128x128"
+initial_cells = 50000
+initialization = "radfoam-v1-scaled-to-50000"
+target_cells = 200000
+topology_refreshes = 30
+densification_rounds = 3
+contribution_views = 255
+contribution_rays_per_round = 1044480
+color_loss = "l1"
+background = "black"
+fresh_ply_evaluation = true
+release_binary_prebuilt_for_continuations = true
+
+[batch256]
+pixel_batch = 256
+completed_steps = 3000
+total_steps = 20400
+geometry_rebuild_every = 100
+densify_every = 500
+densify_warmup = 2000
+densify_until = 11000
+continuation_wall_seconds = 445.007
+continuation_memory_peak_bytes = 475176960
+evaluation_memory_peak_bytes = 98500608
+final_logged_training_loss = 0.3326
+round2_contribution_rays = 1044480
+round2_mean_segments = 46.8
+round2_max_segments = 150
+round2_truncated_rays = 0
+round2_pruned = 191
+round2_split = 9842
+cells = 75452
+adjacency_entries = 1137374
+train_psnr_db = 15.41
+test_psnr_db = 14.76
+artifact_path = "target/audit-runs/bonsai-batch256-step3000-ad697dd/model.ply"
+artifact_sha256 = "0e13068775e68e6502073cb55751606376d2697ecb6cbc2cae747ba9ee1f9306"
+
+[batch1024]
+pixel_batch = 1024
+completed_steps = 750
+total_steps = 5100
+geometry_rebuild_every = 25
+densify_every = 125
+densify_warmup = 500
+densify_until = 2750
+continuation_wall_seconds = 443.899
+continuation_memory_peak_bytes = 489349120
+evaluation_memory_peak_bytes = 98205696
+final_logged_training_loss = 0.2970
+round2_contribution_rays = 1044480
+round2_mean_segments = 46.7
+round2_max_segments = 151
+round2_truncated_rays = 0
+round2_pruned = 18
+round2_split = 9909
+cells = 75969
+adjacency_entries = 1140892
+train_psnr_db = 16.08
+test_psnr_db = 15.66
+artifact_path = "target/audit-runs/bonsai-batch1024-step750-ad697dd/model.ply"
+artifact_sha256 = "26a292e7de85b6c3db2718cd5ff66dccd8da35f1769e448175678336b9644f20"
+
+[comparison_batch1024_vs_batch256]
+delta_continuation_wall_seconds = -1.108
+continuation_wall_ratio = 0.998
+delta_continuation_memory_peak_bytes = 14172160
+delta_final_logged_training_loss = -0.0356
+delta_cells = 517
+delta_adjacency_entries = 3518
+delta_round2_pruned = -173
+delta_round2_split = 67
+delta_train_psnr_db = 0.67
+delta_test_psnr_db = 0.90
+test_frames_improved = 7
+test_frames_total = 8
+
+[[batch256.test_frames]]
+name = "DSCF5565.JPG"
+psnr_db = 13.42
+
+[[batch256.test_frames]]
+name = "DSCF5573.JPG"
+psnr_db = 14.76
+
+[[batch256.test_frames]]
+name = "DSCF5581.JPG"
+psnr_db = 14.88
+
+[[batch256.test_frames]]
+name = "DSCF5589.JPG"
+psnr_db = 13.44
+
+[[batch256.test_frames]]
+name = "DSCF5597.JPG"
+psnr_db = 16.15
+
+[[batch256.test_frames]]
+name = "DSCF5605.JPG"
+psnr_db = 15.28
+
+[[batch256.test_frames]]
+name = "DSCF5613.JPG"
+psnr_db = 13.92
+
+[[batch256.test_frames]]
+name = "DSCF5621.JPG"
+psnr_db = 16.20
+
+[[batch1024.test_frames]]
+name = "DSCF5565.JPG"
+psnr_db = 13.56
+
+[[batch1024.test_frames]]
+name = "DSCF5573.JPG"
+psnr_db = 16.11
+
+[[batch1024.test_frames]]
+name = "DSCF5581.JPG"
+psnr_db = 14.80
+
+[[batch1024.test_frames]]
+name = "DSCF5589.JPG"
+psnr_db = 14.63
+
+[[batch1024.test_frames]]
+name = "DSCF5597.JPG"
+psnr_db = 17.95
+
+[[batch1024.test_frames]]
+name = "DSCF5605.JPG"
+psnr_db = 15.71
+
+[[batch1024.test_frames]]
+name = "DSCF5613.JPG"
+psnr_db = 15.05
+
+[[batch1024.test_frames]]
+name = "DSCF5621.JPG"
+psnr_db = 17.46

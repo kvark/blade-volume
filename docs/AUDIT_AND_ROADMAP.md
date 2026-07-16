@@ -208,6 +208,15 @@ At the audited revision:
   batch changes learned contribution decisions as well as optimizer progress.
   It is the selected direction, but its mixed per-frame 0.17 dB gain requires
   a third boundary or another scene before becoming the default.
+- The third same-ray boundary resolves the batch decision. At 768,000 optimizer
+  rays, batch 256 reaches 15.41 / 14.76 dB train/held out with 75,452 cells;
+  batch 1,024 reaches 16.08 / 15.66 dB with 75,969 cells (+0.67/+0.90 dB) and
+  improves seven of eight held-out frames. Matched continuations take 445.0
+  and 443.9 seconds and peak at 475 and 489 MB. Both have mean paths near 47,
+  maxima 150–151, zero truncation, and zero swap, pressure, OOM, or GPU faults.
+  The smaller batch prunes 191 cells versus 18, consistent with noisier
+  geometry/contribution gradients. Batch 1,024 passes the Bonsai gate and is
+  selected as the scaled pixel-batch default.
 - When a topology and densification boundary coincide, the trainer now
   refreshes adjacency and the GPU cloud before collecting contribution and
   resampling statistics. Previously it downloaded current positions but paired
@@ -769,8 +778,9 @@ material path.
    exact schedule remains negative, relative parameter groups become neutral,
    and ray-normalized schedules are a positive direction. A corrected
    two-round same-ray comparison retains a +0.17 dB held-out advantage for
-   batch 1,024; native 3:2 training is negative. The next gate is a third round
-   or second scene rather than more native-aspect compute.)
+   batch 1,024, which expands to +0.90 dB at round 3; native 3:2 training is
+   negative. The next gate is a second scene rather than more native-aspect
+   compute.)
 3. Run a controlled matrix from identical initialization: appearance-only;
    position optimization with fixed topology; position optimization with exact
    rebuilds; densification/pruning disabled and enabled; quantile loss disabled

@@ -199,3 +199,13 @@ continuation scopes take 391 and 384 seconds and peak at 424 and 451 MB,
 respectively, with zero swap, pressure, OOM, truncation, or GPU faults. Batch
 1,024 remains the selected next direction, but the modest, mixed per-frame
 gain still requires a third boundary or another scene before changing defaults.
+
+The third-round decision protocol is
+`bonsai_batch_same_ray_round3.toml`, with results in
+`results/bonsai-same-ray-batch-step768k-ad697dd.toml`. At 768,000 optimizer
+rays and three growth rounds, batch 256 reaches 75,452 cells and 15.41 / 14.76
+dB train/held out. Ray-normalized batch 1,024 reaches 75,969 cells and 16.08 /
+15.66 dB: +0.67/+0.90 dB, improving seven of eight test frames. The matched
+continuations both take about 444–445 seconds; batch 1,024 peaks at 489 MB
+versus 475 MB. Both report zero swap, pressure, OOM, truncation, or GPU faults.
+This passes the Bonsai gate and selects 1,024 as the scaled pixel-batch default.
