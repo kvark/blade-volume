@@ -47,11 +47,11 @@ fn build_grid_model(n: usize) -> vol::PointCloudModel {
         points.push(glam::Vec4::new(i as f32, 0.0, 0.0, 0.0));
         // sh degree 0: 3 floats per point (RGB), unused for record_paths
         sh.extend_from_slice(&[0.0, 0.0, 0.0]);
-        if i + 1 < n {
-            neighbours.push((i + 1) as u32);
-        }
         if i > 0 {
             neighbours.push((i - 1) as u32);
+        }
+        if i + 1 < n {
+            neighbours.push((i + 1) as u32);
         }
         offsets.push(neighbours.len() as u32);
     }

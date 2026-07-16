@@ -166,7 +166,8 @@ fn interval_differential(
 ) -> IntervalDifferential {
     if (g_params.power_foam == 0u) {
         return IntervalDifferential(
-            t1 - t0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
+            min(t1 - t0, g_params.max_path_dt),
+            vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
             select(0u, 1u, t1 > t0),
         );
     }
