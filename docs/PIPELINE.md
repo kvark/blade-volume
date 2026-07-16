@@ -223,10 +223,11 @@ Broken into sub-steps:
 
     Training checkpoints pair the interchange PLY with a meganeura
     `.safetensors` parameter/Adam sidecar, a versioned `.trainstate` sidecar
-    for all deterministic RNG streams and the dynamic topology-cadence phase,
-    and a legacy `.ply.step` marker. The v2 reader remains compatible with v1
-    fixed-cadence sidecars. A resume validates that the optimizer, trainer
-    state, and absolute schedule step agree before taking another update.
+    for all deterministic RNG streams plus dynamic topology and densification
+    phases, and a legacy `.ply.step` marker. The v3 reader remains compatible
+    with v1/v2 fixed-densification sidecars. A resume validates that the
+    optimizer, trainer state, and absolute schedule step agree before taking
+    another update.
 
   A historical whole-image graph exposed a meganeura matmul shape bug for P×L
   with P≥784 and L≥16. The maintained trainer is pixel-batched and uses the

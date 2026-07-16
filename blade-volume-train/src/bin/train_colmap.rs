@@ -152,6 +152,13 @@ struct Args {
     #[argh(option, default = "0")]
     densify_every: usize,
 
+    /// densification cadence: "fixed" or "radfoam-v1" (default fixed).
+    /// The reference mode grows first at --densify-warmup, then derives each
+    /// interval from the post-growth cell count; --densify-every only enables
+    /// densification and is otherwise ignored.
+    #[argh(option, default = "String::from(\"fixed\")")]
+    densify_schedule: String,
+
     /// per-round growth: each densify round adds `fraction × current`
     /// cells, parents drawn by weighted multinomial on
     /// `|grad(position)| × cell_radius` (RadFoam uses 0.15). Ignored
@@ -159,13 +166,15 @@ struct Args {
     #[argh(option, default = "0.15")]
     densify_fraction: f32,
 
-    /// point budget: stop growing once the cloud reaches this many cells
-    /// (RadFoam bonsai ≈ 2,097,152). Default 2_000_000.
+    /// final point budget (RadFoam bonsai ≈ 2,097,152). Fixed cadence stops
+    /// at the budget; radfoam-v1 stops scheduling at 90% of it. Default
+    /// 2_000_000.
     #[argh(option, default = "2000000")]
     densify_target: usize,
 
-    /// stop densifying after this step (refinement-only afterwards).
-    /// Default 0 = densify until the end of training.
+    /// fixed cadence: stop densifying after this step. Radfoam-v1: end of the
+    /// linear-growth horizon used to derive intervals, not a hard stop.
+    /// Default 0 maps to an unbounded horizon and is invalid for radfoam-v1.
     #[argh(option, default = "0")]
     densify_until: usize,
 
@@ -329,6 +338,27 @@ struct Args {
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
+    let densify_schedule = match args.densify_schedule.as_str() {
+        "fixed" => diff_render::DensifySchedule::Fixed,
+        "radfoam-v1" => diff_render::DensifySchedule::RadFoamV1,
+        other => {
+            eprintln!("unknown --densify-schedule '{other}' (use 'fixed' or 'radfoam-v1')");
+            std::process::exit(2);
+        }
+    };
+    if densify_schedule == diff_render::DensifySchedule::RadFoamV1 {
+        if args.densify_every == 0 {
+            eprintln!("--densify-schedule radfoam-v1 requires --densify-every > 0 to enable it");
+            std::process::exit(2);
+        }
+        if args.densify_until == 0 || args.densify_until <= args.densify_warmup {
+            eprintln!(
+                "--densify-schedule radfoam-v1 requires --densify-until greater than \
+                 --densify-warmup"
+            );
+            std::process::exit(2);
+        }
+    }
     let geometry_rebuild_schedule = match args.geometry_rebuild_schedule.as_str() {
         "fixed" => diff_render::GeometryRebuildSchedule::Fixed,
         "radfoam-v1" => diff_render::GeometryRebuildSchedule::RadFoamV1,
@@ -562,6 +592,7 @@ fn main() {
             },
             densify: if args.densify_every > 0 {
                 Some(diff_render::DensifyConfig {
+                    schedule: densify_schedule,
                     every: args.densify_every,
                     fraction: args.densify_fraction,
                     jitter_scale: args.densify_jitter,

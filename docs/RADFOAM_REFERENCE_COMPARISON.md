@@ -43,7 +43,7 @@ geometry is exhausted.
 | Adam epsilon | `1e-15` | `1e-8` | Usually secondary, but material for an exact reproduction. |
 | Learning rates | Independent density, position, DC, and higher-SH schedules | One cosine base with static multipliers | Position and SH rates differed by up to orders of magnitude during the run. |
 | Topology refresh | Period 1, then 3, 5, …, 99, 101; reset after densification | Exact rebuild every 100 steps | The v1 source increments 99 to 101 before stabilizing; reference refreshes rapidly while early geometry moves fastest. |
-| Densification cadence | Cell-count-dependent linear-growth interval, minimum 100 | Fixed 500 steps | The scaled run reaches its cap, but not at the same times or with the same contribution windows. |
+| Densification cadence | Cell-count-dependent linear-growth interval, minimum 100 | Fixed 500 by default; exact policy available as an opt-in | The scaled baseline reaches its cap, but not at the same times or with the same contribution windows. |
 | Contribution scan | Every view at a random 2× phase; max ray contribution | Same correctness-oriented exhaustive strategy | Semantics agree; this is the measured runtime bottleneck at large cell counts. |
 
 Official v1 parameter rates are:
@@ -83,12 +83,21 @@ existing defaults:
   period, so the next optimizer step rebuilds again. Rust continues to use a
   full exact rebuild rather than the reference's incremental implementation,
   isolating cadence from triangulation-backend behavior. The topology phase is
-  stored in the v2 trainer-state sidecar for exact segmented resumes. When a
+  stored in the current v3 trainer-state sidecar for exact segmented resumes.
+  The reader remains compatible with the original v2 topology state. When a
   scheduled refresh and densification coincide, current adjacency/GPU geometry
   is rebuilt before contribution collection, matching the reference operation
   order. Contribution phases are keyed by absolute densification round rather
   than topology rebuild count so cadence comparisons do not alter their
   pruning sample.
+- `--densify-schedule radfoam-v1` reproduces the reference counter order,
+  post-growth cell-count interval formula, 100-step floor, and 90%-of-target
+  stop gate. `--densify-until` is the linear-growth horizon in this mode, not
+  a hard cutoff. The original point count, active counter, next interval, and
+  absolute round live in the v3 trainer sidecar; v1/v2 fixed-cadence
+  checkpoints remain readable. A physical-GPU segmented test crosses two
+  dynamic rounds and requires exact equality with uninterrupted parameters and
+  adjacency.
 
 These controls do not pretend to solve the remaining batch-size or update
 cadence differences. The historical L1/top-track/unified-cosine behavior stays
@@ -204,8 +213,8 @@ reference-scale protocol. The versioned result is
 
 ## Next experiments
 
-1. Implement cell-count-dependent densification as a separately
-   measurable control rather than bundling it with topology cadence.
+1. Compare the new cell-count-dependent densification control against fixed
+   cadence without bundling it with dynamic topology.
 2. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle; do not change the default without decision agreement or
    a deliberately revised acceptance gate.

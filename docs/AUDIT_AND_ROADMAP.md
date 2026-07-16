@@ -155,13 +155,25 @@ At the audited revision:
   replace the selected scaled optimizer.
 - The official topology-refresh counter is available independently as
   `radfoam-v1`: exact Rust topology/path rebuilds follow periods 1, 3, 5, ...,
-  99, then 101, and reset their period after densification. The v2 training
-  sidecar persists the phase; a physical-GPU 4+6-step resume produced a PLY
+  99, then 101, and reset their period after densification. The current v3
+  training sidecar persists the phase and still reads v2; a physical-GPU
+  4+6-step resume produced a PLY
   byte-identical to an uninterrupted 10-step run. In the clean step-2,000
   comparison, dynamic cadence performs 44 rather than 20 scheduled updates,
   takes 676 rather than 652 seconds, and reaches 14.58 / 15.05 dB train/held
   out versus fixed-100's 14.60 / 15.13. It remains an opt-in reference control;
   fixed-100 remains the selected scaled cadence.
+- The official densification counter is independently available as
+  `--densify-schedule radfoam-v1`. It grows first at the warmup boundary,
+  derives each later interval from the post-growth cell count with a 100-step
+  floor, and stops at 90% of the requested final count. A v3 trainer sidecar
+  persists its initial count, phase, next interval, and absolute round while
+  retaining v1/v2 read compatibility. A physical-GPU two-boundary resume is
+  bit-identical to uninterrupted cloud parameters and adjacency. All 81
+  trainer tests passed on the pinned RTX 5070 at a 985,112,576-byte cgroup
+  peak; the full all-feature workspace suite peaked at 1,182,797,824 bytes.
+  Both recorded zero swap, OOM, or GPU faults. Quality selection still awaits
+  the isolated Bonsai comparison; fixed cadence remains the default.
 - When a topology and densification boundary coincide, the trainer now
   refreshes adjacency and the GPU cloud before collecting contribution and
   resampling statistics. Previously it downloaded current positions but paired
@@ -719,7 +731,8 @@ material path.
    small deterministic trace fixture for every discovered semantic difference.
    (Initialization, background, loss, exact schedule, and separated initial
    parameter-group ratios and topology cadence are measured at the 256-ray
-   boundary; cell-count-dependent densification cadence remains.)
+   boundary; cell-count-dependent densification is implemented and awaits its
+   isolated measurement.)
 3. Run a controlled matrix from identical initialization: appearance-only;
    position optimization with fixed topology; position optimization with exact
    rebuilds; densification/pruning disabled and enabled; quantile loss disabled

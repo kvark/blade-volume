@@ -1116,12 +1116,27 @@ pub enum GeometryRebuildSchedule {
     RadFoamV1,
 }
 
+/// Cadence and stopping policy for adaptive cloud densification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DensifySchedule {
+    /// Grow every [`DensifyConfig::every`] steps from `warmup` until
+    /// `densify_until`, stopping at `target_points`.
+    Fixed,
+    /// Official RadFoam v1 policy. Grow first at `warmup`, then derive the
+    /// next interval from the post-growth cell count and clamp it to at least
+    /// 100 steps. Growth stops once the current count reaches 90% of
+    /// `target_points`; `densify_until` defines the linear-growth horizon in
+    /// the interval formula rather than acting as a hard stop.
+    RadFoamV1,
+}
+
 const SAMPLING_RNG_SEED: u64 = 0xDEAD_BEEF_F00D_CAFE;
 const QUANTILE_RNG_SEED: u64 = 0x51A7_E5D0_9B3C_2468;
 const DENSIFY_RNG_SEED: u64 = 0xCAFE_F00D_DEAD_BEEF;
 const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 const LCG_INCREMENT: u64 = 1_442_695_040_888_963_407;
-const TRAINING_STATE_HEADER: &str = "blade-volume-training-state-v2";
+const TRAINING_STATE_HEADER: &str = "blade-volume-training-state-v3";
+const TOPOLOGY_TRAINING_STATE_HEADER: &str = "blade-volume-training-state-v2";
 const LEGACY_TRAINING_STATE_HEADER: &str = "blade-volume-training-state-v1";
 
 /// Deterministic trainer state which is not owned by meganeura.
@@ -1142,6 +1157,15 @@ pub struct TrainingState {
     pub topology_period: usize,
     /// RadFoam topology steps accumulated toward `topology_period`.
     pub topology_steps_since_update: usize,
+    /// Original cloud size used by the RadFoam densification interval
+    /// formula. Zero means the fixed densification schedule was active.
+    pub densify_initial_points: usize,
+    /// Active steps accumulated toward `densify_next_after`.
+    pub densify_steps_since_update: usize,
+    /// Current RadFoam densification interval.
+    pub densify_next_after: usize,
+    /// Number of successful densification rounds already completed.
+    pub densification_round: usize,
 }
 
 /// Knobs for [`fit_appearance_multi_view`].
@@ -1269,8 +1293,9 @@ pub struct AppearanceFitConfig {
     pub resume_training_state: Option<TrainingState>,
 }
 
-/// Adaptive densification: every `every` training steps after `warmup`
-/// steps, split cells sampled by accumulated `|grad(position)| × cell_radius`.
+/// Adaptive densification: on the selected [`DensifySchedule`] after
+/// `warmup`, split cells sampled by accumulated
+/// `|grad(position)| × cell_radius`.
 /// RadFoam inserts a sibling near the farthest face. PowerFoam copies the
 /// support radius and perturbs both sites by 5% of that radius, following the
 /// reference resampler without introducing its deferred normal semantics. The
@@ -1281,7 +1306,9 @@ pub struct AppearanceFitConfig {
 /// Voronoi adjacency, amortised over the `every` steps in between.
 #[derive(Clone, Copy, Debug)]
 pub struct DensifyConfig {
-    /// Steps between densify rounds.
+    /// Fixed or official RadFoam v1 cadence. Default fixed.
+    pub schedule: DensifySchedule,
+    /// Steps between densify rounds under [`DensifySchedule::Fixed`].
     pub every: usize,
     /// Per-round growth factor: each round adds `fraction × current_cells`
     /// new cells (RadFoam uses 0.15 = +15%/round), selected by weighted
@@ -1294,11 +1321,13 @@ pub struct DensifyConfig {
     /// Skip the first `warmup` steps before the first densify (lets
     /// the per-cell gradient signal settle). RadFoam: 2000.
     pub warmup: usize,
-    /// Stop growing once the cell count reaches this budget (RadFoam
-    /// bonsai: ~2,097,152).
+    /// Final cell-count budget (RadFoam Bonsai: 2,097,152). Fixed cadence
+    /// stops at this count; RadFoam v1 stops scheduling at 90% of it, as in
+    /// the reference trainer.
     pub target_points: usize,
-    /// Stop densifying after this step (refinement-only phase follows).
-    /// RadFoam densifies iters 2000–11000 of 20000 (~55 %).
+    /// Fixed cadence stops after this step. RadFoam v1 instead uses the
+    /// `warmup..densify_until` span in its cell-count-dependent interval
+    /// formula; it is a growth horizon, not a hard cutoff in the reference.
     pub densify_until: usize,
     /// Prune low-contribution small cells each densify round, while
     /// protecting visible cells and their direct neighbours.
@@ -1324,6 +1353,7 @@ pub struct DensifyConfig {
 impl Default for DensifyConfig {
     fn default() -> Self {
         Self {
+            schedule: DensifySchedule::Fixed,
             every: 500,
             fraction: 0.15,
             jitter_scale: 0.5,
@@ -1605,13 +1635,131 @@ impl TopologyCadenceState {
     }
 }
 
-fn densify_due(config: DensifyConfig, steps_done: usize) -> bool {
+fn fixed_densify_due(config: DensifyConfig, steps_done: usize) -> bool {
     steps_done >= config.warmup && (steps_done - config.warmup).is_multiple_of(config.every)
 }
 
-fn densification_round(config: DensifyConfig, steps_done: usize) -> usize {
-    debug_assert!(densify_due(config, steps_done));
+fn fixed_densification_round(config: DensifyConfig, steps_done: usize) -> usize {
+    debug_assert!(fixed_densify_due(config, steps_done));
     (steps_done - config.warmup) / config.every
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DensifyCadenceState {
+    initial_points: usize,
+    steps_since_update: usize,
+    next_after: usize,
+    round: usize,
+}
+
+impl DensifyCadenceState {
+    fn disabled() -> Self {
+        Self {
+            initial_points: 0,
+            steps_since_update: 0,
+            next_after: 0,
+            round: 0,
+        }
+    }
+
+    fn radfoam_v1_initial(initial_points: usize) -> Self {
+        assert!(initial_points > 0);
+        Self {
+            initial_points,
+            steps_since_update: 0,
+            next_after: 1,
+            round: 0,
+        }
+    }
+
+    fn steps_until_update(&self, steps_done: usize, warmup: usize) -> usize {
+        debug_assert!(self.next_after > 0);
+        if steps_done < warmup {
+            warmup - steps_done
+        } else {
+            assert!(
+                self.steps_since_update < self.next_after,
+                "cannot resume RadFoam v1 densification from an unprocessed boundary"
+            );
+            self.next_after - self.steps_since_update
+        }
+    }
+
+    /// Advance completed optimizer steps. RadFoam increments its counter at
+    /// the end of each iteration for which `i + 1 >= densify_from`, so the
+    /// warmup boundary contributes exactly one count.
+    fn advance(&mut self, steps_done: usize, steps: usize, warmup: usize) -> bool {
+        debug_assert!(self.next_after > 0);
+        let end = steps_done + steps;
+        let active_start = steps_done.max(warmup.saturating_sub(1));
+        self.steps_since_update += end.saturating_sub(active_start);
+        assert!(
+            self.steps_since_update <= self.next_after,
+            "densification cycle crossed its scheduled boundary"
+        );
+        self.steps_since_update == self.next_after
+    }
+
+    fn finish_round(&mut self, config: DensifyConfig, current_points: usize) {
+        debug_assert_eq!(config.schedule, DensifySchedule::RadFoamV1);
+        debug_assert_eq!(self.steps_since_update, self.next_after);
+        self.round += 1;
+        self.steps_since_update = 0;
+        self.next_after =
+            radfoam_v1_next_densify_after(config, self.initial_points, current_points);
+    }
+}
+
+fn radfoam_v1_next_densify_after(
+    config: DensifyConfig,
+    initial_points: usize,
+    current_points: usize,
+) -> usize {
+    assert!(config.densify_until > config.warmup);
+    assert!(config.target_points > initial_points);
+    let growth_window = config.densify_until - config.warmup;
+    let point_growth = config.target_points - initial_points;
+    let interval = (f64::from(config.fraction) * current_points as f64 * growth_window as f64
+        / point_growth as f64) as usize;
+    interval.max(100)
+}
+
+fn radfoam_v1_densify_active(config: DensifyConfig, current_points: usize) -> bool {
+    (current_points as u128) * 10 < (config.target_points as u128) * 9
+}
+
+fn restore_densify_cadence(
+    config: Option<DensifyConfig>,
+    current_points: usize,
+    resume_step: usize,
+    training_state: Option<TrainingState>,
+) -> DensifyCadenceState {
+    match config.map(|value| value.schedule) {
+        None | Some(DensifySchedule::Fixed) => DensifyCadenceState::disabled(),
+        Some(DensifySchedule::RadFoamV1) => match training_state {
+            Some(state) => {
+                assert!(
+                    state.densify_initial_points > 0
+                        && state.densify_next_after > 0
+                        && state.densify_steps_since_update <= state.densify_next_after,
+                    "RadFoam v1 densification cadence requires a v3 trainer-state checkpoint"
+                );
+                DensifyCadenceState {
+                    initial_points: state.densify_initial_points,
+                    steps_since_update: state.densify_steps_since_update,
+                    next_after: state.densify_next_after,
+                    round: state.densification_round,
+                }
+            }
+            None => {
+                assert_eq!(
+                    resume_step, 0,
+                    "RadFoam v1 densification cadence cannot resume without trainer state"
+                );
+                DensifyCadenceState::radfoam_v1_initial(current_points)
+            }
+        },
+    }
 }
 
 fn invocation_end_step(
@@ -1627,16 +1775,27 @@ fn invocation_end_step(
 fn segment_preserves_densify_accumulator(
     config: DensifyConfig,
     current_points: usize,
+    resume_step: usize,
     end_step: usize,
     total_steps: usize,
+    cadence: DensifyCadenceState,
 ) -> bool {
     end_step >= total_steps
-        || current_points >= config.target_points
-        || end_step >= config.densify_until
-        || densify_due(config, end_step)
+        || match config.schedule {
+            DensifySchedule::Fixed => {
+                current_points >= config.target_points
+                    || end_step >= config.densify_until
+                    || fixed_densify_due(config, end_step)
+            }
+            DensifySchedule::RadFoamV1 => {
+                !radfoam_v1_densify_active(config, current_points)
+                    || end_step - resume_step
+                        == cadence.steps_until_update(resume_step, config.warmup)
+            }
+        }
 }
 
-fn steps_until_densify(config: DensifyConfig, steps_done: usize) -> usize {
+fn steps_until_fixed_densify(config: DensifyConfig, steps_done: usize) -> usize {
     if steps_done < config.warmup {
         config.warmup - steps_done
     } else {
@@ -1750,7 +1909,10 @@ pub fn fit_appearance_multi_view(
         "fixed geometry optimisation requires geometry_rebuild_every > 0"
     );
     if let Some(ref densify) = config.densify {
-        assert!(densify.every > 0, "densify.every must be greater than zero");
+        assert!(
+            densify.schedule != DensifySchedule::Fixed || densify.every > 0,
+            "fixed densify.every must be greater than zero"
+        );
         assert!(
             densify.fraction.is_finite() && densify.fraction >= 0.0,
             "densify.fraction must be finite and non-negative"
@@ -1767,6 +1929,20 @@ pub fn fit_appearance_multi_view(
             densify.prune_radius.is_finite() && densify.prune_radius >= 0.0,
             "densify.prune_radius must be finite and non-negative"
         );
+        if densify.schedule == DensifySchedule::RadFoamV1 {
+            assert!(
+                densify.densify_until > densify.warmup,
+                "RadFoam v1 densify_until must be greater than warmup"
+            );
+            let initial_points = config
+                .resume_training_state
+                .map(|state| state.densify_initial_points)
+                .unwrap_or(model.points.len());
+            assert!(
+                initial_points > 0 && densify.target_points > initial_points,
+                "RadFoam v1 target_points must exceed the initial cloud size"
+            );
+        }
     }
     if config.pixel_batch.is_none() {
         config.steps_per_view = config.epochs;
@@ -1877,7 +2053,9 @@ fn training_state_path(model_path: &std::path::Path) -> std::path::PathBuf {
 fn encode_training_state(state: TrainingState) -> String {
     format!(
         "{TRAINING_STATE_HEADER}\nstep {}\ncycle {}\nsampling_rng {}\nquantile_rng {}\n\
-         densify_rng {}\ntopology_period {}\ntopology_steps_since_update {}\n",
+         densify_rng {}\ntopology_period {}\ntopology_steps_since_update {}\n\
+         densify_initial_points {}\ndensify_steps_since_update {}\n\
+         densify_next_after {}\ndensification_round {}\n",
         state.step,
         state.cycle,
         state.sampling_rng,
@@ -1885,15 +2063,20 @@ fn encode_training_state(state: TrainingState) -> String {
         state.densify_rng,
         state.topology_period,
         state.topology_steps_since_update,
+        state.densify_initial_points,
+        state.densify_steps_since_update,
+        state.densify_next_after,
+        state.densification_round,
     )
 }
 
 fn decode_training_state(text: &str) -> Result<TrainingState, String> {
     let mut lines = text.lines();
     let header = lines.next();
-    let has_topology_state = match header {
-        Some(TRAINING_STATE_HEADER) => true,
-        Some(LEGACY_TRAINING_STATE_HEADER) => false,
+    let version = match header {
+        Some(TRAINING_STATE_HEADER) => 3,
+        Some(TOPOLOGY_TRAINING_STATE_HEADER) => 2,
+        Some(LEGACY_TRAINING_STATE_HEADER) => 1,
         _ => return Err("unsupported or missing training-state header".to_string()),
     };
     let mut read_value = |expected: &str| -> Result<u64, String> {
@@ -1921,8 +2104,12 @@ fn decode_training_state(text: &str) -> Result<TrainingState, String> {
         densify_rng: read_value("densify_rng")?,
         topology_period: 0,
         topology_steps_since_update: 0,
+        densify_initial_points: 0,
+        densify_steps_since_update: 0,
+        densify_next_after: 0,
+        densification_round: 0,
     };
-    if has_topology_state {
+    if version >= 2 {
         state.topology_period = usize::try_from(read_value("topology_period")?)
             .map_err(|_| "training-state topology_period does not fit usize".to_string())?;
         state.topology_steps_since_update =
@@ -1936,6 +2123,28 @@ fn decode_training_state(text: &str) -> Result<TrainingState, String> {
             && state.topology_steps_since_update > 0;
         if !fixed && !radfoam {
             return Err("invalid training-state topology cadence".to_string());
+        }
+    }
+    if version >= 3 {
+        state.densify_initial_points = usize::try_from(read_value("densify_initial_points")?)
+            .map_err(|_| "training-state densify_initial_points does not fit usize".to_string())?;
+        state.densify_steps_since_update =
+            usize::try_from(read_value("densify_steps_since_update")?).map_err(|_| {
+                "training-state densify_steps_since_update does not fit usize".to_string()
+            })?;
+        state.densify_next_after = usize::try_from(read_value("densify_next_after")?)
+            .map_err(|_| "training-state densify_next_after does not fit usize".to_string())?;
+        state.densification_round = usize::try_from(read_value("densification_round")?)
+            .map_err(|_| "training-state densification_round does not fit usize".to_string())?;
+        let fixed = state.densify_initial_points == 0
+            && state.densify_steps_since_update == 0
+            && state.densify_next_after == 0
+            && state.densification_round == 0;
+        let radfoam = state.densify_initial_points > 0
+            && state.densify_next_after > 0
+            && state.densify_steps_since_update <= state.densify_next_after;
+        if !fixed && !radfoam {
+            return Err("invalid training-state densification cadence".to_string());
         }
     }
     if lines.any(|line| !line.trim().is_empty()) {
@@ -2897,6 +3106,13 @@ fn fit_appearance_pixel_batched(
     let mut steps_done = config.resume_step;
     let invocation_end =
         invocation_end_step(total_steps, config.resume_step, config.stop_after_steps);
+    let densify = config.densify;
+    let mut densify_cadence = restore_densify_cadence(
+        densify,
+        model.points.len(),
+        config.resume_step,
+        config.resume_training_state,
+    );
     if invocation_end < total_steps {
         assert!(
             config.checkpoint_path.is_some(),
@@ -2907,8 +3123,10 @@ fn fit_appearance_pixel_batched(
                 segment_preserves_densify_accumulator(
                     densify,
                     model.points.len(),
+                    config.resume_step,
                     invocation_end,
                     total_steps,
+                    densify_cadence,
                 ),
                 "bounded invocation must end on a densification boundary while future \
                  densification remains enabled"
@@ -3040,7 +3258,6 @@ fn fit_appearance_pixel_batched(
     // preserved through the warmup → first-densify transition. They're
     // only torn down and rebuilt when a split actually changes the cell
     // count.
-    let densify = config.densify;
     let geometry_trainable = config.position_lr_ratio > 0.0
         || config.radius_lr_ratio > 0.0
         || config.lr_groups == LrGroups::RadFoamV1Relative
@@ -3134,8 +3351,21 @@ fn fit_appearance_pixel_batched(
     session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
 
     while steps_done < invocation_end {
-        let densify_budget = match densify {
-            Some(d) => steps_until_densify(d, steps_done).min(invocation_end - steps_done),
+        let densify_schedule_active = densify.is_some_and(|d| match d.schedule {
+            DensifySchedule::Fixed => {
+                steps_done < d.densify_until && model.points.len() < d.target_points
+            }
+            DensifySchedule::RadFoamV1 => radfoam_v1_densify_active(d, model.points.len()),
+        });
+        let densify_budget = match densify.filter(|_| densify_schedule_active) {
+            Some(d) => match d.schedule {
+                DensifySchedule::Fixed => {
+                    steps_until_fixed_densify(d, steps_done).min(invocation_end - steps_done)
+                }
+                DensifySchedule::RadFoamV1 => densify_cadence
+                    .steps_until_update(steps_done, d.warmup)
+                    .min(invocation_end - steps_done),
+            },
             None => invocation_end - steps_done,
         };
         let geometry_budget = if geometry_trainable {
@@ -3153,6 +3383,7 @@ fn fit_appearance_pixel_batched(
         };
         let cycle_budget = densify_budget.min(geometry_budget);
 
+        let cycle_start = steps_done;
         for cycle_step in 0..cycle_budget {
             let step = steps_done + cycle_step;
             let vi = (next_lcg_u32(&mut sampling_rng) as usize) % views.len();
@@ -3342,6 +3573,13 @@ fn fit_appearance_pixel_batched(
 
         steps_done += cycle_budget;
         cycle += 1;
+        let densify_schedule_due = densify_schedule_active
+            && densify.is_some_and(|d| match d.schedule {
+                DensifySchedule::Fixed => fixed_densify_due(d, steps_done),
+                DensifySchedule::RadFoamV1 => {
+                    densify_cadence.advance(cycle_start, cycle_budget, d.warmup)
+                }
+            });
         let topology_schedule_due = geometry_trainable
             && match config.geometry_rebuild_schedule {
                 GeometryRebuildSchedule::Fixed => {
@@ -3350,17 +3588,17 @@ fn fit_appearance_pixel_batched(
                 GeometryRebuildSchedule::RadFoamV1 => topology_cadence.advance(cycle_budget),
             };
 
-        // Prune + densify, gated by the RadFoam schedule: only between
-        // `warmup` and `densify_until`, and only while under the point
-        // budget. Past that it's a refinement-only phase (no rebuilds).
+        // Prune + densify at the selected schedule boundary. The fixed mode
+        // uses `densify_until` and the exact point budget. Reference mode
+        // uses its cell-count-derived interval and 90%-of-target stop gate.
         let mut topology_rebuilt = false;
         if let Some(d) = densify {
-            let gate = densify_due(d, steps_done)
-                && steps_done < total_steps
-                && steps_done < d.densify_until
-                && model.points.len() < d.target_points;
+            let gate = densify_schedule_due && steps_done < total_steps;
             if gate {
-                let densification_round = densification_round(d, steps_done);
+                let densification_round = match d.schedule {
+                    DensifySchedule::Fixed => fixed_densification_round(d, steps_done),
+                    DensifySchedule::RadFoamV1 => densify_cadence.round,
+                };
                 // Snapshot params + Adam state at the OLD size, before
                 // prune+densify remaps `model.points`.
                 let n_old = model.points.len();
@@ -3457,6 +3695,14 @@ fn fit_appearance_pixel_batched(
                     added,
                     model.points.len(),
                 );
+                if d.schedule == DensifySchedule::RadFoamV1 {
+                    densify_cadence.finish_round(d, model.points.len());
+                    log::info!(
+                        "densify round {}: next RadFoam v1 growth after {} steps",
+                        densification_round,
+                        densify_cadence.next_after,
+                    );
+                }
                 // Rebuild Voronoi adjacency for the new cell set so the
                 // GPU path-record sees real neighbours of the new cells.
                 rebuild_training_adjacency(model, config.rebuild_with_qhull);
@@ -3599,8 +3845,7 @@ fn fit_appearance_pixel_batched(
         // Write checkpoints after topology maintenance so every PLY pairs
         // its point positions with matching adjacency. Exposure is baked
         // into a throwaway clone; the exact sidecar retains the live values.
-        let checkpoint_due = steps_done == invocation_end
-            || densify.is_some_and(|config| densify_due(config, steps_done));
+        let checkpoint_due = steps_done == invocation_end || densify_schedule_due;
         if checkpoint_due {
             if let Some(ref ckpt) = config.checkpoint_path {
                 download_model_parameters(&session, model, config.softplus_beta);
@@ -3621,6 +3866,10 @@ fn fit_appearance_pixel_batched(
                             densify_rng: rng_split,
                             topology_period: topology_cadence.period,
                             topology_steps_since_update: topology_cadence.steps_since_update,
+                            densify_initial_points: densify_cadence.initial_points,
+                            densify_steps_since_update: densify_cadence.steps_since_update,
+                            densify_next_after: densify_cadence.next_after,
+                            densification_round: densify_cadence.round,
                         };
                         match save_training_state(ckpt, trainer_state) {
                             Ok(trainer_path) => log::info!(
@@ -4339,6 +4588,10 @@ mod tests {
             densify_rng: 33,
             topology_period: 51,
             topology_steps_since_update: 17,
+            densify_initial_points: 50_000,
+            densify_steps_since_update: 23,
+            densify_next_after: 517,
+            densification_round: 2,
         };
         let encoded = encode_training_state(state);
         assert_eq!(decode_training_state(&encoded).unwrap(), state);
@@ -4357,6 +4610,25 @@ mod tests {
         assert_eq!(state.step, 9_000);
         assert_eq!(state.topology_period, 0);
         assert_eq!(state.topology_steps_since_update, 0);
+        assert_eq!(state.densify_initial_points, 0);
+    }
+
+    #[test]
+    fn v2_training_state_decodes_without_densification_phase() {
+        let encoded = "blade-volume-training-state-v2\n\
+                       step 9000\n\
+                       cycle 94\n\
+                       sampling_rng 11\n\
+                       quantile_rng 22\n\
+                       densify_rng 33\n\
+                       topology_period 51\n\
+                       topology_steps_since_update 17\n";
+        let state = decode_training_state(encoded).unwrap();
+        assert_eq!(state.step, 9_000);
+        assert_eq!(state.topology_period, 51);
+        assert_eq!(state.topology_steps_since_update, 17);
+        assert_eq!(state.densify_initial_points, 0);
+        assert_eq!(state.densify_next_after, 0);
     }
 
     #[test]
@@ -4373,6 +4645,10 @@ mod tests {
             densify_rng: 456,
             topology_period: 101,
             topology_steps_since_update: 42,
+            densify_initial_points: 0,
+            densify_steps_since_update: 0,
+            densify_next_after: 0,
+            densification_round: 0,
         };
         let path = save_training_state(&model_path, state).unwrap();
         assert_eq!(load_training_state(&model_path).unwrap(), state);
@@ -4415,20 +4691,60 @@ mod tests {
             every: 500,
             ..DensifyConfig::default()
         };
-        assert_eq!(steps_until_densify(config, 0), 2000);
-        assert_eq!(steps_until_densify(config, 1900), 100);
-        assert!(densify_due(config, 2000));
-        assert_eq!(densification_round(config, 2000), 0);
+        assert_eq!(steps_until_fixed_densify(config, 0), 2000);
+        assert_eq!(steps_until_fixed_densify(config, 1900), 100);
+        assert!(fixed_densify_due(config, 2000));
+        assert_eq!(fixed_densification_round(config, 2000), 0);
         for geometry_boundary in [2100, 2200, 2300, 2400] {
-            assert!(!densify_due(config, geometry_boundary));
+            assert!(!fixed_densify_due(config, geometry_boundary));
             assert_eq!(
-                steps_until_densify(config, geometry_boundary),
+                steps_until_fixed_densify(config, geometry_boundary),
                 2500 - geometry_boundary,
             );
         }
-        assert!(densify_due(config, 2500));
-        assert_eq!(densification_round(config, 2500), 1);
-        assert_eq!(steps_until_densify(config, 2500), 500);
+        assert!(fixed_densify_due(config, 2500));
+        assert_eq!(fixed_densification_round(config, 2500), 1);
+        assert_eq!(steps_until_fixed_densify(config, 2500), 500);
+    }
+
+    #[test]
+    fn radfoam_v1_densify_cadence_matches_reference_counter_order() {
+        let config = DensifyConfig {
+            schedule: DensifySchedule::RadFoamV1,
+            fraction: 0.15,
+            warmup: 2_000,
+            target_points: 200_000,
+            densify_until: 11_000,
+            ..DensifyConfig::default()
+        };
+        let mut state = DensifyCadenceState::radfoam_v1_initial(50_000);
+        assert_eq!(state.steps_until_update(0, config.warmup), 2_000);
+        assert!(state.advance(0, 2_000, config.warmup));
+        assert_eq!(state.steps_since_update, 1);
+        assert_eq!(state.round, 0);
+
+        state.finish_round(config, 57_500);
+        assert_eq!(state.next_after, 517);
+        assert_eq!(state.steps_since_update, 0);
+        assert_eq!(state.round, 1);
+        assert!(!state.advance(2_000, 516, config.warmup));
+        assert!(state.advance(2_516, 1, config.warmup));
+    }
+
+    #[test]
+    fn radfoam_v1_densify_interval_has_reference_floor_and_stop_gate() {
+        let config = DensifyConfig {
+            schedule: DensifySchedule::RadFoamV1,
+            fraction: 0.15,
+            warmup: 2_000,
+            target_points: 2_097_152,
+            densify_until: 11_000,
+            ..DensifyConfig::default()
+        };
+        assert_eq!(radfoam_v1_next_densify_after(config, 131_072, 150_733), 103,);
+        assert_eq!(radfoam_v1_next_densify_after(config, 131_072, 140_000), 100,);
+        assert!(radfoam_v1_densify_active(config, 1_887_436));
+        assert!(!radfoam_v1_densify_active(config, 1_887_437));
     }
 
     #[test]
@@ -4449,19 +4765,75 @@ mod tests {
             ..DensifyConfig::default()
         };
         assert!(segment_preserves_densify_accumulator(
-            config, 100_000, 10_000, 16_000,
+            config,
+            100_000,
+            0,
+            10_000,
+            16_000,
+            DensifyCadenceState::disabled(),
         ));
         assert!(!segment_preserves_densify_accumulator(
-            config, 100_000, 10_100, 16_000,
+            config,
+            100_000,
+            0,
+            10_100,
+            16_000,
+            DensifyCadenceState::disabled(),
         ));
         assert!(segment_preserves_densify_accumulator(
-            config, 200_000, 10_100, 16_000,
+            config,
+            200_000,
+            0,
+            10_100,
+            16_000,
+            DensifyCadenceState::disabled(),
         ));
         assert!(segment_preserves_densify_accumulator(
-            config, 100_000, 11_000, 16_000,
+            config,
+            100_000,
+            0,
+            11_000,
+            16_000,
+            DensifyCadenceState::disabled(),
         ));
         assert!(segment_preserves_densify_accumulator(
-            config, 100_000, 16_000, 16_000,
+            config,
+            100_000,
+            0,
+            16_000,
+            16_000,
+            DensifyCadenceState::disabled(),
+        ));
+    }
+
+    #[test]
+    fn bounded_radfoam_v1_invocation_requires_the_next_dynamic_boundary() {
+        let config = DensifyConfig {
+            schedule: DensifySchedule::RadFoamV1,
+            fraction: 0.15,
+            warmup: 2_000,
+            target_points: 200_000,
+            densify_until: 11_000,
+            ..DensifyConfig::default()
+        };
+        let initial = DensifyCadenceState::radfoam_v1_initial(50_000);
+        assert!(segment_preserves_densify_accumulator(
+            config, 50_000, 0, 2_000, 16_000, initial,
+        ));
+        assert!(!segment_preserves_densify_accumulator(
+            config, 50_000, 0, 2_100, 16_000, initial,
+        ));
+
+        let mut after_first = initial;
+        assert!(after_first.advance(0, 2_000, config.warmup));
+        after_first.finish_round(config, 57_500);
+        assert!(segment_preserves_densify_accumulator(
+            config,
+            57_500,
+            2_000,
+            2_517,
+            16_000,
+            after_first,
         ));
     }
 
@@ -5179,6 +5551,120 @@ mod tests {
         assert_eq!(losses.len(), 3);
         assert_eq!(model.points.len(), 5);
         model.validate().unwrap();
+    }
+
+    #[test]
+    fn radfoam_v1_densification_resume_matches_uninterrupted_training() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!(
+                "skipping radfoam_v1_densification_resume_matches_uninterrupted_training: no GPU"
+            );
+            return;
+        };
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: [0.0, 0.0, 0.0, 1.0],
+                fov: [0.5, 0.5],
+                principal: [0.0, 0.0],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            width: 1,
+            height: 1,
+        };
+        let base = AppearanceFitConfig {
+            learning_rate: 0.01,
+            epochs: 102,
+            position_lr_ratio: 1.0,
+            geometry_rebuild_every: 100,
+            densify: Some(DensifyConfig {
+                schedule: DensifySchedule::RadFoamV1,
+                fraction: 0.25,
+                warmup: 1,
+                target_points: 6,
+                densify_until: 101,
+                prune: true,
+                ..DensifyConfig::default()
+            }),
+            ..AppearanceFitConfig::default()
+        };
+        let stem = format!("blade-volume-dynamic-resume-{}", std::process::id());
+        let segmented_path = std::env::temp_dir().join(format!("{stem}-segmented.ply"));
+
+        let mut uninterrupted = tiny_model();
+        fit_appearance_multi_view(
+            &mut uninterrupted,
+            std::slice::from_ref(&view),
+            1,
+            1,
+            16,
+            base.clone(),
+            gpu.clone(),
+        );
+
+        let mut first_segment = tiny_model();
+        fit_appearance_multi_view(
+            &mut first_segment,
+            std::slice::from_ref(&view),
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                checkpoint_path: Some(segmented_path.clone()),
+                stop_after_steps: Some(1),
+                ..base.clone()
+            },
+            gpu.clone(),
+        );
+        assert_eq!(first_segment.points.len(), 5);
+
+        let mut resumed = vol::io::try_load(
+            segmented_path
+                .to_str()
+                .expect("temporary checkpoint path is UTF-8"),
+        )
+        .unwrap();
+        let training_state = load_training_state(&segmented_path).unwrap();
+        assert_eq!(training_state.step, 1);
+        assert_eq!(training_state.densification_round, 1);
+        assert_eq!(training_state.densify_next_after, 100);
+        fit_appearance_multi_view(
+            &mut resumed,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                checkpoint_path: Some(segmented_path.clone()),
+                resume_step: 1,
+                resume_state_path: Some(segmented_path.with_extension("safetensors")),
+                resume_training_state: Some(training_state),
+                ..base
+            },
+            gpu,
+        );
+
+        assert_eq!(uninterrupted.points, resumed.points);
+        assert_eq!(uninterrupted.sh_coefficients, resumed.sh_coefficients);
+        assert_eq!(uninterrupted.radii, resumed.radii);
+        let uninterrupted_adjacency = uninterrupted.adjacency.as_ref().unwrap();
+        let resumed_adjacency = resumed.adjacency.as_ref().unwrap();
+        assert_eq!(uninterrupted_adjacency.offsets, resumed_adjacency.offsets);
+        assert_eq!(
+            uninterrupted_adjacency.neighbors,
+            resumed_adjacency.neighbors,
+        );
+        assert_eq!(uninterrupted.points.len(), 6);
+
+        for path in [
+            segmented_path.clone(),
+            segmented_path.with_extension("safetensors"),
+            segmented_path.with_extension("trainstate"),
+            segmented_path.with_extension("ply.step"),
+        ] {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     fn mean_l1(a: &[f32], b: &[f32]) -> f32 {
