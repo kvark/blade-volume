@@ -71,9 +71,21 @@ held-out PSNR stayed flat through three evaluations. Its final metrics do come
 from a freshly reloaded PLY and are useful diagnostic evidence, but they must
 not be presented as a completed manifest result or a reference comparison.
 
-`bonsai_radfoam_v1_semantics.toml` is the next controlled experiment. It keeps
-the plateau run's 50K→200K cells, 128×128 resolution, split, batch, and global
-step budget, but opts into the official v1 initialization distribution,
-Smooth-L1 RGB loss, white background, and parameter-specific learning rates.
-The manifest lists the remaining differences explicitly, so even a successful
-result is a scaled direction check rather than the Stage 2 reference gate.
+`bonsai_radfoam_v1_semantics.toml` defines a bundled semantic direction check.
+It keeps the plateau run's 50K→200K cells, 128×128 resolution, split, batch,
+and global step budget, but opts into the official v1 initialization
+distribution, Smooth-L1 RGB loss, white background, and parameter-specific
+learning rates. Its step-2,000 decision point is recorded in
+`results/bonsai-radfoam-v1-semantics-step2000-86239aa.toml`. The freshly
+reloaded model reached 10.83 dB train / 12.37 dB held out, versus 13.08 / 13.08
+dB for the old scaled protocol at the same step, so the bundled run was stopped
+instead of spending the remaining budget.
+
+This negative result does not isolate a semantic regression. At that point the
+small-batch run had processed 512,000 rays, while 2,000 official one-million-ray
+updates represent 2 billion rays; the reference initialization and warmup were
+therefore evaluated at a radically different data budget. Follow-up runs must
+change one factor at a time from the old scaled baseline and record cumulative
+rays. Only after initialization, loss, background, and parameter scheduling
+have independent curves should they be recombined or used to justify a larger
+batch/reference-scale attempt.

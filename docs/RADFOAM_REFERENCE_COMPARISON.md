@@ -79,21 +79,46 @@ These controls do not pretend to solve the remaining batch-size or update
 cadence differences. The historical L1/top-track/unified-cosine behavior stays
 available for regression and ablation.
 
-## Next experiment
+## Scaled semantic-ablation result
 
-Run a scaled semantic ablation before committing to a multi-day exact-budget
-attempt:
+The first bundled direction check retained the old 50,000→200,000 cell cap,
+128×128 resolution, split, 256-ray batch, and topology cadence, while enabling
+the v1 initialization, Smooth-L1 loss, white background, and parameter-specific
+schedule together. It was stopped at the planned step-2,000 decision point:
 
-1. Use the same 50,000→200,000 cell cap and held-out split as the plateau run.
-2. Change only initialization, Smooth-L1, white compositing, and the v1
-   parameter schedule; retain the exhaustive contribution oracle.
-3. Increase the pixel batch as memory permits and record the exact cumulative
-   ray count, rather than comparing optimizer-step counts alone.
-4. Evaluate serialized checkpoints at steps 2,000, 5,000, 8,000, and 10,000.
-5. If the held-out curve improves, add reference dynamic topology and
-   cell-count-dependent densification cadence, then repeat from the same seed.
-6. Only after the scaled direction is positive should the run move toward
-   190,951→2,097,152 cells and the staged 780×520→1559×1039 image schedule.
+| Metric | Old scaled protocol | Bundled v1 semantics | Delta |
+| --- | ---: | ---: | ---: |
+| Reloaded train PSNR | 13.08 dB | 10.83 dB | -2.25 dB |
+| Reloaded held-out PSNR | 13.08 dB | 12.37 dB | -0.71 dB |
+| Cells | 57,313 | 56,218 | -1,095 |
+
+The serialized model reproduced the live metrics exactly. Training peaked at
+624,214,016 bytes and evaluation at 593,547,264 bytes in separate 4 GiB,
+zero-swap cgroups, with no OOM, memory-pressure, or GPU-fault marker. The
+versioned result is
+[`bonsai-radfoam-v1-semantics-step2000-86239aa.toml`](../benchmarks/results/bonsai-radfoam-v1-semantics-step2000-86239aa.toml).
+
+This is a negative bundled ablation, not a judgment on the v1 semantics. The
+run had consumed only 512,000 rays at the decision point; 2,000 official
+updates consume 2 billion. In particular, the neutral initialization and
+schedule warmups were compared at step parity but not ray or gradient-estimate
+parity. Continuing the unchanged bundle would not identify which factor caused
+the early deficit.
+
+## Next experiments
+
+1. Re-run the scaled baseline to step 2,000 while changing exactly one of white
+   background, Smooth-L1, v1 initialization, or v1 parameter scheduling.
+2. Evaluate every serialized result with the matching background and retain
+   cumulative rays, per-frame PSNR, cells, adjacency size, wall time, and cgroup
+   telemetry.
+3. Use these curves to choose compatible factors, then repeat their combination
+   at the largest safe multi-view batch. Compare ray counts as well as steps.
+4. Add reference dynamic topology and cell-count-dependent densification only
+   after the scaled appearance/initialization direction is positive.
+5. Move toward 190,951→2,097,152 cells and the staged
+   780×520→1559×1039 image schedule only after that direction survives a larger
+   batch.
 
 The acceptance criterion remains a same-budget reference run within 0.5–1.0 dB;
 the scaled ablation is a direction check, not a substitute for that gate.

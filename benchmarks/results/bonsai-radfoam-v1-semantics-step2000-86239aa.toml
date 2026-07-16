@@ -1,0 +1,88 @@
+schema = 1
+manifest = "benchmarks/bonsai_radfoam_v1_semantics.toml"
+manifest_name = "bonsai-radfoam-v1-semantics-v1"
+timestamp_utc = "2026-07-16T10:46:22Z"
+git_commit = "86239aaea7e7f2905f002acf0ada3a59a4d9d097"
+os = "Linux 7.0.0-27-generic x86_64"
+gpu = "NVIDIA GeForce RTX 5070"
+driver = "NVIDIA 595.71.05"
+vulkan_api = "1.4.329"
+status = "stopped_after_negative_early_ablation"
+benchmark_complete = false
+stop_reason = "bundled reference semantics trailed the old checkpoint at the planned step-2000 decision point"
+
+[isolation]
+kind = "systemd user service cgroup v2"
+memory_max_bytes = 4294967296
+training_memory_peak_bytes = 624214016
+evaluation_memory_peak_bytes = 593547264
+memory_swap_max_bytes = 0
+oom = false
+oom_kill = false
+memory_limit_pressure = false
+gpu_fault_marker = false
+
+[training]
+completed_steps = 2000
+planned_steps = 20400
+cumulative_sampled_rays = 512000
+reference_rays_at_same_step = 2000000000
+wall_seconds = 642
+initial_cells = 50000
+cells = 56218
+adjacency_entries = 823782
+
+[artifact]
+path = "target/audit-runs/bonsai-radfoam-v1-86239aa/model.ply"
+sha256 = "6676d530d6269c0fa8d697dbb5f942e8bf3072747f4644723647f7c666c36e1f"
+fresh_ply_evaluation = true
+checkpoint_is_git_ignored = true
+
+[metrics]
+train_views = 255
+test_views = 8
+train_psnr_db = 10.83
+test_psnr_db = 12.37
+serialization_delta_train_db = 0.0
+serialization_delta_test_db = 0.0
+
+[comparison_at_step_2000]
+baseline_result = "benchmarks/results/bonsai-full-partial-93c996f.toml"
+baseline_cells = 57313
+baseline_train_psnr_db = 13.08
+baseline_test_psnr_db = 13.08
+delta_cells = -1095
+delta_train_psnr_db = -2.25
+delta_test_psnr_db = -0.71
+
+[[metrics.test_frames]]
+name = "DSCF5565.JPG"
+psnr_db = 10.05
+
+[[metrics.test_frames]]
+name = "DSCF5573.JPG"
+psnr_db = 13.65
+
+[[metrics.test_frames]]
+name = "DSCF5581.JPG"
+psnr_db = 12.62
+
+[[metrics.test_frames]]
+name = "DSCF5589.JPG"
+psnr_db = 11.76
+
+[[metrics.test_frames]]
+name = "DSCF5597.JPG"
+psnr_db = 14.01
+
+[[metrics.test_frames]]
+name = "DSCF5605.JPG"
+psnr_db = 13.20
+
+[[metrics.test_frames]]
+name = "DSCF5613.JPG"
+psnr_db = 9.36
+
+[[metrics.test_frames]]
+name = "DSCF5621.JPG"
+psnr_db = 14.28

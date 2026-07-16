@@ -58,7 +58,7 @@ constraint.
 The audit covered the Rust model and IO code, adjacency builders, CPU and WGSL
 traversal, Gaussian hardware ray tracing, the COLMAP pipeline, differentiable
 training, checkpointing, the converter, and the experimental scene renderer.
-It also ran workspace formatting, linting, tests, render regressions, and two
+It also ran workspace formatting, linting, tests, render regressions, and three
 Bonsai training experiments.
 
 The working pixel-batched trainer demonstrably learns appearance. A diagnostic
@@ -116,6 +116,13 @@ At the audited revision:
   beta-1 Smooth-L1 color loss are implemented without changing historical
   defaults. A versioned scaled semantic-ablation manifest records both the
   controls and the remaining batching/topology/resolution differences.
+- The first bundled semantic ablation was stopped at step 2,000 after its fresh
+  serialized PLY reached 10.83 dB train / 12.37 dB held out, below the old
+  scaled protocol's 13.08 / 13.08 dB checkpoint. It was memory-stable, but had
+  processed only 512,000 rays versus 2 billion at the same official update
+  count. The result therefore rejects continuing that low-batch bundle; it does
+  not reject reference initialization, loss, background, or learning rates in
+  isolation. The next comparison matrix changes one factor at a time.
 
 ### Remaining PowerFoam gaps
 
@@ -388,6 +395,14 @@ CPU-isolated workspace suite, and all 33 physical-GPU differentiable-renderer
 tests pass. Weighted densification copies the parent's radius and optimizer
 ancestry while applying the reference 5%-of-radius perturbation;
 reference-checkpoint and real-scene radius ablations still remain.
+
+The first bundled RadFoam-v1 semantic direction check is also complete. At
+step 2,000 its reloaded model trailed the old scaled protocol by 2.25 dB train
+and 0.71 dB held out, so the run was stopped. This comparison bundled four
+changes while retaining a 256-ray batch, and represented 512,000 rays rather
+than the official schedule's 2 billion at the same step. Stage 2 now proceeds
+with one-factor-at-a-time scaled ablations before any larger reference-budget
+run.
 
 Long-running topology optimization is now memory-bounded. The upstream
 `qhull` 0.4 destructor omits Qhull's required short-arena cleanup, which leaked
