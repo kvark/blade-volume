@@ -457,6 +457,13 @@ zero swap and zero OOM events, but reached the limit and recorded 406
 4 GiB scope, or split clippy/default/all-feature tests into separate 3 GiB
 scopes; a 3 GiB combined scope is functional but needlessly reclaim-bound.
 
+The post-ablation gate on commit `549759f` split those jobs into separate 4 GiB
+scopes. Default workspace tests peaked at 1,127,636,992 bytes, all-feature
+workspace tests at 1,133,342,720 bytes, and the 72-test physical-NVIDIA trainer
+gate at 414,027,776 bytes. Formatting and all-target/all-feature clippy also
+pass. Every final scope recorded zero swap, `memory.max`, OOM, and group-kill
+events; the lower peaks reflect warm build artifacts as well as job isolation.
+
 The final 2026-07-16 delivery gate split each command into its own 4 GiB/no-swap
 scope. Formatting peaked at 7.4 MiB, all-target/all-feature clippy at 686.4 MiB,
 default workspace tests at 3,304.6 MiB, and all-feature workspace tests at
