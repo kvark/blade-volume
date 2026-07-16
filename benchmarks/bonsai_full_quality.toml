@@ -49,6 +49,7 @@ sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
 densification_seed = "0xCAFE_F00D_DEAD_BEEF"
 
 [execution]
+initial_segment_steps = 2000
 segment_steps = 1000
 memory_max_bytes = 4294967296
 memory_swap_max_bytes = 0

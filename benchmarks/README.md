@@ -42,7 +42,10 @@ LR schedule. It writes `<output>.ckpt.{ply,safetensors,trainstate}` by default;
 continue with the identical training arguments plus
 `--init-ply <output>.ckpt.ply`. When densification can still run, each segment
 must end on a densification boundary so its accumulated geometry signal is not
-discarded. The CLI rejects unsafe endpoints.
+discarded. The CLI rejects unsafe endpoints. In particular,
+`bonsai_full_quality.toml` uses a 2,000-step first segment to reach its warmup
+boundary, followed by 1,000-step segments whose endpoints remain aligned to
+the 500-step densification cadence.
 
 `bonsai_quality.toml` is the first meaningful go/no-go protocol. Do not compare
 its numbers with the historical audit run: camera rectification, terminal
