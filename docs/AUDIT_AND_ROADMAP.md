@@ -198,6 +198,16 @@ At the audited revision:
   451 MB, again with zero swap, pressure, OOM, or GPU faults. Because both
   output grids cover the full calibrated camera domain, 128×128 remains the
   efficient scaled resolution rather than a cropped geometry path.
+- The corrected same-ray batch gate now extends both trajectories through two
+  growth rounds. At 640,000 optimizer rays and 25 topology refreshes, batch
+  256 reaches 15.32 / 15.12 dB train/held out with 65,801 cells; batch 1,024
+  reaches 15.55 / 15.29 dB with 66,078 cells (+0.23/+0.17 dB). Matched final
+  continuations take 391 and 384 seconds and peak at 424 and 451 MB,
+  respectively. Both record zero truncation, swap, pressure, OOM, or GPU
+  faults. The larger batch prunes 112 fewer cells in round 1, showing that the
+  batch changes learned contribution decisions as well as optimizer progress.
+  It is the selected direction, but its mixed per-frame 0.17 dB gain requires
+  a third boundary or another scene before becoming the default.
 - When a topology and densification boundary coincide, the trainer now
   refreshes adjacency and the GPU cloud before collecting contribution and
   resampling statistics. Previously it downloaded current positions but paired
@@ -757,10 +767,10 @@ material path.
    parameter-group ratios, topology cadence, and cell-count-dependent
    densification are measured at the 256-ray boundary. At batch 1,024 the
    exact schedule remains negative, relative parameter groups become neutral,
-   and ray-normalized schedules are a positive direction. A second growth
-   boundary plateaus held-out quality and native 3:2 training is negative, so
-   the next gate is a corrected same-ray batch-256 comparison rather than more
-   native-aspect compute.)
+   and ray-normalized schedules are a positive direction. A corrected
+   two-round same-ray comparison retains a +0.17 dB held-out advantage for
+   batch 1,024; native 3:2 training is negative. The next gate is a third round
+   or second scene rather than more native-aspect compute.)
 3. Run a controlled matrix from identical initialization: appearance-only;
    position optimization with fixed topology; position optimization with exact
    rebuilds; densification/pruning disabled and enabled; quantile loss disabled

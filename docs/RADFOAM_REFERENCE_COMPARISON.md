@@ -277,15 +277,29 @@ lower resolution rather than a crop. The protocol and result are
 and
 [`bonsai-batch1024-native-aspect-step625-07ad939.toml`](../benchmarks/results/bonsai-batch1024-native-aspect-step625-07ad939.toml).
 
+The corrected same-ray batch comparison confirms that the larger-batch signal
+survives the second boundary. Both arms use 640,000 optimizer rays, 25 exact
+topology refreshes, two fixed-cadence growth rounds, and the same 128×128
+contribution/evaluation grid. Batch 256 reaches 65,801 cells and 15.32 dB
+train / 15.12 dB held out; ray-normalized batch 1,024 reaches 66,078 cells and
+15.55 / 15.29 dB, a +0.23/+0.17 dB gain. Their matched final continuation
+scopes take 391 and 384 seconds and peak at 424 and 451 MB. Both have zero
+truncation, swap, pressure, OOM, or GPU faults. The larger batch prunes 26
+rather than 138 cells in round 1, so its gradients also change the learned
+contribution distribution. Per-frame deltas remain mixed, however, and the
+0.17 dB mean is not enough to change defaults without a third boundary or a
+second scene. The protocol and result are
+[`bonsai_batch_same_ray.toml`](../benchmarks/bonsai_batch_same_ray.toml) and
+[`bonsai-same-ray-batch-step640k-945b931.toml`](../benchmarks/results/bonsai-same-ray-batch-step640k-945b931.toml).
+
 ## Next experiments
 
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle; do not change the default without decision agreement or
    a deliberately revised acceptance gate.
-2. Compare ray-normalized batches 256 and 1,024 at 640,000 or more sampled rays
-   under the corrected operation order, then continue only if the larger batch
-   retains a held-out advantage beyond the second growth boundary. Native 3:2
-   training is rejected for the scaled gate.
+2. Continue the corrected same-ray batches through a third growth boundary or
+   repeat the two-round gate on another scene. Batch 1,024 is +0.17 dB held out
+   at round 2, while native 3:2 training is rejected for the scaled gate.
 3. Move toward 190,951→2,097,152 cells and the staged
    780×520→1559×1039 image schedule only after that direction survives a larger
    batch.

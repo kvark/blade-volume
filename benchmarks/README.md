@@ -188,3 +188,14 @@ the training peak from 451 to 519 MB, with zero swap, pressure, OOM,
 truncation, or GPU faults in either arm. The rectifier and ray generator cover
 the full calibrated camera domain at either output shape, so 128×128 is kept
 as the efficient scaled protocol; it is not a crop of the source field.
+
+The corrected two-round same-ray comparison is defined in
+`bonsai_batch_same_ray.toml` and recorded in
+`results/bonsai-same-ray-batch-step640k-945b931.toml`. At 640,000 optimizer
+rays, 25 topology refreshes, and two exhaustive growth rounds, batch 256
+reaches 65,801 cells and 15.32 / 15.12 dB train/held out. Ray-normalized batch
+1,024 reaches 66,078 cells and 15.55 / 15.29 dB: +0.23/+0.17 dB. The matched
+continuation scopes take 391 and 384 seconds and peak at 424 and 451 MB,
+respectively, with zero swap, pressure, OOM, truncation, or GPU faults. Batch
+1,024 remains the selected next direction, but the modest, mixed per-frame
+gain still requires a third boundary or another scene before changing defaults.
