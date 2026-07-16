@@ -42,7 +42,7 @@ geometry is exhausted.
 | Density activation | Softplus beta 10 | Softplus beta 10 | Implemented semantics agree. |
 | Adam epsilon | `1e-15` | `1e-8` | Usually secondary, but material for an exact reproduction. |
 | Learning rates | Independent density, position, DC, and higher-SH schedules | One cosine base with static multipliers | Position and SH rates differed by up to orders of magnitude during the run. |
-| Topology refresh | Period 1, then 3, 5, …, 99, 100; reset after densification | Exact rebuild every 100 steps | Reference refreshes rapidly while early geometry moves fastest. |
+| Topology refresh | Period 1, then 3, 5, …, 99, 101; reset after densification | Exact rebuild every 100 steps | The v1 source increments 99 to 101 before stabilizing; reference refreshes rapidly while early geometry moves fastest. |
 | Densification cadence | Cell-count-dependent linear-growth interval, minimum 100 | Fixed 500 steps | The scaled run reaches its cap, but not at the same times or with the same contribution windows. |
 | Contribution scan | Every view at a random 2× phase; max ray contribution | Same correctness-oriented exhaustive strategy | Semantics agree; this is the measured runtime bottleneck at large cell counts. |
 
@@ -78,6 +78,15 @@ existing defaults:
   density, position, DC, and higher-SH rates while retaining the selected
   constant/cosine time curve and Adam epsilon. This separates parameter-group
   scaling from the update-indexed schedule that fails at a 256-ray batch.
+- `--geometry-rebuild-schedule radfoam-v1` reproduces the reference counter
+  order: periods 1, 3, 5, ... 99, then 101; densification resets only the
+  period, so the next optimizer step rebuilds again. Rust continues to use a
+  full exact rebuild rather than the reference's incremental implementation,
+  isolating cadence from triangulation-backend behavior. The topology phase is
+  stored in the v2 trainer-state sidecar for exact segmented resumes. When a
+  scheduled refresh and densification coincide, current adjacency/GPU geometry
+  is rebuilt before contribution collection, matching the reference operation
+  order.
 
 These controls do not pretend to solve the remaining batch-size or update
 cadence differences. The historical L1/top-track/unified-cosine behavior stays
@@ -179,9 +188,8 @@ pressure, OOM, or GPU faults. The versioned result is
 
 ## Next experiments
 
-1. Implement the reference's rapid topology-refresh sequence as an isolated
-   cadence control, leaving densification cadence and appearance settings
-   fixed for its first comparison.
+1. Compare the implemented rapid topology-refresh control while leaving
+   densification cadence and appearance settings fixed.
 2. Implement cell-count-dependent densification as a second, separately
    measurable control rather than bundling it with topology cadence.
 3. Test larger stratified caps and cumulative multi-boundary drift against the

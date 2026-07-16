@@ -285,6 +285,12 @@ struct Args {
     #[argh(option, default = "100")]
     geometry_rebuild_every: usize,
 
+    /// geometry/path rebuild cadence: "fixed" or "radfoam-v1" (default
+    /// fixed). The reference cadence starts at one step, increases by two up
+    /// to 101, and resets after densification.
+    #[argh(option, default = "String::from(\"fixed\")")]
+    geometry_rebuild_schedule: String,
+
     /// optional checkpoint PLY path written with exact safetensors optimizer
     /// and deterministic trainer-state sidecars at every densify cycle and
     /// bounded invocation endpoint. Defaults to `<output>.ckpt.ply` when either
@@ -323,6 +329,16 @@ struct Args {
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
+    let geometry_rebuild_schedule = match args.geometry_rebuild_schedule.as_str() {
+        "fixed" => diff_render::GeometryRebuildSchedule::Fixed,
+        "radfoam-v1" => diff_render::GeometryRebuildSchedule::RadFoamV1,
+        other => {
+            eprintln!(
+                "unknown --geometry-rebuild-schedule '{other}' (use 'fixed' or 'radfoam-v1')"
+            );
+            std::process::exit(2);
+        }
+    };
 
     if args.qhull && !cfg!(feature = "qhull") {
         eprintln!("--qhull requires building blade-volume-train with --features qhull");
@@ -342,9 +358,10 @@ fn main() {
         std::process::exit(2);
     }
     if (args.position_lr_ratio > 0.0 || args.radius_lr_ratio > 0.0)
+        && geometry_rebuild_schedule == diff_render::GeometryRebuildSchedule::Fixed
         && args.geometry_rebuild_every == 0
     {
-        eprintln!("geometry optimization requires --geometry-rebuild-every > 0");
+        eprintln!("fixed geometry optimization requires --geometry-rebuild-every > 0");
         std::process::exit(2);
     }
     if args.radius_lr_ratio > 0.0 && args.cech_radius <= 0.0 && args.init_ply.is_none() {
@@ -395,12 +412,24 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if lr_schedule == diff_render::LrSchedule::RadFoamV1 && args.geometry_rebuild_every == 0 {
-        eprintln!("--lr-schedule radfoam-v1 requires --geometry-rebuild-every > 0");
+    if lr_schedule == diff_render::LrSchedule::RadFoamV1
+        && geometry_rebuild_schedule == diff_render::GeometryRebuildSchedule::Fixed
+        && args.geometry_rebuild_every == 0
+    {
+        eprintln!(
+            "--lr-schedule radfoam-v1 with fixed geometry requires \
+             --geometry-rebuild-every > 0"
+        );
         std::process::exit(2);
     }
-    if lr_groups == diff_render::LrGroups::RadFoamV1Relative && args.geometry_rebuild_every == 0 {
-        eprintln!("--lr-groups radfoam-v1-relative requires --geometry-rebuild-every > 0");
+    if lr_groups == diff_render::LrGroups::RadFoamV1Relative
+        && geometry_rebuild_schedule == diff_render::GeometryRebuildSchedule::Fixed
+        && args.geometry_rebuild_every == 0
+    {
+        eprintln!(
+            "--lr-groups radfoam-v1-relative with fixed geometry requires \
+             --geometry-rebuild-every > 0"
+        );
         std::process::exit(2);
     }
     if lr_schedule == diff_render::LrSchedule::RadFoamV1
@@ -515,6 +544,7 @@ fn main() {
             position_lr_ratio: args.position_lr_ratio,
             radius_lr_ratio: args.radius_lr_ratio,
             geometry_rebuild_every: args.geometry_rebuild_every,
+            geometry_rebuild_schedule,
             rebuild_with_qhull: args.qhull,
             resume_step,
             stop_after_steps: (args.stop_after_steps > 0).then_some(args.stop_after_steps),

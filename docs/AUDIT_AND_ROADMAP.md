@@ -153,6 +153,17 @@ At the audited revision:
   relative groups. Fresh-Ply evaluation reproduced the scores and cell counts
   were nearly equal. The option remains for larger-batch work; it does not
   replace the selected scaled optimizer.
+- The official topology-refresh counter is available independently as
+  `radfoam-v1`: exact Rust topology/path rebuilds follow periods 1, 3, 5, ...,
+  99, then 101, and reset their period after densification. The v2 training
+  sidecar persists the phase; a physical-GPU 4+6-step resume produced a PLY
+  byte-identical to an uninterrupted 10-step run. Fixed cadence remains the
+  default until the isolated quality comparison is complete.
+- When a topology and densification boundary coincide, the trainer now
+  refreshes adjacency and the GPU cloud before collecting contribution and
+  resampling statistics. Previously it downloaded current positions but paired
+  them with the preceding GPU geometry for that scan. A moving-geometry,
+  prune-and-densify physical-GPU test covers the corrected operation order.
 - Smooth-L1's 4.44 dB held-out failure is unchanged at twice the traversal cap
   and under either background. Visual comparisons identify large near-camera
   Voronoi floaters; the loss remains opt-in until that geometry interaction is
@@ -700,8 +711,9 @@ material path.
    densification samples, and topology/path refresh timing step by step. Add a
    small deterministic trace fixture for every discovered semantic difference.
    (Initialization, background, loss, exact schedule, and separated initial
-   parameter-group ratios are measured at the 256-ray boundary; topology and
-   densification cadence remain.)
+   parameter-group ratios are measured at the 256-ray boundary; topology
+   cadence is implemented and awaits measurement, while densification cadence
+   remains.)
 3. Run a controlled matrix from identical initialization: appearance-only;
    position optimization with fixed topology; position optimization with exact
    rebuilds; densification/pruning disabled and enabled; quantile loss disabled

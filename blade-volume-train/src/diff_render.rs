@@ -1104,19 +1104,32 @@ pub enum LrGroups {
     RadFoamV1Relative,
 }
 
+/// Cadence for rebuilding adjacency and recorded paths while geometry moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeometryRebuildSchedule {
+    /// Rebuild every [`AppearanceFitConfig::geometry_rebuild_every`] global
+    /// optimizer steps.
+    Fixed,
+    /// Official RadFoam v1 cadence. Rebuild after 1 step, then after 3, 5,
+    /// 7, ... 99, and 101 steps. The period remains 101 thereafter and
+    /// resets to 1 after a successful densification round.
+    RadFoamV1,
+}
+
 const SAMPLING_RNG_SEED: u64 = 0xDEAD_BEEF_F00D_CAFE;
 const QUANTILE_RNG_SEED: u64 = 0x51A7_E5D0_9B3C_2468;
 const DENSIFY_RNG_SEED: u64 = 0xCAFE_F00D_DEAD_BEEF;
 const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 const LCG_INCREMENT: u64 = 1_442_695_040_888_963_407;
-const TRAINING_STATE_HEADER: &str = "blade-volume-training-state-v1";
+const TRAINING_STATE_HEADER: &str = "blade-volume-training-state-v2";
+const LEGACY_TRAINING_STATE_HEADER: &str = "blade-volume-training-state-v1";
 
 /// Deterministic trainer state which is not owned by meganeura.
 ///
 /// Parameter values, Adam moments, and the Adam counter live in the paired
-/// safetensors checkpoint. These RNG states preserve view/pixel sampling,
-/// quantile regularization, and densification decisions across a process
-/// restart.
+/// safetensors checkpoint. This sidecar preserves view/pixel sampling,
+/// quantile regularization, densification decisions, and dynamic topology
+/// cadence across a process restart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrainingState {
     pub step: usize,
@@ -1124,6 +1137,11 @@ pub struct TrainingState {
     pub sampling_rng: u64,
     pub quantile_rng: u64,
     pub densify_rng: u64,
+    /// Current RadFoam topology-update period. Zero means the fixed schedule
+    /// was active when the checkpoint was written.
+    pub topology_period: usize,
+    /// RadFoam topology steps accumulated toward `topology_period`.
+    pub topology_steps_since_update: usize,
 }
 
 /// Knobs for [`fit_appearance_multi_view`].
@@ -1202,9 +1220,10 @@ pub struct AppearanceFitConfig {
     /// prepared on white.
     pub background_rgb: [f32; 3],
     /// Position learning rate as a fraction of `learning_rate`. `0.0`
-    /// (default) freezes geometry. A positive value requires
-    /// `geometry_rebuild_every > 0`, because the discrete adjacency and
-    /// recorded cell walks must be refreshed as points move.
+    /// (default) freezes geometry. A positive value requires a geometry
+    /// rebuild schedule; the fixed schedule additionally requires
+    /// `geometry_rebuild_every > 0` because discrete adjacency and recorded
+    /// cell walks must be refreshed as points move.
     pub position_lr_ratio: f32,
     /// PowerFoam support-radius learning rate as a fraction of
     /// `learning_rate`. Radii are optimized through a β=100 softplus and this
@@ -1212,9 +1231,13 @@ pub struct AppearanceFitConfig {
     /// positive value requires periodic geometry rebuilds.
     pub radius_lr_ratio: f32,
     /// Number of Adam steps between adjacency, GPU-cloud, and path-buffer
-    /// rebuilds while positions or radii are trainable. Ignored when both
-    /// geometry learning-rate ratios are zero.
+    /// rebuilds while positions or radii are trainable under the fixed
+    /// schedule. Ignored by [`GeometryRebuildSchedule::RadFoamV1`] and when
+    /// geometry is frozen.
     pub geometry_rebuild_every: usize,
+    /// Fixed historical cadence or the increasing official RadFoam v1
+    /// topology cadence. Default [`GeometryRebuildSchedule::Fixed`].
+    pub geometry_rebuild_schedule: GeometryRebuildSchedule,
     /// Use Qhull for geometry/densification rebuilds. This is the practical
     /// exact backend for large unweighted clouds; the Rust backend remains
     /// available for small dependency-minimal jobs.
@@ -1242,7 +1265,7 @@ pub struct AppearanceFitConfig {
     /// after the graph has been rebuilt for the checkpoint's cell count.
     pub resume_state_path: Option<std::path::PathBuf>,
     /// Optional deterministic trainer state paired with `init_ply`.
-    /// Restores the sampling, quantile, and densification RNG streams.
+    /// Restores sampling, quantile, densification, and topology cadence state.
     pub resume_training_state: Option<TrainingState>,
 }
 
@@ -1342,6 +1365,7 @@ impl Default for AppearanceFitConfig {
             position_lr_ratio: 0.0,
             radius_lr_ratio: 0.0,
             geometry_rebuild_every: 0,
+            geometry_rebuild_schedule: GeometryRebuildSchedule::Fixed,
             rebuild_with_qhull: false,
             checkpoint_path: None,
             resume_step: 0,
@@ -1525,6 +1549,62 @@ fn relative_lr_multipliers(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TopologyCadenceState {
+    period: usize,
+    steps_since_update: usize,
+}
+
+impl TopologyCadenceState {
+    fn radfoam_v1_initial() -> Self {
+        Self {
+            period: 1,
+            steps_since_update: 1,
+        }
+    }
+
+    fn disabled() -> Self {
+        Self {
+            period: 0,
+            steps_since_update: 0,
+        }
+    }
+
+    fn steps_until_update(self) -> usize {
+        debug_assert!(self.period > 0);
+        if self.steps_since_update >= self.period {
+            1
+        } else {
+            self.period - self.steps_since_update + 1
+        }
+    }
+
+    /// Advance through a cycle that cannot contain more than one scheduled
+    /// update. Returns whether the final step performs that update.
+    fn advance(&mut self, steps: usize) -> bool {
+        let until_update = self.steps_until_update();
+        assert!(steps <= until_update);
+        if steps < until_update {
+            self.steps_since_update += steps;
+            return false;
+        }
+
+        if self.period < 100 {
+            self.period += 2;
+        }
+        // The reference resets before incrementing the counter at the end of
+        // the same optimizer iteration.
+        self.steps_since_update = 1;
+        true
+    }
+
+    fn reset_period_after_densification(&mut self) {
+        debug_assert!(self.period > 0);
+        // Official v1 preserves `iters_since_update`; only the period resets.
+        self.period = 1;
+    }
+}
+
 fn densify_due(config: DensifyConfig, steps_done: usize) -> bool {
     steps_done >= config.warmup && (steps_done - config.warmup).is_multiple_of(config.every)
 }
@@ -1654,12 +1734,15 @@ pub fn fit_appearance_multi_view(
         config.radius_lr_ratio == 0.0 || model.radii.is_some(),
         "radius optimisation requires a weighted cloud"
     );
+    let geometry_requested = config.position_lr_ratio > 0.0
+        || config.radius_lr_ratio > 0.0
+        || config.lr_groups == LrGroups::RadFoamV1Relative
+        || config.lr_schedule == LrSchedule::RadFoamV1;
     assert!(
-        (config.position_lr_ratio == 0.0
-            && config.radius_lr_ratio == 0.0
-            && config.lr_groups != LrGroups::RadFoamV1Relative)
+        !geometry_requested
+            || config.geometry_rebuild_schedule == GeometryRebuildSchedule::RadFoamV1
             || config.geometry_rebuild_every > 0,
-        "geometry optimisation requires geometry_rebuild_every > 0"
+        "fixed geometry optimisation requires geometry_rebuild_every > 0"
     );
     if let Some(ref densify) = config.densify {
         assert!(densify.every > 0, "densify.every must be greater than zero");
@@ -1788,16 +1871,26 @@ fn training_state_path(model_path: &std::path::Path) -> std::path::PathBuf {
 
 fn encode_training_state(state: TrainingState) -> String {
     format!(
-        "{TRAINING_STATE_HEADER}\nstep {}\ncycle {}\nsampling_rng {}\nquantile_rng {}\ndensify_rng {}\n",
-        state.step, state.cycle, state.sampling_rng, state.quantile_rng, state.densify_rng,
+        "{TRAINING_STATE_HEADER}\nstep {}\ncycle {}\nsampling_rng {}\nquantile_rng {}\n\
+         densify_rng {}\ntopology_period {}\ntopology_steps_since_update {}\n",
+        state.step,
+        state.cycle,
+        state.sampling_rng,
+        state.quantile_rng,
+        state.densify_rng,
+        state.topology_period,
+        state.topology_steps_since_update,
     )
 }
 
 fn decode_training_state(text: &str) -> Result<TrainingState, String> {
     let mut lines = text.lines();
-    if lines.next() != Some(TRAINING_STATE_HEADER) {
-        return Err("unsupported or missing training-state header".to_string());
-    }
+    let header = lines.next();
+    let has_topology_state = match header {
+        Some(TRAINING_STATE_HEADER) => true,
+        Some(LEGACY_TRAINING_STATE_HEADER) => false,
+        _ => return Err("unsupported or missing training-state header".to_string()),
+    };
     let mut read_value = |expected: &str| -> Result<u64, String> {
         let line = lines
             .next()
@@ -1813,7 +1906,7 @@ fn decode_training_state(text: &str) -> Result<TrainingState, String> {
             .map_err(|err| format!("invalid training-state field {expected}: {err}"))
     };
     let step_u64 = read_value("step")?;
-    let state = TrainingState {
+    let mut state = TrainingState {
         step: usize::try_from(step_u64)
             .map_err(|_| format!("training-state step {step_u64} does not fit usize"))?,
         cycle: usize::try_from(read_value("cycle")?)
@@ -1821,7 +1914,25 @@ fn decode_training_state(text: &str) -> Result<TrainingState, String> {
         sampling_rng: read_value("sampling_rng")?,
         quantile_rng: read_value("quantile_rng")?,
         densify_rng: read_value("densify_rng")?,
+        topology_period: 0,
+        topology_steps_since_update: 0,
     };
+    if has_topology_state {
+        state.topology_period = usize::try_from(read_value("topology_period")?)
+            .map_err(|_| "training-state topology_period does not fit usize".to_string())?;
+        state.topology_steps_since_update =
+            usize::try_from(read_value("topology_steps_since_update")?).map_err(|_| {
+                "training-state topology_steps_since_update does not fit usize".to_string()
+            })?;
+        let fixed = state.topology_period == 0 && state.topology_steps_since_update == 0;
+        let radfoam = state.topology_period > 0
+            && state.topology_period <= 101
+            && state.topology_period % 2 == 1
+            && state.topology_steps_since_update > 0;
+        if !fixed && !radfoam {
+            return Err("invalid training-state topology cadence".to_string());
+        }
+    }
     if lines.any(|line| !line.trim().is_empty()) {
         return Err("unexpected trailing training-state data".to_string());
     }
@@ -2594,6 +2705,19 @@ fn rebuild_training_adjacency(model: &mut vol::PointCloudModel, use_qhull: bool)
     }
 }
 
+fn build_training_gpu_cloud(
+    model: &vol::PointCloudModel,
+    gpu: &std::sync::Arc<blade_graphics::Context>,
+) -> vol::RadFoamGpuCloud {
+    let mut init_encoder = gpu.create_command_encoder(blade_graphics::CommandEncoderDesc {
+        name: "path-record-init",
+        buffer_count: 1,
+    });
+    let cloud = vol::RadFoamGpuCloud::new(model, gpu, &mut init_encoder);
+    gpu.destroy_command_encoder(&mut init_encoder);
+    cloud
+}
+
 /// Build (or rebuild) the meganeura session + GPU cloud for the current
 /// model. Sized for `pixel_batch` and `max_steps`; both are constant
 /// across densify cycles so only the parameter-count-dependent pieces
@@ -2652,15 +2776,7 @@ fn build_train_session(
     );
     upload_model_parameters(&mut session, model, softplus_beta);
 
-    let gpu_cloud = {
-        let mut init_encoder = gpu.create_command_encoder(blade_graphics::CommandEncoderDesc {
-            name: "path-record-init",
-            buffer_count: 1,
-        });
-        let cloud = vol::RadFoamGpuCloud::new(model, gpu, &mut init_encoder);
-        gpu.destroy_command_encoder(&mut init_encoder);
-        cloud
-    };
+    let gpu_cloud = build_training_gpu_cloud(model, gpu);
 
     // Unweighted interior dt is reconstructed from positions, with recorded
     // terminal intervals. Weighted dt is the exact recorder value plus its
@@ -2923,6 +3039,28 @@ fn fit_appearance_pixel_batched(
         || config.radius_lr_ratio > 0.0
         || config.lr_groups == LrGroups::RadFoamV1Relative
         || config.lr_schedule == LrSchedule::RadFoamV1;
+    let mut topology_cadence = match config.geometry_rebuild_schedule {
+        GeometryRebuildSchedule::Fixed => TopologyCadenceState::disabled(),
+        GeometryRebuildSchedule::RadFoamV1 => match config.resume_training_state {
+            Some(state) => {
+                assert!(
+                    state.topology_period > 0 && state.topology_steps_since_update > 0,
+                    "RadFoam v1 geometry cadence requires a v2 trainer-state checkpoint"
+                );
+                TopologyCadenceState {
+                    period: state.topology_period,
+                    steps_since_update: state.topology_steps_since_update,
+                }
+            }
+            None => {
+                assert_eq!(
+                    steps_done, 0,
+                    "RadFoam v1 geometry cadence cannot resume without trainer state"
+                );
+                TopologyCadenceState::radfoam_v1_initial()
+            }
+        },
+    };
     // Resume at the checkpoint's absolute step so the cosine LR and densify
     // schedule pick up where the interrupted run stopped.
     if steps_done > 0 {
@@ -2995,8 +3133,15 @@ fn fit_appearance_pixel_batched(
             None => invocation_end - steps_done,
         };
         let geometry_budget = if geometry_trainable {
-            let every = config.geometry_rebuild_every;
-            (every - steps_done % every).min(invocation_end - steps_done)
+            match config.geometry_rebuild_schedule {
+                GeometryRebuildSchedule::Fixed => {
+                    let every = config.geometry_rebuild_every;
+                    (every - steps_done % every).min(invocation_end - steps_done)
+                }
+                GeometryRebuildSchedule::RadFoamV1 => topology_cadence
+                    .steps_until_update()
+                    .min(invocation_end - steps_done),
+            }
         } else {
             invocation_end - steps_done
         };
@@ -3191,6 +3336,13 @@ fn fit_appearance_pixel_batched(
 
         steps_done += cycle_budget;
         cycle += 1;
+        let topology_schedule_due = geometry_trainable
+            && match config.geometry_rebuild_schedule {
+                GeometryRebuildSchedule::Fixed => {
+                    steps_done.is_multiple_of(config.geometry_rebuild_every)
+                }
+                GeometryRebuildSchedule::RadFoamV1 => topology_cadence.advance(cycle_budget),
+            };
 
         // Prune + densify, gated by the RadFoam schedule: only between
         // `warmup` and `densify_until`, and only while under the point
@@ -3213,6 +3365,23 @@ fn fit_appearance_pixel_batched(
                     views.len(),
                     model.radii.is_some(),
                 );
+
+                // The reference performs a scheduled topology refresh before
+                // collecting its densification statistics. Preserve that
+                // operation order when both boundaries coincide: the current
+                // positions must not be paired with the previous GPU cloud or
+                // previous farthest-neighbour relationships.
+                if topology_schedule_due {
+                    rebuild_training_adjacency(model, config.rebuild_with_qhull);
+                    if d.prune {
+                        gpu_cloud.deinit(&gpu);
+                        gpu_cloud = build_training_gpu_cloud(model, &gpu);
+                    }
+                    log::info!(
+                        "densify cycle {}: refreshed current geometry before resampling",
+                        cycle,
+                    );
+                }
 
                 let contribution = if d.prune {
                     let stats = collect_path_contributions(
@@ -3335,6 +3504,9 @@ fn fit_appearance_pixel_batched(
                 );
                 session.set_adam_step_count(adam_snap.t);
                 topology_rebuilt = true;
+                if config.geometry_rebuild_schedule == GeometryRebuildSchedule::RadFoamV1 {
+                    topology_cadence.reset_period_after_densification();
+                }
             }
         }
 
@@ -3343,9 +3515,8 @@ fn fit_appearance_pixel_batched(
         // cadence, download moved positions/radii, rebuild exact topology, and
         // recreate traversal resources. The final cycle only needs the
         // host-side refresh because no further optimizer step will run.
-        let geometry_due = geometry_trainable
-            && (steps_done.is_multiple_of(config.geometry_rebuild_every)
-                || steps_done == invocation_end);
+        let geometry_due =
+            geometry_trainable && (topology_schedule_due || steps_done == invocation_end);
         if geometry_due && !topology_rebuilt {
             let n_cells = model.points.len();
             download_model_parameters(&session, model, config.softplus_beta);
@@ -3436,6 +3607,8 @@ fn fit_appearance_pixel_batched(
                             sampling_rng,
                             quantile_rng,
                             densify_rng: rng_split,
+                            topology_period: topology_cadence.period,
+                            topology_steps_since_update: topology_cadence.steps_since_update,
                         };
                         match save_training_state(ckpt, trainer_state) {
                             Ok(trainer_path) => log::info!(
@@ -4152,10 +4325,26 @@ mod tests {
             sampling_rng: 11,
             quantile_rng: 22,
             densify_rng: 33,
+            topology_period: 51,
+            topology_steps_since_update: 17,
         };
         let encoded = encode_training_state(state);
         assert_eq!(decode_training_state(&encoded).unwrap(), state);
         assert!(decode_training_state(&(encoded + "unexpected 1\n")).is_err());
+    }
+
+    #[test]
+    fn legacy_training_state_decodes_without_topology_phase() {
+        let encoded = "blade-volume-training-state-v1\n\
+                       step 9000\n\
+                       cycle 94\n\
+                       sampling_rng 11\n\
+                       quantile_rng 22\n\
+                       densify_rng 33\n";
+        let state = decode_training_state(encoded).unwrap();
+        assert_eq!(state.step, 9_000);
+        assert_eq!(state.topology_period, 0);
+        assert_eq!(state.topology_steps_since_update, 0);
     }
 
     #[test]
@@ -4170,11 +4359,41 @@ mod tests {
             sampling_rng: u64::MAX,
             quantile_rng: 123,
             densify_rng: 456,
+            topology_period: 101,
+            topology_steps_since_update: 42,
         };
         let path = save_training_state(&model_path, state).unwrap();
         assert_eq!(load_training_state(&model_path).unwrap(), state);
         assert!(!model_path.with_extension("trainstate.tmp").exists());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn radfoam_v1_topology_cadence_matches_reference_counter_order() {
+        let mut state = TopologyCadenceState::radfoam_v1_initial();
+        for gap in [1, 3, 5, 7, 9, 11] {
+            assert_eq!(state.steps_until_update(), gap);
+            assert!(state.advance(gap));
+            assert_eq!(state.steps_since_update, 1);
+        }
+
+        let mut state = TopologyCadenceState::radfoam_v1_initial();
+        for period in (1..=99).step_by(2) {
+            assert_eq!(state.period, period);
+            let gap = state.steps_until_update();
+            assert_eq!(gap, period);
+            assert!(state.advance(gap));
+        }
+        assert_eq!(state.period, 101);
+        assert_eq!(state.steps_until_update(), 101);
+        assert!(state.advance(101));
+        assert_eq!(state.period, 101);
+
+        state.steps_since_update = 42;
+        state.reset_period_after_densification();
+        assert_eq!(state.period, 1);
+        assert_eq!(state.steps_since_update, 42);
+        assert_eq!(state.steps_until_update(), 1);
     }
 
     #[test]
@@ -4862,6 +5081,45 @@ mod tests {
     }
 
     #[test]
+    fn position_training_supports_radfoam_v1_topology_cadence() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping position_training_supports_radfoam_v1_topology_cadence: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: [0.0, 0.0, 0.0, 1.0],
+                fov: [0.5, 0.5],
+                principal: [0.0, 0.0],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            width: 1,
+            height: 1,
+        };
+        fit_appearance_multi_view(
+            &mut model,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                learning_rate: 0.01,
+                epochs: 5,
+                position_lr_ratio: 1.0,
+                geometry_rebuild_every: 0,
+                geometry_rebuild_schedule: GeometryRebuildSchedule::RadFoamV1,
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        model.validate().unwrap();
+    }
+
+    #[test]
     fn densification_rebuilds_and_continues_training() {
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping densification_rebuilds_and_continues_training: no GPU");
@@ -4889,6 +5147,8 @@ mod tests {
             AppearanceFitConfig {
                 learning_rate: 0.01,
                 epochs: 3,
+                position_lr_ratio: 1.0,
+                geometry_rebuild_every: 1,
                 densify: Some(DensifyConfig {
                     every: 1,
                     fraction: 0.25,
