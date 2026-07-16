@@ -74,6 +74,10 @@ existing defaults:
 - `--lr-schedule radfoam-v1` applies the official absolute parameter schedules,
   position freeze, higher-SH warmup, and Adam epsilon. It enables position
   training even when the legacy position ratio is zero.
+- `--lr-groups radfoam-v1-relative` applies the official initial ratios between
+  density, position, DC, and higher-SH rates while retaining the selected
+  constant/cosine time curve and Adam epsilon. This separates parameter-group
+  scaling from the update-indexed schedule that fails at a 256-ray batch.
 
 These controls do not pretend to solve the remaining batch-size or update
 cadence differences. The historical L1/top-track/unified-cosine behavior stays
@@ -160,17 +164,32 @@ sample retained 112,667 rather than 113,890 cells and its topology hash
 differed. That is promising quality neutrality, not decision agreement; the
 exhaustive collector remains the quality default.
 
+The batch-appropriate parameter-group isolation is also negative. Starting
+from the same v1 initialization with black/L1/cosine training, official initial
+rate ratios reached 14.72 dB train / 14.49 dB held out at step 2,000, versus
+14.59 / 15.11 dB for the legacy relative groups. Cell counts were nearly equal
+(57,410 versus 57,348), and fresh-Ply evaluation exactly reproduced both new
+metrics. The +0.13 dB training change paired with -0.62 dB held out is evidence
+of worse generalization, not under-training. The option remains available for
+larger-batch experiments, but the legacy groups remain the scaled winner. The
+run took 645 seconds and peaked at 615,665,664 bytes in a 4 GiB cgroup; its
+separate evaluation peaked at 599,007,232 bytes. Both recorded zero swap,
+pressure, OOM, or GPU faults. The versioned result is
+[`bonsai-radfoam-v1-relative-groups-step2000-a91766b.toml`](../benchmarks/results/bonsai-radfoam-v1-relative-groups-step2000-a91766b.toml).
+
 ## Next experiments
 
-1. Diagnose the Smooth-L1 single-view collapse, then retry it on the winning
-   initialization/background only if the failure is understood.
-2. Compare a batch-aware schedule by cumulative rays as well as updates; do not
-   use the exact v1 step schedule for batch 256.
+1. Implement the reference's rapid topology-refresh sequence as an isolated
+   cadence control, leaving densification cadence and appearance settings
+   fixed for its first comparison.
+2. Implement cell-count-dependent densification as a second, separately
+   measurable control rather than bundling it with topology cadence.
 3. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle; do not change the default without decision agreement or
    a deliberately revised acceptance gate.
-4. Add reference dynamic topology and cell-count-dependent densification only
-   after the scaled appearance/initialization direction is positive.
+4. Increase batch size and compare schedules by cumulative rays as well as
+   updates; the exact v1 schedule and its initial relative groups are both
+   rejected at batch 256, not at reference scale.
 5. Move toward 190,951→2,097,152 cells and the staged
    780×520→1559×1039 image schedule only after that direction survives a larger
    batch.

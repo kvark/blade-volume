@@ -123,3 +123,12 @@ rotating views cut the 4K→4.5K segment from 635 to 299 seconds (2.12×), while
 fresh-PLY held-out PSNR changed from 15.69 to 15.66 dB. It retained 1,223 fewer
 cells and produced a different artifact/topology, so it has not met the
 decision-agreement gate and must not replace exhaustive scans by default.
+
+`train_colmap --lr-groups radfoam-v1-relative` separates the official initial
+parameter-rate ratios from the official update-indexed time curves. Its first
+isolated result is
+`results/bonsai-radfoam-v1-relative-groups-step2000-a91766b.toml`. Under the
+winning v1-initialization/black/L1/cosine setup it reached 14.72 dB train /
+14.49 dB held out, versus 14.59 / 15.11 dB with legacy groups. The +0.13 dB
+train and -0.62 dB held-out change rejects it as the 256-ray default while
+preserving it as a larger-batch reference control.

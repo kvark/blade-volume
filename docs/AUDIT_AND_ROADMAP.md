@@ -146,6 +146,13 @@ At the audited revision:
   retained 1,223 fewer cells and changed topology. It fails the plan's exact
   decision-agreement gate, so it remains experimental pending larger caps and
   multi-boundary drift measurements.
+- Parameter-group scaling is now independent from the exact v1 time schedule.
+  The official initial density/position/DC/higher-SH ratios can run under the
+  stable cosine curve, but the isolated step-2,000 result is negative: 14.72
+  dB train / 14.49 dB held out, compared with 14.59 / 15.11 dB for the legacy
+  relative groups. Fresh-Ply evaluation reproduced the scores and cell counts
+  were nearly equal. The option remains for larger-batch work; it does not
+  replace the selected scaled optimizer.
 - Smooth-L1's 4.44 dB held-out failure is unchanged at twice the traversal cap
   and under either background. Visual comparisons identify large near-camera
   Voronoi floaters; the loss remains opt-in until that geometry interaction is
@@ -692,6 +699,9 @@ material path.
    opacity parameterization, geometry update cadence, pruning decisions,
    densification samples, and topology/path refresh timing step by step. Add a
    small deterministic trace fixture for every discovered semantic difference.
+   (Initialization, background, loss, exact schedule, and separated initial
+   parameter-group ratios are measured at the 256-ray boundary; topology and
+   densification cadence remain.)
 3. Run a controlled matrix from identical initialization: appearance-only;
    position optimization with fixed topology; position optimization with exact
    rebuilds; densification/pruning disabled and enabled; quantile loss disabled

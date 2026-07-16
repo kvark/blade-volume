@@ -1,0 +1,99 @@
+schema = 1
+manifest = "benchmarks/bonsai_full_quality.toml"
+manifest_name = "bonsai-radfoam-full-v1"
+experiment = "radfoam-v1-relative-parameter-groups"
+timestamp_utc = "2026-07-16T13:19:06Z"
+git_commit = "a91766b68097bfb36870856162523a63701770ca"
+os = "Linux 7.0.0-27-generic x86_64"
+gpu = "NVIDIA GeForce RTX 5070"
+driver = "NVIDIA 595.71.05"
+vulkan_api = "1.4.329"
+status = "completed_step_2000_negative_ablation"
+benchmark_complete = false
+default_changed = false
+reason_default_unchanged = "held-out PSNR regressed 0.62 dB against legacy relative groups"
+
+[isolation]
+kind = "systemd user service cgroup v2"
+memory_max_bytes = 4294967296
+training_memory_peak_bytes = 615665664
+evaluation_memory_peak_bytes = 599007232
+memory_swap_max_bytes = 0
+oom = false
+oom_kill = false
+memory_limit_pressure = false
+gpu_fault_marker = false
+
+[training]
+completed_steps = 2000
+planned_steps = 20400
+cumulative_sampled_rays = 512000
+wall_seconds = 645
+initial_cells = 50000
+cells = 57410
+adjacency_entries = 841214
+initialization = "radfoam-v1-scaled-to-50000"
+color_loss = "l1"
+background = "black"
+lr_schedule = "cosine"
+lr_groups = "radfoam-v1-relative"
+density_initial_lr = 0.1
+position_initial_lr = 0.0002
+sh_dc_initial_lr = 0.005
+sh_rest_initial_lr = 0.0005
+
+[artifact]
+path = "target/audit-runs/bonsai-ablation-lr-groups-a91766b/model.ply"
+sha256 = "cac2c5c76465148d470adaef77b70544283d2fe5f5f335c55d12db3d78f10b40"
+fresh_ply_evaluation = true
+checkpoint_is_git_ignored = true
+
+[metrics]
+train_views = 255
+test_views = 8
+train_psnr_db = 14.72
+test_psnr_db = 14.49
+serialization_delta_train_db = 0.0
+serialization_delta_test_db = 0.0
+
+[comparison_at_step_2000]
+baseline_result = "benchmarks/results/bonsai-radfoam-v1-initialization-step2000-71c8946.toml"
+baseline_lr_groups = "legacy"
+baseline_cells = 57348
+baseline_train_psnr_db = 14.59
+baseline_test_psnr_db = 15.11
+delta_cells = 62
+delta_train_psnr_db = 0.13
+delta_test_psnr_db = -0.62
+
+[[metrics.test_frames]]
+name = "DSCF5565.JPG"
+psnr_db = 12.79
+
+[[metrics.test_frames]]
+name = "DSCF5573.JPG"
+psnr_db = 15.94
+
+[[metrics.test_frames]]
+name = "DSCF5581.JPG"
+psnr_db = 14.03
+
+[[metrics.test_frames]]
+name = "DSCF5589.JPG"
+psnr_db = 12.75
+
+[[metrics.test_frames]]
+name = "DSCF5597.JPG"
+psnr_db = 15.62
+
+[[metrics.test_frames]]
+name = "DSCF5605.JPG"
+psnr_db = 15.05
+
+[[metrics.test_frames]]
+name = "DSCF5613.JPG"
+psnr_db = 13.84
+
+[[metrics.test_frames]]
+name = "DSCF5621.JPG"
+psnr_db = 15.90
