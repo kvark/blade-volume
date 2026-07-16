@@ -134,6 +134,12 @@ At the audited revision:
   train / 14.74 dB held out, versus 14.59 / 15.11 dB for initialization alone.
   The selected scaled trajectory is therefore v1 initialization with the
   existing black/L1/cosine path, resumed from its lossless step-2,000 state.
+- The resumed initialization curve reaches 15.11, 15.39, and 15.58 dB held out
+  at steps 2K, 3K, and 4K. Its advantage over the old curve narrows from +2.03
+  to +1.25 to +0.35 dB while the last 1K segment grows to 1,021 seconds for a
+  0.19 dB gain. It is stopped at 99,262 cells: initialization is a supported
+  improvement, but not the explanation for the remaining quality plateau, and
+  exhaustive contribution scanning is now the dominant scaling bottleneck.
 
 ### Remaining PowerFoam gaps
 

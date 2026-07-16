@@ -131,14 +131,29 @@ healthy, so this is a generalization tradeoff rather than another collapsed
 view. The selected scaled trajectory is therefore v1 initialization with the
 existing black/L1/cosine path.
 
+The selected trajectory was resumed losslessly through step 4,000:
+
+| Step | Cells | Train PSNR | Held-out PSNR | Held-out delta vs old curve | Segment wall time |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 2,000 | 57,348 | 14.59 dB | 15.11 dB | +2.03 dB | 646 s |
+| 3,000 | 75,445 | 15.95 dB | 15.39 dB | +1.25 dB | 793 s |
+| 4,000 | 99,262 | 16.35 dB | 15.58 dB | +0.35 dB | 1,021 s |
+
+The initialization advantage is real but converges toward the old scaled curve
+as training and densification proceed. The final segment adds only 0.19 dB
+held out while exhaustive contribution/topology work raises its wall time to
+17 minutes. It peaked at 622,166,016 bytes in a 4 GiB cgroup with zero swap,
+pressure, OOM, or GPU faults. The diagnostic curve stops here; the next dollar
+of compute is better spent on batch/schedule and oracle-scaling experiments.
+
 ## Next experiments
 
-1. Extend the v1-initialization/black/L1/cosine serialized curve beyond step
-   2,000 using its lossless optimizer and RNG checkpoint.
-2. Diagnose the Smooth-L1 single-view collapse, then retry it on the winning
+1. Diagnose the Smooth-L1 single-view collapse, then retry it on the winning
    initialization/background only if the failure is understood.
-3. Compare a batch-aware schedule by cumulative rays as well as updates; do not
+2. Compare a batch-aware schedule by cumulative rays as well as updates; do not
    use the exact v1 step schedule for batch 256.
+3. Prototype a faster contribution sampler against the exhaustive oracle before
+   extending the 100K-cell curve.
 4. Add reference dynamic topology and cell-count-dependent densification only
    after the scaled appearance/initialization direction is positive.
 5. Move toward 190,951→2,097,152 cells and the staged

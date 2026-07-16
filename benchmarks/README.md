@@ -106,3 +106,11 @@ dB train / 14.74 dB held out after reload. Relative to initialization alone,
 white added 0.24 dB train but lost 0.37 dB held out. The robust scaled winner is
 therefore v1 initialization alone with the existing black/L1/cosine training
 path; its lossless step-2,000 checkpoint is the curve selected for continuation.
+
+That continuation is recorded in
+`results/bonsai-radfoam-v1-initialization-curve-step4000-01e68e3.toml`. Reloaded
+held-out PSNR progresses 15.11 → 15.39 → 15.58 dB at steps 2K/3K/4K, while
+cells grow 57,348 → 75,445 → 99,262. The advantage over the historical
+scaled curve narrows from +2.03 to +1.25 to +0.35 dB. The last 1K segment takes
+1,021 seconds for only +0.19 dB held out, so this diagnostic curve stops at 4K;
+it is not a completed manifest or reference result.
