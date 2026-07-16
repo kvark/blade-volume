@@ -1272,6 +1272,12 @@ pub struct DensifyConfig {
     /// (RadFoam) or explicit support radius (PowerFoam) is below this value;
     /// large empty background cells remain as traversal support.
     pub prune_radius: f32,
+    /// Maximum training views used by the contribution collector at each
+    /// prune/densify boundary. `0` (default) evaluates every view. A positive
+    /// value deterministically rotates a stratified subset between cycles;
+    /// this is an experimental scaling control and must be checked against
+    /// exhaustive decisions before use in a quality run.
+    pub contribution_views: usize,
 }
 
 impl Default for DensifyConfig {
@@ -1287,6 +1293,7 @@ impl Default for DensifyConfig {
             prune_contribution: 0.01,
             suppress_contribution: 0.001,
             prune_radius: 0.1,
+            contribution_views: 0,
         }
     }
 }
@@ -2022,6 +2029,16 @@ fn accumulate_path_contributions(
     }
 }
 
+fn contribution_view_indices(view_count: usize, limit: usize, cycle: usize) -> Vec<usize> {
+    if limit == 0 || limit >= view_count {
+        return (0..view_count).collect();
+    }
+    let offset = cycle.wrapping_mul(0x9E37_79B9) % view_count;
+    (0..limit)
+        .map(|slot| (slot * view_count / limit + offset) % view_count)
+        .collect()
+}
+
 /// Measure the same per-cell contribution signal used by RadFoam pruning:
 /// sum volumetric ray weights within each view, then retain the maximum over
 /// views. Each view uses one deterministic 2× downsample phase, matching the
@@ -2036,12 +2053,17 @@ fn collect_path_contributions(
     views: &[ViewSupervision],
     max_steps: usize,
     cycle: usize,
+    view_limit: usize,
 ) -> PathContributionStats {
     const MAX_RAYS_PER_BATCH: usize = 4096;
 
-    let max_sampled_pixels = views
+    let view_indices = contribution_view_indices(views.len(), view_limit, cycle);
+    let max_sampled_pixels = view_indices
         .iter()
-        .map(|view| view.width.div_ceil(2) as usize * view.height.div_ceil(2) as usize)
+        .map(|&index| {
+            let view = &views[index];
+            view.width.div_ceil(2) as usize * view.height.div_ceil(2) as usize
+        })
         .max()
         .unwrap_or(1);
     let capacity = max_sampled_pixels.clamp(1, MAX_RAYS_PER_BATCH);
@@ -2084,7 +2106,8 @@ fn collect_path_contributions(
         max_steps_used: 0,
     };
 
-    for (view_index, view) in views.iter().enumerate() {
+    for &view_index in &view_indices {
+        let view = &views[view_index];
         let phase = cycle
             .wrapping_mul(0x9E37_79B9)
             .wrapping_add(view_index.wrapping_mul(0x85EB_CA6B));
@@ -3138,7 +3161,14 @@ fn fit_appearance_pixel_batched(
 
                 let contribution = if d.prune {
                     let stats = collect_path_contributions(
-                        &gpu, &recorder, &gpu_cloud, model, views, max_steps, cycle,
+                        &gpu,
+                        &recorder,
+                        &gpu_cloud,
+                        model,
+                        views,
+                        max_steps,
+                        cycle,
+                        d.contribution_views,
                     );
                     let truncated_percent = if stats.rays == 0 {
                         0.0
@@ -3151,9 +3181,12 @@ fn fit_appearance_pixel_batched(
                         stats.segments as f32 / stats.rays as f32
                     };
                     log::info!(
-                        "contribution cycle {}: {} rays, {:.1} mean segments, max {}, \
+                        "contribution cycle {}: {} of {} views, {} rays, \
+                         {:.1} mean segments, max {}, \
                          {} truncated ({:.3}%)",
                         cycle,
+                        contribution_view_indices(views.len(), d.contribution_views, cycle).len(),
+                        views.len(),
                         stats.rays,
                         mean_segments,
                         stats.max_steps_used,
@@ -3717,6 +3750,26 @@ mod tests {
         assert_eq!(stats.segments, 3);
         assert_eq!(stats.max_steps_used, 2);
         assert_eq!(stats.truncated_rays, 1);
+    }
+
+    #[test]
+    fn contribution_view_selection_is_exhaustive_or_rotating_and_stratified() {
+        assert_eq!(contribution_view_indices(5, 0, 7), [0, 1, 2, 3, 4]);
+        assert_eq!(contribution_view_indices(5, 5, 7), [0, 1, 2, 3, 4]);
+        assert!(contribution_view_indices(0, 3, 7).is_empty());
+
+        let first = contribution_view_indices(17, 5, 0);
+        let second = contribution_view_indices(17, 5, 1);
+        assert_eq!(first.len(), 5);
+        assert_eq!(second.len(), 5);
+        assert_ne!(first, second);
+        for selected in [first, second] {
+            let mut sorted = selected.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted.len(), selected.len());
+            assert!(selected.iter().all(|&index| index < 17));
+        }
     }
 
     #[test]

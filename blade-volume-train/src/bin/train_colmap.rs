@@ -190,6 +190,13 @@ struct Args {
     #[argh(option, default = "0.1")]
     prune_radius: f32,
 
+    /// cap training views in each prune/densify contribution scan (default 0
+    /// = exhaustive). Positive values select a deterministic rotating,
+    /// stratified subset and are experimental until compared with exhaustive
+    /// decisions on the same checkpoint.
+    #[argh(option, default = "0")]
+    contribution_views: usize,
+
     /// legacy no-op sibling-jitter flag, retained for CLI compatibility.
     /// Placement now follows fixed method-specific RadFoam/PowerFoam rules.
     #[argh(option, default = "0.5")]
@@ -513,6 +520,7 @@ fn main() {
                     prune_contribution: args.prune_contribution,
                     suppress_contribution: args.suppress_contribution,
                     prune_radius: args.prune_radius,
+                    contribution_views: args.contribution_views,
                 })
             } else {
                 None
