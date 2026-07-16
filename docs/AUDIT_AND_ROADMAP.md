@@ -105,6 +105,17 @@ At the audited revision:
   budget rather than spending more compute on an unchanged protocol. The
   corrected trainer still needs a reference-matched RadFoam run and controlled
   ablations.
+- The official RadFoam v1 code is now pinned and compared line by line in
+  [`RADFOAM_REFERENCE_COMPARISON.md`](RADFOAM_REFERENCE_COMPARISON.md). Its
+  Bonsai recipe processes one million mixed-view rays per update, grows roughly
+  191K→2.1M sites, stages native-aspect resolution, uses Smooth-L1 on white,
+  and applies independent parameter schedules. The stopped Rust run had seen
+  only 2.56 million rays total at step 10,000 and used 50K→200K sites. Its
+  plateau therefore does not measure the representation at reference scale.
+- Opt-in `radfoam-v1` initialization and learning-rate policies plus a
+  beta-1 Smooth-L1 color loss are implemented without changing historical
+  defaults. A versioned scaled semantic-ablation manifest records both the
+  controls and the remaining batching/topology/resolution differences.
 
 ### Remaining PowerFoam gaps
 
@@ -537,9 +548,11 @@ numerically continuous.
 6. Add truncation and topology diagnostics to training and evaluation.
 7. Run matched-protocol comparisons against the reference implementation.
 
-Items 1-6 are implemented and covered by CPU and physical-GPU tests. Item 7 is
-the gating work: the complete-dataset curve above is an internal protocol, not
-a reference-matched result.
+Items 1-6 are implemented and covered by CPU and physical-GPU tests. The
+reference source/configuration audit for item 7 is complete, and the trainer
+now exposes its initialization, loss, and parameter schedule. The actual
+same-budget run remains the gate: the complete-dataset curve above is an
+internal protocol, not a reference-matched result.
 
 Acceptance gate: a canonical scene matches the reference implementation within
 0.5-1.0 dB at the same cell budget, split, image scale, and training budget,
@@ -618,6 +631,7 @@ material path.
    files, train/held-out indices, scale, initial/target cell counts, SH degree,
    backgrounds, and effective ray budget. Record reference-side serialized
    renders and PSNR rather than quoting a paper number with a different setup.
+   (The v1 revision and comparison are pinned; execution remains.)
 2. Compare initialization, optimizer parameter groups, learning-rate curves,
    opacity parameterization, geometry update cadence, pruning decisions,
    densification samples, and topology/path refresh timing step by step. Add a

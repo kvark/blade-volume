@@ -70,3 +70,10 @@ The first full-dataset attempt is recorded as
 held-out PSNR stayed flat through three evaluations. Its final metrics do come
 from a freshly reloaded PLY and are useful diagnostic evidence, but they must
 not be presented as a completed manifest result or a reference comparison.
+
+`bonsai_radfoam_v1_semantics.toml` is the next controlled experiment. It keeps
+the plateau run's 50K→200K cells, 128×128 resolution, split, batch, and global
+step budget, but opts into the official v1 initialization distribution,
+Smooth-L1 RGB loss, white background, and parameter-specific learning rates.
+The manifest lists the remaining differences explicitly, so even a successful
+result is a scaled direction check rather than the Stage 2 reference gate.

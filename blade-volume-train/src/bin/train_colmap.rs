@@ -88,9 +88,16 @@ struct Args {
     #[argh(option, default = "0.1")]
     learning_rate: f32,
 
-    /// cap on initial COLMAP points (default 2000; Delaunay scales poorly past this)
+    /// cap on initial foam points (default 2000; 0 = policy default/all).
+    /// Exact Delaunay construction scales poorly without Qhull.
     #[argh(option, default = "2000")]
     max_points: usize,
+
+    /// initial site policy: "top-track" or "radfoam-v1" (default top-track).
+    /// The reference policy samples sparse points with replacement, adds a
+    /// broad background cloud, and starts appearance at gray.
+    #[argh(option, default = "String::from(\"top-track\")")]
+    initialization: String,
 
     /// use Qhull instead of the default `simple_delaunay_lib` Delaunay
     /// backend. Qhull scales better on typical large clouds, though exact
@@ -129,6 +136,11 @@ struct Args {
     /// parameters per channel.
     #[argh(option, default = "0")]
     sh_degree: usize,
+
+    /// supervised RGB loss: "l1" or "smooth-l1" (default l1). The official
+    /// RadFoam v1 trainer uses Smooth-L1 with beta 1.
+    #[argh(option, default = "String::from(\"l1\")")]
+    color_loss: String,
 
     /// adaptive densification: cells between splits (default 0 = off).
     /// Recommended 500–1000. After every cycle the top
@@ -189,9 +201,9 @@ struct Args {
     #[argh(option, default = "500")]
     densify_warmup: usize,
 
-    /// learning-rate schedule: "constant" or "cosine" (default cosine).
-    /// Cosine decays from `--learning-rate` to `learning_rate * --lr-min-ratio`
-    /// over the full Adam-step budget.
+    /// learning-rate schedule: "constant", "cosine", or "radfoam-v1"
+    /// (default cosine). The reference schedule uses its official absolute
+    /// per-parameter rates and requires geometry rebuilds.
     #[argh(option, default = "String::from(\"cosine\")")]
     lr_schedule: String,
 
@@ -342,11 +354,34 @@ fn main() {
     } else {
         pipeline::AdjacencyKind::Delaunay
     };
+    let initialization = match args.initialization.as_str() {
+        "top-track" => pipeline::InitialPointPolicy::TopTrackLength,
+        "radfoam-v1" => pipeline::InitialPointPolicy::RadFoamV1,
+        other => {
+            eprintln!("unknown --initialization '{other}' (use 'top-track' or 'radfoam-v1')");
+            std::process::exit(2);
+        }
+    };
     let lr_schedule = match args.lr_schedule.as_str() {
         "constant" => diff_render::LrSchedule::Constant,
         "cosine" => diff_render::LrSchedule::Cosine,
+        "radfoam-v1" => diff_render::LrSchedule::RadFoamV1,
         other => {
-            eprintln!("unknown --lr-schedule '{other}' (use 'constant' or 'cosine')");
+            eprintln!(
+                "unknown --lr-schedule '{other}' (use 'constant', 'cosine', or 'radfoam-v1')"
+            );
+            std::process::exit(2);
+        }
+    };
+    if lr_schedule == diff_render::LrSchedule::RadFoamV1 && args.geometry_rebuild_every == 0 {
+        eprintln!("--lr-schedule radfoam-v1 requires --geometry-rebuild-every > 0");
+        std::process::exit(2);
+    }
+    let color_loss = match args.color_loss.as_str() {
+        "l1" => diff_render::ColorLoss::L1,
+        "smooth-l1" => diff_render::ColorLoss::SmoothL1,
+        other => {
+            eprintln!("unknown --color-loss '{other}' (use 'l1' or 'smooth-l1')");
             std::process::exit(2);
         }
     };
@@ -422,13 +457,15 @@ fn main() {
         resolution: (args.width, args.height),
         max_steps: args.max_steps,
         max_views: Some(args.views),
-        max_initial_points: Some(args.max_points),
+        max_initial_points: (args.max_points > 0).then_some(args.max_points),
+        initialization,
         fit: diff_render::AppearanceFitConfig {
             learning_rate: args.learning_rate,
             epochs: args.epochs,
             pixel_batch,
             steps_per_view: args.steps_per_view,
             sh_degree: args.sh_degree,
+            color_loss,
             lr_schedule,
             lr_min_ratio: args.lr_min_ratio,
             patch_size: args.patch_size,

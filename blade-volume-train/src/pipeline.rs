@@ -116,8 +116,12 @@ pub struct PipelineConfig {
     /// point from `points3D.bin`. The current Delaunay backend
     /// (`simple_delaunay_lib`) gets quadratic on tens of thousands of points;
     /// real COLMAP scenes routinely ship 100K+, so subsampling is essential.
-    /// When set, we pick a deterministic stride through the points.
+    /// Interpretation is policy-specific: top-track initialization keeps the
+    /// strongest tracks, while RadFoam v1 scales its sparse/background mix to
+    /// the cap.
     pub max_initial_points: Option<usize>,
+    /// Policy used to turn the sparse COLMAP cloud into initial foam sites.
+    pub initialization: InitialPointPolicy,
     /// Adam settings.
     pub fit: diff_render::AppearanceFitConfig,
     /// `CameraParams::depth` — far plane forwarded to every per-view camera.
@@ -176,6 +180,20 @@ pub enum AdjacencyKind {
     Cech { radius_factor: f32 },
 }
 
+/// Initial foam-site distribution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitialPointPolicy {
+    /// Keep the strongest COLMAP tracks up to `max_initial_points` and seed
+    /// their DC appearance from sparse-point color.
+    TopTrackLength,
+    /// Official RadFoam v1 semantics: sample sparse points with replacement,
+    /// perturb them by a 0.01 standard deviation, add a broad normal
+    /// background cloud, start appearance at gray, and initialize raw density
+    /// in `[0, 1)` (background `-0.5`). The Rust PRNG is deterministic but is
+    /// not expected to reproduce PyTorch's bit sequence.
+    RadFoamV1,
+}
+
 impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
@@ -183,6 +201,7 @@ impl Default for PipelineConfig {
             max_steps: 64,
             max_views: Some(8),
             max_initial_points: Some(2000),
+            initialization: InitialPointPolicy::TopTrackLength,
             fit: diff_render::AppearanceFitConfig {
                 learning_rate: 0.1,
                 epochs: 100,
@@ -449,6 +468,95 @@ pub fn train_colmap_appearance(
     train_colmap_appearance_split(sparse_dir, images_dir, config, 0, gpu).model
 }
 
+struct InitialRng {
+    state: u64,
+}
+
+impl InitialRng {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut value = self.state;
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((value ^ (value >> 31)) >> 32) as u32
+    }
+
+    fn uniform(&mut self) -> f32 {
+        ((self.next_u32() as f64 + 0.5) / (u32::MAX as f64 + 1.0)) as f32
+    }
+
+    fn normal(&mut self) -> f32 {
+        let radius = (-2.0 * self.uniform().ln()).sqrt();
+        let angle = 2.0 * std::f32::consts::PI * self.uniform();
+        radius * angle.cos()
+    }
+
+    fn index(&mut self, len: usize) -> usize {
+        ((self.next_u32() as u64 * len as u64) >> 32) as usize
+    }
+}
+
+fn density_from_raw(raw: f32, softplus_beta: f32) -> f32 {
+    if softplus_beta > 0.0 {
+        (softplus_beta * raw).exp().ln_1p() / softplus_beta
+    } else {
+        raw.max(0.0)
+    }
+}
+
+fn radfoam_v1_initial_model(
+    reconstruction: &colmap::Reconstruction,
+    max_points: Option<usize>,
+    softplus_beta: f32,
+) -> vol::PointCloudModel {
+    assert!(
+        !reconstruction.points.is_empty(),
+        "RadFoam v1 initialization requires sparse COLMAP points"
+    );
+    let reference_sparse = reconstruction.points.len() * 9 / 10;
+    let reference_random = 5_000;
+    let reference_total = reference_sparse + reference_random;
+    let target_total = max_points.unwrap_or(reference_total).min(reference_total);
+    assert!(target_total >= 4, "initial point cap must be at least four");
+    let random_points = if target_total == reference_total {
+        reference_random
+    } else {
+        (target_total * reference_random / reference_total).max(1)
+    };
+    let sparse_points = target_total - random_points;
+    let mut points = Vec::with_capacity(target_total);
+    let mut rng = InitialRng::new(42);
+    for _ in 0..sparse_points {
+        let source = &reconstruction.points[rng.index(reconstruction.points.len())];
+        points.push(glam::Vec4::new(
+            source.xyz[0] as f32 + 1.0e-2 * rng.normal(),
+            source.xyz[1] as f32 + 1.0e-2 * rng.normal(),
+            source.xyz[2] as f32 + 1.0e-2 * rng.normal(),
+            density_from_raw(rng.uniform(), softplus_beta),
+        ));
+    }
+    for _ in 0..random_points {
+        points.push(glam::Vec4::new(
+            10.0 * rng.normal(),
+            10.0 * rng.normal(),
+            10.0 * rng.normal(),
+            density_from_raw(-0.5, softplus_beta),
+        ));
+    }
+    vol::PointCloudModel {
+        sh_coefficients: vec![0.0; points.len() * 3],
+        sh_degree: 0,
+        transforms: None,
+        adjacency: None,
+        radii: None,
+        points,
+    }
+}
+
 /// Orchestrator. Loads the COLMAP reconstruction, splits its image list into
 /// the first `config.max_views` training images and the next `test_views`
 /// held-out images, builds an initial `PointCloudModel`, fits appearance,
@@ -477,9 +585,18 @@ pub fn train_colmap_appearance_split(
         );
         m
     } else {
-        recon.to_initial_model_with_density(config.initial_density)
+        match config.initialization {
+            InitialPointPolicy::TopTrackLength => {
+                recon.to_initial_model_with_density(config.initial_density)
+            }
+            InitialPointPolicy::RadFoamV1 => radfoam_v1_initial_model(
+                &recon,
+                config.max_initial_points,
+                config.fit.softplus_beta,
+            ),
+        }
     };
-    if config.init_ply.is_none() {
+    if config.init_ply.is_none() && config.initialization == InitialPointPolicy::TopTrackLength {
         if let Some(cap) = config.max_initial_points {
             if model.points.len() > cap {
                 let n_before = model.points.len();
@@ -577,6 +694,37 @@ pub fn train_colmap_appearance_split(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn radfoam_v1_initialization_is_deterministic_and_bounded() {
+        let points = (0..10_000)
+            .map(|i| colmap::ColmapPoint3D {
+                id: i as u64,
+                xyz: [i as f64 * 1.0e-3, 0.0, 0.0],
+                rgb: [255, 0, 0],
+                error: 0.0,
+                track_len: 1,
+            })
+            .collect();
+        let reconstruction = colmap::Reconstruction {
+            cameras: std::collections::HashMap::new(),
+            images: Vec::new(),
+            points,
+        };
+        let first = radfoam_v1_initial_model(&reconstruction, Some(1_000), 10.0);
+        let second = radfoam_v1_initial_model(&reconstruction, Some(1_000), 10.0);
+        assert_eq!(first.points, second.points);
+        assert_eq!(first.points.len(), 1_000);
+        assert_eq!(first.sh_degree, 0);
+        assert_eq!(first.sh_coefficients, vec![0.0; 3_000]);
+        assert!(first
+            .points
+            .iter()
+            .all(|point| point.w.is_finite() && point.w > 0.0));
+        let background_density = density_from_raw(-0.5, 10.0);
+        assert!((first.points.last().unwrap().w - background_density).abs() < 1.0e-7);
+        first.validate().unwrap();
+    }
 
     fn tiny_model_far_apart() -> vol::PointCloudModel {
         let points = vec![
@@ -785,6 +933,7 @@ mod tests {
             max_steps: 16,
             max_views: Some(2),
             max_initial_points: None,
+            initialization: InitialPointPolicy::TopTrackLength,
             initial_density: 1.0,
             fit: diff_render::AppearanceFitConfig {
                 learning_rate: 0.1,

@@ -163,7 +163,40 @@ fn weighted_role_tangent(
     g.add(position_tangent, radius_tangent)
 }
 
-/// Build the volumetric forward + L1 loss subgraph and return handles.
+/// Supervised RGB loss used by the volumetric training graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorLoss {
+    /// Mean absolute error per channel. This preserves the original
+    /// blade-volume training behavior.
+    L1,
+    /// PyTorch-compatible Smooth-L1 with beta 1, averaged across pixels and
+    /// RGB channels. This is the loss used by the official RadFoam v1 trainer.
+    SmoothL1,
+}
+
+fn smooth_l1_loss(
+    g: &mut mn::Graph,
+    prediction: mn::NodeId,
+    target: mn::NodeId,
+    n: usize,
+) -> mn::NodeId {
+    let neg_target = g.neg(target);
+    let difference = g.add(prediction, neg_target);
+    let absolute = g.abs(difference);
+    let ones = g.constant(vec![1.0_f32; n], &[n, 1]);
+    let neg_ones = g.neg(ones);
+    let offset = g.add(absolute, neg_ones);
+    let above_one = g.relu(offset);
+    let neg_above_one = g.neg(above_one);
+    let clamped = g.add(absolute, neg_above_one);
+    let half = g.constant(vec![0.5_f32; n], &[n, 1]);
+    let clamped_squared = g.mul(clamped, clamped);
+    let quadratic = g.mul(clamped_squared, half);
+    let elementwise = g.add(quadratic, above_one);
+    g.mean_all(elementwise)
+}
+
+/// Build the volumetric forward + supervised loss subgraph and return handles.
 ///
 /// `n_cells` is the number of cells in the model (the embedding-table size).
 /// `n_pixels` is `P = width * height`. `max_steps` is the longest path the
@@ -190,6 +223,7 @@ pub fn build_volumetric_graph(
     softplus_beta: f32,
     background_rgb: [f32; 3],
     use_recorded_dt: bool,
+    color_loss_kind: ColorLoss,
 ) -> VolumetricGraph {
     assert!(
         sh_degree <= 3,
@@ -576,11 +610,27 @@ pub fn build_volumetric_graph(
     let pixel_g = composite(g, pixel_g, background_rgb[1]);
     let pixel_b = composite(g, pixel_b, background_rgb[2]);
 
-    let loss_r = g.l1_loss(pixel_r, target_r);
-    let loss_g = g.l1_loss(pixel_g, target_g);
-    let loss_b = g.l1_loss(pixel_b, target_b);
+    let loss_r = match color_loss_kind {
+        ColorLoss::L1 => g.l1_loss(pixel_r, target_r),
+        ColorLoss::SmoothL1 => smooth_l1_loss(g, pixel_r, target_r, p),
+    };
+    let loss_g = match color_loss_kind {
+        ColorLoss::L1 => g.l1_loss(pixel_g, target_g),
+        ColorLoss::SmoothL1 => smooth_l1_loss(g, pixel_g, target_g, p),
+    };
+    let loss_b = match color_loss_kind {
+        ColorLoss::L1 => g.l1_loss(pixel_b, target_b),
+        ColorLoss::SmoothL1 => smooth_l1_loss(g, pixel_b, target_b, p),
+    };
     let loss_rg = g.add(loss_r, loss_g);
-    let l1 = g.add(loss_rg, loss_b);
+    let color_loss_sum = g.add(loss_rg, loss_b);
+    let l1 = match color_loss_kind {
+        ColorLoss::L1 => color_loss_sum,
+        ColorLoss::SmoothL1 => {
+            let one_third = g.constant(vec![1.0_f32 / 3.0], &[1]);
+            g.mul(color_loss_sum, one_third)
+        }
+    };
 
     // Gradient (structural) L1 loss, computed in patch mode only. The
     // finite-difference ∂/∂x and ∂/∂y of the rendered patch is matched
@@ -1032,6 +1082,12 @@ pub enum LrSchedule {
     ///
     /// lets early training move fast and late training fine-tune.
     Cosine,
+    /// Parameter-specific schedule from official RadFoam v1. Density warms
+    /// up for the first 10%, higher-order SH for 20%, and positions freeze
+    /// after 90% of the global budget. Absolute rates and Adam epsilon match
+    /// the reference; `learning_rate`, `lr_min_ratio`, and the historical
+    /// position/radius multipliers are ignored.
+    RadFoamV1,
 }
 
 const SAMPLING_RNG_SEED: u64 = 0xDEAD_BEEF_F00D_CAFE;
@@ -1083,6 +1139,10 @@ pub struct AppearanceFitConfig {
     /// the cost of `(1+sh_degree)²` per-cell parameters per RGB
     /// channel.
     pub sh_degree: usize,
+    /// Supervised RGB loss. The official RadFoam v1 trainer uses
+    /// [`ColorLoss::SmoothL1`]; [`ColorLoss::L1`] preserves the historical
+    /// blade-volume behavior.
+    pub color_loss: ColorLoss,
     /// Adaptive densification: split cells with the largest accumulated
     /// position-gradient magnitude times cell radius. `None` disables
     /// densification entirely (geometry stays at its initial cell count).
@@ -1242,6 +1302,7 @@ impl Default for AppearanceFitConfig {
             pixel_batch: None,
             steps_per_view: 200,
             sh_degree: 0,
+            color_loss: ColorLoss::L1,
             densify: None,
             lr_schedule: LrSchedule::Cosine,
             lr_min_ratio: 0.01,
@@ -1320,6 +1381,91 @@ fn lr_at_step(config: &AppearanceFitConfig, t: usize, total: usize) -> f32 {
                 let cos_term = (std::f32::consts::PI * phase).cos();
                 lr_min + (lr_max - lr_min) * 0.5 * (1.0 + cos_term)
             }
+        }
+        LrSchedule::RadFoamV1 => radfoam_v1_lrs(t, total).density,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RadFoamV1Lrs {
+    density: f32,
+    position: f32,
+    sh_dc: f32,
+    sh_rest: f32,
+}
+
+fn radfoam_cosine_lr(
+    step: usize,
+    total: usize,
+    initial: f32,
+    final_lr: f32,
+    warmup: usize,
+    max_step: usize,
+) -> f32 {
+    if step == 0 {
+        return initial;
+    }
+    // Upstream updates the scheduler after each optimizer step. Consequently
+    // the declared initial rate is used at step zero and scheduler index zero
+    // is used at step one. Preserve that one-step lag for exact comparisons.
+    let scheduler_step = step - 1;
+    if warmup > 0 && scheduler_step < warmup {
+        return initial * scheduler_step as f32 / warmup as f32;
+    }
+    if scheduler_step > max_step || total == 0 || max_step <= warmup {
+        return 0.0;
+    }
+    let phase = ((scheduler_step - warmup) as f32 / (max_step - warmup) as f32).clamp(0.0, 1.0);
+    final_lr + 0.5 * (initial - final_lr) * (1.0 + (std::f32::consts::PI * phase).cos())
+}
+
+fn radfoam_v1_lrs(step: usize, total: usize) -> RadFoamV1Lrs {
+    let density_warmup = total / 10;
+    let sh_warmup = total / 5;
+    let position_end = total.saturating_mul(9) / 10;
+    RadFoamV1Lrs {
+        density: radfoam_cosine_lr(step, total, 0.1, 0.01, density_warmup, total),
+        position: radfoam_cosine_lr(step, total, 2.0e-4, 5.0e-6, 0, position_end),
+        sh_dc: radfoam_cosine_lr(step, total, 5.0e-3, 5.0e-4, 0, total),
+        // The optimizer declares the DC rate for every SH parameter before
+        // the first update, then switches higher-order terms to their 0.1×
+        // schedule. Match that reference quirk at step zero.
+        sh_rest: if step == 0 {
+            5.0e-3
+        } else {
+            radfoam_cosine_lr(step, total, 5.0e-4, 5.0e-5, sh_warmup, total)
+        },
+    }
+}
+
+fn configure_optimizer(
+    session: &mut mn::Session,
+    config: &AppearanceFitConfig,
+    step: usize,
+    total_steps: usize,
+) {
+    match config.lr_schedule {
+        LrSchedule::Constant | LrSchedule::Cosine => {
+            session.set_adam(
+                lr_at_step(config, step, total_steps),
+                config.adam_beta1,
+                config.adam_beta2,
+                config.adam_eps,
+            );
+        }
+        LrSchedule::RadFoamV1 => {
+            let rates = radfoam_v1_lrs(step, total_steps);
+            session.set_adam(1.0, config.adam_beta1, config.adam_beta2, 1.0e-15);
+            session.set_lr_multiplier("log_density", rates.density);
+            session.set_lr_multiplier("positions", rates.position);
+            for channel in ["sh_r_", "sh_g_", "sh_b_"] {
+                session.set_lr_multiplier(channel, rates.sh_rest);
+            }
+            for channel in ["sh_r_0", "sh_g_0", "sh_b_0"] {
+                session.set_lr_multiplier(channel, rates.sh_dc);
+            }
+            session.set_lr_multiplier("exposure_", 0.0);
+            session.set_lr_multiplier("log_radii", 0.0);
         }
     }
 }
@@ -2387,6 +2533,7 @@ fn build_train_session(
     pixel_batch: usize,
     max_steps: usize,
     sh_degree: usize,
+    color_loss: ColorLoss,
     num_views: usize,
     patch_size: usize,
     grad_loss_weight: f32,
@@ -2419,6 +2566,7 @@ fn build_train_session(
         softplus_beta,
         background_rgb,
         model.radii.is_some(),
+        color_loss,
     );
     let (mut session, _report) = mn::build(
         &g,
@@ -2695,7 +2843,9 @@ fn fit_appearance_pixel_batched(
     // only torn down and rebuilt when a split actually changes the cell
     // count.
     let densify = config.densify;
-    let geometry_trainable = config.position_lr_ratio > 0.0 || config.radius_lr_ratio > 0.0;
+    let geometry_trainable = config.position_lr_ratio > 0.0
+        || config.radius_lr_ratio > 0.0
+        || config.lr_schedule == LrSchedule::RadFoamV1;
     // Resume at the checkpoint's absolute step so the cosine LR and densify
     // schedule pick up where the interrupted run stopped.
     if steps_done > 0 {
@@ -2722,6 +2872,7 @@ fn fit_appearance_pixel_batched(
         pixel_batch,
         max_steps,
         sh_degree,
+        config.color_loss,
         views.len(),
         patch_size,
         grad_loss_weight,
@@ -2926,17 +3077,9 @@ fn fit_appearance_pixel_batched(
                 session.set_input("quantile_far", &quantile_far);
                 session.set_input("quantile_scale", &[config.quantile_weight * ramp]);
             }
-            // Apply LR schedule: re-set Adam every step with the
-            // current effective LR. `set_adam` is cheap (just updates
-            // a session field), and per-parameter LR multipliers (set
-            // once at build_train_session) survive across set_adam.
-            let lr_now = lr_at_step(&config, step, total_steps);
-            session.set_adam(
-                lr_now,
-                config.adam_beta1,
-                config.adam_beta2,
-                config.adam_eps,
-            );
+            // Reconfigure Adam and any parameter-specific multipliers for the
+            // current global step. This is a cheap session-field update.
+            configure_optimizer(&mut session, &config, step, total_steps);
             session.step();
             session.wait();
             let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
@@ -3068,6 +3211,7 @@ fn fit_appearance_pixel_batched(
                     pixel_batch,
                     max_steps,
                     sh_degree,
+                    config.color_loss,
                     views.len(),
                     patch_size,
                     grad_loss_weight,
@@ -3148,6 +3292,7 @@ fn fit_appearance_pixel_batched(
                     pixel_batch,
                     max_steps,
                     sh_degree,
+                    config.color_loss,
                     views.len(),
                     patch_size,
                     grad_loss_weight,
@@ -3247,6 +3392,35 @@ fn fit_appearance_pixel_batched(
 mod tests {
     use super::*;
     use crate::fit::try_init_gpu;
+
+    #[test]
+    fn smooth_l1_matches_pytorch_beta_one_definition() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping smooth_l1_matches_pytorch_beta_one_definition: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        let prediction = graph.input("prediction", &[4, 1]);
+        let target = graph.input("target", &[4, 1]);
+        let loss = smooth_l1_loss(&mut graph, prediction, target, 4);
+        graph.set_outputs(vec![loss]);
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Inference,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        session.set_input("prediction", &[0.0, 0.5, 2.0, -2.0]);
+        session.set_input("target", &[0.0; 4]);
+        session.step();
+        session.wait();
+        // Element losses: 0, 0.5*0.5², 2-0.5, 2-0.5.
+        let actual = session.read_output(1)[0];
+        let expected = (0.0 + 0.125 + 1.5 + 1.5) / 4.0;
+        assert!((actual - expected).abs() < 1.0e-6, "{actual} != {expected}");
+    }
 
     #[test]
     fn adam_state_roundtrip() {
@@ -3657,8 +3831,21 @@ mod tests {
             let max_steps = 4usize;
             let num_views = 5usize;
             let vg = build_volumetric_graph(
-                &mut g, n_cells, n_pixels, max_steps, sh_degree, num_views, 0, 0.0, 0.0, 0.0, 0.0,
-                0.0, [0.0; 3], false,
+                &mut g,
+                n_cells,
+                n_pixels,
+                max_steps,
+                sh_degree,
+                num_views,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                [0.0; 3],
+                false,
+                ColorLoss::L1,
             );
             assert_eq!(vg.sh_degree, sh_degree);
             assert_eq!(vg.n_cells, n_cells);
@@ -3681,7 +3868,21 @@ mod tests {
     fn build_volumetric_graph_constructs_weighted_tangent_path() {
         let mut graph = mn::Graph::new();
         let vg = build_volumetric_graph(
-            &mut graph, 16, 4, 3, 0, 2, 0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], true,
+            &mut graph,
+            16,
+            4,
+            3,
+            0,
+            2,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            true,
+            ColorLoss::L1,
         );
         assert!(vg.weighted_path.is_some());
     }
@@ -3703,7 +3904,21 @@ mod tests {
         let patch_size = 4usize;
         let n_pixels = patch_size * patch_size;
         let vg = build_volumetric_graph(
-            &mut g, 16, n_pixels, 4, 0, 2, patch_size, 0.2, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
+            &mut g,
+            16,
+            n_pixels,
+            4,
+            0,
+            2,
+            patch_size,
+            0.2,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            false,
+            ColorLoss::L1,
         );
         assert_eq!(vg.n_pixels, n_pixels);
     }
@@ -3751,6 +3966,33 @@ mod tests {
             at_mid > three_qtr,
             "mid {at_mid} should exceed 3qtr {three_qtr}"
         );
+    }
+
+    #[test]
+    fn radfoam_v1_parameter_schedule_matches_reference_boundaries() {
+        let at_zero = radfoam_v1_lrs(0, 20_000);
+        assert_eq!(at_zero.density, 0.1);
+        assert_eq!(at_zero.position, 2.0e-4);
+        assert_eq!(at_zero.sh_dc, 5.0e-3);
+        assert_eq!(at_zero.sh_rest, 5.0e-3);
+
+        let after_first_update = radfoam_v1_lrs(1, 20_000);
+        assert_eq!(after_first_update.density, 0.0);
+        assert_eq!(after_first_update.sh_rest, 0.0);
+
+        let density_warm = radfoam_v1_lrs(2_001, 20_000);
+        assert!((density_warm.density - 0.1).abs() < 1.0e-7);
+        let sh_warm = radfoam_v1_lrs(4_001, 20_000);
+        assert!((sh_warm.sh_rest - 5.0e-4).abs() < 1.0e-8);
+
+        let position_last = radfoam_v1_lrs(18_001, 20_000);
+        assert!((position_last.position - 5.0e-6).abs() < 1.0e-9);
+        assert_eq!(radfoam_v1_lrs(18_002, 20_000).position, 0.0);
+
+        let final_rates = radfoam_v1_lrs(20_001, 20_000);
+        assert!((final_rates.density - 0.01).abs() < 1.0e-7);
+        assert!((final_rates.sh_dc - 5.0e-4).abs() < 1.0e-8);
+        assert!((final_rates.sh_rest - 5.0e-5).abs() < 1.0e-9);
     }
 
     #[test]
@@ -3891,7 +4133,21 @@ mod tests {
 
         let mut g = mn::Graph::new();
         let _vg = build_volumetric_graph(
-            &mut g, n_cells, p, max_steps, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
+            &mut g,
+            n_cells,
+            p,
+            max_steps,
+            0,
+            1,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            false,
+            ColorLoss::L1,
         );
 
         let (mut session, _report) = mn::build(
@@ -3951,7 +4207,21 @@ mod tests {
         let n_cells = model.points.len();
         let mut graph = mn::Graph::new();
         build_volumetric_graph(
-            &mut graph, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], false,
+            &mut graph,
+            n_cells,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            false,
+            ColorLoss::L1,
         );
         let (mut session, _) = mn::build(
             &graph,
@@ -4047,7 +4317,21 @@ mod tests {
         let n_cells = model.points.len();
         let mut g = mn::Graph::new();
         let vg = build_volumetric_graph(
-            &mut g, n_cells, 1, 1, 0, 1, 0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], true,
+            &mut g,
+            n_cells,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            true,
+            ColorLoss::L1,
         );
         let dt_output = g.reshape(vg.dt_from_positions, &[1]);
         g.set_outputs(vec![dt_output]);
@@ -4122,6 +4406,7 @@ mod tests {
                 0.0,
                 background_rgb,
                 false,
+                ColorLoss::L1,
             );
             let (mut session, _) = mn::build(
                 &graph,
@@ -4183,6 +4468,7 @@ mod tests {
                 0.0,
                 [0.0; 3],
                 false,
+                ColorLoss::L1,
             );
             let (mut session, _) = mn::build(
                 &graph,
@@ -4247,6 +4533,7 @@ mod tests {
                 0.0,
                 [0.0; 3],
                 false,
+                ColorLoss::L1,
             );
             let (mut session, _) = mn::build(
                 &graph,

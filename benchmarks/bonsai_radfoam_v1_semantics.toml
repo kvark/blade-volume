@@ -1,0 +1,71 @@
+schema = 1
+name = "bonsai-radfoam-v1-semantics-v1"
+purpose = "Scaled semantic ablation against the 93c996f plateau; not a same-budget reference reproduction"
+reference_repository = "https://github.com/theialab/radfoam"
+reference_tag = "v1"
+reference_commit = "366e1a1b4349023b18e7867fabd6b734983f5c3c"
+dataset = "Mip-NeRF 360 / bonsai"
+dataset_path = "etc/data/bonsai-full"
+dataset_source = "https://huggingface.co/datasets/nvs-bench/mipnerf360"
+dataset_revision = "2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
+dataset_image_files = 292
+colmap_registered_images = 292
+ablation_against = "benchmarks/results/bonsai-full-partial-93c996f.toml"
+comparison_scope = "same scale and ray budget; initialization, color loss, background, and parameter schedule changed together"
+
+[split]
+protocol = "filename-sorted COLMAP order, every Nth held out"
+test_every = 8
+max_train_views = 255
+max_test_views = 8
+
+[model]
+backend = "radfoam"
+initialization = "radfoam-v1-scaled"
+initial_points = 50000
+target_points = 200000
+adjacency = "qhull-delaunay-exact"
+sh_degree = 3
+geometry_rebuild_every = 100
+densify_every = 500
+densify_warmup = 2000
+densify_until = 11000
+densify_fraction = 0.15
+prune = true
+
+[training]
+width = 128
+height = 128
+pixel_batch = 256
+steps_per_view = 80
+total_steps = 20400
+color_loss = "smooth-l1-beta-1-rgb-mean"
+lr_schedule = "radfoam-v1-parameter-specific"
+adam_epsilon = 1e-15
+max_steps = 256
+far_plane = 100.0
+background = "white"
+opacity_weight = 1.0
+distortion_weight = 0.0
+quantile_weight = 0.0001
+softplus_beta = 10.0
+sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
+densification_seed = "0xCAFE_F00D_DEAD_BEEF"
+initialization_seed = 42
+
+[execution]
+initial_segment_steps = 2000
+segment_steps = 1000
+memory_max_bytes = 4294967296
+memory_swap_max_bytes = 0
+
+[known_reference_differences]
+mixed_view_rays_per_step = false
+dynamic_topology_cadence = false
+cell_count_dependent_densification_cadence = false
+staged_native_resolution = false
+reference_cell_budget = false
+
+[result]
+status = "pending"
+required = ["git_commit", "dataset_revision", "gpu", "driver", "wall_seconds", "cells", "train_psnr", "test_psnr"]
