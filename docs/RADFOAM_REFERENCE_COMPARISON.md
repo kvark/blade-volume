@@ -124,19 +124,24 @@ yet sufficient evidence to adopt it: `DSCF5613.JPG` fell to 4.44 dB while the
 other held-out frames improved. The severe schedule loss explains the bundled
 regression and demonstrates step-to-ray-budget coupling at batch 256.
 
+Combining v1 initialization with white was not additive. The reloaded result
+reached 14.83 dB train / 14.74 dB held out: 0.24 dB higher train but 0.37 dB
+lower held-out PSNR than initialization alone. All held-out frames remained
+healthy, so this is a generalization tradeoff rather than another collapsed
+view. The selected scaled trajectory is therefore v1 initialization with the
+existing black/L1/cosine path.
+
 ## Next experiments
 
-1. Combine the two independently supported changes—v1 initialization and white
-   background—while retaining L1 and the existing cosine optimizer.
-2. If that combination remains positive, extend its serialized curve beyond
-   step 2,000 before spending on a larger multi-view batch.
-3. Diagnose the Smooth-L1 single-view collapse, then retry it on the winning
+1. Extend the v1-initialization/black/L1/cosine serialized curve beyond step
+   2,000 using its lossless optimizer and RNG checkpoint.
+2. Diagnose the Smooth-L1 single-view collapse, then retry it on the winning
    initialization/background only if the failure is understood.
-4. Compare a batch-aware schedule by cumulative rays as well as updates; do not
+3. Compare a batch-aware schedule by cumulative rays as well as updates; do not
    use the exact v1 step schedule for batch 256.
-5. Add reference dynamic topology and cell-count-dependent densification only
+4. Add reference dynamic topology and cell-count-dependent densification only
    after the scaled appearance/initialization direction is positive.
-6. Move toward 190,951→2,097,152 cells and the staged
+5. Move toward 190,951→2,097,152 cells and the staged
    780×520→1559×1039 image schedule only after that direction survives a larger
    batch.
 

@@ -130,6 +130,10 @@ At the audited revision:
   exact v1 step schedule loses 4.58 dB at batch 256, confirming that its warmup
   is coupled to the official one-million-ray updates. The next candidate keeps
   the stable L1/cosine optimizer and combines only v1 initialization with white.
+- That interaction is not additive: initialization plus white reaches 14.83 dB
+  train / 14.74 dB held out, versus 14.59 / 15.11 dB for initialization alone.
+  The selected scaled trajectory is therefore v1 initialization with the
+  existing black/L1/cosine path, resumed from its lossless step-2,000 state.
 
 ### Remaining PowerFoam gaps
 

@@ -99,3 +99,10 @@ confirming that its update-indexed warmup is not transferable to a 256-ray
 batch. The next controlled combination is therefore v1 initialization plus
 white on the existing L1/cosine optimizer; Smooth-L1 and the v1 schedule remain
 excluded pending larger-batch evidence.
+
+That two-factor interaction is recorded in
+`results/bonsai-radfoam-v1-init-white-step2000-8bbc167.toml`. It reached 14.83
+dB train / 14.74 dB held out after reload. Relative to initialization alone,
+white added 0.24 dB train but lost 0.37 dB held out. The robust scaled winner is
+therefore v1 initialization alone with the existing black/L1/cosine training
+path; its lossless step-2,000 checkpoint is the curve selected for continuation.
