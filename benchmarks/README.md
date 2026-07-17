@@ -68,9 +68,13 @@ Fetch the pinned 292-image scene with
 `bonsai_full_quality.toml` for this data; it deliberately remains an internal
 budget rather than claiming published-method comparability.
 
-The first full-dataset attempt is recorded as
-`results/bonsai-full-partial-93c996f.toml`. It deliberately sets
-`benchmark_complete = false`: training stopped at step 10,000 of 20,400 after
+Raw models, checkpoints, telemetry, and result snapshots belong under `target`
+or the ignored `benchmarks/results` directory. Accepted conclusions are
+summarized here with their source commit; the protocol manifests remain the
+tracked machine-readable inputs.
+
+The first full-dataset attempt, from commit `93c996f`, deliberately stopped at
+step 10,000 of 20,400 after
 held-out PSNR stayed flat through three evaluations. Its final metrics do come
 from a freshly reloaded PLY and are useful diagnostic evidence, but they must
 not be presented as a completed manifest result or a reference comparison.
@@ -79,8 +83,7 @@ not be presented as a completed manifest result or a reference comparison.
 It keeps the plateau run's 50K→200K cells, 128×128 resolution, split, batch,
 and global step budget, but opts into the official v1 initialization
 distribution, Smooth-L1 RGB loss, white background, and parameter-specific
-learning rates. Its step-2,000 decision point is recorded in
-`results/bonsai-radfoam-v1-semantics-step2000-86239aa.toml`. The freshly
+learning rates. At its step-2,000 decision point on commit `86239aa`, the freshly
 reloaded model reached 10.83 dB train / 12.37 dB held out, versus 13.08 / 13.08
 dB for the old scaled protocol at the same step, so the bundled run was stopped
 instead of spending the remaining budget.
@@ -94,8 +97,8 @@ rays. Only after initialization, loss, background, and parameter scheduling
 have independent curves should they be recombined or used to justify a larger
 batch/reference-scale attempt.
 
-The first step-2,000 one-factor matrix is recorded in four additional result
-files. Against the 13.08 / 13.08 dB train/held-out baseline, v1 initialization
+The first step-2,000 one-factor matrix was run from commit `71c8946`. Against
+the 13.08 / 13.08 dB train/held-out baseline, v1 initialization
 alone reached 14.59 / 15.11 dB, white alone reached 13.64 / 13.53 dB, and
 Smooth-L1 alone reached 13.40 / 13.36 dB. Smooth-L1 nevertheless collapsed one
 held-out frame to 4.44 dB. The v1 schedule alone reached only 8.23 / 8.50 dB,
@@ -104,34 +107,30 @@ batch. The next controlled combination is therefore v1 initialization plus
 white on the existing L1/cosine optimizer; Smooth-L1 and the v1 schedule remain
 excluded pending larger-batch evidence.
 
-That two-factor interaction is recorded in
-`results/bonsai-radfoam-v1-init-white-step2000-8bbc167.toml`. It reached 14.83
+That two-factor interaction on commit `8bbc167` reached 14.83
 dB train / 14.74 dB held out after reload. Relative to initialization alone,
 white added 0.24 dB train but lost 0.37 dB held out. The robust scaled winner is
 therefore v1 initialization alone with the existing black/L1/cosine training
 path; its lossless step-2,000 checkpoint is the curve selected for continuation.
 
-That continuation is recorded in
-`results/bonsai-radfoam-v1-initialization-curve-step4000-01e68e3.toml`. Reloaded
-held-out PSNR progresses 15.11 → 15.39 → 15.58 dB at steps 2K/3K/4K, while
+Through commit `01e68e3`, reloaded held-out PSNR progressed
+15.11 → 15.39 → 15.58 dB at steps 2K/3K/4K, while
 cells grow 57,348 → 75,445 → 99,262. The advantage over the historical
 scaled curve narrows from +2.03 to +1.25 to +0.35 dB. The last 1K segment takes
 1,021 seconds for only +0.19 dB held out, so this diagnostic curve stops at 4K;
 it is not a completed manifest or reference result.
 
 `train_colmap --contribution-views N` is an experimental scaling control for
-the prune/densify oracle. `0` remains the exhaustive default. The first
-same-checkpoint comparison is recorded in
-`results/bonsai-contribution-views32-step4500-ee63217.toml`: 32 stratified,
+the prune/densify oracle. `0` remains the exhaustive default. In the first
+same-checkpoint comparison on commit `ee63217`, 32 stratified,
 rotating views cut the 4K→4.5K segment from 635 to 299 seconds (2.12×), while
 fresh-PLY held-out PSNR changed from 15.69 to 15.66 dB. It retained 1,223 fewer
 cells and produced a different artifact/topology, so it has not met the
 decision-agreement gate and must not replace exhaustive scans by default.
 
 `train_colmap --lr-groups radfoam-v1-relative` separates the official initial
-parameter-rate ratios from the official update-indexed time curves. Its first
-isolated result is
-`results/bonsai-radfoam-v1-relative-groups-step2000-a91766b.toml`. Under the
+parameter-rate ratios from the official update-indexed time curves. In its
+first isolated result on commit `a91766b`, under the
 winning v1-initialization/black/L1/cosine setup it reached 14.72 dB train /
 14.49 dB held out, versus 14.59 / 15.11 dB with legacy groups. The +0.13 dB
 train and -0.62 dB held-out change rejects it as the 256-ray default while
@@ -139,18 +138,17 @@ preserving it as a larger-batch reference control.
 
 `train_colmap --geometry-rebuild-schedule radfoam-v1` reproduces the reference
 1, 3, 5, ... 99, 101 topology-update periods and persists its phase in the v3
-trainer-state sidecar. The clean isolated comparison is
-`results/bonsai-radfoam-v1-topology-cadence-step2000-e50e965.toml`. Contribution
-view and pixel phase are keyed by absolute densification round in both runs.
+trainer-state sidecar. The clean isolated comparison on commit `e50e965` keys
+contribution view and pixel phases by absolute densification round in both
+runs.
 Dynamic cadence used 44 rather than 20 scheduled updates, cost 24 seconds
 (+3.7%), and changed train/held-out PSNR from 14.60 / 15.13 to 14.58 / 15.05
 dB. Fixed-100 therefore remains the scaled default.
 
 `train_colmap --densify-schedule radfoam-v1` implements the reference
 cell-count-dependent growth interval independently from topology cadence. The
-two-round protocol and result are recorded in
-`bonsai_densification_cadence.toml` and
-`results/bonsai-radfoam-v1-densification-cadence-step2805-11a7118.toml`.
+two-round protocol is recorded in `bonsai_densification_cadence.toml`; the
+result comes from commit `11a7118`.
 Fixed-500 grew at steps 2,000 and 2,500; the dynamic arm used the identical
 first contribution round and delayed the second growth to step 2,517. Both
 ended with 66,054 cells after the same 718,080 sampled training rays. Dynamic
@@ -160,7 +158,7 @@ about 481 MB with zero swap, OOM, or GPU faults. Fixed cadence remains the
 scaled default.
 
 The first larger-batch gate is defined in `bonsai_batch1024_optimizer.toml`
-and recorded in `results/bonsai-batch1024-optimizer-step500-6877bea.toml`.
+and was run on commit `6877bea`.
 All arms process 512,000 sampled training rays and use the same exhaustive
 round-0 contribution sample. With the original update-indexed 20,400-step
 horizon and fixed-100 topology cadence, the exact v1 schedule reaches only
@@ -177,9 +175,8 @@ training scopes peak between 409 and 420 MB under a 4 GiB, zero-swap cgroup and
 record no pressure, OOM, truncation, or GPU-fault event.
 
 The two-round/native-aspect follow-up is defined in
-`bonsai_batch1024_native_aspect.toml` and recorded in
-`results/bonsai-batch1024-native-aspect-step625-07ad939.toml`. The lossless
-square continuation reaches 66,078 cells and 15.55 / 15.29 dB at 128×128;
+`bonsai_batch1024_native_aspect.toml` and was run on commit `07ad939`. The
+lossless square continuation reaches 66,078 cells and 15.55 / 15.29 dB at 128×128;
 held-out quality is 0.04 dB below its step-500 value. On a common fresh-Ply
 192×128 evaluation, square training reaches 15.56 / 15.28 dB while native 3:2
 training reaches 15.42 / 15.05 dB, a -0.14/-0.23 dB change. Native training
@@ -190,9 +187,8 @@ the full calibrated camera domain at either output shape, so 128×128 is kept
 as the efficient scaled protocol; it is not a crop of the source field.
 
 The corrected two-round same-ray comparison is defined in
-`bonsai_batch_same_ray.toml` and recorded in
-`results/bonsai-same-ray-batch-step640k-945b931.toml`. At 640,000 optimizer
-rays, 25 topology refreshes, and two exhaustive growth rounds, batch 256
+`bonsai_batch_same_ray.toml` and was run on commit `945b931`. At 640,000
+optimizer rays, 25 topology refreshes, and two exhaustive growth rounds, batch 256
 reaches 65,801 cells and 15.32 / 15.12 dB train/held out. Ray-normalized batch
 1,024 reaches 66,078 cells and 15.55 / 15.29 dB: +0.23/+0.17 dB. The matched
 continuation scopes take 391 and 384 seconds and peak at 424 and 451 MB,
@@ -201,8 +197,8 @@ respectively, with zero swap, pressure, OOM, truncation, or GPU faults. Batch
 gain still requires a third boundary or another scene before changing defaults.
 
 The third-round decision protocol is
-`bonsai_batch_same_ray_round3.toml`, with results in
-`results/bonsai-same-ray-batch-step768k-ad697dd.toml`. At 768,000 optimizer
+`bonsai_batch_same_ray_round3.toml`; its result comes from commit `ad697dd`.
+At 768,000 optimizer
 rays and three growth rounds, batch 256 reaches 75,452 cells and 15.41 / 14.76
 dB train/held out. Ray-normalized batch 1,024 reaches 75,969 cells and 16.08 /
 15.66 dB: +0.67/+0.90 dB, improving seven of eight test frames. The matched

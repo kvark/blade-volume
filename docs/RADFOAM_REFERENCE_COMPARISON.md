@@ -119,8 +119,8 @@ schedule together. It was stopped at the planned step-2,000 decision point:
 The serialized model reproduced the live metrics exactly. Training peaked at
 624,214,016 bytes and evaluation at 593,547,264 bytes in separate 4 GiB,
 zero-swap cgroups, with no OOM, memory-pressure, or GPU-fault marker. The
-versioned result is
-[`bonsai-radfoam-v1-semantics-step2000-86239aa.toml`](../benchmarks/results/bonsai-radfoam-v1-semantics-step2000-86239aa.toml).
+protocol is
+[`bonsai_radfoam_v1_semantics.toml`](../benchmarks/bonsai_radfoam_v1_semantics.toml).
 
 This is a negative bundled ablation, not a judgment on the v1 semantics. The
 run had consumed only 512,000 rays at the decision point; 2,000 official
@@ -194,8 +194,8 @@ of worse generalization, not under-training. The option remains available for
 larger-batch experiments, but the legacy groups remain the scaled winner. The
 run took 645 seconds and peaked at 615,665,664 bytes in a 4 GiB cgroup; its
 separate evaluation peaked at 599,007,232 bytes. Both recorded zero swap,
-pressure, OOM, or GPU faults. The versioned result is
-[`bonsai-radfoam-v1-relative-groups-step2000-a91766b.toml`](../benchmarks/results/bonsai-radfoam-v1-relative-groups-step2000-a91766b.toml).
+pressure, OOM, or GPU faults. The result is summarized in the
+[benchmark ledger](../benchmarks/README.md).
 
 The clean topology-cadence isolation is likewise neutral-to-negative at this
 scale. Both runs use the selected initialization/black/L1/cosine configuration,
@@ -208,8 +208,8 @@ Fresh-Ply evaluation reproduces all four scores exactly. Both 4 GiB scopes
 record zero swap, pressure, OOM, or GPU faults; their raw memory peaks are not
 directly comparable because only the fixed run compiled the release binary.
 This rejects dynamic cadence as the 256-ray default, not as part of a future
-reference-scale protocol. The versioned result is
-[`bonsai-radfoam-v1-topology-cadence-step2000-e50e965.toml`](../benchmarks/results/bonsai-radfoam-v1-topology-cadence-step2000-e50e965.toml).
+reference-scale protocol. The result is summarized in the
+[benchmark ledger](../benchmarks/README.md).
 
 The independently isolated densification cadence is also negative at the
 256-ray scale. Fixed-500 and `radfoam-v1` use identical data, initialization,
@@ -221,10 +221,9 @@ reaches 16.11 dB train / 16.18 dB held out, versus 16.34 / 16.25 dB for fixed
 cadence. It takes 1,087 rather than 1,101 seconds, a 1.2% difference that does
 not compensate for the quality loss. Fresh-Ply evaluation reproduces the
 scores exactly. Both 4 GiB scopes peak near 481 MB and record zero swap,
-pressure, OOM, or GPU faults. The dedicated protocol and versioned result are
+pressure, OOM, or GPU faults. The dedicated protocol is
 [`bonsai_densification_cadence.toml`](../benchmarks/bonsai_densification_cadence.toml)
-and
-[`bonsai-radfoam-v1-densification-cadence-step2805-11a7118.toml`](../benchmarks/results/bonsai-radfoam-v1-densification-cadence-step2805-11a7118.toml).
+with metrics summarized in the [benchmark ledger](../benchmarks/README.md).
 This retains the dynamic policy as a reference-scale control while selecting
 fixed cadence for the current scaled protocol.
 
@@ -250,11 +249,9 @@ refreshes as the corrected batch-256 fixed-cadence checkpoint. The result is
 four arms report zero truncated rays, use fresh serialized PLY evaluation,
 peak between 409 and 420 MB in 4 GiB zero-swap scopes, and record no pressure,
 OOM, or GPU fault. This selects ray-normalized larger batching for a longer
-confirmation without changing the current default. The protocol and result
-are
+confirmation without changing the current default. The protocol is
 [`bonsai_batch1024_optimizer.toml`](../benchmarks/bonsai_batch1024_optimizer.toml)
-and
-[`bonsai-batch1024-optimizer-step500-6877bea.toml`](../benchmarks/results/bonsai-batch1024-optimizer-step500-6877bea.toml).
+with metrics summarized in the [benchmark ledger](../benchmarks/README.md).
 
 The two-round/native-aspect gate does not justify increasing image area. The
 losslessly resumed 128×128 arm grows again at step 625 to 66,078 cells and
@@ -272,10 +269,9 @@ zero truncation. Training peaks are 519 and 451 MB, and both zero-swap scopes
 record no pressure, OOM, or GPU fault. Because rectification maps the full
 calibrated source domain to either output grid and ray directions use normalized
 pixel coordinates with the original camera field of view, square training is
-lower resolution rather than a crop. The protocol and result are
+lower resolution rather than a crop. The protocol is
 [`bonsai_batch1024_native_aspect.toml`](../benchmarks/bonsai_batch1024_native_aspect.toml)
-and
-[`bonsai-batch1024-native-aspect-step625-07ad939.toml`](../benchmarks/results/bonsai-batch1024-native-aspect-step625-07ad939.toml).
+with metrics summarized in the [benchmark ledger](../benchmarks/README.md).
 
 The corrected same-ray batch comparison confirms that the larger-batch signal
 survives the second boundary. Both arms use 640,000 optimizer rays, 25 exact
@@ -288,9 +284,9 @@ truncation, swap, pressure, OOM, or GPU faults. The larger batch prunes 26
 rather than 138 cells in round 1, so its gradients also change the learned
 contribution distribution. Per-frame deltas remain mixed, however, and the
 0.17 dB mean is not enough to change defaults without a third boundary or a
-second scene. The protocol and result are
+second scene. The protocol is
 [`bonsai_batch_same_ray.toml`](../benchmarks/bonsai_batch_same_ray.toml) and
-[`bonsai-same-ray-batch-step640k-945b931.toml`](../benchmarks/results/bonsai-same-ray-batch-step640k-945b931.toml).
+the metrics are summarized in the [benchmark ledger](../benchmarks/README.md).
 
 Round 3 turns the modest signal into a clear selection. At 768,000 optimizer
 rays, 30 exact topology refreshes, and three exhaustive growth rounds, batch
@@ -305,10 +301,9 @@ Both 4 GiB zero-swap scopes record no pressure, OOM, or GPU fault, and fresh
 PLY evaluation reproduces every metric. This passes the Bonsai gate and
 selects batch 1,024 for the scaled trainer. The CLI now uses 1,024 when
 `--pixel-batch` is omitted while preserving every explicit override. The
-protocol and result are
+protocol is
 [`bonsai_batch_same_ray_round3.toml`](../benchmarks/bonsai_batch_same_ray_round3.toml)
-and
-[`bonsai-same-ray-batch-step768k-ad697dd.toml`](../benchmarks/results/bonsai-same-ray-batch-step768k-ad697dd.toml).
+with metrics summarized in the [benchmark ledger](../benchmarks/README.md).
 
 ## Next experiments
 

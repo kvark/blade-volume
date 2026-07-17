@@ -10,7 +10,8 @@ dataset_source = "https://huggingface.co/datasets/nvs-bench/mipnerf360"
 dataset_revision = "2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
 dataset_image_files = 292
 colmap_registered_images = 292
-ablation_against = "benchmarks/results/bonsai-full-partial-93c996f.toml"
+baseline_manifest = "benchmarks/bonsai_full_quality.toml"
+baseline_summary = "benchmarks/README.md"
 comparison_scope = "same scale and ray budget; initialization, color loss, background, and parameter schedule changed together"
 
 [split]

@@ -1,4 +1,5 @@
 /target
+/benchmarks/results
 /etc/data
 /blade-volume-test/data/police_out.png
 /.claude
