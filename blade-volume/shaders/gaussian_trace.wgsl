@@ -42,7 +42,7 @@ fn gaussian_eval_sh(gs: Gaussian, dir: vec3<f32>) -> vec3<f32> {
     for (var i = 0u; i < MAX_SH_COMPONENTS; i += 1u) {
         coeffs[i] = gs.harmonics[i].xyz;
     }
-    return 0.5 + sh_eval_color(coeffs, dir, gs_get_sh_degree());
+    return max(vec3<f32>(0.0), 0.5 + sh_eval_color(coeffs, dir, gs_get_sh_degree()));
 }
 
 // Evaluate the Gaussian's maximum-response depth and reject conservative

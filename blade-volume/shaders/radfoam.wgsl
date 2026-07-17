@@ -80,7 +80,7 @@ fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32> {
             g_attributes[offset + 2u]
         );
     }
-    return 0.5 + sh_eval_color(coeffs, dir, g_params.sh_degree);
+    return max(vec3<f32>(0.0), 0.5 + sh_eval_color(coeffs, dir, g_params.sh_degree));
 }
 
 fn rf_adjacency_begin(idx: u32) -> u32 {

@@ -1005,7 +1005,10 @@ fn channel_pixel_sh(
 
     let bias = g.constant(vec![0.5; p * l], &[p, l]);
     let biased = g.add(color_total, bias);
-    let weighted = g.mul(weight, biased); // [P, L]
+    // Match RadFoam's per-cell `max(rgb, 0)` before volumetric
+    // compositing. Clamping only the accumulated pixel is not equivalent.
+    let non_negative = g.relu(biased);
+    let weighted = g.mul(weight, non_negative); // [P, L]
     g.matmul(weighted, ones_l1) // [P, L] @ [L, 1] = [P, 1]
 }
 
@@ -3947,6 +3950,48 @@ mod tests {
         let actual = session.read_output(1)[0];
         let expected = (0.0 + 0.125 + 1.5 + 1.5) / 4.0;
         assert!((actual - expected).abs() < 1.0e-6, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn sh_color_graph_clamps_negative_values_before_weighting() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping sh_color_graph_clamps_negative_values_before_weighting: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        let cell_indices = graph.input_u32("cell_indices", &[1]);
+        let weight = graph.input("weight", &[1, 1]);
+        let sh = graph.parameter("sh", &[1, 1]);
+        let ones_l1 = graph.constant(vec![1.0], &[1, 1]);
+        let ones_1l = graph.constant(vec![1.0], &[1, 1]);
+        let pixel = channel_pixel_sh(
+            &mut graph,
+            cell_indices,
+            &[sh],
+            &[],
+            weight,
+            ones_l1,
+            ones_1l,
+            1,
+            1,
+        );
+        graph.set_outputs(vec![pixel]);
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Inference,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        session.set_parameter("sh", &[-4.0]);
+        session.set_input_u32("cell_indices", &[0]);
+        session.set_input("weight", &[1.0]);
+        session.step();
+        session.wait();
+
+        let actual = session.read_output(1)[0];
+        assert!(actual.abs() < 1.0e-6, "clamped color was {actual}");
     }
 
     #[test]
