@@ -1,0 +1,112 @@
+schema = 1
+name = "room-official-radfoam-v1-prefix5000"
+purpose = "Pin an executed official RadFoam-v1 Room prefix and cross-render its serialized PLY through Blade"
+dataset = "Mip-NeRF 360 / room"
+dataset_path = "etc/data/room-full"
+dataset_source = "https://storage.googleapis.com/gresearch/refraw360/360_v2.zip"
+dataset_mirror = "https://huggingface.co/datasets/nvs-bench/mipnerf360"
+dataset_mirror_revision = "2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
+dataset_image_files = 311
+colmap_registered_images = 311
+dataset_validation = "images_2 sample and all sparse binaries CRC-matched to the official archive; images_4 extracted from the official archive"
+
+[reference]
+repository = "https://github.com/theialab/radfoam"
+tag = "v1"
+commit = "366e1a1b4349023b18e7867fabd6b734983f5c3c"
+config = "configs/mipnerf360_indoor.yaml"
+local_checkout = "/tmp/radfoam-reference-v1"
+
+[reference_environment]
+rootfs = "Ubuntu 24.04.4"
+python = "3.12"
+pytorch = "2.9.1+cu130"
+cuda_toolkit = "13.1"
+compiler = "GCC 13"
+gpu = "NVIDIA GeForce RTX 5070 12GB"
+driver = "595.71.05"
+compatibility_edits = [
+    "allow a CUDA 13.1 toolkit with PyTorch CUDA 13.0 within the same major version",
+    "replace CUDA-13-removed CUB transform/counting/discard iterators with Thrust equivalents",
+    "stop-only RADFOAM_STOP_AFTER hook after update 4999 without changing the 20000-update schedules",
+]
+
+[protocol]
+split = "filename-sorted, every eighth held out"
+train_views = 272
+test_views = 39
+optimizer_batch_rays = 1000000
+optimizer_updates_total = 20000
+downsample = [4, 2]
+downsample_iterations = [0, 5000]
+train_resolution_prefix = [779, 519]
+test_resolution = [1557, 1038]
+initial_sparse_samples = 101364
+initial_broad_samples = 5000
+target_cells = 2097152
+sh_degree = 3
+background = "white"
+color_loss = "smooth-l1-beta-1"
+
+[full_attempt]
+status = "cgroup-oom-at-update-5000-resolution-reload"
+optimizer_updates_completed = 5000
+cells_at_boundary = 735351
+periodic_test_psnr = 30.157621
+memory_max_bytes = 34359738368
+last_sampled_memory_bytes = 27226824704
+sampled_gpu_memory_mib = 7297
+serialized_model = false
+artifact_path = "target/audit-runs/radfoam-v1-room-366e1a1"
+
+[prefix_result]
+status = "completed"
+optimizer_updates = 5000
+optimizer_rays = 5000000000
+cells = 735103
+directed_adjacency_entries = 11185482
+test_views = 39
+test_width = 1557
+test_height = 1038
+test_psnr = 30.023897171020508
+wall_seconds = 854.978
+memory_peak_bytes = 10280112128
+sampled_gpu_memory_peak_mib = 7133
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+ply_bytes = 193969327
+model_pt_bytes = 248268733
+artifact_path = "target/audit-runs/radfoam-v1-room-prefix5000-366e1a1"
+
+[blade_cross_render]
+split = "same 39 every-eighth held-out views"
+resolution = [1557, 1038]
+max_steps = 1024
+background = "white"
+fresh_ply_reload = true
+before_commit = "bcf8429"
+before_test_psnr = 28.97
+fixed_commit = "00de721"
+fixed_test_psnr = 29.59
+fixed_delta_from_upstream = -0.43
+fixed_wall_seconds = 306.32
+fixed_max_rss_kib = 990828
+fixed_cgroup_memory_peak_bytes = 1034031104
+truncated_rays = 0
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+
+[result]
+required = [
+    "reference.commit",
+    "prefix_result.optimizer_updates",
+    "prefix_result.optimizer_rays",
+    "prefix_result.cells",
+    "prefix_result.test_psnr",
+    "prefix_result.wall_seconds",
+    "prefix_result.memory_peak_bytes",
+    "blade_cross_render.fixed_commit",
+    "blade_cross_render.fixed_test_psnr",
+]

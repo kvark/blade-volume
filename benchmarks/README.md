@@ -224,3 +224,39 @@ eight test frames. Fresh-PLY reload reproduces every metric. The arms take
 1495.5 and 1484.5 seconds and peak at 494 and 531 MiB respectively; both report
 zero swap, pressure, OOM, truncation, or GPU faults. Room therefore confirms
 the batch-1,024 direction rather than exposing a Bonsai-only result.
+
+The executed official baseline is
+[`room_radfoam_v1_reference.toml`](room_radfoam_v1_reference.toml). The exact
+first 5,000 updates of RadFoam v1 on Room process five billion mixed-view rays,
+serialize 735,103 cells with 11,185,482 directed edges, and reach 30.0239 dB on
+all 39 held-out views at 1,557×1,038. The run takes 14m 14.978s, peaks at
+10,280,112,128 bytes of host memory and 7,133 MiB sampled GPU memory, and has
+zero swap, pressure, OOM, or GPU fault. An unchanged full run is not feasible
+on this host: switching its cached training rays from downsample 4 to 2 at
+update 5,000 exceeds a 32 GiB cgroup.
+
+Blade directly loads the official PLY. Commit `00de721` fixes the missing
+per-cell nonnegative SH clamp in the CPU renderer, standalone and scene WGSL,
+Gaussian WGSL, and differentiable training graph. The identical 39-view
+cross-render improves from 28.97 to 29.59 dB, leaving a 0.43 dB mean gap to
+upstream and passing the renderer-parity gate. Models trained before that
+commit retain historical metrics; they must be retrained before their quality
+is compared under the corrected runtime semantics.
+
+That controlled retrain is recorded without replacing the historical result in
+[`room_batch_same_ray_round3.toml`](room_batch_same_ray_round3.toml). The
+identical selected batch-1,024 protocol at commit `00de721` produces 75,809
+cells and 1,132,150 directed edges; fresh-Ply evaluation reaches 19.02 dB train
+/ 18.84 dB held out, +0.52/+0.61 dB over the originally published result. The
+old cloud reaches only 17.79 / 17.37 dB when evaluated under the corrected
+renderer, confirming that old and new models cannot be compared without
+retraining. The new run takes 24m 0.142s, peaks at 543,166,464 host bytes and
+551 MiB sampled GPU memory, and records zero truncation, swap, pressure, OOM,
+or GPU faults. Its ignored raw artifact is
+`target/audit-runs/room-batch1024-step750-00de721`; the `comparisons/` directory
+contains the eight selected held-out render comparisons. An all-39-view
+18.44 dB evaluation is retained only as a coverage diagnostic because the
+bounded protocol trains on 255 views and selects the first eight held-out
+views, leaving the end of the capture under-covered. The selected comparison
+PNGs are recognizable but still have severe cell/color fragmentation and lose
+fine room structure; this is a scaling baseline, not viewer-ready quality.

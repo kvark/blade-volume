@@ -1,6 +1,6 @@
 # RadFoam v1 reference comparison
 
-Date: 2026-07-16
+Date: 2026-07-17
 
 This comparison pins the official [`theialab/radfoam` v1
 tag](https://github.com/theialab/radfoam/tree/366e1a1b4349023b18e7867fabd6b734983f5c3c)
@@ -13,15 +13,26 @@ baseline.
 
 ## Main conclusion
 
-The 17.50 dB train / 16.13 dB held-out blade-volume result is not a failed
-reproduction of RadFoam. It is a much smaller plumbing and scaling experiment.
-At the step-10,000 stopping point it had processed 2.56 million sampled rays;
-official v1 processes one million mixed-view rays per optimizer step, or about
-20 billion rays over its run. The Rust run also used one tenth as many final
-cells, a square low-resolution image, a different loss/background, different
-initialization, and a shared optimizer schedule. Its plateau says that this
-particular low-budget protocol is exhausted, not that point-cloud volumetric
-geometry is exhausted.
+The representation is worth pursuing. An exact official-v1 Room run reaches
+30.02 dB on all 39 held-out views after the first 5,000 of 20,000 optimizer
+updates, with 735,103 cells. This is direct evidence that a cloud-only
+Voronoi-volume representation can reconstruct a difficult real scene well;
+the earlier Rust plateau does not reject the geometry premise.
+
+The current Rust trainer is still a much smaller scaling experiment. Its
+selected Room protocol processes 768,000 sampled optimizer rays and reaches
+75,809 cells and 18.84 dB on its selected eight held-out views, while the
+serialized official prefix has processed five billion mixed-view rays and has
+nearly ten times as many cells. Resolution, split coverage, loss, background,
+initialization, and optimizer schedules also differ. These scores are therefore
+diagnostics, not an apples-to-apples trainer ranking.
+
+Renderer compatibility is now separately established. Loading the official
+PLY directly in Blade and evaluating the same full-resolution split reaches
+29.59 dB, 0.43 dB below the upstream renderer. Before correcting Blade's
+missing per-cell nonnegative SH clamp, the same model reached 28.97 dB. The
+remaining Stage 2 risk is consequently training scale and protocol efficiency,
+not basic PLY, camera, SH, or volumetric-renderer compatibility.
 
 ## Protocol differences
 
@@ -59,6 +70,72 @@ The upstream loop updates its scheduler after each optimizer step. Therefore
 step zero uses each parameter group's declared rate, step one uses scheduler
 index zero, and the density/higher-SH rates are zero for that second update.
 The Rust `radfoam-v1` schedule deliberately preserves this one-step quirk.
+
+## Official Room execution and renderer parity
+
+The reference run uses the official Mip-NeRF-360 Room images and sparse COLMAP
+model. Checksums of the local `images_2` tier and all three sparse binary files
+were compared with the official archive; the `images_4` training tier was
+extracted from that archive. Official v1 holds out every eighth
+filename-sorted image, trains at downsample 4 through update 4,999, switches to
+downsample 2 at update 5,000, and evaluates all 39 held-out images at
+1,557×1,038.
+
+The first exact 20,000-update attempt reached update 4,999, approximately
+735,351 cells, and a periodic 30.16 dB held-out result. At update 5,000 the
+upstream loader replaced its cached downsample-4 rays with all downsample-2
+rays. Host memory rose from about 9 GiB to the 32 GiB cgroup limit between
+one-second samples and the kernel killed the isolated scope. The process had
+also reached 7,297 MiB of the 12 GiB GPU. No model was serialized because
+upstream saves only after training. This is a bounded resource failure, not a
+quality result, and retrying the unchanged loader on this machine is not
+responsible.
+
+A second run retained the original 20,000-update schedules but used a stop-only
+hook immediately after update 4,999, before the high-resolution reload. It
+serialized the exact first-5,000-update prefix:
+
+| Measurement | Official v1 prefix |
+| --- | ---: |
+| Optimizer rays | 5,000,000,000 |
+| Cells | 735,103 |
+| Directed adjacency entries | 11,185,482 |
+| Held-out views / resolution | 39 / 1,557×1,038 |
+| Upstream held-out PSNR | 30.0239 dB |
+| Wall time | 14m 14.978s |
+| Host-memory peak | 10,280,112,128 bytes |
+| Sampled GPU-memory peak | 7,133 MiB |
+
+The 12 GiB run completed with zero swap, memory-pressure, OOM, or GPU-fault
+events. Repeating the first prefix was not bit deterministic: the failed full
+attempt and serialized prefix differed by 248 cells and about 0.13 dB at the
+boundary despite the upstream seeds. Reference comparisons should therefore
+retain run-to-run variance rather than imply exact CUDA determinism.
+
+The serialized PLY is directly compatible with `PointCloudModel`. A
+full-resolution CPU cross-render over the identical 39 views gives:
+
+| Blade rendering of official PLY | Mean PSNR | Delta vs upstream |
+| --- | ---: | ---: |
+| Before per-cell SH clamp | 28.97 dB | -1.05 dB |
+| Corrected renderer (`00de721`) | 29.59 dB | -0.43 dB |
+
+The corrected run takes 5m 6s, peaks below 1 GiB RSS, and has no truncated-ray,
+swap, pressure, OOM, or fault report. The remaining per-view delta ranges from
+-0.07 to -1.50 dB and is systematic across all views. Remaining implementation
+differences include upstream's half-precision cached neighbor offsets and its
+boundary/terminal-cell behavior; Blade evaluates faces from full-precision
+sites. Their individual contributions have not been isolated, so the residual
+is documented rather than attributed to one mechanism or hidden by changing
+Blade's runtime contract.
+
+The build ran from the pinned v1 commit in an isolated Ubuntu 24.04 root with
+Python 3.12, PyTorch 2.9.1 CUDA 13.0 wheels, the CUDA 13.1 toolkit, GCC 13, and
+the RTX 5070 on driver 595.71.05. Local reference-only compatibility edits
+allowed the toolkit/PyTorch minor mismatch and replaced CUDA-removed CUB
+iterators with their Thrust equivalents. They are not dependencies of the Rust
+project. The machine-readable record is
+[`room_radfoam_v1_reference.toml`](../benchmarks/room_radfoam_v1_reference.toml).
 
 ## Implemented comparison controls
 
@@ -305,18 +382,54 @@ protocol is
 [`bonsai_batch_same_ray_round3.toml`](../benchmarks/bonsai_batch_same_ray_round3.toml)
 with metrics summarized in the [benchmark ledger](../benchmarks/README.md).
 
+Room confirms both the batch decision and the corrected radiance semantics.
+The original second-scene gate and its controlled from-scratch retrain use the
+same 768,000 optimizer rays, 30 topology refreshes, three exhaustive growth
+rounds, 128×128 grid, black background, and L1/cosine path:
+
+| Room batch-1,024 result | Cells | Train PSNR | Held-out PSNR | Wall time | Host peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Historical semantics (`9d224dd`) | 75,718 | 18.50 dB | 18.23 dB | 1,484.545 s | 556,830,720 B |
+| Historical PLY, corrected renderer | 75,718 | 17.79 dB | 17.37 dB | — | — |
+| Corrected retrain (`00de721`) | 75,809 | 19.02 dB | 18.84 dB | 1,440.142 s | 543,166,464 B |
+
+Fresh-Ply evaluation exactly reproduces the corrected live result, which is
++0.52/+0.61 dB over the historical published train/held-out metric and
++1.23/+1.47 dB over rendering the old cloud with the corrected semantics. The
+new cloud has 1,132,150 directed adjacency entries. All three contribution
+rounds examine 1,044,480 rays across all 255 training views and report zero
+truncation; the run also records zero swap, pressure, OOM, or GPU faults and a
+551 MiB sampled GPU-memory peak.
+
+Evaluating the same cloud on all 39 every-eighth frames gives 18.44 dB, but
+that is a coverage diagnostic rather than an official comparison: this bounded
+protocol caps training at 255 views and its selected validation set at the
+first eight held-out views, so the end of the capture is under-covered. The
+selected comparison PNGs remain visibly fragmented, with broken fine structure
+and strong cell/color artifacts despite the metric gain. In contrast, the
+official 30 dB prefix is visually close to its targets. The corrected Rust run
+is therefore a trustworthy scaling baseline, not a usable reconstruction or
+evidence that the remaining gap is merely metric calibration. The
+machine-readable result remains in
+[`room_batch_same_ray_round3.toml`](../benchmarks/room_batch_same_ray_round3.toml).
+
 ## Next experiments
 
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle; do not change the default without decision agreement or
    a deliberately revised acceptance gate.
-2. The second-scene gate is complete. On Room, ray-normalized batch 1,024 is
-   +0.82 dB held out over batch 256 at round 3 and improves six of eight test
-   frames. The result reproduces after PLY reload with zero truncation or
-   cgroup faults. The next quality gate is the pinned same-budget reference
-   RadFoam run.
-3. After the same-budget reference run, begin a bounded scaling probe toward
-   190,951→2,097,152 cells and the staged 780×520→1559×1039 image schedule.
+2. Replace one-view-at-a-time optimizer batches with deterministic mixed-view
+   batches, then scale batch size and schedule boundaries by sampled rays. The
+   official prefix uses 5 billion mixed-view rays; adding thousands of tiny
+   one-view updates is not a credible route to that regime.
+3. Run a bounded cell/ray scaling ladder on Room, retaining fresh-Ply metrics,
+   per-phase timing, truncation, and cgroup telemetry at every boundary. Scale
+   toward the 735K-cell prefix before attempting the 2.1M-cell final target.
+4. If a complete upstream baseline is still needed, make its image/ray loader
+   streaming or run it on a machine with more than 32 GiB host memory and more
+   than 12 GiB VRAM. Do not retry the unchanged caching path here.
 
-The acceptance criterion remains a same-budget reference run within 0.5–1.0 dB;
-the scaled ablation is a direction check, not a substitute for that gate.
+The renderer-parity acceptance criterion is met at a 0.43 dB mean gap. Trainer
+parity remains open until a ray-, cell-, split-, and resolution-matched run is
+within 0.5–1.0 dB; the official prefix and scaled ablations bound the problem
+but do not substitute for that gate.

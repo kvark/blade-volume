@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -29,18 +29,25 @@ RadFoam/PowerFoam traversal, imported Gaussian path, and Rust-native training
 pipeline form a coherent technical direction; the maintained trainer also
 demonstrably learns a recognizable held-out reconstruction.
 
-The unresolved risk is empirical rather than architectural. A complete-dataset
-Bonsai run now reaches 17.50 dB train / 16.13 dB held-out PSNR after a fresh
-serialized-model reload, but plateaus well below a compelling reference target.
+The unresolved risk is now specifically trainer scaling rather than the
+representation or renderer. Official RadFoam v1 reaches 30.02 dB on Room after
+its first 5,000 updates with 735,103 cloud cells, while Blade cross-renders the
+same PLY and full-resolution held-out split at 29.59 dB. The 0.43 dB renderer
+gap meets the Stage 2 tolerance. Blade's selected scaled Room trainer remains
+far smaller: its corrected 768,000-ray baseline has 75,809 cells and reaches
+19.02 / 18.84 dB on the selected train/held-out split. It still needs a matched
+ray/cell/resolution scaling ladder before the reconstruction path is
+production-ready.
+
 The corrected paths pass the targeted NVIDIA/Vulkan physical-GPU gates,
 including weighted differentiable traversal, Gaussian CPU/GPU parity, and
 transformed-scene pixel readback. Whole-cloud layering is still not exact
-interleaved volume compositing, the Metal multi-cloud binding design is open,
-and no matched reference-trainer comparison exists. New rendering methods and
-broad scene features should therefore remain behind these gates:
+interleaved volume compositing and the Metal multi-cloud binding design is
+open. New rendering methods and broad scene features should therefore remain
+behind these gates:
 
-1. Match reference RadFoam within the Stage 2 quality tolerance on a complete,
-   reproducible scene.
+1. Match reference RadFoam training within the Stage 2 quality tolerance on a
+   complete, reproducible scene. Checkpoint renderer parity is done.
 2. Demonstrate that learned PowerFoam radii improve a fixed held-out ablation.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
@@ -98,20 +105,26 @@ At the audited revision:
   pruning, optimizer ancestry, and the weighted copied-radius split policy.
 - Quantile regularization, explicit background compositing, lossless DC SH, and
   versioned parameter/Adam/RNG checkpoints are implemented.
-- The blocker is quality evidence. A fresh, segmented run over all 292
+- The blocker is trainer-scale quality. A fresh, segmented run over all 292
   registered Bonsai images reached step 10,000 and the 200,000-cell target on a
   stable NVIDIA/Vulkan path. Its held-out curve flattened near 16.1 dB by step
   8,000, so the run was deliberately stopped before the nominal 20,400-step
-  budget rather than spending more compute on an unchanged protocol. The
-  corrected trainer still needs a reference-matched RadFoam run and controlled
-  ablations.
+  budget rather than spending more compute on an unchanged protocol.
 - The official RadFoam v1 code is now pinned and compared line by line in
   [`RADFOAM_REFERENCE_COMPARISON.md`](RADFOAM_REFERENCE_COMPARISON.md). Its
-  Bonsai recipe processes one million mixed-view rays per update, grows roughly
-  191K→2.1M sites, stages native-aspect resolution, uses Smooth-L1 on white,
-  and applies independent parameter schedules. The stopped Rust run had seen
-  only 2.56 million rays total at step 10,000 and used 50K→200K sites. Its
-  plateau therefore does not measure the representation at reference scale.
+  Room recipe processes one million mixed-view rays per update, targets roughly
+  106K→2.1M sites, stages native-aspect resolution, uses Smooth-L1 on white,
+  and applies independent parameter schedules. An exact serialized prefix at
+  update 5,000 contains 735,103 sites and reaches 30.0239 dB over all 39
+  held-out views. The unchanged upstream run cannot cross its downsample-2
+  reload on this host: its cached ray data exceeds a 32 GiB cgroup and it is
+  already using 7.3 GiB of 12 GiB VRAM at that boundary.
+- Blade loads that official PLY without conversion. Correcting a missing
+  per-cell nonnegative SH clamp improves the identical 39-view cross-render
+  from 28.97 to 29.59 dB, only 0.43 dB below upstream. CPU, standalone WGSL,
+  scene WGSL, Gaussian WGSL, and the differentiable Meganeura graph now share
+  the clamp and pass CPU/GPU regression tests. Renderer compatibility is no
+  longer the primary Stage 2 blocker.
 - Opt-in `radfoam-v1` initialization and learning-rate policies plus a
   beta-1 Smooth-L1 color loss are implemented without changing historical
   defaults. A versioned scaled semantic-ablation manifest records both the
@@ -219,6 +232,20 @@ At the audited revision:
   selected as the scaled pixel-batch default. `train_colmap` now uses it when
   the flag is omitted, with a parser regression test covering both the new
   default and an explicit 256 override.
+- The second-scene Room gate confirms that selection and has now been retrained
+  after the per-cell SH clamp correction. Under the identical selected
+  batch-1,024 protocol, the corrected cloud reaches 75,809 cells and 19.02 /
+  18.84 dB train/held out after a fresh PLY reload, versus the historical
+  75,718-cell result at 18.50 / 18.23 dB. Rendering the historical cloud under
+  corrected semantics gives only 17.79 / 17.37 dB, so the +0.52/+0.61 dB new
+  result is not an evaluation-only artifact. The 24m 0.142s retrain peaks at
+  543,166,464 host bytes and 551 MiB sampled GPU memory; all three exhaustive
+  contribution rounds cover 1,044,480 rays with zero truncation, swap,
+  pressure, OOM, or GPU faults. Its 18.44 dB all-39-view diagnostic is not
+  compared with official v1 because this bounded run caps training at 255
+  views and selected validation at the first eight held-out frames. Visual
+  inspection still shows severe cell/color fragmentation and lost fine
+  structure, so the positive metric delta does not make this viewer-ready.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -273,6 +300,12 @@ At the audited revision:
   radii instead of retaining the preceding unweighted Delaunay graph.
 - Traversal now integrates the terminal cell up to the requested end depth
   when no later face is found.
+- Official v1 instead caches neighbor offsets in half precision and does not
+  integrate a cell without an exit face. Blade keeps full-precision site data
+  and terminal integration as its runtime contract. After matching the
+  reference per-cell SH clamp, the official Room PLY cross-render is within
+  0.43 dB mean PSNR; the remaining storage/traversal delta is explicit rather
+  than silently emulated.
 - The production path recorder applies the same maximum interval clamp to
   unweighted terminal segments as to weighted segments; previously the
   unweighted early-return path bypassed the configured bound.
@@ -302,6 +335,10 @@ At the audited revision:
 - Training, SH evaluation, image output, PSNR, backgrounds, and viewers now
   explicitly use display-referred sRGB code values without a hidden transfer
   function or tone map. Linear-light clients must decode explicitly.
+- RadFoam and Gaussian SH radiance is clamped to nonnegative per point before
+  opacity weighting, matching the reference forward and zero-gradient branch.
+  Clamping only the accumulated output had left a systematic 1.05 dB mean gap
+  when cross-rendering the official Room checkpoint.
 - The glTF converter decodes texture samples, combines base-color factors and
   ambient gain in linear light, then encodes once at the `PointCloudModel`
   boundary. It no longer stores linear midtones in an sRGB-coded model.
@@ -491,14 +528,16 @@ now collects maximum per-view ray contribution on the GPU at a deterministic
 2× downsample, protects contributing cells and their adjacency neighbours,
 suppresses dead-cell density, and reports max-step truncation. Held-out CPU
 evaluation also distinguishes hard step-cap truncation from opacity, far-plane,
-and terminal-cell exits and warns with an exact ray count. A matched reference
-benchmark remains. The trainer now also implements RadFoam's exact
+and terminal-cell exits and warns with an exact ray count. Official-checkpoint
+renderer parity is complete; a matched-scale Rust trainer benchmark remains.
+The trainer now also implements RadFoam's exact
 random transmittance-quantile depth-separation loss and half-training weight
 ramp; the earlier smooth depth-variance term remains available as a separate
 ablation. The color contract now explicitly follows reference RadFoam/3DGS:
 training, SH appearance, backgrounds, PNG output, and PSNR use display-referred
-sRGB code values. The viewer no longer applies an extra Reinhard curve to the
-RadFoam backend. Lossless checkpoints now include a versioned trainer-state
+sRGB code values, and SH radiance is clamped per cell before compositing. The
+viewer no longer applies an extra Reinhard curve to the RadFoam backend.
+Lossless checkpoints now include a versioned trainer-state
 sidecar for the sampling, quantile, and densification RNG streams as well as
 the existing parameter/Adam safetensors; legacy resumes reconstruct fixed-draw
 sampling streams by jumping the LCG to the absolute step. Stage 3 now persists
@@ -696,10 +735,11 @@ numerically continuous.
 7. Run matched-protocol comparisons against the reference implementation.
 
 Items 1-6 are implemented and covered by CPU and physical-GPU tests. The
-reference source/configuration audit for item 7 is complete, and the trainer
-now exposes its initialization, loss, and parameter schedule. The actual
-same-budget run remains the gate: the complete-dataset curve above is an
-internal protocol, not a reference-matched result.
+reference source/configuration audit for item 7 is complete, an official Room
+prefix is serialized, and Blade cross-renders it within 0.43 dB. The trainer
+now exposes the reference initialization, loss, and parameter schedule, but the
+actual same-budget Rust training run remains the gate: the complete-dataset
+curves above are internal scaled protocols, not reference-matched results.
 
 Acceptance gate: a canonical scene matches the reference implementation within
 0.5-1.0 dB at the same cell budget, split, image scale, and training budget,
@@ -774,11 +814,11 @@ material path.
 
 ### P0: explain and close the RadFoam quality gap
 
-1. Pin a reference RadFoam revision and reproduce one run on the same 292 image
-   files, train/held-out indices, scale, initial/target cell counts, SH degree,
-   backgrounds, and effective ray budget. Record reference-side serialized
-   renders and PSNR rather than quoting a paper number with a different setup.
-   (The v1 revision and comparison are pinned; execution remains.)
+1. Pin a reference RadFoam revision and reproduce one run on a complete,
+   checksum-verified scene. Record reference-side serialized renders and PSNR
+   rather than quoting a paper number with a different setup. (Done for the
+   exact first 5,000 updates of official v1 on Room: 735,103 cells and 30.0239
+   dB; Blade cross-renders the PLY at 29.59 dB.)
 2. Compare initialization, optimizer parameter groups, learning-rate curves,
    opacity parameterization, geometry update cadence, pruning decisions,
    densification samples, and topology/path refresh timing step by step. Add a
@@ -791,14 +831,15 @@ material path.
    two-round same-ray comparison retains a +0.17 dB held-out advantage for
    batch 1,024, which expands to +0.90 dB at round 3; native 3:2 training is
    negative. The matched Room result confirms +0.82 dB held out and improves
-   six of eight test frames. The next gate is the pinned same-budget reference
-   run rather than more native-aspect compute.)
-3. Run a controlled matrix from identical initialization: appearance-only;
-   position optimization with fixed topology; position optimization with exact
-   rebuilds; densification/pruning disabled and enabled; quantile loss disabled
-   and enabled; and topology cadences 100/250/500. Evaluate both train and
-   held-out views from a reloaded PLY and retain wall time, cell count,
-   adjacency size, truncation counts, cgroup peak, and GPU fault telemetry.
+   six of eight test frames. Official-checkpoint comparison then exposed and
+   fixed the missing per-cell SH clamp; renderer parity now passes. Retraining
+   the selected Room protocol under the corrected graph reaches 19.02 / 18.84
+   dB, +0.52/+0.61 dB over its historical published result.)
+3. Implement deterministic mixed-view optimizer batches, then run a sampled-ray
+   and cell-count scaling ladder from the corrected 75,809-cell, 19.02/18.84 dB
+   Room checkpoint. Retain fresh-Ply train/held-out metrics, adjacency size,
+   per-phase timing, truncation counts, cgroup peak, and GPU fault telemetry at
+   every boundary.
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.
