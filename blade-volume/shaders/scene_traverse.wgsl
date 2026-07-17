@@ -1,6 +1,7 @@
 // Mixed point-cloud scene traversal: RadFoam/PowerFoam plus ray-traced Gaussians.
 
 enable wgpu_ray_query;
+enable wgpu_binding_array;
 
 // Naga 29 cannot dynamically index acceleration-structure binding arrays, so
 // the composer expands this to a constant-index switch.

@@ -588,6 +588,7 @@ mod tests {
         let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
             name: "radfoam-background-test",
             buffer_count: 1,
+            manual_barriers: false,
         });
         let backend = RadFoamBackend::new(
             &model,

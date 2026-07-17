@@ -117,6 +117,7 @@ fn scene_add_radfoam_object() {
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "scene-test",
         buffer_count: 1,
+        manual_barriers: false,
     });
 
     // Create a simple chain model with adjacency
@@ -167,6 +168,7 @@ fn scene_multiple_radfoam_objects() {
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "scene-test",
         buffer_count: 1,
+        manual_barriers: false,
     });
 
     let model1 = radfoam_synth_chain::make_chain_model(5, 0.5, 0.1, 0, glam::Vec3::splat(0.5));
@@ -214,6 +216,7 @@ fn scene_prepare_creates_buffers() {
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "scene-test",
         buffer_count: 1,
+        manual_barriers: false,
     });
 
     let model = radfoam_synth_chain::make_chain_model(10, 0.5, 0.1, 0, glam::Vec3::splat(0.5));
@@ -253,6 +256,7 @@ fn scene_render_data_reflects_all_objects() {
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "scene-test",
         buffer_count: 1,
+        manual_barriers: false,
     });
 
     let model1 = radfoam_synth_chain::make_chain_model(5, 0.5, 0.1, 0, glam::Vec3::splat(0.5));

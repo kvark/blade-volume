@@ -2473,6 +2473,7 @@ fn collect_path_contributions(
     let mut encoder = context.create_command_encoder(blade_graphics::CommandEncoderDesc {
         name: "collect-path-contributions",
         buffer_count: 1,
+        manual_barriers: false,
     });
     let mut stats = PathContributionStats {
         per_cell: vec![0.0; model.points.len()],
@@ -2927,6 +2928,7 @@ fn build_training_gpu_cloud(
     let mut init_encoder = gpu.create_command_encoder(blade_graphics::CommandEncoderDesc {
         name: "path-record-init",
         buffer_count: 1,
+        manual_barriers: false,
     });
     let cloud = vol::RadFoamGpuCloud::new(model, gpu, &mut init_encoder);
     gpu.destroy_command_encoder(&mut init_encoder);
@@ -3178,6 +3180,7 @@ fn fit_appearance_pixel_batched(
     let mut record_encoder = gpu.create_command_encoder(blade_graphics::CommandEncoderDesc {
         name: "path-record-step",
         buffer_count: 2,
+        manual_barriers: false,
     });
 
     // Restore all trainer-owned stochastic state. Legacy checkpoints have no

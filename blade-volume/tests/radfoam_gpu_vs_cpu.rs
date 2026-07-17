@@ -201,6 +201,7 @@ fn assert_gpu_matches_cpu(
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "radfoam-test",
         buffer_count: 1,
+        manual_barriers: false,
     });
 
     // Upload buffers using the existing helper.

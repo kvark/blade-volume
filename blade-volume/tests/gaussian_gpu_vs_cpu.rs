@@ -83,6 +83,7 @@ fn gaussian_gpu_orders_overlapping_scales_like_cpu_oracle() {
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "gaussian-oracle-test",
         buffer_count: 1,
+        manual_barriers: false,
     });
     let mut cloud = vol::GaussianGpuCloud::new(
         &model,

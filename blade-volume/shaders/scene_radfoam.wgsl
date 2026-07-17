@@ -1,6 +1,8 @@
 // RadFoam/PowerFoam-only scene traversal. This pipeline intentionally has no
 // ray-query extension or acceleration-structure bindings.
 
+enable wgpu_binding_array;
+
 // #include "common.wgsl"
 // #include "sh_eval.wgsl"
 // #include "scene_bindings.wgsl"

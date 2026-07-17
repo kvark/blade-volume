@@ -142,6 +142,7 @@ fn render_offscreen(model: &vol::PointCloudModel, width: u32, height: u32, debug
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "volume-test",
         buffer_count: 1,
+        manual_barriers: false,
     });
 
     let size = view::RenderSize { width, height };

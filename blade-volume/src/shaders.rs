@@ -154,10 +154,12 @@ mod tests {
     fn scene_variants_keep_ray_queries_out_of_radfoam_only_shader() {
         let radfoam = compose(SCENE_RADFOAM);
         assert!(radfoam.contains("fn trace_scene"));
+        assert!(radfoam.contains("enable wgpu_binding_array"));
         assert!(!radfoam.contains("enable wgpu_ray_query"));
         assert!(!radfoam.contains("g_gaussian_tlas"));
 
         let mixed = compose(SCENE_TRAVERSE);
+        assert!(mixed.contains("enable wgpu_binding_array"));
         assert!(mixed.contains("enable wgpu_ray_query"));
         assert!(mixed.contains("g_gaussian_tlas"));
         assert!(!mixed.contains("#initialize_gaussian_query"));

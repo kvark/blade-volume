@@ -196,6 +196,7 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "powerfoam-scene-readback",
         buffer_count: 1,
+        manual_barriers: false,
     });
     let mut renderer = view::SceneRenderer::new(&context, gpu::TextureFormat::Rgba16Float, SIZE);
     renderer.background_rgb = BACKGROUND.to_array();
@@ -281,6 +282,7 @@ fn gaussian_scene_uses_independent_clouds_and_transforms() {
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "gaussian-scene-readback",
         buffer_count: 1,
+        manual_barriers: false,
     });
     let mut renderer = view::SceneRenderer::new(&context, gpu::TextureFormat::Rgba16Float, SIZE);
     renderer.background_rgb = BACKGROUND.to_array();

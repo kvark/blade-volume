@@ -181,9 +181,12 @@ Broken into sub-steps:
   exercises the full Graph → autodiff → Adam loop on a toy: optimise a
   `[1, 3]` parameter to match a target RGB via MSE. Test converges to within
   0.02 on hosts that have a GPU; skips gracefully otherwise via
-  `try_init_gpu()`. Pinned meganeura at a git rev (tip-of-main is what we
-  need — published 0.2.0 doesn't expose `build`/`SessionConfig`/`Mode`).
-  blade-graphics is unified at `72c30c1` (the rev meganeura pins) so we
+  `try_init_gpu()`. Meganeura is pinned at `378f0e5`, the newest verified
+  compatible revision: the following `3d24850` e-graph extraction change and
+  current upstream head erase the custom RadFoam position gradient in both the
+  one-step and finite-difference integration tests. Published 0.2.0 does not
+  expose `build`/`SessionConfig`/`Mode`.
+  blade-graphics is unified at `ba0fb5a` (the rev meganeura pins) so we
   share one GPU context across our renderer and the meganeura session.
   Notes on meganeura's op set captured in the module doc — biggest gap for
   the real renderer is no `where`/scan/while primitive, so M3c-4 will

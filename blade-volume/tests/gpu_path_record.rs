@@ -215,6 +215,7 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
     let mut encoder = ctx.create_command_encoder(gpu::CommandEncoderDesc {
         name: "gpu-path-record-test",
         buffer_count: 1,
+        manual_barriers: false,
     });
     let mut cloud = RadFoamGpuCloud::new(&model, &ctx, &mut encoder);
     let mut recorder = PathRecorder::new(&ctx);
