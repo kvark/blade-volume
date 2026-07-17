@@ -36,6 +36,11 @@ the pure-Rust `simple_delaunay_lib` path exceeded 8 GiB while constructing
 400 MiB for the complete smoke run. Run benchmarks in a dedicated cgroup and
 record its memory peak and OOM events alongside the required result fields.
 
+The post-Meganeura-uprev smoke run on commit `9d224dd` reproduced the accepted
+baseline exactly: both live and fresh-PLY evaluation report 16.58 dB train /
+17.00 dB held out for 2,000 cells. Its ignored artifact and telemetry live at
+`target/audit-runs/bonsai-smoke-9d224dd/`.
+
 For long-lived GPU drivers, `train_colmap --stop-after-steps N` ends the
 current process cleanly after `N` updates while retaining the original global
 LR schedule. It writes `<output>.ckpt.{ply,safetensors,trainstate}` by default;
@@ -207,3 +212,15 @@ versus 475 MB. Both report zero swap, pressure, OOM, truncation, or GPU faults.
 This passes the Bonsai gate and selects 1,024 as the scaled pixel-batch default.
 `train_colmap` now uses that value when `--pixel-batch` is omitted; explicit
 values, including `0` for full-image batches, retain their existing semantics.
+
+The second-scene gate is
+[`room_batch_same_ray_round3.toml`](room_batch_same_ray_round3.toml), run on
+commit `9d224dd` against all 311
+registered Room images from the same pinned Mip-NeRF-360 revision. At 768,000
+optimizer rays, 30 topology refreshes, and three exhaustive growth rounds,
+batch 256 reaches 74,642 cells and 17.54 / 17.41 dB train/held out. Batch 1,024
+reaches 75,718 cells and 18.50 / 18.23 dB: +0.96/+0.82 dB, improving six of
+eight test frames. Fresh-PLY reload reproduces every metric. The arms take
+1495.5 and 1484.5 seconds and peak at 494 and 531 MiB respectively; both report
+zero swap, pressure, OOM, truncation, or GPU faults. Room therefore confirms
+the batch-1,024 direction rather than exposing a Bonsai-only result.

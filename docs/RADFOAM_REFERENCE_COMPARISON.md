@@ -310,12 +310,13 @@ with metrics summarized in the [benchmark ledger](../benchmarks/README.md).
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle; do not change the default without decision agreement or
    a deliberately revised acceptance gate.
-2. Repeat the selected ray-normalized batch-1,024 protocol on another scene.
-   It is +0.90 dB held out at Bonsai round 3; native 3:2 training is rejected
-   for the scaled gate.
-3. Move toward 190,951→2,097,152 cells and the staged
-   780×520→1559×1039 image schedule only after that direction survives a larger
-   batch.
+2. The second-scene gate is complete. On Room, ray-normalized batch 1,024 is
+   +0.82 dB held out over batch 256 at round 3 and improves six of eight test
+   frames. The result reproduces after PLY reload with zero truncation or
+   cgroup faults. The next quality gate is the pinned same-budget reference
+   RadFoam run.
+3. After the same-budget reference run, begin a bounded scaling probe toward
+   190,951→2,097,152 cells and the staged 780×520→1559×1039 image schedule.
 
 The acceptance criterion remains a same-budget reference run within 0.5–1.0 dB;
 the scaled ablation is a direction check, not a substitute for that gate.

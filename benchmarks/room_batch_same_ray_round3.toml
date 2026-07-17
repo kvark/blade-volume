@@ -1,0 +1,110 @@
+schema = 1
+name = "room-radfoam-same-ray-batch-round3-v1"
+purpose = "Test the selected scaled pixel batch on a second complete scene after three growth rounds at an equal sampled-ray budget"
+dataset = "Mip-NeRF 360 / room"
+dataset_path = "etc/data/room-full"
+dataset_source = "https://huggingface.co/datasets/nvs-bench/mipnerf360"
+dataset_revision = "2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
+dataset_image_files = 311
+colmap_registered_images = 311
+comparison_scope = "same 768000 optimizer rays, 30 topology refreshes, three growth rounds, contribution samples, and 128x128 fresh-Ply evaluation"
+
+[split]
+protocol = "existence-filtered COLMAP order, every Nth held out"
+test_every = 8
+max_train_views = 255
+max_test_views = 8
+
+[model]
+backend = "radfoam"
+initial_points = 50000
+initialization = "radfoam-v1"
+target_points = 200000
+adjacency = "qhull-delaunay-exact"
+sh_degree = 3
+densify_fraction = 0.15
+prune = true
+
+[training]
+width = 128
+height = 128
+sampled_rays = 768000
+learning_rate = 0.1
+lr_schedule = "cosine"
+lr_min_ratio = 0.01
+lr_groups = "legacy"
+position_lr_ratio = 0.01
+geometry_rebuild_schedule = "fixed"
+densify_schedule = "fixed"
+densify_fraction = 0.15
+densification_rounds = 3
+color_loss = "l1"
+max_steps = 256
+far_plane = 100.0
+background = "black"
+opacity_weight = 1.0
+distortion_weight = 0.0
+quantile_weight = 0.0001
+softplus_beta = 10.0
+sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
+densification_seed = "0xCAFE_F00D_DEAD_BEEF"
+
+[batch256]
+pixel_batch = 256
+completed_steps = 3000
+total_steps = 20400
+geometry_rebuild_every = 100
+densify_every = 500
+densify_warmup = 2000
+densify_until = 11000
+
+[batch1024]
+pixel_batch = 1024
+completed_steps = 750
+total_steps = 5100
+geometry_rebuild_every = 25
+densify_every = 125
+densify_warmup = 500
+densify_until = 2750
+
+[contribution]
+views = 255
+resolution_scale = 2
+rays_per_round = 1044480
+sampling_phase = "absolute densification round"
+
+[execution]
+release_binary_prebuilt = true
+memory_max_bytes = 4294967296
+memory_swap_max_bytes = 0
+
+[result]
+status = "completed"
+git_commit = "9d224dd"
+gpu = "NVIDIA GeForce RTX 5070"
+driver = "595.71.05"
+fresh_ply_reload = true
+batch256_wall_seconds = 1495.542
+batch256_memory_peak_bytes = 518131712
+batch256_cells = 74642
+batch256_train_psnr = 17.54
+batch256_test_psnr = 17.41
+batch1024_wall_seconds = 1484.545
+batch1024_memory_peak_bytes = 556830720
+batch1024_cells = 75718
+batch1024_train_psnr = 18.50
+batch1024_test_psnr = 18.23
+required = [
+    "git_commit",
+    "gpu",
+    "driver",
+    "fresh_ply_reload",
+    "batch256_wall_seconds",
+    "batch256_cells",
+    "batch256_train_psnr",
+    "batch256_test_psnr",
+    "batch1024_wall_seconds",
+    "batch1024_cells",
+    "batch1024_train_psnr",
+    "batch1024_test_psnr",
+]

@@ -6,6 +6,7 @@
 #   etc/fetch_test_dataset.sh                    # defaults to "bonsai"
 #   etc/fetch_test_dataset.sh bonsai             # yuangjia/mipnerf-bonsai
 #   etc/fetch_test_dataset.sh bonsai-full        # nvs-bench/mipnerf360
+#   etc/fetch_test_dataset.sh room-full          # nvs-bench/mipnerf360
 #   etc/fetch_test_dataset.sh glomap-example     # pablovela5620/example-colmap-glomap
 #
 # Each scene lands in etc/data/<scene>/ with the canonical COLMAP layout:
@@ -39,13 +40,21 @@ case "$SCENE" in
     REVISION="2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
     DOWNLOAD_MODE="hf"
     ;;
+  room-full)
+    REPO="https://huggingface.co/datasets/nvs-bench/mipnerf360"
+    REPO_ID="nvs-bench/mipnerf360"
+    PATHS=("room")
+    SOURCE_SUBDIR="room"
+    REVISION="2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
+    DOWNLOAD_MODE="hf"
+    ;;
   glomap-example)
     REPO="https://huggingface.co/datasets/pablovela5620/example-colmap-glomap"
     PATHS=("images" "colmap")
     ;;
   *)
     echo "unknown scene: $SCENE" >&2
-    echo "known: bonsai | bonsai-full | glomap-example" >&2
+    echo "known: bonsai | bonsai-full | room-full | glomap-example" >&2
     exit 2
     ;;
 esac

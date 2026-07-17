@@ -472,14 +472,15 @@ Each stage lands as one or more focused commits. Every commit must pass its
 targeted tests and formatting; stage boundaries require workspace formatting,
 clippy with warnings denied, and the full practical test suite.
 
-Progress through 2026-07-16: Stages 0 and 1 are substantially complete. The
+Progress through 2026-07-17: Stages 0 and 1 are substantially complete. The
 first versioned Bonsai smoke result now evaluates a freshly serialized PLY at
 16.58 dB train / 17.00 dB held out, identical to live evaluation; exact DC SH
 extension properties removed the prior 0.90/0.94 dB serialization loss. The
 run used a 2 GiB/no-swap cgroup and peaked at 68.6 MiB. A controlled pure-Rust
 Delaunay attempt reached its 8 GiB limit before training, while exact Qhull
 completed adjacency in 0.02 seconds, so production benchmark protocols select
-the isolated Qhull feature explicitly.
+the isolated Qhull feature explicitly. A post-Meganeura-uprev rerun on commit
+`9d224dd` reproduces the same live and fresh-PLY metrics exactly.
 
 Stage 2 now has topology-safe opt-in position optimization, exact symmetric
 adjacency caps, terminal-segment integration, reference position-gradient ×
@@ -789,8 +790,9 @@ material path.
    and ray-normalized schedules are a positive direction. A corrected
    two-round same-ray comparison retains a +0.17 dB held-out advantage for
    batch 1,024, which expands to +0.90 dB at round 3; native 3:2 training is
-   negative. The next gate is a second scene rather than more native-aspect
-   compute.)
+   negative. The matched Room result confirms +0.82 dB held out and improves
+   six of eight test frames. The next gate is the pinned same-budget reference
+   run rather than more native-aspect compute.)
 3. Run a controlled matrix from identical initialization: appearance-only;
    position optimization with fixed topology; position optimization with exact
    rebuilds; densification/pruning disabled and enabled; quantile loss disabled
