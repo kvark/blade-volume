@@ -1,13 +1,13 @@
 schema = 1
 name = "room-radfoam-same-ray-batch-round3-v1"
-purpose = "Test the selected scaled pixel batch on a second complete scene after three growth rounds at an equal sampled-ray budget"
+purpose = "Test deterministic one-view and mixed-view optimizer batches on a second complete scene at matched sampled-ray boundaries"
 dataset = "Mip-NeRF 360 / room"
 dataset_path = "etc/data/room-full"
 dataset_source = "https://huggingface.co/datasets/nvs-bench/mipnerf360"
 dataset_revision = "2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
 dataset_image_files = 311
 colmap_registered_images = 311
-comparison_scope = "same 768000 optimizer rays, 30 topology refreshes, three growth rounds, contribution samples, and 128x128 fresh-Ply evaluation"
+comparison_scope = "matched 768000- and 1024000-ray boundaries, topology refreshes, growth rounds, contribution samples, and 128x128 fresh-Ply evaluation"
 
 [split]
 protocol = "existence-filtered COLMAP order, every Nth held out"
@@ -119,6 +119,74 @@ all_39_delta_from_one_view = 1.22
 improved_selected_test_views = 8
 artifact_path = "target/audit-runs/room-batch1024-mixed16-step750-3d2ba74"
 
+[step1000_one_view]
+status = "completed"
+git_commit = "3d2ba74"
+resume_from = "target/audit-runs/room-batch1024-step750-00de721"
+resume_step = 750
+completed_steps = 1000
+additional_sampled_rays = 256000
+total_sampled_rays = 1024000
+additional_densification_rounds = 2
+total_densification_rounds = 5
+fresh_ply_reload = true
+continuation_wall_seconds = 1044.090
+cumulative_wall_seconds = 2484.232
+memory_peak_bytes = 670986240
+sampled_gpu_memory_peak_mib = 567
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+truncated_rays = 0
+cells = 100158
+directed_adjacency_entries = 1511226
+train_psnr = 20.18
+test_psnr = 19.95
+selected_test_psnr = [18.46, 21.42, 19.99, 21.08, 19.92, 18.57, 20.65, 19.51]
+all_39_test_psnr = 19.53
+artifact_path = "target/audit-runs/room-batch1024-one1-step1000-3d2ba74"
+
+[step1000_mixed_view_16]
+status = "completed"
+git_commit = "3d2ba74"
+resume_from = "target/audit-runs/room-batch1024-mixed16-step750-3d2ba74"
+resume_step = 750
+completed_steps = 1000
+additional_sampled_rays = 256000
+total_sampled_rays = 1024000
+additional_densification_rounds = 2
+total_densification_rounds = 5
+views_per_batch = 16
+rays_per_view = 64
+fresh_ply_reload = true
+continuation_wall_seconds = 1053.509
+cumulative_wall_seconds = 2517.075
+memory_peak_bytes = 650641408
+sampled_gpu_memory_peak_mib = 567
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+truncated_rays = 0
+cells = 99970
+directed_adjacency_entries = 1507322
+train_psnr = 21.31
+test_psnr = 20.90
+selected_test_psnr = [19.22, 22.05, 21.00, 21.91, 20.88, 19.76, 21.63, 20.74]
+all_39_test_psnr = 20.70
+test_delta_from_one_view = 0.95
+all_39_delta_from_one_view = 1.17
+improved_selected_test_views = 8
+artifact_path = "target/audit-runs/room-batch1024-mixed16-step1000-3d2ba74"
+
+[selection]
+status = "selected"
+decision_commit = "7c423a1"
+cli_auto_random_pixel_views = 16
+library_default_views = 1
+full_image_views = 1
+patch_views = 1
+reason = "The matched step-1000 boundary retains a 0.95 dB held-out gain across all eight views at effectively identical capacity and continuation cost"
+
 [result]
 status = "completed"
 git_commit = "9d224dd"
@@ -158,4 +226,11 @@ required = [
     "mixed_view_16.cells",
     "mixed_view_16.train_psnr",
     "mixed_view_16.test_psnr",
+    "step1000_one_view.cells",
+    "step1000_one_view.train_psnr",
+    "step1000_one_view.test_psnr",
+    "step1000_mixed_view_16.cells",
+    "step1000_mixed_view_16.train_psnr",
+    "step1000_mixed_view_16.test_psnr",
+    "selection.decision_commit",
 ]

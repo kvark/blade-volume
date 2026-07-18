@@ -20,12 +20,12 @@ Voronoi-volume representation can reconstruct a difficult real scene well;
 the earlier Rust plateau does not reject the geometry premise.
 
 The current Rust trainer is still a much smaller scaling experiment. Its
-selected Room protocol processes 768,000 sampled optimizer rays and reaches
-75,722 cells and 19.94 dB on its selected eight held-out views, while the
+selected Room protocol processes 1,024,000 sampled optimizer rays and reaches
+99,970 cells and 20.90 dB on its selected eight held-out views, while the
 serialized official prefix has processed five billion mixed-view rays and has
-nearly ten times as many cells. Resolution, split coverage, loss, background,
-initialization, and optimizer schedules also differ. These scores are therefore
-diagnostics, not an apples-to-apples trainer ranking.
+more than seven times as many cells. Resolution, split coverage, loss,
+background, initialization, and optimizer schedules also differ. These scores
+are therefore diagnostics, not an apples-to-apples trainer ranking.
 
 Renderer compatibility is now separately established. Loading the official
 PLY directly in Blade and evaluating the same full-resolution split reaches
@@ -393,6 +393,8 @@ rounds, 128×128 grid, black background, and L1/cosine path:
 | Historical PLY, corrected renderer | 75,718 | 17.79 dB | 17.37 dB | — | — |
 | Corrected retrain (`00de721`) | 75,809 | 19.02 dB | 18.84 dB | 1,440.142 s | 543,166,464 B |
 | Corrected, 16 views/batch (`3d2ba74`) | 75,722 | 20.21 dB | 19.94 dB | 1,463.566 s | 560,238,592 B |
+| One view/batch, step 1,000 | 100,158 | 20.18 dB | 19.95 dB | 2,484.232 s cumulative | 670,986,240 B |
+| 16 views/batch, step 1,000 | 99,970 | 21.31 dB | 20.90 dB | 2,517.075 s cumulative | 650,641,408 B |
 
 Fresh-Ply evaluation exactly reproduces the corrected live result, which is
 +0.52/+0.61 dB over the historical published train/held-out metric and
@@ -410,26 +412,39 @@ unchanged, wall time rises 1.6%, host memory rises 3.1%, and sampled GPU memory
 remains 551 MiB. Exact 4+4-step checkpoint-resume coverage and sliced
 CPU/GPU path-record oracles cover the new stochastic and buffer semantics.
 
-The all-39-view coverage diagnostic improves from 18.44 to 19.66 dB (+1.22),
-including large recovery near the previously weak capture tail. It is still
-not an official comparison: this bounded protocol caps training at 255 views
-and selected validation at the first eight held-out views. Mixed-view PNGs have
-more coherent room structure but remain visibly fragmented, while the official
-30 dB prefix is visually close to its targets. This is a stronger scaling
-baseline, not a usable reconstruction. The machine-readable result remains in
+The matched step-1,000 continuations add 256,000 rays and two growth rounds to
+each arm. Mixed-view training retains +1.13/+0.95 dB train/held out, improves
+all eight selected frames by +0.63 to +1.23 dB, and raises the all-39 coverage
+diagnostic from 19.53 to 20.70 dB. Capacity differs by only 188 cells (0.19%);
+continuation time differs by 0.9%, and the mixed run has the lower host-memory
+peak. Both peak at 567 MiB sampled GPU memory with zero truncation, swap, OOM,
+or GPU faults. Notably, the 750-step mixed checkpoint already matches the
+one-view 1,000-step held-out score with 25% fewer optimizer rays and about 24%
+fewer cells. This later boundary selects 16 views as `train_colmap`'s automatic
+random-pixel policy. Full-image and patch modes, plus the direct library
+default, remain one view.
+
+At the 750-step boundary, the all-39-view coverage diagnostic improves from
+18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
+capture tail. It is still not an official comparison: this bounded protocol
+caps training at 255 views and selected validation at the first eight held-out
+views. Mixed-view PNGs have more coherent room structure but remain visibly
+fragmented, while the official 30 dB prefix is visually close to its targets.
+This is a stronger scaling baseline, not a usable reconstruction. The
+machine-readable result remains in
 [`room_batch_same_ray_round3.toml`](../benchmarks/room_batch_same_ray_round3.toml).
 
 ## Next experiments
 
 1. Test larger stratified caps and cumulative multi-boundary drift against the
-   exhaustive oracle; do not change the default without decision agreement or
-   a deliberately revised acceptance gate.
+   exhaustive oracle before considering a value above the selected 16 views.
 2. Continue the selected 16-view protocol through a bounded cell/ray scaling
-   ladder on Room, retaining fresh-Ply metrics,
+   ladder from the 99,970-cell checkpoint on Room, retaining fresh-Ply metrics,
    per-phase timing, truncation, and cgroup telemetry at every boundary. Scale
    toward the 735K-cell prefix before attempting the 2.1M-cell final target.
-3. Check at least one later boundary or second scene before changing the
-   one-view library default; keep `--views-per-batch 16` explicit meanwhile.
+3. Repeat the selected automatic random-pixel policy on another complete scene
+   before generalizing the efficiency claim beyond Room. Keep the one-view
+   library default and the full-image/patch compatibility behavior.
 4. If a complete upstream baseline is still needed, make its image/ray loader
    streaming or run it on a machine with more than 32 GiB host memory and more
    than 12 GiB VRAM. Do not retry the unchanged caching path here.

@@ -34,9 +34,9 @@ representation or renderer. Official RadFoam v1 reaches 30.02 dB on Room after
 its first 5,000 updates with 735,103 cloud cells, while Blade cross-renders the
 same PLY and full-resolution held-out split at 29.59 dB. The 0.43 dB renderer
 gap meets the Stage 2 tolerance. Blade's selected scaled Room trainer remains
-far smaller: its selected 16-view, 768,000-ray baseline has 75,722 cells and
-reaches 20.21 / 19.94 dB on the selected train/held-out split. It still needs a
-matched ray/cell/resolution scaling ladder before the reconstruction path is
+far smaller: its 16-view, 1,024,000-ray checkpoint has 99,970 cells and reaches
+21.31 / 20.90 dB on the selected train/held-out split. It still needs a matched
+ray/cell/resolution scaling ladder before the reconstruction path is
 production-ready.
 
 The corrected paths pass the targeted NVIDIA/Vulkan physical-GPU gates,
@@ -246,7 +246,7 @@ At the audited revision:
   views and selected validation at the first eight held-out frames. Visual
   inspection still shows severe cell/color fragmentation and lost fine
   structure, so the positive metric delta does not make this viewer-ready.
-- Deterministic mixed-view optimizer batches are now implemented as an opt-in
+- Deterministic mixed-view optimizer batches are implemented through the
   `--views-per-batch` control. Camera-specific recorder dispatches fill
   disjoint rows of one fixed-size path batch, while the Meganeura graph consumes
   per-ray origins and view indices. One-view mode retains its exact historical
@@ -257,8 +257,13 @@ At the audited revision:
   improves all eight selected held-out frames. The all-39 diagnostic rises
   from 18.44 to 19.66 dB. Cell count stays within 0.2%; wall time rises 1.6%,
   host peak 3.1%, GPU peak is unchanged, and no truncation, swap, pressure,
-  OOM, or GPU fault occurs. The default remains one view pending a later
-  boundary or second-scene confirmation.
+  OOM, or GPU fault occurs. Matched continuations to step 1,000 retain a
+  +0.95 dB held-out gain (20.90 versus 19.95 dB), improve all eight frames,
+  and keep capacity and continuation cost effectively equal. The mixed
+  750-step checkpoint already matches the one-view 1,000-step score with 25%
+  fewer optimizer rays. `train_colmap` therefore selects 16 views
+  automatically for random-pixel batches; full-image, patch, and direct
+  library defaults remain one view.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -849,13 +854,16 @@ material path.
    the selected Room protocol under the corrected graph reaches 19.02 / 18.84
    dB, +0.52/+0.61 dB over its historical published result. Distributing the
    same rays across 16 views then reaches 20.21 / 19.94 dB and improves all
-   eight selected held-out frames.)
+   eight selected held-out frames. At the matched 1,024,000-ray boundary the
+   gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
+   all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   cell-count scaling ladder from the 75,722-cell, 20.21/19.94 dB Room
+   cell-count scaling ladder from the 99,970-cell, 21.31/20.90 dB Room
    checkpoint. Retain fresh-Ply train/held-out metrics, adjacency size,
    per-phase timing, truncation counts, cgroup peak, and GPU fault telemetry at
-   every boundary. Keep mixed views opt-in until a later boundary or second
-   scene confirms the selection.
+   every boundary. The matched later boundary selects 16 views as the
+   random-pixel CLI default; retain one view for full-image and patch modes and
+   keep explicit overrides available.
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.

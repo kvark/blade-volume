@@ -274,3 +274,21 @@ MiB. All three exhaustive contribution rounds report zero truncation, and the
 scope records zero swap, pressure, OOM, or GPU faults. Visual structure is
 more coherent but still visibly fragmented. Raw results remain ignored under
 `target/audit-runs/room-batch1024-mixed16-step750-3d2ba74`.
+
+Matched continuations to step 1,000 retain the result after two more growth
+rounds. One-view training reaches 100,158 cells and 20.18 / 19.95 dB, while
+16-view training reaches 99,970 cells and 21.31 / 20.90 dB. All eight selected
+held-out frames still improve, by +0.63 to +1.23 dB; the all-39 coverage
+diagnostic rises from 19.53 to 20.70 dB (+1.17). Continuation wall time differs
+by only 0.9% (1,044.090 versus 1,053.509 seconds), the mixed run has the lower
+host peak (650,641,408 versus 670,986,240 bytes), and both peak at 567 MiB
+sampled GPU memory with zero truncation, swap, OOM, or GPU faults. The 750-step
+mixed run already matches the 1,000-step one-view held-out score (19.94 versus
+19.95 dB) with 25% fewer optimizer rays and about 24% fewer cells.
+
+This later boundary satisfies the selection gate. `train_colmap` now chooses
+16 views automatically for random-pixel batches; full-image and patch modes
+remain one view, and explicit overrides remain available. The library-level
+`AppearanceFitConfig` default stays at one view so direct callers do not change
+semantics implicitly. The ignored step-1,000 artifacts are
+`target/audit-runs/room-batch1024-{one1,mixed16}-step1000-3d2ba74`.
