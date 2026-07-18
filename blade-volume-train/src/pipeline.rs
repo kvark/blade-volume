@@ -917,6 +917,7 @@ mod tests {
 
     #[test]
     fn end_to_end_colmap_train_succeeds() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = crate::fit::try_init_gpu() else {
             eprintln!("skipping end_to_end_colmap_train_succeeds: no GPU");
             return;

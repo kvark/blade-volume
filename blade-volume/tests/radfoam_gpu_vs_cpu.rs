@@ -38,6 +38,14 @@ mod radfoam_cpu_ref;
 mod radfoam_synth_branch;
 mod radfoam_synth_chain;
 
+static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 use radfoam_cpu_ref as cpu;
 
 /// A minimal camera uniform matching the production shader.
@@ -391,6 +399,7 @@ fn make_branching_test_model() -> vol::PointCloudModel {
 /// Original regression: plain RadFoam (no radii) — GPU must match CPU.
 #[test]
 fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
+    let _gpu_test_guard = gpu_test_guard();
     let Some(context) = make_test_context() else {
         eprintln!("Skipping RadFoam GPU-vs-CPU test: no supported GPU device found");
         return;
@@ -406,6 +415,7 @@ fn radfoam_gpu_matches_cpu_on_tiny_fixture_for_some_pixels() {
 /// CPU reference got the formula wrong, the two would diverge here.
 #[test]
 fn powerfoam_gpu_matches_cpu_with_radii() {
+    let _gpu_test_guard = gpu_test_guard();
     let Some(context) = make_test_context() else {
         eprintln!("Skipping Power Foam GPU-vs-CPU test: no supported GPU device found");
         return;

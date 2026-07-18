@@ -10,6 +10,13 @@ const SIZE: view::RenderSize = view::RenderSize {
     height: 1,
 };
 const BACKGROUND: glam::Vec3 = glam::Vec3::new(0.05, 0.10, 0.15);
+static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 struct Target {
     texture: gpu::Texture,
@@ -189,6 +196,7 @@ fn composite(color: glam::Vec3, alpha: f32) -> glam::Vec3 {
 
 #[test]
 fn transformed_powerfoam_scene_matches_analytic_pixels() {
+    let _gpu_test_guard = gpu_test_guard();
     let Some(context) = test_context(false) else {
         eprintln!("skipping PowerFoam scene readback: no binding-array GPU");
         return;
@@ -275,6 +283,7 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
 
 #[test]
 fn gaussian_scene_uses_independent_clouds_and_transforms() {
+    let _gpu_test_guard = gpu_test_guard();
     let Some(context) = test_context(true) else {
         eprintln!("skipping Gaussian scene readback: no compute ray-query GPU");
         return;

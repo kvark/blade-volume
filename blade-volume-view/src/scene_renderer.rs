@@ -485,6 +485,7 @@ mod tests {
 
     #[test]
     fn scene_pipelines_compile_with_explicit_background_binding() {
+        let _gpu_test_guard = crate::gpu_test_guard();
         if vol::gpu::access_disabled() {
             eprintln!("skipping scene shader compilation: GPU access disabled");
             return;

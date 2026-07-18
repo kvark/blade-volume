@@ -21,3 +21,11 @@ pub use scene_renderer::{SceneDebugMode, SceneParams, SceneRenderer};
 // Re-export commonly used types from dependencies for convenience
 pub use blade_volume::CameraParams;
 pub use winit;
+
+#[cfg(test)]
+fn gpu_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}

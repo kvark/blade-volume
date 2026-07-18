@@ -561,6 +561,7 @@ mod tests {
 
     #[test]
     fn radfoam_backend_compiles_explicit_background_shader() {
+        let _gpu_test_guard = crate::gpu_test_guard();
         if vol::gpu::access_disabled() {
             eprintln!("skipping RadFoam shader compilation: GPU access disabled");
             return;

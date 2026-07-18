@@ -3972,6 +3972,7 @@ mod tests {
 
     #[test]
     fn smooth_l1_matches_pytorch_beta_one_definition() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping smooth_l1_matches_pytorch_beta_one_definition: no GPU");
             return;
@@ -4001,6 +4002,7 @@ mod tests {
 
     #[test]
     fn sh_color_graph_clamps_negative_values_before_weighting() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping sh_color_graph_clamps_negative_values_before_weighting: no GPU");
             return;
@@ -4043,6 +4045,7 @@ mod tests {
 
     #[test]
     fn adam_state_roundtrip() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping adam_state_roundtrip: no GPU");
             return;
@@ -4981,6 +4984,7 @@ mod tests {
     /// dtype, and shape errors that graph-construction tests cannot see.
     #[test]
     fn volumetric_graph_runs_one_step() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping volumetric_graph_runs_one_step: no GPU");
             return;
@@ -5060,6 +5064,7 @@ mod tests {
 
     #[test]
     fn position_gradient_matches_central_finite_difference_for_fixed_path() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping position gradient check: no GPU");
             return;
@@ -5168,6 +5173,7 @@ mod tests {
 
     #[test]
     fn weighted_graph_uses_recorded_intervals_and_jacobians() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping weighted graph Jacobian test: no GPU");
             return;
@@ -5241,6 +5247,7 @@ mod tests {
 
     #[test]
     fn graph_composites_the_configured_background() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping graph_composites_the_configured_background: no GPU");
             return;
@@ -5304,6 +5311,7 @@ mod tests {
 
     #[test]
     fn distortion_loss_penalizes_depth_spread() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping distortion_loss_penalizes_depth_spread: no GPU");
             return;
@@ -5369,6 +5377,7 @@ mod tests {
 
     #[test]
     fn quantile_loss_matches_piecewise_constant_crossing_depths() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping quantile_loss_matches_piecewise_constant_crossing_depths: no GPU");
             return;
@@ -5454,6 +5463,7 @@ mod tests {
     ///
     #[test]
     fn fit_appearance_reduces_loss() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping fit_appearance_reduces_loss: no GPU");
             return;
@@ -5537,6 +5547,7 @@ mod tests {
 
     #[test]
     fn position_training_rebuilds_valid_topology() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping position_training_rebuilds_valid_topology: no GPU");
             return;
@@ -5586,6 +5597,7 @@ mod tests {
 
     #[test]
     fn position_training_supports_radfoam_v1_topology_cadence() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping position_training_supports_radfoam_v1_topology_cadence: no GPU");
             return;
@@ -5625,6 +5637,7 @@ mod tests {
 
     #[test]
     fn densification_rebuilds_and_continues_training() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping densification_rebuilds_and_continues_training: no GPU");
             return;
@@ -5673,6 +5686,7 @@ mod tests {
 
     #[test]
     fn mixed_view_resume_matches_uninterrupted_training() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping mixed_view_resume_matches_uninterrupted_training: no GPU");
             return;
@@ -5788,6 +5802,7 @@ mod tests {
 
     #[test]
     fn radfoam_v1_densification_resume_matches_uninterrupted_training() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!(
                 "skipping radfoam_v1_densification_resume_matches_uninterrupted_training: no GPU"
@@ -5916,6 +5931,7 @@ mod tests {
     /// so a different camera should also see them.
     #[test]
     fn novel_pose_render_matches_ground_truth() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping novel_pose_render_matches_ground_truth: no GPU");
             return;
@@ -6042,6 +6058,7 @@ mod tests {
     /// trainer would get and certainly beat the black baseline.
     #[test]
     fn multi_view_training_beats_single_view_on_novel_pose() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping multi_view_training: no GPU");
             return;

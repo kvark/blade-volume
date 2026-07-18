@@ -66,6 +66,15 @@ pub fn try_init_gpu() -> Option<sync::Arc<gpu::Context>> {
     Some(sync::Arc::new(ctx))
 }
 
+#[cfg(test)]
+pub(crate) fn gpu_test_guard() -> sync::MutexGuard<'static, ()> {
+    static GPU_TEST_LOCK: sync::OnceLock<sync::Mutex<()>> = sync::OnceLock::new();
+    GPU_TEST_LOCK
+        .get_or_init(|| sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(sync::PoisonError::into_inner)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct FitConfig {
     pub learning_rate: f32,
@@ -243,6 +252,7 @@ mod tests {
 
     #[test]
     fn fits_target_rgb_via_adam() {
+        let _gpu_test_guard = gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping fit_constant_rgb: no supported GPU device");
             return;
@@ -275,6 +285,7 @@ mod tests {
 
     #[test]
     fn fits_image_via_l1_adam() {
+        let _gpu_test_guard = gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping fit_constant_image: no supported GPU device");
             return;
