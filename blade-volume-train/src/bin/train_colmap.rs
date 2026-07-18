@@ -122,10 +122,10 @@ struct Args {
     #[argh(option, default = "1024")]
     pixel_batch: usize,
 
-    /// camera views per random-pixel Adam batch (default 1). Rays are split
-    /// evenly across a deterministic stratified view sample. Values above one
-    /// are incompatible with patch and full-image batches.
-    #[argh(option, default = "1")]
+    /// camera views per random-pixel Adam batch (default 0 = automatic: 16 for
+    /// random pixels, 1 for patch and full-image batches). Rays are split evenly
+    /// across a deterministic stratified view sample.
+    #[argh(option, default = "0")]
     views_per_batch: usize,
 
     /// adam steps per view in pixel-batched mode (default 200)
@@ -341,6 +341,27 @@ struct Args {
     test_every: usize,
 }
 
+fn resolve_views_per_batch(
+    requested: usize,
+    pixel_batch: Option<usize>,
+    patch_size: usize,
+) -> Result<usize, &'static str> {
+    let random_pixels = pixel_batch.is_some() && patch_size == 0;
+    let selected = if requested == 0 {
+        if random_pixels {
+            16
+        } else {
+            1
+        }
+    } else {
+        requested
+    };
+    if selected > 1 && !random_pixels {
+        return Err("--views-per-batch > 1 requires random-pixel sampling");
+    }
+    Ok(selected)
+}
+
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
@@ -410,14 +431,13 @@ fn main() {
     } else {
         Some(args.pixel_batch)
     };
-    if args.views_per_batch == 0 {
-        eprintln!("--views-per-batch must be greater than zero");
-        std::process::exit(2);
-    }
-    if args.views_per_batch > 1 && (pixel_batch.is_none() || args.patch_size > 0) {
-        eprintln!("--views-per-batch > 1 requires random-pixel sampling");
-        std::process::exit(2);
-    }
+    let views_per_batch =
+        resolve_views_per_batch(args.views_per_batch, pixel_batch, args.patch_size).unwrap_or_else(
+            |message| {
+                eprintln!("{message}");
+                std::process::exit(2);
+            },
+        );
     let adjacency = if args.qhull {
         pipeline::AdjacencyKind::DelaunayQhull
     } else if args.cech_radius > 0.0 {
@@ -568,7 +588,7 @@ fn main() {
             learning_rate: args.learning_rate,
             epochs: args.epochs,
             pixel_batch,
-            views_per_batch: args.views_per_batch,
+            views_per_batch,
             steps_per_view: args.steps_per_view,
             sh_degree: args.sh_degree,
             color_loss,
@@ -845,7 +865,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(default.pixel_batch, 1024);
-        assert_eq!(default.views_per_batch, 1);
+        assert_eq!(default.views_per_batch, 0);
+        assert_eq!(
+            resolve_views_per_batch(default.views_per_batch, Some(default.pixel_batch), 0),
+            Ok(16)
+        );
 
         let explicit = <Args as argh::FromArgs>::from_args(
             &["train_colmap"],
@@ -865,5 +889,21 @@ mod tests {
         .unwrap();
         assert_eq!(explicit.pixel_batch, 256);
         assert_eq!(explicit.views_per_batch, 16);
+    }
+
+    #[test]
+    fn batching_auto_selection_preserves_non_random_modes() {
+        assert_eq!(resolve_views_per_batch(0, Some(1024), 0), Ok(16));
+        assert_eq!(resolve_views_per_batch(0, None, 0), Ok(1));
+        assert_eq!(resolve_views_per_batch(0, Some(1024), 16), Ok(1));
+        assert_eq!(resolve_views_per_batch(1, None, 0), Ok(1));
+        assert_eq!(
+            resolve_views_per_batch(16, None, 0),
+            Err("--views-per-batch > 1 requires random-pixel sampling")
+        );
+        assert_eq!(
+            resolve_views_per_batch(16, Some(1024), 16),
+            Err("--views-per-batch > 1 requires random-pixel sampling")
+        );
     }
 }
