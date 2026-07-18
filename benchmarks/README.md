@@ -260,3 +260,17 @@ bounded protocol trains on 255 views and selects the first eight held-out
 views, leaving the end of the capture under-covered. The selected comparison
 PNGs are recognizable but still have severe cell/color fragmentation and lose
 fine room structure; this is a scaling baseline, not viewer-ready quality.
+
+Commit `3d2ba74` adds deterministic mixed-view optimizer batches without
+changing the default one-view policy. The controlled Room arm changes only
+`views_per_batch` from 1 to 16, giving each selected camera 64 of the same
+1,024 rays per Adam step. At the same 768,000-ray budget it reaches 75,722
+cells and 20.21 / 19.94 dB after fresh-Ply reload: +1.19/+1.10 dB over the
+corrected one-view train/held-out result, with all eight selected test frames
+improving. The all-39-view coverage diagnostic rises from 18.44 to 19.66 dB
+(+1.22). Wall time increases only 1.6%, from 1,440.142 to 1,463.566 seconds;
+host peak rises 3.1% to 560,238,592 bytes and sampled GPU memory remains 551
+MiB. All three exhaustive contribution rounds report zero truncation, and the
+scope records zero swap, pressure, OOM, or GPU faults. Visual structure is
+more coherent but still visibly fragmented. Raw results remain ignored under
+`target/audit-runs/room-batch1024-mixed16-step750-3d2ba74`.

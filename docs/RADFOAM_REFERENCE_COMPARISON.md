@@ -1,6 +1,6 @@
 # RadFoam v1 reference comparison
 
-Date: 2026-07-17
+Date: 2026-07-18
 
 This comparison pins the official [`theialab/radfoam` v1
 tag](https://github.com/theialab/radfoam/tree/366e1a1b4349023b18e7867fabd6b734983f5c3c)
@@ -21,7 +21,7 @@ the earlier Rust plateau does not reject the geometry premise.
 
 The current Rust trainer is still a much smaller scaling experiment. Its
 selected Room protocol processes 768,000 sampled optimizer rays and reaches
-75,809 cells and 18.84 dB on its selected eight held-out views, while the
+75,722 cells and 19.94 dB on its selected eight held-out views, while the
 serialized official prefix has processed five billion mixed-view rays and has
 nearly ten times as many cells. Resolution, split coverage, loss, background,
 initialization, and optimizer schedules also differ. These scores are therefore
@@ -392,6 +392,7 @@ rounds, 128×128 grid, black background, and L1/cosine path:
 | Historical semantics (`9d224dd`) | 75,718 | 18.50 dB | 18.23 dB | 1,484.545 s | 556,830,720 B |
 | Historical PLY, corrected renderer | 75,718 | 17.79 dB | 17.37 dB | — | — |
 | Corrected retrain (`00de721`) | 75,809 | 19.02 dB | 18.84 dB | 1,440.142 s | 543,166,464 B |
+| Corrected, 16 views/batch (`3d2ba74`) | 75,722 | 20.21 dB | 19.94 dB | 1,463.566 s | 560,238,592 B |
 
 Fresh-Ply evaluation exactly reproduces the corrected live result, which is
 +0.52/+0.61 dB over the historical published train/held-out metric and
@@ -401,16 +402,21 @@ rounds examine 1,044,480 rays across all 255 training views and report zero
 truncation; the run also records zero swap, pressure, OOM, or GPU faults and a
 551 MiB sampled GPU-memory peak.
 
-Evaluating the same cloud on all 39 every-eighth frames gives 18.44 dB, but
-that is a coverage diagnostic rather than an official comparison: this bounded
-protocol caps training at 255 views and its selected validation set at the
-first eight held-out views, so the end of the capture is under-covered. The
-selected comparison PNGs remain visibly fragmented, with broken fine structure
-and strong cell/color artifacts despite the metric gain. In contrast, the
-official 30 dB prefix is visually close to its targets. The corrected Rust run
-is therefore a trustworthy scaling baseline, not a usable reconstruction or
-evidence that the remaining gap is merely metric calibration. The
-machine-readable result remains in
+The mixed-view arm changes only the camera distribution inside each 1,024-ray
+Adam batch: 16 deterministic stratified views receive 64 rays each. It
+improves the corrected baseline by +1.19/+1.10 dB train/held out, and every
+selected test frame improves by +0.25 to +1.62 dB. Capacity is effectively
+unchanged, wall time rises 1.6%, host memory rises 3.1%, and sampled GPU memory
+remains 551 MiB. Exact 4+4-step checkpoint-resume coverage and sliced
+CPU/GPU path-record oracles cover the new stochastic and buffer semantics.
+
+The all-39-view coverage diagnostic improves from 18.44 to 19.66 dB (+1.22),
+including large recovery near the previously weak capture tail. It is still
+not an official comparison: this bounded protocol caps training at 255 views
+and selected validation at the first eight held-out views. Mixed-view PNGs have
+more coherent room structure but remain visibly fragmented, while the official
+30 dB prefix is visually close to its targets. This is a stronger scaling
+baseline, not a usable reconstruction. The machine-readable result remains in
 [`room_batch_same_ray_round3.toml`](../benchmarks/room_batch_same_ray_round3.toml).
 
 ## Next experiments
@@ -418,13 +424,12 @@ machine-readable result remains in
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle; do not change the default without decision agreement or
    a deliberately revised acceptance gate.
-2. Replace one-view-at-a-time optimizer batches with deterministic mixed-view
-   batches, then scale batch size and schedule boundaries by sampled rays. The
-   official prefix uses 5 billion mixed-view rays; adding thousands of tiny
-   one-view updates is not a credible route to that regime.
-3. Run a bounded cell/ray scaling ladder on Room, retaining fresh-Ply metrics,
+2. Continue the selected 16-view protocol through a bounded cell/ray scaling
+   ladder on Room, retaining fresh-Ply metrics,
    per-phase timing, truncation, and cgroup telemetry at every boundary. Scale
    toward the 735K-cell prefix before attempting the 2.1M-cell final target.
+3. Check at least one later boundary or second scene before changing the
+   one-view library default; keep `--views-per-batch 16` explicit meanwhile.
 4. If a complete upstream baseline is still needed, make its image/ray loader
    streaming or run it on a machine with more than 32 GiB host memory and more
    than 12 GiB VRAM. Do not retry the unchanged caching path here.
