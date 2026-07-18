@@ -371,3 +371,14 @@ zero truncation, prunes 116 cells, and adds 79,292 splits. The 3,021.045-second
 continuation peaks at 3,013,816,320 host bytes and 1,786 MiB sampled GPU memory
 with zero swap, pressure, OOM, or GPU faults. The raw artifact remains ignored
 at `target/audit-runs/room-batch1024-mixed16-step2625-1a013d7`.
+
+At step 2,750 the max-512 ladder reaches 698,940 cells and 10,756,702 directed
+edges, within 5% of the reference capacity. Fresh-Ply evaluation reproduces
+23.89 dB train / 22.62 dB held out, +0.09/-0.02 dB versus step 2,625; the
+all-39 diagnostic still rises by 0.03 dB to 22.65. The selected regression is
+concentrated in a larger dark foreground smear on DSCF4707. The exhaustive scan
+measures 156.2 mean / 299 maximum segments with zero truncation. The
+3,411.154-second continuation peaks at 3,572,768,768 host bytes and 1,773 MiB
+sampled GPU memory with zero swap, pressure, OOM, or GPU faults. The raw
+artifact remains ignored at
+`target/audit-runs/room-batch1024-mixed16-step2750-66002d9`.
