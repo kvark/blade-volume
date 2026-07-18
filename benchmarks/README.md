@@ -352,3 +352,13 @@ average 22.47 dB. The 2,411.225-second continuation peaks at 2,324,807,680 host
 bytes and 1,362 MiB sampled GPU memory with zero swap, pressure, OOM, or GPU
 faults. The raw artifact remains ignored at
 `target/audit-runs/room-batch1024-mixed16-step2375-1fd1783`.
+
+At step 2,500 the same max-512 protocol reaches 528,732 cells and 8,128,410
+directed edges. Fresh-Ply evaluation reproduces 23.69 dB train / 22.57 dB held
+out, +0.14/+0.04 dB over step 2,375; the all-39 diagnostic rises by 0.09 dB to
+22.56. The exhaustive scan measures 140.9 mean / 267 maximum segments with
+zero truncation, prunes 121 cells, and adds 68,965 splits. The 2,702.106-second
+continuation peaks at 2,646,769,664 host bytes and 1,690 MiB sampled GPU memory
+with zero swap, pressure, OOM, or GPU faults. Quality is still improving, but
+held-out gains are now small. The raw artifact remains ignored at
+`target/audit-runs/room-batch1024-mixed16-step2500-2f997cf`.
