@@ -20,10 +20,10 @@ Voronoi-volume representation can reconstruct a difficult real scene well;
 the earlier Rust plateau does not reject the geometry premise.
 
 The current Rust trainer is still a much smaller scaling experiment. Its
-selected Room protocol processes 1,024,000 sampled optimizer rays and reaches
-99,970 cells and 20.90 dB on its selected eight held-out views, while the
+selected Room protocol processes 1,536,000 sampled optimizer rays and reaches
+174,410 cells and 21.83 dB on its selected eight held-out views, while the
 serialized official prefix has processed five billion mixed-view rays and has
-more than seven times as many cells. Resolution, split coverage, loss,
+more than four times as many cells. Resolution, split coverage, loss,
 background, initialization, and optimizer schedules also differ. These scores
 are therefore diagnostics, not an apples-to-apples trainer ranking.
 
@@ -395,6 +395,7 @@ rounds, 128×128 grid, black background, and L1/cosine path:
 | Corrected, 16 views/batch (`3d2ba74`) | 75,722 | 20.21 dB | 19.94 dB | 1,463.566 s | 560,238,592 B |
 | One view/batch, step 1,000 | 100,158 | 20.18 dB | 19.95 dB | 2,484.232 s cumulative | 670,986,240 B |
 | 16 views/batch, step 1,000 | 99,970 | 21.31 dB | 20.90 dB | 2,517.075 s cumulative | 650,641,408 B |
+| 16 views/batch, step 1,500 | 174,410 | 22.39 dB | 21.83 dB | 5,400.440 s cumulative | 1,038,524,416 B |
 
 Fresh-Ply evaluation exactly reproduces the corrected live result, which is
 +0.52/+0.61 dB over the historical published train/held-out metric and
@@ -424,6 +425,16 @@ fewer cells. This later boundary selects 16 views as `train_colmap`'s automatic
 random-pixel policy. Full-image and patch modes, plus the direct library
 default, remain one view.
 
+Continuing the selected arm to step 1,500 adds four exhaustive growth rounds
+and reaches 174,410 cells. Fresh-Ply quality improves by +1.08/+0.93 dB over
+step 1,000, and the all-39 coverage diagnostic rises by +0.90 dB to 21.60.
+Mean contribution paths grow from 69.4 to 88.2 segments and maxima from 155 to
+178, still with zero truncation across every 1,044,480-ray scan. The 500-step
+continuation takes 2,883.365 seconds, peaks at 1,038,524,416 host bytes and
+719 MiB sampled GPU memory, and records zero swap, pressure, OOM, or GPU faults.
+The monotonic metric gain supports further scaling, although comparison PNGs
+remain visibly fragmented.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -439,7 +450,7 @@ machine-readable result remains in
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle before considering a value above the selected 16 views.
 2. Continue the selected 16-view protocol through a bounded cell/ray scaling
-   ladder from the 99,970-cell checkpoint on Room, retaining fresh-Ply metrics,
+   ladder from the 174,410-cell checkpoint on Room, retaining fresh-Ply metrics,
    per-phase timing, truncation, and cgroup telemetry at every boundary. Scale
    toward the 735K-cell prefix before attempting the 2.1M-cell final target.
 3. Repeat the selected automatic random-pixel policy on another complete scene

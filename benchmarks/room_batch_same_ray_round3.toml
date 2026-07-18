@@ -178,6 +178,43 @@ all_39_delta_from_one_view = 1.17
 improved_selected_test_views = 8
 artifact_path = "target/audit-runs/room-batch1024-mixed16-step1000-3d2ba74"
 
+[step1500_mixed_view_16]
+status = "completed"
+git_commit = "a86707a"
+resume_from = "target/audit-runs/room-batch1024-mixed16-step1000-3d2ba74"
+resume_step = 1000
+completed_steps = 1500
+additional_sampled_rays = 512000
+total_sampled_rays = 1536000
+additional_densification_rounds = 4
+total_densification_rounds = 9
+views_per_batch = 16
+rays_per_view = 64
+fresh_ply_reload = true
+continuation_wall_seconds = 2883.365
+cumulative_wall_seconds = 5400.440
+memory_peak_bytes = 1038524416
+sampled_gpu_memory_peak_mib = 719
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+truncated_rays = 0
+contribution_mean_segments = [69.4, 75.7, 82.0, 88.2]
+contribution_max_segments = [155, 161, 170, 178]
+pruned_cells = [68, 95, 68, 73]
+split_cells = [14985, 17219, 19791, 22749]
+cells = 174410
+directed_adjacency_entries = 2658968
+train_psnr = 22.39
+test_psnr = 21.83
+selected_test_psnr = [20.25, 23.17, 21.81, 22.78, 21.94, 20.43, 22.78, 21.48]
+all_39_test_psnr = 21.60
+train_delta_from_step1000 = 1.08
+test_delta_from_step1000 = 0.93
+all_39_delta_from_step1000 = 0.90
+artifact_path = "target/audit-runs/room-batch1024-mixed16-step1500-a86707a"
+
 [selection]
 status = "selected"
 decision_commit = "7c423a1"
@@ -232,5 +269,9 @@ required = [
     "step1000_mixed_view_16.cells",
     "step1000_mixed_view_16.train_psnr",
     "step1000_mixed_view_16.test_psnr",
+    "step1500_mixed_view_16.git_commit",
+    "step1500_mixed_view_16.cells",
+    "step1500_mixed_view_16.train_psnr",
+    "step1500_mixed_view_16.test_psnr",
     "selection.decision_commit",
 ]

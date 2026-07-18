@@ -292,3 +292,16 @@ remain one view, and explicit overrides remain available. The library-level
 `AppearanceFitConfig` default stays at one view so direct callers do not change
 semantics implicitly. The ignored step-1,000 artifacts are
 `target/audit-runs/room-batch1024-{one1,mixed16}-step1000-3d2ba74`.
+
+The selected mixed-view trajectory continues from step 1,000 to 1,500 through
+four additional exhaustive growth rounds. It reaches 174,410 cells and
+2,658,968 directed edges; fresh-Ply evaluation exactly reproduces 22.39 dB
+train / 21.83 dB held out, +1.08/+0.93 dB over step 1,000. The all-39 coverage
+diagnostic rises from 20.70 to 21.60 dB (+0.90). Mean contribution-path length
+grows smoothly from 69.4 to 88.2 segments, the maximum from 155 to 178, and all
+four 1,044,480-ray scans retain zero truncation. The 500-step continuation takes
+2,883.365 seconds, peaks at 1,038,524,416 host bytes and 719 MiB sampled GPU
+memory, and records zero swap, pressure, OOM, or GPU faults. Visual structure
+continues to improve but remains painterly and fragmented rather than
+viewer-ready. The raw artifact remains ignored at
+`target/audit-runs/room-batch1024-mixed16-step1500-a86707a`.
