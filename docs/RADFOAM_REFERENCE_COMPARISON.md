@@ -19,13 +19,13 @@ updates, with 735,103 cells. This is direct evidence that a cloud-only
 Voronoi-volume representation can reconstruct a difficult real scene well;
 the earlier Rust plateau does not reject the geometry premise.
 
-The current Rust trainer is still a much smaller scaling experiment. Its
-selected Room protocol processes 2,816,000 sampled optimizer rays and reaches
-698,940 cells and 22.62 dB on its selected eight held-out views, while the
-serialized official prefix has processed five billion mixed-view rays and has
-more than four times as many cells. Resolution, split coverage, loss,
-background, initialization, and optimizer schedules also differ. These scores
-are therefore diagnostics, not an apples-to-apples trainer ranking.
+The current Rust trainer is still a much smaller optimization experiment. Its
+selected Room protocol processes 2,944,000 sampled optimizer rays and now
+matches the official prefix's 735,103 cells, reaching 22.77 dB on its selected
+eight held-out views. The serialized official prefix has processed five billion
+mixed-view rays. Resolution, split coverage, loss, background, initialization,
+and optimizer schedules also differ. These scores are therefore diagnostics,
+not an apples-to-apples trainer ranking.
 
 Renderer compatibility is now separately established. Loading the official
 PLY directly in Blade and evaluating the same full-resolution split reaches
@@ -403,6 +403,7 @@ rounds, 128×128 grid, black background, and L1/cosine path:
 | 16 views/batch, step 2,500, max-512 | 528,732 | 23.69 dB | 22.57 dB | 17,696.292 s cumulative | 2,646,769,664 B |
 | 16 views/batch, step 2,625, max-512 | 607,908 | 23.80 dB | 22.64 dB | 20,717.337 s cumulative | 3,013,816,320 B |
 | 16 views/batch, step 2,750, max-512 | 698,940 | 23.89 dB | 22.62 dB | 24,128.491 s cumulative | 3,572,768,768 B |
+| 16 views/batch, step 2,875, max-512 | 735,103 | 24.07 dB | 22.77 dB | 27,944.446 s cumulative | 3,634,937,856 B |
 
 Fresh-Ply evaluation exactly reproduces the corrected live result, which is
 +0.52/+0.61 dB over the historical published train/held-out metric and
@@ -505,6 +506,17 @@ a larger foreground smear, and all 39 held-out views still rise by 0.03 dB to
 bytes and 1,773 MiB sampled GPU memory, and records zero swap, pressure, OOM,
 or GPU faults.
 
+At step 2,875 the ladder reaches the official prefix's 735,103-cell capacity
+exactly. The exhaustive scan measures 164.2 mean / 305 maximum segments with
+zero truncation, prunes 192 cells, and adds the 36,355 splits needed to hit the
+cap. Fresh-Ply quality rises by +0.18/+0.15 dB to 24.07/22.77; all 39 held-out
+views average 22.76 dB, +0.11 dB. The continuation takes 3,815.955 seconds,
+peaks at 3,634,937,856 host bytes and 1,822 MiB sampled GPU memory, and records
+zero swap, pressure, OOM, or GPU faults. Cell capacity is therefore no longer
+the primary unmatched variable: the Rust checkpoint has only 2.944 million
+optimizer rays versus roughly five billion in the 30.02 dB official prefix,
+and still differs in resolution and training protocol.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -519,10 +531,11 @@ machine-readable result remains in
 
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle before considering a value above the selected 16 views.
-2. Continue the selected 16-view protocol through a bounded cell/ray scaling
-   ladder from the 698,940-cell checkpoint on Room, retaining fresh-Ply metrics,
-   per-phase timing, truncation, and cgroup telemetry at every boundary. Scale
-   toward the 735K-cell prefix before attempting the 2.1M-cell final target.
+2. Continue the selected 16-view protocol through a bounded sampled-ray and
+   resolution ladder from the 735,103-cell checkpoint on Room, retaining
+   fresh-Ply metrics, per-phase timing, truncation, and cgroup telemetry at
+   every boundary. Keep capacity fixed until optimizer-budget returns are
+   measured; do not jump to the 2.1M-cell final target.
 3. Repeat the selected automatic random-pixel policy on another complete scene
    before generalizing the efficiency claim beyond Room. Keep the one-view
    library default and the full-image/patch compatibility behavior.

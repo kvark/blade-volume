@@ -382,3 +382,15 @@ measures 156.2 mean / 299 maximum segments with zero truncation. The
 sampled GPU memory with zero swap, pressure, OOM, or GPU faults. The raw
 artifact remains ignored at
 `target/audit-runs/room-batch1024-mixed16-step2750-66002d9`.
+
+The step-2,875 boundary reaches the 735,103-cell official-prefix capacity
+exactly, with 11,310,690 directed edges. Fresh-Ply evaluation reproduces 24.07
+dB train / 22.77 dB held out, +0.18/+0.15 dB over step 2,750; the all-39
+diagnostic rises by 0.11 dB to 22.76. The exhaustive scan measures 164.2 mean /
+305 maximum segments with zero truncation, prunes 192 cells, and adds the
+36,355 splits needed to hit the cap. The 3,815.955-second continuation peaks at
+3,634,937,856 host bytes and 1,822 MiB sampled GPU memory with zero swap,
+pressure, OOM, or GPU faults. Matching capacity is beneficial but not
+sufficient: this 128² run has processed only 2,944,000 optimizer rays, versus
+roughly five billion for the 30.02 dB official prefix. The raw artifact remains
+ignored at `target/audit-runs/room-batch1024-mixed16-step2875-67ef5c8`.

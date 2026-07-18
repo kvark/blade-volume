@@ -34,10 +34,10 @@ representation or renderer. Official RadFoam v1 reaches 30.02 dB on Room after
 its first 5,000 updates with 735,103 cloud cells, while Blade cross-renders the
 same PLY and full-resolution held-out split at 29.59 dB. The 0.43 dB renderer
 gap meets the Stage 2 tolerance. Blade's selected scaled Room trainer remains
-far smaller: its 16-view, 2,816,000-ray checkpoint has 698,940 cells and reaches
-23.89 / 22.62 dB on the selected train/held-out split. It still needs a matched
-ray/cell/resolution scaling ladder before the reconstruction path is
-production-ready.
+still uses far less optimization: its 16-view, 2,944,000-ray checkpoint now
+matches the 735,103-cell capacity but reaches only 24.07 / 22.77 dB on the
+selected train/held-out split. It still needs a matched ray/resolution scaling
+ladder before the reconstruction path is production-ready.
 
 The corrected paths pass the targeted NVIDIA/Vulkan physical-GPU gates,
 including weighted differentiable traversal, Gaussian CPU/GPU parity, and
@@ -319,6 +319,13 @@ At the audited revision:
   measures 156.2 mean / 299 maximum segments with zero truncation. The 56m
   51.154s continuation peaks at 3,572,768,768 host bytes and 1,773 MiB sampled
   GPU memory with zero swap, pressure, OOM, or GPU faults.
+- At step 2,875 the ladder reaches the 735,103-cell reference capacity exactly
+  and improves fresh-Ply train/held-out quality to 24.07 / 22.77 dB; all 39
+  diagnostic views average 22.76 dB. Its scan measures 164.2 mean / 305 maximum
+  segments with zero truncation. The 1h 3m 35.955s continuation peaks at
+  3,634,937,856 host bytes and 1,822 MiB sampled GPU memory with zero swap,
+  pressure, OOM, or GPU faults. Capacity matching is done; optimization rays,
+  resolution, and protocol remain unmatched.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -913,7 +920,7 @@ material path.
    gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
    all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   cell-count scaling ladder from the 698,940-cell, 23.89/22.62 dB Room
+   sampled-ray and resolution ladder from the 735,103-cell, 24.07/22.77 dB Room
    checkpoint. Retain fresh-Ply train/held-out metrics, adjacency size,
    per-phase timing, truncation counts, cgroup peak, and GPU fault telemetry at
    every boundary. The matched later boundary selects 16 views as the
