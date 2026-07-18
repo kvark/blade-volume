@@ -252,6 +252,44 @@ test_delta_from_step1500 = 0.17
 all_39_delta_from_step1500 = 0.20
 artifact_path = "target/audit-runs/room-batch1024-mixed16-step1625-d454892"
 
+[step2000_mixed_view_16]
+status = "completed"
+git_commit = "1ea4b28"
+resume_from = "target/audit-runs/room-batch1024-mixed16-step1625-d454892"
+resume_step = 1625
+completed_steps = 2000
+additional_sampled_rays = 384000
+total_sampled_rays = 2048000
+additional_densification_rounds = 3
+total_densification_rounds = 13
+target_points = 400000
+views_per_batch = 16
+rays_per_view = 64
+fresh_ply_reload = true
+continuation_wall_seconds = 3354.647
+cumulative_wall_seconds = 9719.508
+memory_peak_bytes = 1730691072
+sampled_gpu_memory_peak_mib = 936
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+truncated_rays = 0
+contribution_mean_segments = [100.6, 106.9, 113.5]
+contribution_max_segments = [205, 205, 223]
+pruned_cells = [57, 72, 88]
+split_cells = [29991, 34479, 39638]
+cells = 303891
+directed_adjacency_entries = 4658338
+train_psnr = 23.16
+test_psnr = 22.31
+selected_test_psnr = [20.48, 23.68, 22.44, 23.23, 22.53, 21.06, 23.16, 21.91]
+all_39_test_psnr = 22.22
+train_delta_from_step1625 = 0.53
+test_delta_from_step1625 = 0.31
+all_39_delta_from_step1625 = 0.42
+artifact_path = "target/audit-runs/room-batch1024-mixed16-step2000-1ea4b28"
+
 [selection]
 status = "selected"
 decision_commit = "7c423a1"
@@ -314,5 +352,9 @@ required = [
     "step1625_mixed_view_16.cells",
     "step1625_mixed_view_16.train_psnr",
     "step1625_mixed_view_16.test_psnr",
+    "step2000_mixed_view_16.git_commit",
+    "step2000_mixed_view_16.cells",
+    "step2000_mixed_view_16.train_psnr",
+    "step2000_mixed_view_16.test_psnr",
     "selection.decision_commit",
 ]

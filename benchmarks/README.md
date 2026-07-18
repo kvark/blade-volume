@@ -316,3 +316,15 @@ maximum of 188, and truncates none. The 964.421-second continuation peaks at
 pressure, OOM, or GPU faults. Visual structure continues to sharpen but remains
 fragmented. The raw artifact remains ignored at
 `target/audit-runs/room-batch1024-mixed16-step1625-d454892`.
+
+Raising only the capacity cap to 400,000 and continuing to step 2,000 adds
+three exhaustive growth rounds and reaches 303,891 cells with 4,658,338
+directed edges. Fresh-Ply evaluation reproduces 23.16 dB train / 22.31 dB held
+out, +0.53/+0.31 dB over step 1,625; the all-39 diagnostic rises by 0.42 dB to
+22.22. Mean contribution paths increase smoothly from 100.6 to 113.5 segments,
+the maximum from 205 to 223, and all three 1,044,480-ray scans truncate none.
+The 3,354.647-second continuation peaks at 1,730,691,072 host bytes and 936 MiB
+sampled GPU memory with zero swap, pressure, OOM, or GPU faults. Large surfaces
+and boundaries are cleaner, but fine detail remains fragmented. The raw
+artifact remains ignored at
+`target/audit-runs/room-batch1024-mixed16-step2000-1ea4b28`.
