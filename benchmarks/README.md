@@ -362,3 +362,12 @@ continuation peaks at 2,646,769,664 host bytes and 1,690 MiB sampled GPU memory
 with zero swap, pressure, OOM, or GPU faults. Quality is still improving, but
 held-out gains are now small. The raw artifact remains ignored at
 `target/audit-runs/room-batch1024-mixed16-step2500-2f997cf`.
+
+At step 2,625 the max-512 ladder reaches 607,908 cells and 9,350,692 directed
+edges. Fresh-Ply evaluation reproduces 23.80 dB train / 22.64 dB held out,
++0.11/+0.07 dB over step 2,500; the all-39 diagnostic rises by 0.06 dB to
+22.62. The exhaustive scan measures 148.5 mean / 275 maximum segments with
+zero truncation, prunes 116 cells, and adds 79,292 splits. The 3,021.045-second
+continuation peaks at 3,013,816,320 host bytes and 1,786 MiB sampled GPU memory
+with zero swap, pressure, OOM, or GPU faults. The raw artifact remains ignored
+at `target/audit-runs/room-batch1024-mixed16-step2625-1a013d7`.

@@ -34,8 +34,8 @@ representation or renderer. Official RadFoam v1 reaches 30.02 dB on Room after
 its first 5,000 updates with 735,103 cloud cells, while Blade cross-renders the
 same PLY and full-resolution held-out split at 29.59 dB. The 0.43 dB renderer
 gap meets the Stage 2 tolerance. Blade's selected scaled Room trainer remains
-far smaller: its 16-view, 2,560,000-ray checkpoint has 528,732 cells and reaches
-23.69 / 22.57 dB on the selected train/held-out split. It still needs a matched
+far smaller: its 16-view, 2,688,000-ray checkpoint has 607,908 cells and reaches
+23.80 / 22.64 dB on the selected train/held-out split. It still needs a matched
 ray/cell/resolution scaling ladder before the reconstruction path is
 production-ready.
 
@@ -308,6 +308,11 @@ At the audited revision:
   truncation. The 45m 2.106s continuation peaks at 2,646,769,664 host bytes and
   1,690 MiB sampled GPU memory with zero swap, pressure, OOM, or GPU faults.
   Held-out improvement has slowed to +0.04 dB at this boundary.
+- The following max-512 round reaches 607,908 cells and improves fresh-Ply
+  train/held-out quality to 23.80 / 22.64 dB; all 39 diagnostic views average
+  22.62 dB. Its scan measures 148.5 mean / 275 maximum segments with zero
+  truncation. The 50m 21.045s continuation peaks at 3,013,816,320 host bytes and
+  1,786 MiB sampled GPU memory with zero swap, pressure, OOM, or GPU faults.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -902,7 +907,7 @@ material path.
    gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
    all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   cell-count scaling ladder from the 528,732-cell, 23.69/22.57 dB Room
+   cell-count scaling ladder from the 607,908-cell, 23.80/22.64 dB Room
    checkpoint. Retain fresh-Ply train/held-out metrics, adjacency size,
    per-phase timing, truncation counts, cgroup peak, and GPU fault telemetry at
    every boundary. The matched later boundary selects 16 views as the
