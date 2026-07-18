@@ -330,6 +330,48 @@ max_steps_512_train_psnr = 23.42
 max_steps_512_test_psnr = 22.43
 artifact_path = "target/audit-runs/room-batch1024-mixed16-step2250-f92281f"
 
+[step2375_mixed_view_16]
+status = "completed"
+git_commit = "1fd1783"
+resume_from = "target/audit-runs/room-batch1024-mixed16-step2250-f92281f"
+resume_step = 2250
+completed_steps = 2375
+additional_sampled_rays = 128000
+total_sampled_rays = 2432000
+additional_densification_rounds = 1
+total_densification_rounds = 16
+target_points = 735103
+densify_until = 2875
+max_steps = 512
+views_per_batch = 16
+rays_per_view = 64
+fresh_ply_reload = true
+continuation_wall_seconds = 2411.225
+cumulative_wall_seconds = 14994.186
+memory_peak_bytes = 2324807680
+sampled_gpu_memory_peak_mib = 1362
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+truncated_rays = 0
+contribution_mean_segments = [133.6]
+contribution_max_segments = [259]
+pruned_cells = [97]
+split_cells = [59985]
+cells = 459888
+directed_adjacency_entries = 7065808
+train_psnr = 23.55
+test_psnr = 22.53
+selected_test_psnr = [20.83, 24.20, 22.57, 23.40, 22.75, 21.09, 23.26, 22.14]
+all_39_test_psnr = 22.47
+train_delta_from_step2250 = 0.13
+test_delta_from_step2250 = 0.10
+all_39_delta_from_step2250 = 0.09
+max_steps_256_train_psnr = 23.55
+max_steps_256_test_psnr = 22.53
+artifact_path = "target/audit-runs/room-batch1024-mixed16-step2375-1fd1783"
+
 [selection]
 status = "selected"
 decision_commit = "7c423a1"
@@ -400,5 +442,10 @@ required = [
     "step2250_mixed_view_16.cells",
     "step2250_mixed_view_16.train_psnr",
     "step2250_mixed_view_16.test_psnr",
+    "step2375_mixed_view_16.git_commit",
+    "step2375_mixed_view_16.max_steps",
+    "step2375_mixed_view_16.cells",
+    "step2375_mixed_view_16.train_psnr",
+    "step2375_mixed_view_16.test_psnr",
     "selection.decision_commit",
 ]

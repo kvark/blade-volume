@@ -340,3 +340,15 @@ budget. The 2,863.453-second continuation peaks at 2,309,640,192 host bytes and
 954 MiB sampled GPU memory with zero swap, pressure, OOM, or GPU faults. The
 raw artifact remains ignored at
 `target/audit-runs/room-batch1024-mixed16-step2250-f92281f`.
+
+The next guarded round raises the target to the 735,103-cell reference prefix,
+extends the growth horizon to step 2,875, and raises traversal capacity to 512.
+At step 2,375 it reaches 459,888 cells and 7,065,808 directed edges. The
+exhaustive scan measures 133.6 mean / 259 maximum segments with zero
+truncation, proving that the old 256-step budget is no longer sufficient even
+though a diagnostic 256-step reload rounds to the same PSNR. Fresh max-512 PLY
+evaluation reproduces 23.55 dB train / 22.53 dB held out; all 39 held-out views
+average 22.47 dB. The 2,411.225-second continuation peaks at 2,324,807,680 host
+bytes and 1,362 MiB sampled GPU memory with zero swap, pressure, OOM, or GPU
+faults. The raw artifact remains ignored at
+`target/audit-runs/room-batch1024-mixed16-step2375-1fd1783`.

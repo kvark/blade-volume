@@ -20,8 +20,8 @@ Voronoi-volume representation can reconstruct a difficult real scene well;
 the earlier Rust plateau does not reject the geometry premise.
 
 The current Rust trainer is still a much smaller scaling experiment. Its
-selected Room protocol processes 2,304,000 sampled optimizer rays and reaches
-400,000 cells and 22.43 dB on its selected eight held-out views, while the
+selected Room protocol processes 2,432,000 sampled optimizer rays and reaches
+459,888 cells and 22.53 dB on its selected eight held-out views, while the
 serialized official prefix has processed five billion mixed-view rays and has
 more than four times as many cells. Resolution, split coverage, loss,
 background, initialization, and optimizer schedules also differ. These scores
@@ -399,6 +399,7 @@ rounds, 128×128 grid, black background, and L1/cosine path:
 | 16 views/batch, step 1,625 | 200,000 | 22.63 dB | 22.00 dB | 6,364.861 s cumulative | 1,060,331,520 B |
 | 16 views/batch, step 2,000 | 303,891 | 23.16 dB | 22.31 dB | 9,719.508 s cumulative | 1,730,691,072 B |
 | 16 views/batch, step 2,250 | 400,000 | 23.42 dB | 22.43 dB | 12,582.961 s cumulative | 2,309,640,192 B |
+| 16 views/batch, step 2,375, max-512 | 459,888 | 23.55 dB | 22.53 dB | 14,994.186 s cumulative | 2,324,807,680 B |
 
 Fresh-Ply evaluation exactly reproduces the corrected live result, which is
 +0.52/+0.61 dB over the historical published train/held-out metric and
@@ -466,6 +467,17 @@ is insufficient for another capacity increase. The continuation takes
 2,863.453 seconds, peaks at 2,309,640,192 host bytes and 954 MiB sampled GPU
 memory, and records zero swap, pressure, OOM, or GPU faults.
 
+The next guarded round raises the target to the 735,103-cell reference prefix,
+extends growth through step 2,875, and doubles the traversal budget to 512. At
+step 2,375 it reaches 459,888 cells. Its exhaustive scan measures 133.6 mean /
+259 maximum segments with zero truncation, directly proving that 256 is no
+longer a sufficient contribution budget. A diagnostic 256-step reload still
+rounds to the same 23.55/22.53 dB as the fresh max-512 evaluation because the
+over-budget paths are rare; all 39 held-out views average 22.47 dB. The
+continuation takes 2,411.225 seconds, peaks at 2,324,807,680 host bytes and
+1,362 MiB sampled GPU memory, and records zero swap, pressure, OOM, or GPU
+faults.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -481,7 +493,7 @@ machine-readable result remains in
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle before considering a value above the selected 16 views.
 2. Continue the selected 16-view protocol through a bounded cell/ray scaling
-   ladder from the 400,000-cell checkpoint on Room, retaining fresh-Ply metrics,
+   ladder from the 459,888-cell checkpoint on Room, retaining fresh-Ply metrics,
    per-phase timing, truncation, and cgroup telemetry at every boundary. Scale
    toward the 735K-cell prefix before attempting the 2.1M-cell final target.
 3. Repeat the selected automatic random-pixel policy on another complete scene
