@@ -243,21 +243,27 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
         tx.fill_buffer(bufs.dt_grad_current.at(0), pl * 16, 0);
         tx.fill_buffer(bufs.dt_grad_next.at(0), pl * 16, 0);
     }
-    recorder.dispatch(
-        &mut encoder,
-        &cloud,
-        &bufs,
-        RecordPathsArgs {
-            camera,
-            start_point: 0,
-            max_steps: max_steps as u32,
-            image_width: width,
-            image_height: height,
-            max_path_dt: 50.0,
-            depth,
-            num_pixels,
-        },
-    );
+    // Fill the batch in two slices. This exercises the same output-offset
+    // path used by mixed-view training while retaining one camera here so the
+    // complete result can be compared directly with the CPU oracle.
+    for pixel_offset in [0, num_pixels / 2] {
+        recorder.dispatch(
+            &mut encoder,
+            &cloud,
+            &bufs,
+            RecordPathsArgs {
+                camera,
+                start_point: 0,
+                pixel_offset,
+                max_steps: max_steps as u32,
+                image_width: width,
+                image_height: height,
+                max_path_dt: 50.0,
+                depth,
+                num_pixels: num_pixels / 2,
+            },
+        );
+    }
     // Read back via download staging buffers.
     let pl = (num_pixels as u64) * (max_steps as u64);
     let previous_cells_dl = ctx.create_buffer(gpu::BufferDesc {

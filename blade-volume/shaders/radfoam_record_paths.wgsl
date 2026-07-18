@@ -31,6 +31,8 @@ struct RecordParams {
     max_steps: u32,
     /// Pixels in this dispatch (= P).
     num_pixels: u32,
+    /// First pixel/output row owned by this dispatch.
+    pixel_offset: u32,
     /// Source image width (for converting pixel index → (ix, iy)).
     image_width: u32,
     image_height: u32,
@@ -42,6 +44,9 @@ struct RecordParams {
     depth: f32,
     /// Non-zero for bounded PowerFoam support spheres.
     power_foam: u32,
+    _padding0: u32,
+    _padding1: u32,
+    _padding2: u32,
 };
 
 struct Camera {
@@ -240,7 +245,8 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let pixel_idx = g_pixel_indices[p_id];
+    let output_pixel = g_params.pixel_offset + p_id;
+    let pixel_idx = g_pixel_indices[output_pixel];
     let ray_dir = ray_dir_for_pixel(pixel_idx);
     let ray_origin = g_camera.position;
 
@@ -250,7 +256,7 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
     var current_pos = g_points[current].xyz;
     var current_radius = g_points[current].w;
 
-    let row_start = p_id * g_params.max_steps;
+    let row_start = output_pixel * g_params.max_steps;
     var output_step: u32 = 0u;
 
     // The CPU `record_path` walks until t1 >= depth, no more faces,

@@ -122,6 +122,12 @@ struct Args {
     #[argh(option, default = "1024")]
     pixel_batch: usize,
 
+    /// camera views per random-pixel Adam batch (default 1). Rays are split
+    /// evenly across a deterministic stratified view sample. Values above one
+    /// are incompatible with patch and full-image batches.
+    #[argh(option, default = "1")]
+    views_per_batch: usize,
+
     /// adam steps per view in pixel-batched mode (default 200)
     #[argh(option, default = "200")]
     steps_per_view: usize,
@@ -404,6 +410,14 @@ fn main() {
     } else {
         Some(args.pixel_batch)
     };
+    if args.views_per_batch == 0 {
+        eprintln!("--views-per-batch must be greater than zero");
+        std::process::exit(2);
+    }
+    if args.views_per_batch > 1 && (pixel_batch.is_none() || args.patch_size > 0) {
+        eprintln!("--views-per-batch > 1 requires random-pixel sampling");
+        std::process::exit(2);
+    }
     let adjacency = if args.qhull {
         pipeline::AdjacencyKind::DelaunayQhull
     } else if args.cech_radius > 0.0 {
@@ -554,6 +568,7 @@ fn main() {
             learning_rate: args.learning_rate,
             epochs: args.epochs,
             pixel_batch,
+            views_per_batch: args.views_per_batch,
             steps_per_view: args.steps_per_view,
             sh_degree: args.sh_degree,
             color_loss,
@@ -816,7 +831,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pixel_batch_uses_selected_default_and_accepts_override() {
+    fn batching_uses_selected_defaults_and_accepts_overrides() {
         let default = <Args as argh::FromArgs>::from_args(
             &["train_colmap"],
             &[
@@ -830,6 +845,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(default.pixel_batch, 1024);
+        assert_eq!(default.views_per_batch, 1);
 
         let explicit = <Args as argh::FromArgs>::from_args(
             &["train_colmap"],
@@ -842,9 +858,12 @@ mod tests {
                 "model.ply",
                 "--pixel-batch",
                 "256",
+                "--views-per-batch",
+                "16",
             ],
         )
         .unwrap();
         assert_eq!(explicit.pixel_batch, 256);
+        assert_eq!(explicit.views_per_batch, 16);
     }
 }

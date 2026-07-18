@@ -65,8 +65,7 @@ pub struct VolumetricGraph {
     pub ray_origin: mn::NodeId,
     pub ray_dir_per_pixel: mn::NodeId,
     pub pixel_idx_per_step: mn::NodeId,
-    /// Single u32 scalar — index into `exposure` for the current view.
-    /// Set once per Adam step via `set_input_u32("view_idx", &[vi])`.
+    /// `[P]` u32 indices into the exposure tables, one per sampled ray.
     pub view_idx: mn::NodeId,
     /// `basis_inputs[k-1]` is the `[P, 1]` per-pixel basis input for SH
     /// component `k` (k ≥ 1). Component 0 is the constant `SH_C0`, no
@@ -273,10 +272,9 @@ pub fn build_volumetric_graph(
     };
 
     // Ray geometry inputs — needed to compute dt from positions
-    // differentiably. Set once per Adam step; the host code computes the
-    // ray-origin (single 3-vector per view) and ray-direction (one per
-    // sampled pixel) from the view camera.
-    let ray_origin = g.input("ray_origin", &[1, 3]);
+    // differentiably. Both are per pixel because one Adam batch may contain
+    // rays from multiple camera views.
+    let ray_origin = g.input("ray_origin", &[p, 3]);
     let ray_dir_per_pixel = g.input("ray_dir_per_pixel", &[p, 3]);
     // Constant gather: pixel_idx_per_step[k] = k / L = which pixel this
     // (pixel, step) entry belongs to. Used to broadcast per-pixel ray
@@ -324,7 +322,7 @@ pub fn build_volumetric_graph(
     let exposure_r = g.parameter("exposure_r", &[num_views, 1]);
     let exposure_g = g.parameter("exposure_g", &[num_views, 1]);
     let exposure_b = g.parameter("exposure_b", &[num_views, 1]);
-    let view_idx = g.input_u32("view_idx", &[1]);
+    let view_idx = g.input_u32("view_idx", &[p]);
     let mut sh_coefficients: Vec<Vec<mn::NodeId>> = Vec::with_capacity(3);
     for channel in ["sh_r", "sh_g", "sh_b"] {
         let mut per_channel = Vec::with_capacity(num_components);
@@ -377,10 +375,8 @@ pub fn build_volumetric_graph(
     let normal = g.add(pos_next, neg_pos_cell);
     let normal_squared = g.mul(normal, normal);
 
-    // Broadcast ray_origin [1,3] → [P*L, 3] via matmul with [P*L, 1] ones.
-    let ones_pl1 = g.constant(vec![1.0_f32; pl], &[pl, 1]);
-    let ray_origin_pl = g.matmul(ones_pl1, ray_origin); // [P*L, 3]
-                                                        // Gather ray_dir [P, 3] → [P*L, 3] via embedding with pixel_idx_per_step.
+    // Gather per-pixel origins and directions into the `[P*L, 3]` path layout.
+    let ray_origin_pl = g.embedding(pixel_idx_per_step, ray_origin);
     let ray_dir_pl = g.embedding(pixel_idx_per_step, ray_dir_per_pixel);
 
     let neg_ray_origin_pl = g.neg(ray_origin_pl);
@@ -576,20 +572,15 @@ pub fn build_volumetric_graph(
     // --- Per-view exposure ---
     //
     // Each channel's exposure is its own `[num_views, 1]` table. Gather
-    // the row for the current view via embedding (which is fully
-    // differentiable — backward is scatter_add into the table). The
-    // result is `[1, 1]`; broadcast to `[p, 1]` with a matmul against
-    // the `ones[p, 1]` constant, then elementwise-multiply the
-    // rendered channel.
+    // the row for each pixel's view via embedding (which is fully
+    // differentiable — backward is scatter_add into the table), then
+    // elementwise-multiply the rendered channel.
     let ones_p1 = g.constant(vec![1.0_f32; p], &[p, 1]);
-    let exp_r_11 = g.embedding(view_idx, exposure_r); // [1, 1]
-    let exp_r_p = g.matmul(ones_p1, exp_r_11); // [p, 1]
+    let exp_r_p = g.embedding(view_idx, exposure_r); // [p, 1]
     let pixel_r = g.mul(pixel_r, exp_r_p);
-    let exp_g_11 = g.embedding(view_idx, exposure_g);
-    let exp_g_p = g.matmul(ones_p1, exp_g_11);
+    let exp_g_p = g.embedding(view_idx, exposure_g);
     let pixel_g = g.mul(pixel_g, exp_g_p);
-    let exp_b_11 = g.embedding(view_idx, exposure_b);
-    let exp_b_p = g.matmul(ones_p1, exp_b_11);
+    let exp_b_p = g.embedding(view_idx, exposure_b);
     let pixel_b = g.mul(pixel_b, exp_b_p);
 
     // Explicit premultiplied-alpha background compositing. Opacity
@@ -1194,6 +1185,12 @@ pub struct AppearanceFitConfig {
     /// per step and uses `epochs` steps per view. Both modes use the same GPU
     /// path recorder and differentiable graph.
     pub pixel_batch: Option<usize>,
+    /// Camera views represented in each random-pixel Adam batch. Rays are
+    /// split evenly across a deterministic stratified sample of this many
+    /// views. The value is capped to the available views and rays. Default 1
+    /// preserves historical one-view batches. Patch and full-image modes
+    /// require 1.
+    pub views_per_batch: usize,
     /// Number of Adam steps per view in randomly batched mode. Default 200.
     pub steps_per_view: usize,
     /// SH degree for view-dependent colour. 0 = flat colour (default,
@@ -1381,6 +1378,7 @@ impl Default for AppearanceFitConfig {
             adam_beta2: 0.999,
             adam_eps: 1e-8,
             pixel_batch: None,
+            views_per_batch: 1,
             steps_per_view: 200,
             sh_degree: 0,
             color_loss: ColorLoss::L1,
@@ -1414,6 +1412,21 @@ fn next_lcg_u32(state: &mut u64) -> u32 {
         .wrapping_mul(LCG_MULTIPLIER)
         .wrapping_add(LCG_INCREMENT);
     (*state >> 32) as u32
+}
+
+fn sample_training_views(state: &mut u64, num_views: usize, count: usize) -> Vec<usize> {
+    assert!(count > 0 && count <= num_views);
+    (0..count)
+        .map(|slot| {
+            let begin = slot * num_views / count;
+            let end = (slot + 1) * num_views / count;
+            begin + (next_lcg_u32(state) as usize) % (end - begin)
+        })
+        .collect()
+}
+
+fn batch_view_range(slot: usize, count: usize, pixel_batch: usize) -> std::ops::Range<usize> {
+    slot * pixel_batch / count..(slot + 1) * pixel_batch / count
 }
 
 fn next_quantile(state: &mut u64) -> f32 {
@@ -1831,7 +1844,8 @@ pub struct ViewSupervision {
 /// `pixel_batch = None` uses the complete `width × height` image as the batch
 /// and preserves the legacy `epochs * views.len()` step count without using
 /// the obsolete precomputed-path graph. `Some(K)` uses random mini-batches and
-/// `steps_per_view * views.len()` steps.
+/// `steps_per_view * views.len()` steps. `views_per_batch > 1` distributes
+/// each random-pixel batch across a deterministic stratified camera sample.
 pub fn fit_appearance_multi_view(
     model: &mut vol::PointCloudModel,
     views: &[ViewSupervision],
@@ -2539,6 +2553,7 @@ fn collect_path_contributions(
                 vol::gpu::RecordPathsArgs {
                     camera: view.camera,
                     start_point,
+                    pixel_offset: 0,
                     max_steps: max_steps as u32,
                     image_width: view.width,
                     image_height: view.height,
@@ -3079,10 +3094,11 @@ fn build_train_session(
     (session, gpu_cloud)
 }
 
-/// Pixel-batched training mode. Each Adam step picks a random training view
-/// and `pixel_batch` random pixels from its image, records paths through the
-/// current model, and runs one optimiser step. Allows training at full image
-/// resolution without exceeding the meganeura matmul shape limits.
+/// Pixel-batched training mode. Each Adam step picks a deterministic
+/// stratified set of training views, distributes `pixel_batch` random pixels
+/// across them, records paths through the current model, and runs one
+/// optimiser step. Allows training at full image resolution without exceeding
+/// the meganeura matmul shape limits.
 fn fit_appearance_pixel_batched(
     model: &mut vol::PointCloudModel,
     views: &[ViewSupervision],
@@ -3094,6 +3110,17 @@ fn fit_appearance_pixel_batched(
     let n_cells = model.points.len();
     let total_steps = config.steps_per_view.max(1) * views.len();
     let full_image_batch = config.pixel_batch.is_none();
+    assert!(
+        config.views_per_batch > 0,
+        "views_per_batch must be non-zero"
+    );
+    if full_image_batch || config.patch_size > 0 {
+        assert_eq!(
+            config.views_per_batch, 1,
+            "mixed-view batches require random-pixel sampling"
+        );
+    }
+    let views_per_batch = config.views_per_batch.min(views.len()).min(pixel_batch);
     assert!(
         config.resume_step <= total_steps,
         "resume_step {} exceeds the configured total step budget {}",
@@ -3196,7 +3223,7 @@ fn fit_appearance_pixel_batched(
     } else if full_image_batch {
         1_u64 // view only
     } else {
-        1_u64.saturating_add(pixel_batch as u64) // view + each sampled pixel
+        (views_per_batch as u64).saturating_add(pixel_batch as u64)
     };
     let quantile_draws_per_step = if config.quantile_weight > 0.0 {
         (pixel_batch as u64).saturating_mul(2)
@@ -3243,12 +3270,13 @@ fn fit_appearance_pixel_batched(
         .map(|_| vec![0.0_f32; pixel_batch])
         .collect();
     // Position-opt graph inputs:
-    //   - ray_origin (per view, [1,3]): camera position
+    //   - ray_origin ([P,3]): per-pixel camera position
     //   - ray_dir_per_pixel ([P, 3]): per-pixel ray direction
     //   - pixel_idx_per_step ([P*L]): constant gather index for
     //     broadcasting per-pixel data across the L step dimension
-    let mut ray_origin_buf = vec![0.0_f32; 3];
+    let mut ray_origin_buf = vec![0.0_f32; pixel_batch * 3];
     let mut ray_dir_per_pixel_buf = vec![0.0_f32; pixel_batch * 3];
+    let mut view_idx_buf = vec![0_u32; pixel_batch];
     let pixel_idx_per_step: Vec<u32> = (0..(pixel_batch * max_steps))
         .map(|i| (i / max_steps) as u32)
         .collect();
@@ -3392,23 +3420,29 @@ fn fit_appearance_pixel_batched(
         let cycle_start = steps_done;
         for cycle_step in 0..cycle_budget {
             let step = steps_done + cycle_step;
-            let vi = (next_lcg_u32(&mut sampling_rng) as usize) % views.len();
-            let v = &views[vi];
-            let img_size = v.width * v.height;
-
-            let cam_ray_constants = ray_constants(&v.camera);
-            ray_origin_buf[0] = cam_ray_constants.origin.x;
-            ray_origin_buf[1] = cam_ray_constants.origin.y;
-            ray_origin_buf[2] = cam_ray_constants.origin.z;
+            let selected_views =
+                sample_training_views(&mut sampling_rng, views.len(), views_per_batch);
+            for (slot, &vi) in selected_views.iter().enumerate() {
+                let range = batch_view_range(slot, views_per_batch, pixel_batch);
+                let origin = ray_constants(&views[vi].camera).origin;
+                for k in range {
+                    ray_origin_buf[k * 3] = origin.x;
+                    ray_origin_buf[k * 3 + 1] = origin.y;
+                    ray_origin_buf[k * 3 + 2] = origin.z;
+                    view_idx_buf[k] = vi as u32;
+                }
+            }
 
             // Two sampling modes:
-            //   - random pixels: pick `pixel_batch` independent random
-            //     pixels (legacy behaviour, used with patch_size == 0).
+            //   - random pixels: split the batch across the selected views,
+            //     then pick independent random pixels within each view.
             //   - patch: pick a random `q × q` patch corner and emit
             //     pixel indices in row-major order across the patch, so
             //     the graph can treat them as a 2D image for gradient
             //     L1.
             if patch_size > 0 {
+                let v = &views[selected_views[0]];
+                let cam_ray_constants = ray_constants(&v.camera);
                 let q = patch_size as u32;
                 let max_x = v.width.saturating_sub(q);
                 let max_y = v.height.saturating_sub(q);
@@ -3438,6 +3472,9 @@ fn fit_appearance_pixel_batched(
                     }
                 }
             } else if full_image_batch {
+                let v = &views[selected_views[0]];
+                let cam_ray_constants = ray_constants(&v.camera);
+                let img_size = v.width * v.height;
                 assert_eq!(pixel_batch, img_size as usize);
                 for (k, pidx) in (0..img_size).enumerate() {
                     pixel_indices[k] = pidx;
@@ -3461,25 +3498,30 @@ fn fit_appearance_pixel_batched(
                     }
                 }
             } else {
-                for k in 0..pixel_batch {
-                    let pidx = next_lcg_u32(&mut sampling_rng) % img_size;
-                    pixel_indices[k] = pidx;
-                    let base = (pidx as usize) * 3;
-                    target_buf[k * 3] = v.target_rgb[base];
-                    target_buf[k * 3 + 1] = v.target_rgb[base + 1];
-                    target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+                for (slot, &vi) in selected_views.iter().enumerate() {
+                    let v = &views[vi];
+                    let cam_ray_constants = ray_constants(&v.camera);
+                    let img_size = v.width * v.height;
+                    for k in batch_view_range(slot, views_per_batch, pixel_batch) {
+                        let pidx = next_lcg_u32(&mut sampling_rng) % img_size;
+                        pixel_indices[k] = pidx;
+                        let base = (pidx as usize) * 3;
+                        target_buf[k * 3] = v.target_rgb[base];
+                        target_buf[k * 3 + 1] = v.target_rgb[base + 1];
+                        target_buf[k * 3 + 2] = v.target_rgb[base + 2];
 
-                    let ix = pidx % v.width;
-                    let iy = pidx / v.width;
-                    let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
-                    ray_dir_per_pixel_buf[k * 3] = dir.x;
-                    ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
-                    ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
+                        let ix = pidx % v.width;
+                        let iy = pidx / v.width;
+                        let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
+                        ray_dir_per_pixel_buf[k * 3] = dir.x;
+                        ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
+                        ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
 
-                    if num_components > 1 {
-                        let basis = sh_basis(dir, num_components);
-                        for (j, &bv) in basis.iter().enumerate().skip(1) {
-                            basis_inputs[j - 1][k] = bv;
+                        if num_components > 1 {
+                            let basis = sh_basis(dir, num_components);
+                            for (j, &bv) in basis.iter().enumerate().skip(1) {
+                                basis_inputs[j - 1][k] = bv;
+                            }
                         }
                     }
                 }
@@ -3511,26 +3553,31 @@ fn fit_appearance_pixel_batched(
                     tx.fill_buffer(path_bufs.dt_grad_next.at(0), pl_bytes * 4, 0);
                 }
             }
-            recorder.dispatch(
-                &mut record_encoder,
-                &gpu_cloud,
-                &path_bufs,
-                vol::gpu::RecordPathsArgs {
-                    camera: v.camera,
-                    start_point: gpu_cloud
-                        .containing_point(glam::Vec3::from_array(v.camera.cam_position)),
-                    max_steps: max_steps as u32,
-                    image_width: v.width,
-                    image_height: v.height,
-                    max_path_dt: MAX_PATH_DT,
-                    depth: v.camera.depth,
-                    num_pixels: pixel_batch as u32,
-                },
-            );
+            for (slot, &vi) in selected_views.iter().enumerate() {
+                let v = &views[vi];
+                let range = batch_view_range(slot, views_per_batch, pixel_batch);
+                recorder.dispatch(
+                    &mut record_encoder,
+                    &gpu_cloud,
+                    &path_bufs,
+                    vol::gpu::RecordPathsArgs {
+                        camera: v.camera,
+                        start_point: gpu_cloud
+                            .containing_point(glam::Vec3::from_array(v.camera.cam_position)),
+                        pixel_offset: range.start as u32,
+                        max_steps: max_steps as u32,
+                        image_width: v.width,
+                        image_height: v.height,
+                        max_path_dt: MAX_PATH_DT,
+                        depth: v.camera.depth,
+                        num_pixels: range.len() as u32,
+                    },
+                );
+            }
             let _ = gpu.submit(&mut record_encoder);
 
             session.set_input("labels", &target_buf);
-            session.set_input_u32("view_idx", &[vi as u32]);
+            session.set_input_u32("view_idx", &view_idx_buf);
             if config.quantile_weight > 0.0 {
                 for (near, far) in quantile_near.iter_mut().zip(quantile_far.iter_mut()) {
                     let qa = next_quantile(&mut quantile_rng);
@@ -4513,6 +4560,29 @@ mod tests {
             ColorLoss::L1,
         );
         assert_eq!(vg.n_pixels, n_pixels);
+    }
+
+    #[test]
+    fn mixed_view_sampling_is_stratified_and_preserves_single_view_draws() {
+        let seed = 0x1234_5678_9ABC_DEF0;
+        let mut single_state = seed;
+        let single = sample_training_views(&mut single_state, 11, 1);
+        let mut legacy_state = seed;
+        let legacy = (next_lcg_u32(&mut legacy_state) as usize) % 11;
+        assert_eq!(single, [legacy]);
+        assert_eq!(single_state, legacy_state);
+
+        let mut mixed_state = seed;
+        let mixed = sample_training_views(&mut mixed_state, 11, 4);
+        assert_eq!(mixed.len(), 4);
+        for (slot, &view) in mixed.iter().enumerate() {
+            assert!(view >= slot * 11 / 4);
+            assert!(view < (slot + 1) * 11 / 4);
+        }
+        assert_eq!(mixed_state, advance_lcg(seed, 4));
+
+        let ranges: Vec<_> = (0..4).map(|slot| batch_view_range(slot, 4, 10)).collect();
+        assert_eq!(ranges, [0..2, 2..5, 5..7, 7..10]);
     }
 
     #[test]
@@ -5599,6 +5669,121 @@ mod tests {
         assert_eq!(losses.len(), 3);
         assert_eq!(model.points.len(), 5);
         model.validate().unwrap();
+    }
+
+    #[test]
+    fn mixed_view_resume_matches_uninterrupted_training() {
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping mixed_view_resume_matches_uninterrupted_training: no GPU");
+            return;
+        };
+        let cameras = [
+            vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: [0.0, 0.0, 0.0, 1.0],
+                fov: [0.5, 0.5],
+                principal: [0.0, 0.0],
+            },
+            vol::CameraParams {
+                cam_position: [-1.0, 0.05, 0.05],
+                depth: 10.0,
+                cam_orientation: [
+                    0.0,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                    0.0,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                ],
+                fov: [0.5, 0.5],
+                principal: [0.0, 0.0],
+            },
+        ];
+        let targets = [[0.9_f32, 0.2, 0.1], [0.1, 0.2, 0.9]];
+        let views: Vec<_> = cameras
+            .into_iter()
+            .zip(targets)
+            .map(|(camera, target)| ViewSupervision {
+                camera,
+                target_rgb: target.repeat(4),
+                width: 2,
+                height: 2,
+            })
+            .collect();
+        let base = AppearanceFitConfig {
+            learning_rate: 0.01,
+            pixel_batch: Some(4),
+            views_per_batch: 2,
+            steps_per_view: 4,
+            ..AppearanceFitConfig::default()
+        };
+        let checkpoint = std::env::temp_dir().join(format!(
+            "blade-volume-mixed-view-resume-{}.ply",
+            std::process::id()
+        ));
+
+        let mut uninterrupted = tiny_model();
+        fit_appearance_multi_view(
+            &mut uninterrupted,
+            &views,
+            2,
+            2,
+            16,
+            base.clone(),
+            gpu.clone(),
+        );
+
+        let mut first_segment = tiny_model();
+        fit_appearance_multi_view(
+            &mut first_segment,
+            &views,
+            2,
+            2,
+            16,
+            AppearanceFitConfig {
+                checkpoint_path: Some(checkpoint.clone()),
+                stop_after_steps: Some(4),
+                ..base.clone()
+            },
+            gpu.clone(),
+        );
+        let training_state = load_training_state(&checkpoint).unwrap();
+        assert_eq!(training_state.step, 4);
+
+        let mut resumed = vol::io::try_load(checkpoint.to_str().unwrap()).unwrap();
+        fit_appearance_multi_view(
+            &mut resumed,
+            &views,
+            2,
+            2,
+            16,
+            AppearanceFitConfig {
+                checkpoint_path: Some(checkpoint.clone()),
+                resume_step: 4,
+                resume_state_path: Some(checkpoint.with_extension("safetensors")),
+                resume_training_state: Some(training_state),
+                ..base
+            },
+            gpu,
+        );
+
+        assert_eq!(uninterrupted.points, resumed.points);
+        assert_eq!(uninterrupted.sh_coefficients, resumed.sh_coefficients);
+        let uninterrupted_adjacency = uninterrupted.adjacency.as_ref().unwrap();
+        let resumed_adjacency = resumed.adjacency.as_ref().unwrap();
+        assert_eq!(uninterrupted_adjacency.offsets, resumed_adjacency.offsets);
+        assert_eq!(
+            uninterrupted_adjacency.neighbors,
+            resumed_adjacency.neighbors
+        );
+
+        for path in [
+            checkpoint.clone(),
+            checkpoint.with_extension("safetensors"),
+            checkpoint.with_extension("trainstate"),
+            checkpoint.with_extension("ply.step"),
+        ] {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]

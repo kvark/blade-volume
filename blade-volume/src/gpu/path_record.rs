@@ -44,6 +44,10 @@ fn output_bytes(num_pixels: u32, max_steps: u32, with_jacobians: bool) -> u64 {
 pub struct RecordPathsArgs {
     pub camera: CameraParams,
     pub start_point: u32,
+    /// First row in the caller's `[buffer_capacity, max_steps]` outputs.
+    /// Pixel indices use the same offset. This allows multiple camera
+    /// dispatches to fill one optimizer batch without copying path data.
+    pub pixel_offset: u32,
     pub max_steps: u32,
     pub image_width: u32,
     pub image_height: u32,
@@ -60,11 +64,13 @@ struct RecordParams {
     start_point: u32,
     max_steps: u32,
     num_pixels: u32,
+    pixel_offset: u32,
     image_width: u32,
     image_height: u32,
     max_path_dt: f32,
     depth: f32,
     power_foam: u32,
+    _padding: [u32; 3],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -133,7 +139,8 @@ impl PathRecorder {
             "PowerFoam path recording requires full Jacobian buffers"
         );
         assert!(
-            args.num_pixels <= buffers.num_pixels,
+            args.num_pixels <= buffers.num_pixels
+                && args.pixel_offset <= buffers.num_pixels - args.num_pixels,
             "path dispatch exceeds pixel buffer capacity"
         );
         assert_eq!(
@@ -144,11 +151,13 @@ impl PathRecorder {
             start_point: args.start_point,
             max_steps: args.max_steps,
             num_pixels: args.num_pixels,
+            pixel_offset: args.pixel_offset,
             image_width: args.image_width,
             image_height: args.image_height,
             max_path_dt: args.max_path_dt,
             depth: args.depth,
             power_foam: cloud.is_power_foam as u32,
+            _padding: [0; 3],
         };
 
         let mut pass = encoder.compute("radfoam-record-paths");
