@@ -305,3 +305,14 @@ memory, and records zero swap, pressure, OOM, or GPU faults. Visual structure
 continues to improve but remains painterly and fragmented rather than
 viewer-ready. The raw artifact remains ignored at
 `target/audit-runs/room-batch1024-mixed16-step1500-a86707a`.
+
+One final 125-step segment under the initial 200,000-cell cap reaches that cap
+exactly: contribution round 9 prunes 67 cells and splits 25,657 survivors from
+174,410 to 200,000 cells. Fresh-Ply evaluation reproduces 22.63 dB train /
+22.00 dB held out, +0.24/+0.17 dB over step 1,500; the all-39 diagnostic rises
+by 0.20 dB to 21.80. Its 1,044,480-ray scan averages 94.3 segments, reaches a
+maximum of 188, and truncates none. The 964.421-second continuation peaks at
+1,060,331,520 host bytes and 688 MiB sampled GPU memory with zero swap,
+pressure, OOM, or GPU faults. Visual structure continues to sharpen but remains
+fragmented. The raw artifact remains ignored at
+`target/audit-runs/room-batch1024-mixed16-step1625-d454892`.
