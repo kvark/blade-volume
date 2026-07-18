@@ -532,6 +532,28 @@ test_delta_from_step2750 = 0.15
 all_39_delta_from_step2750 = 0.11
 artifact_path = "target/audit-runs/room-batch1024-mixed16-step2875-67ef5c8"
 
+[step3000_fixed_capacity_attempt]
+status = "failed_gpu_xid79"
+git_commit = "3792145"
+resume_from = "target/audit-runs/room-batch1024-mixed16-step2875-67ef5c8"
+resume_step = 2875
+intended_completed_steps = 3000
+last_completed_geometry_step = 2975
+target_points = 735103
+densify_until = 2875
+max_steps = 512
+memory_peak_bytes = 2692427776
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+last_sampled_gpu_memory_mib = 1788
+last_sampled_gpu_temperature_c = 72
+last_sampled_gpu_utilization_percent = 100
+exit_code = 143
+gpu_fault = "NVRM Xid 79: GPU has fallen off the bus"
+checkpoint_written = false
+artifact_path = "target/audit-runs/room-batch1024-mixed16-step3000-3792145"
+
 [selection]
 status = "selected"
 decision_commit = "7c423a1"

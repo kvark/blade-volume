@@ -517,6 +517,15 @@ the primary unmatched variable: the Rust checkpoint has only 2.944 million
 optimizer rays versus roughly five billion in the 30.02 dB official prefix,
 and still differs in resolution and training protocol.
 
+The first fixed-cap continuation toward step 3,000 did not produce a result.
+It completed geometry cycles through step 2,975, then NVIDIA Xid 79 reported
+that the GPU fell off the bus during the final 25-step interval. The cgroup
+fault watcher terminated the scope with exit 143 before a checkpoint or PLY
+was written. Host peak was 2,692,427,776 bytes with zero swap, pressure, or OOM
+events; the final GPU sample was 1,788 MiB at 72 °C and 100% utilization. This
+is a hardware/driver reset event rather than an experiment-quality result. The
+validated step-2,875 checkpoint remains the resume boundary after reboot.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -534,8 +543,9 @@ machine-readable result remains in
 2. Continue the selected 16-view protocol through a bounded sampled-ray and
    resolution ladder from the 735,103-cell checkpoint on Room, retaining
    fresh-Ply metrics, per-phase timing, truncation, and cgroup telemetry at
-   every boundary. Keep capacity fixed until optimizer-budget returns are
-   measured; do not jump to the 2.1M-cell final target.
+   every boundary. After reboot, retry the failed step-2,875→3,000 fixed-cap
+   segment. Keep capacity fixed until optimizer-budget returns are measured;
+   do not jump to the 2.1M-cell final target.
 3. Repeat the selected automatic random-pixel policy on another complete scene
    before generalizing the efficiency claim beyond Room. Keep the one-view
    library default and the full-image/patch compatibility behavior.

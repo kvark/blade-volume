@@ -394,3 +394,15 @@ pressure, OOM, or GPU faults. Matching capacity is beneficial but not
 sufficient: this 128² run has processed only 2,944,000 optimizer rays, versus
 roughly five billion for the 30.02 dB official prefix. The raw artifact remains
 ignored at `target/audit-runs/room-batch1024-mixed16-step2875-67ef5c8`.
+
+A fixed-cap step-2,875→3,000 continuation then attempted to measure optimizer
+return without further densification. It completed geometry cycles through
+step 2,975, but the NVIDIA device emitted Xid 79 (“GPU has fallen off the bus”)
+during the final 25-step interval. The cgroup fault watcher killed the scope
+with exit 143 before a checkpoint or model could be written. This was not a
+cgroup OOM: host peak was 2,692,427,776 bytes with zero swap, pressure, or OOM
+events; the final GPU sample was 1,788 MiB, 72 °C, and 100% utilization. The
+validated step-2,875 checkpoint remains the only resume source. A host reboot
+is required before retrying because both NVIDIA and this user's systemd manager
+remain wedged. Failure logs remain ignored at
+`target/audit-runs/room-batch1024-mixed16-step3000-3792145`.

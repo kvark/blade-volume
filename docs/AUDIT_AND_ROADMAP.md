@@ -326,6 +326,12 @@ At the audited revision:
   3,634,937,856 host bytes and 1,822 MiB sampled GPU memory with zero swap,
   pressure, OOM, or GPU faults. Capacity matching is done; optimization rays,
   resolution, and protocol remain unmatched.
+- The first fixed-cap continuation completed geometry cycles through step 2,975
+  before NVIDIA Xid 79 reported that the GPU fell off the bus. The cgroup fault
+  watcher terminated it before any step-3,000 checkpoint was written. Its
+  2,692,427,776-byte host peak, zero swap/pressure/OOM counters, and final
+  1,788 MiB / 72 °C / 100% GPU sample rule out cgroup memory exhaustion. Resume
+  remains at the validated step-2,875 checkpoint after reboot.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -920,12 +926,13 @@ material path.
    gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
    all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   sampled-ray and resolution ladder from the 735,103-cell, 24.07/22.77 dB Room
+   resolution ladder from the 735,103-cell, 24.07/22.77 dB Room
    checkpoint. Retain fresh-Ply train/held-out metrics, adjacency size,
    per-phase timing, truncation counts, cgroup peak, and GPU fault telemetry at
    every boundary. The matched later boundary selects 16 views as the
    random-pixel CLI default; retain one view for full-image and patch modes and
-   keep explicit overrides available.
+   keep explicit overrides available. Reboot the host first, then retry the
+   failed fixed-cap step-2,875→3,000 continuation; no later checkpoint exists.
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.
