@@ -34,8 +34,8 @@ representation or renderer. Official RadFoam v1 reaches 30.02 dB on Room after
 its first 5,000 updates with 735,103 cloud cells, while Blade cross-renders the
 same PLY and full-resolution held-out split at 29.59 dB. The 0.43 dB renderer
 gap meets the Stage 2 tolerance. Blade's selected scaled Room trainer remains
-far smaller: its 16-view, 2,048,000-ray checkpoint has 303,891 cells and reaches
-23.16 / 22.31 dB on the selected train/held-out split. It still needs a matched
+far smaller: its 16-view, 2,304,000-ray checkpoint has 400,000 cells and reaches
+23.42 / 22.43 dB on the selected train/held-out split. It still needs a matched
 ray/cell/resolution scaling ladder before the reconstruction path is
 production-ready.
 
@@ -287,6 +287,14 @@ At the audited revision:
   continuation peaks at 1,730,691,072 host bytes and 936 MiB sampled GPU memory
   with zero swap, pressure, OOM, or GPU faults. Scaling remains productive, but
   the result is not viewer-ready.
+- Continuing to step 2,250 reaches the 400,000-cell cap and improves fresh-Ply
+  train/held-out quality to 23.42 / 22.43 dB; all 39 diagnostic views average
+  22.38 dB. The two scans average 120.2/127.0 segments, peak at 246, and
+  truncate no rays. A 512-step reload is metric-identical to the 256-step
+  result, but only ten traversal steps remain, so the next growth segment must
+  raise the budget. The 47m 43.453s continuation peaks at 2,309,640,192 host
+  bytes and 954 MiB sampled GPU memory with zero swap, pressure, OOM, or GPU
+  faults.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -881,7 +889,7 @@ material path.
    gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
    all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   cell-count scaling ladder from the 303,891-cell, 23.16/22.31 dB Room
+   cell-count scaling ladder from the 400,000-cell, 23.42/22.43 dB Room
    checkpoint. Retain fresh-Ply train/held-out metrics, adjacency size,
    per-phase timing, truncation counts, cgroup peak, and GPU fault telemetry at
    every boundary. The matched later boundary selects 16 views as the

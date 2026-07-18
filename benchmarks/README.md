@@ -328,3 +328,15 @@ sampled GPU memory with zero swap, pressure, OOM, or GPU faults. Large surfaces
 and boundaries are cleaner, but fine detail remains fragmented. The raw
 artifact remains ignored at
 `target/audit-runs/room-batch1024-mixed16-step2000-1ea4b28`.
+
+Continuing to step 2,250 reaches the 400,000-cell cap exactly, with 6,140,550
+directed edges. Fresh-Ply evaluation reproduces 23.42 dB train / 22.43 dB held
+out, +0.26/+0.12 dB over step 2,000; the all-39 diagnostic rises by 0.16 dB to
+22.38. The two exhaustive scans average 120.2 and 127.0 segments, reach maxima
+of 235 and 246, and truncate no rays. A controlled reload at 512 rather than
+256 maximum steps is metric-identical at 23.42/22.43 dB, so this artifact is
+not clipped, but the 10-step headroom gates further growth on raising the
+budget. The 2,863.453-second continuation peaks at 2,309,640,192 host bytes and
+954 MiB sampled GPU memory with zero swap, pressure, OOM, or GPU faults. The
+raw artifact remains ignored at
+`target/audit-runs/room-batch1024-mixed16-step2250-f92281f`.
