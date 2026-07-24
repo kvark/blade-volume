@@ -980,7 +980,7 @@ fn write_gaussian_ply_binary(
         glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
     let inv_rotation = ply_rotation.inverse();
 
-    let mut file = std::fs::File::create(path)?;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
     writeln!(file, "ply")?;
     writeln!(file, "format binary_little_endian 1.0")?;
     writeln!(file, "element vertex {}", count)?;
@@ -1047,6 +1047,7 @@ fn write_gaussian_ply_binary(
         }
     }
 
+    file.flush()?;
     Ok(())
 }
 
@@ -1068,7 +1069,7 @@ fn write_gaussian_ply_ascii(
         glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
     let inv_rotation = ply_rotation.inverse();
 
-    let mut file = std::fs::File::create(path)?;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
     writeln!(file, "ply")?;
     writeln!(file, "format ascii 1.0")?;
     writeln!(file, "element vertex {}", count)?;
@@ -1140,6 +1141,7 @@ fn write_gaussian_ply_ascii(
         writeln!(file)?;
     }
 
+    file.flush()?;
     Ok(())
 }
 
@@ -1158,7 +1160,7 @@ fn write_radfoam_ply_ascii(
     let sh_components = vol::get_sh_component_count(model.sh_degree);
     let sh_rest = (sh_components - 1) * 3;
     let sh_block = sh_components * 3;
-    let mut file = std::fs::File::create(path)?;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
 
     writeln!(file, "ply")?;
     writeln!(file, "format ascii 1.0")?;
@@ -1223,6 +1225,7 @@ fn write_radfoam_ply_ascii(
         writeln!(file, "{}", idx)?;
     }
 
+    file.flush()?;
     Ok(())
 }
 
@@ -1242,7 +1245,7 @@ fn write_radfoam_ply_binary(
     // Number of `color_sh_*` properties = (components excluding DC) × 3 channels.
     let sh_rest = (sh_components - 1) * 3;
     let sh_block = sh_components * 3;
-    let mut file = std::fs::File::create(path)?;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
 
     writeln!(file, "ply")?;
     writeln!(file, "format binary_little_endian 1.0")?;
@@ -1305,6 +1308,7 @@ fn write_radfoam_ply_binary(
         file.write_all(&idx.to_le_bytes())?;
     }
 
+    file.flush()?;
     Ok(())
 }
 
