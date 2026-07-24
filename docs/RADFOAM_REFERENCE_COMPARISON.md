@@ -1,6 +1,6 @@
 # RadFoam v1 reference comparison
 
-Date: 2026-07-18
+Date: 2026-07-24
 
 This comparison pins the official [`theialab/radfoam` v1
 tag](https://github.com/theialab/radfoam/tree/366e1a1b4349023b18e7867fabd6b734983f5c3c)
@@ -20,12 +20,13 @@ Voronoi-volume representation can reconstruct a difficult real scene well;
 the earlier Rust plateau does not reject the geometry premise.
 
 The current Rust trainer is still a much smaller optimization experiment. Its
-selected Room protocol processes 3,712,000 sampled optimizer rays and matches
-the official prefix's 735,103 cells, reaching 23.26 dB on its selected eight
-held-out views and 23.19 dB across all 39. The serialized official prefix has
-processed five billion mixed-view rays. Resolution, split coverage, loss,
-background, initialization, and optimizer schedules also differ. These scores
-are therefore diagnostics, not an apples-to-apples trainer ranking.
+selected Room protocol processes 10,880,000 sampled optimizer rays and matches
+the official prefix's 735,103 cells, reaching 24.03 dB on its selected eight
+held-out views and 23.93 dB across all 39 at 256². The serialized official
+prefix has processed roughly five billion mixed-view rays. Resolution, split
+coverage, loss, background, initialization, and optimizer schedules also
+differ. These scores are therefore diagnostics, not an apples-to-apples
+trainer ranking.
 
 Renderer compatibility is now separately established. Loading the official
 PLY directly in Blade and evaluating the same full-resolution split reaches
@@ -385,7 +386,8 @@ with metrics summarized in the [benchmark ledger](../benchmarks/README.md).
 Room confirms both the batch decision and the corrected radiance semantics.
 The original second-scene gate and its controlled from-scratch retrain use the
 same 768,000 optimizer rays, 30 topology refreshes, three exhaustive growth
-rounds, 128×128 grid, black background, and L1/cosine path:
+rounds, 128×128 grid, black background, and L1/cosine path. Subsequent rows
+document the selected scaling ladder and differ as labeled:
 
 | Room batch-1,024 result | Cells | Train PSNR | Held-out PSNR | Wall time | Host peak |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -407,10 +409,16 @@ rounds, 128×128 grid, black background, and L1/cosine path:
 | 16 views/batch, step 3,000, fixed cap | 735,103 | 24.29 dB | 22.92 dB | 30,926.751 s cumulative | 4,294,967,296 B¹ |
 | 16 views/batch, step 3,125, atomic scatter | 735,103 | 24.44 dB | 23.06 dB | 31,478.509 s cumulative | 4,541,816,832 B |
 | 16 views/batch, step 3,250, batch 4,096 | 735,103 | 24.74 dB | 23.26 dB | 32,020.275 s cumulative | 3,831,681,024 B |
+| 16 views/batch, step 3,375, 256² | 735,103 | 24.77 dB | 23.39 dB | 32,945.973 s cumulative | 3,727,613,952 B |
+| 16 views/batch, step 5,000, cadence 250 | 735,103 | 25.69 dB | 24.03 dB | 34,061.297 s selected-path cumulative² | 4,008,652,800 B |
 
 ¹ The fixed-cap retry did not swap or OOM, but its final
 serialization/evaluation phase touched the 4 GiB scope limit and recorded 221
 `memory.events:max` events.
+
+² Later segmented scopes use `--skip-eval`; the cumulative figure includes
+selected-path training/checkpoint wall time, while fresh-Ply evaluation runs in
+separate measured scopes. It excludes rejected ablation arms.
 
 Fresh-Ply evaluation exactly reproduces the corrected live result, which is
 +0.52/+0.61 dB over the historical published train/held-out metric and
@@ -561,6 +569,22 @@ across all 39. Host/GPU memory remain bounded and fault-free. The larger batch
 is therefore selected for the resolution ladder, although its comparison
 images remain fragmented.
 
+At 256², the step-3,250 checkpoint evaluates at 24.55/23.23 dB and 23.19 dB
+across all 39 views. A 125-step continuation reaches 24.77/23.39 dB and 23.34
+dB all-39. Distributing the same 4,096 rays over 64 rather than 16 views ties
+both held-out means while taking 6% more training/topology time, so the
+16-view policy remains selected.
+
+Fixed-cap cadence gates then remove Qhull work without hiding quality drift.
+Cadence 125 ties cadence 25 at step 3,500 while reducing the matched
+training/topology interval from 219 to 46 seconds. Cadence 250 ties cadence 125
+at step 3,750 while reducing 111 seconds to 63. Cadence 500 finally loses 0.01
+dB on both selected and all-39 metrics at step 4,500 for only a 25% interval
+saving, so cadence 250 is selected. Continuing it to step 5,000 reaches
+25.69/24.03 dB and 23.93 dB all-39 after 10.88 million optimizer rays. The
+last 500 steps add only 0.06/0.05 dB held-out/all-39, and thin foreground
+geometry remains visibly smeared.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -573,17 +597,17 @@ machine-readable result remains in
 
 ## Next experiments
 
-1. Test larger stratified caps and cumulative multi-boundary drift against the
-   exhaustive oracle before considering a value above the selected 16 views.
-2. Continue the selected 16-view protocol through a bounded resolution ladder
-   from the step-3,250, 735,103-cell checkpoint on Room, retaining
-   fresh-Ply metrics, per-phase timing, truncation, and cgroup telemetry at
-   every boundary. Use the selected 4,096-ray/16-view batch and a 6 GiB scope
-   for the 256² boundary. Keep capacity fixed until optimizer-budget returns
-   are measured; do not jump to the 2.1M-cell final target.
-3. Repeat the selected automatic random-pixel policy on another complete scene
-   before generalizing the efficiency claim beyond Room. Keep the one-view
-   library default and the full-image/patch compatibility behavior.
+1. Compare the remaining reference-protocol differences at the selected
+   735,103-cell checkpoint, especially the much larger mixed-ray budget and
+   independent parameter schedules. The current cosine horizon is nearly
+   exhausted at step 5,000; do not extend it by silently changing the schedule.
+2. Repeat the selected 4,096-ray/16-view and fixed-cap cadence-250 policy on
+   another complete scene before generalizing the efficiency claim beyond
+   Room. Keep the one-view library default and the full-image/patch
+   compatibility behavior.
+3. Move exhaustive evaluation onto the maintained GPU render path or add a
+   parity-checked GPU evaluator; the current 255-view 256² metric pass is
+   CPU-bound and takes about nine minutes.
 4. If a complete upstream baseline is still needed, make its image/ray loader
    streaming or run it on a machine with more than 32 GiB host memory and more
    than 12 GiB VRAM. Do not retry the unchanged caching path here.

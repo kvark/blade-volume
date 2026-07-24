@@ -688,6 +688,153 @@ test_delta_from_step3125 = 0.20
 all_39_delta_from_step3125 = 0.19
 artifact_path = "target/audit-runs/room-batch4096-mixed16-step3250-27242ad"
 
+[step3250_resolution256_baseline]
+status = "completed"
+git_commit = "e23a4d3"
+width = 256
+height = 256
+fresh_ply_reload = true
+train_psnr = 24.55
+test_psnr = 23.23
+selected_test_psnr = [21.35, 25.04, 23.43, 24.42, 23.58, 21.08, 24.10, 22.84]
+all_39_test_psnr = 23.19
+artifact_path = "target/audit-runs/room-step3250-resolution256-baseline-e23a4d3"
+
+[step3375_resolution256]
+status = "completed"
+git_commit = "e23a4d3"
+resume_from = "target/audit-runs/room-batch4096-mixed16-step3250-27242ad"
+resume_step = 3250
+completed_steps = 3375
+width = 256
+height = 256
+pixel_batch = 4096
+views_per_batch = 16
+rays_per_view = 256
+additional_sampled_rays = 512000
+total_sampled_rays = 4224000
+geometry_rebuild_every = 25
+training_boundary_seconds = 228
+continuation_wall_seconds = 925.698
+memory_peak_bytes = 3727613952
+memory_max_events = 0
+memory_swap_bytes = 0
+oom_events = 0
+sampled_gpu_memory_peak_mib = 3763
+sampled_gpu_temperature_peak_c = 49
+fresh_ply_reload = true
+cells = 735103
+directed_adjacency_entries = 11309758
+train_psnr = 24.77
+test_psnr = 23.39
+selected_test_psnr = [21.48, 25.26, 23.56, 24.59, 23.77, 21.17, 24.25, 23.03]
+all_39_test_psnr = 23.34
+train_delta_from_resolution_baseline = 0.22
+test_delta_from_resolution_baseline = 0.16
+all_39_delta_from_resolution_baseline = 0.15
+artifact_path = "target/audit-runs/room-batch4096-mixed16-resolution256-step3375-e23a4d3"
+
+[step3375_mixed_view_64]
+status = "rejected"
+git_commit = "e23a4d3"
+resume_from = "target/audit-runs/room-batch4096-mixed16-step3250-27242ad"
+resume_step = 3250
+completed_steps = 3375
+pixel_batch = 4096
+views_per_batch = 64
+rays_per_view = 64
+training_boundary_seconds = 242
+continuation_wall_seconds = 940.755
+memory_peak_bytes = 3855896576
+sampled_gpu_memory_peak_mib = 3763
+sampled_gpu_temperature_peak_c = 51
+test_psnr = 23.39
+all_39_test_psnr = 23.34
+reason = "Tied the 16-view arm at selected and all-39 precision while taking 6% more training/topology time and 3% more peak host memory"
+artifact_path = "target/audit-runs/room-batch4096-mixed64-resolution256-step3375-e23a4d3"
+
+[fixed_capacity_topology_cadence]
+status = "completed"
+git_commit = "98d9ee9"
+cells = 735103
+width = 256
+height = 256
+pixel_batch = 4096
+views_per_batch = 16
+step3500_control_every = 25
+step3500_candidate_every = 125
+step3500_control_training_seconds = 219
+step3500_candidate_training_seconds = 46
+step3500_training_speedup = 4.76
+step3500_control_test_psnr = 23.51
+step3500_candidate_test_psnr = 23.51
+step3500_control_all_39_test_psnr = 23.45
+step3500_candidate_all_39_test_psnr = 23.45
+step3750_control_every = 125
+step3750_candidate_every = 250
+step3750_control_training_seconds = 111
+step3750_candidate_training_seconds = 63
+step3750_training_speedup = 1.76
+step3750_control_test_psnr = 23.68
+step3750_candidate_test_psnr = 23.68
+step3750_control_all_39_test_psnr = 23.62
+step3750_candidate_all_39_test_psnr = 23.62
+step4500_control_every = 250
+step4500_candidate_every = 500
+step4500_control_training_seconds = 232
+step4500_candidate_training_seconds = 186
+step4500_training_speedup = 1.25
+step4500_control_test_psnr = 23.97
+step4500_candidate_test_psnr = 23.96
+step4500_control_all_39_test_psnr = 23.88
+step4500_candidate_all_39_test_psnr = 23.87
+selected_geometry_rebuild_every = 250
+reason = "Cadence 250 tied the denser controls through step 3750; cadence 500 then lost 0.01 dB selected and all-39 for only a 25% interval speedup"
+artifact_paths = [
+    "target/audit-runs/room-batch4096-mixed16-resolution256-step3500-geometry25-98d9ee9",
+    "target/audit-runs/room-batch4096-mixed16-resolution256-step3500-geometry125-98d9ee9",
+    "target/audit-runs/room-batch4096-mixed16-resolution256-step3750-geometry125-98d9ee9",
+    "target/audit-runs/room-batch4096-mixed16-resolution256-step3750-geometry250-98d9ee9",
+    "target/audit-runs/room-batch4096-mixed16-resolution256-step4500-geometry250-98d9ee9",
+    "target/audit-runs/room-batch4096-mixed16-resolution256-step4500-geometry500-98d9ee9",
+]
+
+[step5000_resolution256]
+status = "selected"
+git_commit = "98d9ee9"
+resume_from = "target/audit-runs/room-batch4096-mixed16-resolution256-step4500-geometry250-98d9ee9"
+resume_step = 4500
+completed_steps = 5000
+width = 256
+height = 256
+pixel_batch = 4096
+views_per_batch = 16
+rays_per_view = 256
+geometry_rebuild_every = 250
+additional_sampled_rays = 2048000
+total_sampled_rays = 10880000
+training_boundary_seconds = 159
+continuation_wall_seconds = 321.729
+memory_peak_bytes = 4008652800
+memory_max_events = 0
+memory_swap_bytes = 0
+oom_events = 0
+sampled_gpu_memory_peak_mib = 3763
+sampled_gpu_temperature_peak_c = 63
+fresh_ply_reload = true
+cells = 735103
+directed_adjacency_entries = 11308074
+train_psnr = 25.69
+test_psnr = 24.03
+selected_test_psnr = [21.97, 26.03, 24.08, 25.31, 24.56, 21.64, 24.92, 23.70]
+all_39_test_psnr = 23.93
+train_delta_from_step3375 = 0.92
+test_delta_from_step3375 = 0.64
+all_39_delta_from_step3375 = 0.59
+test_delta_from_step4500 = 0.06
+all_39_delta_from_step4500 = 0.05
+artifact_path = "target/audit-runs/room-batch4096-mixed16-resolution256-step5000-geometry250-98d9ee9"
+
 [continuation_selection]
 status = "selected"
 pixel_batch = 4096
@@ -801,6 +948,11 @@ required = [
     "step3250_batch4096.git_commit",
     "step3250_batch4096.train_psnr",
     "step3250_batch4096.test_psnr",
+    "step3375_resolution256.train_psnr",
+    "step3375_resolution256.test_psnr",
+    "fixed_capacity_topology_cadence.selected_geometry_rebuild_every",
+    "step5000_resolution256.train_psnr",
+    "step5000_resolution256.test_psnr",
     "continuation_selection.decision_commit",
     "selection.decision_commit",
 ]

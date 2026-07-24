@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-07-18
+Last updated: 2026-07-24
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -34,11 +34,12 @@ representation or renderer. Official RadFoam v1 reaches 30.02 dB on Room after
 its first 5,000 updates with 735,103 cloud cells, while Blade cross-renders the
 same PLY and full-resolution held-out split at 29.59 dB. The 0.43 dB renderer
 gap meets the Stage 2 tolerance. Blade's selected scaled Room trainer remains
-far less optimized: its 16-view, 3,712,000-ray checkpoint matches the
-735,103-cell capacity but reaches only 24.74 / 23.26 dB on the selected
-train/held-out split and 23.19 dB across all 39 held-out views. It still needs
-a matched ray/resolution scaling ladder before the reconstruction path is
-production-ready.
+far less optimized: its 16-view, 10,880,000-ray step-5,000 checkpoint matches
+the 735,103-cell capacity and reaches 25.69 / 24.03 dB on the selected
+train/held-out split and 23.93 dB across all 39 held-out views at 256². The
+official prefix has processed roughly five billion rays and reaches 30.02 dB.
+The Rust path therefore remains a useful scaling baseline, not a
+production-ready reconstruction pipeline.
 
 The corrected paths pass the targeted NVIDIA/Vulkan physical-GPU gates,
 including weighted differentiable traversal, Gaussian CPU/GPU parity, and
@@ -357,6 +358,28 @@ At the audited revision:
   23.19 dB across all 39. Its 3,831,681,024-byte host peak, 3,763 MiB sampled
   VRAM peak, and zero pressure/swap/OOM/fault events select 4,096 rays for the
   next resolution boundary. Visual fragmentation remains.
+- Raising the training and evaluation resolution to 256² from the same
+  step-3,250 checkpoint gives a 24.55 / 23.23 dB train/held-out baseline and
+  23.19 dB across all 39 views. Continuing 125 steps reaches 24.77 / 23.39 dB
+  and 23.34 dB across all 39. A matched 64-view arm ties both held-out means
+  while taking 6% more training/topology time and 3% more peak host memory, so
+  the simpler 16-view policy remains selected.
+- Fixed-cap topology cadence is now measured rather than assumed. At step
+  3,500, rebuilding every 125 rather than 25 steps cuts the matched
+  training/topology interval from 219 to 46 seconds with identical 23.51 /
+  23.45 dB selected/all-39 quality. At step 3,750, cadence 250 ties cadence 125
+  at 23.68 / 23.62 dB while cutting the interval from 111 to 63 seconds. A
+  longer cadence-500 gate loses 0.01 dB selected and all-39 at step 4,500 for
+  only a 25% interval saving. Cadence 250 is therefore selected after the
+  cloud reaches fixed capacity; dense refreshes remain appropriate while
+  topology-changing densification is active.
+- Continuing the selected fixed-cap path to aligned step 5,000 processes
+  10.88 million optimizer rays and reaches 25.69 / 24.03 dB train/held out and
+  23.93 dB across all 39 views. The final 500 updates add only 0.06 dB on the
+  selected set and 0.05 dB across all views. Large surfaces and room layout
+  improve, but foreground furniture, thin structures, and occlusion edges
+  remain visibly smeared. More identical low-batch continuation is now
+  lower-value than closing the remaining reference-protocol differences.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -951,14 +974,12 @@ material path.
    gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
    all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   resolution ladder from the step-3,250, 735,103-cell, 24.74/23.26 dB Room
-   checkpoint. Retain fresh-Ply train/held-out metrics, adjacency size,
-   per-phase timing, truncation counts, cgroup peak, and GPU fault telemetry at
-   every boundary. The matched later boundary selects 16 views as the
-   random-pixel CLI default; retain one view for full-image and patch modes and
-   keep explicit overrides available. The 4,096-ray batch is selected after
-   delivering four times the rays for 4% more training/topology time; test the
-   next 256² boundary under at least a 6 GiB scope.
+   resolution ladder. (Done through step 5,000 at 256²: 735,103 cells,
+   10.88 million rays, 25.69/24.03 dB train/held out, and 23.93 dB across all
+   39 held-out views. A 64-view batch is neutral and rejected. The next
+   quality experiment should change a remaining reference-protocol variable
+   or repeat the selected policy on another scene, not merely extend the same
+   nearly exhausted cosine schedule.)
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.
@@ -971,10 +992,13 @@ material path.
    tolerance before changing the default. (A 32/255-view rotating prototype is
    2.12× faster and within 0.03 dB, but differs by 1,223 retained cells; the
    default therefore remains exhaustive.)
-2. Measure exact topology cadences 100/250/500 after the cloud reaches its
-   target size. Retain feature-gated Qhull as the production-size oracle while
-   investigating a memory-bounded Rust implementation; runtime geometry stays
-   point-cloud-only in either case.
+2. Measure exact topology cadences after the cloud reaches its target size.
+   (Done on fixed-cap Room across matched 25/125, 125/250, and 250/500 gates.
+   Cadence 250 is selected: it ties denser refreshes through step 3,750, while
+   cadence 500 loses 0.01 dB selected and all-39 at step 4,500. Retain
+   feature-gated Qhull as the production-size oracle while investigating a
+   memory-bounded Rust implementation; runtime geometry stays point-cloud-only
+   in either case.)
 3. Add per-phase timing around recording, optimization, contribution scans,
    downloads, topology construction, and evaluation so a long run explains its
    cost without profiler-only evidence.
