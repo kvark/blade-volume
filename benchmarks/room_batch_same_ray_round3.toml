@@ -554,6 +554,43 @@ gpu_fault = "NVRM Xid 79: GPU has fallen off the bus"
 checkpoint_written = false
 artifact_path = "target/audit-runs/room-batch1024-mixed16-step3000-3792145"
 
+[step3000_fixed_capacity_retry]
+status = "completed"
+git_commit = "bd28c53"
+resume_from = "target/audit-runs/room-batch1024-mixed16-step2875-67ef5c8"
+resume_step = 2875
+completed_steps = 3000
+additional_sampled_rays = 128000
+total_sampled_rays = 3072000
+additional_densification_rounds = 0
+total_densification_rounds = 20
+target_points = 735103
+densify_until = 2875
+max_steps = 512
+views_per_batch = 16
+rays_per_view = 64
+fresh_ply_reload = true
+continuation_wall_seconds = 2982.305
+cumulative_wall_seconds = 30926.751
+memory_peak_bytes = 4294967296
+memory_max_events = 221
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+sampled_gpu_memory_peak_mib = 1835
+sampled_gpu_temperature_peak_c = 74
+cells = 735103
+directed_adjacency_entries = 11311556
+train_psnr = 24.29
+test_psnr = 22.92
+selected_test_psnr = [21.13, 24.70, 23.24, 23.94, 23.30, 20.73, 23.76, 22.53]
+all_39_test_psnr = 22.90
+train_delta_from_step2875 = 0.22
+test_delta_from_step2875 = 0.15
+all_39_delta_from_step2875 = 0.14
+artifact_path = "target/audit-runs/room-batch1024-mixed16-step3000-retry-bd28c53"
+
 [selection]
 status = "selected"
 decision_commit = "7c423a1"
@@ -645,5 +682,9 @@ required = [
     "step2875_mixed_view_16.cells",
     "step2875_mixed_view_16.train_psnr",
     "step2875_mixed_view_16.test_psnr",
+    "step3000_fixed_capacity_retry.git_commit",
+    "step3000_fixed_capacity_retry.cells",
+    "step3000_fixed_capacity_retry.train_psnr",
+    "step3000_fixed_capacity_retry.test_psnr",
     "selection.decision_commit",
 ]
