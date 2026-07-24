@@ -2529,25 +2529,27 @@ fn collect_path_contributions(
     };
     let pl_capacity = capacity as u64 * max_steps as u64;
     let readback_size = pl_capacity * std::mem::size_of::<u32>() as u64;
+    // Contribution scoring scans every value on the CPU, so use cached
+    // download memory rather than the write-combined shared mapping.
     let cells_readback = context.create_buffer(blade_graphics::BufferDesc {
         name: "contribution-cells-readback",
         size: readback_size,
-        memory: blade_graphics::Memory::Shared,
+        memory: blade_graphics::Memory::Download,
     });
     let next_cells_readback = context.create_buffer(blade_graphics::BufferDesc {
         name: "contribution-next-cells-readback",
         size: readback_size,
-        memory: blade_graphics::Memory::Shared,
+        memory: blade_graphics::Memory::Download,
     });
     let dts_readback = context.create_buffer(blade_graphics::BufferDesc {
         name: "contribution-dts-readback",
         size: readback_size,
-        memory: blade_graphics::Memory::Shared,
+        memory: blade_graphics::Memory::Download,
     });
     let mask_readback = context.create_buffer(blade_graphics::BufferDesc {
         name: "contribution-mask-readback",
         size: readback_size,
-        memory: blade_graphics::Memory::Shared,
+        memory: blade_graphics::Memory::Download,
     });
     let mut encoder = context.create_command_encoder(blade_graphics::CommandEncoderDesc {
         name: "collect-path-contributions",
