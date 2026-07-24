@@ -521,3 +521,22 @@ terminal-counter retention, so the branch remains pushed for investigation
 rather than selected for uprev. Blade stays pinned to merged Meganeura
 `fba040a`. Raw artifacts remain ignored at
 `target/audit-runs/room-step5000-phase-profile-{stream2-local,stream-final-copy-local}`.
+
+The follow-up subprofile isolates the apparent serialization cost more
+precisely: 61.486 of 75.467 checkpoint seconds came from Meganeura reading
+GPU-backed optimizer allocations on the CPU, while 13.970 seconds came from
+the PLY writer issuing millions of tiny writes. Blade branch
+`perf/download-memory` at `f724f6a` adds a CPU-cached readback allocation.
+Meganeura branch `perf/profile-checkpoint-fba` at `6909ecc` snapshots all
+parameters and Adam buffers with one GPU transfer into that allocation and
+streams it directly to safetensors. Blade-volume commit `5844ac9` buffers all
+PLY writers. On the same step-5,000→5,100 Room continuation, optimizer
+checkpointing falls from 61.486 to 0.425 seconds (145×), model PLY output from
+13.970 to 0.094 seconds (149×), and the complete checkpoint from 75.467 to
+0.531 seconds (142×). Whole-command time falls from 144.032 to 68.663 seconds
+(2.10×), with the same 0.0919→0.0854 loss trace and 24.03 dB fresh-Ply
+held-out result. Exact cgroup peak rises only 1.1%, from 4,303,171,584 to
+4,348,669,952 bytes, with zero swap, pressure, OOM, or GPU faults. The
+dependency branches are pushed but Blade-volume remains pinned to merged
+revisions until they land. Raw evidence remains ignored at
+`target/audit-runs/room-step5000-{checkpoint-subphase,buffered-checkpoint}-local`.
