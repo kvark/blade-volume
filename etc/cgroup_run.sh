@@ -33,9 +33,30 @@
 #   - Hides Vulkan ICDs and denies non-standard device access in `--cpu-only`
 #     scopes. The explicit loader barrier matters when a wedged vendor driver
 #     can hang before a denied device open returns.
-#   - Samples the named cgroup's current/peak/swap memory every second,
-#     plus NVIDIA telemetry when nvidia-smi is available.
+#   - Samples the named cgroup's current/peak/swap memory every second and
+#     records the exact terminal counters before the scope exits, plus NVIDIA
+#     telemetry when nvidia-smi is available.
 set -euo pipefail
+
+if [ "${1:-}" = "--scope-child" ]; then
+  GPU_LOG="$2"
+  shift 3
+  set +e
+  "$@"
+  RC=$?
+  set -e
+  CONTROL_GROUP=$(awk -F: '$1 == "0" { print $3 }' /proc/self/cgroup)
+  CGROUP_PATH="/sys/fs/cgroup${CONTROL_GROUP}"
+  {
+    echo "=== cgroup terminal $(date -Is) ==="
+    echo "MemoryCurrent=$(cat "$CGROUP_PATH/memory.current")"
+    echo "MemoryPeak=$(cat "$CGROUP_PATH/memory.peak")"
+    echo "MemorySwapCurrent=$(cat "$CGROUP_PATH/memory.swap.current")"
+    echo "MemorySwapPeak=$(cat "$CGROUP_PATH/memory.swap.peak")"
+    sed -n '1,20p' "$CGROUP_PATH/memory.events"
+  } >>"$GPU_LOG"
+  exit "$RC"
+fi
 
 MEM_CAP="16G"
 CPU_WEIGHT="100"
@@ -335,7 +356,7 @@ systemd-run --user --scope --unit="$UNIT" \
   -p CPUWeight="$CPU_WEIGHT" \
   "${SCOPE_DEVICE_PROPERTIES[@]}" \
   --description="blade-volume cgroup_run: $*" \
-  -- "$@"
+  -- "$(realpath "$0")" --scope-child "$GPU_LOG" -- "$@"
 RC=$?
 set -e
 wait "$MEMORY_WATCH_PID" 2>/dev/null || true
