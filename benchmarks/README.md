@@ -517,9 +517,9 @@ this is not a runtime claim. Combining it with final PLY reuse did not
 reproduce an additional memory benefit: the sampler observed at least
 4,104,609,792 bytes versus the pinned run's exact 3,899,666,432-byte peak, with
 145.172 versus 142.098 seconds wall time. That combined run preceded exact
-terminal-counter retention, so the branch remains pushed for investigation
-rather than selected for uprev. Blade stays pinned to merged Meganeura
-`fba040a`. Raw artifacts remain ignored at
+terminal-counter retention. It remains useful historical evidence, but the
+later cached-snapshot subprofile below supersedes the streaming-only path.
+Raw artifacts remain ignored at
 `target/audit-runs/room-step5000-phase-profile-{stream2-local,stream-final-copy-local}`.
 
 The follow-up subprofile isolates the apparent serialization cost more
@@ -537,8 +537,8 @@ checkpointing falls from 61.486 to 0.425 seconds (145×), model PLY output from
 (2.10×), with the same 0.0919→0.0854 loss trace and 24.03 dB fresh-Ply
 held-out result. Exact cgroup peak rises only 1.1%, from 4,303,171,584 to
 4,348,669,952 bytes, with zero swap, pressure, OOM, or GPU faults. The
-dependency branches are pushed but Blade-volume remains pinned to merged
-revisions until they land. Raw evidence remains ignored at
+tested path is now pinned exactly at Blade `f724f6a` and Meganeura `a2ce41c`.
+Raw evidence remains ignored at
 `target/audit-runs/room-step5000-{checkpoint-subphase,buffered-checkpoint}-local`.
 
 An attempted 8,192-ray continuation exposed a correctness bug below the
@@ -620,3 +620,49 @@ neutral within separate GPU-run variation: train/selected/all-39 changes from
 topology memory reduction is claimed. Every scope records zero swap, pressure,
 OOM, or GPU faults. Raw evidence remains ignored under
 `target/audit-runs/room-step{6000-qhull-csr-,5500-qhull-csr-fast-}*`.
+
+The selected Room update composition was then tested on the complete Bonsai
+scene instead of being generalized from one reconstruction. Under the current
+renderer semantics, the durable step-10,000 source measures 16.76 dB train,
+15.83 dB on the selected eight held-out views, and 16.16 dB across all 37.
+A matched 4,096-ray/16-view update immediately generalizes: after 500 updates,
+the legacy parameter groups reach 18.38/16.77/17.47 dB. Relative RadFoam-v1
+groups, which were part of the selected Room continuation, reach only
+18.09/16.66/17.30 dB and are rejected for this Bonsai stage.
+
+Continuing the legacy-group path losslessly to its 20,400-step cosine endpoint
+reaches 22.89 dB train, 20.41 dB selected-held-out, and 21.35 dB across all 37
+held-out views. This is a +6.13/+4.58/+5.19 dB improvement over the source
+without increasing its 200,000-cell capacity. The final 400 updates add just
+0.02 dB all-37, so the schedule is complete and effectively saturated. The
+final and checkpoint PLYs are byte-identical with SHA-256
+`047aa82cf8e91fc74acaaf9bf94f8497dbf8913d4ef3d2fb0de36c6f40f6b4f3`;
+they contain 3,042,928 directed adjacency edges and live under
+`target/audit-runs/bonsai-batch4096-long-cosine-legacy-step20400-local/`.
+The checkpoint curve and exact protocol are recorded in
+`bonsai_full_quality.toml`.
+
+Two cross-scene gates remain deliberately negative. One 15% densification
+round grows the step-12,000 cloud to 229,566 cells but reaches only
+20.41/18.38/19.17 dB at step 13,000, versus 20.52/18.51/19.28 dB for the
+fixed-200K control. A 250-step topology cadence makes the matched
+step-13,000→14,000 interval 1.25× faster (112.875 versus 140.885 seconds) but
+loses 0.02 dB selected and 0.05 dB all-37. Bonsai therefore retains 200,000
+cells and cadence 100; Room's capacity and cadence choices are not assumed to
+transfer.
+
+Commit `86cfcab` addresses a separate, decision-preserving bottleneck. The
+four GPU-to-CPU buffers used by exhaustive contribution scoring are now
+allocated as CPU-cached download memory. On the matched 200K→230K capacity
+gate, the unchanged serial scoring loop falls from 561.315 to 1.197 seconds
+(468.9×), training from 721.832 to 169.076 seconds, and whole-command time
+from 728.308 to 175.622 seconds (4.15×). All-37 PSNR remains 19.17 dB, cell
+count differs by only three from normal GPU run variation, host peak falls
+from 1,470,054,400 to 1,397,407,744 bytes, and both 4 GiB scopes record zero
+swap, pressure, OOM, or GPU faults.
+
+The latest Bonsai result is substantially more coherent than the step-10,000
+source, including a 15.83→20.42 dB selected-view improvement when both are
+rendered at 256². It is still not viewer-ready: side-by-side images retain
+large translucent floaters, smeared backgrounds, and weak thin geometry.
+Additional fixed-cap updates are no longer the next quality experiment.

@@ -107,11 +107,16 @@ At the audited revision:
   pruning, optimizer ancestry, and the weighted copied-radius split policy.
 - Quantile regularization, explicit background compositing, lossless DC SH, and
   versioned parameter/Adam/RNG checkpoints are implemented.
-- The blocker is trainer-scale quality. A fresh, segmented run over all 292
-  registered Bonsai images reached step 10,000 and the 200,000-cell target on a
-  stable NVIDIA/Vulkan path. Its held-out curve flattened near 16.1 dB by step
-  8,000, so the run was deliberately stopped before the nominal 20,400-step
-  budget rather than spending more compute on an unchanged protocol.
+- Trainer-scale quality remains the blocker, but the first Bonsai plateau was
+  an update-composition failure rather than a hard capacity limit. Re-evaluated
+  under current renderer semantics, its 200,000-cell step-10,000 checkpoint
+  measures 16.76/15.83 dB train/selected-held-out and 16.16 dB over all 37
+  held-out views. Lossless continuation with 4,096 rays distributed across 16
+  views on the original 20,400-step cosine horizon reaches
+  22.89/20.41/21.35 dB at the exact endpoint. The last 400 updates add only
+  0.02 dB all-37. This validates mixed-view scaling on a second complete
+  scene, but 256² comparisons still show translucent floaters, smeared
+  backgrounds, and weak thin geometry.
 - The official RadFoam v1 code is now pinned and compared line by line in
   [`RADFOAM_REFERENCE_COMPARISON.md`](RADFOAM_REFERENCE_COMPARISON.md). Its
   Room recipe processes one million mixed-view rays per update, targets roughly
@@ -408,30 +413,19 @@ At the audited revision:
   3,899,666,432 bytes. Checkpoint/final hashes and the 24.03 dB held-out result
   match. Commit `c8ca20f` records terminal cgroup counters from inside the
   live scope so short-lived peaks can no longer escape the sampler.
-- Meganeura branch `perf/stream-checkpoints-fba` (`cb64f67`) removes the second
-  checkpoint-sized host allocation by streaming safetensors to disk. A matched
-  run cuts peak host memory by 695,529,472 bytes (15.7%) with the same selected
-  24.03 dB result and no memory or GPU faults. Checkpoint time is unchanged
-  within run variance (100.060 versus 98.460 seconds). A later combination
-  with endpoint PLY reuse did not show further memory or runtime benefit and
-  lacked the new exact terminal counter. The branch remains unselected pending
-  isolation of that discrepancy; Blade stays pinned to merged Meganeura
-  `fba040a`.
 - Checkpoint subphases reveal the underlying problem: optimizer persistence
-  spends 61.486 seconds reading GPU-backed host-visible allocations on the
-  CPU, while the model PLY spends 13.970 seconds issuing millions of tiny
-  writes. Blade branch `perf/download-memory` (`f724f6a`) adds CPU-cached
-  readback memory, and Meganeura branch `perf/profile-checkpoint-fba`
-  (`6909ecc`) snapshots all parameters and Adam state in one GPU transfer
-  before streaming safetensors to disk. Together with Blade-volume's buffered
-  PLY writer, the optimizer save falls to 0.425 seconds, model PLY output to
-  0.094 seconds, and the complete checkpoint to 0.531 seconds. The matched
-  step-5,000→5,100 command falls from 144.032 to 68.663 seconds (2.10×) while
-  retaining the exact 0.0919→0.0854 loss trace and 24.03 dB fresh-Ply result.
-  Exact host peak changes only from 4,303,171,584 to 4,348,669,952 bytes
-  (+1.1%), with zero swap, pressure, OOM, or GPU faults. The dependency
-  branches are pushed; the production pin remains on merged revisions until
-  both land.
+  spent 61.486 seconds reading write-combined GPU-backed mappings on the CPU,
+  while the model PLY spent 13.970 seconds issuing millions of tiny writes.
+  Blade `f724f6a` adds CPU-cached download memory, and Meganeura `a2ce41c`
+  snapshots all parameters and Adam state in one GPU transfer before streaming
+  safetensors to disk. Together with Blade-volume's buffered PLY writer, the
+  optimizer save falls to 0.425 seconds, model PLY output to 0.094 seconds, and
+  the complete checkpoint to 0.531 seconds. The matched step-5,000→5,100
+  command falls from 144.032 to 68.663 seconds (2.10×) while retaining the
+  exact 0.0919→0.0854 loss trace and 24.03 dB fresh-Ply result. Exact host peak
+  changes only from 4,303,171,584 to 4,348,669,952 bytes (+1.1%), with zero
+  swap, pressure, OOM, or GPU faults. Blade-volume now pins both exact
+  dependency revisions so the tested path is reproducible.
 - A larger-batch gate exposed a Meganeura dispatch-limit correctness bug.
   With 8,192 rays and 512 path steps, the scalar `[P*L,3]@[3,1]` matmul
   requested 65,536 workgroups in Y and produced non-finite position gradients
@@ -469,6 +463,22 @@ At the audited revision:
   from 152.098 to 145.236 seconds. All-39 quality changes only 24.14→24.15 dB.
   An isolated exact rebuild also lowers peak memory 10.1%, though another
   phase dominates the full training peak.
+- The selected mixed-view direction transfers to the complete Bonsai scene,
+  but Room's parameter and topology choices do not transfer wholesale. From
+  the current-semantics step-10,000 checkpoint, 4,096 rays across 16 views
+  reach 22.89/20.41 dB train/selected and 21.35 dB all-37 at step 20,400,
+  gains of 6.13/4.58/5.19 dB at the same 200,000-cell capacity. Relative
+  RadFoam-v1 groups lose 0.11/0.17 dB selected/all-37 at the first gate. A
+  229,566-cell densification loses 0.13/0.11 dB, and cadence 250 is 1.25×
+  faster but loses 0.02/0.05 dB. Bonsai therefore selects legacy groups,
+  fixed 200K capacity, cadence 100, and the completed horizon.
+- Commit `86cfcab` uses Blade's CPU-cached download memory for the four
+  exhaustive contribution buffers. The scoring arithmetic and serial order
+  are unchanged. In the matched Bonsai 200K→230K gate, contribution time falls
+  from 561.315 to 1.197 seconds (468.9×), training from 721.832 to 169.076
+  seconds, and the command from 728.308 to 175.622 seconds (4.15×). All-37
+  quality remains 19.17 dB, host peak falls 4.9%, and both scopes record zero
+  swap, pressure, OOM, or GPU faults.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -899,14 +909,40 @@ trainer-state, step, cycle, and RNG sidecars. The largest training segment used
 or GPU recovery markers. The independent evaluation peaked at 600,907,776
 bytes.
 
-The curve is effectively flat from step 8,000 through 10,000; continuing the
-same nominal 20,400-step protocol is therefore low-value until an ablation
-changes the result. Profiling also shows that exhaustive all-view contribution
-scans dominate densification as the cloud grows, while exact Qhull rebuilds
-every 100 position steps remain the main cost after reaching 200,000 cells.
-The exhaustive scan must remain the correctness oracle while a deterministic
-sampled or incremental alternative is evaluated; performance alone is not a
-reason to silently change pruning decisions.
+That original 256-ray curve is effectively flat from step 8,000 through
+10,000; continuing it unchanged was correctly rejected. Re-evaluation with the
+current renderer gives 16.76/15.83 dB train/selected-held-out and 16.16 dB
+all-37 at step 10,000. The controlled change is update composition: 4,096 rays
+distributed across 16 views on the original 20,400-step cosine horizon. Legacy
+parameter groups win the first cross-scene gate, and lossless continuation
+produces:
+
+| Global step | Cells | Train PSNR | Selected-8 PSNR | All-37 PSNR |
+| ---: | ---: | ---: | ---: | ---: |
+| 10,000 | 200,000 | 16.76 dB | 15.83 dB | 16.16 dB |
+| 10,500 | 200,000 | 18.38 dB | 16.77 dB | 17.47 dB |
+| 12,000 | 200,000 | 19.78 dB | 17.97 dB | 18.61 dB |
+| 14,000 | 200,000 | 21.17 dB | 19.07 dB | 19.89 dB |
+| 16,000 | 200,000 | 22.13 dB | 19.88 dB | 20.73 dB |
+| 18,000 | 200,000 | 22.67 dB | 20.26 dB | 21.19 dB |
+| 20,000 | 200,000 | 22.87 dB | 20.39 dB | 21.33 dB |
+| 20,400 | 200,000 | 22.89 dB | 20.41 dB | 21.35 dB |
+
+The endpoint PLY and checkpoint PLY are byte-identical with SHA-256
+`047aa82cf8e91fc74acaaf9bf94f8497dbf8913d4ef3d2fb0de36c6f40f6b4f3`.
+The model has 3,042,928 directed adjacency edges and lives at
+`target/audit-runs/bonsai-batch4096-long-cosine-legacy-step20400-local/`.
+The final 400 updates add only 0.02 dB all-37, and 256² comparisons still show
+large floaters and smeared thin structure, so the result closes this schedule
+rather than the reconstruction-quality gate.
+
+Profiling originally showed exhaustive all-view contribution scans dominating
+densification. The correctness oracle remains exhaustive, but its GPU results
+now land in cached download memory before the unchanged CPU scoring pass.
+Matched contribution time falls 468.9× and full command time 4.15×, removing
+the bottleneck without sampling views or changing pruning semantics. Exact
+Qhull rebuilds every 100 position steps are now the main fixed-cap Bonsai cost;
+a cadence-250 replay is 1.25× faster but loses 0.05 dB all-37 and is rejected.
 
 ### Stage 0: trustworthy baseline
 
@@ -1063,7 +1099,7 @@ material path.
    gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
    all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   resolution ladder. (Done through step 6,000 at 256²: 735,103 cells,
+   resolution ladder. (Done through step 6,000 at 256² on Room: 735,103 cells,
    26.22/24.57 dB train/selected-held-out, and 24.14 dB across all 39 held-out
    views. A 64-view batch, 512² training, and distortion regularization are
    neutral and rejected. A matched 4,096/8,192-ray gate confirms that doubling
@@ -1072,9 +1108,14 @@ material path.
    nor relative RadFoam-v1 parameter groups works alone; together they restore
    reference-scale rates and add 0.21 dB all-39 by step 6,000. The final
    500-step segment adds only 0.02 dB all-39 and begins regressing late views,
-   so the next quality experiment should repeat the selected policy on another
-   complete scene or isolate another reference difference rather than extend
-   Room further.)
+   The mixed-view direction is now repeated on complete Bonsai: it improves
+   the same 200,000-cell checkpoint by 6.13/4.58/5.19 dB
+   train/selected/all-37 and reaches 22.89/20.41/21.35 dB at its exact
+   20,400-step endpoint. Relative parameter groups, extra capacity, and cadence
+   250 fail their Bonsai gates, so only the update composition generalizes.
+   Both scenes remain visibly below the quality bar; the next experiment
+   should isolate representation/geometry error rather than add more
+   fixed-cap updates.)
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.
@@ -1095,7 +1136,9 @@ material path.
    memory-bounded Rust implementation; runtime geometry stays point-cloud-only
    in either case. Commit `1c46fb2` removes redundant global edge sorting from
    exact unbounded CSR construction, making the matched topology phase 1.19×
-   faster without changing the graph-selection semantics.)
+   faster without changing the graph-selection semantics. On Bonsai,
+   cadence 250 makes the matched 1,000-step interval 1.25× faster but loses
+   0.05 dB all-37, so cadence 100 remains selected there.)
 3. Add per-phase timing around recording, optimization, contribution scans,
    downloads, topology construction, and evaluation so a long run explains its
    cost without profiler-only evidence. (Done in `5e3f81d`. The matched
@@ -1109,7 +1152,10 @@ material path.
    remains unselected pending an exact explanation. Commit `0da6a85` then
    removes unnecessary graph/optimizer reconstruction at fixed-cap topology
    boundaries: state readback is 9.24× faster, training 1.24× faster, and
-   whole-command time 1.21× faster with identical held-out quality.)
+   whole-command time 1.21× faster with identical held-out quality. Commit
+   `86cfcab` then moves exhaustive contribution readback to cached download
+   memory: the matched CPU scoring phase is 468.9× faster and the complete
+   densification command 4.15× faster at unchanged all-view quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done in
    `77c19b7`: weighted/unweighted physical pixel parity passes, aggregate Room

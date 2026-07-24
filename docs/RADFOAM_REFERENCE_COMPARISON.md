@@ -603,19 +603,26 @@ seconds (1.39×) and whole-command time from 205.641 to 158.960 seconds (1.29×)
 Loss remains 0.0919→0.0854, selected held-out quality remains 24.03 dB, and
 each run's checkpoint PLY is byte-identical to its final PLY. Peak host memory
 falls from 4,421,963,776 to 4,200,992,768 bytes with no pressure, swap, OOM, or
-GPU faults. A pending Meganeura streaming-serialization branch reduces that
-peak further to 3,726,434,304 bytes (15.7% below control), but checkpoint time
-is unchanged; it is a memory improvement, not evidence of faster training.
+GPU faults. An early streaming-only Meganeura branch reduces that peak further
+to 3,726,434,304 bytes (15.7% below control), but checkpoint time is unchanged;
+that isolated result motivated the subphase profile below rather than being
+selected on its own.
 
 Commit `fe7517d` removes the second endpoint PLY encoding through an explicit
 successful-checkpoint signal and atomic copy with serialization fallback. The
 735,103-cell final-output phase falls from 13.991 to 0.045 seconds (311×);
 whole-command time reaches 142.098 seconds, 1.45× faster than the original
 205.641-second profile. The exact terminal host peak is 3,899,666,432 bytes,
-and byte identity plus the selected 24.03 dB result remain intact. Combining
-the pending Meganeura streaming branch with this path did not demonstrate a
-further memory or runtime gain, so Blade remains pinned to `fba040a` while the
-discrepancy is isolated.
+and byte identity plus the selected 24.03 dB result remain intact.
+
+Subphase profiling identifies write-combined CPU mappings as the missing
+variable. Blade `f724f6a` adds cached download memory, while Meganeura
+`a2ce41c` batches the parameter/Adam snapshot into one GPU transfer and streams
+the resulting safetensors. With the buffered PLY path, optimizer persistence
+falls 61.486→0.425 seconds, model PLY output 13.970→0.094 seconds, and the
+complete checkpoint 75.467→0.531 seconds. The matched command becomes 2.10×
+faster with the exact loss trace and 24.03 dB result retained. Blade-volume
+now pins these exact dependency revisions.
 
 The fixed-cap follow-up separates training-resolution, regularization, and
 schedule effects. A 512²-trained step-5,000 candidate ties the 256²-trained
@@ -653,6 +660,39 @@ within the observed GPU-run variation. The isolated 735,103-cell rebuild drops
 host peak 10.1%; no full-run memory reduction is claimed because a different
 phase determines that peak.
 
+The 4,096-ray/16-view direction was then repeated on complete Bonsai from its
+durable 200,000-cell step-10,000 checkpoint. Under current rendering semantics,
+that source measures 16.76/15.83 dB train/selected and 16.16 dB all-37. Unlike
+Room, relative RadFoam-v1 groups are immediately negative: the matched
+step-10,500 result is 18.09/16.66/17.30 dB versus 18.38/16.77/17.47 dB for
+legacy groups. Legacy is therefore continued on the original 20,400-step
+cosine horizon.
+
+The lossless curve reaches 19.78/17.97/18.61 dB at step 12,000,
+21.17/19.07/19.89 dB at step 14,000, 22.13/19.88/20.73 dB at step 16,000,
+and 22.89/20.41/21.35 dB at the exact step-20,400 endpoint. The +5.19 dB
+all-view gain at unchanged capacity confirms that mixed-view update
+composition—not the Room-specific parameter groups—is the transferable
+result. The last 400 updates add only 0.02 dB all-37.
+
+The remaining Room choices fail quality-first cross-scene gates. One
+densification round grows Bonsai to 229,566 cells but loses 0.13 dB selected
+and 0.11 dB all-37 after 500 settling updates. Cadence 250 makes the matched
+step-13,000→14,000 interval 1.25× faster but loses 0.02/0.05 dB
+selected/all-37. Bonsai consequently retains fixed 200K capacity and cadence
+100.
+
+Exhaustive contribution scoring no longer dominates that capacity gate.
+Commit `86cfcab` places the four GPU readbacks in Blade's cached download
+memory while preserving the serial CPU arithmetic and all-view oracle.
+Contribution time falls 561.315→1.197 seconds (468.9×), and the complete
+command 728.308→175.622 seconds (4.15×), with the same 19.17 dB all-37 result
+and no memory or GPU faults. The final Bonsai PLY and checkpoint are
+byte-identical at
+`target/audit-runs/bonsai-batch4096-long-cosine-legacy-step20400-local/`.
+Despite the numerical gain, 256² comparisons still show substantial floaters
+and background smear, so this is not a viewer-ready result.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -665,20 +705,25 @@ machine-readable result remains in
 
 ## Next experiments
 
-1. Isolate another remaining reference-protocol difference at the selected
-   735,103-cell checkpoint. Room is stopped at step 6,000 from all-39
-   validation rather than the eight-view subset; do not extend it without a
-   new held-out criterion.
-2. Repeat the selected 4,096-ray/16-view and fixed-cap cadence-250 policy on
-   another complete scene before generalizing the efficiency claim beyond
-   Room. Keep the one-view library default and the full-image/patch
-   compatibility behavior.
-3. Sub-profile checkpoint tensor readback, safetensor encoding, and file writes
-   separately. Endpoint PLY duplication is fixed with explicit success
-   metadata and lossless fallback. Do not uprev the pending Meganeura streaming
-   branch until its isolated 15.7% reduction is reconciled with the combined
-   run, which showed no additional benefit.
-4. If a complete upstream baseline is still needed, make its image/ray loader
+1. Diagnose the residual geometry error at the saturated Bonsai endpoint.
+   Record depth, terminal transmittance, path length, and responsible cell IDs
+   for the worst held-out pixels, then correlate the visible floaters with
+   density, support size, and topology. Use that evidence to choose the next
+   loss or geometry ablation; do not extend the exhausted cosine schedule.
+2. Repeat initialization, background, and robust-loss factors from a fresh
+   large mixed-view run. The old 256-ray semantic gate is not evidence about
+   Smooth-L1 or v1 initialization at the now-selected data budget, while the
+   continuation gate shows that Room's relative parameter groups do not
+   transfer to Bonsai.
+3. Measure how many exact Delaunay edges actually change at each late
+   fixed-cap rebuild. Cadence 250 is a quality loss on Bonsai, so the next
+   topology optimization must retain cadence-100 paths—through faster exact
+   construction or a validated graph-stability criterion—not silently refresh
+   less often.
+4. Run the real-scene equal-radius versus trainable-radius PowerFoam ablation
+   from the selected mixed-view protocol before implementing its larger
+   appearance model.
+5. If a complete upstream baseline is still needed, make its image/ray loader
    streaming or run it on a machine with more than 32 GiB host memory and more
    than 12 GiB VRAM. Do not retry the unchanged caching path here.
 
