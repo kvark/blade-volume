@@ -460,6 +460,15 @@ At the audited revision:
   24.14 dB all-39 at step 6,000. The final 500 steps add only 0.02 dB all-39
   and regress some late held-out views, so step 6,000 is selected as the
   stopping point. The cloud is still visibly blurred and is not viewer-ready.
+- Commit `1c46fb2` specializes exact unbounded CSR construction. Exact
+  Delaunay/Čech inputs are already symmetric, so they no longer globally
+  distance-sort every edge or allocate a second graph merely to retain all
+  neighbors; finite approximate caps preserve the old path. On the matched
+  step-5,500→6,000 Room continuation, topology falls from 30.949 to 26.114
+  seconds (1.19×), training from 127.416 to 122.912 seconds, and the command
+  from 152.098 to 145.236 seconds. All-39 quality changes only 24.14→24.15 dB.
+  An isolated exact rebuild also lowers peak memory 10.1%, though another
+  phase dominates the full training peak.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -1084,7 +1093,9 @@ material path.
    cadence 500 loses 0.01 dB selected and all-39 at step 4,500. Retain
    feature-gated Qhull as the production-size oracle while investigating a
    memory-bounded Rust implementation; runtime geometry stays point-cloud-only
-   in either case.)
+   in either case. Commit `1c46fb2` removes redundant global edge sorting from
+   exact unbounded CSR construction, making the matched topology phase 1.19×
+   faster without changing the graph-selection semantics.)
 3. Add per-phase timing around recording, optimization, contribution scans,
    downloads, topology construction, and evaluation so a long run explains its
    cost without profiler-only evidence. (Done in `5e3f81d`. The matched

@@ -642,6 +642,17 @@ Its final PLY is byte-identical to the checkpoint, has 735,103 cells and
 the baseline but does not close the visual gap: thin structure remains
 blurred, so the reconstruction is not production-ready.
 
+Exact adjacency construction is also leaner after commit `1c46fb2`. Unbounded
+graphs no longer enter the finite-cap algorithm, which globally sorts edges by
+length and builds a second graph to decide which neighbors survive. On the
+same lossless step-5,500→6,000 continuation, scheduled topology time falls
+30.949→26.114 seconds (1.19×), training 127.416→122.912 seconds, and the full
+command 152.098→145.236 seconds. The separate run changes
+train/selected/all-39 PSNR from 26.22/24.57/24.14 to 26.23/24.54/24.15 dB,
+within the observed GPU-run variation. The isolated 735,103-cell rebuild drops
+host peak 10.1%; no full-run memory reduction is claimed because a different
+phase determines that peak.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
