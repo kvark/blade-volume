@@ -388,12 +388,18 @@ pub fn build_volumetric_graph(
     let mn_prod = g.mul(mo_diff, normal);
     let dot_num = g.matmul(mn_prod, ones_3_1); // [P*L, 1]
     let nd_prod = g.mul(normal, ray_dir_pl);
-    let dot_den_raw = g.matmul(nd_prod, ones_3_1); // [P*L, 1]
-                                                   // ε regularisation: for invalid steps `dot_den_raw = 0`; downstream
-                                                   // mask zeros the result, but the division itself must stay finite.
-    let eps_pl1 = g.constant(vec![1.0e-6_f32; pl], &[pl, 1]);
-    let dot_den = g.add(dot_den_raw, eps_pl1);
-    let t_pl1 = g.div(dot_num, dot_den);
+    let dot_den_raw = g.matmul(nd_prod, ones_3_1);
+    // A plain `dot_den_raw + ε` can cancel when a nearly parallel face has
+    // `dot_den_raw ≈ -ε`, producing infinite position gradients before the
+    // path mask or dt clamp can suppress the entry. Use the bounded
+    // Tikhonov reciprocal `d / (d² + ε²)` instead. It preserves `1/d` away
+    // from parallel faces, keeps the sign, maps an invalid zero normal to
+    // zero, and bounds both the forward value and its derivative.
+    let dot_den_squared = g.mul(dot_den_raw, dot_den_raw);
+    let eps_squared_pl1 = g.constant(vec![1.0e-12_f32; pl], &[pl, 1]);
+    let regularized_denominator = g.add(dot_den_squared, eps_squared_pl1);
+    let regularized_numerator = g.mul(dot_num, dot_den_raw);
+    let t_pl1 = g.div(regularized_numerator, regularized_denominator);
     let t_2d = g.reshape(t_pl1, &[p, l]); // [P, L]
 
     let t_shifted = g.shift_inner(t_2d, 1); // [P, L], t[p, k-1] or zero
@@ -414,7 +420,8 @@ pub fn build_volumetric_graph(
     // and its end is the fixed far plane rather than a differentiable face.
     // Blend to the recorder's exact dt in that case. For real faces the gate
     // is effectively one; the epsilon keeps the expression finite.
-    let normal_gate_denominator = g.add(normal_length_squared, eps_pl1);
+    let normal_gate_epsilon = g.constant(vec![1.0e-6_f32; pl], &[pl, 1]);
+    let normal_gate_denominator = g.add(normal_length_squared, normal_gate_epsilon);
     let normal_gate_flat = g.div(normal_length_squared, normal_gate_denominator);
     let normal_gate = g.reshape(normal_gate_flat, &[p, l]);
     let neg_normal_gate = g.neg(normal_gate);
@@ -5184,6 +5191,20 @@ mod tests {
             position_grad.iter().any(|v| v.abs() > 1e-7),
             "interior face integration must produce a position gradient"
         );
+
+        // A nearly parallel face can have dot(normal, ray) = -ε exactly.
+        // The old `denominator + ε` regularization cancelled to zero here
+        // and injected NaNs into the position table before masking/clamping.
+        session.set_parameter("positions", &positions);
+        session.set_input_u32("next_cell_indices", &[1]);
+        session.set_input("ray_dir_per_pixel", &[-2.0e-6, 0.0, 1.0]);
+        session.step();
+        session.wait();
+        session.read_param_grad("positions", &mut position_grad);
+        assert!(position_grad.iter().all(|value| value.is_finite()));
+        let mut updated_positions = vec![0.0_f32; positions.len()];
+        session.read_param("positions", &mut updated_positions);
+        assert!(updated_positions.iter().all(|value| value.is_finite()));
     }
 
     #[test]
