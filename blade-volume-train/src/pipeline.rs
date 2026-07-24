@@ -711,7 +711,11 @@ pub fn train_colmap_appearance_split(
     _test_views: usize,
     gpu: sync::Arc<gpu::Context>,
 ) -> TrainOutcome {
+    let pipeline_start = std::time::Instant::now();
+    let load_start = std::time::Instant::now();
     let recon = colmap::load_reconstruction(sparse_dir);
+    let load_duration = load_start.elapsed();
+    let initialization_start = std::time::Instant::now();
     // Resume path: take the foam from a checkpoint PLY instead of the
     // COLMAP cloud. Cameras/views still come from `recon`; the PLY already
     // carries the densified, trained cell set, so we skip the COLMAP
@@ -769,11 +773,13 @@ pub fn train_colmap_appearance_split(
             }
         }
     }
+    let initialization_duration = initialization_start.elapsed();
     let t0 = std::time::Instant::now();
     rebuild_adjacency(&mut model, config.adjacency);
+    let adjacency_duration = t0.elapsed();
     log::info!(
         "adjacency done in {:.2}s ({} edges)",
-        t0.elapsed().as_secs_f32(),
+        adjacency_duration.as_secs_f32(),
         model
             .adjacency
             .as_ref()
@@ -788,6 +794,7 @@ pub fn train_colmap_appearance_split(
         config.resolution,
     );
 
+    let view_start = std::time::Instant::now();
     let views = if config.test_every > 0 {
         let (train_imgs, test_imgs) =
             split_train_test(&recon, images_dir, config.max_views, 0, config.test_every);
@@ -801,8 +808,18 @@ pub fn train_colmap_appearance_split(
     } else {
         build_views(&recon, images_dir, config)
     };
+    let view_duration = view_start.elapsed();
     if views.is_empty() {
         log::warn!("no usable training views — returning untrained initial model");
+        log::info!(
+            "pipeline phase timing: wall={:.3}s colmap-load={:.3}s \
+             initialization={:.3}s adjacency={:.3}s view-load={:.3}s training=0.000s",
+            pipeline_start.elapsed().as_secs_f64(),
+            load_duration.as_secs_f64(),
+            initialization_duration.as_secs_f64(),
+            adjacency_duration.as_secs_f64(),
+            view_duration.as_secs_f64(),
+        );
         return TrainOutcome {
             model,
             reconstruction: recon,
@@ -810,6 +827,7 @@ pub fn train_colmap_appearance_split(
         };
     }
 
+    let training_start = std::time::Instant::now();
     let losses = diff_render::fit_appearance_multi_view(
         &mut model,
         &views,
@@ -819,6 +837,7 @@ pub fn train_colmap_appearance_split(
         config.fit.clone(),
         gpu,
     );
+    let training_duration = training_start.elapsed();
 
     if let (Some(&first), Some(&last)) = (losses.first(), losses.last()) {
         log::info!(
@@ -826,6 +845,16 @@ pub fn train_colmap_appearance_split(
             losses.len()
         );
     }
+    log::info!(
+        "pipeline phase timing: wall={:.3}s colmap-load={:.3}s \
+         initialization={:.3}s adjacency={:.3}s view-load={:.3}s training={:.3}s",
+        pipeline_start.elapsed().as_secs_f64(),
+        load_duration.as_secs_f64(),
+        initialization_duration.as_secs_f64(),
+        adjacency_duration.as_secs_f64(),
+        view_duration.as_secs_f64(),
+        training_duration.as_secs_f64(),
+    );
     TrainOutcome {
         model,
         reconstruction: recon,

@@ -368,6 +368,7 @@ fn resolve_views_per_batch(
 
 fn main() {
     env_logger::init();
+    let command_start = std::time::Instant::now();
     let args: Args = argh::from_env();
     let densify_schedule = match args.densify_schedule.as_str() {
         "fixed" => diff_render::DensifySchedule::Fixed,
@@ -677,6 +678,7 @@ fn main() {
         eprintln!("no supported GPU device — cannot train");
         std::process::exit(2);
     };
+    let pipeline_start = std::time::Instant::now();
     let outcome = pipeline::train_colmap_appearance_split(
         sparse,
         images,
@@ -684,8 +686,10 @@ fn main() {
         args.test_views,
         gpu.clone(),
     );
+    let pipeline_duration = pipeline_start.elapsed();
 
     let output = path::Path::new(&args.output);
+    let serialization_start = std::time::Instant::now();
     convert::save_ply_with_options(
         output,
         &outcome.model,
@@ -697,6 +701,7 @@ fn main() {
         eprintln!("failed to save PLY: {err:?}");
         std::process::exit(3);
     });
+    let serialization_duration = serialization_start.elapsed();
     println!(
         "wrote {} ({} points, {} adjacency edges)",
         output.display(),
@@ -710,6 +715,7 @@ fn main() {
     );
 
     // --- Evaluation on held-out test views ---
+    let evaluation_start = std::time::Instant::now();
     if !args.skip_eval && (args.test_views > 0 || args.test_every > 0) {
         // Same split logic as training (existence-filtered COLMAP order):
         // interleaved every-Nth when --test-every > 0, else the legacy
@@ -755,7 +761,9 @@ fn main() {
             }
         }
     }
+    let evaluation_duration = evaluation_start.elapsed();
 
+    let novel_start = std::time::Instant::now();
     if let Some(ref novel_path) = args.novel_out {
         render_novel_at(&outcome.model, sparse, &config, 0.5, novel_path);
     }
@@ -767,6 +775,16 @@ fn main() {
             render_novel_at(&outcome.model, sparse, &config, t, &path);
         }
     }
+    let novel_duration = novel_start.elapsed();
+    println!(
+        "phase timing: wall={:.3}s pipeline={:.3}s final-ply={:.3}s \
+         evaluation={:.3}s novel-render={:.3}s",
+        command_start.elapsed().as_secs_f64(),
+        pipeline_duration.as_secs_f64(),
+        serialization_duration.as_secs_f64(),
+        evaluation_duration.as_secs_f64(),
+        novel_duration.as_secs_f64(),
+    );
 }
 
 /// Render the trained model from a pose interpolated between the first two
