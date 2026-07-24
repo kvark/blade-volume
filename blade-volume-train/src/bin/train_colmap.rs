@@ -73,6 +73,10 @@ struct Args {
     #[argh(option, default = "0")]
     test_views: usize,
 
+    /// skip post-training PSNR evaluation
+    #[argh(switch)]
+    skip_eval: bool,
+
     /// training epochs (default 100)
     #[argh(option, default = "100")]
     epochs: usize,
@@ -706,7 +710,7 @@ fn main() {
     );
 
     // --- Evaluation on held-out test views ---
-    if args.test_views > 0 || args.test_every > 0 {
+    if !args.skip_eval && (args.test_views > 0 || args.test_every > 0) {
         // Same split logic as training (existence-filtered COLMAP order):
         // interleaved every-Nth when --test-every > 0, else the legacy
         // contiguous first-train/next-test slicing.
@@ -866,6 +870,7 @@ mod tests {
         .unwrap();
         assert_eq!(default.pixel_batch, 1024);
         assert_eq!(default.views_per_batch, 0);
+        assert!(!default.skip_eval);
         assert_eq!(
             resolve_views_per_batch(default.views_per_batch, Some(default.pixel_batch), 0),
             Ok(16)
@@ -889,6 +894,22 @@ mod tests {
         .unwrap();
         assert_eq!(explicit.pixel_batch, 256);
         assert_eq!(explicit.views_per_batch, 16);
+        assert!(!explicit.skip_eval);
+
+        let skip_eval = <Args as argh::FromArgs>::from_args(
+            &["train_colmap"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--output",
+                "model.ply",
+                "--skip-eval",
+            ],
+        )
+        .unwrap();
+        assert!(skip_eval.skip_eval);
     }
 
     #[test]
