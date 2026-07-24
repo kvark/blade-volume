@@ -1975,6 +1975,11 @@ struct TrainingPhaseTimings {
     densify: std::time::Duration,
     resource_rebuild: std::time::Duration,
     checkpoint: std::time::Duration,
+    checkpoint_download: std::time::Duration,
+    checkpoint_snapshot: std::time::Duration,
+    checkpoint_model: std::time::Duration,
+    checkpoint_optimizer: std::time::Duration,
+    checkpoint_metadata: std::time::Duration,
     finalize: std::time::Duration,
 }
 
@@ -1985,7 +1990,10 @@ impl TrainingPhaseTimings {
              input={:.3}s path-submit={:.3}s gpu-step-wait={:.3}s \
              gradient-readback={:.3}s state-readback={:.3}s \
              contribution={:.3}s topology={:.3}s densify={:.3}s \
-             resource-rebuild={:.3}s checkpoint={:.3}s finalize={:.3}s",
+             resource-rebuild={:.3}s checkpoint={:.3}s \
+             checkpoint-download={:.3}s checkpoint-snapshot={:.3}s \
+             checkpoint-model={:.3}s checkpoint-optimizer={:.3}s \
+             checkpoint-metadata={:.3}s finalize={:.3}s",
             wall.as_secs_f64(),
             steps,
             self.setup.as_secs_f64(),
@@ -1999,6 +2007,11 @@ impl TrainingPhaseTimings {
             self.densify.as_secs_f64(),
             self.resource_rebuild.as_secs_f64(),
             self.checkpoint.as_secs_f64(),
+            self.checkpoint_download.as_secs_f64(),
+            self.checkpoint_snapshot.as_secs_f64(),
+            self.checkpoint_model.as_secs_f64(),
+            self.checkpoint_optimizer.as_secs_f64(),
+            self.checkpoint_metadata.as_secs_f64(),
             self.finalize.as_secs_f64(),
         );
     }
@@ -3990,19 +4003,28 @@ fn fit_appearance_pixel_batched(
         if checkpoint_due {
             if let Some(ref ckpt) = config.checkpoint_path {
                 let checkpoint_start = std::time::Instant::now();
+                let download_start = std::time::Instant::now();
                 if !model_parameters_current {
                     download_model_parameters(&session, model, config.softplus_beta);
                     model_parameters_current = true;
                 }
+                phase_timings.checkpoint_download += download_start.elapsed();
+                let snapshot_start = std::time::Instant::now();
                 let mut snapshot = model.clone();
                 bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
+                phase_timings.checkpoint_snapshot += snapshot_start.elapsed();
+                let model_start = std::time::Instant::now();
                 let model_checkpoint = save_checkpoint(ckpt, &snapshot);
+                phase_timings.checkpoint_model += model_start.elapsed();
                 if model_checkpoint.is_ok() && steps_done == invocation_end {
                     endpoint_checkpoint = Some(ckpt.clone());
                 }
+                let optimizer_start = std::time::Instant::now();
                 match model_checkpoint.and_then(|()| save_optimizer_checkpoint(&mut session, ckpt))
                 {
                     Ok(optimizer_path) => {
+                        phase_timings.checkpoint_optimizer += optimizer_start.elapsed();
+                        let metadata_start = std::time::Instant::now();
                         if let Err(err) = save_checkpoint_step(ckpt, steps_done) {
                             log::warn!("checkpoint step-sidecar write failed: {err}");
                         }
@@ -4032,8 +4054,12 @@ fn fit_appearance_pixel_batched(
                                 "checkpoint trainer-state save failed after model/optimizer: {err}"
                             ),
                         }
+                        phase_timings.checkpoint_metadata += metadata_start.elapsed();
                     }
-                    Err(err) => log::warn!("checkpoint save failed: {err:?}"),
+                    Err(err) => {
+                        phase_timings.checkpoint_optimizer += optimizer_start.elapsed();
+                        log::warn!("checkpoint save failed: {err:?}");
+                    }
                 }
                 phase_timings.checkpoint += checkpoint_start.elapsed();
             }
