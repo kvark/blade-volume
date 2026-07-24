@@ -554,6 +554,9 @@ pub struct TrainOutcome {
     pub reconstruction: colmap::Reconstruction,
     /// Loss values per Adam step in the order they ran (epoch-major × view-major).
     pub training_loss: Vec<f32>,
+    /// Successfully written checkpoint PLY for the final step of this
+    /// invocation. Its model contents match `model`.
+    pub endpoint_checkpoint: Option<path::PathBuf>,
 }
 
 fn rebuild_adjacency(model: &mut vol::PointCloudModel, kind: AdjacencyKind) {
@@ -824,11 +827,12 @@ pub fn train_colmap_appearance_split(
             model,
             reconstruction: recon,
             training_loss: Vec::new(),
+            endpoint_checkpoint: None,
         };
     }
 
     let training_start = std::time::Instant::now();
-    let losses = diff_render::fit_appearance_multi_view(
+    let fit_outcome = diff_render::fit_appearance_multi_view_outcome(
         &mut model,
         &views,
         config.resolution.0,
@@ -839,10 +843,10 @@ pub fn train_colmap_appearance_split(
     );
     let training_duration = training_start.elapsed();
 
-    if let (Some(&first), Some(&last)) = (losses.first(), losses.last()) {
+    if let (Some(&first), Some(&last)) = (fit_outcome.losses.first(), fit_outcome.losses.last()) {
         log::info!(
             "training: loss {first:.4} → {last:.4} over {} steps",
-            losses.len()
+            fit_outcome.losses.len()
         );
     }
     log::info!(
@@ -858,7 +862,8 @@ pub fn train_colmap_appearance_split(
     TrainOutcome {
         model,
         reconstruction: recon,
-        training_loss: losses,
+        training_loss: fit_outcome.losses,
+        endpoint_checkpoint: fit_outcome.endpoint_checkpoint,
     }
 }
 

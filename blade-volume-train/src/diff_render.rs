@@ -1830,9 +1830,26 @@ pub fn fit_appearance_multi_view(
     width: u32,
     height: u32,
     max_steps: usize,
-    mut config: AppearanceFitConfig,
+    config: AppearanceFitConfig,
     gpu: std::sync::Arc<blade_graphics::Context>,
 ) -> Vec<f32> {
+    fit_appearance_multi_view_outcome(model, views, width, height, max_steps, config, gpu).losses
+}
+
+pub(crate) struct AppearanceFitOutcome {
+    pub losses: Vec<f32>,
+    pub endpoint_checkpoint: Option<std::path::PathBuf>,
+}
+
+pub(crate) fn fit_appearance_multi_view_outcome(
+    model: &mut vol::PointCloudModel,
+    views: &[ViewSupervision],
+    width: u32,
+    height: u32,
+    max_steps: usize,
+    mut config: AppearanceFitConfig,
+    gpu: std::sync::Arc<blade_graphics::Context>,
+) -> AppearanceFitOutcome {
     assert!(
         !views.is_empty(),
         "fit_appearance_multi_view needs >=1 view"
@@ -3129,7 +3146,7 @@ fn fit_appearance_pixel_batched(
     pixel_batch: usize,
     config: AppearanceFitConfig,
     gpu: std::sync::Arc<blade_graphics::Context>,
-) -> Vec<f32> {
+) -> AppearanceFitOutcome {
     let wall_start = std::time::Instant::now();
     let mut phase_timings = TrainingPhaseTimings::default();
     let n_cells = model.points.len();
@@ -3311,6 +3328,7 @@ fn fit_appearance_pixel_batched(
         .collect();
 
     let mut losses = Vec::with_capacity(invocation_end.saturating_sub(steps_done));
+    let mut endpoint_checkpoint = None;
     // Frequent loss readouts (every ~2000 steps) so long multi-hour runs
     // surface their trajectory instead of only ~10 lines total.
     let log_every = 2000.min(total_steps).max(1);
@@ -3978,8 +3996,11 @@ fn fit_appearance_pixel_batched(
                 }
                 let mut snapshot = model.clone();
                 bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
-                match save_checkpoint(ckpt, &snapshot)
-                    .and_then(|()| save_optimizer_checkpoint(&mut session, ckpt))
+                let model_checkpoint = save_checkpoint(ckpt, &snapshot);
+                if model_checkpoint.is_ok() && steps_done == invocation_end {
+                    endpoint_checkpoint = Some(ckpt.clone());
+                }
+                match model_checkpoint.and_then(|()| save_optimizer_checkpoint(&mut session, ckpt))
                 {
                     Ok(optimizer_path) => {
                         if let Err(err) = save_checkpoint_step(ckpt, steps_done) {
@@ -4045,7 +4066,10 @@ fn fit_appearance_pixel_batched(
         invocation_end.saturating_sub(config.resume_step),
     );
 
-    losses
+    AppearanceFitOutcome {
+        losses,
+        endpoint_checkpoint,
+    }
 }
 
 #[cfg(test)]
@@ -5821,7 +5845,7 @@ mod tests {
         );
 
         let mut first_segment = tiny_model();
-        fit_appearance_multi_view(
+        let first_outcome = fit_appearance_multi_view_outcome(
             &mut first_segment,
             &views,
             2,
@@ -5833,6 +5857,10 @@ mod tests {
                 ..base.clone()
             },
             gpu.clone(),
+        );
+        assert_eq!(
+            first_outcome.endpoint_checkpoint.as_deref(),
+            Some(checkpoint.as_path())
         );
         let training_state = load_training_state(&checkpoint).unwrap();
         assert_eq!(training_state.step, 4);

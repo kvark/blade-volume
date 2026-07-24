@@ -28,7 +28,7 @@ use argh::FromArgs;
 use blade_volume as vol;
 use blade_volume_convert as convert;
 use blade_volume_train::{diff_render, fit, pipeline};
-use std::path;
+use std::{fs, path};
 
 /// Train a RadFoam from a COLMAP sparse reconstruction.
 #[derive(FromArgs)]
@@ -366,6 +366,29 @@ fn resolve_views_per_batch(
     Ok(selected)
 }
 
+fn copy_endpoint_checkpoint(source: &path::Path, output: &path::Path) -> Result<(), String> {
+    if source == output {
+        return Ok(());
+    }
+    let tmp = output.with_extension("ply.tmp");
+    if let Err(err) = fs::copy(source, &tmp) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!(
+            "failed to copy endpoint checkpoint {} to {}: {err}",
+            source.display(),
+            tmp.display(),
+        ));
+    }
+    if let Err(err) = fs::rename(&tmp, output) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!(
+            "failed to rename endpoint checkpoint copy to {}: {err}",
+            output.display(),
+        ));
+    }
+    Ok(())
+}
+
 fn main() {
     env_logger::init();
     let command_start = std::time::Instant::now();
@@ -690,17 +713,29 @@ fn main() {
 
     let output = path::Path::new(&args.output);
     let serialization_start = std::time::Instant::now();
-    convert::save_ply_with_options(
-        output,
-        &outcome.model,
-        &convert::SaveOptions {
-            format: convert::PlyFormat::Binary,
-        },
-    )
-    .unwrap_or_else(|err| {
-        eprintln!("failed to save PLY: {err:?}");
-        std::process::exit(3);
-    });
+    let reused_checkpoint =
+        outcome.endpoint_checkpoint.as_ref().is_some_and(
+            |checkpoint| match copy_endpoint_checkpoint(checkpoint, output) {
+                Ok(()) => true,
+                Err(err) => {
+                    eprintln!("{err}; serializing the in-memory model instead");
+                    false
+                }
+            },
+        );
+    if !reused_checkpoint {
+        convert::save_ply_with_options(
+            output,
+            &outcome.model,
+            &convert::SaveOptions {
+                format: convert::PlyFormat::Binary,
+            },
+        )
+        .unwrap_or_else(|err| {
+            eprintln!("failed to save PLY: {err:?}");
+            std::process::exit(3);
+        });
+    }
     let serialization_duration = serialization_start.elapsed();
     println!(
         "wrote {} ({} points, {} adjacency edges)",
@@ -871,6 +906,24 @@ fn interp_camera(a: &vol::CameraParams, b: &vol::CameraParams, t: f32) -> vol::C
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_checkpoint_copy_atomically_replaces_final_ply() {
+        let stem = format!("blade-volume-final-ply-copy-{}", std::process::id());
+        let source = std::env::temp_dir().join(format!("{stem}.ckpt.ply"));
+        let output = std::env::temp_dir().join(format!("{stem}.ply"));
+        let tmp = output.with_extension("ply.tmp");
+        fs::write(&source, b"current endpoint checkpoint").unwrap();
+        fs::write(&output, b"stale final output").unwrap();
+
+        copy_endpoint_checkpoint(&source, &output).unwrap();
+
+        assert_eq!(fs::read(&output).unwrap(), b"current endpoint checkpoint");
+        assert_eq!(fs::read(&source).unwrap(), b"current endpoint checkpoint");
+        assert!(!tmp.exists());
+        fs::remove_file(source).unwrap();
+        fs::remove_file(output).unwrap();
+    }
 
     #[test]
     fn batching_uses_selected_defaults_and_accepts_overrides() {
