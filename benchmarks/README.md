@@ -492,6 +492,20 @@ zero pressure, swap, OOM, or GPU faults. Peak host memory falls from
 4,421,963,776 to 4,200,992,768 bytes. Raw evidence remains ignored at
 `target/audit-runs/room-step5000-phase-profile-{local,readback-local}`.
 
+Commit `fe7517d` makes the trainer explicitly report a successfully written
+endpoint checkpoint PLY. The CLI atomically copies that exact snapshot to the
+requested final path instead of encoding the same 735,103-cell model again;
+if the copy fails or no endpoint checkpoint exists, it retains the old
+serialization fallback. On the matched production endpoint, final PLY output
+falls from 13.991 to 0.045 seconds (311×), and whole-command time reaches
+142.098 seconds—1.45× faster than the original 205.641-second profile and
+1.12× faster than the readback-only run. Commit `c8ca20f` makes the cgroup
+wrapper retain the exact terminal kernel counters; this run peaks at
+3,899,666,432 host bytes, with zero pressure, swap, OOM, or GPU faults. The
+checkpoint and final PLY are byte-identical but separate files, and the same
+eight held-out views remain at 24.03 dB. Raw evidence remains ignored at
+`target/audit-runs/room-step5000-phase-profile-final-copy-exact-local`.
+
 The phase profile identifies serialization as the remaining dominant endpoint
 cost. Meganeura branch `perf/stream-checkpoints-fba` at `cb64f67` writes
 safetensors directly to the destination file rather than materializing a
@@ -499,7 +513,11 @@ second complete byte vector. A matched Blade run reduces peak host memory from
 4,421,963,776 to 3,726,434,304 bytes (15.7%) while preserving 24.03 dB selected
 held-out quality and byte-identical checkpoint/final PLYs within the run.
 Checkpoint time is effectively unchanged at 100.060 versus 98.460 seconds, so
-this is a pending upstream memory fix, not a runtime claim. Blade remains
-pinned to merged Meganeura commit `fba040a` until that branch lands. The raw
-artifact remains ignored at
-`target/audit-runs/room-step5000-phase-profile-stream2-local`.
+this is not a runtime claim. Combining it with final PLY reuse did not
+reproduce an additional memory benefit: the sampler observed at least
+4,104,609,792 bytes versus the pinned run's exact 3,899,666,432-byte peak, with
+145.172 versus 142.098 seconds wall time. That combined run preceded exact
+terminal-counter retention, so the branch remains pushed for investigation
+rather than selected for uprev. Blade stays pinned to merged Meganeura
+`fba040a`. Raw artifacts remain ignored at
+`target/audit-runs/room-step5000-phase-profile-{stream2-local,stream-final-copy-local}`.

@@ -910,9 +910,29 @@ checkpoint_final_ply_sha256 = "cb4569d604b12b2c9c3e8c4bd4c98ffd9cf052e2a81fb5331
 optimization = "reuse current model parameter downloads across geometry, checkpoint, and finalization boundaries"
 control_artifact_path = "target/audit-runs/room-step5000-phase-profile-local"
 optimized_artifact_path = "target/audit-runs/room-step5000-phase-profile-readback-local"
+final_ply_reuse_git_commit = "fe7517d"
+exact_terminal_memory_git_commit = "c8ca20f"
+final_ply_reuse_training_wall_seconds = 117.909
+final_ply_reuse_command_wall_seconds = 142.098
+final_ply_reuse_command_speedup_from_control = 1.447
+final_ply_reuse_command_reduction_from_control_percent = 30.9
+final_ply_reuse_command_speedup_from_readback = 1.119
+final_ply_reuse_command_reduction_from_readback_percent = 10.6
+serialized_final_ply_seconds = 13.991
+reused_final_ply_seconds = 0.045
+final_ply_speedup = 310.911
+final_ply_time_reduction_percent = 99.7
+final_ply_reuse_memory_peak_bytes = 3899666432
+final_ply_reuse_memory_reduction_from_control_percent = 11.8
+final_ply_reuse_memory_reduction_from_readback_percent = 7.2
+final_ply_reuse_memory_measurement = "exact terminal cgroup memory.peak"
+final_ply_reuse_selected_test_psnr = 24.03
+final_ply_reuse_checkpoint_matches_final_ply = true
+final_ply_reuse_checkpoint_final_ply_sha256 = "314ea032796a505e010f95c56b3ce0c1fa4b48c6605f68bf14d29c7770117e00"
+final_ply_reuse_artifact_path = "target/audit-runs/room-step5000-phase-profile-final-copy-exact-local"
 
 [meganeura_stream_checkpoint]
-status = "branch-pushed-awaiting-merge"
+status = "branch-pushed-more-validation-needed"
 meganeura_base_commit = "fba040a"
 meganeura_commit = "cb64f67"
 meganeura_branch = "perf/stream-checkpoints-fba"
@@ -931,6 +951,11 @@ gpu_faults = 0
 selected_test_psnr = 24.03
 checkpoint_matches_final_ply = true
 artifact_path = "target/audit-runs/room-step5000-phase-profile-stream2-local"
+combined_with_final_ply_reuse_wall_seconds = 145.172
+combined_with_final_ply_reuse_observed_memory_peak_bytes = 4104609792
+combined_terminal_memory_was_not_retained = true
+combined_conclusion = "no additional memory or runtime benefit demonstrated after final PLY reuse; do not uprev without isolating the discrepancy"
+combined_artifact_path = "target/audit-runs/room-step5000-phase-profile-stream-final-copy-local"
 
 [continuation_selection]
 status = "selected"
@@ -1059,6 +1084,11 @@ required = [
     "training_phase_profile.command_speedup",
     "training_phase_profile.selected_test_psnr",
     "training_phase_profile.checkpoint_matches_final_ply",
+    "training_phase_profile.final_ply_reuse_git_commit",
+    "training_phase_profile.final_ply_speedup",
+    "training_phase_profile.final_ply_reuse_command_speedup_from_control",
+    "training_phase_profile.final_ply_reuse_selected_test_psnr",
+    "training_phase_profile.final_ply_reuse_checkpoint_matches_final_ply",
     "continuation_selection.decision_commit",
     "selection.decision_commit",
 ]
