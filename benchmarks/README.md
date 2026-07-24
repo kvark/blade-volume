@@ -477,3 +477,29 @@ production target is RGBA16F. The apples-to-apples 255+8-view pass falls from
 respectively; the GPU pass samples 279 MiB VRAM and records zero swap,
 pressure, OOM, or GPU faults. Raw parity and timing artifacts remain ignored
 at `target/audit-runs/room-step5000-gpu-eval-local`.
+
+Commit `5e3f81d` adds built-in phase timing and reuses an already-current model
+download across geometry, checkpoint, and finalization boundaries. In a
+matched step-5,000→5,100 continuation, training falls from 167.369 to 120.675
+seconds (1.39×) and whole-command time falls from 205.641 to 158.960 seconds
+(1.29×). The eliminated duplicate finalization download accounts for 24.906
+seconds; checkpoint time also falls from 98.460 to 76.406 seconds because it
+no longer starts with another full parameter download. Both runs follow the
+same 0.0919→0.0854 loss trace and produce 735,103 cells with 11,308,046
+directed edges. The optimized checkpoint PLY is byte-identical to its final
+PLY, selected held-out evaluation remains 24.03 dB, and the 6 GiB scope records
+zero pressure, swap, OOM, or GPU faults. Peak host memory falls from
+4,421,963,776 to 4,200,992,768 bytes. Raw evidence remains ignored at
+`target/audit-runs/room-step5000-phase-profile-{local,readback-local}`.
+
+The phase profile identifies serialization as the remaining dominant endpoint
+cost. Meganeura branch `perf/stream-checkpoints-fba` at `cb64f67` writes
+safetensors directly to the destination file rather than materializing a
+second complete byte vector. A matched Blade run reduces peak host memory from
+4,421,963,776 to 3,726,434,304 bytes (15.7%) while preserving 24.03 dB selected
+held-out quality and byte-identical checkpoint/final PLYs within the run.
+Checkpoint time is effectively unchanged at 100.060 versus 98.460 seconds, so
+this is a pending upstream memory fix, not a runtime claim. Blade remains
+pinned to merged Meganeura commit `fba040a` until that branch lands. The raw
+artifact remains ignored at
+`target/audit-runs/room-step5000-phase-profile-stream2-local`.
