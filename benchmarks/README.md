@@ -444,3 +444,24 @@ ladder. Images remain visibly fragmented, so the result improves the training
 economics and evidence, not the production-readiness verdict. Artifacts remain
 ignored at `target/audit-runs/room-batch1024-mixed16-step3125-27242ad` and
 `target/audit-runs/room-batch4096-mixed16-step3250-27242ad`.
+
+The selected path then moves to 256². Reloading step 3,250 at that resolution
+gives 24.55/23.23 dB train/held out and 23.19 dB across all 39 views. Continuing
+to step 3,375 reaches 24.77/23.39 dB and 23.34 dB all-39. A matched 64-view
+batch ties the 16-view result while taking 6% more training/topology time and
+3% more peak host memory, so 16 views remains selected.
+
+Matched fixed-cap topology gates select an exact Qhull rebuild every 250 steps.
+Cadence 125 ties cadence 25 at step 3,500 while cutting the training/topology
+interval from 219 to 46 seconds. Cadence 250 then ties cadence 125 at step
+3,750 while cutting 111 seconds to 63. Cadence 500 loses 0.01 dB selected and
+all-39 at step 4,500 for only a 25% interval saving, so it is rejected.
+
+The selected cadence-250 path reaches aligned step 5,000 with 735,103 cells,
+11,308,074 directed edges, and 10.88 million optimizer rays. Fresh-Ply
+evaluation gives 25.69/24.03 dB train/held out and 23.93 dB across all 39
+views. The final 500 steps add only 0.06 dB selected and 0.05 dB all-39.
+Foreground furniture and thin occlusion boundaries remain visibly smeared, so
+this is the latest reconstruction checkpoint rather than a viewer-ready
+result. Raw artifacts remain ignored under
+`target/audit-runs/room-batch4096-mixed16-resolution256-step*-{e23a4d3,98d9ee9}`.
