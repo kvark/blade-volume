@@ -1945,6 +1945,48 @@ pub fn fit_appearance_multi_view(
     fit_appearance_pixel_batched(model, views, max_steps, pixel_batch, config, gpu)
 }
 
+#[derive(Default)]
+struct TrainingPhaseTimings {
+    setup: std::time::Duration,
+    input_prepare: std::time::Duration,
+    path_submit: std::time::Duration,
+    gpu_step_wait: std::time::Duration,
+    gradient_readback: std::time::Duration,
+    state_readback: std::time::Duration,
+    contribution: std::time::Duration,
+    topology: std::time::Duration,
+    densify: std::time::Duration,
+    resource_rebuild: std::time::Duration,
+    checkpoint: std::time::Duration,
+    finalize: std::time::Duration,
+}
+
+impl TrainingPhaseTimings {
+    fn log(&self, wall: std::time::Duration, steps: usize) {
+        log::info!(
+            "training phase timing: wall={:.3}s steps={} setup={:.3}s \
+             input={:.3}s path-submit={:.3}s gpu-step-wait={:.3}s \
+             gradient-readback={:.3}s state-readback={:.3}s \
+             contribution={:.3}s topology={:.3}s densify={:.3}s \
+             resource-rebuild={:.3}s checkpoint={:.3}s finalize={:.3}s",
+            wall.as_secs_f64(),
+            steps,
+            self.setup.as_secs_f64(),
+            self.input_prepare.as_secs_f64(),
+            self.path_submit.as_secs_f64(),
+            self.gpu_step_wait.as_secs_f64(),
+            self.gradient_readback.as_secs_f64(),
+            self.state_readback.as_secs_f64(),
+            self.contribution.as_secs_f64(),
+            self.topology.as_secs_f64(),
+            self.densify.as_secs_f64(),
+            self.resource_rebuild.as_secs_f64(),
+            self.checkpoint.as_secs_f64(),
+            self.finalize.as_secs_f64(),
+        );
+    }
+}
+
 fn upload_model_parameters(
     session: &mut mn::Session,
     model: &vol::PointCloudModel,
@@ -3088,6 +3130,8 @@ fn fit_appearance_pixel_batched(
     config: AppearanceFitConfig,
     gpu: std::sync::Arc<blade_graphics::Context>,
 ) -> Vec<f32> {
+    let wall_start = std::time::Instant::now();
+    let mut phase_timings = TrainingPhaseTimings::default();
     let n_cells = model.points.len();
     let profile_gpu = std::env::var_os("BLADE_VOLUME_PROFILE_GPU").is_some();
     if profile_gpu && std::env::var_os("MEGANEURA_GPU_TIMING").is_none() {
@@ -3313,6 +3357,7 @@ fn fit_appearance_pixel_batched(
             model.points.len(),
         );
     }
+    let setup_start = std::time::Instant::now();
     let mut position_grad_accum = vec![0.0f32; model.points.len()];
     let mut position_grad_scratch = vec![0.0f32; model.points.len() * 3];
     let _ = n_cells;
@@ -3368,6 +3413,12 @@ fn fit_appearance_pixel_batched(
     // upload once. The new session built for each densify cycle gets
     // its own upload below.
     session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
+    // The checkpoint PLY may have exposure baked into it while the restored
+    // safetensors sidecar carries the exact live parameters. Track whether
+    // `model` reflects the current session so endpoint checkpoint/finalization
+    // does not repeat the same full parameter readback.
+    let mut model_parameters_current = false;
+    phase_timings.setup += setup_start.elapsed();
 
     while steps_done < invocation_end {
         let densify_schedule_active = densify.is_some_and(|d| match d.schedule {
@@ -3404,6 +3455,7 @@ fn fit_appearance_pixel_batched(
 
         let cycle_start = steps_done;
         for cycle_step in 0..cycle_budget {
+            let input_start = std::time::Instant::now();
             let step = steps_done + cycle_step;
             let selected_views =
                 sample_training_views(&mut sampling_rng, views.len(), views_per_batch);
@@ -3517,7 +3569,9 @@ fn fit_appearance_pixel_batched(
             for (j, vec) in basis_inputs.iter().enumerate() {
                 session.set_input(&format!("basis_{}", j + 1), vec);
             }
+            phase_timings.input_prepare += input_start.elapsed();
 
+            let path_submit_start = std::time::Instant::now();
             record_encoder.start();
             {
                 let mut tx = record_encoder.transfer("path-record-prepare");
@@ -3560,7 +3614,9 @@ fn fit_appearance_pixel_batched(
                 );
             }
             let _ = gpu.submit(&mut record_encoder);
+            phase_timings.path_submit += path_submit_start.elapsed();
 
+            let gpu_step_start = std::time::Instant::now();
             session.set_input("labels", &target_buf);
             session.set_input_u32("view_idx", &view_idx_buf);
             if config.quantile_weight > 0.0 {
@@ -3580,12 +3636,15 @@ fn fit_appearance_pixel_batched(
             configure_optimizer(&mut session, &config, step, total_steps);
             session.step();
             session.wait();
+            model_parameters_current = false;
             if profile_gpu {
                 session.dump_gpu_timings();
             }
             let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
             losses.push(loss);
+            phase_timings.gpu_step_wait += gpu_step_start.elapsed();
 
+            let gradient_readback_start = std::time::Instant::now();
             if densify_schedule_active && session.has_param_grad("positions") {
                 session.read_param_grad("positions", &mut position_grad_scratch);
                 for (i, accumulated) in position_grad_accum.iter_mut().enumerate() {
@@ -3596,6 +3655,7 @@ fn fit_appearance_pixel_batched(
                     *accumulated += (x * x + y * y + z * z).sqrt();
                 }
             }
+            phase_timings.gradient_readback += gradient_readback_start.elapsed();
 
             if step == 0 || (step + 1).is_multiple_of(log_every) {
                 let window: usize = log_every.min(losses.len());
@@ -3643,7 +3703,9 @@ fn fit_appearance_pixel_batched(
                 // Snapshot params + Adam state at the OLD size, before
                 // prune+densify remaps `model.points`.
                 let n_old = model.points.len();
+                let state_readback_start = std::time::Instant::now();
                 download_model_parameters(&session, model, config.softplus_beta);
+                model_parameters_current = true;
                 let adam_snap = save_adam_state(
                     &session,
                     sh_degree,
@@ -3651,6 +3713,7 @@ fn fit_appearance_pixel_batched(
                     views.len(),
                     model.radii.is_some(),
                 );
+                phase_timings.state_readback += state_readback_start.elapsed();
 
                 // The reference performs a scheduled topology refresh before
                 // collecting its densification statistics. Preserve that
@@ -3658,10 +3721,14 @@ fn fit_appearance_pixel_batched(
                 // positions must not be paired with the previous GPU cloud or
                 // previous farthest-neighbour relationships.
                 if topology_schedule_due {
+                    let topology_start = std::time::Instant::now();
                     rebuild_training_adjacency(model, config.rebuild_with_qhull);
+                    phase_timings.topology += topology_start.elapsed();
                     if d.prune {
+                        let resource_rebuild_start = std::time::Instant::now();
                         gpu_cloud.deinit(&gpu);
                         gpu_cloud = build_training_gpu_cloud(model, &gpu);
+                        phase_timings.resource_rebuild += resource_rebuild_start.elapsed();
                     }
                     log::info!(
                         "densify round {}: refreshed current geometry before resampling",
@@ -3670,6 +3737,7 @@ fn fit_appearance_pixel_batched(
                 }
 
                 let contribution = if d.prune {
+                    let contribution_start = std::time::Instant::now();
                     let stats = collect_path_contributions(
                         &gpu,
                         &recorder,
@@ -3680,6 +3748,7 @@ fn fit_appearance_pixel_batched(
                         densification_round,
                         d.contribution_views,
                     );
+                    phase_timings.contribution += contribution_start.elapsed();
                     let truncated_percent = if stats.rays == 0 {
                         0.0
                     } else {
@@ -3720,6 +3789,7 @@ fn fit_appearance_pixel_batched(
                 } else {
                     vec![f32::INFINITY; n_old]
                 };
+                let densify_start = std::time::Instant::now();
                 let (new_to_old, pruned, added) = prune_and_densify(
                     model,
                     &position_grad_accum,
@@ -3728,6 +3798,7 @@ fn fit_appearance_pixel_batched(
                     &mut rng_split,
                     config.softplus_beta,
                 );
+                phase_timings.densify += densify_start.elapsed();
                 log::info!(
                     "densify round {}: {} cells (-{} pruned, +{} split) → {} total",
                     densification_round,
@@ -3746,13 +3817,16 @@ fn fit_appearance_pixel_batched(
                 }
                 // Rebuild Voronoi adjacency for the new cell set so the
                 // GPU path-record sees real neighbours of the new cells.
+                let topology_start = std::time::Instant::now();
                 rebuild_training_adjacency(model, config.rebuild_with_qhull);
+                phase_timings.topology += topology_start.elapsed();
                 position_grad_accum = vec![0.0f32; model.points.len()];
                 position_grad_scratch = vec![0.0f32; model.points.len() * 3];
 
                 // Topology changed: tear down and rebuild the
                 // cell-count-dependent resources, then remap Adam moments
                 // from survivors and split parents into the new session.
+                let resource_rebuild_start = std::time::Instant::now();
                 drop(session);
                 gpu_cloud.deinit(&gpu);
                 path_bufs.destroy(&gpu);
@@ -3802,6 +3876,7 @@ fn fit_appearance_pixel_batched(
                     model.radii.is_some(),
                 );
                 session.set_adam_step_count(adam_snap.t);
+                phase_timings.resource_rebuild += resource_rebuild_start.elapsed();
                 topology_rebuilt = true;
                 if config.geometry_rebuild_schedule == GeometryRebuildSchedule::RadFoamV1 {
                     topology_cadence.reset_period_after_densification();
@@ -3818,7 +3893,9 @@ fn fit_appearance_pixel_batched(
             geometry_trainable && (topology_schedule_due || steps_done == invocation_end);
         if geometry_due && !topology_rebuilt {
             let n_cells = model.points.len();
+            let state_readback_start = std::time::Instant::now();
             download_model_parameters(&session, model, config.softplus_beta);
+            model_parameters_current = true;
             let adam_snap = (steps_done < invocation_end).then(|| {
                 save_adam_state(
                     &session,
@@ -3828,7 +3905,10 @@ fn fit_appearance_pixel_batched(
                     model.radii.is_some(),
                 )
             });
+            phase_timings.state_readback += state_readback_start.elapsed();
+            let topology_start = std::time::Instant::now();
             rebuild_training_adjacency(model, config.rebuild_with_qhull);
+            phase_timings.topology += topology_start.elapsed();
             log::info!(
                 "geometry cycle {}: rebuilt adjacency for {} moved points at step {}",
                 cycle,
@@ -3837,6 +3917,7 @@ fn fit_appearance_pixel_batched(
             );
 
             if let Some(adam_snap) = adam_snap {
+                let resource_rebuild_start = std::time::Instant::now();
                 drop(session);
                 gpu_cloud.deinit(&gpu);
                 path_bufs.destroy(&gpu);
@@ -3880,6 +3961,7 @@ fn fit_appearance_pixel_batched(
                     model.radii.is_some(),
                 );
                 session.set_adam_step_count(adam_snap.t);
+                phase_timings.resource_rebuild += resource_rebuild_start.elapsed();
             }
         }
 
@@ -3889,7 +3971,11 @@ fn fit_appearance_pixel_batched(
         let checkpoint_due = steps_done == invocation_end || densify_schedule_due;
         if checkpoint_due {
             if let Some(ref ckpt) = config.checkpoint_path {
-                download_model_parameters(&session, model, config.softplus_beta);
+                let checkpoint_start = std::time::Instant::now();
+                if !model_parameters_current {
+                    download_model_parameters(&session, model, config.softplus_beta);
+                    model_parameters_current = true;
+                }
                 let mut snapshot = model.clone();
                 bake_mean_exposure_into_sh(&session, &mut snapshot, views.len());
                 match save_checkpoint(ckpt, &snapshot)
@@ -3928,6 +4014,7 @@ fn fit_appearance_pixel_batched(
                     }
                     Err(err) => log::warn!("checkpoint save failed: {err:?}"),
                 }
+                phase_timings.checkpoint += checkpoint_start.elapsed();
             }
         }
     }
@@ -3940,8 +4027,11 @@ fn fit_appearance_pixel_batched(
         );
     }
 
+    let finalize_start = std::time::Instant::now();
     debug_dump_exposure(&session, views.len());
-    download_model_parameters(&session, model, config.softplus_beta);
+    if !model_parameters_current {
+        download_model_parameters(&session, model, config.softplus_beta);
+    }
     bake_mean_exposure_into_sh(&session, model, views.len());
     drop(session);
     gpu_cloud.deinit(&gpu);
@@ -3949,6 +4039,11 @@ fn fit_appearance_pixel_batched(
     let mut recorder = recorder;
     recorder.destroy(&gpu);
     gpu.destroy_command_encoder(&mut record_encoder);
+    phase_timings.finalize += finalize_start.elapsed();
+    phase_timings.log(
+        wall_start.elapsed(),
+        invocation_end.saturating_sub(config.resume_step),
+    );
 
     losses
 }
