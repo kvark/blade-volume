@@ -1,10 +1,12 @@
 mod gaussian;
 mod path_record;
 mod radfoam;
+mod radfoam_trace;
 
 pub use gaussian::{GaussianGpuCloud, InitParameters};
 pub use path_record::{PathRecordBuffers, PathRecorder, RecordPathsArgs};
 pub use radfoam::RadFoamGpuCloud;
+pub use radfoam_trace::{RadFoamGpuTracer, RadFoamTraceSettings};
 
 /// Whether this process is forbidden from initializing a GPU context.
 ///

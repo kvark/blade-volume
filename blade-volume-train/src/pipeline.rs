@@ -404,6 +404,148 @@ pub fn evaluate_views(
     out
 }
 
+pub struct GpuViewEvaluator {
+    context: sync::Arc<gpu::Context>,
+    encoder: gpu::CommandEncoder,
+    tracer: vol::RadFoamGpuTracer,
+    output: gpu::Texture,
+    output_view: gpu::TextureView,
+    readback: gpu::Buffer,
+    resolution: [u32; 2],
+}
+
+impl GpuViewEvaluator {
+    pub fn new(
+        model: &vol::PointCloudModel,
+        config: &PipelineConfig,
+        context: sync::Arc<gpu::Context>,
+    ) -> Self {
+        let resolution = [config.resolution.0, config.resolution.1];
+        assert!(
+            resolution[0] > 0 && resolution[1] > 0,
+            "evaluation resolution must be non-zero"
+        );
+        let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+            name: "radfoam-evaluate",
+            buffer_count: 1,
+            manual_barriers: false,
+        });
+        let tracer = vol::RadFoamGpuTracer::new(
+            model,
+            vol::RadFoamTraceSettings {
+                max_steps: config.max_steps as u32,
+                weight_threshold: 1e-4,
+                debug_cell_density: false,
+            },
+            &context,
+            &mut encoder,
+        );
+        let output = context.create_texture(gpu::TextureDesc {
+            name: "radfoam-evaluate-output",
+            format: gpu::TextureFormat::Rgba16Float,
+            size: gpu::Extent {
+                width: resolution[0],
+                height: resolution[1],
+                depth: 1,
+            },
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::STORAGE | gpu::TextureUsage::COPY,
+            external: None,
+        });
+        let output_view = context.create_texture_view(
+            output,
+            gpu::TextureViewDesc {
+                name: "radfoam-evaluate-output-view",
+                format: gpu::TextureFormat::Rgba16Float,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources::default(),
+            },
+        );
+        let readback = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-evaluate-readback",
+            size: u64::from(resolution[0]) * u64::from(resolution[1]) * 8,
+            memory: gpu::Memory::Shared,
+        });
+        Self {
+            context,
+            encoder,
+            tracer,
+            output,
+            output_view,
+            readback,
+            resolution,
+        }
+    }
+
+    pub fn render_rgba(&mut self, camera: vol::CameraParams) -> Result<Vec<f32>, String> {
+        self.encoder.start();
+        self.encoder.init_texture(self.output);
+        self.tracer
+            .dispatch(&mut self.encoder, self.output_view, camera, self.resolution);
+        let bytes_per_row = self.resolution[0] * 8;
+        let mut transfer = self.encoder.transfer("radfoam-evaluate-readback");
+        transfer.copy_texture_to_buffer(
+            gpu::TexturePiece {
+                texture: self.output,
+                mip_level: 0,
+                array_layer: 0,
+                origin: [0, 0, 0],
+            },
+            self.readback.at(0),
+            bytes_per_row,
+            gpu::Extent {
+                width: self.resolution[0],
+                height: self.resolution[1],
+                depth: 1,
+            },
+        );
+        drop(transfer);
+
+        let sync_point = self.context.submit(&mut self.encoder);
+        match self.context.wait_for(&sync_point, !0) {
+            Ok(true) => {}
+            Ok(false) => return Err("GPU evaluation timed out".to_string()),
+            Err(err) => return Err(format!("GPU evaluation wait failed: {err:?}")),
+        }
+
+        let num_values = self.resolution[0] as usize * self.resolution[1] as usize * 4;
+        let data =
+            unsafe { std::slice::from_raw_parts(self.readback.data() as *const u16, num_values) };
+        Ok(data
+            .iter()
+            .map(|&bits| half::f16::from_bits(bits).to_f32())
+            .collect())
+    }
+
+    pub fn evaluate(
+        &mut self,
+        views: &[diff_render::ViewSupervision],
+        background_rgb: [f32; 3],
+    ) -> Result<Vec<f32>, String> {
+        let mut out = Vec::with_capacity(views.len());
+        for view in views {
+            let rgba = self.render_rgba(view.camera)?;
+            let mut pred = metrics::rgba_over_background(&rgba, background_rgb);
+            for value in pred.iter_mut() {
+                *value = value.clamp(0.0, 1.0);
+            }
+            out.push(metrics::psnr(&pred, &view.target_rgb));
+        }
+        Ok(out)
+    }
+
+    pub fn deinit(mut self) {
+        self.context.destroy_buffer(self.readback);
+        self.context.destroy_texture_view(self.output_view);
+        self.context.destroy_texture(self.output);
+        self.tracer.deinit(&self.context);
+        self.context.destroy_command_encoder(&mut self.encoder);
+    }
+}
+
 /// Result of an end-to-end COLMAP training run. The Reconstruction comes
 /// back so callers can render extra views (test set, novel poses) without
 /// re-parsing the binary.
@@ -771,6 +913,59 @@ mod tests {
         let mut model = tiny_model_far_apart();
         model.radii = Some(vec![0.0, 20.0, 0.0, 0.0]);
         assert_eq!(pick_start_cell(&model, glam::Vec3::ZERO), 1);
+    }
+
+    #[test]
+    fn gpu_view_evaluator_matches_cpu_oracle() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping gpu_view_evaluator_matches_cpu_oracle: no GPU");
+            return;
+        };
+        let camera = vol::CameraParams {
+            cam_position: [0.0, 0.0, -1.0],
+            depth: 100.0,
+            cam_orientation: glam::Quat::IDENTITY.into(),
+            fov: [1.0, 1.0],
+            principal: [0.08, -0.04],
+        };
+        let config = PipelineConfig {
+            resolution: (8, 8),
+            max_steps: 64,
+            ..PipelineConfig::default()
+        };
+
+        for weighted in [false, true] {
+            let mut model = tiny_model_far_apart();
+            model.compute_adjacency_default();
+            if weighted {
+                model.radii = Some(vec![20.0; model.points.len()]);
+            }
+            let cpu = render::render_cpu(
+                &model,
+                &camera,
+                render::RenderSettings {
+                    width: config.resolution.0,
+                    height: config.resolution.1,
+                    start_point: pick_start_cell(&model, glam::Vec3::from(camera.cam_position)),
+                    max_steps: config.max_steps as u32,
+                    weight_threshold: 1e-4,
+                },
+            );
+            let mut evaluator = GpuViewEvaluator::new(&model, &config, gpu.clone());
+            let actual = evaluator.render_rgba(camera).unwrap();
+            evaluator.deinit();
+
+            let max_delta = actual
+                .iter()
+                .zip(cpu.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(
+                max_delta <= 5e-3,
+                "weighted={weighted}: max GPU/CPU delta {max_delta}"
+            );
+        }
     }
 
     /// Write a minimal COLMAP fixture: one PINHOLE camera, two images

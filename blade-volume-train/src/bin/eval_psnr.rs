@@ -18,7 +18,7 @@
 
 use argh::FromArgs;
 use blade_volume as vol;
-use blade_volume_train::{colmap, diff_render, metrics, pipeline, render};
+use blade_volume_train::{colmap, diff_render, fit, metrics, pipeline, render};
 use std::path;
 
 /// Evaluate PSNR of a trained RadFoam PLY against existing COLMAP images.
@@ -82,6 +82,10 @@ struct Args {
     /// composite predictions on white instead of the default black background
     #[argh(switch)]
     white_background: bool,
+
+    /// use the production GPU compute tracer instead of the CPU oracle
+    #[argh(switch)]
+    gpu: bool,
 }
 
 /// Write a side-by-side `[GT | rendered]` PNG. Both inputs are row-major
@@ -196,8 +200,33 @@ fn main() {
     let test_views =
         pipeline::build_views_from(&recon, images_dir, &config, test_slice.iter().copied());
 
-    let train_psnrs = pipeline::evaluate_views(&model, &train_views, &config);
-    let test_psnrs = pipeline::evaluate_views(&model, &test_views, &config);
+    let mut gpu_evaluator = if args.gpu {
+        let context = fit::try_init_gpu().unwrap_or_else(|| {
+            eprintln!("no supported GPU device — cannot run GPU evaluation");
+            std::process::exit(2);
+        });
+        Some(pipeline::GpuViewEvaluator::new(&model, &config, context))
+    } else {
+        None
+    };
+    let train_psnrs = match gpu_evaluator {
+        Some(ref mut evaluator) => evaluator
+            .evaluate(&train_views, config.fit.background_rgb)
+            .unwrap_or_else(|err| {
+                eprintln!("{err}");
+                std::process::exit(3);
+            }),
+        None => pipeline::evaluate_views(&model, &train_views, &config),
+    };
+    let test_psnrs = match gpu_evaluator {
+        Some(ref mut evaluator) => evaluator
+            .evaluate(&test_views, config.fit.background_rgb)
+            .unwrap_or_else(|err| {
+                eprintln!("{err}");
+                std::process::exit(3);
+            }),
+        None => pipeline::evaluate_views(&model, &test_views, &config),
+    };
 
     let avg_train: f32 = train_psnrs.iter().copied().sum::<f32>() / train_psnrs.len() as f32;
     let avg_test: f32 = test_psnrs.iter().copied().sum::<f32>() / test_psnrs.len() as f32;
@@ -219,20 +248,28 @@ fn main() {
             eprintln!("could not create dump dir {}: {e}", dir.display());
         } else {
             for (img, view) in test_slice.iter().zip(test_views.iter()) {
-                let rgba = render::render_cpu(
-                    &model,
-                    &view.camera,
-                    render::RenderSettings {
-                        width: args.width,
-                        height: args.height,
-                        start_point: pipeline::pick_start_cell(
-                            &model,
-                            glam::Vec3::from_array(view.camera.cam_position),
-                        ),
-                        max_steps: args.max_steps as u32,
-                        weight_threshold: 1e-4,
-                    },
-                );
+                let rgba = match gpu_evaluator {
+                    Some(ref mut evaluator) => {
+                        evaluator.render_rgba(view.camera).unwrap_or_else(|err| {
+                            eprintln!("{err}");
+                            std::process::exit(3);
+                        })
+                    }
+                    None => render::render_cpu(
+                        &model,
+                        &view.camera,
+                        render::RenderSettings {
+                            width: args.width,
+                            height: args.height,
+                            start_point: pipeline::pick_start_cell(
+                                &model,
+                                glam::Vec3::from_array(view.camera.cam_position),
+                            ),
+                            max_steps: args.max_steps as u32,
+                            weight_threshold: 1e-4,
+                        },
+                    ),
+                };
                 let pred = metrics::rgba_over_background(&rgba, config.fit.background_rgb);
                 let stem = path::Path::new(&img.name)
                     .file_stem()
@@ -243,5 +280,32 @@ fn main() {
                 println!("  wrote {}", out.display());
             }
         }
+    }
+    if let Some(evaluator) = gpu_evaluator {
+        evaluator.deinit();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+
+    #[test]
+    fn gpu_evaluation_is_opt_in() {
+        let base = [
+            "--ply",
+            "model.ply",
+            "--sparse",
+            "sparse",
+            "--images",
+            "images",
+        ];
+        let default = <Args as argh::FromArgs>::from_args(&["eval_psnr"], &base).unwrap();
+        assert!(!default.gpu);
+
+        let mut explicit = base.to_vec();
+        explicit.push("--gpu");
+        let gpu = <Args as argh::FromArgs>::from_args(&["eval_psnr"], &explicit).unwrap();
+        assert!(gpu.gpu);
     }
 }
