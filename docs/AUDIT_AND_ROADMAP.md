@@ -417,6 +417,21 @@ At the audited revision:
   lacked the new exact terminal counter. The branch remains unselected pending
   isolation of that discrepancy; Blade stays pinned to merged Meganeura
   `fba040a`.
+- Checkpoint subphases reveal the underlying problem: optimizer persistence
+  spends 61.486 seconds reading GPU-backed host-visible allocations on the
+  CPU, while the model PLY spends 13.970 seconds issuing millions of tiny
+  writes. Blade branch `perf/download-memory` (`f724f6a`) adds CPU-cached
+  readback memory, and Meganeura branch `perf/profile-checkpoint-fba`
+  (`6909ecc`) snapshots all parameters and Adam state in one GPU transfer
+  before streaming safetensors to disk. Together with Blade-volume's buffered
+  PLY writer, the optimizer save falls to 0.425 seconds, model PLY output to
+  0.094 seconds, and the complete checkpoint to 0.531 seconds. The matched
+  step-5,000→5,100 command falls from 144.032 to 68.663 seconds (2.10×) while
+  retaining the exact 0.0919→0.0854 loss trace and 24.03 dB fresh-Ply result.
+  Exact host peak changes only from 4,303,171,584 to 4,348,669,952 bytes
+  (+1.1%), with zero swap, pressure, OOM, or GPU faults. The dependency
+  branches are pushed; the production pin remains on merged revisions until
+  both land.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
