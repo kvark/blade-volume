@@ -607,6 +607,16 @@ GPU faults. A pending Meganeura streaming-serialization branch reduces that
 peak further to 3,726,434,304 bytes (15.7% below control), but checkpoint time
 is unchanged; it is a memory improvement, not evidence of faster training.
 
+Commit `fe7517d` removes the second endpoint PLY encoding through an explicit
+successful-checkpoint signal and atomic copy with serialization fallback. The
+735,103-cell final-output phase falls from 13.991 to 0.045 seconds (311×);
+whole-command time reaches 142.098 seconds, 1.45× faster than the original
+205.641-second profile. The exact terminal host peak is 3,899,666,432 bytes,
+and byte identity plus the selected 24.03 dB result remain intact. Combining
+the pending Meganeura streaming branch with this path did not demonstrate a
+further memory or runtime gain, so Blade remains pinned to `fba040a` while the
+discrepancy is isolated.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -627,11 +637,11 @@ machine-readable result remains in
    another complete scene before generalizing the efficiency claim beyond
    Room. Keep the one-view library default and the full-image/patch
    compatibility behavior.
-3. After the pending Meganeura streaming checkpoint branch lands, uprev and
-   retain its measured 15.7% host-memory reduction. Then sub-profile exact
-   checkpoint encoding/writes and the duplicate final PLY output; optimize
-   them only if lossless resume, endpoint PLY identity, and interrupted-run
-   behavior remain unchanged.
+3. Sub-profile checkpoint tensor readback, safetensor encoding, and file writes
+   separately. Endpoint PLY duplication is fixed with explicit success
+   metadata and lossless fallback. Do not uprev the pending Meganeura streaming
+   branch until its isolated 15.7% reduction is reconciled with the combined
+   run, which showed no additional benefit.
 4. If a complete upstream baseline is still needed, make its image/ray loader
    streaming or run it on a machine with more than 32 GiB host memory and more
    than 12 GiB VRAM. Do not retry the unchanged caching path here.

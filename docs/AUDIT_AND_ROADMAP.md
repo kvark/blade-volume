@@ -399,13 +399,24 @@ At the audited revision:
   and host peak from 4,421,963,776 to 4,200,992,768 bytes. Loss, cell and edge
   counts, selected 24.03 dB held-out quality, and checkpoint/final PLY identity
   are preserved. Serialization remains the largest phase.
+- Commit `fe7517d` eliminates the remaining duplicate endpoint PLY encoding
+  without inferring success from stale files: the trainer explicitly returns
+  its successfully written endpoint snapshot, and the CLI atomically copies
+  it with serialization fallback. At 735,103 cells, final PLY output falls
+  from 13.991 to 0.045 seconds (311×), whole-command time reaches 142.098
+  seconds (1.45× over the original profile), and exact terminal host peak is
+  3,899,666,432 bytes. Checkpoint/final hashes and the 24.03 dB held-out result
+  match. Commit `c8ca20f` records terminal cgroup counters from inside the
+  live scope so short-lived peaks can no longer escape the sampler.
 - Meganeura branch `perf/stream-checkpoints-fba` (`cb64f67`) removes the second
   checkpoint-sized host allocation by streaming safetensors to disk. A matched
   run cuts peak host memory by 695,529,472 bytes (15.7%) with the same selected
   24.03 dB result and no memory or GPU faults. Checkpoint time is unchanged
-  within run variance (100.060 versus 98.460 seconds), so this is a pending
-  upstream memory improvement rather than a speed claim. Blade remains pinned
-  to merged Meganeura `fba040a` until it lands.
+  within run variance (100.060 versus 98.460 seconds). A later combination
+  with endpoint PLY reuse did not show further memory or runtime benefit and
+  lacked the new exact terminal counter. The branch remains unselected pending
+  isolation of that discrepancy; Blade stays pinned to merged Meganeura
+  `fba040a`.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -1031,8 +1042,11 @@ material path.
    step-5,000→5,100 profile found redundant parameter downloads and removed
    them without changing quality or checkpoint contents: training is 1.39×
    faster and whole-command time is 1.29× faster. Checkpoint serialization is
-   now the largest measured endpoint phase; upstream streaming reduces peak
-   memory by 15.7% but does not improve its wall time.)
+   now the largest measured endpoint phase. Reusing the losslessly equivalent
+   endpoint PLY then makes final output 311× faster and brings the combined
+   whole-command speedup to 1.45×. Upstream safetensor streaming reduced peak
+   memory in isolation but did not reproduce a benefit when combined, so it
+   remains unselected pending an exact explanation.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done in
    `77c19b7`: weighted/unweighted physical pixel parity passes, aggregate Room
