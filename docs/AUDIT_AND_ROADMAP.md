@@ -432,6 +432,24 @@ At the audited revision:
   (+1.1%), with zero swap, pressure, OOM, or GPU faults. The dependency
   branches are pushed; the production pin remains on merged revisions until
   both land.
+- A larger-batch gate exposed a Meganeura dispatch-limit correctness bug.
+  With 8,192 rays and 512 path steps, the scalar `[P*L,3]@[3,1]` matmul
+  requested 65,536 workgroups in Y and produced non-finite position gradients
+  before Qhull. Meganeura `2e20ec6` splits tall scalar matmuls across Y/Z and
+  verifies a physical 4,194,304-row result end to end. The repaired Room run
+  is stable, but 8,192 rays add only 0.01 dB selected and all-39 held-out
+  quality while increasing training time 59%, graph allocation 90%, and
+  sampled VRAM from 3,891 to 6,219 MiB. The correctness fix is retained;
+  4,096 rays remains selected.
+- Commit `0da6a85` keeps the live Meganeura session, Adam state, and external
+  path buffers across ordinary fixed-cap topology refreshes. Adjacency belongs
+  to the path recorder, so recreating an identical training graph and copying
+  every appearance parameter/moment was unnecessary. In the deterministic
+  step-4,500→5,000 Room gate, state readback falls from 33.010 to 3.574
+  seconds (9.24×), training from 158.513 to 127.533 seconds (1.24×), and whole
+  command time from 178.520 to 147.806 seconds (1.21×). Every selected view
+  retains its reported PSNR and the all-39 mean remains 23.93 dB. Exact host
+  peak falls 4.5%; swap, pressure, OOM, and GPU-fault counters remain zero.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -1031,7 +1049,9 @@ material path.
    39 held-out views. A 64-view batch is neutral and rejected. The next
    quality experiment should change a remaining reference-protocol variable
    or repeat the selected policy on another scene, not merely extend the same
-   nearly exhausted cosine schedule.)
+   nearly exhausted cosine schedule. A matched 4,096/8,192-ray gate confirms
+   that doubling the batch adds only 0.01 dB for 59% more training time, so
+   4,096 remains selected.)
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.
@@ -1061,7 +1081,10 @@ material path.
    endpoint PLY then makes final output 311× faster and brings the combined
    whole-command speedup to 1.45×. Upstream safetensor streaming reduced peak
    memory in isolation but did not reproduce a benefit when combined, so it
-   remains unselected pending an exact explanation.)
+   remains unselected pending an exact explanation. Commit `0da6a85` then
+   removes unnecessary graph/optimizer reconstruction at fixed-cap topology
+   boundaries: state readback is 9.24× faster, training 1.24× faster, and
+   whole-command time 1.21× faster with identical held-out quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done in
    `77c19b7`: weighted/unweighted physical pixel parity passes, aggregate Room

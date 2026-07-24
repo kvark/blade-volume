@@ -1006,6 +1006,96 @@ implementation = "one GPU snapshot into CPU-cached download memory, direct safet
 control_artifact_path = "target/audit-runs/room-step5000-checkpoint-subphase-local"
 optimized_artifact_path = "target/audit-runs/room-step5000-buffered-checkpoint-local"
 
+[large_batch_dispatch_validation]
+status = "validated-rejected-for-quality"
+source_checkpoint_git_commit = "98d9ee9"
+source_checkpoint_step = 4500
+completed_step = 5000
+profile_steps = 500
+blade_volume_numerical_fix_commit = "3354c85"
+meganeura_branch = "perf/profile-checkpoint-fba"
+meganeura_commit = "2e20ec6"
+dispatch_failure = "the scalar [P*L,3]@[3,1] matmul emitted 65,536 workgroups in Y at pixel_batch=8192 and max_steps=512, exceeding Vulkan's portable 65,535 limit"
+dispatch_fix = "split tall scalar matmul row tiles across Y and Z and decode the row tile from both workgroup coordinates"
+regression = "a physical 4,194,304x1 matmul verifies first, middle, and last rows; the real one-step Room gate has finite position gradients and completes Qhull"
+pixel_batch_control = 4096
+pixel_batch_candidate = 8192
+views_per_batch = 16
+max_steps = 512
+cells = 735103
+control_command_wall_seconds = 178.520
+candidate_command_wall_seconds = 272.363
+candidate_wall_increase_percent = 52.6
+control_training_wall_seconds = 158.513
+candidate_training_wall_seconds = 252.258
+candidate_training_increase_percent = 59.1
+control_gpu_step_seconds = 88.396
+candidate_gpu_step_seconds = 176.900
+control_graph_allocation_mb = 2999.7
+candidate_graph_allocation_mb = 5693.7
+control_host_memory_peak_bytes = 4263723008
+candidate_host_memory_peak_bytes = 4374749184
+control_sampled_gpu_memory_peak_mib = 3891
+candidate_sampled_gpu_memory_peak_mib = 6219
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+control_selected_test_psnr = 24.02
+candidate_selected_test_psnr = 24.03
+control_all_39_test_psnr = 23.93
+candidate_all_39_test_psnr = 23.94
+selected_pixel_batch = 4096
+decision = "reject 8192: +0.01 dB does not justify 59% more training time, 90% more graph memory, and 60% more sampled VRAM"
+control_artifact_path = "target/audit-runs/room-step4500-batch4096-tikhonov-step5000-local"
+candidate_artifact_path = "target/audit-runs/room-step4500-batch8192-tikhonov-step5000-local"
+
+[topology_session_reuse]
+status = "selected"
+git_commit = "0da6a85"
+source_checkpoint_git_commit = "98d9ee9"
+source_checkpoint_step = 4500
+completed_step = 5000
+profile_steps = 500
+pixel_batch = 4096
+views_per_batch = 16
+geometry_rebuild_every = 250
+cells = 735103
+control_command_wall_seconds = 178.520
+optimized_command_wall_seconds = 147.806
+command_speedup = 1.208
+command_wall_reduction_percent = 17.2
+control_training_wall_seconds = 158.513
+optimized_training_wall_seconds = 127.533
+training_speedup = 1.243
+training_wall_reduction_percent = 19.5
+control_state_readback_seconds = 33.010
+optimized_state_readback_seconds = 3.574
+state_readback_speedup = 9.236
+control_resource_rebuild_seconds = 2.313
+optimized_resource_rebuild_seconds = 0.516
+control_topology_seconds = 30.941
+optimized_topology_seconds = 30.938
+control_host_memory_peak_bytes = 4263723008
+optimized_host_memory_peak_bytes = 4072030208
+memory_reduction_percent = 4.5
+control_sampled_gpu_memory_peak_mib = 3891
+optimized_sampled_gpu_memory_peak_mib = 3819
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+loss_start = 0.0900
+loss_end = 0.0891
+control_selected_test_psnr = 24.02
+optimized_selected_test_psnr = 24.02
+optimized_selected_test_psnr_values = [21.96, 26.03, 24.07, 25.31, 24.56, 21.64, 24.92, 23.70]
+control_all_39_test_psnr = 23.93
+optimized_all_39_test_psnr = 23.93
+implementation = "ordinary fixed-cap topology refreshes keep the live Meganeura graph, Adam state, and external path buffers; only positions/radii, adjacency, and the recorder cloud are refreshed"
+control_artifact_path = "target/audit-runs/room-step4500-batch4096-tikhonov-step5000-local"
+optimized_artifact_path = "target/audit-runs/room-step4500-batch4096-topology-reuse-step5000-local"
+
 [continuation_selection]
 status = "selected"
 pixel_batch = 4096
@@ -1138,6 +1228,13 @@ required = [
     "training_phase_profile.final_ply_reuse_command_speedup_from_control",
     "training_phase_profile.final_ply_reuse_selected_test_psnr",
     "training_phase_profile.final_ply_reuse_checkpoint_matches_final_ply",
+    "large_batch_dispatch_validation.meganeura_commit",
+    "large_batch_dispatch_validation.selected_pixel_batch",
+    "large_batch_dispatch_validation.candidate_all_39_test_psnr",
+    "topology_session_reuse.git_commit",
+    "topology_session_reuse.training_speedup",
+    "topology_session_reuse.state_readback_speedup",
+    "topology_session_reuse.optimized_all_39_test_psnr",
     "continuation_selection.decision_commit",
     "selection.decision_commit",
 ]

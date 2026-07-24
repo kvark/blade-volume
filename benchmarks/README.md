@@ -540,3 +540,32 @@ held-out result. Exact cgroup peak rises only 1.1%, from 4,303,171,584 to
 dependency branches are pushed but Blade-volume remains pinned to merged
 revisions until they land. Raw evidence remains ignored at
 `target/audit-runs/room-step5000-{checkpoint-subphase,buffered-checkpoint}-local`.
+
+An attempted 8,192-ray continuation exposed a correctness bug below the
+trainer rather than a memory failure. At `max_steps=512`, the scalar
+`[P*L,3]@[3,1]` Meganeura matmul requested 65,536 workgroups in Y, one past
+Vulkan's portable limit, and corrupted position gradients before Qhull.
+Meganeura branch `perf/profile-checkpoint-fba` at `2e20ec6` splits tall scalar
+matmuls across Y and Z and adds a physical 4,194,304-row regression. A real
+one-step Room gate then remains finite and completes topology reconstruction.
+In the matched step-4,500→5,000 quality gate, however, 8,192 rays improve only
+24.02→24.03 dB on the selected eight views and 23.93→23.94 dB over all 39,
+while training rises from 158.513 to 252.258 seconds, graph allocation from
+3.00 to 5.69 GB, and sampled VRAM from 3,891 to 6,219 MiB. The dispatch fix is
+required for correctness, but 4,096 remains the selected batch. Raw artifacts
+remain ignored at
+`target/audit-runs/room-step4500-batch{4096,8192}-tikhonov-step5000-local`.
+
+Commit `0da6a85` removes another fixed-cap cost without changing the training
+graph. Adjacency is consumed by the path recorder, not embedded in the
+Meganeura graph, so an ordinary topology refresh now downloads only current
+positions/radii and rebuilds the recorder cloud while retaining the live
+session, Adam state, and external path buffers. On the same deterministic
+step-4,500→5,000 continuation, state readback falls from 33.010 to 3.574
+seconds (9.24×), training from 158.513 to 127.533 seconds (1.24×), and whole
+command time from 178.520 to 147.806 seconds (1.21×). Selected/all-39 held-out
+quality remains exactly 24.02/23.93 dB at reported precision; topology time is
+unchanged, and exact host peak falls 4.5% to 4,072,030,208 bytes. The 8 GiB
+scope records zero swap, pressure, OOM, or GPU faults. Raw evidence remains
+ignored at
+`target/audit-runs/room-step4500-batch4096-topology-reuse-step5000-local`.
