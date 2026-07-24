@@ -192,30 +192,6 @@ impl GaussianBackend {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct RadFoamTraceParams {
-    sh_degree: u32,
-    weight_threshold: f32,
-    max_steps: u32,
-    start_point: u32,
-    debug_mode: u32,
-    align_pad: [u32; 3],
-    power_foam: u32,
-    size_pad: [u32; 3],
-}
-
-#[derive(blade_macros::ShaderData)]
-struct RadFoamTraceData {
-    g_camera: vol::CameraParams,
-    g_params: RadFoamTraceParams,
-    g_points: gpu::BufferPiece,
-    g_attributes: gpu::BufferPiece,
-    g_adjacency: gpu::BufferPiece,
-    g_adjacency_offsets: gpu::BufferPiece,
-    g_out: gpu::TextureView,
-}
-
 #[derive(blade_macros::ShaderData)]
 struct RadFoamBlitData {
     g_src: gpu::TextureView,
@@ -231,31 +207,29 @@ struct Background {
 }
 
 pub struct RadFoamBackend {
-    point_cloud: vol::RadFoamGpuCloud,
-    trace_pipeline: gpu::ComputePipeline,
+    tracer: vol::RadFoamGpuTracer,
     blit_pipeline: gpu::RenderPipeline,
     hdr_tex: gpu::Texture,
     hdr_view: gpu::TextureView,
     sampler: gpu::Sampler,
-    trace_params: RadFoamTraceParams,
     background: Background,
 }
 
 impl RadFoamBackend {
     pub fn max_steps_mut(&mut self) -> &mut u32 {
-        &mut self.trace_params.max_steps
+        self.tracer.max_steps_mut()
     }
 
     pub fn weight_threshold_mut(&mut self) -> &mut f32 {
-        &mut self.trace_params.weight_threshold
+        self.tracer.weight_threshold_mut()
     }
 
     pub fn max_steps(&self) -> u32 {
-        self.trace_params.max_steps
+        self.tracer.max_steps()
     }
 
     pub fn weight_threshold(&self) -> f32 {
-        self.trace_params.weight_threshold
+        self.tracer.weight_threshold()
     }
 
     pub fn new(
@@ -273,21 +247,6 @@ impl RadFoamBackend {
             mag_filter: gpu::FilterMode::Linear,
             min_filter: gpu::FilterMode::Linear,
             ..Default::default()
-        });
-
-        let shader = {
-            let raw_source = vol::shaders::RADFOAM;
-            let source = vol::shaders::compose(raw_source);
-            context.create_shader(gpu::ShaderDesc {
-                source: &source,
-                naga_module: None,
-            })
-        };
-        let trace_layout = <RadFoamTraceData as gpu::ShaderData>::layout();
-        let trace_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
-            name: "radfoam-trace",
-            data_layouts: &[&trace_layout],
-            compute: shader.at("trace_main"),
         });
 
         let blit_shader = {
@@ -313,31 +272,27 @@ impl RadFoamBackend {
             multisample_state: Default::default(),
         });
 
-        let point_cloud = vol::RadFoamGpuCloud::new(model, context, encoder);
-
-        let trace_params = RadFoamTraceParams {
-            sh_degree: point_cloud.sh_degree as u32,
-            weight_threshold: settings.weight_threshold,
-            max_steps: settings.max_steps,
-            start_point: 0,
-            debug_mode: settings.debug_mode as u32,
-            align_pad: [0; 3],
-            power_foam: point_cloud.is_power_foam as u32,
-            size_pad: [0; 3],
-        };
+        let tracer = vol::RadFoamGpuTracer::new(
+            model,
+            vol::RadFoamTraceSettings {
+                max_steps: settings.max_steps,
+                weight_threshold: settings.weight_threshold,
+                debug_cell_density: settings.debug_mode != DebugMode::Off,
+            },
+            context,
+            encoder,
+        );
         let background = Background {
             color: settings.background_rgb,
             pad: 0.0,
         };
 
         Self {
-            point_cloud,
-            trace_pipeline,
+            tracer,
             blit_pipeline,
             hdr_tex,
             hdr_view,
             sampler,
-            trace_params,
             background,
         }
     }
@@ -384,7 +339,7 @@ impl RadFoamBackend {
     }
 
     pub fn set_debug_mode(&mut self, mode: DebugMode) {
-        self.trace_params.debug_mode = mode as u32;
+        self.tracer.set_debug_cell_density(mode != DebugMode::Off);
     }
 
     pub fn render(
@@ -392,32 +347,16 @@ impl RadFoamBackend {
         encoder: &mut gpu::CommandEncoder,
         frame_view: gpu::TextureView,
         camera_params: vol::CameraParams,
-        camera_position: glam::Vec3,
+        _camera_position: glam::Vec3,
         size: RenderSize,
     ) {
-        self.trace_params.start_point = self.point_cloud.containing_point(camera_position);
-
         encoder.init_texture(self.hdr_tex);
-
-        if let mut pass = encoder.compute("radfoam-trace") {
-            let mut pen = pass.with(&self.trace_pipeline);
-            pen.bind(
-                0,
-                &RadFoamTraceData {
-                    g_camera: camera_params,
-                    g_params: self.trace_params,
-                    g_points: self.point_cloud.points(),
-                    g_attributes: self.point_cloud.attributes(),
-                    g_adjacency: self.point_cloud.point_adjacency(),
-                    g_adjacency_offsets: self.point_cloud.point_adjacency_offsets(),
-                    g_out: self.hdr_view,
-                },
-            );
-
-            let gx = size.width.div_ceil(8);
-            let gy = size.height.div_ceil(8);
-            pen.dispatch([gx, gy, 1]);
-        }
+        self.tracer.dispatch(
+            encoder,
+            self.hdr_view,
+            camera_params,
+            [size.width, size.height],
+        );
 
         if let mut pass = encoder.render(
             "radfoam-present",
@@ -445,26 +384,17 @@ impl RadFoamBackend {
 
     pub fn print_info(&self) {
         println!("RadFoam Trace Params:");
-        println!("\tsh_degree: {}", self.trace_params.sh_degree);
-        println!("\tstart_point: {}", self.trace_params.start_point);
-        println!("\tmax_steps: {}", self.trace_params.max_steps);
-        println!("\tweight_threshold: {}", self.trace_params.weight_threshold);
-        println!(
-            "\tdebug_mode: {:?}",
-            if self.trace_params.debug_mode == 0 {
-                DebugMode::Off
-            } else {
-                DebugMode::ParticleDensity
-            }
-        );
+        println!("\tsh_degree: {}", self.tracer.sh_degree());
+        println!("\tstart_point: {}", self.tracer.start_point());
+        println!("\tmax_steps: {}", self.tracer.max_steps());
+        println!("\tweight_threshold: {}", self.tracer.weight_threshold());
     }
 
     pub fn destroy(mut self, context: &gpu::Context) {
         context.destroy_sampler(self.sampler);
         context.destroy_texture_view(self.hdr_view);
         context.destroy_texture(self.hdr_tex);
-        self.point_cloud.deinit(context);
-        context.destroy_compute_pipeline(&mut self.trace_pipeline);
+        self.tracer.deinit(context);
         context.destroy_render_pipeline(&mut self.blit_pipeline);
     }
 }
@@ -562,12 +492,6 @@ impl RenderBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn radfoam_power_flag_matches_wgsl_uniform_layout() {
-        assert_eq!(std::mem::size_of::<RadFoamTraceParams>(), 48);
-        assert_eq!(std::mem::offset_of!(RadFoamTraceParams, power_foam), 32);
-    }
 
     #[test]
     fn radfoam_backend_compiles_explicit_background_shader() {

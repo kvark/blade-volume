@@ -17,6 +17,7 @@ blade-volume = { path = "../blade-volume" }
 blade-volume-convert = { path = "../blade-volume-convert" }
 env_logger.workspace = true
 glam.workspace = true
+half.workspace = true
 image = "0.25"
 kiddo.workspace = true
 log.workspace = true
