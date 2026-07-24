@@ -200,7 +200,9 @@ struct RadFoamTraceParams {
     max_steps: u32,
     start_point: u32,
     debug_mode: u32,
-    pad: [u32; 7],
+    align_pad: [u32; 3],
+    power_foam: u32,
+    size_pad: [u32; 3],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -319,7 +321,9 @@ impl RadFoamBackend {
             max_steps: settings.max_steps,
             start_point: 0,
             debug_mode: settings.debug_mode as u32,
-            pad: [point_cloud.is_power_foam as u32, 0, 0, 0, 0, 0, 0],
+            align_pad: [0; 3],
+            power_foam: point_cloud.is_power_foam as u32,
+            size_pad: [0; 3],
         };
         let background = Background {
             color: settings.background_rgb,
@@ -558,6 +562,12 @@ impl RenderBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn radfoam_power_flag_matches_wgsl_uniform_layout() {
+        assert_eq!(std::mem::size_of::<RadFoamTraceParams>(), 48);
+        assert_eq!(std::mem::offset_of!(RadFoamTraceParams, power_foam), 32);
+    }
 
     #[test]
     fn radfoam_backend_compiles_explicit_background_shader() {
