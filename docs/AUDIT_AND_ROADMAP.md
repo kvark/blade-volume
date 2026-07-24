@@ -34,9 +34,9 @@ representation or renderer. Official RadFoam v1 reaches 30.02 dB on Room after
 its first 5,000 updates with 735,103 cloud cells, while Blade cross-renders the
 same PLY and full-resolution held-out split at 29.59 dB. The 0.43 dB renderer
 gap meets the Stage 2 tolerance. Blade's selected scaled Room trainer remains
-far less optimized: its 16-view, 3,072,000-ray checkpoint matches the
-735,103-cell capacity but reaches only 24.29 / 22.92 dB on the selected
-train/held-out split and 22.90 dB across all 39 held-out views. It still needs
+far less optimized: its 16-view, 3,712,000-ray checkpoint matches the
+735,103-cell capacity but reaches only 24.74 / 23.26 dB on the selected
+train/held-out split and 23.19 dB across all 39 held-out views. It still needs
 a matched ray/resolution scaling ladder before the reconstruction path is
 production-ready.
 
@@ -341,6 +341,22 @@ At the audited revision:
   `memory.events:max` 221 times, so later 735K-cell timing scopes use 6 GiB.
   The general metric gain is real, but comparison images remain visibly
   fragmented.
+- Per-dispatch profiling shows that 51 dense embedding-gradient scatter-adds
+  consume 19.747 of 19.776 GPU seconds in a representative 735K-cell step.
+  Meganeura `fba040a` switches large scatters to a zero pass plus atomic f32
+  accumulation while retaining the deterministic dense path for small
+  workloads. One-step Room parameter deltas stay below `1.49e-8`; loss, PSNR,
+  capacity, and topology size agree. The measured optimizer portion is about
+  98× faster, and the full 25-step optimizer/topology boundary falls from 505
+  to 21 seconds.
+- Blade `27242ad` continues the fixed-cap run to step 3,125 in a 218-second
+  training/topology interval, 12.3× faster than the old comparable five
+  cycles. Fresh-Ply quality reaches 24.44 / 23.06 dB and 23.00 dB across all
+  39 held-out views. A 4,096-ray batch then processes four times as many rays
+  in a 227-second interval, only 4% longer, and reaches 24.74 / 23.26 dB plus
+  23.19 dB across all 39. Its 3,831,681,024-byte host peak, 3,763 MiB sampled
+  VRAM peak, and zero pressure/swap/OOM/fault events select 4,096 rays for the
+  next resolution boundary. Visual fragmentation remains.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -935,13 +951,14 @@ material path.
    gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
    all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   resolution ladder from the 735,103-cell, 24.29/22.92 dB Room
+   resolution ladder from the step-3,250, 735,103-cell, 24.74/23.26 dB Room
    checkpoint. Retain fresh-Ply train/held-out metrics, adjacency size,
    per-phase timing, truncation counts, cgroup peak, and GPU fault telemetry at
    every boundary. The matched later boundary selects 16 views as the
    random-pixel CLI default; retain one view for full-image and patch modes and
-   keep explicit overrides available. The fixed-cap step-3,000 retry is
-   complete; use at least a 6 GiB scope for subsequent timing boundaries.
+   keep explicit overrides available. The 4,096-ray batch is selected after
+   delivering four times the rays for 4% more training/topology time; test the
+   next 256² boundary under at least a 6 GiB scope.
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.
