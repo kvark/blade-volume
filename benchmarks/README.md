@@ -406,3 +406,15 @@ validated step-2,875 checkpoint remains the only resume source. A host reboot
 is required before retrying because both NVIDIA and this user's systemd manager
 remain wedged. Failure logs remain ignored at
 `target/audit-runs/room-batch1024-mixed16-step3000-3792145`.
+
+After reboot, the identical fixed-cap retry completed step 3,000 with 735,103
+cells and 11,311,556 directed edges. Fresh-Ply evaluation reproduces 24.29 dB
+train / 22.92 dB on the selected held-out views, +0.22/+0.15 dB over step
+2,875; the all-39 diagnostic rises by 0.14 dB to 22.90. The 2,982.305-second
+continuation peaks at 1,835 MiB sampled GPU memory and 74 °C with no GPU fault,
+swap, or OOM. Final serialization/evaluation does reach the 4 GiB cgroup cap
+and increments `memory.events:max` 221 times, so later 735K-cell timing runs
+use a 6 GiB scope to avoid reclaim-distorted measurements. Comparison images
+remain visibly fragmented despite the general metric gain. The raw artifact
+remains ignored at
+`target/audit-runs/room-batch1024-mixed16-step3000-retry-bd28c53`.

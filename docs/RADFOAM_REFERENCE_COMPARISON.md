@@ -20,12 +20,12 @@ Voronoi-volume representation can reconstruct a difficult real scene well;
 the earlier Rust plateau does not reject the geometry premise.
 
 The current Rust trainer is still a much smaller optimization experiment. Its
-selected Room protocol processes 2,944,000 sampled optimizer rays and now
-matches the official prefix's 735,103 cells, reaching 22.77 dB on its selected
-eight held-out views. The serialized official prefix has processed five billion
-mixed-view rays. Resolution, split coverage, loss, background, initialization,
-and optimizer schedules also differ. These scores are therefore diagnostics,
-not an apples-to-apples trainer ranking.
+selected Room protocol processes 3,072,000 sampled optimizer rays and matches
+the official prefix's 735,103 cells, reaching 22.92 dB on its selected eight
+held-out views and 22.90 dB across all 39. The serialized official prefix has
+processed five billion mixed-view rays. Resolution, split coverage, loss,
+background, initialization, and optimizer schedules also differ. These scores
+are therefore diagnostics, not an apples-to-apples trainer ranking.
 
 Renderer compatibility is now separately established. Loading the official
 PLY directly in Blade and evaluating the same full-resolution split reaches
@@ -404,6 +404,11 @@ rounds, 128×128 grid, black background, and L1/cosine path:
 | 16 views/batch, step 2,625, max-512 | 607,908 | 23.80 dB | 22.64 dB | 20,717.337 s cumulative | 3,013,816,320 B |
 | 16 views/batch, step 2,750, max-512 | 698,940 | 23.89 dB | 22.62 dB | 24,128.491 s cumulative | 3,572,768,768 B |
 | 16 views/batch, step 2,875, max-512 | 735,103 | 24.07 dB | 22.77 dB | 27,944.446 s cumulative | 3,634,937,856 B |
+| 16 views/batch, step 3,000, fixed cap | 735,103 | 24.29 dB | 22.92 dB | 30,926.751 s cumulative | 4,294,967,296 B¹ |
+
+¹ The fixed-cap retry did not swap or OOM, but its final
+serialization/evaluation phase touched the 4 GiB scope limit and recorded 221
+`memory.events:max` events.
 
 Fresh-Ply evaluation exactly reproduces the corrected live result, which is
 +0.52/+0.61 dB over the historical published train/held-out metric and
@@ -526,6 +531,17 @@ events; the final GPU sample was 1,788 MiB at 72 °C and 100% utilization. This
 is a hardware/driver reset event rather than an experiment-quality result. The
 validated step-2,875 checkpoint remains the resume boundary after reboot.
 
+After reboot, the identical fixed-cap retry completes step 3,000 with 735,103
+cells and 11,311,556 directed edges. Fresh-Ply quality reaches 24.29/22.92 dB,
++0.22/+0.15 dB over step 2,875, and all 39 held-out views improve by 0.14 dB
+to 22.90. The 2,982.305-second continuation peaks at 1,835 MiB sampled GPU
+memory and 74 °C without a GPU fault, swap, or OOM. Final
+serialization/evaluation reaches the exact 4 GiB cgroup limit and records 221
+`memory.events:max` events, so later 735K-cell timing runs use 6 GiB. The
+comparison images remain visibly fragmented: fixed-cap optimization is still
+beneficial, but 3.072 million total optimizer rays are not enough to approach
+the official five-billion-ray result.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -541,11 +557,12 @@ machine-readable result remains in
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle before considering a value above the selected 16 views.
 2. Continue the selected 16-view protocol through a bounded sampled-ray and
-   resolution ladder from the 735,103-cell checkpoint on Room, retaining
+   resolution ladder from the step-3,000, 735,103-cell checkpoint on Room,
+   retaining
    fresh-Ply metrics, per-phase timing, truncation, and cgroup telemetry at
-   every boundary. After reboot, retry the failed step-2,875→3,000 fixed-cap
-   segment. Keep capacity fixed until optimizer-budget returns are measured;
-   do not jump to the 2.1M-cell final target.
+   every boundary. Use a 6 GiB scope for comparable timing. Keep capacity fixed
+   until optimizer-budget returns are measured; do not jump to the 2.1M-cell
+   final target.
 3. Repeat the selected automatic random-pixel policy on another complete scene
    before generalizing the efficiency claim beyond Room. Keep the one-view
    library default and the full-image/patch compatibility behavior.

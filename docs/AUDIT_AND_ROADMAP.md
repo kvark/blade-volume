@@ -34,10 +34,11 @@ representation or renderer. Official RadFoam v1 reaches 30.02 dB on Room after
 its first 5,000 updates with 735,103 cloud cells, while Blade cross-renders the
 same PLY and full-resolution held-out split at 29.59 dB. The 0.43 dB renderer
 gap meets the Stage 2 tolerance. Blade's selected scaled Room trainer remains
-still uses far less optimization: its 16-view, 2,944,000-ray checkpoint now
-matches the 735,103-cell capacity but reaches only 24.07 / 22.77 dB on the
-selected train/held-out split. It still needs a matched ray/resolution scaling
-ladder before the reconstruction path is production-ready.
+far less optimized: its 16-view, 3,072,000-ray checkpoint matches the
+735,103-cell capacity but reaches only 24.29 / 22.92 dB on the selected
+train/held-out split and 22.90 dB across all 39 held-out views. It still needs
+a matched ray/resolution scaling ladder before the reconstruction path is
+production-ready.
 
 The corrected paths pass the targeted NVIDIA/Vulkan physical-GPU gates,
 including weighted differentiable traversal, Gaussian CPU/GPU parity, and
@@ -332,6 +333,14 @@ At the audited revision:
   2,692,427,776-byte host peak, zero swap/pressure/OOM counters, and final
   1,788 MiB / 72 °C / 100% GPU sample rule out cgroup memory exhaustion. Resume
   remains at the validated step-2,875 checkpoint after reboot.
+- After reboot, the identical fixed-cap retry completes step 3,000 and improves
+  fresh-Ply train/selected-held-out quality to 24.29 / 22.92 dB; all 39
+  diagnostic views improve 0.14 dB to 22.90. The 49m 42.305s scope peaks at
+  1,835 MiB sampled GPU memory and 74 °C with no GPU fault, swap, or OOM. Final
+  serialization/evaluation reaches the exact 4 GiB memory limit and increments
+  `memory.events:max` 221 times, so later 735K-cell timing scopes use 6 GiB.
+  The general metric gain is real, but comparison images remain visibly
+  fragmented.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -926,13 +935,13 @@ material path.
    gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
    all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   resolution ladder from the 735,103-cell, 24.07/22.77 dB Room
+   resolution ladder from the 735,103-cell, 24.29/22.92 dB Room
    checkpoint. Retain fresh-Ply train/held-out metrics, adjacency size,
    per-phase timing, truncation counts, cgroup peak, and GPU fault telemetry at
    every boundary. The matched later boundary selects 16 views as the
    random-pixel CLI default; retain one view for full-image and patch modes and
-   keep explicit overrides available. Reboot the host first, then retry the
-   failed fixed-cap step-2,875→3,000 continuation; no later checkpoint exists.
+   keep explicit overrides available. The fixed-cap step-3,000 retry is
+   complete; use at least a 6 GiB scope for subsequent timing boundaries.
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.
