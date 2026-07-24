@@ -20,9 +20,9 @@ Voronoi-volume representation can reconstruct a difficult real scene well;
 the earlier Rust plateau does not reject the geometry premise.
 
 The current Rust trainer is still a much smaller optimization experiment. Its
-selected Room protocol processes 3,072,000 sampled optimizer rays and matches
-the official prefix's 735,103 cells, reaching 22.92 dB on its selected eight
-held-out views and 22.90 dB across all 39. The serialized official prefix has
+selected Room protocol processes 3,712,000 sampled optimizer rays and matches
+the official prefix's 735,103 cells, reaching 23.26 dB on its selected eight
+held-out views and 23.19 dB across all 39. The serialized official prefix has
 processed five billion mixed-view rays. Resolution, split coverage, loss,
 background, initialization, and optimizer schedules also differ. These scores
 are therefore diagnostics, not an apples-to-apples trainer ranking.
@@ -405,6 +405,8 @@ rounds, 128×128 grid, black background, and L1/cosine path:
 | 16 views/batch, step 2,750, max-512 | 698,940 | 23.89 dB | 22.62 dB | 24,128.491 s cumulative | 3,572,768,768 B |
 | 16 views/batch, step 2,875, max-512 | 735,103 | 24.07 dB | 22.77 dB | 27,944.446 s cumulative | 3,634,937,856 B |
 | 16 views/batch, step 3,000, fixed cap | 735,103 | 24.29 dB | 22.92 dB | 30,926.751 s cumulative | 4,294,967,296 B¹ |
+| 16 views/batch, step 3,125, atomic scatter | 735,103 | 24.44 dB | 23.06 dB | 31,478.509 s cumulative | 4,541,816,832 B |
+| 16 views/batch, step 3,250, batch 4,096 | 735,103 | 24.74 dB | 23.26 dB | 32,020.275 s cumulative | 3,831,681,024 B |
 
 ¹ The fixed-cap retry did not swap or OOM, but its final
 serialization/evaluation phase touched the 4 GiB scope limit and recorded 221
@@ -542,6 +544,23 @@ comparison images remain visibly fragmented: fixed-cap optimization is still
 beneficial, but 3.072 million total optimizer rays are not enough to approach
 the official five-billion-ray result.
 
+Profiling isolates the dominant implementation cost rather than guessing from
+the graph shape. A 735K-cell step issues 414 Meganeura dispatches and spends
+19.747 of 19.776 GPU seconds (99.85%) in 51 dense embedding-gradient
+scatter-adds. Meganeura `fba040a` replaces large dense scans with zero plus
+atomic f32 scatter. The one-step model delta is at most `1.49e-8`, while the
+optimizer portion becomes about 98× faster and the full 25-step
+optimizer/topology boundary falls from 505 to 21 seconds.
+
+The faster path continues from step 3,000 to 3,125 with a 218-second
+training/topology interval instead of the old comparable 2,677 seconds.
+Fresh-Ply quality reaches 24.44/23.06 dB and 23.00 dB across all 39 views.
+Increasing the batch to 4,096 rays processes four times the samples in a
+227-second interval—only 4% longer—and reaches 24.74/23.26 dB plus 23.19 dB
+across all 39. Host/GPU memory remain bounded and fault-free. The larger batch
+is therefore selected for the resolution ladder, although its comparison
+images remain fragmented.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -556,13 +575,12 @@ machine-readable result remains in
 
 1. Test larger stratified caps and cumulative multi-boundary drift against the
    exhaustive oracle before considering a value above the selected 16 views.
-2. Continue the selected 16-view protocol through a bounded sampled-ray and
-   resolution ladder from the step-3,000, 735,103-cell checkpoint on Room,
-   retaining
+2. Continue the selected 16-view protocol through a bounded resolution ladder
+   from the step-3,250, 735,103-cell checkpoint on Room, retaining
    fresh-Ply metrics, per-phase timing, truncation, and cgroup telemetry at
-   every boundary. Use a 6 GiB scope for comparable timing. Keep capacity fixed
-   until optimizer-budget returns are measured; do not jump to the 2.1M-cell
-   final target.
+   every boundary. Use the selected 4,096-ray/16-view batch and a 6 GiB scope
+   for the 256² boundary. Keep capacity fixed until optimizer-budget returns
+   are measured; do not jump to the 2.1M-cell final target.
 3. Repeat the selected automatic random-pixel policy on another complete scene
    before generalizing the efficiency claim beyond Room. Keep the one-view
    library default and the full-image/patch compatibility behavior.

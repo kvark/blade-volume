@@ -591,6 +591,111 @@ test_delta_from_step2875 = 0.15
 all_39_delta_from_step2875 = 0.14
 artifact_path = "target/audit-runs/room-batch1024-mixed16-step3000-retry-bd28c53"
 
+[row_sequence_performance]
+status = "completed"
+blade_commit = "209d94a"
+meganeura_commit = "e82bd55"
+control_resume_step = 2875
+control_completed_step = 2900
+pixel_batch = 1024
+max_steps = 512
+old_boundary_seconds = 533
+optimized_boundary_seconds = 505
+boundary_speedup = 1.055
+max_parameter_delta = 4.76837158e-7
+profile_artifact_path = "target/audit-runs/room-step2900-row-prefix-e82bd55"
+
+[atomic_scatter_performance]
+status = "completed"
+blade_commit = "27242ad"
+meganeura_commit = "fba040a"
+profile_dispatches = 414
+profile_gpu_milliseconds = 19776.49
+dense_scatter_gpu_milliseconds = 19747.13
+dense_scatter_percent = 99.85
+control_resume_step = 2875
+control_completed_step = 2900
+linear_prefix_boundary_seconds = 505
+atomic_scatter_boundary_seconds = 21
+boundary_speedup = 24.05
+estimated_optimizer_speedup = 97.8
+max_parameter_delta = 1.49011612e-8
+profile_artifact_path = "target/audit-runs/room-step2878-gpu-profile-209d94a"
+benchmark_artifact_path = "target/audit-runs/room-step2900-atomic-scatter-local"
+
+[step3125_fixed_capacity]
+status = "completed"
+git_commit = "27242ad"
+resume_from = "target/audit-runs/room-batch1024-mixed16-step3000-retry-bd28c53"
+resume_step = 3000
+completed_steps = 3125
+pixel_batch = 1024
+views_per_batch = 16
+additional_sampled_rays = 128000
+total_sampled_rays = 3200000
+training_boundary_seconds = 218
+old_comparable_boundary_seconds = 2677
+training_boundary_speedup = 12.28
+continuation_wall_seconds = 551.758
+cumulative_wall_seconds = 31478.509
+memory_peak_bytes = 4541816832
+memory_max_events = 0
+memory_swap_bytes = 0
+oom_events = 0
+sampled_gpu_memory_peak_mib = 1819
+sampled_gpu_temperature_peak_c = 48
+fresh_ply_reload = true
+cells = 735103
+directed_adjacency_entries = 11311230
+train_psnr = 24.44
+test_psnr = 23.06
+selected_test_psnr = [21.19, 24.87, 23.34, 24.12, 23.44, 20.91, 23.95, 22.65]
+all_39_test_psnr = 23.00
+train_delta_from_step3000 = 0.15
+test_delta_from_step3000 = 0.14
+all_39_delta_from_step3000 = 0.10
+artifact_path = "target/audit-runs/room-batch1024-mixed16-step3125-27242ad"
+
+[step3250_batch4096]
+status = "completed"
+git_commit = "27242ad"
+resume_from = "target/audit-runs/room-batch1024-mixed16-step3125-27242ad"
+resume_step = 3125
+completed_steps = 3250
+pixel_batch = 4096
+views_per_batch = 16
+rays_per_view = 256
+additional_sampled_rays = 512000
+total_sampled_rays = 3712000
+training_boundary_seconds = 227
+continuation_wall_seconds = 541.766
+cumulative_wall_seconds = 32020.275
+memory_peak_bytes = 3831681024
+memory_max_events = 0
+memory_swap_bytes = 0
+oom_events = 0
+sampled_gpu_memory_peak_mib = 3763
+sampled_gpu_temperature_peak_c = 51
+fresh_ply_reload = true
+cells = 735103
+directed_adjacency_entries = 11311050
+train_psnr = 24.74
+test_psnr = 23.26
+selected_test_psnr = [21.30, 25.14, 23.53, 24.34, 23.66, 21.09, 24.14, 22.86]
+all_39_test_psnr = 23.19
+train_delta_from_step3125 = 0.30
+test_delta_from_step3125 = 0.20
+all_39_delta_from_step3125 = 0.19
+artifact_path = "target/audit-runs/room-batch4096-mixed16-step3250-27242ad"
+
+[continuation_selection]
+status = "selected"
+pixel_batch = 4096
+views_per_batch = 16
+rays_per_view = 256
+decision_commit = "27242ad"
+reason = "Four times the sampled rays required only 4% more training/topology time and improved fresh held-out PSNR by 0.20 dB over the preceding 1024-ray segment"
+
 [selection]
 status = "selected"
 decision_commit = "7c423a1"
@@ -686,5 +791,16 @@ required = [
     "step3000_fixed_capacity_retry.cells",
     "step3000_fixed_capacity_retry.train_psnr",
     "step3000_fixed_capacity_retry.test_psnr",
+    "row_sequence_performance.meganeura_commit",
+    "row_sequence_performance.boundary_speedup",
+    "atomic_scatter_performance.meganeura_commit",
+    "atomic_scatter_performance.boundary_speedup",
+    "step3125_fixed_capacity.git_commit",
+    "step3125_fixed_capacity.train_psnr",
+    "step3125_fixed_capacity.test_psnr",
+    "step3250_batch4096.git_commit",
+    "step3250_batch4096.train_psnr",
+    "step3250_batch4096.test_psnr",
+    "continuation_selection.decision_commit",
     "selection.decision_commit",
 ]

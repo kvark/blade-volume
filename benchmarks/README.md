@@ -418,3 +418,29 @@ use a 6 GiB scope to avoid reclaim-distorted measurements. Comparison images
 remain visibly fragmented despite the general metric gain. The raw artifact
 remains ignored at
 `target/audit-runs/room-batch1024-mixed16-step3000-retry-bd28c53`.
+
+GPU pass profiling then identified the real training bottleneck. A representative
+735,103-cell step issued 414 Meganeura dispatches and spent 19.747 of 19.776 GPU
+seconds (99.85%) in 51 dense embedding-gradient scatter-adds. The dense kernel
+scanned every table row for every recorded path element. Meganeura `fba040a`
+keeps that deterministic implementation for small workloads and switches large
+ones to a zero pass plus atomic f32 scatter. A one-step Room replay changes model
+parameters by at most `1.49e-8`, with identical reported loss, PSNR, cell count,
+and adjacency size. The step-2,875→2,900 optimizer/topology boundary falls from
+505 to 21 seconds; after subtracting the Qhull rebuild, the optimizer portion is
+about 98× faster. The raw profile and parity artifacts remain ignored under
+`target/audit-runs/room-step2878-gpu-profile-209d94a` and
+`target/audit-runs/room-step2900-atomic-scatter-local`.
+
+With Blade `27242ad`, the fixed-cap step-3,000→3,125 continuation completes its
+five training/topology cycles in 218 seconds instead of the old comparable
+2,677 seconds (12.3×). Fresh-Ply quality reaches 24.44/23.06 dB and 23.00 dB
+across all 39 held-out views. Raising the batch from 1,024 to 4,096 rays then
+adds four times as many samples in 227 seconds—only 4% longer—and reaches
+24.74/23.26 dB plus 23.19 dB across all 39 views. It stays bounded at 3.57 GiB
+host peak and 3,763 MiB sampled VRAM with zero pressure, swap, OOM, or GPU
+faults. The 4,096-ray/16-view setting is selected for the next resolution
+ladder. Images remain visibly fragmented, so the result improves the training
+economics and evidence, not the production-readiness verdict. Artifacts remain
+ignored at `target/audit-runs/room-batch1024-mixed16-step3125-27242ad` and
+`target/audit-runs/room-batch4096-mixed16-step3250-27242ad`.
