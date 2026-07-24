@@ -835,6 +835,43 @@ test_delta_from_step4500 = 0.06
 all_39_delta_from_step4500 = 0.05
 artifact_path = "target/audit-runs/room-batch4096-mixed16-resolution256-step5000-geometry250-98d9ee9"
 
+[gpu_evaluation_performance]
+status = "completed"
+git_commit = "77c19b7"
+checkpoint_git_commit = "98d9ee9"
+checkpoint_path = "target/audit-runs/room-batch4096-mixed16-resolution256-step5000-geometry250-98d9ee9/model.ply"
+renderer = "shared production RadFoam/PowerFoam WGSL compute tracer"
+cpu_oracle_remains_default = true
+gpu_is_opt_in = true
+width = 256
+height = 256
+max_steps = 512
+train_views = 255
+selected_test_views = 8
+all_test_views = 39
+cpu_full_wall_seconds = 548.251
+gpu_full_wall_seconds = 119.668
+full_speedup = 4.581
+cpu_all_39_wall_seconds = 77.923
+gpu_all_39_wall_seconds = 7.758
+all_39_speedup = 10.044
+cpu_memory_peak_bytes = 510726144
+gpu_memory_peak_bytes = 499122176
+sampled_gpu_memory_peak_mib = 279
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+cpu_train_psnr = 25.69
+gpu_train_psnr = 25.69
+cpu_test_psnr = 24.03
+gpu_test_psnr = 24.03
+cpu_all_39_test_psnr = 23.93
+gpu_all_39_test_psnr = 23.93
+maximum_reported_per_view_delta_db = 0.01
+parity_test = "physical-GPU pixel comparison against the CPU oracle for unweighted and weighted clouds"
+artifact_path = "target/audit-runs/room-step5000-gpu-eval-local"
+
 [continuation_selection]
 status = "selected"
 pixel_batch = 4096
@@ -953,6 +990,10 @@ required = [
     "fixed_capacity_topology_cadence.selected_geometry_rebuild_every",
     "step5000_resolution256.train_psnr",
     "step5000_resolution256.test_psnr",
+    "gpu_evaluation_performance.git_commit",
+    "gpu_evaluation_performance.full_speedup",
+    "gpu_evaluation_performance.cpu_test_psnr",
+    "gpu_evaluation_performance.gpu_test_psnr",
     "continuation_selection.decision_commit",
     "selection.decision_commit",
 ]

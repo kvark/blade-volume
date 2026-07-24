@@ -465,3 +465,15 @@ Foreground furniture and thin occlusion boundaries remain visibly smeared, so
 this is the latest reconstruction checkpoint rather than a viewer-ready
 result. Raw artifacts remain ignored under
 `target/audit-runs/room-batch4096-mixed16-resolution256-step*-{e23a4d3,98d9ee9}`.
+
+Commit `77c19b7` moves headless evaluation onto the same production
+RadFoam/PowerFoam compute tracer as the viewer while keeping the CPU oracle as
+the default. On the selected step-5,000 Room PLY, the opt-in GPU path exactly
+matches the aggregate 25.69/24.03 dB train/held-out and 23.93 dB all-39
+metrics; reported per-view PSNR differs by at most 0.01 dB because the
+production target is RGBA16F. The apples-to-apples 255+8-view pass falls from
+548.251 to 119.668 seconds (4.58×), and the 39-view pass falls from 77.923 to
+7.758 seconds (10.04×). Host peaks are 510,726,144 and 499,122,176 bytes,
+respectively; the GPU pass samples 279 MiB VRAM and records zero swap,
+pressure, OOM, or GPU faults. Raw parity and timing artifacts remain ignored
+at `target/audit-runs/room-step5000-gpu-eval-local`.
