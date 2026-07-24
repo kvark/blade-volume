@@ -2987,6 +2987,9 @@ fn build_train_session(
             ..Default::default()
         },
     );
+    if std::env::var_os("BLADE_VOLUME_PROFILE_GPU").is_some() {
+        session.set_profiling(true);
+    }
     upload_model_parameters(&mut session, model, softplus_beta);
 
     let gpu_cloud = build_training_gpu_cloud(model, gpu);
@@ -3086,6 +3089,10 @@ fn fit_appearance_pixel_batched(
     gpu: std::sync::Arc<blade_graphics::Context>,
 ) -> Vec<f32> {
     let n_cells = model.points.len();
+    let profile_gpu = std::env::var_os("BLADE_VOLUME_PROFILE_GPU").is_some();
+    if profile_gpu && std::env::var_os("MEGANEURA_GPU_TIMING").is_none() {
+        log::warn!("BLADE_VOLUME_PROFILE_GPU requires MEGANEURA_GPU_TIMING=1 for GPU timestamps");
+    }
     let total_steps = config.steps_per_view.max(1) * views.len();
     let full_image_batch = config.pixel_batch.is_none();
     assert!(
@@ -3573,6 +3580,9 @@ fn fit_appearance_pixel_batched(
             configure_optimizer(&mut session, &config, step, total_steps);
             session.step();
             session.wait();
+            if profile_gpu {
+                session.dump_gpu_timings();
+            }
             let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
             losses.push(loss);
 
