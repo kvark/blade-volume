@@ -462,8 +462,8 @@ The selected cadence-250 path reaches aligned step 5,000 with 735,103 cells,
 evaluation gives 25.69/24.03 dB train/held out and 23.93 dB across all 39
 views. The final 500 steps add only 0.06 dB selected and 0.05 dB all-39.
 Foreground furniture and thin occlusion boundaries remain visibly smeared, so
-this is the latest reconstruction checkpoint rather than a viewer-ready
-result. Raw artifacts remain ignored under
+this is the fixed-cap control checkpoint rather than a viewer-ready result.
+Raw artifacts remain ignored under
 `target/audit-runs/room-batch4096-mixed16-resolution256-step*-{e23a4d3,98d9ee9}`.
 
 Commit `77c19b7` moves headless evaluation onto the same production
@@ -569,3 +569,33 @@ unchanged, and exact host peak falls 4.5% to 4,072,030,208 bytes. The 8 GiB
 scope records zero swap, pressure, OOM, or GPU faults. Raw evidence remains
 ignored at
 `target/audit-runs/room-step4500-batch4096-topology-reuse-step5000-local`.
+
+The next matched quality controls reject two plausible but ineffective
+changes. Training the same step-4,500→5,000 segment at 512² ties a 256²-trained
+control when both are evaluated at 512²: 24.04 dB on the selected views and
+23.93 dB across all 39. Distortion weights `1e-4` and `1e-3` likewise remain
+within 0.01 dB of the 24.02/23.93 dB control. None changes the visible smear,
+so the selected path remains at 256² with distortion disabled.
+
+A four-arm schedule gate isolates a positive continuation instead. Reopening
+the cosine horizon from 5,100 to 20,400 updates with legacy parameter groups
+collapses selected/all-39 quality to 22.89/22.70 dB; relative RadFoam-v1 groups
+on the exhausted horizon are also slightly negative at 24.00/23.91 dB. Used
+together, however, they restore reference-scale rates while retaining the
+stable cosine curve and reach 25.84/24.22 dB train/selected and 24.00 dB
+all-39 at step 5,000. Continued losslessly to steps 5,500 and 6,000, the result
+reaches 26.09/24.45/24.12 and then 26.22/24.57/24.14 dB. The last segment adds
+only 0.02 dB all-39 and begins regressing late held-out views, so step 6,000 is
+the selected stopping point rather than an invitation to optimize the selected
+eight views indefinitely. This is a Room continuation choice, not a change to
+library defaults.
+
+The latest checkpoint and reconstruction are at
+`target/audit-runs/room-reference-scale-cosine-batch4096-step6000-local/`.
+The checkpoint PLY and final PLY are byte-identical with SHA-256
+`81996c09e0e0a785262a9b1b48ff02d2a3a0cc8520a2736480a98197bb17f151`.
+The run retained 735,103 cells and 11,307,630 directed adjacency edges, stayed
+within 3,503,509,504 bytes of host memory and 3,819 MiB sampled VRAM, and
+recorded zero swap, pressure, OOM, or GPU faults. It is the strongest local
+reconstruction, but comparison images remain blurred enough that it is not
+viewer-ready.
