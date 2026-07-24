@@ -1183,6 +1183,49 @@ step5000_artifact_path = "target/audit-runs/room-step4500-reference-scale-cosine
 step5500_artifact_path = "target/audit-runs/room-reference-scale-cosine-batch4096-step5500-local"
 step6000_artifact_path = "target/audit-runs/room-reference-scale-cosine-batch4096-step6000-local"
 
+[unbounded_csr_performance]
+status = "selected"
+git_commit = "1c46fb2"
+source_checkpoint_step = 5500
+completed_step = 6000
+cells = 735103
+implementation = "exact unbounded topology sorts and deduplicates each already-symmetric neighbor row directly; it skips the capped path's global distance sort and second graph allocation"
+regression = "unbounded output exactly matches the capped builder when its cap retains every edge, including duplicate and self-edge input"
+standalone_control_command_wall_seconds = 16.86
+standalone_optimized_command_wall_seconds = 14.62
+standalone_command_speedup = 1.153
+standalone_control_host_memory_peak_bytes = 2152636416
+standalone_optimized_host_memory_peak_bytes = 1934176256
+standalone_memory_reduction_percent = 10.1
+control_command_wall_seconds = 152.098
+optimized_command_wall_seconds = 145.236
+command_speedup = 1.047
+control_training_wall_seconds = 127.416
+optimized_training_wall_seconds = 122.912
+training_speedup = 1.037
+control_topology_seconds = 30.949
+optimized_topology_seconds = 26.114
+topology_speedup = 1.185
+topology_wall_reduction_percent = 15.6
+control_initial_adjacency_seconds = 20.707
+optimized_initial_adjacency_seconds = 18.175
+control_host_memory_peak_bytes = 3503509504
+optimized_host_memory_peak_bytes = 3761418240
+control_train_psnr = 26.22
+optimized_train_psnr = 26.23
+control_selected_test_psnr = 24.57
+optimized_selected_test_psnr = 24.54
+control_all_39_test_psnr = 24.14
+optimized_all_39_test_psnr = 24.15
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+decision = "select: the exact builder is 15.6% faster in the matched topology phase and all-39 quality changes by +0.01 dB; end-to-end peak memory is dominated by other phases and did not improve in the matched training run"
+standalone_control_artifact_path = "target/audit-runs/room-step6000-qhull-csr-control-cgroup.log"
+standalone_optimized_artifact_path = "target/audit-runs/room-step6000-qhull-csr-fast-cgroup.log"
+optimized_artifact_path = "target/audit-runs/room-step5500-qhull-csr-fast-step6000-local"
+
 [continuation_selection]
 status = "selected"
 pixel_batch = 4096
@@ -1328,6 +1371,9 @@ required = [
     "reference_scale_cosine_continuation.selected_step6000_selected_test_psnr",
     "reference_scale_cosine_continuation.selected_step6000_all_39_test_psnr",
     "reference_scale_cosine_continuation.final_ply_sha256",
+    "unbounded_csr_performance.git_commit",
+    "unbounded_csr_performance.topology_speedup",
+    "unbounded_csr_performance.optimized_all_39_test_psnr",
     "continuation_selection.decision_commit",
     "selection.decision_commit",
 ]

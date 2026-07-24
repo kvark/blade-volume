@@ -599,3 +599,24 @@ within 3,503,509,504 bytes of host memory and 3,819 MiB sampled VRAM, and
 recorded zero swap, pressure, OOM, or GPU faults. It is the strongest local
 reconstruction, but comparison images remain blurred enough that it is not
 viewer-ready.
+
+Commit `1c46fb2` removes work that exact topology never needed. The shared CSR
+builder previously sent unbounded Delaunay and Čech graphs through the
+approximate capped path: it globally distance-sorted every unique edge,
+allocated a second per-point graph, and sorted its rows again before retaining
+every edge. Exact mode now sorts and deduplicates the already-symmetric rows
+directly; finite caps keep the old distance-ordered selection. A regression
+proves both paths emit identical CSR when the cap retains every edge.
+
+On an isolated rebuild of the 735,103-cell step-6,000 cloud, whole-command time
+falls from 16.86 to 14.62 seconds (1.15×) and exact host peak from
+2,152,636,416 to 1,934,176,256 bytes (−10.1%). In the matched lossless
+step-5,500→6,000 training gate, the two scheduled topology rebuilds fall from
+30.949 to 26.114 seconds (1.19×), training from 127.416 to 122.912 seconds,
+and whole-command time from 152.098 to 145.236 seconds. Fresh evaluation is
+neutral within separate GPU-run variation: train/selected/all-39 changes from
+26.22/24.57/24.14 to 26.23/24.54/24.15 dB. The full run peaks higher at
+3,761,418,240 bytes because another phase dominates, so only the isolated
+topology memory reduction is claimed. Every scope records zero swap, pressure,
+OOM, or GPU faults. Raw evidence remains ignored under
+`target/audit-runs/room-step{6000-qhull-csr-,5500-qhull-csr-fast-}*`.
