@@ -57,3 +57,129 @@ memory_swap_max_bytes = 0
 [result]
 status = "pending"
 required = ["git_commit", "dataset_revision", "gpu", "driver", "wall_seconds", "cells", "train_psnr", "test_psnr"]
+
+# The original 256-ray run stopped at step 10,000 after its held-out curve
+# flattened. This lossless continuation changes only the update composition
+# while retaining the original cosine horizon, 200,000-cell cloud, and legacy
+# parameter groups, so it is recorded separately rather than presented as the
+# unfinished baseline result above.
+[mixed_view_continuation]
+status = "complete"
+git_commit = "86cfcab25f9a44df94cb2ddaa76601a4c820df8f"
+blade_commit = "f724f6a9da89939de908ec434e65e86a9a789477"
+meganeura_commit = "a2ce41c6113f6c016ba0de461d1d38f7f7b65f6b"
+gpu = "NVIDIA GeForce RTX 5070"
+driver = "595.71.05"
+source_step = 10000
+source_artifact = "target/audit-runs/bonsai-full-93c996f/model.ckpt.ply"
+artifact = "target/audit-runs/bonsai-batch4096-long-cosine-legacy-step20400-local/model.ply"
+artifact_sha256 = "047aa82cf8e91fc74acaaf9bf94f8497dbf8913d4ef3d2fb0de36c6f40f6b4f3"
+width = 128
+height = 128
+pixel_batch = 4096
+views_per_batch = 16
+schedule_horizon = 20400
+lr_groups = "legacy"
+geometry_rebuild_every = 100
+cells = 200000
+directed_adjacency_edges = 3042928
+train_psnr = 22.89
+selected_8_psnr = 20.41
+all_37_psnr = 21.35
+max_host_bytes = 1538531328
+memory_swap_bytes = 0
+cgroup_pressure_events = 0
+cgroup_oom_events = 0
+selection = "completed horizon; final 400 updates add 0.02 dB all-37"
+
+[[mixed_view_continuation.checkpoint]]
+step = 10000
+train_psnr = 16.76
+selected_8_psnr = 15.83
+all_37_psnr = 16.16
+
+[[mixed_view_continuation.checkpoint]]
+step = 10500
+train_psnr = 18.38
+selected_8_psnr = 16.77
+all_37_psnr = 17.47
+
+[[mixed_view_continuation.checkpoint]]
+step = 12000
+train_psnr = 19.78
+selected_8_psnr = 17.97
+all_37_psnr = 18.61
+
+[[mixed_view_continuation.checkpoint]]
+step = 14000
+train_psnr = 21.17
+selected_8_psnr = 19.07
+all_37_psnr = 19.89
+
+[[mixed_view_continuation.checkpoint]]
+step = 16000
+train_psnr = 22.13
+selected_8_psnr = 19.88
+all_37_psnr = 20.73
+
+[[mixed_view_continuation.checkpoint]]
+step = 18000
+train_psnr = 22.67
+selected_8_psnr = 20.26
+all_37_psnr = 21.19
+
+[[mixed_view_continuation.checkpoint]]
+step = 20000
+train_psnr = 22.87
+selected_8_psnr = 20.39
+all_37_psnr = 21.33
+
+[[mixed_view_continuation.checkpoint]]
+step = 20400
+train_psnr = 22.89
+selected_8_psnr = 20.41
+all_37_psnr = 21.35
+
+[mixed_view_continuation.factor_gate]
+boundary_step = 10500
+legacy_selected_8_psnr = 16.77
+legacy_all_37_psnr = 17.47
+relative_selected_8_psnr = 16.66
+relative_all_37_psnr = 17.30
+selection = "legacy; Room relative groups do not transfer at this Bonsai stage"
+
+[mixed_view_continuation.capacity_gate]
+boundary_step = 13000
+control_cells = 200000
+control_selected_8_psnr = 18.51
+control_all_37_psnr = 19.28
+candidate_cells = 229566
+candidate_selected_8_psnr = 18.38
+candidate_all_37_psnr = 19.17
+selection = "retain 200000 cells"
+
+[mixed_view_continuation.cadence_gate]
+interval = "steps 13000..14000"
+control_every = 100
+control_wall_seconds = 140.885
+control_selected_8_psnr = 19.07
+control_all_37_psnr = 19.89
+candidate_every = 250
+candidate_wall_seconds = 112.875
+candidate_selected_8_psnr = 19.05
+candidate_all_37_psnr = 19.84
+selection = "retain cadence 100; 1.25x speedup does not justify the cross-scene quality loss"
+
+[contribution_readback_performance]
+interval = "steps 12000..13000 with one 200000 to 230000-cell densification round"
+shared_contribution_seconds = 561.315
+download_contribution_seconds = 1.197
+contribution_speedup = 468.9
+shared_wall_seconds = 728.308
+download_wall_seconds = 175.622
+wall_speedup = 4.147
+shared_max_host_bytes = 1470054400
+download_max_host_bytes = 1397407744
+shared_all_37_psnr = 19.17
+download_all_37_psnr = 19.17
+selection = "cached download memory"
