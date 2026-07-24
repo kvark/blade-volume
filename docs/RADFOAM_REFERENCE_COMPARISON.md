@@ -585,6 +585,16 @@ saving, so cadence 250 is selected. Continuing it to step 5,000 reaches
 last 500 steps add only 0.06/0.05 dB held-out/all-39, and thin foreground
 geometry remains visibly smeared.
 
+Commit `77c19b7` makes exhaustive evaluation use the maintained production
+WGSL tracer through an opt-in `eval_psnr --gpu` path; the CPU renderer remains
+the default oracle. Weighted and unweighted physical pixel tests pass. On the
+step-5,000 Room PLY, CPU and GPU aggregates agree at 25.69/24.03 dB and
+23.93 dB all-39, with at most 0.01 dB difference in reported per-view PSNR
+from RGBA16F output. The identical 255+8-view pass falls from 548.251 to
+119.668 seconds (4.58×), while the 39-view coverage pass falls from 77.923 to
+7.758 seconds (10.04×). Both isolated runs stay near 0.5 GB host memory; the
+GPU pass samples 279 MiB VRAM and records no swap, pressure, OOM, or GPU fault.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -605,9 +615,10 @@ machine-readable result remains in
    another complete scene before generalizing the efficiency claim beyond
    Room. Keep the one-view library default and the full-image/patch
    compatibility behavior.
-3. Move exhaustive evaluation onto the maintained GPU render path or add a
-   parity-checked GPU evaluator; the current 255-view 256² metric pass is
-   CPU-bound and takes about nine minutes.
+3. Add built-in per-phase timings around GPU path recording, optimization,
+   contribution scans, downloads, Qhull construction, serialization, and
+   evaluation, then optimize the largest remaining measured phase without
+   changing reconstruction decisions.
 4. If a complete upstream baseline is still needed, make its image/ray loader
    streaming or run it on a machine with more than 32 GiB host memory and more
    than 12 GiB VRAM. Do not retry the unchanged caching path here.

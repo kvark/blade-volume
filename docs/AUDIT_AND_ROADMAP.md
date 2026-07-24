@@ -380,6 +380,16 @@ At the audited revision:
   improve, but foreground furniture, thin structures, and occlusion edges
   remain visibly smeared. More identical low-batch continuation is now
   lower-value than closing the remaining reference-protocol differences.
+- Commit `77c19b7` centralizes the production RadFoam/PowerFoam WGSL compute
+  tracer so the viewer and opt-in headless evaluator cannot drift. Physical
+  pixel tests match the CPU oracle for weighted and unweighted clouds. On the
+  selected 735,103-cell Room PLY, GPU and CPU evaluation agree at
+  25.69/24.03 dB train/held out and 23.93 dB all-39; per-view reporting differs
+  by at most 0.01 dB from the RGBA16F target. The identical 255+8-view pass
+  falls from 548.251 to 119.668 seconds (4.58×), and all 39 held-out views
+  fall from 77.923 to 7.758 seconds (10.04×). Host peaks remain near 0.5 GB,
+  sampled VRAM peaks at 279 MiB, and both isolated runs record zero swap,
+  pressure, OOM, or GPU faults. The CPU path remains the default oracle.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -1002,6 +1012,10 @@ material path.
 3. Add per-phase timing around recording, optimization, contribution scans,
    downloads, topology construction, and evaluation so a long run explains its
    cost without profiler-only evidence.
+4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
+   preserving the CPU implementation as the default oracle. (Done in
+   `77c19b7`: weighted/unweighted physical pixel parity passes, aggregate Room
+   PSNR is identical, and the 255+8-view pass is 4.58× faster.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 
