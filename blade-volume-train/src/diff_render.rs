@@ -396,14 +396,7 @@ pub fn build_volumetric_graph(
     let t_pl1 = g.div(dot_num, dot_den);
     let t_2d = g.reshape(t_pl1, &[p, l]); // [P, L]
 
-    // Build the L×L shift-right matrix: M[i, k] = 1 iff k == i+1 (and k≥1).
-    // (t @ M)[p, k] = t[p, k-1] for k ≥ 1, else 0.
-    let mut shift_data = vec![0.0_f32; l * l];
-    for i in 0..l.saturating_sub(1) {
-        shift_data[i * l + (i + 1)] = 1.0;
-    }
-    let shift_mat = g.constant(shift_data, &[l, l]);
-    let t_shifted = g.matmul(t_2d, shift_mat); // [P, L]
+    let t_shifted = g.shift_inner(t_2d, 1); // [P, L], t[p, k-1] or zero
     let neg_t_shifted = g.neg(t_shifted);
     let dt_raw_2d = g.add(t_2d, neg_t_shifted); // [P, L]
 
@@ -491,11 +484,8 @@ pub fn build_volumetric_graph(
     let raw = g.mul(density, dt_2d); // [P, L], non-negative
     let raw_masked = g.mul(raw, mask_2d); // zero-out padded steps
 
-    // Cumulative sum over the L axis via matmul with a fixed strictly-lower-
-    // triangular ones matrix: cum[p, k] = sum_{i<k} raw_masked[p, i].
-    let cum_data = strict_lower_triangular_ones(l);
-    let cum_matrix = g.constant(cum_data, &[l, l]);
-    let cumsum = g.matmul(raw_masked, cum_matrix); // [P, L]
+    // cum[p, k] = sum_{i<k} raw_masked[p, i].
+    let cumsum = g.exclusive_cumsum(raw_masked, false); // [P, L]
 
     // Transmittance: T = exp(-cumsum). Use the identity
     //   exp(-x) = recip(sigmoid(x)) - 1   (valid for x >= 0)
@@ -669,8 +659,7 @@ pub fn build_volumetric_graph(
     // weighted depth variance; it is zero for a single concentrated surface
     // and grows when a ray spreads contribution across floaters/layers.
     let loss = if distortion_weight > 0.0 {
-        let depth_prefix_matrix = g.constant(strict_lower_triangular_ones(l), &[l, l]);
-        let depth_prefix = g.matmul(dt_2d, depth_prefix_matrix);
+        let depth_prefix = g.exclusive_cumsum(dt_2d, false);
         let half = g.constant(vec![0.5_f32; p * l], &[p, l]);
         let half_dt = g.mul(dt_2d, half);
         let midpoint = g.add(depth_prefix, half_dt);
@@ -773,17 +762,6 @@ pub fn build_volumetric_graph(
         loss,
         dt_from_positions,
     }
-}
-
-/// `[L, L]` row-major matrix with `M[i, k] = 1` iff `i < k`, else `0`.
-fn strict_lower_triangular_ones(l: usize) -> Vec<f32> {
-    let mut data = vec![0.0f32; l * l];
-    for i in 0..l {
-        for k in (i + 1)..l {
-            data[i * l + k] = 1.0;
-        }
-    }
-    data
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3598,7 +3576,7 @@ fn fit_appearance_pixel_batched(
             let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
             losses.push(loss);
 
-            if densify.is_some() && session.has_param_grad("positions") {
+            if densify_schedule_active && session.has_param_grad("positions") {
                 session.read_param_grad("positions", &mut position_grad_scratch);
                 for (i, accumulated) in position_grad_accum.iter_mut().enumerate() {
                     let base = i * 3;
@@ -4167,15 +4145,6 @@ mod tests {
         };
         m.compute_adjacency_default();
         m
-    }
-
-    #[test]
-    fn strict_lower_triangular_ones_shape() {
-        let m = strict_lower_triangular_ones(3);
-        // row 0: 0 1 1
-        // row 1: 0 0 1
-        // row 2: 0 0 0
-        assert_eq!(m, vec![0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]

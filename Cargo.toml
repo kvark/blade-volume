@@ -31,8 +31,8 @@ unused_extern_crates = "warn"
 [workspace.dependencies]
 blade-graphics = { git = "https://github.com/kvark/blade", rev = "ba0fb5a6f2b5462c3e5796f8ce06b3b3d580adac" }
 blade-macros = "0.3"
-# Includes the optimizer topology fix required by custom RadFoam position gradients.
-meganeura = { git = "https://github.com/kvark/meganeura", rev = "a7ced10" }
+# Includes the optimizer topology fix and differentiable row-sequence operations.
+meganeura = { git = "https://github.com/kvark/meganeura", rev = "e82bd55" }
 bytemuck = "1"
 glam = { version = "0.30", features = ["mint"] }
 flate2 = "1"
