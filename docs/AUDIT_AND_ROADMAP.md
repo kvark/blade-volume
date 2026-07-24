@@ -390,6 +390,22 @@ At the audited revision:
   fall from 77.923 to 7.758 seconds (10.04×). Host peaks remain near 0.5 GB,
   sampled VRAM peaks at 279 MiB, and both isolated runs record zero swap,
   pressure, OOM, or GPU faults. The CPU path remains the default oracle.
+- Commit `5e3f81d` makes long training runs report setup, input, GPU wait,
+  readback, topology, densification, checkpoint, finalization, pipeline, and
+  CLI-output timings. The first matched 735,103-cell profile exposed redundant
+  full parameter downloads at the geometry/checkpoint/finalization endpoint.
+  Reusing current host parameters cuts training from 167.369 to 120.675
+  seconds (1.39×), whole-command time from 205.641 to 158.960 seconds (1.29×),
+  and host peak from 4,421,963,776 to 4,200,992,768 bytes. Loss, cell and edge
+  counts, selected 24.03 dB held-out quality, and checkpoint/final PLY identity
+  are preserved. Serialization remains the largest phase.
+- Meganeura branch `perf/stream-checkpoints-fba` (`cb64f67`) removes the second
+  checkpoint-sized host allocation by streaming safetensors to disk. A matched
+  run cuts peak host memory by 695,529,472 bytes (15.7%) with the same selected
+  24.03 dB result and no memory or GPU faults. Checkpoint time is unchanged
+  within run variance (100.060 versus 98.460 seconds), so this is a pending
+  upstream memory improvement rather than a speed claim. Blade remains pinned
+  to merged Meganeura `fba040a` until it lands.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -1011,7 +1027,12 @@ material path.
    in either case.)
 3. Add per-phase timing around recording, optimization, contribution scans,
    downloads, topology construction, and evaluation so a long run explains its
-   cost without profiler-only evidence.
+   cost without profiler-only evidence. (Done in `5e3f81d`. The matched
+   step-5,000→5,100 profile found redundant parameter downloads and removed
+   them without changing quality or checkpoint contents: training is 1.39×
+   faster and whole-command time is 1.29× faster. Checkpoint serialization is
+   now the largest measured endpoint phase; upstream streaming reduces peak
+   memory by 15.7% but does not improve its wall time.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done in
    `77c19b7`: weighted/unweighted physical pixel parity passes, aggregate Room

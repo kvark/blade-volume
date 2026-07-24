@@ -872,6 +872,66 @@ maximum_reported_per_view_delta_db = 0.01
 parity_test = "physical-GPU pixel comparison against the CPU oracle for unweighted and weighted clouds"
 artifact_path = "target/audit-runs/room-step5000-gpu-eval-local"
 
+[training_phase_profile]
+status = "completed"
+control_base_git_commit = "3b9d403"
+optimized_git_commit = "5e3f81d"
+source_checkpoint_git_commit = "98d9ee9"
+source_checkpoint_step = 5000
+completed_step = 5100
+profile_steps = 100
+cells = 735103
+directed_adjacency_entries = 11308046
+loss_start = 0.0919
+loss_end = 0.0854
+control_training_wall_seconds = 167.369
+optimized_training_wall_seconds = 120.675
+training_speedup = 1.387
+training_wall_reduction_percent = 27.9
+control_command_wall_seconds = 205.641
+optimized_command_wall_seconds = 158.960
+command_speedup = 1.294
+command_wall_reduction_percent = 22.7
+control_checkpoint_seconds = 98.460
+optimized_checkpoint_seconds = 76.406
+control_finalize_seconds = 25.280
+optimized_finalize_seconds = 0.374
+control_memory_peak_bytes = 4421963776
+optimized_memory_peak_bytes = 4200992768
+memory_reduction_percent = 5.0
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+selected_test_psnr = 24.03
+selected_test_psnr_values = [21.97, 26.05, 24.08, 25.32, 24.57, 21.65, 24.92, 23.71]
+checkpoint_matches_final_ply = true
+checkpoint_final_ply_sha256 = "cb4569d604b12b2c9c3e8c4bd4c98ffd9cf052e2a81fb53313d1461dac525a23"
+optimization = "reuse current model parameter downloads across geometry, checkpoint, and finalization boundaries"
+control_artifact_path = "target/audit-runs/room-step5000-phase-profile-local"
+optimized_artifact_path = "target/audit-runs/room-step5000-phase-profile-readback-local"
+
+[meganeura_stream_checkpoint]
+status = "branch-pushed-awaiting-merge"
+meganeura_base_commit = "fba040a"
+meganeura_commit = "cb64f67"
+meganeura_branch = "perf/stream-checkpoints-fba"
+change = "serialize safetensors directly to the destination file instead of first allocating the complete byte vector"
+control_checkpoint_seconds = 98.460
+streamed_checkpoint_seconds = 100.060
+runtime_claim = "none; matched checkpoint time is effectively unchanged"
+control_memory_peak_bytes = 4421963776
+streamed_memory_peak_bytes = 3726434304
+memory_reduction_bytes = 695529472
+memory_reduction_percent = 15.7
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+selected_test_psnr = 24.03
+checkpoint_matches_final_ply = true
+artifact_path = "target/audit-runs/room-step5000-phase-profile-stream2-local"
+
 [continuation_selection]
 status = "selected"
 pixel_batch = 4096
@@ -994,6 +1054,11 @@ required = [
     "gpu_evaluation_performance.full_speedup",
     "gpu_evaluation_performance.cpu_test_psnr",
     "gpu_evaluation_performance.gpu_test_psnr",
+    "training_phase_profile.optimized_git_commit",
+    "training_phase_profile.training_speedup",
+    "training_phase_profile.command_speedup",
+    "training_phase_profile.selected_test_psnr",
+    "training_phase_profile.checkpoint_matches_final_ply",
     "continuation_selection.decision_commit",
     "selection.decision_commit",
 ]

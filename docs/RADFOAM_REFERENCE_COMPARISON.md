@@ -595,6 +595,18 @@ from RGBA16F output. The identical 255+8-view pass falls from 548.251 to
 7.758 seconds (10.04×). Both isolated runs stay near 0.5 GB host memory; the
 GPU pass samples 279 MiB VRAM and records no swap, pressure, OOM, or GPU fault.
 
+Commit `5e3f81d` adds built-in phase timing across the trainer, pipeline, and
+CLI. A matched step-5,000→5,100 continuation shows checkpoint/finalization
+downloads dominating the endpoint. Reusing the parameter download already
+performed at the geometry boundary cuts training from 167.369 to 120.675
+seconds (1.39×) and whole-command time from 205.641 to 158.960 seconds (1.29×).
+Loss remains 0.0919→0.0854, selected held-out quality remains 24.03 dB, and
+each run's checkpoint PLY is byte-identical to its final PLY. Peak host memory
+falls from 4,421,963,776 to 4,200,992,768 bytes with no pressure, swap, OOM, or
+GPU faults. A pending Meganeura streaming-serialization branch reduces that
+peak further to 3,726,434,304 bytes (15.7% below control), but checkpoint time
+is unchanged; it is a memory improvement, not evidence of faster training.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -615,10 +627,11 @@ machine-readable result remains in
    another complete scene before generalizing the efficiency claim beyond
    Room. Keep the one-view library default and the full-image/patch
    compatibility behavior.
-3. Add built-in per-phase timings around GPU path recording, optimization,
-   contribution scans, downloads, Qhull construction, serialization, and
-   evaluation, then optimize the largest remaining measured phase without
-   changing reconstruction decisions.
+3. After the pending Meganeura streaming checkpoint branch lands, uprev and
+   retain its measured 15.7% host-memory reduction. Then sub-profile exact
+   checkpoint encoding/writes and the duplicate final PLY output; optimize
+   them only if lossless resume, endpoint PLY identity, and interrupted-run
+   behavior remain unchanged.
 4. If a complete upstream baseline is still needed, make its image/ray loader
    streaming or run it on a machine with more than 32 GiB host memory and more
    than 12 GiB VRAM. Do not retry the unchanged caching path here.
