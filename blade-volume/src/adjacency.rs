@@ -57,6 +57,33 @@ fn build_symmetric_csr(
     neighbor_sets: &mut [Vec<u32>],
     config: &AdjacencyConfig,
 ) -> Adjacency {
+    if config.max_neighbors == usize::MAX {
+        // Every private caller records both directions before reaching this
+        // function. For exact, unbounded topology, sorting and deduplicating
+        // each row is therefore sufficient. The capped path below needs a
+        // global distance order to choose a symmetric subset; doing that work
+        // here would sort every Delaunay edge and allocate a second graph only
+        // to retain all of it.
+        let capacity = neighbor_sets.iter().map(Vec::len).sum();
+        let mut offsets = Vec::with_capacity(points.len() + 1);
+        let mut neighbors = Vec::with_capacity(capacity);
+        offsets.push(0);
+        for (i, list) in neighbor_sets.iter_mut().enumerate() {
+            list.sort_unstable();
+            list.dedup();
+            neighbors.extend(
+                list.iter()
+                    .copied()
+                    .filter(|&neighbor| neighbor as usize != i),
+            );
+            offsets.push(neighbors.len() as u32);
+        }
+        if config.validate {
+            validate_csr(&offsets, &neighbors, points.len());
+        }
+        return Adjacency { neighbors, offsets };
+    }
+
     let mut edges = Vec::new();
     for (i, neighbors) in neighbor_sets.iter_mut().enumerate() {
         neighbors.sort_unstable();
@@ -626,6 +653,39 @@ pub(crate) fn validate_csr_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unbounded_csr_matches_capped_builder_when_every_edge_fits() {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 1.0, 0.0, 1.0),
+            glam::Vec4::new(0.0, 0.0, 1.0, 1.0),
+            glam::Vec4::new(1.0, 1.0, 1.0, 1.0),
+        ];
+        let neighbor_sets = vec![
+            vec![0, 1, 2, 2, 3],
+            vec![0, 2, 4],
+            vec![0, 0, 1, 3, 4],
+            vec![0, 2, 4],
+            vec![1, 2, 3],
+        ];
+        let mut unbounded_sets = neighbor_sets.clone();
+        let unbounded =
+            build_symmetric_csr(&points, &mut unbounded_sets, &AdjacencyConfig::default());
+        let mut capped_sets = neighbor_sets;
+        let capped = build_symmetric_csr(
+            &points,
+            &mut capped_sets,
+            &AdjacencyConfig {
+                max_neighbors: points.len(),
+                validate: true,
+            },
+        );
+
+        assert_eq!(unbounded.offsets, capped.offsets);
+        assert_eq!(unbounded.neighbors, capped.neighbors);
+    }
 
     #[test]
     fn test_tetrahedron_adjacency() {
