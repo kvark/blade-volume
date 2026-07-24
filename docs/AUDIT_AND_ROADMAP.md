@@ -34,9 +34,9 @@ representation or renderer. Official RadFoam v1 reaches 30.02 dB on Room after
 its first 5,000 updates with 735,103 cloud cells, while Blade cross-renders the
 same PLY and full-resolution held-out split at 29.59 dB. The 0.43 dB renderer
 gap meets the Stage 2 tolerance. Blade's selected scaled Room trainer remains
-far less optimized: its 16-view, 10,880,000-ray step-5,000 checkpoint matches
-the 735,103-cell capacity and reaches 25.69 / 24.03 dB on the selected
-train/held-out split and 23.93 dB across all 39 held-out views at 256². The
+far less optimized: its 16-view, 14,976,000-ray step-6,000 checkpoint matches
+the 735,103-cell capacity and reaches 26.22 / 24.57 dB on the selected
+train/held-out split and 24.14 dB across all 39 held-out views at 256². The
 official prefix has processed roughly five billion rays and reaches 30.02 dB.
 The Rust path therefore remains a useful scaling baseline, not a
 production-ready reconstruction pipeline.
@@ -450,6 +450,16 @@ At the audited revision:
   command time from 178.520 to 147.806 seconds (1.21×). Every selected view
   retains its reported PSNR and the all-39 mean remains 23.93 dB. Exact host
   peak falls 4.5%; swap, pressure, OOM, and GPU-fault counters remain zero.
+- Fixed-cap quality controls rule out 512² training and distortion weights
+  `1e-4`/`1e-3`: each is neutral at reported selected and all-39 held-out
+  precision. A four-arm schedule gate instead finds a coupled improvement.
+  Reopening the cosine horizon alone collapses all-39 quality from 23.93 to
+  22.70 dB, and relative RadFoam-v1 parameter groups alone reach 23.91 dB;
+  together they restore reference-scale rates and reach 24.00 dB at step
+  5,000. Lossless continuation reaches 26.22/24.57 dB train/selected and
+  24.14 dB all-39 at step 6,000. The final 500 steps add only 0.02 dB all-39
+  and regress some late held-out views, so step 6,000 is selected as the
+  stopping point. The cloud is still visibly blurred and is not viewer-ready.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -1044,14 +1054,18 @@ material path.
    gain persists: 21.31 / 20.90 dB versus 20.18 / 19.95 dB, again improving
    all eight frames at nearly identical capacity and cost.)
 3. Continue the deterministic 16-view protocol through a sampled-ray and
-   resolution ladder. (Done through step 5,000 at 256²: 735,103 cells,
-   10.88 million rays, 25.69/24.03 dB train/held out, and 23.93 dB across all
-   39 held-out views. A 64-view batch is neutral and rejected. The next
-   quality experiment should change a remaining reference-protocol variable
-   or repeat the selected policy on another scene, not merely extend the same
-   nearly exhausted cosine schedule. A matched 4,096/8,192-ray gate confirms
-   that doubling the batch adds only 0.01 dB for 59% more training time, so
-   4,096 remains selected.)
+   resolution ladder. (Done through step 6,000 at 256²: 735,103 cells,
+   26.22/24.57 dB train/selected-held-out, and 24.14 dB across all 39 held-out
+   views. A 64-view batch, 512² training, and distortion regularization are
+   neutral and rejected. A matched 4,096/8,192-ray gate confirms that doubling
+   the batch adds only 0.01 dB for 59% more training time, so 4,096 remains
+   selected. Factor isolation shows that neither reopening the cosine horizon
+   nor relative RadFoam-v1 parameter groups works alone; together they restore
+   reference-scale rates and add 0.21 dB all-39 by step 6,000. The final
+   500-step segment adds only 0.02 dB all-39 and begins regressing late views,
+   so the next quality experiment should repeat the selected policy on another
+   complete scene or isolate another reference difference rather than extend
+   Room further.)
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.

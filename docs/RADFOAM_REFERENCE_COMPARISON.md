@@ -617,6 +617,31 @@ the pending Meganeura streaming branch with this path did not demonstrate a
 further memory or runtime gain, so Blade remains pinned to `fba040a` while the
 discrepancy is isolated.
 
+The fixed-cap follow-up separates training-resolution, regularization, and
+schedule effects. A 512²-trained step-5,000 candidate ties the 256²-trained
+control when both are evaluated at 512²: 24.04 dB selected and 23.93 dB across
+all 39 views. Distortion weights `1e-4` and `1e-3` are likewise neutral. The
+schedule factor matrix is more informative:
+
+| Cosine horizon | Parameter groups | Selected PSNR | All-39 PSNR |
+| --- | --- | ---: | ---: |
+| 5,100 updates | Legacy | 24.02 dB | 23.93 dB |
+| 20,400 updates | Legacy | 22.89 dB | 22.70 dB |
+| 5,100 updates | Relative RadFoam-v1 | 24.00 dB | 23.91 dB |
+| 20,400 updates | Relative RadFoam-v1 | 24.22 dB | 24.00 dB |
+
+Thus neither factor is independently positive: the longer horizon leaves
+legacy SH rates excessive, while relative groups reach the floor of the old
+horizon. Together they restore reference-scale learning rates without
+adopting the unstable exact v1 schedule. Lossless continuations reach
+26.09/24.45 dB train/selected and 24.12 dB all-39 at step 5,500, then
+26.22/24.57/24.14 dB at step 6,000. The last 500 steps add only 0.02 dB
+all-39 and begin regressing late held-out views, so step 6,000 is selected.
+Its final PLY is byte-identical to the checkpoint, has 735,103 cells and
+11,307,630 directed edges, and records no cgroup or GPU fault. This improves
+the baseline but does not close the visual gap: thin structure remains
+blurred, so the reconstruction is not production-ready.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol
@@ -629,10 +654,10 @@ machine-readable result remains in
 
 ## Next experiments
 
-1. Compare the remaining reference-protocol differences at the selected
-   735,103-cell checkpoint, especially the much larger mixed-ray budget and
-   independent parameter schedules. The current cosine horizon is nearly
-   exhausted at step 5,000; do not extend it by silently changing the schedule.
+1. Isolate another remaining reference-protocol difference at the selected
+   735,103-cell checkpoint. Room is stopped at step 6,000 from all-39
+   validation rather than the eight-view subset; do not extend it without a
+   new held-out criterion.
 2. Repeat the selected 4,096-ray/16-view and fixed-cap cadence-250 policy on
    another complete scene before generalizing the efficiency claim beyond
    Room. Keep the one-view library default and the full-image/patch

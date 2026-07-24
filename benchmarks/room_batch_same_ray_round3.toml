@@ -1096,6 +1096,93 @@ implementation = "ordinary fixed-cap topology refreshes keep the live Meganeura 
 control_artifact_path = "target/audit-runs/room-step4500-batch4096-tikhonov-step5000-local"
 optimized_artifact_path = "target/audit-runs/room-step4500-batch4096-topology-reuse-step5000-local"
 
+[fixed_capacity_quality_controls]
+status = "validated-rejected"
+source_checkpoint_step = 4500
+completed_step = 5000
+pixel_batch = 4096
+views_per_batch = 16
+control_resolution = 256
+candidate_resolution = 512
+control_evaluated_at_512_selected_test_psnr = 24.04
+candidate_evaluated_at_512_selected_test_psnr = 24.04
+control_evaluated_at_512_all_39_test_psnr = 23.93
+candidate_evaluated_at_512_all_39_test_psnr = 23.93
+resolution_candidate_command_wall_seconds = 148.244
+resolution_candidate_training_wall_seconds = 126.121
+resolution_candidate_host_memory_peak_bytes = 4192301056
+resolution_candidate_sampled_gpu_memory_peak_mib = 3819
+distortion_1e4_selected_test_psnr = 24.03
+distortion_1e4_all_39_test_psnr = 23.93
+distortion_1e4_command_wall_seconds = 148.433
+distortion_1e4_training_wall_seconds = 128.466
+distortion_1e3_selected_test_psnr = 24.03
+distortion_1e3_all_39_test_psnr = 23.93
+distortion_1e3_command_wall_seconds = 147.411
+distortion_1e3_training_wall_seconds = 127.509
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+decision = "reject both controls: 512-square training and distortion weights 1e-4/1e-3 are neutral at reported held-out precision"
+resolution_artifact_path = "target/audit-runs/room-step4500-resolution512-batch4096-step5000-local"
+distortion_1e4_artifact_path = "target/audit-runs/room-step4500-distortion1e-4-batch4096-step5000-local"
+distortion_1e3_artifact_path = "target/audit-runs/room-step4500-distortion1e-3-batch4096-step5000-local"
+
+[reference_scale_cosine_continuation]
+status = "selected-stopped-at-step-6000"
+blade_volume_commit = "0da6a85"
+blade_commit = "f724f6a"
+meganeura_commit = "2e20ec6"
+source_checkpoint_git_commit = "98d9ee9"
+source_checkpoint_step = 4500
+pixel_batch = 4096
+views_per_batch = 16
+resolution = 256
+control_steps_per_view = 20
+selected_steps_per_view = 80
+control_total_schedule_steps = 5100
+selected_total_schedule_steps = 20400
+control_lr_groups = "legacy"
+selected_lr_groups = "radfoam-v1-relative"
+lr_schedule = "cosine"
+control_step5000_selected_test_psnr = 24.02
+control_step5000_all_39_test_psnr = 23.93
+long_horizon_legacy_step5000_selected_test_psnr = 22.89
+long_horizon_legacy_step5000_all_39_test_psnr = 22.70
+short_horizon_relative_step5000_selected_test_psnr = 24.00
+short_horizon_relative_step5000_all_39_test_psnr = 23.91
+selected_step5000_train_psnr = 25.84
+selected_step5000_selected_test_psnr = 24.22
+selected_step5000_all_39_test_psnr = 24.00
+selected_step5000_command_wall_seconds = 146.930
+selected_step5000_training_wall_seconds = 126.917
+selected_step5000_host_memory_peak_bytes = 3716157440
+selected_step5500_train_psnr = 26.09
+selected_step5500_selected_test_psnr = 24.45
+selected_step5500_all_39_test_psnr = 24.12
+selected_step5500_command_wall_seconds = 150.669
+selected_step5500_training_wall_seconds = 130.505
+selected_step5500_host_memory_peak_bytes = 3980050432
+selected_step6000_train_psnr = 26.22
+selected_step6000_selected_test_psnr = 24.57
+selected_step6000_all_39_test_psnr = 24.14
+selected_step6000_command_wall_seconds = 152.098
+selected_step6000_training_wall_seconds = 127.416
+selected_step6000_host_memory_peak_bytes = 3503509504
+sampled_gpu_memory_peak_mib = 3819
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+final_cells = 735103
+final_directed_adjacency_edges = 11307630
+final_ply_sha256 = "81996c09e0e0a785262a9b1b48ff02d2a3a0cc8520a2736480a98197bb17f151"
+decision = "select the combined longer cosine horizon and relative parameter groups; stop at 6000 because the final 500 steps add only 0.02 dB all-39 and begin regressing late held-out views"
+step5000_artifact_path = "target/audit-runs/room-step4500-reference-scale-cosine-batch4096-step5000-local"
+step5500_artifact_path = "target/audit-runs/room-reference-scale-cosine-batch4096-step5500-local"
+step6000_artifact_path = "target/audit-runs/room-reference-scale-cosine-batch4096-step6000-local"
+
 [continuation_selection]
 status = "selected"
 pixel_batch = 4096
@@ -1235,6 +1322,12 @@ required = [
     "topology_session_reuse.training_speedup",
     "topology_session_reuse.state_readback_speedup",
     "topology_session_reuse.optimized_all_39_test_psnr",
+    "fixed_capacity_quality_controls.status",
+    "fixed_capacity_quality_controls.candidate_evaluated_at_512_all_39_test_psnr",
+    "reference_scale_cosine_continuation.status",
+    "reference_scale_cosine_continuation.selected_step6000_selected_test_psnr",
+    "reference_scale_cosine_continuation.selected_step6000_all_39_test_psnr",
+    "reference_scale_cosine_continuation.final_ply_sha256",
     "continuation_selection.decision_commit",
     "selection.decision_commit",
 ]
