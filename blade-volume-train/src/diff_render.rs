@@ -2352,18 +2352,8 @@ fn inv_radius_activation(radius: f32) -> f32 {
     inv_density_activation(radius, RADIUS_SOFTPLUS_BETA)
 }
 
-fn download_model_parameters(
-    session: &mn::Session,
-    model: &mut vol::PointCloudModel,
-    softplus_beta: f32,
-) {
+fn download_model_geometry(session: &mn::Session, model: &mut vol::PointCloudModel) {
     let n_cells = model.points.len();
-    let mut out_density = vec![0.0f32; n_cells];
-    session.read_param("log_density", &mut out_density);
-    for (i, d) in out_density.iter().enumerate() {
-        model.points[i].w = density_activation(*d, softplus_beta);
-    }
-
     let mut out_positions = vec![0.0_f32; n_cells * 3];
     session.read_param("positions", &mut out_positions);
     for i in 0..n_cells {
@@ -2378,6 +2368,21 @@ fn download_model_parameters(
         for (radius, &raw) in radii.iter_mut().zip(out_radii.iter()) {
             *radius = radius_activation(raw);
         }
+    }
+}
+
+fn download_model_parameters(
+    session: &mn::Session,
+    model: &mut vol::PointCloudModel,
+    softplus_beta: f32,
+) {
+    let n_cells = model.points.len();
+    download_model_geometry(session, model);
+
+    let mut out_density = vec![0.0f32; n_cells];
+    session.read_param("log_density", &mut out_density);
+    for (i, d) in out_density.iter().enumerate() {
+        model.points[i].w = density_activation(*d, softplus_beta);
     }
 
     let num_components = model.sh_component_count();
@@ -3931,18 +3936,20 @@ fn fit_appearance_pixel_batched(
             geometry_trainable && (topology_schedule_due || steps_done == invocation_end);
         if geometry_due && !topology_rebuilt {
             let n_cells = model.points.len();
+            let continuing = steps_done < invocation_end;
             let state_readback_start = std::time::Instant::now();
-            download_model_parameters(&session, model, config.softplus_beta);
-            model_parameters_current = true;
-            let adam_snap = (steps_done < invocation_end).then(|| {
-                save_adam_state(
-                    &session,
-                    sh_degree,
-                    n_cells,
-                    views.len(),
-                    model.radii.is_some(),
-                )
-            });
+            if continuing {
+                // The Meganeura graph and its external path buffers do not
+                // depend on adjacency. Only the path recorder needs current
+                // positions/radii for the next discrete walk, so keep the
+                // live session and Adam state in place instead of copying all
+                // appearance parameters and moments through uncached shared
+                // memory just to recreate an identical graph.
+                download_model_geometry(&session, model);
+            } else {
+                download_model_parameters(&session, model, config.softplus_beta);
+                model_parameters_current = true;
+            }
             phase_timings.state_readback += state_readback_start.elapsed();
             let topology_start = std::time::Instant::now();
             rebuild_training_adjacency(model, config.rebuild_with_qhull);
@@ -3954,51 +3961,10 @@ fn fit_appearance_pixel_batched(
                 steps_done,
             );
 
-            if let Some(adam_snap) = adam_snap {
+            if continuing {
                 let resource_rebuild_start = std::time::Instant::now();
-                drop(session);
                 gpu_cloud.deinit(&gpu);
-                path_bufs.destroy(&gpu);
-                path_bufs = vol::gpu::PathRecordBuffers::new_external_with_jacobians(
-                    &gpu,
-                    pixel_batch as u32,
-                    max_steps as u32,
-                    model.radii.is_some(),
-                );
-                let rebuilt = build_train_session(
-                    model,
-                    pixel_batch,
-                    max_steps,
-                    sh_degree,
-                    config.color_loss,
-                    views.len(),
-                    patch_size,
-                    grad_loss_weight,
-                    config.opacity_weight,
-                    config.distortion_weight,
-                    config.quantile_weight,
-                    config.softplus_beta,
-                    config.background_rgb,
-                    &gpu,
-                    &path_bufs,
-                    config.learning_rate,
-                    config.lr_groups,
-                    config.position_lr_ratio,
-                    config.radius_lr_ratio,
-                    (config.adam_beta1, config.adam_beta2, config.adam_eps),
-                );
-                session = rebuilt.0;
-                gpu_cloud = rebuilt.1;
-                session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
-                let identity: Vec<usize> = (0..n_cells).collect();
-                restore_adam_state_remap(
-                    &mut session,
-                    &adam_snap,
-                    &identity,
-                    sh_degree,
-                    model.radii.is_some(),
-                );
-                session.set_adam_step_count(adam_snap.t);
+                gpu_cloud = build_training_gpu_cloud(model, &gpu);
                 phase_timings.resource_rebuild += resource_rebuild_start.elapsed();
             }
         }
