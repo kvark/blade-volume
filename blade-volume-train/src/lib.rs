@@ -33,6 +33,7 @@ pub mod diff_render;
 pub mod fit;
 pub mod metrics;
 pub mod pipeline;
+pub mod relight;
 pub mod render;
 
 // Re-export so downstream crates only need to add one dep.
