@@ -344,6 +344,53 @@ fn main() {
         );
     }
 
+    // How accurate does a reconstruction's geometry have to be? The bound above
+    // is handed exact normals; a real primitive estimates them. Tilting every
+    // normal by a fixed angle, and using the tilted one both to fit and to
+    // relight, is what a normal error of that size would actually cost.
+    println!("\nsensitivity to normal error (diffuse + specular, all training environments):");
+    println!(
+        "{:<16}{:>12}{:>14}",
+        "tilt (degrees)", "albedo rmse", "held-out psnr"
+    );
+    let lights: Vec<_> = training
+        .iter()
+        .map(|index| (*index, irradiance[*index]))
+        .collect();
+    for degrees in [0.0f32, 1.0, 2.0, 5.0, 10.0, 20.0, 45.0] {
+        let angle = degrees.to_radians();
+        let mut albedo_error = train::relight::Accumulator::new();
+        let mut held_error = train::relight::Accumulator::new();
+        for (index, sample) in samples.iter().enumerate() {
+            let tilted = train::relight::Sample {
+                normal: train::relight::perturb_normal(sample.normal, angle, index as u32),
+                albedo_truth: sample.albedo_truth,
+                specular_f0: sample.specular_f0,
+                roughness: sample.roughness,
+                view: sample.view,
+                radiance: sample.radiance.clone(),
+            };
+            let albedo = train::relight::solve_albedo_specular(&tilted, &lights, &specular);
+            albedo_error.add(albedo, sample.albedo_truth);
+            let shade = irradiance[held_out].shade(tilted.normal);
+            let lobe = train::relight::specular_radiance(&tilted, &specular[held_out]);
+            held_error.add(
+                [
+                    albedo[0] * shade[0] + lobe[0],
+                    albedo[1] * shade[1] + lobe[1],
+                    albedo[2] * shade[2] + lobe[2],
+                ],
+                sample.radiance[held_out],
+            );
+        }
+        println!(
+            "{:<16.0}{:>12.4}{:>14.2}",
+            degrees,
+            albedo_error.rmse(),
+            held_error.psnr()
+        );
+    }
+
     println!("\noracle residual by roughness (albedo is exact, so this is model error):");
     println!(
         "{:<14}{:>10}{:>12}{:>12}{:>14}",
