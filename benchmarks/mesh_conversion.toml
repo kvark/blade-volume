@@ -1,0 +1,238 @@
+# Offline glTF -> point cloud conversion.
+#
+# Unlike the reconstruction manifests in this directory, this one records
+# *cost and structure*, not quality: there is currently no metric comparing a
+# converted cloud against its source mesh. Numbers here therefore bound
+# usability (can an asset be converted at all, and how fast) and must not be
+# read as evidence that any sampling option improves appearance.
+#
+# Reproduce with:
+#   cargo build --release -p blade-volume-convert --features qhull
+#   ./target/release/convert blade-volume-test/data/police.glb \
+#       -k radfoam -r <resolution> -t <exact|qhull> -o /tmp/foam.ply
+#
+# The converter uses fixed seeds, so a given commit and flag set reproduces
+# byte-identical output; `etc/convert_smoke.sh` asserts that in CI.
+
+[manifest]
+name = "mesh_conversion"
+asset = "blade-volume-test/data/police.glb"
+triangles = 2076
+git_commit = "b096da03e3b3fa70512b6fa9395422cf46079726"
+cpu = "12th Gen Intel(R) Core(TM) i5-12400F"
+threads = 1
+profile = "release"
+quality_metric = "rendered-image PSNR against the ray-traced source mesh (convert_quality)"
+
+# The interior even-odd test used to scan every triangle for every grid point.
+# Indexing it per parity direction (exact narrowing, identical classification)
+# removed what was 99.3% of conversion time.
+[interior_index]
+status = "complete"
+before_seconds = 42.6
+after_seconds = 0.087
+resolution = 128
+points = 804464
+speedup = 490.0
+equivalence = "point counts identical at resolutions 64/96/128; unit test asserts agreement with an exhaustive scan over a 24^3 sweep"
+
+# An exact lattice is cospherical, so its Delaunay triangulation is not unique.
+# Both builders were doing more work and returning different answers.
+[interior_jitter]
+status = "complete"
+resolution = 128
+default_before = 0.0
+default_after = "0.5 for radfoam, 0.0 for gaussian"
+default_scope = "per output kind: gaussian builds no adjacency, so jitter buys nothing there and costs 2.3 dB on the reference render"
+exact_seconds_before = 30.9
+exact_seconds_after = 8.4
+exact_speedup = 3.7
+qhull_seconds_before = 26.4
+qhull_seconds_after = 18.4
+edge_disagreement_before = 0.156
+edge_disagreement_after = 0.039
+selection = "jitter on by default; it is faster and less ambiguous on both builders"
+
+# Sampling alone, with adjacency skipped (--kind gaussian). Linear in points.
+[[sampling]]
+resolution = 64
+points = 104942
+seconds = 0.014
+
+[[sampling]]
+resolution = 128
+points = 804464
+seconds = 0.094
+
+[[sampling]]
+resolution = 192
+points = 2570364
+seconds = 0.270
+
+# End-to-end RadFoam, i.e. sampling plus Delaunay. Delaunay is now the whole
+# cost, so it is where any further scaling work belongs.
+[[radfoam.exact]]
+resolution = 32
+points = 14784
+edges = 226278
+seconds = 0.144
+
+[[radfoam.exact]]
+resolution = 64
+points = 104942
+edges = 1619472
+seconds = 1.019
+
+[[radfoam.exact]]
+resolution = 96
+points = 339518
+edges = 5252506
+seconds = 3.452
+
+[[radfoam.exact]]
+resolution = 128
+points = 804464
+edges = 12468098
+seconds = 8.402
+
+[[radfoam.qhull]]
+resolution = 32
+points = 14784
+edges = 232636
+seconds = 0.257
+
+[[radfoam.qhull]]
+resolution = 64
+points = 104942
+edges = 1681350
+seconds = 2.220
+
+[[radfoam.qhull]]
+resolution = 96
+points = 339518
+edges = 5458440
+seconds = 7.580
+
+[[radfoam.qhull]]
+resolution = 128
+points = 804464
+edges = 12955536
+seconds = 18.504
+
+[topology_gate]
+# Reverses a standing assumption in docs/MESH_TO_FOAM.md, which treated Qhull
+# as the escape hatch for asset-sized clouds.
+finding = "with the lattice degeneracy removed, the pure-Rust exact builder is 2.2x faster than Qhull at every measured size"
+exact_vs_qhull_ratio_at_128 = 2.2
+site_counts = "identical for both backends; only the adjacency differs"
+selection = "exact remains the default; qhull stays available behind --features qhull for cross-checking"
+caveat = "measured on one 2,076-triangle asset up to 804k sites; the crossover on larger or differently distributed inputs is untested"
+
+# ---------------------------------------------------------------------------
+# Rendered-image quality.
+#
+# The reference is the source triangle mesh itself, ray traced through Blade's
+# acceleration structures by `MeshReferenceTracer` — not an approximation. The
+# candidate is the converted cloud through the ordinary viewer backend. Same
+# camera convention, same output format, same shading model, so the difference
+# is the representation.
+#
+#   cargo run --release -p blade-volume-test --bin convert_quality -- \
+#       --kind gaussian --resolutions 16,24,32,48,64 --views 8 --size 256
+[quality]
+reference = "MeshReferenceTracer, hardware ray tracing of the glTF triangles"
+views = 8
+render_size = 256
+metric = "PSNR over RGB, composited on black"
+
+# Monotone and still climbing: the metric responds to sampling rate as a
+# quality metric should.
+[[quality.gaussian]]
+resolution = 16
+points = 3376
+psnr = 14.04
+worst_view_psnr = 13.50
+
+[[quality.gaussian]]
+resolution = 24
+points = 7049
+psnr = 16.38
+worst_view_psnr = 15.86
+
+[[quality.gaussian]]
+resolution = 32
+points = 14784
+psnr = 17.87
+worst_view_psnr = 17.48
+
+[[quality.gaussian]]
+resolution = 48
+points = 42728
+psnr = 19.83
+worst_view_psnr = 19.18
+
+[[quality.gaussian]]
+resolution = 64
+points = 104942
+psnr = 20.77
+worst_view_psnr = 20.35
+
+# RadFoam was unrenderable from an external camera before the exterior fill;
+# these are with it, at the selected 0.1 rate and 4 views.
+[[quality.radfoam]]
+resolution = 24
+points = 9435
+psnr = 12.19
+
+[[quality.radfoam]]
+resolution = 48
+points = 62538
+psnr = 12.63
+
+[[quality.radfoam]]
+resolution = 64
+points = 152104
+psnr = 12.92
+
+[[quality.radfoam]]
+resolution = 96
+points = 494475
+psnr = 12.85
+
+# Two representation bugs the metric exposed immediately. Neither was visible
+# to any structural check, which is why cost-only benchmarking had missed them.
+[quality.exterior_fog_defect]
+status = "fixed"
+symptom = "object-centric RadFoam rendered as an opaque white smear from any external camera; PSNR ~5 dB and flat or declining with resolution"
+cause = "a Voronoi diagram built only from surface and interior sites gives every point of empty space to an unbounded cell owned by an opaque surface site"
+why_training_never_saw_it = "optimisation drives background cells to near-zero density; a converted asset has no such stage"
+fix = "ConvertOptions::exterior_density_scale seeds zero-density cells in padded space outside the mesh"
+psnr_before = 5.01
+psnr_after = 13.90
+note = "before/after at resolution 48, 8 views, at the original sparse 0.002 fill"
+
+[quality.density_semantics_defect]
+status = "fixed"
+symptom = "converted RadFoam objects were washed out, and coverage depended on the sampling rate"
+cause = "point.w is alpha for Gaussian splatting but a density per unit length for RadFoam, which integrates alpha = 1 - exp(-w*dt); the converter stored the same number for both, so cells grew more transparent as they shrank"
+fix = "stored_density() solves for the density achieving the requested opacity across one local cell"
+caveat = "this LOWERED measured PSNR at resolution 48 (13.90 -> 10.27 at the sparse fill) because it stops translucency from masking silhouette bloat; the fix is dimensionally correct and the bloat is addressed by a denser exterior fill"
+
+[quality.exterior_fill_gate]
+interval = "resolution 48, 4 views"
+rates = [0.002, 0.02, 0.1, 0.5, 1.0]
+psnr = [10.38, 12.06, 12.63, 13.00, 13.11]
+points = [43092, 46808, 62538, 139338, 240394]
+selection = "0.1 — the knee; beyond it point count grows far faster than the image improves"
+
+[quality.backend_selection]
+selected = "gaussian"
+rationale = "20.77 dB and still climbing with sampling rate, versus a ~13 dB RadFoam plateau at comparable point counts; splatting also has no analogue of the exterior-fog or density-semantics failure modes, since a splat carries its own finite support and alpha"
+scope = "the offline conversion path for the first interactive prototype; the trained-from-photographs track stays on RadFoam, where optimisation supplies the learned background density and per-cell opacity that conversion cannot"
+revisit_when = "surface sample distribution improves, since that is what the RadFoam ceiling is made of"
+
+[quality.open_gap]
+finding = "RadFoam saturates near 13 dB while Gaussian climbs past 20 dB at comparable point counts"
+evidence = "RadFoam gains only +0.66 dB from resolution 24 to 96 (12.19 -> 12.85) while quadrupling points; Gaussian gains +6.73 dB over 16 -> 64"
+diagnosis = "residual error is surface speckle, not silhouette or transparency: random barycentric samples give an incoherent set of opaque cells rather than a coherent surface"
+next = "surface-aware sample distribution (blue noise or a true bounded CVT) is now testable against this metric rather than argued from first principles"

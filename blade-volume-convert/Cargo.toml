@@ -6,6 +6,11 @@ description = "Offline glTF to point-cloud conversion for blade-volume"
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Delaunay via Qhull. The pure-Rust builder is exact but not scalable much
+# past ~100k sites; Qhull is what makes asset-sized clouds practical.
+qhull = ["blade-volume/qhull"]
+
 [dependencies]
 blade-volume = { path = "../blade-volume" }
 glam.workspace = true
