@@ -541,6 +541,9 @@ pub struct Sample {
     pub roughness: f32,
     /// Direction from the surface back towards the camera.
     pub view: glam::Vec3,
+    /// Where the surface is in the world, so observations of the same point
+    /// from different cameras can be recognised as such.
+    pub position: glam::Vec3,
     /// Which view this came from, and where in it, so a prediction can be put
     /// back into image space to be looked at.
     pub view_index: usize,
@@ -588,6 +591,9 @@ pub fn gather_samples(dataset: &Dataset) -> Result<Vec<Sample>, String> {
             // flipped vertically, matching `get_ray_direction_at`.
             let local = glam::Vec3::new(ndc.x * tan_half_x, -ndc.y * tan_half_y, -1.0);
             let direction = (view.orientation * local).normalize();
+            // The generator stores distance along the ray rather than a
+            // projected depth, so the world position is the ray walked out.
+            let position = view.position + direction * geometry[pixel][3];
             samples.push(Sample {
                 view_index: view.index,
                 pixel,
@@ -599,6 +605,7 @@ pub fn gather_samples(dataset: &Dataset) -> Result<Vec<Sample>, String> {
                 },
                 roughness: material[pixel][3],
                 view: -direction,
+                position,
                 radiance: radiance
                     .iter()
                     .map(|plane| [plane[pixel][0], plane[pixel][1], plane[pixel][2]])
@@ -634,6 +641,303 @@ pub fn solve_albedo(sample: &Sample, lights: &[(usize, Irradiance)]) -> [f32; 3]
         };
     }
     albedo
+}
+
+// ------------------------------------------------------------------- elements
+
+/// A patch of surface, and every pixel that ever landed on it.
+///
+/// The per-pixel fit solves each observation on its own, so a surface point is
+/// only ever seen once per environment and the specular lobe is
+/// indistinguishable from a brighter albedo. Gathering the views that saw the
+/// same point is what makes the two separable: the diffuse part is the same
+/// from every direction and the lobe is not, so disagreement between views is
+/// the signal that says how much of the radiance was which.
+pub struct Element {
+    /// Indices into the sample list, all landing on this patch.
+    pub samples: Vec<u32>,
+    pub albedo: [f32; 3],
+    pub specular_f0: [f32; 3],
+    pub roughness: f32,
+}
+
+/// Group samples that share a voxel of world space.
+///
+/// Voxels rather than a nearest-neighbour merge: a surface point is defined
+/// here by where it is, and two cameras that disagree by less than the voxel
+/// are looking at the same thing for our purposes. The size is the usual
+/// trade — too large and distinct materials get averaged together, too small
+/// and each element is seen once and nothing has been fused.
+pub fn build_elements(samples: &[Sample], voxel: f32) -> Vec<Element> {
+    use std::collections::HashMap;
+    let mut by_cell: HashMap<[i32; 3], usize> = HashMap::new();
+    let mut elements: Vec<Element> = Vec::new();
+    let inverse = 1.0 / voxel.max(1e-6);
+    for (index, sample) in samples.iter().enumerate() {
+        let cell = [
+            (sample.position.x * inverse).floor() as i32,
+            (sample.position.y * inverse).floor() as i32,
+            (sample.position.z * inverse).floor() as i32,
+        ];
+        let slot = *by_cell.entry(cell).or_insert_with(|| {
+            elements.push(Element {
+                samples: Vec::new(),
+                // A mid grey dielectric, so the fit starts somewhere neutral
+                // rather than at the answer.
+                albedo: [0.5; 3],
+                specular_f0: [0.04; 3],
+                roughness: 0.5,
+            });
+            elements.len() - 1
+        });
+        elements[slot].samples.push(index as u32);
+    }
+    elements
+}
+
+/// Seed every element's reflectance and roughness from the truth.
+///
+/// For the comparison against the per-pixel fit, which was handed both: frozen
+/// at a neutral guess they would be plain wrong, and the resulting numbers
+/// would say nothing about fusing views.
+pub fn seed_elements_from_truth(elements: &mut [Element], samples: &[Sample]) {
+    for element in elements.iter_mut() {
+        let mut specular_f0 = [0.0f32; 3];
+        let mut roughness = 0.0f32;
+        for &index in &element.samples {
+            let sample = &samples[index as usize];
+            for (total, value) in specular_f0.iter_mut().zip(sample.specular_f0) {
+                *total += value;
+            }
+            roughness += sample.roughness;
+        }
+        let count = element.samples.len().max(1) as f32;
+        for (target, total) in element.specular_f0.iter_mut().zip(specular_f0) {
+            *target = total / count;
+        }
+        element.roughness = roughness / count;
+    }
+}
+
+/// Predicted radiance for one observation under one environment.
+pub fn predict(
+    sample: &Sample,
+    albedo: [f32; 3],
+    specular_f0: [f32; 3],
+    roughness: f32,
+    irradiance: &Irradiance,
+    specular: &SpecularEnvironment,
+) -> [f32; 3] {
+    let shade = irradiance.shade(sample.normal);
+    let n_dot_v = sample.normal.dot(sample.view);
+    let mut out = [
+        albedo[0] * shade[0],
+        albedo[1] * shade[1],
+        albedo[2] * shade[2],
+    ];
+    if n_dot_v > 0.0 {
+        let reflection = (2.0 * n_dot_v * sample.normal - sample.view).normalize();
+        let prefiltered = specular.sample(reflection, roughness);
+        let scale = specular_scale(specular_f0, roughness, n_dot_v);
+        for channel in 0..3 {
+            out[channel] += prefiltered[channel] * scale[channel];
+        }
+    }
+    out
+}
+
+/// Adam, with the moments kept alongside the parameter they belong to.
+#[derive(Clone, Copy, Default)]
+struct Moment {
+    first: f32,
+    second: f32,
+}
+
+impl Moment {
+    fn step(&mut self, gradient: f32, rate: f32, iteration: i32) -> f32 {
+        const BETA1: f32 = 0.9;
+        const BETA2: f32 = 0.999;
+        self.first = BETA1 * self.first + (1.0 - BETA1) * gradient;
+        self.second = BETA2 * self.second + (1.0 - BETA2) * gradient * gradient;
+        let corrected_first = self.first / (1.0 - BETA1.powi(iteration));
+        let corrected_second = self.second / (1.0 - BETA2.powi(iteration));
+        rate * corrected_first / (corrected_second.sqrt() + 1e-8)
+    }
+}
+
+/// What the joint fit is allowed to move.
+#[derive(Clone, Copy)]
+pub struct JointConfig {
+    pub iterations: usize,
+    pub albedo_rate: f32,
+    pub specular_rate: f32,
+    pub roughness_rate: f32,
+    /// Let the reflectance move. Off holds it at whatever it started as.
+    pub fit_specular: bool,
+    /// Let the roughness move.
+    pub fit_roughness: bool,
+}
+
+impl Default for JointConfig {
+    fn default() -> Self {
+        Self {
+            iterations: 120,
+            albedo_rate: 0.02,
+            specular_rate: 0.01,
+            roughness_rate: 0.02,
+            fit_specular: true,
+            fit_roughness: true,
+        }
+    }
+}
+
+/// Fit every element against all of its observations at once.
+///
+/// Albedo and reflectance enter the prediction linearly, so their gradients are
+/// exact. Roughness does not — it moves the prefiltered lookup and the BRDF
+/// term together — so it takes a central difference, which is one extra pair of
+/// evaluations for a single parameter.
+pub fn optimize_elements(
+    elements: &mut [Element],
+    samples: &[Sample],
+    environments: &[usize],
+    irradiance: &[Irradiance],
+    specular: &[SpecularEnvironment],
+    config: JointConfig,
+) -> Vec<f64> {
+    const ROUGHNESS_EPSILON: f32 = 0.02;
+    let mut history = Vec::with_capacity(config.iterations);
+
+    for element in elements.iter_mut() {
+        let mut albedo_moments = [Moment::default(); 3];
+        let mut specular_moments = [Moment::default(); 3];
+        let mut roughness_moment = Moment::default();
+
+        for iteration in 1..=config.iterations as i32 {
+            let mut albedo_gradient = [0.0f32; 3];
+            let mut specular_gradient = [0.0f32; 3];
+            let mut roughness_gradient = 0.0f32;
+            let mut count = 0.0f32;
+
+            for &index in &element.samples {
+                let sample = &samples[index as usize];
+                let n_dot_v = sample.normal.dot(sample.view);
+                for &environment in environments {
+                    let shade = irradiance[environment].shade(sample.normal);
+                    let predicted = predict(
+                        sample,
+                        element.albedo,
+                        element.specular_f0,
+                        element.roughness,
+                        &irradiance[environment],
+                        &specular[environment],
+                    );
+                    let observed = sample.radiance[environment];
+                    let mut residual = [0.0f32; 3];
+                    for channel in 0..3 {
+                        residual[channel] = predicted[channel] - observed[channel];
+                    }
+
+                    for channel in 0..3 {
+                        albedo_gradient[channel] += residual[channel] * shade[channel];
+                    }
+                    if (config.fit_specular || config.fit_roughness) && n_dot_v > 0.0 {
+                        let reflection = (2.0 * n_dot_v * sample.normal - sample.view).normalize();
+                        let prefiltered =
+                            specular[environment].sample(reflection, element.roughness);
+                        // d(F0 * scale + bias) / d(F0) is the scale alone.
+                        let unit = specular_scale([1.0; 3], element.roughness, n_dot_v);
+                        let zero = specular_scale([0.0; 3], element.roughness, n_dot_v);
+                        for channel in 0..3 {
+                            specular_gradient[channel] += residual[channel]
+                                * prefiltered[channel]
+                                * (unit[channel] - zero[channel]);
+                        }
+
+                        let mut difference = 0.0f32;
+                        for direction in [-1.0f32, 1.0] {
+                            let shifted =
+                                (element.roughness + direction * ROUGHNESS_EPSILON).clamp(0.0, 1.0);
+                            let nudged = predict(
+                                sample,
+                                element.albedo,
+                                element.specular_f0,
+                                shifted,
+                                &irradiance[environment],
+                                &specular[environment],
+                            );
+                            for channel in 0..3 {
+                                difference += direction * residual[channel] * nudged[channel];
+                            }
+                        }
+                        roughness_gradient += difference / (2.0 * ROUGHNESS_EPSILON);
+                    }
+                    count += 1.0;
+                }
+            }
+
+            if count == 0.0 {
+                break;
+            }
+            let normalise = 1.0 / count;
+            for channel in 0..3 {
+                element.albedo[channel] = (element.albedo[channel]
+                    - albedo_moments[channel].step(
+                        albedo_gradient[channel] * normalise,
+                        config.albedo_rate,
+                        iteration,
+                    ))
+                .clamp(0.0, 1.0);
+            }
+            if config.fit_specular {
+                for channel in 0..3 {
+                    element.specular_f0[channel] = (element.specular_f0[channel]
+                        - specular_moments[channel].step(
+                            specular_gradient[channel] * normalise,
+                            config.specular_rate,
+                            iteration,
+                        ))
+                    .clamp(0.0, 1.0);
+                }
+            }
+            if config.fit_roughness {
+                element.roughness = (element.roughness
+                    - roughness_moment.step(
+                        roughness_gradient * normalise,
+                        config.roughness_rate,
+                        iteration,
+                    ))
+                .clamp(0.02, 1.0);
+            }
+        }
+    }
+
+    // One final pass for the loss, so the number reported is the one the
+    // parameters actually produce rather than the one before the last step.
+    let mut total = 0.0f64;
+    let mut count = 0usize;
+    for element in elements.iter() {
+        for &index in &element.samples {
+            let sample = &samples[index as usize];
+            for &environment in environments {
+                let predicted = predict(
+                    sample,
+                    element.albedo,
+                    element.specular_f0,
+                    element.roughness,
+                    &irradiance[environment],
+                    &specular[environment],
+                );
+                for (value, observed) in predicted.iter().zip(sample.radiance[environment]) {
+                    let difference = (value - observed) as f64;
+                    total += difference * difference;
+                    count += 1;
+                }
+            }
+        }
+    }
+    history.push(total / count.max(1) as f64);
+    history
 }
 
 /// A deterministic hash, so a perturbation sweep repeats exactly.
@@ -915,6 +1219,7 @@ mod tests {
             albedo_truth: truth,
             specular_f0: [0.0; 3],
             view: normal,
+            position: glam::Vec3::ZERO,
             roughness: 1.0,
             radiance: vec![[
                 truth[0] * shade[0],
