@@ -450,10 +450,10 @@ dependencies = [
 [[package]]
 name = "blade-egui"
 version = "0.8.1"
-source = "git+https://github.com/kvark/blade?rev=f724f6a9da89939de908ec434e65e86a9a789477#f724f6a9da89939de908ec434e65e86a9a789477"
+source = "git+https://github.com/kvark/blade?rev=675dc40115a2921c8169a61244971cc41f133a5a#675dc40115a2921c8169a61244971cc41f133a5a"
 dependencies = [
  "blade-graphics",
- "blade-macros 0.3.0 (git+https://github.com/kvark/blade?rev=f724f6a9da89939de908ec434e65e86a9a789477)",
+ "blade-macros 0.3.0 (git+https://github.com/kvark/blade?rev=675dc40115a2921c8169a61244971cc41f133a5a)",
  "blade-util",
  "bytemuck",
  "egui",
@@ -463,7 +463,7 @@ dependencies = [
 [[package]]
 name = "blade-graphics"
 version = "0.8.4"
-source = "git+https://github.com/kvark/blade?rev=f724f6a9da89939de908ec434e65e86a9a789477#f724f6a9da89939de908ec434e65e86a9a789477"
+source = "git+https://github.com/kvark/blade?rev=675dc40115a2921c8169a61244971cc41f133a5a#675dc40115a2921c8169a61244971cc41f133a5a"
 dependencies = [
  "ash",
  "ash-window",
@@ -510,7 +510,7 @@ dependencies = [
 [[package]]
 name = "blade-macros"
 version = "0.3.0"
-source = "git+https://github.com/kvark/blade?rev=f724f6a9da89939de908ec434e65e86a9a789477#f724f6a9da89939de908ec434e65e86a9a789477"
+source = "git+https://github.com/kvark/blade?rev=675dc40115a2921c8169a61244971cc41f133a5a#675dc40115a2921c8169a61244971cc41f133a5a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -520,7 +520,7 @@ dependencies = [
 [[package]]
 name = "blade-util"
 version = "0.4.1"
-source = "git+https://github.com/kvark/blade?rev=f724f6a9da89939de908ec434e65e86a9a789477#f724f6a9da89939de908ec434e65e86a9a789477"
+source = "git+https://github.com/kvark/blade?rev=675dc40115a2921c8169a61244971cc41f133a5a#675dc40115a2921c8169a61244971cc41f133a5a"
 dependencies = [
  "blade-graphics",
  "bytemuck",
@@ -2879,7 +2879,7 @@ dependencies = [
 [[package]]
 name = "meganeura"
 version = "0.2.0"
-source = "git+https://github.com/kvark/meganeura?rev=a2ce41c6113f6c016ba0de461d1d38f7f7b65f6b#a2ce41c6113f6c016ba0de461d1d38f7f7b65f6b"
+source = "git+https://github.com/kvark/meganeura?rev=d17d6234748259887cd6e89f565a8ffaf7446cc2#d17d6234748259887cd6e89f565a8ffaf7446cc2"
 dependencies = [
  "blade-graphics",
  "blade-macros 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
