@@ -52,6 +52,14 @@ struct Args {
     /// which view to write images of (default 6)
     #[argh(option, default = "6")]
     dump_view: usize,
+
+    /// world-space size of a fused surface element
+    #[argh(option, default = "0.08")]
+    voxel: f32,
+
+    /// joint optimiser iterations per element
+    #[argh(option, default = "120")]
+    iterations: usize,
 }
 
 /// The display transfer function, so linear radiance can be looked at.
@@ -456,6 +464,126 @@ fn main() {
         );
     }
 
+    // Everything above solves each pixel on its own, so a surface point is
+    // seen once per environment and a specular lobe is indistinguishable from
+    // a brighter albedo. Fusing the views that landed on the same point makes
+    // them separable, because the diffuse part is the same from every
+    // direction and the lobe is not.
+    {
+        let mut elements = train::relight::build_elements(&samples, args.voxel);
+        let observations: usize = elements.iter().map(|e| e.samples.len()).sum();
+        let multi = elements.iter().filter(|e| e.samples.len() > 1).count();
+        println!(
+            "\nfused {} samples into {} elements at {} world units: {:.1} views each, {:.0} % seen more than once",
+            observations,
+            elements.len(),
+            args.voxel,
+            observations as f64 / elements.len() as f64,
+            100.0 * multi as f64 / elements.len() as f64
+        );
+
+        println!(
+            "\n{:<34}{:>10}{:>10}{:>12}{:>12}",
+            "joint fit", "albedo", "rough", "held-out", "held-out"
+        );
+        println!(
+            "{:<34}{:>10}{:>10}{:>12}{:>12}",
+            "", "rmse", "rmse", "psnr", "dielectric"
+        );
+
+        // Freezing one at the truth at a time says which of the two the fit
+        // cannot identify, rather than only that it cannot identify both.
+        for (label, seed_truth, fit_specular, fit_roughness) in [
+            ("albedo only, true rough+F0", true, false, false),
+            ("albedo + roughness, true F0", true, false, true),
+            ("albedo + F0, true roughness", true, true, false),
+            ("albedo + roughness + F0", true, true, true),
+            ("all three, from a grey guess", false, true, true),
+        ] {
+            let mut fitted = train::relight::build_elements(&samples, args.voxel);
+            if seed_truth {
+                train::relight::seed_elements_from_truth(&mut fitted, &samples);
+            }
+            let config = train::relight::JointConfig {
+                iterations: args.iterations,
+                fit_specular,
+                fit_roughness,
+                ..Default::default()
+            };
+            train::relight::optimize_elements(
+                &mut fitted,
+                &samples,
+                &training,
+                &irradiance,
+                &specular,
+                config,
+            );
+
+            let mut albedo_error = train::relight::Accumulator::new();
+            let mut held_error = train::relight::Accumulator::new();
+            let mut held_dielectric = train::relight::Accumulator::new();
+            let mut roughness_squared = 0.0f64;
+            let mut roughness_count = 0usize;
+            // Roughness is only identifiable where the lobe is narrow enough
+            // to see. On a fully rough surface it barely changes the image, so
+            // pooling it with the rest says more about the floor than about
+            // whether the fit works.
+            let mut glossy_squared = 0.0f64;
+            let mut glossy_count = 0usize;
+            let mut metal_f0_squared = 0.0f64;
+            let mut metal_f0_count = 0usize;
+            for element in &fitted {
+                for &index in &element.samples {
+                    let sample = &samples[index as usize];
+                    albedo_error.add(element.albedo, sample.albedo_truth);
+                    let difference = (element.roughness - sample.roughness) as f64;
+                    roughness_squared += difference * difference;
+                    roughness_count += 1;
+                    if sample.roughness < 0.9 {
+                        glossy_squared += difference * difference;
+                        glossy_count += 1;
+                    }
+                    if sample.albedo_truth.iter().all(|c| *c <= args.metal_albedo) {
+                        for channel in 0..3 {
+                            let d =
+                                (element.specular_f0[channel] - sample.specular_f0[channel]) as f64;
+                            metal_f0_squared += d * d;
+                            metal_f0_count += 1;
+                        }
+                    }
+                    let predicted = train::relight::predict(
+                        sample,
+                        element.albedo,
+                        element.specular_f0,
+                        element.roughness,
+                        &irradiance[held_out],
+                        &specular[held_out],
+                    );
+                    held_error.add(predicted, sample.radiance[held_out]);
+                    if sample.albedo_truth.iter().any(|c| *c > args.metal_albedo) {
+                        held_dielectric.add(predicted, sample.radiance[held_out]);
+                    }
+                }
+            }
+            println!(
+                "{:<34}{:>10.4}{:>10.4}{:>12.2}{:>12.2}",
+                label,
+                albedo_error.rmse(),
+                (roughness_squared / roughness_count.max(1) as f64).sqrt(),
+                held_error.psnr(),
+                held_dielectric.psnr()
+            );
+            println!(
+                "{:<34}rough rmse on glossy only {:.4}, metal F0 rmse {:.4}",
+                "",
+                (glossy_squared / glossy_count.max(1) as f64).sqrt(),
+                (metal_f0_squared / metal_f0_count.max(1) as f64).sqrt(),
+            );
+            elements = fitted;
+        }
+        drop(elements);
+    }
+
     // How accurate does a reconstruction's geometry have to be? The bound above
     // is handed exact normals; a real primitive estimates them. Tilting every
     // normal by a fixed angle, and using the tilted one both to fit and to
@@ -482,6 +610,7 @@ fn main() {
                 specular_f0: sample.specular_f0,
                 roughness: sample.roughness,
                 view: sample.view,
+                position: sample.position,
                 radiance: sample.radiance.clone(),
             };
             let albedo = train::relight::solve_albedo_specular(&tilted, &lights, &specular);
