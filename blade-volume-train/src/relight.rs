@@ -541,6 +541,10 @@ pub struct Sample {
     pub roughness: f32,
     /// Direction from the surface back towards the camera.
     pub view: glam::Vec3,
+    /// Which view this came from, and where in it, so a prediction can be put
+    /// back into image space to be looked at.
+    pub view_index: usize,
+    pub pixel: usize,
     /// Observed radiance per environment, in dataset order.
     pub radiance: Vec<[f32; 3]>,
 }
@@ -585,6 +589,8 @@ pub fn gather_samples(dataset: &Dataset) -> Result<Vec<Sample>, String> {
             let local = glam::Vec3::new(ndc.x * tan_half_x, -ndc.y * tan_half_y, -1.0);
             let direction = (view.orientation * local).normalize();
             samples.push(Sample {
+                view_index: view.index,
+                pixel,
                 normal: normal.normalize(),
                 albedo_truth: [material[pixel][0], material[pixel][1], material[pixel][2]],
                 specular_f0: match specular {
@@ -903,6 +909,8 @@ mod tests {
         let truth = [0.7f32, 0.35, 0.15];
         let shade = irradiance.shade(normal);
         let sample = Sample {
+            view_index: 0,
+            pixel: 0,
             normal,
             albedo_truth: truth,
             specular_f0: [0.0; 3],
