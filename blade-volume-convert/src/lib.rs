@@ -3,16 +3,62 @@ use std::path;
 
 const SH_C0: f32 = 0.282_094_8;
 
+/// Interior jitter applied to triangulated output when none is requested.
+///
+/// Measured on `police.glb` at resolution 128 (804,464 points): an exact
+/// lattice makes the pure-Rust Delaunay take 30.9s and disagree with Qhull on
+/// 15.6% of edges, because a cospherical site set has no unique triangulation.
+/// Half a sub-cell brings that to 8.4s and 3.9%.
+pub const DEFAULT_INTERIOR_JITTER: f32 = 0.5;
+
+/// Exterior fill rate for triangulated output when none is requested, relative
+/// to [`ConvertOptions::density`].
+///
+/// Exterior sites do not resolve detail, but they do pin the silhouette: a
+/// surface cell extends outward until it meets another site, so a fill that is
+/// too sparse inflates the object's outline. Measured against the mesh on
+/// `police.glb` at resolution 48 (rendered PSNR / total points):
+/// 0.002 -> 10.38 dB / 43k, 0.02 -> 12.06 / 47k, **0.1 -> 12.63 / 63k**,
+/// 0.5 -> 13.00 / 139k, 1.0 -> 13.11 / 240k. 0.1 is the knee — beyond it the
+/// point count grows far faster than the image improves.
+///
+/// See [`ConvertOptions::exterior_density_scale`] for why this is not optional
+/// in practice for RadFoam.
+pub const DEFAULT_EXTERIOR_DENSITY_SCALE: f32 = 0.1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputKind {
     Gaussian,
     RadFoam,
 }
 
+/// Which Delaunay builder produces the unweighted RadFoam adjacency.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Topology {
+    /// Pure-Rust exact construction. Dependency free and exact, but its cost
+    /// grows steeply and it is not practical much past ~100k sites.
+    #[default]
+    Exact,
+    /// Qhull. Requires building with the `qhull` feature; converting a
+    /// asset-sized cloud without it is impractically slow.
+    Qhull,
+}
+
 #[derive(Clone, Debug)]
 pub struct ConvertOptions {
     pub output: OutputKind,
+    /// Samples per cubic world unit. The interior grid spacing is
+    /// `density^(-1/3)` and the surface budget is `density^(2/3)` samples per
+    /// square world unit, so a single length scale drives both. Because it is
+    /// absolute, the same value gives wildly different point counts for assets
+    /// authored in different units; prefer [`ConvertOptions::resolution`] when
+    /// the asset's scale is not under your control.
     pub density: f32,
+    /// Scale-invariant alternative to [`ConvertOptions::density`]: the number
+    /// of grid cells across the bounding-box diagonal. When `Some`, `density`
+    /// is derived per asset as `(resolution / diagonal)^3` and the field's own
+    /// value is ignored.
+    pub resolution: Option<f32>,
     pub surface_density_scale: f32,
     pub interior_density_scale: f32,
     pub alpha_threshold: f32,
@@ -40,6 +86,40 @@ pub struct ConvertOptions {
     pub assign_radii: bool,
     /// Multiplier for [`vol::radii_from_nearest_neighbour`].
     pub radius_factor: f32,
+    /// Delaunay builder for the RadFoam adjacency. Ignored by the Gaussian
+    /// output, and by the Čech rebuild that follows radius assignment.
+    pub topology: Topology,
+    /// Zero-density samples placed in the padded space *outside* the mesh, as
+    /// a fraction of [`ConvertOptions::density`]. `None` picks per output kind.
+    ///
+    /// This exists because adjacency-walk traversal integrates whatever cell a
+    /// ray is in, and a Voronoi diagram built only from surface and interior
+    /// sites gives every point of empty space to an *unbounded* cell owned by
+    /// an opaque surface site. A camera outside the object therefore looks
+    /// through opaque fog: object-centric RadFoam renders as a white smear
+    /// regardless of sampling rate. Trained scenes never show this because
+    /// optimisation drives background cells to near-zero density; a converted
+    /// asset has no such stage, so the transparent exterior must be built.
+    ///
+    /// Only affects [`OutputKind::RadFoam`]; Gaussian splatting has no cells
+    /// and ignores empty space already.
+    pub exterior_density_scale: Option<f32>,
+    /// How far the exterior fill extends beyond the mesh bounds, as a fraction
+    /// of the bounding-box diagonal.
+    pub exterior_padding: f32,
+    /// Random displacement applied to interior samples, as a fraction of the
+    /// sub-cell spacing. `Some(0.0)` places them on an exact lattice, which is
+    /// a degenerate (cospherical) configuration for Delaunay: the
+    /// triangulation is then not unique, different builders legitimately
+    /// return different adjacencies, and both take substantially longer. A
+    /// small jitter breaks the ties.
+    ///
+    /// `None` picks per output kind, because that is exactly where the
+    /// trade-off differs: [`OutputKind::RadFoam`] is triangulated and gets
+    /// [`DEFAULT_INTERIOR_JITTER`], while [`OutputKind::Gaussian`] builds no
+    /// adjacency, so jitter there buys nothing and measurably degrades the
+    /// render by scattering splats off their lattice.
+    pub interior_jitter: Option<f32>,
 }
 
 impl Default for ConvertOptions {
@@ -47,6 +127,7 @@ impl Default for ConvertOptions {
         Self {
             output: OutputKind::Gaussian,
             density: 10.0,
+            resolution: None,
             surface_density_scale: 1.0,
             interior_density_scale: 0.25,
             alpha_threshold: 0.01,
@@ -62,6 +143,10 @@ impl Default for ConvertOptions {
             spring_step: 0.3,
             assign_radii: false,
             radius_factor: 0.5,
+            topology: Topology::Exact,
+            exterior_density_scale: None,
+            exterior_padding: 0.35,
+            interior_jitter: None,
         }
     }
 }
@@ -75,6 +160,8 @@ pub enum ConvertError {
     UnsupportedPrimitiveMode,
     MissingOutputData,
     Adjacency(vol::AdjacencyError),
+    /// [`Topology::Qhull`] was requested from a build without the feature.
+    QhullUnavailable,
 }
 
 impl From<std::io::Error> for ConvertError {
@@ -302,11 +389,14 @@ struct Triangle {
     area: f32,
 }
 
-pub fn convert_gltf(
-    path: impl AsRef<path::Path>,
-    options: &ConvertOptions,
-) -> Result<vol::PointCloudModel, ConvertError> {
-    let (document, buffers, images) = gltf::import(path.as_ref())?;
+/// Walk the glTF default scene and collect world-space triangles plus the
+/// material table they index.
+///
+/// Shared by cloud conversion and reference-mesh extraction so that both see
+/// exactly the same geometry and materials — otherwise a render comparison
+/// between them would measure the discrepancy, not the representation.
+fn gather_scene(path: &path::Path) -> Result<(Vec<Triangle>, Vec<MaterialInfo>), ConvertError> {
+    let (document, buffers, images) = gltf::import(path)?;
     let mut materials = Vec::new();
 
     for material in document.materials() {
@@ -375,12 +465,74 @@ pub fn convert_gltf(
         return Err(ConvertError::MissingMeshData);
     }
 
-    let density = options.density;
-    if density <= 0.0 {
+    Ok((triangles, materials))
+}
+
+/// Extract the source mesh in the form the GPU reference renderer wants.
+///
+/// Colour is the converter's own per-sample colour function evaluated at each
+/// triangle's centroid, left in **linear light**: the renderer applies the
+/// ambient gain and the sRGB encode, mirroring [`display_color`]. That is
+/// exact for flat base-colour materials. For textured materials it is a
+/// per-triangle average, so a texture varying within one triangle is the one
+/// place the reference is an approximation rather than ground truth.
+pub fn reference_mesh_from_gltf(
+    path: impl AsRef<path::Path>,
+) -> Result<vol::ReferenceMesh, ConvertError> {
+    let (triangles, materials) = gather_scene(path.as_ref())?;
+
+    // The acceleration structure wants indexed geometry; conversion works on
+    // loose triangles, so emit three vertices each and keep the order aligned
+    // with `triangle_colors` (the shader indexes it by primitive index).
+    let mut positions = Vec::with_capacity(triangles.len() * 3);
+    let mut indices = Vec::with_capacity(triangles.len());
+    let mut triangle_colors = Vec::with_capacity(triangles.len());
+    for triangle in triangles.iter() {
+        let base = positions.len() as u32;
+        positions.push(triangle.v0.to_array());
+        positions.push(triangle.v1.to_array());
+        positions.push(triangle.v2.to_array());
+        indices.push([base, base + 1, base + 2]);
+        let third = 1.0 / 3.0;
+        let color =
+            sample_triangle_color(triangle, &materials[triangle.material], third, third, third);
+        triangle_colors.push(color.truncate().to_array());
+    }
+
+    Ok(vol::ReferenceMesh {
+        positions,
+        indices,
+        triangle_colors,
+    })
+}
+
+pub fn convert_gltf(
+    path: impl AsRef<path::Path>,
+    options: &ConvertOptions,
+) -> Result<vol::PointCloudModel, ConvertError> {
+    let (triangles, materials) = gather_scene(path.as_ref())?;
+
+    let bbox = compute_bounds(&triangles);
+
+    // A scale-invariant request is resolved against this asset's own extent,
+    // so the same flags give comparable clouds for meshes authored in metres,
+    // centimetres, or arbitrary engine units.
+    let density = match options.resolution {
+        Some(resolution) => {
+            let diagonal = (bbox.max - bbox.min).length();
+            if resolution <= 0.0 || !diagonal.is_finite() || diagonal <= 0.0 {
+                return Err(ConvertError::InvalidDensity);
+            }
+            (resolution / diagonal).powi(3)
+        }
+        None => options.density,
+    };
+    // NaN fails `is_finite`, so it is rejected here rather than reaching the
+    // sampling loops as a silently empty grid.
+    if !density.is_finite() || density <= 0.0 {
         return Err(ConvertError::InvalidDensity);
     }
 
-    let bbox = compute_bounds(&triangles);
     let avg_color = compute_average_color(&triangles, &materials);
 
     let interior_density = density * options.interior_density_scale;
@@ -390,6 +542,20 @@ pub fn convert_gltf(
     let mut scales = Vec::new();
 
     if interior_density > 0.0 {
+        let inside = InsideTester::new(&triangles);
+        // Seeded separately from the surface sampler so that changing one
+        // stage's rate does not reshuffle the other's samples.
+        let mut interior_rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(
+            options.seed ^ 0x0117_e210_7ab0,
+        );
+        // Only the triangulated output benefits; see `DEFAULT_INTERIOR_JITTER`.
+        let jitter = options
+            .interior_jitter
+            .unwrap_or(match options.output {
+                OutputKind::RadFoam => DEFAULT_INTERIOR_JITTER,
+                OutputKind::Gaussian => 0.0,
+            })
+            .max(0.0);
         let spacing = interior_density.powf(-1.0 / 3.0);
         let sub_div = 3u32;
         let sub_spacing = spacing / sub_div as f32;
@@ -401,7 +567,7 @@ pub fn convert_gltf(
                 let mut x = start.x;
                 while x <= bbox.max.x {
                     let p = glam::Vec3::new(x, y, z);
-                    if is_point_inside_mesh(p, &triangles) {
+                    if inside.is_inside(p, &triangles) {
                         let color = display_color(avg_color, options.ambient);
                         let base = p - glam::Vec3::splat(0.5 * spacing);
                         let scale = sub_spacing * 0.5 * options.interior_scale;
@@ -416,7 +582,16 @@ pub fn convert_gltf(
                                         (iy as f32 + 0.5) * sub_spacing,
                                         (iz as f32 + 0.5) * sub_spacing,
                                     );
-                                    let sp = base + offset;
+                                    let mut sp = base + offset;
+                                    if jitter > 0.0 {
+                                        use rand::RngExt as _;
+                                        let amount = jitter * sub_spacing;
+                                        let mut axis = || {
+                                            let r: f32 = interior_rng.random();
+                                            (r - 0.5) * amount
+                                        };
+                                        sp += glam::Vec3::new(axis(), axis(), axis());
+                                    }
                                     push_point(
                                         &mut points,
                                         &mut sh_coefficients,
@@ -424,7 +599,11 @@ pub fn convert_gltf(
                                         &mut scales,
                                         sp,
                                         color,
-                                        options.interior_opacity,
+                                        stored_density(
+                                            options.interior_opacity,
+                                            sub_spacing,
+                                            options.output,
+                                        ),
                                         scale,
                                         None,
                                         options,
@@ -435,6 +614,54 @@ pub fn convert_gltf(
                             }
                             iz += 1;
                         }
+                    }
+                    x += spacing;
+                }
+                y += spacing;
+            }
+            z += spacing;
+        }
+    }
+
+    // Transparent cells for the space around the object. Without these, every
+    // exterior point belongs to an unbounded cell owned by an opaque surface
+    // site and the object cannot be viewed from outside at all — see
+    // `ConvertOptions::exterior_density_scale`.
+    let exterior_density = density
+        * options
+            .exterior_density_scale
+            .unwrap_or(match options.output {
+                OutputKind::RadFoam => DEFAULT_EXTERIOR_DENSITY_SCALE,
+                OutputKind::Gaussian => 0.0,
+            });
+    if exterior_density > 0.0 {
+        let inside = InsideTester::new(&triangles);
+        let spacing = exterior_density.powf(-1.0 / 3.0);
+        let padding = (bbox.max - bbox.min).length() * options.exterior_padding.max(0.0);
+        let lo = bbox.min - glam::Vec3::splat(padding);
+        let hi = bbox.max + glam::Vec3::splat(padding);
+        let mut z = lo.z + 0.5 * spacing;
+        while z <= hi.z {
+            let mut y = lo.y + 0.5 * spacing;
+            while y <= hi.y {
+                let mut x = lo.x + 0.5 * spacing;
+                while x <= hi.x {
+                    let p = glam::Vec3::new(x, y, z);
+                    // Only fill genuinely empty space; interior sampling owns
+                    // the inside, at its own much finer rate.
+                    if !inside.is_inside(p, &triangles) {
+                        push_point(
+                            &mut points,
+                            &mut sh_coefficients,
+                            &mut rotations,
+                            &mut scales,
+                            p,
+                            glam::Vec3::ZERO,
+                            0.0,
+                            spacing * 0.5,
+                            None,
+                            options,
+                        );
                     }
                     x += spacing;
                 }
@@ -479,7 +706,13 @@ pub fn convert_gltf(
                     &mut scales,
                     p,
                     color,
-                    options.surface_opacity * coverage,
+                    stored_density(
+                        options.surface_opacity * coverage,
+                        // Surface samples sit on a sheet; their characteristic
+                        // cell extent is the local sample spacing.
+                        local_surface_density.max(1e-12).powf(-0.5),
+                        options.output,
+                    ),
                     surface_point_scale(local_surface_density) * options.surface_scale,
                     Some(tri.normal),
                     options,
@@ -502,7 +735,13 @@ pub fn convert_gltf(
             model.transforms = Some(vol::Transforms { rotations, scales });
         }
         OutputKind::RadFoam => {
-            model.adjacency = Some(vol::try_compute_adjacency_default(&model.points)?);
+            model.adjacency = Some(match options.topology {
+                Topology::Exact => vol::try_compute_adjacency_default(&model.points)?,
+                #[cfg(feature = "qhull")]
+                Topology::Qhull => vol::compute_adjacency_qhull_default(&model.points),
+                #[cfg(not(feature = "qhull"))]
+                Topology::Qhull => return Err(ConvertError::QhullUnavailable),
+            });
             if options.spring_iterations > 0 {
                 vol::spring_relax(&mut model, options.spring_iterations, options.spring_step);
             }
@@ -721,29 +960,191 @@ fn compute_average_color(triangles: &[Triangle], materials: &[MaterialInfo]) -> 
     }
 }
 
-fn is_point_inside_mesh(point: glam::Vec3, triangles: &[Triangle]) -> bool {
-    const RAYS: [glam::Vec3; 3] = [
-        glam::Vec3::new(0.321, 0.571, 0.755),
-        glam::Vec3::new(-0.742, 0.201, 0.639),
-        glam::Vec3::new(0.189, -0.911, 0.367),
-    ];
+/// Oblique parity directions. Three independent casts with a majority vote
+/// tolerate the occasional degenerate hit; the directions are deliberately not
+/// axis aligned, because axis-aligned geometry makes axis-aligned rays graze
+/// shared edges and coplanar faces far more often.
+const INSIDE_RAYS: [glam::Vec3; 3] = [
+    glam::Vec3::new(0.321, 0.571, 0.755),
+    glam::Vec3::new(-0.742, 0.201, 0.639),
+    glam::Vec3::new(0.189, -0.911, 0.367),
+];
 
-    let mut odd_hits = 0u32;
-    for ray_dir in &RAYS {
-        let dir = ray_dir.normalize();
-        let origin = point + dir * 1e-4;
-        let mut hits = 0u32;
-        for tri in triangles {
-            if ray_intersects_triangle(origin, dir, tri) {
-                hits += 1;
+/// Triangles bucketed by their footprint on the plane perpendicular to one
+/// parity direction, in CSR form.
+///
+/// A ray along that direction keeps a fixed position in the plane, so it can
+/// only hit triangles whose projected bounding box covers that position. The
+/// narrowing is therefore exact, not conservative-with-error: the same
+/// triangles pass the intersection test as in an exhaustive scan.
+struct DirectionIndex {
+    dir: glam::Vec3,
+    u: glam::Vec3,
+    v: glam::Vec3,
+    min: glam::Vec2,
+    inv_cell: glam::Vec2,
+    dims: [usize; 2],
+    offsets: Vec<u32>,
+    indices: Vec<u32>,
+}
+
+impl DirectionIndex {
+    fn new(dir: glam::Vec3, triangles: &[Triangle]) -> Self {
+        let dir = dir.normalize();
+        // Any orthonormal pair spanning the plane perpendicular to `dir`.
+        let helper = if dir.z.abs() < 0.9 {
+            glam::Vec3::Z
+        } else {
+            glam::Vec3::X
+        };
+        let u = dir.cross(helper).normalize();
+        let v = dir.cross(u);
+
+        // Roughly two triangles per cell keeps candidate lists short without
+        // the bucket array dominating memory.
+        let side = ((triangles.len() as f32 / 2.0).sqrt().ceil() as usize).clamp(1, 1024);
+        let dims = [side, side];
+
+        let project = |p: glam::Vec3| glam::Vec2::new(p.dot(u), p.dot(v));
+        let mut min = glam::Vec2::splat(f32::INFINITY);
+        let mut max = glam::Vec2::splat(f32::NEG_INFINITY);
+        let bounds = triangles
+            .iter()
+            .map(|tri| {
+                let (a, b, c) = (project(tri.v0), project(tri.v1), project(tri.v2));
+                let lo = a.min(b).min(c);
+                let hi = a.max(b).max(c);
+                min = min.min(lo);
+                max = max.max(hi);
+                (lo, hi)
+            })
+            .collect::<Vec<_>>();
+        if !min.is_finite() || !max.is_finite() {
+            min = glam::Vec2::ZERO;
+            max = glam::Vec2::ZERO;
+        }
+
+        // A degenerate axis would divide by zero; a single cell is correct
+        // there because every triangle projects onto the same position.
+        let extent = (max - min).max(glam::Vec2::splat(f32::MIN_POSITIVE));
+        let inv_cell = glam::Vec2::new(dims[0] as f32, dims[1] as f32) / extent;
+
+        let cell_range = |lo: glam::Vec2, hi: glam::Vec2| {
+            let to_cell = |value: f32, axis: usize| {
+                let scaled = (value - min[axis]) * inv_cell[axis];
+                (scaled.floor().max(0.0) as usize).min(dims[axis] - 1)
+            };
+            [
+                (to_cell(lo.x, 0), to_cell(hi.x, 0)),
+                (to_cell(lo.y, 1), to_cell(hi.y, 1)),
+            ]
+        };
+
+        // Count first, then fill: CSR without per-cell allocations.
+        let mut offsets = vec![0u32; dims[0] * dims[1] + 1];
+        for &(lo, hi) in bounds.iter() {
+            let [(x0, x1), (y0, y1)] = cell_range(lo, hi);
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    offsets[y * dims[0] + x + 1] += 1;
+                }
             }
         }
-        if hits % 2 == 1 {
-            odd_hits += 1;
+        for i in 1..offsets.len() {
+            offsets[i] += offsets[i - 1];
+        }
+        let mut cursor = offsets.clone();
+        let mut indices = vec![0u32; offsets[offsets.len() - 1] as usize];
+        for (ti, &(lo, hi)) in bounds.iter().enumerate() {
+            let [(x0, x1), (y0, y1)] = cell_range(lo, hi);
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let cell = y * dims[0] + x;
+                    indices[cursor[cell] as usize] = ti as u32;
+                    cursor[cell] += 1;
+                }
+            }
+        }
+
+        Self {
+            dir,
+            u,
+            v,
+            min,
+            inv_cell,
+            dims,
+            offsets,
+            indices,
         }
     }
 
-    odd_hits >= 2
+    /// Triangles a ray from `origin` along `self.dir` could possibly hit. A
+    /// point projecting outside the built extent has none.
+    fn candidates(&self, origin: glam::Vec3) -> &[u32] {
+        let projected = glam::Vec2::new(origin.dot(self.u), origin.dot(self.v));
+        let mut cell = [0usize; 2];
+        for axis in 0..2 {
+            let scaled = (projected[axis] - self.min[axis]) * self.inv_cell[axis];
+            // Rejects NaN as well as negatives, so the cast below cannot
+            // silently land in cell 0.
+            if !scaled.is_finite() || scaled < 0.0 {
+                return &[];
+            }
+            let slot = scaled.floor() as usize;
+            if slot >= self.dims[axis] {
+                // The upper boundary belongs to the last cell; anything beyond
+                // it is outside every triangle's footprint.
+                if slot > self.dims[axis] {
+                    return &[];
+                }
+                cell[axis] = self.dims[axis] - 1;
+            } else {
+                cell[axis] = slot;
+            }
+        }
+        let flat = cell[1] * self.dims[0] + cell[0];
+        let start = self.offsets[flat] as usize;
+        let end = self.offsets[flat + 1] as usize;
+        &self.indices[start..end]
+    }
+}
+
+/// Even-odd containment test against a closed mesh, accelerated by one
+/// projected index per parity direction.
+///
+/// Building the indices costs `O(triangles)`; each query then touches only the
+/// triangles sharing its cell, instead of the whole mesh. The exhaustive
+/// version made interior sampling `O(grid^3 * triangles)`, which dominated
+/// conversion so heavily that only toy assets finished.
+struct InsideTester {
+    indices: [DirectionIndex; 3],
+}
+
+impl InsideTester {
+    fn new(triangles: &[Triangle]) -> Self {
+        Self {
+            indices: INSIDE_RAYS.map(|dir| DirectionIndex::new(dir, triangles)),
+        }
+    }
+
+    fn is_inside(&self, point: glam::Vec3, triangles: &[Triangle]) -> bool {
+        let mut odd_hits = 0u32;
+        for index in self.indices.iter() {
+            let dir = index.dir;
+            let origin = point + dir * 1e-4;
+            let mut hits = 0u32;
+            for &ti in index.candidates(origin) {
+                if ray_intersects_triangle(origin, dir, &triangles[ti as usize]) {
+                    hits += 1;
+                }
+            }
+            if hits % 2 == 1 {
+                odd_hits += 1;
+            }
+        }
+
+        odd_hits >= 2
+    }
 }
 
 fn ray_intersects_triangle(origin: glam::Vec3, dir: glam::Vec3, tri: &Triangle) -> bool {
@@ -816,6 +1217,30 @@ fn material_alpha_coverage(material: &MaterialInfo, alpha: f32) -> f32 {
 
 fn surface_point_scale(surface_density: f32) -> f32 {
     0.5 / surface_density.sqrt()
+}
+
+/// Translate an alpha-like opacity knob into the value the target backend
+/// stores in `point.w`.
+///
+/// Gaussian splatting uses that field directly as alpha. RadFoam integrates
+/// `alpha = 1 - exp(-w * dt)` along the path, so `w` is a density per unit
+/// length: storing an alpha there makes coverage depend on cell size, and the
+/// object grows *more* transparent as sampling gets finer. Solving for the
+/// density that yields `opacity` across one cell removes that dependence.
+fn stored_density(opacity: f32, cell_size: f32, output: OutputKind) -> f32 {
+    match output {
+        OutputKind::Gaussian => opacity,
+        OutputKind::RadFoam => {
+            // Fully opaque would need infinite density; cap so a saturated
+            // request stays finite and well conditioned.
+            let alpha = opacity.clamp(0.0, 0.999);
+            if alpha <= 0.0 {
+                0.0
+            } else {
+                -(1.0 - alpha).ln() / cell_size.max(1e-6)
+            }
+        }
+    }
 }
 
 fn push_point(
@@ -2075,9 +2500,183 @@ mod tests {
             },
         ];
 
+        let tester = super::InsideTester::new(&triangles);
         let inside = glam::Vec3::new(0.1, 0.1, 0.1);
         let outside = glam::Vec3::new(1.5, 1.5, 1.5);
-        assert!(is_point_inside_mesh(inside, &triangles));
-        assert!(!is_point_inside_mesh(outside, &triangles));
+        assert!(tester.is_inside(inside, &triangles));
+        assert!(!tester.is_inside(outside, &triangles));
+    }
+
+    /// Exhaustive reference: the pre-index behaviour, kept only as a test
+    /// oracle. `InsideTester` must agree with it everywhere.
+    fn is_point_inside_mesh_exhaustive(point: glam::Vec3, triangles: &[super::Triangle]) -> bool {
+        let mut odd_hits = 0u32;
+        for ray_dir in super::INSIDE_RAYS.iter() {
+            let dir = ray_dir.normalize();
+            let origin = point + dir * 1e-4;
+            let mut hits = 0u32;
+            for tri in triangles.iter() {
+                if super::ray_intersects_triangle(origin, dir, tri) {
+                    hits += 1;
+                }
+            }
+            if hits % 2 == 1 {
+                odd_hits += 1;
+            }
+        }
+        odd_hits >= 2
+    }
+
+    fn unit_triangle(v0: glam::Vec3, v1: glam::Vec3, v2: glam::Vec3) -> super::Triangle {
+        super::Triangle {
+            v0,
+            v1,
+            v2,
+            uv0: glam::Vec2::ZERO,
+            uv1: glam::Vec2::ZERO,
+            uv2: glam::Vec2::ZERO,
+            color0: glam::Vec4::ONE,
+            color1: glam::Vec4::ONE,
+            color2: glam::Vec4::ONE,
+            normal: (v1 - v0).cross(v2 - v0).normalize_or_zero(),
+            material: 0,
+            area: 0.5 * (v1 - v0).cross(v2 - v0).length(),
+        }
+    }
+
+    /// Two disjoint axis-aligned boxes. The gap between them, the interiors,
+    /// and the surrounding space all have to classify identically with and
+    /// without the projected index — including points outside its extent.
+    fn two_box_mesh() -> Vec<super::Triangle> {
+        let mut triangles = Vec::new();
+        for offset in [glam::Vec3::ZERO, glam::Vec3::new(3.0, 0.0, 0.0)] {
+            let lo = offset;
+            let hi = offset + glam::Vec3::ONE;
+            let corner = |x: bool, y: bool, z: bool| {
+                glam::Vec3::new(
+                    if x { hi.x } else { lo.x },
+                    if y { hi.y } else { lo.y },
+                    if z { hi.z } else { lo.z },
+                )
+            };
+            // Six quads, two triangles each, consistent winding not required
+            // by an even-odd test.
+            let quads = [
+                [
+                    corner(false, false, false),
+                    corner(true, false, false),
+                    corner(true, true, false),
+                    corner(false, true, false),
+                ],
+                [
+                    corner(false, false, true),
+                    corner(true, false, true),
+                    corner(true, true, true),
+                    corner(false, true, true),
+                ],
+                [
+                    corner(false, false, false),
+                    corner(false, true, false),
+                    corner(false, true, true),
+                    corner(false, false, true),
+                ],
+                [
+                    corner(true, false, false),
+                    corner(true, true, false),
+                    corner(true, true, true),
+                    corner(true, false, true),
+                ],
+                [
+                    corner(false, false, false),
+                    corner(true, false, false),
+                    corner(true, false, true),
+                    corner(false, false, true),
+                ],
+                [
+                    corner(false, true, false),
+                    corner(true, true, false),
+                    corner(true, true, true),
+                    corner(false, true, true),
+                ],
+            ];
+            for quad in quads.iter() {
+                triangles.push(unit_triangle(quad[0], quad[1], quad[2]));
+                triangles.push(unit_triangle(quad[0], quad[2], quad[3]));
+            }
+        }
+        triangles
+    }
+
+    #[test]
+    fn projected_index_matches_an_exhaustive_scan() {
+        let triangles = two_box_mesh();
+        let tester = super::InsideTester::new(&triangles);
+
+        let mut inside_count = 0u32;
+        let mut outside_count = 0u32;
+        // Sweep well beyond the mesh so query points land outside the index
+        // extent too, where the candidate list must be empty rather than wrong.
+        let steps = 24;
+        for iz in 0..steps {
+            for iy in 0..steps {
+                for ix in 0..steps {
+                    let t = |i: i32| -1.0 + 6.0 * (i as f32 + 0.5) / steps as f32;
+                    let p = glam::Vec3::new(t(ix), t(iy), t(iz));
+                    let fast = tester.is_inside(p, &triangles);
+                    let slow = is_point_inside_mesh_exhaustive(p, &triangles);
+                    assert_eq!(fast, slow, "disagreement at {p:?}");
+                    if fast {
+                        inside_count += 1;
+                    } else {
+                        outside_count += 1;
+                    }
+                }
+            }
+        }
+        // Guard against a vacuous pass where nothing was ever classified inside.
+        assert!(inside_count > 0, "no interior samples were exercised");
+        assert!(outside_count > 0, "no exterior samples were exercised");
+    }
+
+    #[test]
+    fn interior_fill_is_scale_invariant_under_resolution() {
+        // The same asset at two scales must produce the same cloud size when
+        // the sampling rate is requested as a resolution rather than a density.
+        let base = two_box_mesh();
+        let scaled = base
+            .iter()
+            .map(|tri| unit_triangle(tri.v0 * 100.0, tri.v1 * 100.0, tri.v2 * 100.0))
+            .collect::<Vec<_>>();
+
+        let count_inside = |triangles: &[super::Triangle], resolution: f32| {
+            let bounds = super::compute_bounds(triangles);
+            let diagonal = (bounds.max - bounds.min).length();
+            let density = (resolution / diagonal).powi(3) * 0.25;
+            let spacing = density.powf(-1.0 / 3.0);
+            let tester = super::InsideTester::new(triangles);
+            let mut count = 0u32;
+            let start = bounds.min + glam::Vec3::splat(0.5 * spacing);
+            let mut z = start.z;
+            while z <= bounds.max.z {
+                let mut y = start.y;
+                while y <= bounds.max.y {
+                    let mut x = start.x;
+                    while x <= bounds.max.x {
+                        if tester.is_inside(glam::Vec3::new(x, y, z), triangles) {
+                            count += 1;
+                        }
+                        x += spacing;
+                    }
+                    y += spacing;
+                }
+                z += spacing;
+            }
+            count
+        };
+
+        let small = count_inside(&base, 24.0);
+        let large = count_inside(&scaled, 24.0);
+        assert!(small > 0, "expected a non-empty interior");
+        assert_eq!(small, large, "resolution sampling must not depend on units");
     }
 }

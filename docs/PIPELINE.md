@@ -262,6 +262,30 @@ documented there. Initial Power-Foam radii helper
 (`adjacency::radii_from_nearest_neighbour`) shipped — one-line upgrade
 from plain Voronoi to Power Foam for any mesh-derived cloud.
 
+Productionized since: every sampling, appearance, and topology option is
+exposed on the `convert` CLI (they were library-only and default-off before,
+so all command-line output was the plain baseline); `--resolution` gives a
+scale-invariant sampling rate for assets whose units you do not control; the
+interior parity test is indexed per parity direction, which cut sampling from
+42.6 s to 0.087 s at 804k points; `--topology qhull` selects the Qhull builder;
+and interior jitter breaks the lattice degeneracy that was making Delaunay
+both slow and ambiguous. `etc/convert_smoke.sh` runs the binary end to end in
+CI.
+
+Conversion quality is now measured, not asserted: `MeshReferenceTracer` ray
+traces the source triangles through Blade's acceleration structures, and
+`convert_quality` scores converted clouds against that reference at matched
+poses. Gaussian output climbs 14.04 → 20.77 dB across the resolution ladder.
+The metric immediately found two representation defects — opaque exterior fog
+that made object-centric RadFoam unviewable from outside, and an alpha stored
+where RadFoam expects a density — both fixed. The open item is RadFoam's ~13 dB
+ceiling, whose residual is surface-sampling speckle.
+
+On that evidence the **Gaussian backend is the target for the first interactive
+prototype**; see the backend-choice section in `docs/MESH_TO_FOAM.md`. This
+scopes the offline conversion path only — the trained-from-photographs track
+stays on RadFoam.
+
 ## Sequencing recommendation
 
 ```

@@ -19,13 +19,24 @@ are worth chasing.
    no default is declared), accumulate every triangle with world-space
    positions, UVs, normals, vertex colours, and its material index. The
    transform stack is applied as we walk.
-2. **Bounds + grid.** AABB of the gathered triangles → a uniform 3D grid at
-   `spacing = bound_diag / density^(1/3)` cells per side.
+2. **Bounds + grid.** AABB of the gathered triangles → a uniform 3D grid.
+   `--density` is *absolute*: spacing is `density^(-1/3)` world units, with no
+   bounding-box term, so the same value gives wildly different clouds for
+   assets authored in metres versus centimetres. `--resolution N` asks for `N`
+   cells across the bounding-box diagonal instead and is therefore scale
+   invariant; prefer it whenever the asset's units are not under your control.
+   `--spacing` states the world-unit spacing directly. All three resolve to the
+   single length scale that drives both the interior and surface budgets.
 3. **Interior sampling.** For each grid cell whose centre is *inside* the
    mesh (ray-cast intersection-count parity test against the gathered
    triangles), drop `interior_subdiv^3` jittered points carrying the
    mesh's average colour. The grid + subdivision keeps the interior cloud
-   uniform in volume.
+   uniform in volume. The parity test is accelerated by one triangle index per
+   parity direction, bucketed by footprint on the plane perpendicular to that
+   direction; the narrowing is exact, so results match an exhaustive scan.
+   `--interior-jitter` displaces each sample within its sub-cell: an exact
+   lattice is a cospherical, degenerate configuration for Delaunay, which both
+   slows the builder down and makes the resulting adjacency arbitrary.
 4. **Surface sampling.** Per triangle, pick seeded random barycentric points
    from an area budget, optionally redistributed toward high-curvature
    triangles. Base colour combines glTF texture transforms/wrap modes,
@@ -38,13 +49,41 @@ are worth chasing.
    can then run the explicitly named spring heuristic. Optional nearest-
    neighbour radii switch the output to PowerFoam and rebuild a Čech graph.
 
-Sampling is roughly proportional to the configured surface/volume budgets.
-Exact 3D Delaunay can have quadratic output and the pure-Rust implementation is
-not production-scalable at large site counts. On a small glTF the conversion
-finishes in seconds. The converter does not yet expose the training crate's
-isolated Qhull selection, so it remains a small-asset path until that explicit
-feature-controlled backend is wired. The output goes straight into
-`blade-volume-view` and renders without any training.
+Sampling is roughly proportional to the configured surface/volume budgets. The
+output goes straight into `blade-volume-view` and renders without any training.
+
+`--topology qhull` (needs `--features qhull`) selects the same Qhull builder the
+training crate uses. Note the measured result below: once interior jitter breaks
+the lattice degeneracy, the pure-Rust builder is the *faster* of the two at
+800k sites, so Qhull is an alternative rather than the scaling escape hatch this
+document previously assumed it would be.
+
+### Measured cost
+
+`police.glb` (2,076 triangles), single core, release build:
+
+| Stage | Before | After |
+| --- | ---: | ---: |
+| Sampling at resolution 128 (804,464 points) | 42.6 s | 0.087 s |
+| Exact Delaunay on that cloud, lattice interior | 30.9 s | — |
+| Exact Delaunay on that cloud, jittered interior | — | 8.4 s |
+| End-to-end RadFoam at resolution 128 | 42.9 s | 8.5 s |
+
+The interior parity test used to scan every triangle for every grid point,
+making it `O(grid^3 * triangles)` and 99.3% of runtime; the per-direction index
+removed that. What remains is dominated by Delaunay, so *that* is where the next
+scaling work belongs — not in the sampler.
+
+Interior jitter matters for more than speed. On the lattice, the exact and Qhull
+builders disagreed on 15.6% of edges, because a cospherical point set has no
+unique Delaunay triangulation. Half a sub-cell of jitter cuts the disagreement
+to 3.9% and makes the exact builder 3.7x faster.
+
+Jitter defaults *per output kind*, because that is where the trade-off differs.
+RadFoam is triangulated and gets it; Gaussian output builds no adjacency, so
+jitter buys nothing there and measurably degrades the render by scattering
+splats off their lattice (the reference image drops ~2.3 dB). `--interior-jitter`
+overrides either way.
 
 ## Why this works without snapshots
 
@@ -71,6 +110,12 @@ feature-controlled backend is wired. The output goes straight into
   the area sampler, but it is not blue-noise sampling or a surface-aware CVT.
   Delaunay-based Voronoi cells around badly distributed sites can still have
   long faces that produce visible traversal artefacts.
+- **RadFoam saturates far below Gaussian.** With the exterior fill and correct
+  density semantics in place, RadFoam reaches ~13 dB against the mesh and stops
+  improving (+0.66 dB from resolution 24 to 96), while Gaussian climbs past
+  20 dB and is still rising. The residual is surface speckle: random
+  barycentric samples give an incoherent set of opaque cells, not a coherent
+  surface. This is now the top open item, and it is measurable.
 - **Power-diagram radii are only an initial heuristic.** The converter can use
   scaled nearest-neighbour distance and rebuild Čech adjacency, but it does not
   infer radii from features or optimise them against rendered evidence.
@@ -127,19 +172,88 @@ ground-truth pixels. This *does* introduce 2D images, but only as a
 post-processing step on top of an already-good foam. Cheaper than
 training from scratch.
 
+## Measuring conversion quality
+
+The ground truth for a converted asset is the source mesh, and Blade traces
+triangles, so there is nothing analytic about it: `MeshReferenceTracer`
+(`blade-volume/src/gpu/mesh_reference.rs`) builds a BLAS/TLAS from the glTF
+triangles and ray traces them with the same camera convention, output format,
+and shading model the cloud backends use. Any difference in the rendered image
+is therefore the cost of the representation.
+
+```text
+cargo run --release -p blade-volume-test --bin convert_quality -- \
+    --kind gaussian --resolutions 16,24,32,48,64 --views 8 --size 256
+```
+
+| Resolution | Points | Gaussian PSNR |
+| ---: | ---: | ---: |
+| 16 | 3,376 | 14.04 dB |
+| 24 | 7,049 | 16.38 dB |
+| 32 | 14,784 | 17.87 dB |
+| 48 | 42,728 | 19.83 dB |
+| 64 | 104,942 | 20.77 dB |
+
+The metric immediately exposed two representation defects that no structural
+check could have caught, which is precisely why cost-only benchmarking missed
+them:
+
+1. **Opaque exterior fog.** An object-centric RadFoam cloud rendered as a white
+   smear from *any* external camera, ~5 dB and not improving with resolution.
+   A Voronoi diagram built only from surface and interior sites hands every
+   point of empty space to an unbounded cell owned by an opaque surface site.
+   Trained scenes never show this because optimisation drives background cells
+   to near-zero density; a converted asset has no such stage. Fixed by
+   `--exterior-density-scale`, which seeds zero-density cells around the mesh.
+   5.01 → 13.90 dB.
+2. **Alpha stored where a density belongs.** `point.w` is alpha for Gaussian
+   splatting, but RadFoam integrates `alpha = 1 - exp(-w·dt)`, so there it is a
+   density per unit length. The converter stored the same number for both,
+   making coverage depend on cell size — objects grew *more* transparent as
+   sampling got finer. Fixed by solving for the density that achieves the
+   requested opacity across one local cell. Note this *lowered* measured PSNR
+   at first, because translucency had been masking silhouette bloat; the fix is
+   dimensionally correct and the bloat is what the exterior fill addresses.
+
+Full ladders, the exterior-fill rate gate, and the defect records are in
+`benchmarks/mesh_conversion.toml`.
+
+## Backend choice for the first interactive prototype
+
+**Gaussian is the target.** The measurements above are the reason rather than a
+preference: at comparable point counts it reaches 20.77 dB against the source
+mesh and is still improving with sampling rate, while RadFoam plateaus near
+13 dB. It also sidesteps the two failure modes that only exist for a
+cell-based representation — empty space needing explicit transparent sites, and
+opacity being a density that has to track cell size. Neither has an analogue in
+splatting, where a splat carries its own finite support and alpha.
+
+That is a statement about the *conversion* path today, not about RadFoam as a
+representation: the trained-from-photographs track continues on RadFoam, where
+optimisation supplies exactly what conversion cannot (learned background
+density, learned per-cell opacity, sites placed by error rather than by a
+sampling heuristic). Revisit this once surface sample distribution improves,
+since that is what the RadFoam ceiling is made of.
+
 ## Recommendation
 
-For asset preview and offline mesh → point-cloud conversion, first benchmark
-the implemented curvature redistribution and optional nearest-neighbour
-PowerFoam initializer against the plain RadFoam baseline. Add signed-distance
-density or a true bounded CVT only when held-out render metrics identify
-density leakage or site distribution as the limiting error. None requires a
-polygonal runtime path, and training remains optional.
+Every knob described here is now reachable from the `convert` binary — they
+were previously library-only and defaulted off, so in practice every
+command-line conversion was the plain baseline. `etc/convert_smoke.sh` runs the
+binary end to end and is wired into CI alongside the crate's tests.
 
-(5) and (6) are interesting research-y extensions but cross a line —
-either we accept analytic mesh rendering as an intermediate (which the
-user explicitly wanted to avoid), or we keep things gradient-free and
-limit ourselves to SH degree 0.
+The next step is **surface sample distribution**, and it is now decidable by
+measurement rather than argument: RadFoam's residual error is speckle from
+random barycentric sampling, so blue-noise or a true bounded CVT (improvement 4)
+can be scored directly with `convert_quality`. Signed-distance density
+(improvement 3) is the natural follow-up if silhouettes remain the limit. None
+of this requires a polygonal runtime path, and training remains optional.
+
+(5) and (6) remain optional rather than blocked. Rendering the mesh is not the
+line this document once assumed it was: Blade traces triangles, and the
+reference renderer above already does it. What (5) and (6) add is *fitting*
+against those renders, which is a separate decision from having them — the
+quality metric needs only the renders, and stays gradient-free.
 
 ## Stretch idea: tetrahedralised mesh interiors
 

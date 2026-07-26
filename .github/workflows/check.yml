@@ -24,6 +24,28 @@ jobs:
       - name: Test all features
         run: cargo +stable test --workspace --all-features
 
+  convert:
+    name: Asset conversion
+    runs-on: ubuntu-latest
+    env:
+      BLADE_VOLUME_DISABLE_GPU: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      # The offline glTF path is the front door of the pipeline, so the shipped
+      # binary is exercised end to end, not just the library behind it. Both
+      # feature configurations are covered: the default pure-Rust Delaunay and
+      # the Qhull backend used for asset-sized clouds.
+      - name: Build converter (default features)
+        run: cargo +stable build --release -p blade-volume-convert
+      - name: Smoke test converter (default features)
+        run: etc/convert_smoke.sh
+      - name: Build converter (qhull)
+        run: cargo +stable build --release -p blade-volume-convert --features qhull
+      - name: Smoke test converter (qhull)
+        run: etc/convert_smoke.sh
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
