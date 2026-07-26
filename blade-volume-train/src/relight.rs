@@ -630,6 +630,41 @@ pub fn solve_albedo(sample: &Sample, lights: &[(usize, Irradiance)]) -> [f32; 3]
     albedo
 }
 
+/// A deterministic hash, so a perturbation sweep repeats exactly.
+fn hash_u32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^= x >> 16;
+    x
+}
+
+fn unit_float(seed: u32) -> f32 {
+    hash_u32(seed) as f32 / u32::MAX as f32
+}
+
+/// Tilt a normal by a fixed angle in a direction drawn from `seed`.
+///
+/// A reconstruction does not get the normals this dataset hands over, so how
+/// fast the bound falls away from them is what says how accurate a primitive's
+/// normals actually have to be.
+pub fn perturb_normal(normal: glam::Vec3, angle: f32, seed: u32) -> glam::Vec3 {
+    if angle <= 0.0 {
+        return normal;
+    }
+    let up = if normal.z.abs() < 0.9 {
+        glam::Vec3::Z
+    } else {
+        glam::Vec3::X
+    };
+    let tangent = up.cross(normal).normalize();
+    let bitangent = normal.cross(tangent);
+    let phi = 2.0 * std::f32::consts::PI * unit_float(seed);
+    let axis = tangent * phi.cos() + bitangent * phi.sin();
+    (normal * angle.cos() + axis * angle.sin()).normalize()
+}
+
 /// Least-squares albedo with the specular lobe accounted for.
 ///
 /// The lobe does not depend on the albedo, so subtracting it leaves the same
