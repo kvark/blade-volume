@@ -237,7 +237,11 @@ impl Dataset {
                 },
                 "[[environment]]" => match key {
                     "name" => *environments.last_mut().unwrap() = unquote(value),
-                    "file" => *environment_files.last_mut().unwrap() = root.join(unquote(value)),
+                    // `file` is what older datasets called the 8-bit map;
+                    // `radiance` is the float one that replaced it.
+                    "file" | "radiance" => {
+                        *environment_files.last_mut().unwrap() = root.join(unquote(value))
+                    }
                     _ => {}
                 },
                 "[[view]]" => {
@@ -326,7 +330,7 @@ impl Dataset {
     pub fn environment_specular(&self) -> Result<Vec<SpecularEnvironment>, String> {
         let mut out = Vec::with_capacity(self.environment_files.len());
         for file in &self.environment_files {
-            let (texels, width, height) = read_png_linear(file)?;
+            let (texels, width, height) = read_environment(file)?;
             out.push(SpecularEnvironment::prefilter(&texels, width, height));
         }
         Ok(out)
@@ -339,15 +343,43 @@ impl Dataset {
     pub fn environment_irradiance(&self) -> Result<Vec<Irradiance>, String> {
         let mut out = Vec::with_capacity(self.environment_files.len());
         for file in &self.environment_files {
-            let (texels, width, height) = read_png_linear(file)?;
+            let (texels, width, height) = read_environment(file)?;
             out.push(Irradiance::project(&texels, width, height));
         }
         Ok(out)
     }
 }
 
-/// Minimal reader for the 8-bit RGBA PNGs the generator writes for the maps.
-fn read_png_linear(path: &path::Path) -> Result<(Vec<[f32; 3]>, usize, usize), String> {
+/// Read an environment map as linear radiance.
+///
+/// A float plane when the generator wrote one, and an 8-bit PNG otherwise, so
+/// datasets made before the maps went floating point still load. The two are
+/// not equivalent: a sun a hundred times brighter than its sky survives only
+/// in the first, and that contrast is what a specular fit needs.
+fn read_environment(path: &path::Path) -> Result<(Vec<[f32; 3]>, usize, usize), String> {
+    if path.extension().and_then(|e| e.to_str()) == Some("f32") {
+        let bytes = fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let texel_count = bytes.len() / 16;
+        // Equirectangular maps are twice as wide as they are tall.
+        let height = ((texel_count / 2) as f64).sqrt().round() as usize;
+        let width = height * 2;
+        if width * height != texel_count {
+            return Err(format!(
+                "{} holds {texel_count} texels, which is not a 2:1 map",
+                path.display()
+            ));
+        }
+        let mut texels = Vec::with_capacity(texel_count);
+        for texel in bytes.chunks_exact(16) {
+            let mut rgb = [0.0f32; 3];
+            for (channel, chunk) in texel.chunks_exact(4).take(3).enumerate() {
+                rgb[channel] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            }
+            texels.push(rgb);
+        }
+        return Ok((texels, width, height));
+    }
+
     let decoded = image::open(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?
         .to_rgb8();
@@ -368,9 +400,13 @@ fn read_png_linear(path: &path::Path) -> Result<(Vec<[f32; 3]>, usize, usize), S
 // -------------------------------------------------------------------- specular
 
 /// Roughness levels the specular environment is prefiltered at.
-const SPECULAR_LEVELS: usize = 6;
+const SPECULAR_LEVELS: usize = 10;
 /// Equirectangular resolution of each prefiltered level.
-const SPECULAR_SIZE: (usize, usize) = (64, 32);
+///
+/// This has to resolve the source: a sun a few degrees across is sub-texel at
+/// 64x32, so the mirror end of the ladder smears it into a dim smudge and the
+/// model cannot render the very highlight that identifies a roughness.
+const SPECULAR_SIZE: (usize, usize) = (256, 128);
 
 /// The environment convolved with the GGX lobe at a ladder of roughnesses.
 ///
@@ -684,6 +720,40 @@ pub fn build_elements(samples: &[Sample], voxel: f32) -> Vec<Element> {
                 samples: Vec::new(),
                 // A mid grey dielectric, so the fit starts somewhere neutral
                 // rather than at the answer.
+                albedo: [0.5; 3],
+                specular_f0: [0.04; 3],
+                roughness: 0.5,
+            });
+            elements.len() - 1
+        });
+        elements[slot].samples.push(index as u32);
+    }
+    elements
+}
+
+/// Group samples by the material they were authored with, rather than by where
+/// they are.
+///
+/// An oracle grouping, and deliberately so. If a fit that pools every
+/// observation of one material still cannot recover its roughness, then the
+/// information is not in the data and no amount of clustering or prior will
+/// put it there. If it can, then what defeats the per-element fit is being
+/// asked to determine a BRDF from one patch of surface, and the answer is to
+/// share materials rather than to gather more views.
+pub fn build_material_groups(samples: &[Sample]) -> Vec<Element> {
+    use std::collections::HashMap;
+    let mut by_material: HashMap<[i32; 4], usize> = HashMap::new();
+    let mut elements: Vec<Element> = Vec::new();
+    for (index, sample) in samples.iter().enumerate() {
+        let key = [
+            (sample.roughness * 100.0).round() as i32,
+            (sample.specular_f0[0] * 100.0).round() as i32,
+            (sample.specular_f0[1] * 100.0).round() as i32,
+            (sample.specular_f0[2] * 100.0).round() as i32,
+        ];
+        let slot = *by_material.entry(key).or_insert_with(|| {
+            elements.push(Element {
+                samples: Vec::new(),
                 albedo: [0.5; 3],
                 specular_f0: [0.04; 3],
                 roughness: 0.5,

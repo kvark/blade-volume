@@ -482,6 +482,38 @@ fn main() {
             100.0 * multi as f64 / elements.len() as f64
         );
 
+        // Separating a lobe from a diffuse term relies on the same point being
+        // seen from directions far enough apart for the lobe to move between
+        // them. If the cameras all sit on a short arc, fusing them adds
+        // samples but not the angular leverage the separation needs.
+        let mut spreads: Vec<f32> = elements
+            .iter()
+            .filter(|e| e.samples.len() > 1)
+            .map(|element| {
+                let mut widest = 0.0f32;
+                for (i, &a) in element.samples.iter().enumerate() {
+                    for &b in &element.samples[i + 1..] {
+                        let angle = samples[a as usize]
+                            .view
+                            .dot(samples[b as usize].view)
+                            .clamp(-1.0, 1.0)
+                            .acos();
+                        widest = widest.max(angle);
+                    }
+                }
+                widest.to_degrees()
+            })
+            .collect();
+        spreads.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        if !spreads.is_empty() {
+            println!(
+                "widest view separation per element: median {:.1} deg, 90th {:.1} deg, max {:.1} deg",
+                spreads[spreads.len() / 2],
+                spreads[spreads.len() * 9 / 10],
+                spreads[spreads.len() - 1]
+            );
+        }
+
         println!(
             "\n{:<34}{:>10}{:>10}{:>12}{:>12}",
             "joint fit", "albedo", "rough", "held-out", "held-out"
@@ -582,6 +614,68 @@ fn main() {
             elements = fitted;
         }
         drop(elements);
+    }
+
+    // Pooling every observation of a material at once, which is more than any
+    // clustering could give a real solver, so it bounds what sharing could buy.
+    {
+        let mut groups = train::relight::build_material_groups(&samples);
+        println!(
+            "\npooling by true material: {} groups, {} samples each on average",
+            groups.len(),
+            samples.len() / groups.len().max(1)
+        );
+        train::relight::optimize_elements(
+            &mut groups,
+            &samples,
+            &training,
+            &irradiance,
+            &specular,
+            train::relight::JointConfig {
+                iterations: args.iterations.max(400),
+                ..Default::default()
+            },
+        );
+        let mut rough_squared = 0.0f64;
+        let mut rough_count = 0usize;
+        let mut f0_squared = 0.0f64;
+        let mut f0_count = 0usize;
+        println!(
+            "{:<10}{:>10}{:>10}{:>26}{:>26}",
+            "samples", "rough", "true", "F0 fitted", "F0 true"
+        );
+        for group in &groups {
+            let truth = &samples[group.samples[0] as usize];
+            if truth.roughness < 0.9 {
+                let d = (group.roughness - truth.roughness) as f64;
+                rough_squared += d * d;
+                rough_count += 1;
+            }
+            for channel in 0..3 {
+                let d = (group.specular_f0[channel] - truth.specular_f0[channel]) as f64;
+                f0_squared += d * d;
+                f0_count += 1;
+            }
+            println!(
+                "{:<10}{:>10.3}{:>10.3}{:>26}{:>26}",
+                group.samples.len(),
+                group.roughness,
+                truth.roughness,
+                format!(
+                    "{:.2} {:.2} {:.2}",
+                    group.specular_f0[0], group.specular_f0[1], group.specular_f0[2]
+                ),
+                format!(
+                    "{:.2} {:.2} {:.2}",
+                    truth.specular_f0[0], truth.specular_f0[1], truth.specular_f0[2]
+                ),
+            );
+        }
+        println!(
+            "pooled: glossy roughness rmse {:.4}, F0 rmse {:.4}",
+            (rough_squared / rough_count.max(1) as f64).sqrt(),
+            (f0_squared / f0_count.max(1) as f64).sqrt()
+        );
     }
 
     // How accurate does a reconstruction's geometry have to be? The bound above
