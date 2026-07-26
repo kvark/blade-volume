@@ -90,7 +90,7 @@ max_host_bytes = 1538531328
 memory_swap_bytes = 0
 cgroup_pressure_events = 0
 cgroup_oom_events = 0
-selection = "completed horizon; final 400 updates add 0.02 dB all-37"
+selection = "historical continuation; superseded by fresh mixed-view geometry formation"
 
 [[mixed_view_continuation.checkpoint]]
 step = 10000
@@ -169,6 +169,258 @@ candidate_wall_seconds = 112.875
 candidate_selected_8_psnr = 19.05
 candidate_all_37_psnr = 19.84
 selection = "retain cadence 100; 1.25x speedup does not justify the cross-scene quality loss"
+
+# Repeating the selected update composition from initialization, rather than
+# attaching it after 10,000 tiny-batch updates, changes the geometry selected
+# by pruning and splitting. This is the completed L1 control and current
+# durable full-horizon artifact.
+[fresh_mixed_view]
+status = "complete"
+git_commit = "b096da03e3b3fa70512b6fa9395422cf46079726"
+blade_commit = "f724f6a9da89939de908ec434e65e86a9a789477"
+meganeura_commit = "a2ce41c6113f6c016ba0de461d1d38f7f7b65f6b"
+gpu = "NVIDIA GeForce RTX 5070"
+driver = "595.71.05"
+artifact = "target/audit-runs/bonsai-fresh-batch4096-top-track-step20400-local/model.ply"
+artifact_sha256 = "4378223af64a491747637e5a86490e95f176fa11aa88218fbead2d4ea1cda97d"
+initialization = "top-track"
+color_loss = "l1"
+width = 128
+height = 128
+pixel_batch = 4096
+views_per_batch = 16
+schedule_horizon = 20400
+lr_groups = "legacy"
+geometry_rebuild_every = 100
+cells = 200000
+directed_adjacency_edges = 3055304
+train_psnr = 26.05
+selected_8_psnr = 24.00
+all_37_psnr = 24.69
+selected_8_psnr_at_256 = 23.95
+wall_seconds = 2657.75
+max_host_bytes = 1198428160
+memory_swap_bytes = 0
+cgroup_pressure_events = 0
+cgroup_oom_events = 0
+selection = "fresh mixed-view L1 control; final 400 updates are flat"
+
+[[fresh_mixed_view.checkpoint]]
+step = 2000
+cells = 57365
+train_psnr = 16.42
+selected_8_psnr = 15.47
+all_37_psnr = 16.35
+
+[[fresh_mixed_view.checkpoint]]
+step = 4000
+cells = 98838
+train_psnr = 19.90
+selected_8_psnr = 18.95
+all_37_psnr = 19.63
+
+[[fresh_mixed_view.checkpoint]]
+step = 6000
+cells = 170203
+train_psnr = 21.68
+selected_8_psnr = 20.14
+all_37_psnr = 21.41
+
+[[fresh_mixed_view.checkpoint]]
+step = 7000
+cells = 200000
+train_psnr = 22.44
+selected_8_psnr = 20.78
+all_37_psnr = 22.03
+
+[[fresh_mixed_view.checkpoint]]
+step = 8000
+cells = 200000
+train_psnr = 22.93
+selected_8_psnr = 21.39
+all_37_psnr = 22.43
+
+[[fresh_mixed_view.checkpoint]]
+step = 10000
+cells = 200000
+train_psnr = 23.37
+selected_8_psnr = 22.01
+all_37_psnr = 22.80
+
+[[fresh_mixed_view.checkpoint]]
+step = 12000
+cells = 200000
+train_psnr = 24.01
+selected_8_psnr = 22.63
+all_37_psnr = 23.30
+
+[[fresh_mixed_view.checkpoint]]
+step = 14000
+cells = 200000
+train_psnr = 24.76
+selected_8_psnr = 23.18
+all_37_psnr = 23.88
+
+[[fresh_mixed_view.checkpoint]]
+step = 16000
+cells = 200000
+train_psnr = 25.40
+selected_8_psnr = 23.65
+all_37_psnr = 24.30
+
+[[fresh_mixed_view.checkpoint]]
+step = 18000
+cells = 200000
+train_psnr = 25.85
+selected_8_psnr = 23.92
+all_37_psnr = 24.61
+
+[[fresh_mixed_view.checkpoint]]
+step = 20000
+cells = 200000
+train_psnr = 26.03
+selected_8_psnr = 24.00
+all_37_psnr = 24.69
+
+[[fresh_mixed_view.checkpoint]]
+step = 20400
+cells = 200000
+train_psnr = 26.05
+selected_8_psnr = 24.00
+all_37_psnr = 24.69
+
+[fresh_mixed_view.initialization_gate]
+step = 2000
+top_track_cells = 57365
+top_track_train_psnr = 16.42
+top_track_selected_8_psnr = 15.47
+top_track_all_37_psnr = 16.35
+radfoam_v1_cells = 57493
+radfoam_v1_train_psnr = 16.23
+radfoam_v1_selected_8_psnr = 16.33
+radfoam_v1_all_37_psnr = 16.17
+selection = "top-track; selected-eight gain does not offset train and all-view losses"
+
+[fresh_mixed_view.traversal_gate]
+interval = "steps 20000..20400"
+control_max_steps = 256
+control_training_seconds = 50.519
+control_gpu_step_seconds = 35.425
+control_graph_megabytes = 2342.4
+control_device_megabytes = 541.1
+candidate_max_steps = 224
+candidate_training_seconds = 46.696
+candidate_gpu_step_seconds = 31.407
+candidate_graph_megabytes = 2060.8
+candidate_device_megabytes = 473.4
+candidate_train_psnr = 26.05
+candidate_selected_8_psnr = 24.00
+candidate_all_37_psnr = 24.69
+candidate_256_render_psnr_range = "58.39..65.74 dB versus the control"
+selection = "224 passes this capped L1 endpoint; do not generalize while topology is growing"
+
+# Smooth-L1 is selected by a matched fresh mixed-view factor gate. Its normal
+# densifying continuation is durable through step 6,000; the next segment did
+# not launch because the display GPU entered reset-required state during a
+# subsequent Vulkan health probe.
+[fresh_mixed_view.loss_gate]
+status = "complete"
+control_loss = "l1"
+candidate_loss = "smooth-l1-beta-1"
+step_2000_control_train_psnr = 16.42
+step_2000_control_selected_8_psnr = 15.47
+step_2000_control_all_37_psnr = 16.35
+step_2000_candidate_train_psnr = 16.43
+step_2000_candidate_selected_8_psnr = 16.01
+step_2000_candidate_all_37_psnr = 16.29
+step_4400_control_train_psnr = 21.46
+step_4400_control_selected_8_psnr = 19.88
+step_4400_control_all_37_psnr = 21.25
+step_4400_candidate_train_psnr = 22.00
+step_4400_candidate_selected_8_psnr = 20.86
+step_4400_candidate_all_37_psnr = 21.70
+step_6000_control_train_psnr = 21.68
+step_6000_control_selected_8_psnr = 20.14
+step_6000_control_all_37_psnr = 21.41
+step_6000_candidate_cells = 174331
+step_6000_candidate_train_psnr = 22.11
+step_6000_candidate_selected_8_psnr = 20.98
+step_6000_candidate_all_37_psnr = 21.74
+step_20400_control_train_psnr = 26.05
+step_20400_control_selected_8_psnr = 24.00
+step_20400_control_all_37_psnr = 24.69
+step_20400_candidate_cells = 200000
+step_20400_candidate_train_psnr = 26.78
+step_20400_candidate_selected_8_psnr = 24.48
+step_20400_candidate_all_37_psnr = 24.94
+candidate_artifact = "target/audit-runs/bonsai-fresh-batch4096-smooth-l1-step20400-local/model.ply"
+candidate_artifact_sha256 = "18481e5530c24d077f7612351ef8987dced52f6fe14867711d99980a17d515fa"
+candidate_directed_adjacency_edges = 3041490
+candidate_selected_8_psnr_at_256 = 24.46
+candidate_max_host_bytes = 1121284096
+candidate_memory_swap_bytes = 0
+candidate_cgroup_pressure_events = 0
+candidate_cgroup_oom_events = 0
+selection = "smooth-l1; leads L1 at every measured step and at the 20,400 endpoint"
+
+# The continuation that the GPU reset had blocked, resumed on driver
+# 595.71.05 from the intact step-6,000 checkpoint. Segments are 2,000 steps
+# each (400 for the last), every one checkpointed and evaluated.
+[[fresh_mixed_view.loss_gate.candidate_checkpoint]]
+step = 8000
+cells = 200000
+train_psnr = 23.47
+selected_8_psnr = 22.30
+all_37_psnr = 22.81
+
+[[fresh_mixed_view.loss_gate.candidate_checkpoint]]
+step = 10000
+cells = 200000
+train_psnr = 23.83
+selected_8_psnr = 22.63
+all_37_psnr = 23.10
+
+[[fresh_mixed_view.loss_gate.candidate_checkpoint]]
+step = 12000
+cells = 200000
+train_psnr = 24.50
+selected_8_psnr = 23.15
+all_37_psnr = 23.56
+
+[[fresh_mixed_view.loss_gate.candidate_checkpoint]]
+step = 14000
+cells = 200000
+train_psnr = 25.26
+selected_8_psnr = 23.64
+all_37_psnr = 24.09
+
+[[fresh_mixed_view.loss_gate.candidate_checkpoint]]
+step = 16000
+cells = 200000
+train_psnr = 25.96
+selected_8_psnr = 24.08
+all_37_psnr = 24.51
+
+[[fresh_mixed_view.loss_gate.candidate_checkpoint]]
+step = 18000
+cells = 200000
+train_psnr = 26.50
+selected_8_psnr = 24.38
+all_37_psnr = 24.82
+
+[[fresh_mixed_view.loss_gate.candidate_checkpoint]]
+step = 20000
+cells = 200000
+train_psnr = 26.76
+selected_8_psnr = 24.48
+all_37_psnr = 24.92
+
+[[fresh_mixed_view.loss_gate.candidate_checkpoint]]
+step = 20400
+cells = 200000
+train_psnr = 26.78
+selected_8_psnr = 24.48
+all_37_psnr = 24.94
 
 [contribution_readback_performance]
 interval = "steps 12000..13000 with one 200000 to 230000-cell densification round"

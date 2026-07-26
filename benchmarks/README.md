@@ -665,4 +665,59 @@ The latest Bonsai result is substantially more coherent than the step-10,000
 source, including a 15.83→20.42 dB selected-view improvement when both are
 rendered at 256². It is still not viewer-ready: side-by-side images retain
 large translucent floaters, smeared backgrounds, and weak thin geometry.
-Additional fixed-cap updates are no longer the next quality experiment.
+Additional fixed-cap updates on that trajectory are no longer the next
+quality experiment.
+
+The more important control repeats the 4,096-ray/16-view protocol from
+initialization, so mixed-view gradients participate in every prune and split
+decision. With the otherwise unchanged L1 recipe, it reaches the 200,000-cell
+cap at step 7,000 and completes the 20,400-step cosine horizon at
+26.05/24.00/24.69 dB train/selected/all-37. That is +3.16/+3.59/+3.34 dB
+over the completed appearance-only continuation at the same capacity. The
+fresh result improves every broad checkpoint through step 20,000; the final
+400 updates are flat. At 256² it reaches 23.95 dB on the selected views and
+has recognizable solid scene structure, though colour speckle and smeared
+thin/background detail remain.
+
+The durable fresh L1 artifact and checkpoint are byte-identical with SHA-256
+`4378223af64a491747637e5a86490e95f176fa11aa88218fbead2d4ea1cda97d`.
+They contain 3,055,304 directed adjacency edges and live at
+`target/audit-runs/bonsai-fresh-batch4096-top-track-step20400-local/`. The
+complete segmented run took 2,657.75 seconds, peaked at 1,198,428,160 bytes
+of host memory, and recorded zero swap, pressure, OOM, or kill events in its
+4 GiB scopes.
+
+A matched final-400 traversal gate reduces `max_steps` from 256 to 224.
+Meganeura's logical graph falls 2,342.4→2,060.8 MB and device-local
+allocation 541.1→473.4 MB; GPU-step time falls 35.425→31.407 seconds and
+training 50.519→46.696 seconds. Train, selected, and all-37 PSNR remain
+26.05/24.00/24.69 dB. Rendering the candidate itself at 224 and 256 produces
+byte-identical 256² PNGs, while candidate-versus-control image differences
+are 58.39–65.74 dB PSNR. This validates 224 for the capped Bonsai endpoint,
+not as a growing-cloud library default.
+
+The fresh loss gate then finds a larger quality improvement. Smooth-L1 is
+mixed at the first growth boundary, but after a matched 400-step no-growth
+settle it beats L1 by +0.54/+0.98/+0.45 dB train/selected/all-37. Under the
+normal growth schedule at step 6,000 it retains +0.43/+0.84/+0.33 dB and
+reaches 22.11/20.98/21.74 dB with 174,331 cells. The byte-identical PLY and
+checkpoint (`23eaac7270cc0a6d7cee5272560f2c714113dfd4ede6f76cb877f4a86a0d7037`)
+are at
+`target/audit-runs/bonsai-fresh-batch4096-smooth-l1-step6000-local/`.
+Smooth-L1 is selected for continuation.
+
+That continuation is now complete. It was blocked when the NVIDIA driver
+entered reset-required state during a Vulkan health probe; it resumed from the
+intact step-6,000 checkpoint on driver 595.71.05 without bypassing the cgroup
+safety gate. Segmented 2,000 updates at a time, it leads the L1 control at
+every measured step and finishes the 20,400-step horizon at
+26.78/24.48/24.94 dB train/selected/all-37 — +0.73/+0.48/+0.25 dB over the
+control at identical capacity and schedule. The advantage peaks mid-growth
+(+0.91 dB selected at step 8,000) and narrows as the 200,000-cell cap
+saturates; the final 400 updates add 0.02 dB all-37, the same flat tail the L1
+arm showed. Smooth-L1 therefore improves the trajectory rather than the
+ceiling: this schedule, not the loss, is what closes. The 200,000-cell
+artifact has 3,041,490 directed edges, SHA-256
+`18481e5530c24d077f7612351ef8987dced52f6fe14867711d99980a17d515fa`, reaches
+24.46 dB on the selected views at 256², and lives at
+`target/audit-runs/bonsai-fresh-batch4096-smooth-l1-step20400-local/`.
