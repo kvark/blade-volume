@@ -479,6 +479,26 @@ At the audited revision:
   seconds, and the command from 728.308 to 175.622 seconds (4.15×). All-37
   quality remains 19.17 dB, host peak falls 4.9%, and both scopes record zero
   swap, pressure, OOM, or GPU faults.
+- Forming geometry under mixed-view batches from initialization is much
+  stronger than continuing geometry formed by 256-ray updates. The fresh L1
+  run reaches 26.05/24.00/24.69 dB train/selected/all-37 at step 20,400,
+  improving the completed continuation by +3.16/+3.59/+3.34 dB at the same
+  200,000-cell capacity. The final 400 updates are flat. Its segmented 4 GiB
+  scopes peak at 1,198,428,160 bytes and record zero swap, pressure, OOM, or
+  kill events.
+- A final-400 Bonsai traversal gate reduces the graph cap from 256 to 224
+  steps. Logical/device-local graph allocation falls 2,342.4→2,060.8 MB and
+  541.1→473.4 MB; GPU-step time improves 1.13× and total training 1.08×.
+  Quality remains 26.05/24.00/24.69 dB, and the candidate's 256² renders are
+  byte-identical at 224 and 256 steps. This is selected for the capped scene,
+  not generalized to a growing cloud.
+- A fresh Smooth-L1 gate reverses the old tiny-batch result. After a matched
+  400-step post-growth settle, it beats L1 by +0.54/+0.98/+0.45 dB
+  train/selected/all-37. Under normal densification it retains
+  +0.43/+0.84/+0.33 dB at step 6,000, and its completed continuation reaches
+  26.78/24.48/24.94 dB at the same 20,400-step, 200,000-cell endpoint —
+  +0.73/+0.48/+0.25 dB over the L1 control. It leads at every measured
+  checkpoint, so the loss is selected rather than merely opt-in on this scene.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
@@ -496,10 +516,13 @@ At the audited revision:
   round, not the generic session-rebuild counter. Topology-cadence ablations
   therefore see identical contribution samples at the same global boundary;
   segmented resumes derive the same round directly from the absolute step.
-- Smooth-L1's 4.44 dB held-out failure is unchanged at twice the traversal cap
-  and under either background. Visual comparisons identify large near-camera
-  Voronoi floaters; the loss remains opt-in until that geometry interaction is
-  understood.
+- The historical 256-ray Smooth-L1 arm's 4.44 dB held-out failure is unchanged
+  at twice the traversal cap and under either background. That result does not
+  transfer to fresh 4,096-ray/16-view geometry formation: the matched
+  step-6,000 gate selects Smooth-L1 by +0.84 dB selected and +0.33 dB all-37,
+  and the completed 20,400-step continuation holds +0.48 dB selected and
+  +0.25 dB all-37. The loss remains opt-in until the same result reproduces on
+  another scene.
 
 ### Remaining PowerFoam gaps
 
@@ -936,6 +959,83 @@ The final 400 updates add only 0.02 dB all-37, and 256² comparisons still show
 large floaters and smeared thin structure, so the result closes this schedule
 rather than the reconstruction-quality gate.
 
+Repeating the same mixed-view protocol from initialization demonstrates that
+the old trajectory's geometry, not just its unfinished appearance fit, was the
+limitation:
+
+| Global step | Cells | Train PSNR | Selected-8 PSNR | All-37 PSNR |
+| ---: | ---: | ---: | ---: | ---: |
+| 2,000 | 57,365 | 16.42 dB | 15.47 dB | 16.35 dB |
+| 4,000 | 98,838 | 19.90 dB | 18.95 dB | 19.63 dB |
+| 6,000 | 170,203 | 21.68 dB | 20.14 dB | 21.41 dB |
+| 7,000 | 200,000 | 22.44 dB | 20.78 dB | 22.03 dB |
+| 8,000 | 200,000 | 22.93 dB | 21.39 dB | 22.43 dB |
+| 10,000 | 200,000 | 23.37 dB | 22.01 dB | 22.80 dB |
+| 12,000 | 200,000 | 24.01 dB | 22.63 dB | 23.30 dB |
+| 14,000 | 200,000 | 24.76 dB | 23.18 dB | 23.88 dB |
+| 16,000 | 200,000 | 25.40 dB | 23.65 dB | 24.30 dB |
+| 18,000 | 200,000 | 25.85 dB | 23.92 dB | 24.61 dB |
+| 20,000 | 200,000 | 26.03 dB | 24.00 dB | 24.69 dB |
+| 20,400 | 200,000 | 26.05 dB | 24.00 dB | 24.69 dB |
+
+The final/checkpoint PLY SHA-256 is
+`4378223af64a491747637e5a86490e95f176fa11aa88218fbead2d4ea1cda97d`;
+the model has 3,055,304 directed edges and lives at
+`target/audit-runs/bonsai-fresh-batch4096-top-track-step20400-local/`.
+At 256² it reaches 23.95 dB on the selected views. Visual inspection shows
+solid recognizable scene structure instead of the old large translucent
+floaters, but colour speckle and smeared thin/background detail remain.
+
+The fresh residual diagnostic also changes the next hypothesis. Across the
+worst 512 pixels in each selected view, error is distributed over 1,896
+dominant cells, primarily dense far/background cells at path depths 13–20,
+rather than one corrupt cell or the old near-camera floater population.
+Topology changes by 2.34% over steps 18,000→20,000 and 0.46% in the final 400,
+so freezing adjacency is not justified.
+
+A scene-specific traversal gate shows that 224 path steps are enough at the
+capped endpoint: the candidate matches all reported PSNRs, and its 256² PNGs
+are byte-identical when rendered with caps 224 and 256. It reduces GPU-step
+time 35.425→31.407 seconds and graph/device allocation by about 12%. The
+setting is not generalized while densification can lengthen paths.
+
+Finally, fresh Smooth-L1 geometry is now a positive direction. It is mixed at
+step 2,000, but after a matched 400-step no-growth settle reaches
+22.00/20.86/21.70 dB versus L1's 21.46/19.88/21.25. Under the ordinary growth
+schedule at step 6,000 it reaches 22.11/20.98/21.74 dB, gains of
++0.43/+0.84/+0.33 dB. Its 174,331-cell PLY/checkpoint SHA-256 is
+`23eaac7270cc0a6d7cee5272560f2c714113dfd4ede6f76cb877f4a86a0d7037`.
+
+That continuation, previously blocked by a reset-required driver state, is now
+complete on driver 595.71.05 and resumed from the intact step-6,000
+checkpoint. It leads the L1 control at every measured step:
+
+| Global step | Cells | Train PSNR | Selected-8 PSNR | All-37 PSNR |
+| ---: | ---: | ---: | ---: | ---: |
+| 6,000 | 174,331 | 22.11 dB | 20.98 dB | 21.74 dB |
+| 8,000 | 200,000 | 23.47 dB | 22.30 dB | 22.81 dB |
+| 10,000 | 200,000 | 23.83 dB | 22.63 dB | 23.10 dB |
+| 12,000 | 200,000 | 24.50 dB | 23.15 dB | 23.56 dB |
+| 14,000 | 200,000 | 25.26 dB | 23.64 dB | 24.09 dB |
+| 16,000 | 200,000 | 25.96 dB | 24.08 dB | 24.51 dB |
+| 18,000 | 200,000 | 26.50 dB | 24.38 dB | 24.82 dB |
+| 20,000 | 200,000 | 26.76 dB | 24.48 dB | 24.92 dB |
+| 20,400 | 200,000 | 26.78 dB | 24.48 dB | 24.94 dB |
+
+At the exact 20,400-step endpoint this is 26.78/24.48/24.94 dB against the L1
+control's 26.05/24.00/24.69 dB: +0.73/+0.48/+0.25 dB at identical capacity and
+schedule. The 200,000-cell PLY has 3,041,490 directed edges, SHA-256
+`18481e5530c24d077f7612351ef8987dced52f6fe14867711d99980a17d515fa`, and lives
+at `target/audit-runs/bonsai-fresh-batch4096-smooth-l1-step20400-local/`. It
+reaches 24.46 dB on the selected views at 256². Its 4 GiB scopes peak at
+1,121,284,096 bytes with zero swap, pressure, OOM, or kill events.
+
+The advantage is largest in the mid-growth interval (+0.91 dB selected at step
+8,000) and narrows as the capped cloud saturates (+0.48 dB at the endpoint),
+and the final 400 updates add 0.02 dB all-37 — the same flat tail the L1 arm
+showed. So Smooth-L1 improves the trajectory rather than the ceiling: this
+schedule, not the loss, is what closes.
+
 Profiling originally showed exhaustive all-view contribution scans dominating
 densification. The correctness oracle remains exhaustive, but its GPU results
 now land in cached download memory before the unchanged CPU scoring pass.
@@ -1108,14 +1208,19 @@ material path.
    nor relative RadFoam-v1 parameter groups works alone; together they restore
    reference-scale rates and add 0.21 dB all-39 by step 6,000. The final
    500-step segment adds only 0.02 dB all-39 and begins regressing late views,
-   The mixed-view direction is now repeated on complete Bonsai: it improves
-   the same 200,000-cell checkpoint by 6.13/4.58/5.19 dB
-   train/selected/all-37 and reaches 22.89/20.41/21.35 dB at its exact
-   20,400-step endpoint. Relative parameter groups, extra capacity, and cadence
-   250 fail their Bonsai gates, so only the update composition generalizes.
-   Both scenes remain visibly below the quality bar; the next experiment
-   should isolate representation/geometry error rather than add more
-   fixed-cap updates.)
+   Repeating the mixed-view direction from Bonsai initialization, rather than
+   attaching it to geometry formed by tiny batches, reaches
+   26.05/24.00/24.69 dB train/selected/all-37 at the exact 20,400-step
+   endpoint. This is +3.16/+3.59/+3.34 dB over the completed continuation at
+   the same capacity. A fresh Smooth-L1 gate then adds +0.43/+0.84/+0.33 dB
+   through step 6,000, and its completed continuation reaches
+   26.78/24.48/24.94 dB at the same endpoint — +0.73/+0.48/+0.25 dB over the
+   L1 control, leading at every measured step. Relative parameter groups,
+   extra capacity, and cadence 250 still fail their Bonsai gates. Both scenes
+   remain visibly below the quality bar, and the robust-loss trajectory is now
+   finished, so the next experiment should target the distributed
+   far/background residuals and the 200,000-cell cap rather than extend a
+   saturated fixed-cap schedule.)
 4. Do not declare Stage 2 complete until the same-budget result is within
    0.5–1.0 dB of the reference or the remaining difference is isolated to a
    documented unsupported feature.
