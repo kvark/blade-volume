@@ -124,6 +124,8 @@ pub struct View {
     pub radiance: Vec<path::PathBuf>,
     pub material: path::PathBuf,
     pub geometry: path::PathBuf,
+    /// Present once the generator started writing the specular plane.
+    pub specular: Option<path::PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -196,6 +198,7 @@ impl Dataset {
                         radiance: Vec::new(),
                         material: path::PathBuf::new(),
                         geometry: path::PathBuf::new(),
+                        specular: None,
                     }),
                     _ => {}
                 }
@@ -255,6 +258,7 @@ impl Dataset {
                         "fov_y" => view.fov_y = value.parse().unwrap_or(0.0),
                         "material" => view.material = root.join(unquote(value)),
                         "geometry" => view.geometry = root.join(unquote(value)),
+                        "specular" => view.specular = Some(root.join(unquote(value))),
                         "radiance" => in_radiance = true,
                         _ => {}
                     }
@@ -318,6 +322,16 @@ impl Dataset {
         Ok(out)
     }
 
+    /// Prefilter every environment for the specular lobe.
+    pub fn environment_specular(&self) -> Result<Vec<SpecularEnvironment>, String> {
+        let mut out = Vec::with_capacity(self.environment_files.len());
+        for file in &self.environment_files {
+            let (texels, width, height) = read_png_linear(file)?;
+            out.push(SpecularEnvironment::prefilter(&texels, width, height));
+        }
+        Ok(out)
+    }
+
     /// Project every environment onto the diffuse basis.
     ///
     /// The maps are stored as the 8-bit linear values the renderer sampled, so
@@ -351,13 +365,182 @@ fn read_png_linear(path: &path::Path) -> Result<(Vec<[f32; 3]>, usize, usize), S
     Ok((texels, width as usize, height as usize))
 }
 
+// -------------------------------------------------------------------- specular
+
+/// Roughness levels the specular environment is prefiltered at.
+const SPECULAR_LEVELS: usize = 6;
+/// Equirectangular resolution of each prefiltered level.
+const SPECULAR_SIZE: (usize, usize) = (64, 32);
+
+/// The environment convolved with the GGX lobe at a ladder of roughnesses.
+///
+/// This is the first half of the split-sum approximation: the light a mirror
+/// of the given roughness sees along a reflection direction, with the BRDF's
+/// own scale left for [`specular_scale`] to supply.
+pub struct SpecularEnvironment {
+    levels: Vec<Vec<[f32; 3]>>,
+}
+
+/// Van der Corput radical inverse, for the Hammersley sequence.
+fn radical_inverse(mut bits: u32) -> f32 {
+    bits = bits.rotate_right(16);
+    bits = ((bits & 0x5555_5555) << 1) | ((bits & 0xAAAA_AAAA) >> 1);
+    bits = ((bits & 0x3333_3333) << 2) | ((bits & 0xCCCC_CCCC) >> 2);
+    bits = ((bits & 0x0F0F_0F0F) << 4) | ((bits & 0xF0F0_F0F0) >> 4);
+    bits = ((bits & 0x00FF_00FF) << 8) | ((bits & 0xFF00_FF00) >> 8);
+    bits as f32 * 2.328_306_4e-10
+}
+
+/// A half vector drawn from the GGX distribution around `+Z`.
+fn importance_sample_ggx(u: glam::Vec2, roughness: f32) -> glam::Vec3 {
+    let a = roughness * roughness;
+    let phi = 2.0 * std::f32::consts::PI * u.x;
+    let cos_theta = ((1.0 - u.y) / (1.0 + (a * a - 1.0) * u.y)).max(0.0).sqrt();
+    let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
+    glam::Vec3::new(phi.cos() * sin_theta, phi.sin() * sin_theta, cos_theta)
+}
+
+fn sample_equirect(texels: &[[f32; 3]], width: usize, height: usize, dir: glam::Vec3) -> [f32; 3] {
+    // Inverse of `equirect_direction`.
+    let yaw = dir.y.clamp(-1.0, 1.0).asin();
+    let pitch = dir.x.atan2(dir.z);
+    let u = (pitch / (2.0 * std::f32::consts::PI) + 0.5).rem_euclid(1.0);
+    let v = (0.5 - yaw / std::f32::consts::PI).clamp(0.0, 1.0);
+    let x = ((u * width as f32) as usize).min(width - 1);
+    let y = ((v * height as f32) as usize).min(height - 1);
+    texels[y * width + x]
+}
+
+impl SpecularEnvironment {
+    /// Convolve an environment with the GGX lobe at each roughness level.
+    pub fn prefilter(texels: &[[f32; 3]], width: usize, height: usize) -> Self {
+        const SAMPLES: u32 = 128;
+        let (out_width, out_height) = SPECULAR_SIZE;
+        let mut levels = Vec::with_capacity(SPECULAR_LEVELS);
+        for level in 0..SPECULAR_LEVELS {
+            let roughness = level as f32 / (SPECULAR_LEVELS - 1) as f32;
+            let mut plane = vec![[0.0f32; 3]; out_width * out_height];
+            for y in 0..out_height {
+                let v = (y as f32 + 0.5) / out_height as f32;
+                for x in 0..out_width {
+                    let u = (x as f32 + 0.5) / out_width as f32;
+                    // Split-sum assumes the view and the normal agree with the
+                    // reflection direction, which is what makes one table
+                    // serve every viewing angle.
+                    let normal = equirect_direction(u, v);
+                    if roughness <= 0.0 {
+                        plane[y * out_width + x] = sample_equirect(texels, width, height, normal);
+                        continue;
+                    }
+                    let up = if normal.z.abs() < 0.999 {
+                        glam::Vec3::Z
+                    } else {
+                        glam::Vec3::X
+                    };
+                    let tangent = up.cross(normal).normalize();
+                    let bitangent = normal.cross(tangent);
+
+                    let mut total = [0.0f32; 3];
+                    let mut weight = 0.0f32;
+                    for index in 0..SAMPLES {
+                        let hammersley =
+                            glam::Vec2::new(index as f32 / SAMPLES as f32, radical_inverse(index));
+                        let local = importance_sample_ggx(hammersley, roughness);
+                        let half = tangent * local.x + bitangent * local.y + normal * local.z;
+                        let light = (2.0 * normal.dot(half) * half - normal).normalize();
+                        let cosine = normal.dot(light);
+                        if cosine <= 0.0 {
+                            continue;
+                        }
+                        let radiance = sample_equirect(texels, width, height, light);
+                        for (accumulated, value) in total.iter_mut().zip(radiance) {
+                            *accumulated += value * cosine;
+                        }
+                        weight += cosine;
+                    }
+                    if weight > 0.0 {
+                        for accumulated in total.iter_mut() {
+                            *accumulated /= weight;
+                        }
+                    }
+                    plane[y * out_width + x] = total;
+                }
+            }
+            levels.push(plane);
+        }
+        Self { levels }
+    }
+
+    /// Prefiltered radiance along `reflection` at `roughness`, interpolated
+    /// between the two neighbouring levels.
+    pub fn sample(&self, reflection: glam::Vec3, roughness: f32) -> [f32; 3] {
+        let (width, height) = SPECULAR_SIZE;
+        let scaled = roughness.clamp(0.0, 1.0) * (SPECULAR_LEVELS - 1) as f32;
+        let low = scaled.floor() as usize;
+        let high = (low + 1).min(SPECULAR_LEVELS - 1);
+        let blend = scaled - low as f32;
+        let a = sample_equirect(&self.levels[low], width, height, reflection);
+        let b = sample_equirect(&self.levels[high], width, height, reflection);
+        [
+            a[0] + (b[0] - a[0]) * blend,
+            a[1] + (b[1] - a[1]) * blend,
+            a[2] + (b[2] - a[2]) * blend,
+        ]
+    }
+}
+
+/// The second half of the split sum: the scale and bias applied to `F0`.
+///
+/// Lazarov's analytic fit to the environment BRDF, which avoids carrying a
+/// lookup table around for an approximation that is already one.
+pub fn specular_scale(f0: [f32; 3], roughness: f32, n_dot_v: f32) -> [f32; 3] {
+    let c0 = glam::Vec4::new(-1.0, -0.0275, -0.572, 0.022);
+    let c1 = glam::Vec4::new(1.0, 0.0425, 1.04, -0.04);
+    let r = glam::Vec4::new(
+        roughness * c0.x + c1.x,
+        roughness * c0.y + c1.y,
+        roughness * c0.z + c1.z,
+        roughness * c0.w + c1.w,
+    );
+    let a004 = (r.x * r.x).min((-9.28 * n_dot_v.max(0.0)).exp2()) * r.x + r.y;
+    let scale = a004 * -1.04 + r.z;
+    let bias = a004 * 1.04 + r.w;
+    [
+        f0[0] * scale + bias,
+        f0[1] * scale + bias,
+        f0[2] * scale + bias,
+    ]
+}
+
+/// Outgoing specular radiance for one sample under one environment.
+pub fn specular_radiance(sample: &Sample, environment: &SpecularEnvironment) -> [f32; 3] {
+    let n_dot_v = sample.normal.dot(sample.view);
+    if n_dot_v <= 0.0 {
+        return [0.0; 3];
+    }
+    let reflection = (2.0 * n_dot_v * sample.normal - sample.view).normalize();
+    let prefiltered = environment.sample(reflection, sample.roughness);
+    let scale = specular_scale(sample.specular_f0, sample.roughness, n_dot_v);
+    [
+        prefiltered[0] * scale[0],
+        prefiltered[1] * scale[1],
+        prefiltered[2] * scale[2],
+    ]
+}
+
 // --------------------------------------------------------------------- solving
 
-/// One surface sample: everything the diffuse model needs about a pixel.
+/// One surface sample: everything a shading model needs about a pixel.
 pub struct Sample {
     pub normal: glam::Vec3,
     pub albedo_truth: [f32; 3],
+    /// Specular reflectance at normal incidence. A metal keeps its base colour
+    /// here and has none in the diffuse channel, so the two together are what
+    /// identify the material.
+    pub specular_f0: [f32; 3],
     pub roughness: f32,
+    /// Direction from the surface back towards the camera.
+    pub view: glam::Vec3,
     /// Observed radiance per environment, in dataset order.
     pub radiance: Vec<[f32; 3]>,
 }
@@ -368,10 +551,19 @@ pub fn gather_samples(dataset: &Dataset) -> Result<Vec<Sample>, String> {
     for view in &dataset.views {
         let geometry = dataset.read_plane(&view.geometry)?;
         let material = dataset.read_plane(&view.material)?;
+        let specular = match view.specular {
+            Some(ref path) => Some(dataset.read_plane(path)?),
+            None => None,
+        };
         let mut radiance = Vec::with_capacity(dataset.environments.len());
         for file in &view.radiance {
             radiance.push(dataset.read_plane(file)?);
         }
+        // The renderer widens the vertical field of view by the aspect ratio;
+        // reproducing that exactly is what makes the reconstructed ray the one
+        // that was actually traced.
+        let tan_half_y = (0.5 * view.fov_y).tan();
+        let tan_half_x = tan_half_y * dataset.width as f32 / dataset.height as f32;
         for pixel in 0..dataset.pixel_count() {
             // Negative distance is the generator's miss marker.
             if geometry[pixel][3] <= 0.0 {
@@ -382,10 +574,25 @@ pub fn gather_samples(dataset: &Dataset) -> Result<Vec<Sample>, String> {
             if normal.length_squared() < 0.5 {
                 continue;
             }
+            let x = (pixel % dataset.width) as f32 + 0.5;
+            let y = (pixel / dataset.width) as f32 + 0.5;
+            let ndc = glam::Vec2::new(
+                x / (0.5 * dataset.width as f32) - 1.0,
+                y / (0.5 * dataset.height as f32) - 1.0,
+            );
+            // Camera space is right handed with -Z forward, and the film is
+            // flipped vertically, matching `get_ray_direction_at`.
+            let local = glam::Vec3::new(ndc.x * tan_half_x, -ndc.y * tan_half_y, -1.0);
+            let direction = (view.orientation * local).normalize();
             samples.push(Sample {
                 normal: normal.normalize(),
                 albedo_truth: [material[pixel][0], material[pixel][1], material[pixel][2]],
+                specular_f0: match specular {
+                    Some(ref plane) => [plane[pixel][0], plane[pixel][1], plane[pixel][2]],
+                    None => [0.0; 3],
+                },
                 roughness: material[pixel][3],
+                view: -direction,
                 radiance: radiance
                     .iter()
                     .map(|plane| [plane[pixel][0], plane[pixel][1], plane[pixel][2]])
@@ -409,6 +616,40 @@ pub fn solve_albedo(sample: &Sample, lights: &[(usize, Irradiance)]) -> [f32; 3]
         let observed = sample.radiance[environment];
         for channel in 0..3 {
             numerator[channel] += shade[channel] * observed[channel];
+            denominator[channel] += shade[channel] * shade[channel];
+        }
+    }
+    let mut albedo = [0.0f32; 3];
+    for channel in 0..3 {
+        albedo[channel] = if denominator[channel] > 1e-8 {
+            (numerator[channel] / denominator[channel]).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+    }
+    albedo
+}
+
+/// Least-squares albedo with the specular lobe accounted for.
+///
+/// The lobe does not depend on the albedo, so subtracting it leaves the same
+/// linear problem as [`solve_albedo`] on what is left. Whether that helps is
+/// the question worth asking: a model that explains more of the image should
+/// leave less of it for the albedo to absorb.
+pub fn solve_albedo_specular(
+    sample: &Sample,
+    lights: &[(usize, Irradiance)],
+    specular: &[SpecularEnvironment],
+) -> [f32; 3] {
+    let mut numerator = [0.0f32; 3];
+    let mut denominator = [0.0f32; 3];
+    for &(environment, ref irradiance) in lights {
+        let shade = irradiance.shade(sample.normal);
+        let observed = sample.radiance[environment];
+        let lobe = specular_radiance(sample, &specular[environment]);
+        for channel in 0..3 {
+            let residual = observed[channel] - lobe[channel];
+            numerator[channel] += shade[channel] * residual;
             denominator[channel] += shade[channel] * shade[channel];
         }
     }
@@ -629,6 +870,8 @@ mod tests {
         let sample = Sample {
             normal,
             albedo_truth: truth,
+            specular_f0: [0.0; 3],
+            view: normal,
             roughness: 1.0,
             radiance: vec![[
                 truth[0] * shade[0],
