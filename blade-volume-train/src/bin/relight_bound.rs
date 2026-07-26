@@ -44,6 +44,42 @@ struct Args {
     /// treat a sample as a metal, and report it apart, below this albedo
     #[argh(option, default = "0.02")]
     metal_albedo: f32,
+
+    /// write per-view images of the fit into this directory
+    #[argh(option)]
+    dump: Option<String>,
+
+    /// which view to write images of (default 6)
+    #[argh(option, default = "6")]
+    dump_view: usize,
+}
+
+/// The display transfer function, so linear radiance can be looked at.
+fn encode_srgb(v: f32) -> u8 {
+    let v = v.clamp(0.0, 1.0);
+    let encoded = if v <= 0.003_130_8 {
+        12.92 * v
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded * 255.0).round() as u8
+}
+
+/// Write one plane of linear values as an image.
+fn save_plane(path: &std::path::Path, pixels: &[[f32; 3]], width: usize, height: usize) {
+    let mut buffer = image::RgbImage::new(width as u32, height as u32);
+    for (index, texel) in pixels.iter().enumerate() {
+        buffer.put_pixel(
+            (index % width) as u32,
+            (index / width) as u32,
+            image::Rgb([
+                encode_srgb(texel[0]),
+                encode_srgb(texel[1]),
+                encode_srgb(texel[2]),
+            ]),
+        );
+    }
+    let _ = buffer.save(path);
 }
 
 /// Outcome of one fit.
@@ -344,6 +380,82 @@ fn main() {
         );
     }
 
+    // Put the fit back into image space, so the numbers above can be looked at.
+    if let Some(ref directory) = args.dump {
+        let directory = std::path::Path::new(directory);
+        let _ = std::fs::create_dir_all(directory);
+        let width = dataset.width;
+        let height = dataset.height;
+        let count = width * height;
+        let background = [0.0f32; 3];
+
+        let lights: Vec<_> = training
+            .iter()
+            .map(|index| (*index, irradiance[*index]))
+            .collect();
+        let mut truth_plane = vec![background; count];
+        let mut diffuse_plane = vec![background; count];
+        let mut specular_plane = vec![background; count];
+        let mut albedo_truth_plane = vec![background; count];
+        let mut albedo_diffuse_plane = vec![background; count];
+        let mut albedo_specular_plane = vec![background; count];
+        let mut error_diffuse_plane = vec![background; count];
+        let mut error_specular_plane = vec![background; count];
+
+        for sample in samples.iter().filter(|s| s.view_index == args.dump_view) {
+            let shade = irradiance[held_out].shade(sample.normal);
+            let lobe = train::relight::specular_radiance(sample, &specular[held_out]);
+            let observed = sample.radiance[held_out];
+
+            let only_diffuse = train::relight::solve_albedo(sample, &lights);
+            let with_specular = train::relight::solve_albedo_specular(sample, &lights, &specular);
+            let predicted_diffuse = [
+                only_diffuse[0] * shade[0],
+                only_diffuse[1] * shade[1],
+                only_diffuse[2] * shade[2],
+            ];
+            let predicted_specular = [
+                with_specular[0] * shade[0] + lobe[0],
+                with_specular[1] * shade[1] + lobe[1],
+                with_specular[2] * shade[2] + lobe[2],
+            ];
+
+            let pixel = sample.pixel;
+            truth_plane[pixel] = observed;
+            diffuse_plane[pixel] = predicted_diffuse;
+            specular_plane[pixel] = predicted_specular;
+            albedo_truth_plane[pixel] = sample.albedo_truth;
+            albedo_diffuse_plane[pixel] = only_diffuse;
+            albedo_specular_plane[pixel] = with_specular;
+            // Amplified, because the interesting differences are small.
+            for channel in 0..3 {
+                error_diffuse_plane[pixel][channel] =
+                    4.0 * (predicted_diffuse[channel] - observed[channel]).abs();
+                error_specular_plane[pixel][channel] =
+                    4.0 * (predicted_specular[channel] - observed[channel]).abs();
+            }
+        }
+
+        for (name, plane) in [
+            ("held-out-truth", &truth_plane),
+            ("relit-diffuse", &diffuse_plane),
+            ("relit-specular", &specular_plane),
+            ("albedo-truth", &albedo_truth_plane),
+            ("albedo-diffuse", &albedo_diffuse_plane),
+            ("albedo-specular", &albedo_specular_plane),
+            ("error-diffuse-x4", &error_diffuse_plane),
+            ("error-specular-x4", &error_specular_plane),
+        ] {
+            save_plane(&directory.join(format!("{name}.png")), plane, width, height);
+        }
+        println!(
+            "\nwrote images of view {} under '{}' to {}",
+            args.dump_view,
+            dataset.environments[held_out],
+            directory.display()
+        );
+    }
+
     // How accurate does a reconstruction's geometry have to be? The bound above
     // is handed exact normals; a real primitive estimates them. Tilting every
     // normal by a fixed angle, and using the tilted one both to fit and to
@@ -363,6 +475,8 @@ fn main() {
         let mut held_error = train::relight::Accumulator::new();
         for (index, sample) in samples.iter().enumerate() {
             let tilted = train::relight::Sample {
+                view_index: sample.view_index,
+                pixel: sample.pixel,
                 normal: train::relight::perturb_normal(sample.normal, angle, index as u32),
                 albedo_truth: sample.albedo_truth,
                 specular_f0: sample.specular_f0,
