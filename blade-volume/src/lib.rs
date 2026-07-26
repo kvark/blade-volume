@@ -19,7 +19,8 @@ pub use adjacency::{
 pub use adjacency::{compute_adjacency_qhull, compute_adjacency_qhull_default};
 pub use camera::CameraParams;
 pub use gpu::{
-    GaussianGpuCloud, InitParameters, RadFoamGpuCloud, RadFoamGpuTracer, RadFoamTraceSettings,
+    GaussianGpuCloud, InitParameters, MeshReferenceSettings, MeshReferenceTracer, RadFoamGpuCloud,
+    RadFoamGpuTracer, RadFoamTraceSettings, ReferenceMesh,
 };
 pub use scene::{
     GpuTransform, ObjectBounds, ObjectHandle, ObjectType, Scene, SceneRenderData, Transform,
