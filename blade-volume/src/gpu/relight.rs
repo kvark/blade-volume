@@ -33,6 +33,12 @@ pub struct RelightSettings {
     /// ray either reaches the environment or meets something, and what it
     /// meets is what lights the point instead.
     pub diffuse_samples: u32,
+    /// Show the environment where nothing was hit, rather than
+    /// [`background_rgb`]. What a path traced reference does, so a comparison
+    /// against one is of the whole frame rather than of a mask.
+    ///
+    /// [`background_rgb`]: Self::background_rgb
+    pub show_environment: bool,
 }
 
 impl Default for RelightSettings {
@@ -40,6 +46,7 @@ impl Default for RelightSettings {
         Self {
             background_rgb: [0.0; 3],
             diffuse_samples: 0,
+            show_environment: false,
         }
     }
 }
@@ -52,7 +59,8 @@ struct RelightParams {
     max_specular_level: f32,
     diffuse_samples: u32,
     frame_index: u32,
-    pad: [u32; 2],
+    show_environment: u32,
+    pad: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -348,7 +356,8 @@ impl RelightTracer {
                 max_specular_level: (relight::SPECULAR_LEVELS - 1) as f32,
                 diffuse_samples: settings.diffuse_samples,
                 frame_index: 0,
-                pad: [0; 2],
+                show_environment: settings.show_environment as u32,
+                pad: 0,
             },
             mesh_buf,
             surfel_buf,

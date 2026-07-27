@@ -282,6 +282,7 @@ fn gpu_shading_matches_the_cpu_reference() {
             background_rgb: background,
             // The analytic path, which is what the CPU reference implements.
             diffuse_samples: 0,
+            show_environment: false,
         },
         &harness.context,
         &mut harness.encoder,
@@ -482,6 +483,7 @@ fn sampling_converges_to_the_analytic_irradiance_with_nothing_in_the_way() {
             vol::gpu::RelightSettings {
                 background_rgb: [0.0; 3],
                 diffuse_samples,
+                show_environment: false,
             },
             &harness.context,
             &mut harness.encoder,

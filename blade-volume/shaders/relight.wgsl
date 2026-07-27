@@ -33,7 +33,11 @@ struct Parameters {
     // Decorrelates the sampling between frames so an accumulating viewer
     // converges instead of settling on one noisy estimate.
     frame_index: u32,
-    pad: vec2<u32>,
+    // Whether a ray that hits nothing shows the environment or the flat
+    // background. Comparing against a path traced reference wants the former,
+    // since that is what the reference does.
+    show_environment: u32,
+    pad: u32,
 }
 var<uniform> g_params: Parameters;
 
@@ -463,7 +467,11 @@ fn trace_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // image nor stands still while a viewer accumulates.
     let seed = hash_u32(gid.x + gid.y * 8192u + g_params.frame_index * 0x9E3779B9u);
     let traced = trace_blended(g_camera.position, ray_dir, seed);
-    // Whatever the surfels did not cover shows the environment behind them.
-    let radiance = traced.xyz + traced.w * g_params.background;
+    var behind = g_params.background;
+    if (g_params.show_environment != 0u) {
+        behind = environment_radiance(ray_dir);
+    }
+    // Whatever the surfels did not cover shows what is behind them.
+    let radiance = traced.xyz + traced.w * behind;
     textureStore(g_out, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(radiance, 1.0));
 }

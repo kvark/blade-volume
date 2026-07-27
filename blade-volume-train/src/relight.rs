@@ -330,7 +330,7 @@ impl Dataset {
     pub fn environment_specular(&self) -> Result<Vec<SpecularEnvironment>, String> {
         let mut out = Vec::with_capacity(self.environment_files.len());
         for file in &self.environment_files {
-            let (texels, width, height) = read_environment(file)?;
+            let (texels, width, height) = read_environment_plane(file)?;
             out.push(SpecularEnvironment::prefilter(&texels, width, height));
         }
         Ok(out)
@@ -343,7 +343,7 @@ impl Dataset {
     pub fn environment_irradiance(&self) -> Result<Vec<Irradiance>, String> {
         let mut out = Vec::with_capacity(self.environment_files.len());
         for file in &self.environment_files {
-            let (texels, width, height) = read_environment(file)?;
+            let (texels, width, height) = read_environment_plane(file)?;
             out.push(Irradiance::project(&texels, width, height));
         }
         Ok(out)
@@ -356,7 +356,7 @@ impl Dataset {
 /// datasets made before the maps went floating point still load. The two are
 /// not equivalent: a sun a hundred times brighter than its sky survives only
 /// in the first, and that contrast is what a specular fit needs.
-fn read_environment(path: &path::Path) -> Result<(Vec<[f32; 3]>, usize, usize), String> {
+pub fn read_environment_plane(path: &path::Path) -> Result<(Vec<[f32; 3]>, usize, usize), String> {
     if path.extension().and_then(|e| e.to_str()) == Some("f32") {
         let bytes = fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let texel_count = bytes.len() / 16;

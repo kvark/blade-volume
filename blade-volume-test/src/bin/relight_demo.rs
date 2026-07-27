@@ -333,6 +333,7 @@ fn main() {
             vol::gpu::RelightSettings {
                 background_rgb: [0.02, 0.025, 0.035],
                 diffuse_samples: samples,
+                show_environment: false,
             },
             &context,
             &mut encoder,
