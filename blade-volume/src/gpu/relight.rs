@@ -25,12 +25,21 @@ const CIRCUMSCRIBED: f32 = 1.732_050_8; // sqrt(3)
 pub struct RelightSettings {
     /// Radiance for rays that hit nothing.
     pub background_rgb: [f32; 3],
+    /// Rays cast per shading point for the shadowed diffuse term.
+    ///
+    /// Zero keeps the analytic unshadowed irradiance, which is cheaper and
+    /// free of noise. Anything above it buys shadowing and one bounce of
+    /// indirect light together — they cannot be had separately, because each
+    /// ray either reaches the environment or meets something, and what it
+    /// meets is what lights the point instead.
+    pub diffuse_samples: u32,
 }
 
 impl Default for RelightSettings {
     fn default() -> Self {
         Self {
             background_rgb: [0.0; 3],
+            diffuse_samples: 0,
         }
     }
 }
@@ -41,6 +50,9 @@ struct RelightParams {
     irradiance: [[f32; 4]; 9],
     background: [f32; 3],
     max_specular_level: f32,
+    diffuse_samples: u32,
+    frame_index: u32,
+    pad: [u32; 2],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -334,6 +346,9 @@ impl RelightTracer {
                 irradiance: environment.diffuse_irradiance(),
                 background: settings.background_rgb,
                 max_specular_level: (relight::SPECULAR_LEVELS - 1) as f32,
+                diffuse_samples: settings.diffuse_samples,
+                frame_index: 0,
+                pad: [0; 2],
             },
             mesh_buf,
             surfel_buf,
@@ -355,6 +370,9 @@ impl RelightTracer {
         size: [u32; 2],
     ) {
         assert!(size[0] > 0 && size[1] > 0, "render size must be non-zero");
+        // Advanced per dispatch, so an accumulating viewer converges rather
+        // than settling on one noisy estimate.
+        self.params.frame_index = self.params.frame_index.wrapping_add(1);
         let mut pass = encoder.compute("relight");
         let mut pen = pass.with(&self.pipeline);
         pen.bind(
@@ -393,9 +411,9 @@ mod tests {
 
     #[test]
     fn the_uniform_layout_matches_the_shader() {
-        // `vec4` arrays pack tight, and the trailing `vec3` plus `f32` fills
-        // one more, so the struct is ten of them.
-        assert_eq!(mem::size_of::<RelightParams>(), 10 * 16);
+        // `vec4` arrays pack tight; the trailing `vec3` plus `f32` fills one
+        // more and the four `u32` another, so the struct is eleven of them.
+        assert_eq!(mem::size_of::<RelightParams>(), 11 * 16);
     }
 
     #[test]

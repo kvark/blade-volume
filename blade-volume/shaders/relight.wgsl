@@ -27,6 +27,13 @@ struct Parameters {
     // Highest index in the prefiltered ladder, as a float, since every use of
     // it is arithmetic rather than indexing.
     max_specular_level: f32,
+    // Rays cast per shading point for the shadowed diffuse term. Zero keeps
+    // the analytic unshadowed one, which is cheaper and has no noise.
+    diffuse_samples: u32,
+    // Decorrelates the sampling between frames so an accumulating viewer
+    // converges instead of settling on one noisy estimate.
+    frame_index: u32,
+    pad: vec2<u32>,
 }
 var<uniform> g_params: Parameters;
 
@@ -115,6 +122,92 @@ const MIN_TRANSMITTANCE: f32 = 0.003;
 // Matches `relight::SURFACE_BAND`.
 const SURFACE_BAND: f32 = 2.0;
 
+// A hash, for turning a pixel and a sample index into a direction.
+fn hash_u32(value: u32) -> u32 {
+    var x = value;
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return x;
+}
+
+fn unit_float(seed: u32) -> f32 {
+    return f32(hash_u32(seed)) * 2.3283064e-10;
+}
+
+// A direction drawn proportionally to the cosine, which is the density the
+// diffuse integral wants: the weights all become one and the estimate is the
+// plain mean of the radiance that came back.
+fn sample_cosine(normal: vec3<f32>, seed: u32) -> vec3<f32> {
+    let u1 = unit_float(seed * 2u + 1u);
+    let u2 = unit_float(seed * 2u + 2u);
+    let radius = sqrt(u1);
+    let phi = 2.0 * PI * u2;
+    let up = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(normal.z) < 0.9);
+    let tangent = normalize(cross(up, normal));
+    let bitangent = cross(normal, tangent);
+    return normalize(
+        tangent * (radius * cos(phi))
+        + bitangent * (radius * sin(phi))
+        + normal * sqrt(max(0.0, 1.0 - u1))
+    );
+}
+
+// Radiance arriving from a direction with nothing in the way. The mirror end
+// of the prefiltered ladder is the environment itself, so no second copy of it
+// has to be bound.
+fn environment_radiance(dir: vec3<f32>) -> vec3<f32> {
+    return textureSampleLevel(g_specular, g_sampler, direction_to_equirect(dir), 0, 0.0).xyz;
+}
+
+struct Occlusion {
+    // How much of the ray got through.
+    transmittance: f32,
+    // Nearest thing in the way, for the one bounce off it.
+    blocker: u32,
+    blocked: bool,
+}
+
+// What a ray meets on its way out to the environment.
+//
+// Unlike the camera ray this needs no sorting: transmittance is a product over
+// the surfels in the way and multiplication does not care what order they come
+// in, so the candidates can be consumed exactly as the traversal produces
+// them. Only the nearest one is singled out, and a minimum needs no sort
+// either. That is what makes a shadow ray so much cheaper than a camera ray
+// rather than merely cheaper by the shading it skips.
+fn trace_occlusion(origin: vec3<f32>, dir: vec3<f32>, t_min: f32) -> Occlusion {
+    var rq: ray_query;
+    rayQueryInitialize(&rq, g_tlas, RayDesc(0u, 0xFFu, t_min, g_camera.depth, origin, dir));
+
+    var result = Occlusion(1.0, 0u, false);
+    var nearest = g_camera.depth;
+    var in_progress = true;
+    while (in_progress) {
+        in_progress = rayQueryProceed(&rq);
+        let intersection = rayQueryGetCandidateIntersection(&rq);
+        if (intersection.kind != RAY_QUERY_INTERSECTION_TRIANGLE) {
+            continue;
+        }
+        let hit = intersect_surfel(intersection.instance_index, origin, dir);
+        if (hit.coverage <= 0.0 || hit.t <= t_min) {
+            continue;
+        }
+        result.transmittance *= 1.0 - hit.coverage;
+        if (hit.t < nearest) {
+            nearest = hit.t;
+            result.blocker = hit.index;
+            result.blocked = true;
+        }
+        if (result.transmittance <= MIN_TRANSMITTANCE) {
+            break;
+        }
+    }
+    return result;
+}
+
 struct Hit {
     t: f32,
     index: u32,
@@ -149,6 +242,56 @@ fn intersect_surfel(index: u32, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> Hi
     return Hit(t, index, coverage_of(normalized));
 }
 
+// The diffuse term with visibility and one bounce of indirect light, which
+// have to arrive together.
+//
+// Leaving out visibility makes a surface uniformly too bright and leaving out
+// interreflection makes it too dark, by about the same amount, so a model with
+// neither sits closer to a converged render than one with only the first.
+// Here neither can be had alone: each ray either reaches the environment or
+// meets something, and what it meets is what lights the point instead.
+fn shaded_diffuse(position: vec3<f32>, normal: vec3<f32>, radius: f32, seed: u32) -> vec3<f32> {
+    let count = g_params.diffuse_samples;
+    if (count == 0u) {
+        return sh9_dot_irradiance(normal);
+    }
+    // Off the surface by a couple of surfel radii, not by an absolute epsilon.
+    // A surface made of overlapping discs is locally a soup of them, so a ray
+    // leaving one at a grazing angle immediately meets its neighbours and the
+    // point shadows itself. The disc is the scale that has to be cleared.
+    //
+    // The cost is that contact shadows finer than a surfel cannot appear,
+    // which is a limit of the representation rather than of the estimator: a
+    // cloud cannot resolve occlusion below its own sample spacing.
+    let bias = 2.0 * radius;
+    var total = vec3<f32>(0.0);
+    for (var i = 0u; i < count; i += 1u) {
+        let dir = sample_cosine(normal, seed + i * 9781u);
+        let occlusion = trace_occlusion(position + normal * bias, dir, bias);
+        var arriving = occlusion.transmittance * environment_radiance(dir);
+        if (occlusion.blocked) {
+            // One bounce: what the blocker sends back this way. It is shaded
+            // without its own visibility, which is what makes this one bounce
+            // rather than a recursion.
+            let surfel = g_surfels[occlusion.blocker];
+            var facing = surfel.normal;
+            if (dot(facing, dir) > 0.0) {
+                facing = -facing;
+            }
+            // The blocker's whole response, not only its diffuse half. A
+            // metal has no diffuse albedo at all, so bouncing just that off
+            // one makes it cast a black shadow — which is what the first
+            // version did, and it was visible as dark blobs on exactly the
+            // metallic rows and nowhere else.
+            let bounced = shade(facing, -dir, g_materials[surfel.material]);
+            arriving += (1.0 - occlusion.transmittance) * bounced;
+        }
+        total += arriving;
+    }
+    // Cosine sampling makes the weights one, so the estimate is the mean.
+    return total / f32(count);
+}
+
 fn shade_surfel(index: u32, ray_dir: vec3<f32>) -> vec3<f32> {
     let surfel = g_surfels[index];
     // A disc has two sides and a ray may arrive at either; shading the one it
@@ -161,6 +304,49 @@ fn shade_surfel(index: u32, ray_dir: vec3<f32>) -> vec3<f32> {
     return shade(normal, -ray_dir, g_materials[surfel.material]);
 }
 
+// Same, but with the diffuse half sampled rather than taken from the analytic
+// irradiance, so it carries shadowing and a bounce.
+fn shade_surfel_sampled(index: u32, position: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec3<f32> {
+    let surfel = g_surfels[index];
+    var normal = surfel.normal;
+    if (dot(normal, ray_dir) > 0.0) {
+        normal = -normal;
+    }
+    let material = g_materials[surfel.material];
+    var out = material.albedo * shaded_diffuse(position, normal, surfel.radius, seed);
+
+    let view = -ray_dir;
+    let n_dot_v = dot(normal, view);
+    if (n_dot_v > 0.0) {
+        let reflection = normalize(2.0 * n_dot_v * normal - view);
+        let level = clamp(material.roughness, 0.0, 1.0) * g_params.max_specular_level;
+        let low = floor(level);
+        let high = min(low + 1.0, g_params.max_specular_level);
+        let uv = direction_to_equirect(reflection);
+        let a = textureSampleLevel(g_specular, g_sampler, uv, i32(low), 0.0).xyz;
+        let b = textureSampleLevel(g_specular, g_sampler, uv, i32(high), 0.0).xyz;
+        var incoming = mix(a, b, level - low);
+        if (g_params.diffuse_samples > 0u) {
+            // One ray along the reflection, so a mirror shows what is actually
+            // in front of it rather than the sky behind that.
+            let bias = 2.0 * surfel.radius;
+            let occlusion = trace_occlusion(position + normal * bias, reflection, bias);
+            if (occlusion.blocked) {
+                let blocker = g_surfels[occlusion.blocker];
+                var facing = blocker.normal;
+                if (dot(facing, reflection) > 0.0) {
+                    facing = -facing;
+                }
+                let bounced = shade(facing, -reflection, g_materials[blocker.material]);
+                incoming = occlusion.transmittance * incoming
+                    + (1.0 - occlusion.transmittance) * bounced;
+            }
+        }
+        out += incoming * specular_scale(material.specular_f0, material.roughness, n_dot_v);
+    }
+    return out;
+}
+
 // Composite every surfel the ray passes through, nearest first.
 //
 // The acceleration structure holds a triangle circumscribing each disc, so a
@@ -168,7 +354,7 @@ fn shade_surfel(index: u32, ray_dir: vec3<f32>) -> vec3<f32> {
 // over in whatever order the traversal reached them. Compositing is not
 // commutative, so they have to be sorted; the window below keeps the next few
 // in order and the walk resumes from the last one when more remain.
-fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
+fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f32> {
     var radiance = vec3<f32>(0.0);
     var transmittance = 1.0;
     var cursor = Hit(0.0, 0u, 0.0);
@@ -229,7 +415,9 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
             var j = i;
             while (j < hit_count && hits[j].t <= limit) {
                 let hit = hits[j];
-                sum_color += hit.coverage * shade_surfel(hit.index, ray_dir);
+                let point = ray_origin + hit.t * ray_dir;
+                sum_color += hit.coverage
+                    * shade_surfel_sampled(hit.index, point, ray_dir, seed);
                 sum_weight += hit.coverage;
                 j += 1u;
             }
@@ -271,7 +459,10 @@ fn trace_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let local_dir = vec3<f32>((ndc - g_camera.principal) * tan_half, 1.0);
     let ray_dir = normalize(qrot(g_camera.orientation, local_dir));
 
-    let traced = trace_blended(g_camera.position, ray_dir);
+    // A seed per pixel and frame, so the sampling neither repeats across the
+    // image nor stands still while a viewer accumulates.
+    let seed = hash_u32(gid.x + gid.y * 8192u + g_params.frame_index * 0x9E3779B9u);
+    let traced = trace_blended(g_camera.position, ray_dir, seed);
     // Whatever the surfels did not cover shows the environment behind them.
     let radiance = traced.xyz + traced.w * g_params.background;
     textureStore(g_out, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(radiance, 1.0));

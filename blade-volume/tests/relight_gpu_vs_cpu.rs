@@ -280,6 +280,8 @@ fn gpu_shading_matches_the_cpu_reference() {
         &specular,
         vol::gpu::RelightSettings {
             background_rgb: background,
+            // The analytic path, which is what the CPU reference implements.
+            diffuse_samples: 0,
         },
         &harness.context,
         &mut harness.encoder,
@@ -436,4 +438,89 @@ fn relighting_changes_the_image_and_nothing_else_has_to() {
     );
 
     harness.destroy();
+}
+
+/// One isolated surfel has nothing to shadow it and nothing to bounce off, so
+/// the sampled estimator has to land on the analytic irradiance it replaces.
+///
+/// This is what says the estimator is unbiased and normalised correctly. A
+/// visibility term that quietly darkened everything, or a cosine density that
+/// did not cancel the way it should, would show up here as a constant offset
+/// rather than as noise.
+#[test]
+fn sampling_converges_to_the_analytic_irradiance_with_nothing_in_the_way() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    // A single disc facing the camera, big enough to fill much of the frame.
+    let model = vol::relight::RelightModel {
+        surfels: vec![vol::relight::Surfel {
+            center: [0.0; 3],
+            radius: 1.6,
+            normal: [0.0, 0.0, -1.0],
+            material: 0,
+        }],
+        materials: vec![vol::relight::Material {
+            albedo: [0.7, 0.5, 0.3],
+            // Rough, so the specular half contributes little and what is being
+            // compared is the diffuse term this test is about.
+            roughness: 1.0,
+            specular_f0: [0.04; 3],
+            _padding: 0.0,
+        }],
+    };
+    let environment = environment();
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 128, 64);
+    let camera = camera(4.0);
+
+    let mut images = Vec::new();
+    for diffuse_samples in [0u32, 512] {
+        let mut tracer = vol::gpu::RelightTracer::new(
+            &model,
+            &environment,
+            &specular,
+            vol::gpu::RelightSettings {
+                background_rgb: [0.0; 3],
+                diffuse_samples,
+            },
+            &harness.context,
+            &mut harness.encoder,
+        );
+        images.push(harness.render(&mut tracer, camera));
+        tracer.deinit(&harness.context);
+    }
+
+    // Averaged over the lit pixels, so what is left is the bias rather than
+    // the sampling noise, which is what this is trying to catch.
+    let mut analytic = [0.0f64; 3];
+    let mut sampled = [0.0f64; 3];
+    let mut lit = 0usize;
+    for (a, b) in images[0].iter().zip(&images[1]) {
+        if a[0] + a[1] + a[2] <= 1.0e-4 {
+            continue;
+        }
+        lit += 1;
+        for channel in 0..3 {
+            analytic[channel] += a[channel] as f64;
+            sampled[channel] += b[channel] as f64;
+        }
+    }
+    assert!(lit > 1000, "the surfel barely covered the frame: {lit}");
+
+    for channel in 0..3 {
+        analytic[channel] /= lit as f64;
+        sampled[channel] /= lit as f64;
+    }
+    println!("analytic {analytic:?}\n sampled {sampled:?}");
+    for channel in 0..3 {
+        let relative = (sampled[channel] - analytic[channel]).abs() / analytic[channel].max(1e-6);
+        assert!(
+            relative < 0.06,
+            "channel {channel} is {:.1} % off the analytic irradiance: \
+             sampled {:.4} against {:.4}",
+            100.0 * relative,
+            sampled[channel],
+            analytic[channel]
+        );
+    }
 }
