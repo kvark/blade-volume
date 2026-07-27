@@ -389,6 +389,125 @@ impl SpecularEnvironment {
     }
 }
 
+/// One entry of the environment's alias table.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct AliasEntry {
+    /// Probability of keeping this texel rather than taking the alias.
+    pub threshold: f32,
+    /// Texel to fall back to.
+    pub alias: u32,
+    /// Probability of this texel being chosen at all, before the solid angle
+    /// is divided out to make it a density over directions.
+    pub probability: f32,
+    pub _padding: f32,
+}
+
+/// A way of drawing directions in proportion to the light coming from them.
+///
+/// Sampling the environment by the cosine and nothing else loses concentrated
+/// light: a sun a few degrees across covers well under a thousandth of the
+/// sphere, so almost no ray finds it and the estimate comes out dark however
+/// many rays are cast. Choosing texels in proportion to what they emit puts
+/// the samples where the light is.
+///
+/// The alias method rather than a search through a cumulative table, because
+/// it draws in constant time from one lookup and one comparison, which is what
+/// a shader wants.
+pub struct EnvironmentSampler {
+    pub width: usize,
+    pub height: usize,
+    pub entries: Vec<AliasEntry>,
+}
+
+impl EnvironmentSampler {
+    pub fn build(environment: &Environment) -> Self {
+        let (width, height) = (environment.width, environment.height);
+        let count = width * height;
+
+        // Weight by what a texel emits and how much of the sphere it covers,
+        // since a texel near a pole stands for far less of it than one at the
+        // equator.
+        let base =
+            (2.0 * std::f32::consts::PI / width as f32) * (std::f32::consts::PI / height as f32);
+        let mut weights = Vec::with_capacity(count);
+        let mut total = 0.0f64;
+        for y in 0..height {
+            let v = (y as f32 + 0.5) / height as f32;
+            let solid_angle = base * (std::f32::consts::PI * v).sin();
+            for x in 0..width {
+                let texel = environment.texels[y * width + x];
+                let luminance = 0.2126 * texel[0] + 0.7152 * texel[1] + 0.0722 * texel[2];
+                let weight = (luminance.max(0.0) * solid_angle) as f64;
+                total += weight;
+                weights.push(weight);
+            }
+        }
+        if total <= 0.0 {
+            // A black environment: draw uniformly rather than dividing by zero.
+            total = count as f64;
+            weights.iter_mut().for_each(|w| *w = 1.0);
+        }
+
+        let mut entries = vec![AliasEntry::default(); count];
+        for (index, weight) in weights.iter().enumerate() {
+            entries[index].probability = (*weight / total) as f32;
+        }
+
+        // Vose's construction: scale the probabilities so the mean is one, then
+        // pair every texel that is under with one that is over until none are
+        // left.
+        let mut scaled: Vec<f64> = weights.iter().map(|w| w / total * count as f64).collect();
+        let mut small = Vec::new();
+        let mut large = Vec::new();
+        for (index, value) in scaled.iter().enumerate() {
+            if *value < 1.0 {
+                small.push(index);
+            } else {
+                large.push(index);
+            }
+        }
+        while let (Some(lean), Some(fat)) = (small.pop(), large.pop()) {
+            entries[lean].threshold = scaled[lean] as f32;
+            entries[lean].alias = fat as u32;
+            scaled[fat] -= 1.0 - scaled[lean];
+            if scaled[fat] < 1.0 {
+                small.push(fat);
+            } else {
+                large.push(fat);
+            }
+        }
+        // Whatever is left is exactly one by construction, up to rounding.
+        for index in small.into_iter().chain(large) {
+            entries[index].threshold = 1.0;
+            entries[index].alias = index as u32;
+        }
+
+        Self {
+            width,
+            height,
+            entries,
+        }
+    }
+
+    /// Density over directions for the texel a direction falls in.
+    pub fn pdf(&self, direction: glam::Vec3) -> f32 {
+        let yaw = direction.y.clamp(-1.0, 1.0).asin();
+        let pitch = direction.x.atan2(direction.z);
+        let u = (pitch / (2.0 * std::f32::consts::PI) + 0.5).rem_euclid(1.0);
+        let v = (0.5 - yaw / std::f32::consts::PI).clamp(0.0, 1.0);
+        let x = ((u * self.width as f32) as usize).min(self.width - 1);
+        let y = ((v * self.height as f32) as usize).min(self.height - 1);
+        let solid_angle = (2.0 * std::f32::consts::PI / self.width as f32)
+            * (std::f32::consts::PI / self.height as f32)
+            * (std::f32::consts::PI * (y as f32 + 0.5) / self.height as f32).sin();
+        if solid_angle <= 0.0 {
+            return 0.0;
+        }
+        self.entries[y * self.width + x].probability / solid_angle
+    }
+}
+
 /// The second half of the split sum: what scales `F0`.
 ///
 /// Lazarov's analytic fit, which spares carrying a lookup table for something
@@ -600,5 +719,120 @@ mod tests {
             materials: vec![Material::default()],
         };
         assert!(model.validate().unwrap_err().contains("length"));
+    }
+}
+
+#[cfg(test)]
+mod sampler_tests {
+    use super::*;
+
+    #[test]
+    fn the_alias_table_reproduces_the_environment_it_was_built_from() {
+        // A dim sky with one bright patch, which is the case cosine sampling
+        // cannot handle and this exists for.
+        let (width, height) = (64usize, 32usize);
+        let mut environment = Environment::uniform([0.05; 3], width, height);
+        for y in 12..15 {
+            for x in 20..24 {
+                environment.texels[y * width + x] = [50.0; 3];
+            }
+        }
+        let sampler = EnvironmentSampler::build(&environment);
+
+        // Drawing from the table has to reproduce the probabilities that went
+        // into it, or the density the estimator divides by is a lie.
+        //
+        // The two draws per sample come from separate hashed streams. A linear
+        // congruential generator's consecutive outputs are correlated, and
+        // since one picks the texel and the other decides whether to keep it,
+        // that correlation lands squarely on what is being measured.
+        let mut counts = vec![0u32; width * height];
+        let draws = 400_000u32;
+        let hash = |mut x: u32| {
+            x ^= x >> 16;
+            x = x.wrapping_mul(0x7feb_352d);
+            x ^= x >> 15;
+            x = x.wrapping_mul(0x846c_a68b);
+            x ^= x >> 16;
+            x as f32 / u32::MAX as f32
+        };
+        for draw in 0..draws {
+            let index = ((hash(draw.wrapping_mul(2)) * (width * height) as f32) as usize)
+                .min(width * height - 1);
+            let entry = sampler.entries[index];
+            let chosen = if hash(draw.wrapping_mul(2).wrapping_add(1)) < entry.threshold {
+                index
+            } else {
+                entry.alias as usize
+            };
+            counts[chosen] += 1;
+        }
+
+        // Only where enough draws are expected for the frequency to mean
+        // something; a texel expecting four of them says nothing either way.
+        let mut worst = 0.0f32;
+        let mut checked = 0usize;
+        for (index, entry) in sampler.entries.iter().enumerate() {
+            if entry.probability * (draws as f32) < 200.0 {
+                continue;
+            }
+            checked += 1;
+            let observed = counts[index] as f32 / draws as f32;
+            worst = worst.max((observed - entry.probability).abs() / entry.probability);
+        }
+        assert!(checked > 8, "too few texels were worth checking: {checked}");
+        assert!(
+            worst < 0.1,
+            "drawn frequencies are {:.1} % off the table's own probabilities \
+             over {checked} texels",
+            100.0 * worst
+        );
+    }
+
+    #[test]
+    fn the_bright_patch_takes_most_of_the_probability() {
+        let (width, height) = (64usize, 32usize);
+        let mut environment = Environment::uniform([0.05; 3], width, height);
+        for y in 12..15 {
+            for x in 20..24 {
+                environment.texels[y * width + x] = [50.0; 3];
+            }
+        }
+        let sampler = EnvironmentSampler::build(&environment);
+        let mut patch = 0.0f32;
+        for y in 12..15 {
+            for x in 20..24 {
+                patch += sampler.entries[y * width + x].probability;
+            }
+        }
+        // Twelve texels out of two thousand, carrying most of the light.
+        assert!(
+            patch > 0.5,
+            "the patch should dominate the sampling, got {:.3}",
+            patch
+        );
+    }
+
+    #[test]
+    fn the_density_integrates_to_one_over_the_sphere() {
+        let (width, height) = (64usize, 32usize);
+        let mut environment = Environment::uniform([0.2; 3], width, height);
+        environment.texels[13 * width + 21] = [30.0; 3];
+        let sampler = EnvironmentSampler::build(&environment);
+        let base =
+            (2.0 * std::f32::consts::PI / width as f32) * (std::f32::consts::PI / height as f32);
+        let mut integral = 0.0f64;
+        for y in 0..height {
+            let v = (y as f32 + 0.5) / height as f32;
+            let solid_angle = base * (std::f32::consts::PI * v).sin();
+            for x in 0..width {
+                let u = (x as f32 + 0.5) / width as f32;
+                integral += (sampler.pdf(equirect_direction(u, v)) * solid_angle) as f64;
+            }
+        }
+        assert!(
+            (integral - 1.0).abs() < 0.02,
+            "a density has to integrate to one, got {integral:.4}"
+        );
     }
 }
