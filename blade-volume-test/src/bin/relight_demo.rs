@@ -182,6 +182,8 @@ fn main() {
     let mut tessellation = 24usize;
     let mut asset: Option<String> = None;
     let mut resolution = 96.0f32;
+    // Rays per shading point for shadowing and the bounce that comes with it.
+    let mut samples = 0u32;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -202,6 +204,13 @@ fn main() {
                     .expect("bad tessellation");
             }
             "--asset" => asset = Some(args.next().expect("--asset needs a path")),
+            "--samples" => {
+                samples = args
+                    .next()
+                    .expect("--samples needs a count")
+                    .parse()
+                    .expect("bad sample count");
+            }
             "--resolution" => {
                 resolution = args
                     .next()
@@ -323,6 +332,7 @@ fn main() {
             &specular,
             vol::gpu::RelightSettings {
                 background_rgb: [0.02, 0.025, 0.035],
+                diffuse_samples: samples,
             },
             &context,
             &mut encoder,
