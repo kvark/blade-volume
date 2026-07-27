@@ -1,3 +1,5 @@
+#![allow(irrefutable_let_patterns)]
+
 //! Render one relightable model under several environments.
 //!
 //! The point of the representation is that nothing about the model changes
@@ -10,6 +12,7 @@
 
 use blade_graphics as gpu;
 use blade_volume as vol;
+use blade_volume_convert as convert;
 
 const DEFAULT_SIZE: [u32; 2] = [320, 240];
 
@@ -18,7 +21,13 @@ const DEFAULT_SIZE: [u32; 2] = [320, 240];
 /// Discs rather than a mesh because that is what a converter or a
 /// reconstruction produces, and because the normal of a surfel is exact where
 /// a normal inferred from a covariance is not.
-fn sphere(center: glam::Vec3, radius: f32, material: u32, rings: usize, segments: usize) -> Vec<vol::relight::Surfel> {
+fn sphere(
+    center: glam::Vec3,
+    radius: f32,
+    material: u32,
+    rings: usize,
+    segments: usize,
+) -> Vec<vol::relight::Surfel> {
     let mut surfels = Vec::with_capacity(rings * segments);
     // Overlap the discs a little, so the sphere has no gaps between them.
     let disc = 1.6 * radius * std::f32::consts::PI / segments as f32;
@@ -171,6 +180,8 @@ fn main() {
     // 180/tessellation degrees, and normal error is the approximation this
     // representation is most sensitive to.
     let mut tessellation = 24usize;
+    let mut asset: Option<String> = None;
+    let mut resolution = 96.0f32;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -178,7 +189,10 @@ fn main() {
             "--size" => {
                 let spec = args.next().expect("--size needs WxH");
                 let (w, h) = spec.split_once('x').expect("--size looks like WxH");
-                size = [w.parse().expect("bad width"), h.parse().expect("bad height")];
+                size = [
+                    w.parse().expect("bad width"),
+                    h.parse().expect("bad height"),
+                ];
             }
             "--tessellation" => {
                 tessellation = args
@@ -186,6 +200,14 @@ fn main() {
                     .expect("--tessellation needs a count")
                     .parse()
                     .expect("bad tessellation");
+            }
+            "--asset" => asset = Some(args.next().expect("--asset needs a path")),
+            "--resolution" => {
+                resolution = args
+                    .next()
+                    .expect("--resolution needs a number")
+                    .parse()
+                    .expect("bad resolution");
             }
             other => panic!("unexpected argument {other}"),
         }
@@ -211,7 +233,26 @@ fn main() {
     );
     std::fs::create_dir_all(&out_dir).unwrap();
 
-    let model = scene(tessellation);
+    // A converted asset when one is given, and the procedural grid otherwise.
+    // The asset path is the one that matters: it is the whole point of the
+    // representation that a glTF file can arrive carrying its own materials
+    // and come out relightable without anything being fitted.
+    let model = match asset {
+        Some(ref path) => {
+            let options = convert::ConvertOptions {
+                resolution: Some(resolution),
+                ..Default::default()
+            };
+            match convert::relight_model_from_gltf(std::path::Path::new(path), &options) {
+                Ok(model) => model,
+                Err(e) => {
+                    eprintln!("cannot convert {path}: {e:?}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => scene(tessellation),
+    };
     println!(
         "{} surfels over {} materials",
         model.surfels.len(),
@@ -257,10 +298,19 @@ fn main() {
 
     let fov_y = 0.85f32;
     let aspect = size[0] as f32 / size[1] as f32;
+    // Frame whatever came in, rather than assuming the grid's extent.
+    let (min, max) = model.bounds().expect("the model has no surfels");
+    let center = 0.5 * (min + max);
+    let radius = 0.5 * (max - min).length();
+    let distance = radius / (0.5 * fov_y).tan() * 1.15;
+    // A three-quarter view, so an asset is seen the way anyone would look at
+    // it rather than straight down an axis.
+    let (azimuth, elevation) = (0.6f32, 0.35f32);
+    let rotation = glam::Quat::from_rotation_y(azimuth) * glam::Quat::from_rotation_x(elevation);
     let camera = vol::CameraParams {
-        cam_position: [0.0, 0.0, -7.5],
-        depth: 100.0,
-        cam_orientation: [0.0, 0.0, 0.0, 1.0],
+        cam_position: (center - rotation * glam::Vec3::Z * distance).into(),
+        depth: 10.0 * distance.max(1.0),
+        cam_orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
         fov: [2.0 * ((0.5 * fov_y).tan() * aspect).atan(), fov_y],
         principal: [0.0, 0.0],
     };

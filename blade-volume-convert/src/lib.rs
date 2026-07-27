@@ -184,6 +184,12 @@ impl From<vol::AdjacencyError> for ConvertError {
 
 struct MaterialInfo {
     base_color: glam::Vec4,
+    /// glTF metallic-roughness, kept as authored. A relightable conversion
+    /// needs both: a metal keeps its colour in the specular reflectance and
+    /// has no diffuse response at all, and neither fact is recoverable from
+    /// the base colour alone.
+    metallic: f32,
+    roughness: f32,
     base_color_texture: Option<Texture>,
     tex_coord: u32,
     uv_transform: UvTransform,
@@ -425,6 +431,8 @@ fn gather_scene(path: &path::Path) -> Result<(Vec<Triangle>, Vec<MaterialInfo>),
         };
         materials.push(MaterialInfo {
             base_color: glam::Vec4::from(base_color),
+            metallic: pbr.metallic_factor(),
+            roughness: pbr.roughness_factor(),
             base_color_texture,
             tex_coord,
             uv_transform,
@@ -438,6 +446,8 @@ fn gather_scene(path: &path::Path) -> Result<(Vec<Triangle>, Vec<MaterialInfo>),
     let default_material = materials.len();
     materials.push(MaterialInfo {
         base_color: glam::Vec4::ONE,
+        metallic: 1.0,
+        roughness: 1.0,
         base_color_texture: None,
         tex_coord: 0,
         uv_transform: UvTransform::identity(),
@@ -466,6 +476,118 @@ fn gather_scene(path: &path::Path) -> Result<(Vec<Triangle>, Vec<MaterialInfo>),
     }
 
     Ok((triangles, materials))
+}
+
+/// Turn a glTF asset into surfels that can be lit by an environment.
+///
+/// The cloud conversion bakes a colour: it evaluates the base colour under a
+/// fixed ambient gain and stores the result, which cannot be relit because the
+/// light is already inside the number. This keeps the material instead.
+///
+/// Three things follow from what the relighting study measured rather than
+/// from convenience:
+///
+/// - **Normals come from the triangle**, not from anything inferred later.
+///   Five degrees of normal error costs 1.3 dB of relighting accuracy, and a
+///   triangle knows its own normal exactly.
+/// - **One material per glTF material**, shared by every surfel that came off
+///   it, because a patch of surface does not determine a BRDF and there is no
+///   reason to pretend otherwise when the asset already says so.
+/// - **The metallic-roughness conversion happens once, here.** A metal keeps
+///   its base colour as specular reflectance and loses its diffuse albedo,
+///   which is why both factors had to be carried this far.
+///
+/// Sampling density follows the same `resolution` or `density` the cloud
+/// conversion uses, so the two are comparable.
+pub fn relight_model_from_gltf(
+    path: &path::Path,
+    options: &ConvertOptions,
+) -> Result<vol::relight::RelightModel, ConvertError> {
+    let (triangles, materials) = gather_scene(path)?;
+    if triangles.is_empty() {
+        return Err(ConvertError::MissingMeshData);
+    }
+
+    // Resolved exactly as the cloud conversion resolves it, so `--resolution`
+    // means the same thing for both and the two stay comparable.
+    let bbox = compute_bounds(&triangles);
+    let density = match options.resolution {
+        Some(resolution) => {
+            let diagonal = (bbox.max - bbox.min).length();
+            if resolution <= 0.0 || !diagonal.is_finite() || diagonal <= 0.0 {
+                return Err(ConvertError::InvalidDensity);
+            }
+            (resolution / diagonal).powi(3)
+        }
+        None => options.density,
+    };
+    if !density.is_finite() || density <= 0.0 {
+        return Err(ConvertError::InvalidDensity);
+    }
+    let surface_density = density.powf(2.0 / 3.0) * options.surface_density_scale;
+    let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(options.seed);
+
+    let converted = materials
+        .iter()
+        .map(|material| {
+            let base = material.base_color.truncate();
+            let metallic = material.metallic.clamp(0.0, 1.0);
+            vol::relight::Material {
+                // The specular workflow: interpolating towards the base colour
+                // for a metal and towards a dielectric's 4% for everything else.
+                albedo: (base * (1.0 - metallic)).into(),
+                roughness: material.roughness.clamp(0.02, 1.0),
+                specular_f0: (glam::Vec3::splat(0.04)
+                    + (base - glam::Vec3::splat(0.04)) * metallic)
+                    .into(),
+                _padding: 0.0,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut surfels = Vec::new();
+    for tri in &triangles {
+        let count = (tri.area * surface_density).ceil() as u32;
+        if count == 0 {
+            continue;
+        }
+        // Discs large enough that randomly placed ones actually cover the
+        // triangle. Giving each its exact share of the area would only work if
+        // they tiled; scattered at random, the fraction left uncovered is
+        // `exp(-k)` for a total disc area of `k` times the surface, so three
+        // times over leaves about five percent showing through. Sizing them
+        // for their share instead is what perforates the result.
+        const OVERLAP: f32 = 3.0;
+        let radius = (OVERLAP * tri.area / count as f32 / std::f32::consts::PI)
+            .max(1e-12)
+            .sqrt()
+            * options.surface_scale;
+        let material = &materials[tri.material];
+        for _ in 0..count {
+            let (u, v) = sample_barycentric(&mut rng);
+            let w = 1.0 - u - v;
+            let base = sample_triangle_color(tri, material, u, v, w);
+            let coverage = material_alpha_coverage(material, base.w);
+            if coverage <= 0.0 || coverage < options.alpha_threshold {
+                continue;
+            }
+            surfels.push(vol::relight::Surfel {
+                center: (tri.v0 * u + tri.v1 * v + tri.v2 * w).into(),
+                radius,
+                normal: tri.normal.into(),
+                material: tri.material as u32,
+            });
+        }
+    }
+
+    let model = vol::relight::RelightModel {
+        surfels,
+        materials: converted,
+    };
+    model
+        .validate()
+        .unwrap_or_else(|err| panic!("conversion produced an invalid model: {err}"));
+    Ok(model)
 }
 
 /// Extract the source mesh in the form the GPU reference renderer wants.
@@ -1905,6 +2027,8 @@ mod tests {
     #[test]
     fn material_alpha_modes_produce_gltf_coverage() {
         let mut material = MaterialInfo {
+            metallic: 0.0,
+            roughness: 1.0,
             base_color: glam::Vec4::ONE,
             base_color_texture: None,
             tex_coord: 0,
@@ -1925,6 +2049,8 @@ mod tests {
     #[test]
     fn vertex_color_interpolates_and_multiplies_base_color() {
         let material = MaterialInfo {
+            metallic: 0.0,
+            roughness: 1.0,
             base_color: glam::Vec4::new(0.5, 1.0, 0.25, 0.8),
             base_color_texture: None,
             tex_coord: 0,
