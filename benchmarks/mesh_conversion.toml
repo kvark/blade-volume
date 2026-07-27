@@ -278,6 +278,29 @@ render_ms_16 = 5.4
 render_ms_64 = 19.9
 verdict = "analytic is better until the environment is importance sampled"
 
+# It was, and it is still not enough. The environment now has an alias table
+# built over it and half the rays are drawn from it, weighted against the
+# cosine half by the balance heuristic. The table is checked three ways: drawn
+# frequencies match its own probabilities, the density integrates to one over
+# the sphere, and an isolated surfel with nothing to shadow it lands on the
+# analytic irradiance within three percent.
+#
+# Sixteen and sixty-four rays still agree, but for the opposite reason: before
+# they were equally wrong, and now they are equally converged. What is left is
+# bias rather than noise, and it is the shading model — one bounce against the
+# reference's four, on a closed asset where a car's own panels are most of what
+# a ray meets. Direct light alone remains the better trade at a seventh of the
+# cost.
+[relight_quality.importance_sampling]
+analytic_psnr = 27.95
+analytic_tonemapped = 23.78
+sampled_16_psnr = 27.34
+sampled_16_tonemapped = 21.74
+sampled_64_tonemapped = 21.74
+render_ms_analytic = 0.7
+render_ms_16 = 5.3
+verdict = "correct, validated, and still not worth its cost with one bounce"
+
 # The same under-sampling, one stage earlier. Prefiltering the environment for
 # the specular lobe drew 128 GGX samples per texel, and a broad lobe drawing
 # 128 samples misses a sun covering under a thousandth of the sphere almost

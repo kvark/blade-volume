@@ -37,7 +37,14 @@ struct Parameters {
     // background. Comparing against a path traced reference wants the former,
     // since that is what the reference does.
     show_environment: u32,
-    pad: u32,
+    // Dimensions of the environment the alias table was built over.
+    env_width: u32,
+    env_height: u32,
+    // Three scalars of tail, so the block lands on a multiple of sixteen and
+    // matches what the host lays out.
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 var<uniform> g_params: Parameters;
 
@@ -59,6 +66,15 @@ var g_tlas: acceleration_structure;
 var<storage> g_surfels: array<Surfel>;
 var<storage> g_materials: array<Material>;
 // The environment convolved with the GGX lobe, roughness ascending by layer.
+struct AliasEntry {
+    threshold: f32,
+    // `alias` is a reserved word in WGSL.
+    fallback: u32,
+    probability: f32,
+    pad: f32,
+}
+// Lets a direction be drawn in proportion to the light coming from it.
+var<storage> g_alias: array<AliasEntry>;
 var g_specular: texture_2d_array<f32>;
 var g_sampler: sampler;
 var g_out: texture_storage_2d<rgba16float, write>;
@@ -72,6 +88,68 @@ fn direction_to_equirect(dir: vec3<f32>) -> vec2<f32> {
     let u = fract(pitch / (2.0 * PI) + 0.5);
     let v = clamp(0.5 - yaw / PI, 0.0, 1.0);
     return vec2<f32>(u, v);
+}
+
+// Inverse of `direction_to_equirect`, matching `equirect_direction` on the
+// host.
+fn equirect_to_direction(uv: vec2<f32>) -> vec3<f32> {
+    let yaw = PI * (0.5 - uv.y);
+    let pitch = 2.0 * PI * (uv.x - 0.5);
+    return vec3<f32>(cos(yaw) * sin(pitch), sin(yaw), cos(yaw) * cos(pitch));
+}
+
+// Solid angle of one texel of the environment, at a given row.
+fn texel_solid_angle(v: f32) -> f32 {
+    return (2.0 * PI / f32(g_params.env_width))
+        * (PI / f32(g_params.env_height))
+        * sin(PI * v);
+}
+
+struct LightSample {
+    direction: vec3<f32>,
+    // Density over directions, not over texels.
+    pdf: f32,
+}
+
+// A direction drawn in proportion to the environment's own brightness.
+//
+// One lookup and one comparison, which is what the alias table buys over
+// searching a cumulative distribution.
+fn sample_environment(seed: u32) -> LightSample {
+    let count = g_params.env_width * g_params.env_height;
+    let picked = min(u32(unit_float(seed * 4u + 1u) * f32(count)), count - 1u);
+    let entry = g_alias[picked];
+    var chosen = entry.fallback;
+    if (unit_float(seed * 4u + 2u) < entry.threshold) {
+        chosen = picked;
+    }
+
+    let x = chosen % g_params.env_width;
+    let y = chosen / g_params.env_width;
+    // Jittered inside the texel that was chosen, so the direction stays in the
+    // texel whose probability is about to be divided out.
+    let u = (f32(x) + unit_float(seed * 4u + 3u)) / f32(g_params.env_width);
+    let v = (f32(y) + unit_float(seed * 4u + 4u)) / f32(g_params.env_height);
+    let center_v = (f32(y) + 0.5) / f32(g_params.env_height);
+
+    var result: LightSample;
+    result.direction = equirect_to_direction(vec2<f32>(u, v));
+    let solid_angle = texel_solid_angle(center_v);
+    result.pdf = select(0.0, g_alias[chosen].probability / solid_angle, solid_angle > 0.0);
+    return result;
+}
+
+// The same density, for a direction that came from somewhere else.
+fn environment_pdf(dir: vec3<f32>) -> f32 {
+    let uv = direction_to_equirect(dir);
+    let x = min(u32(uv.x * f32(g_params.env_width)), g_params.env_width - 1u);
+    let y = min(u32(uv.y * f32(g_params.env_height)), g_params.env_height - 1u);
+    let center_v = (f32(y) + 0.5) / f32(g_params.env_height);
+    let solid_angle = texel_solid_angle(center_v);
+    if (solid_angle <= 0.0) {
+        return 0.0;
+    }
+    return g_alias[y * g_params.env_width + x].probability / solid_angle;
 }
 
 fn sh9_dot_irradiance(n: vec3<f32>) -> vec3<f32> {
@@ -260,7 +338,7 @@ fn shaded_diffuse(position: vec3<f32>, normal: vec3<f32>, radius: f32, seed: u32
         return sh9_dot_irradiance(normal);
     }
     // Off the surface by a couple of surfel radii, not by an absolute epsilon.
-    // A surface made of overlapping discs is locally a soup of them, so a ray
+    // A surface of overlapping discs is locally a soup of them, so a ray
     // leaving one at a grazing angle immediately meets its neighbours and the
     // point shadows itself. The disc is the scale that has to be cleared.
     //
@@ -268,32 +346,73 @@ fn shaded_diffuse(position: vec3<f32>, normal: vec3<f32>, radius: f32, seed: u32
     // which is a limit of the representation rather than of the estimator: a
     // cloud cannot resolve occlusion below its own sample spacing.
     let bias = 2.0 * radius;
+    let origin = position + normal * bias;
+
+    // Half the rays drawn from the environment and half from the cosine, each
+    // weighted by how likely the other was to have found the same direction.
+    //
+    // Neither strategy is enough alone. The cosine misses a sun a few degrees
+    // across almost every time, however many rays are cast, because it knows
+    // nothing about where the light is; sampling the environment handles that
+    // and is poor at broad sky, where the cosine is exactly right. The balance
+    // heuristic takes whichever was more likely to find each direction.
+    let light_count = max(1u, count / 2u);
+    let cosine_count = max(1u, count - light_count);
     var total = vec3<f32>(0.0);
-    for (var i = 0u; i < count; i += 1u) {
-        let dir = sample_cosine(normal, seed + i * 9781u);
-        let occlusion = trace_occlusion(position + normal * bias, dir, bias);
-        var arriving = occlusion.transmittance * environment_radiance(dir);
-        if (occlusion.blocked) {
-            // One bounce: what the blocker sends back this way. It is shaded
-            // without its own visibility, which is what makes this one bounce
-            // rather than a recursion.
-            let surfel = g_surfels[occlusion.blocker];
-            var facing = surfel.normal;
-            if (dot(facing, dir) > 0.0) {
-                facing = -facing;
-            }
-            // The blocker's whole response, not only its diffuse half. A
-            // metal has no diffuse albedo at all, so bouncing just that off
-            // one makes it cast a black shadow — which is what the first
-            // version did, and it was visible as dark blobs on exactly the
-            // metallic rows and nowhere else.
-            let bounced = shade(facing, -dir, g_materials[surfel.material]);
-            arriving += (1.0 - occlusion.transmittance) * bounced;
+
+    for (var i = 0u; i < light_count; i += 1u) {
+        let sample = sample_environment(seed + i * 6151u);
+        let cosine = dot(normal, sample.direction);
+        if (cosine <= 0.0 || sample.pdf <= 0.0) {
+            continue;
         }
-        total += arriving;
+        let cosine_pdf = cosine / PI;
+        let weight = f32(light_count) * sample.pdf
+            / (f32(light_count) * sample.pdf + f32(cosine_count) * cosine_pdf);
+        let arriving = incoming_radiance(origin, sample.direction, bias);
+        total += arriving * (cosine / PI) * weight / (f32(light_count) * sample.pdf);
     }
-    // Cosine sampling makes the weights one, so the estimate is the mean.
-    return total / f32(count);
+
+    for (var i = 0u; i < cosine_count; i += 1u) {
+        let dir = sample_cosine(normal, seed + 104729u + i * 9781u);
+        let cosine = dot(normal, dir);
+        if (cosine <= 0.0) {
+            continue;
+        }
+        let cosine_pdf = cosine / PI;
+        let light_pdf = environment_pdf(dir);
+        let weight = f32(cosine_count) * cosine_pdf
+            / (f32(light_count) * light_pdf + f32(cosine_count) * cosine_pdf);
+        // The cosine density cancels the cosine and the `1 / PI` exactly, so
+        // what is left of this term is the radiance itself.
+        total += incoming_radiance(origin, dir, bias) * weight / f32(cosine_count);
+    }
+    return total;
+}
+
+// What arrives along a direction: the environment when nothing is in the way,
+// and whatever is in the way when something is.
+//
+// Visibility and the bounce cannot be separated here, which is the point. The
+// transmittance that weights the sky is the same number that weights the
+// blocker, so a renderer cannot end up with one and not the other — and one
+// without the other was measured to be worse than neither.
+fn incoming_radiance(origin: vec3<f32>, dir: vec3<f32>, bias: f32) -> vec3<f32> {
+    let occlusion = trace_occlusion(origin, dir, bias);
+    var arriving = occlusion.transmittance * environment_radiance(dir);
+    if (occlusion.blocked) {
+        // The blocker's whole response, not only its diffuse half. A metal has
+        // no diffuse albedo at all, so bouncing just that off one makes it cast
+        // a black shadow.
+        let surfel = g_surfels[occlusion.blocker];
+        var facing = surfel.normal;
+        if (dot(facing, dir) > 0.0) {
+            facing = -facing;
+        }
+        let bounced = shade(facing, -dir, g_materials[surfel.material]);
+        arriving += (1.0 - occlusion.transmittance) * bounced;
+    }
+    return arriving;
 }
 
 fn shade_surfel(index: u32, ray_dir: vec3<f32>) -> vec3<f32> {

@@ -60,7 +60,9 @@ struct RelightParams {
     diffuse_samples: u32,
     frame_index: u32,
     show_environment: u32,
-    pad: u32,
+    env_width: u32,
+    env_height: u32,
+    pad: [u32; 3],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -70,6 +72,7 @@ struct RelightData {
     g_tlas: gpu::AccelerationStructure,
     g_surfels: gpu::BufferPiece,
     g_materials: gpu::BufferPiece,
+    g_alias: gpu::BufferPiece,
     g_specular: gpu::TextureView,
     g_sampler: gpu::Sampler,
     g_out: gpu::TextureView,
@@ -81,6 +84,7 @@ pub struct RelightTracer {
     mesh_buf: gpu::Buffer,
     surfel_buf: gpu::Buffer,
     material_buf: gpu::Buffer,
+    alias_buf: gpu::Buffer,
     instance_buf: gpu::Buffer,
     specular_texture: gpu::Texture,
     specular_view: gpu::TextureView,
@@ -159,6 +163,17 @@ impl RelightTracer {
         let material_buf = context.create_buffer(gpu::BufferDesc {
             name: "relight-materials",
             size: material_size,
+            memory: gpu::Memory::Device,
+        });
+        // Built here rather than taken as an argument: it depends on nothing
+        // but the environment, and having one way to build it is what keeps
+        // the density the shader divides by the same one it drew from.
+        let sampler_table = relight::EnvironmentSampler::build(environment);
+        let alias_size =
+            (sampler_table.entries.len() * mem::size_of::<relight::AliasEntry>()) as u64;
+        let alias_buf = context.create_buffer(gpu::BufferDesc {
+            name: "relight-alias",
+            size: alias_size,
             memory: gpu::Memory::Device,
         });
 
@@ -260,7 +275,7 @@ impl RelightTracer {
         });
 
         let level_size = specular.level_bytes() as u64;
-        let stage_size = vertex_size + index_size + surfel_size + material_size;
+        let stage_size = vertex_size + index_size + surfel_size + material_size + alias_size;
         let stage = context.create_buffer(gpu::BufferDesc {
             name: "relight-stage",
             size: stage_size,
@@ -291,6 +306,14 @@ impl RelightTracer {
                 model.materials.len(),
             );
             materials.copy_from_slice(&model.materials);
+            let alias = slice::from_raw_parts_mut(
+                stage
+                    .data()
+                    .add((vertex_size + index_size + surfel_size + material_size) as usize)
+                    as *mut relight::AliasEntry,
+                sampler_table.entries.len(),
+            );
+            alias.copy_from_slice(&sampler_table.entries);
 
             for (level, plane) in specular.levels.iter().enumerate() {
                 ptr::copy_nonoverlapping(
@@ -314,6 +337,11 @@ impl RelightTracer {
                 stage.at(vertex_size + index_size + surfel_size),
                 material_buf.at(0),
                 material_size,
+            );
+            pass.copy_buffer_to_buffer(
+                stage.at(vertex_size + index_size + surfel_size + material_size),
+                alias_buf.at(0),
+                alias_size,
             );
             for level in 0..relight::SPECULAR_LEVELS {
                 pass.copy_buffer_to_texture(
@@ -357,11 +385,14 @@ impl RelightTracer {
                 diffuse_samples: settings.diffuse_samples,
                 frame_index: 0,
                 show_environment: settings.show_environment as u32,
-                pad: 0,
+                env_width: environment.width as u32,
+                env_height: environment.height as u32,
+                pad: [0; 3],
             },
             mesh_buf,
             surfel_buf,
             material_buf,
+            alias_buf,
             instance_buf,
             specular_texture,
             specular_view,
@@ -392,6 +423,7 @@ impl RelightTracer {
                 g_tlas: self.tlas,
                 g_surfels: self.surfel_buf.at(0),
                 g_materials: self.material_buf.at(0),
+                g_alias: self.alias_buf.at(0),
                 g_specular: self.specular_view,
                 g_sampler: self.sampler,
                 g_out: output,
@@ -408,6 +440,7 @@ impl RelightTracer {
         context.destroy_texture_view(self.specular_view);
         context.destroy_texture(self.specular_texture);
         context.destroy_buffer(self.instance_buf);
+        context.destroy_buffer(self.alias_buf);
         context.destroy_buffer(self.material_buf);
         context.destroy_buffer(self.surfel_buf);
         context.destroy_buffer(self.mesh_buf);
@@ -420,9 +453,9 @@ mod tests {
 
     #[test]
     fn the_uniform_layout_matches_the_shader() {
-        // `vec4` arrays pack tight; the trailing `vec3` plus `f32` fills one
-        // more and the four `u32` another, so the struct is eleven of them.
-        assert_eq!(mem::size_of::<RelightParams>(), 11 * 16);
+        // `vec4` arrays pack tight, and everything after them is padded out to
+        // land on a multiple of sixteen, which is what the binding requires.
+        assert_eq!(mem::size_of::<RelightParams>(), 12 * 16);
     }
 
     #[test]
