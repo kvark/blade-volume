@@ -278,12 +278,47 @@ render_ms_16 = 5.4
 render_ms_64 = 19.9
 verdict = "analytic is better until the environment is importance sampled"
 
-# One view under `studio` scores 10.7 against a 24.7 mean for that
-# environment. Not the sampling (it is there with zero rays), not the diffuse
-# basis (SH-9 matches direct integration within 5 %), and not the density (it
-# survives five times the surfels). Unexplained.
-[relight_quality.open_defect]
-environment = "studio"
-mean_psnr = 24.68
-worst_view_psnr = 10.66
-ruled_out = ["stochastic sampling", "SH-9 irradiance", "surfel density"]
+# The same under-sampling, one stage earlier. Prefiltering the environment for
+# the specular lobe drew 128 GGX samples per texel, and a broad lobe drawing
+# 128 samples misses a sun covering under a thousandth of the sphere almost
+# every time - which is most of that environment's energy discarded.
+#
+# The fix is not more samples at full resolution: a rough level is smooth by
+# construction, so it is computed at a reduced size with a far larger budget
+# per texel and stretched back up. That is both better and eight times cheaper
+# than brute force, because nothing is lost that was ever there.
+#
+# The environments with a concentrated source gain four to six decibels and the
+# broad ones do not move at all, which is the control.
+[relight_quality.prefilter]
+before_samples = 128
+after_samples = 4096
+after_computes_rough_levels_reduced = true
+psnr_before = 25.29
+psnr_after = 27.95
+tonemapped_after = 23.78
+sun_east_before = 27.88
+sun_east_after = 32.71
+uniform_before = 23.36
+uniform_after = 23.36
+prefilter_seconds_before = 7.9
+prefilter_seconds_brute_force = 113.9
+prefilter_seconds_after = 13.1
+
+# The `studio` outlier was the measure rather than the renderer. That view has
+# the light source in frame: two percent of its pixels are above one and it
+# peaks at 5.6, while the view scoring 24 dB peaks at 0.2. Squared error
+# against a fixed peak of one lets a handful of very bright pixels outweigh
+# every other pixel in the image, so the tool now reports a tone mapped score
+# beside the linear one and that view reads 20.5 rather than 10.7.
+#
+# Ruled out along the way, none of them the cause: the stochastic sampling (it
+# is there with zero rays), the diffuse basis (nine coefficients match direct
+# integration within 5 %), and the surfel density (it survives five times as
+# many).
+[relight_quality.metric]
+linear_psnr_is_dominated_by_highlights = true
+studio_worst_linear = 10.69
+studio_worst_tonemapped = 20.53
+reference_peak_worst_view = 5.6
+reference_peak_best_view = 0.2

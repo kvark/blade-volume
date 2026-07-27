@@ -53,14 +53,52 @@ struct Args {
 
 /// Peak signal-to-noise ratio over linear radiance, against a peak of one.
 ///
-/// The same convention the rest of the relighting work reports, so the numbers
-/// sit next to each other. Not comparable with an sRGB-space PSNR.
+/// The convention the rest of the relighting work reports, so the numbers sit
+/// next to each other. It is the wrong measure on its own for a frame with a
+/// light source in it: the error is squared and the peak is fixed, so a
+/// handful of pixels at five times white can outweigh every other pixel in the
+/// image put together. Read it next to [`tone_mapped_psnr`].
+///
+/// [`tone_mapped_psnr`]: fn.tone_mapped_psnr.html
 fn psnr(a: &[[f32; 4]], b: &[[f32; 4]]) -> f64 {
     let mut sum = 0.0f64;
     let mut count = 0usize;
     for (x, y) in a.iter().zip(b) {
         for channel in 0..3 {
             let difference = (x[channel] - y[channel]) as f64;
+            sum += difference * difference;
+            count += 1;
+        }
+    }
+    let mse = sum / count.max(1) as f64;
+    if mse <= 0.0 {
+        f64::INFINITY
+    } else {
+        10.0 * (1.0 / mse).log10()
+    }
+}
+
+/// The same, after the curve a display would apply.
+///
+/// Compresses the highlights before differencing, so what is measured is how
+/// far apart the two images look rather than how far apart their brightest
+/// pixels are. On a frame with the light source in view the two disagree by
+/// more than ten decibels, and this is the one that corresponds to looking.
+fn tone_mapped_psnr(a: &[[f32; 4]], b: &[[f32; 4]]) -> f64 {
+    let map = |v: f32| {
+        let v = v.max(0.0);
+        let reinhard = v / (1.0 + v);
+        if reinhard <= 0.003_130_8 {
+            12.92 * reinhard
+        } else {
+            1.055 * reinhard.powf(1.0 / 2.4) - 0.055
+        }
+    };
+    let mut sum = 0.0f64;
+    let mut count = 0usize;
+    for (x, y) in a.iter().zip(b) {
+        for channel in 0..3 {
+            let difference = (map(x[channel]) - map(y[channel])) as f64;
             sum += difference * difference;
             count += 1;
         }
@@ -213,8 +251,8 @@ fn main() {
     }
 
     println!(
-        "\n{:<14}{:>10}{:>12}{:>14}",
-        "environment", "psnr", "worst view", "render ms"
+        "\n{:<14}{:>10}{:>12}{:>12}{:>12}{:>12}",
+        "environment", "psnr", "worst", "tonemapped", "worst", "render ms"
     );
     let mut overall = Vec::new();
     for (index, name) in dataset.environments.iter().enumerate() {
@@ -248,6 +286,7 @@ fn main() {
         );
 
         let mut scores = Vec::new();
+        let mut display_scores = Vec::new();
         let mut elapsed = std::time::Duration::ZERO;
         for view in &dataset.views {
             let reference = match dataset.read_plane(&view.radiance[index]) {
@@ -284,6 +323,7 @@ fn main() {
                 unsafe { std::slice::from_raw_parts(readback.data() as *const [f32; 4], count) }
                     .to_vec();
             scores.push(psnr(&rendered, &reference));
+            display_scores.push(tone_mapped_psnr(&rendered, &reference));
 
             if let Some(ref directory) = args.dump {
                 let directory = std::path::Path::new(directory);
@@ -304,17 +344,21 @@ fn main() {
 
         let mean = scores.iter().sum::<f64>() / scores.len() as f64;
         let worst = scores.iter().cloned().fold(f64::INFINITY, f64::min);
+        let display_mean = display_scores.iter().sum::<f64>() / display_scores.len() as f64;
+        let display_worst = display_scores.iter().cloned().fold(f64::INFINITY, f64::min);
         println!(
-            "{name:<14}{mean:>10.2}{worst:>12.2}{:>14.1}",
+            "{name:<14}{mean:>10.2}{worst:>12.2}{display_mean:>12.2}{display_worst:>12.2}{:>12.1}",
             elapsed.as_secs_f64() * 1000.0 / scores.len() as f64
         );
-        overall.push(mean);
+        overall.push((mean, display_mean));
         tracer.deinit(&context);
     }
 
+    let count = overall.len() as f64;
     println!(
-        "\nmean over environments: {:.2} dB",
-        overall.iter().sum::<f64>() / overall.len() as f64
+        "\nmean over environments: {:.2} dB linear, {:.2} dB tone mapped",
+        overall.iter().map(|p| p.0).sum::<f64>() / count,
+        overall.iter().map(|p| p.1).sum::<f64>() / count,
     );
 
     context.destroy_buffer(readback);

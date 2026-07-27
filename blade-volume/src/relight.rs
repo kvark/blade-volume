@@ -272,23 +272,47 @@ fn importance_sample_ggx(u: glam::Vec2, roughness: f32) -> glam::Vec3 {
 
 impl SpecularEnvironment {
     pub fn prefilter(environment: &Environment, width: usize, height: usize) -> Self {
-        const SAMPLES: u32 = 128;
+        // Enough to find a concentrated source. A sun a few degrees across
+        // covers well under a thousandth of the sphere, so a broad lobe drawing
+        // a hundred samples usually misses it entirely and the level comes out
+        // dark — which is most of the environment's energy thrown away, and it
+        // showed up as several decibels against a path traced reference.
+        const SAMPLES: u32 = 4096;
+
         let mut levels = Vec::with_capacity(SPECULAR_LEVELS as usize);
         for level in 0..SPECULAR_LEVELS {
             let roughness = level as f32 / (SPECULAR_LEVELS - 1) as f32;
-            let mut plane = vec![[0.0f32; 4]; width * height];
-            for y in 0..height {
-                let v = (y as f32 + 0.5) / height as f32;
-                for x in 0..width {
-                    let u = (x as f32 + 0.5) / width as f32;
+            if roughness <= 0.0 {
+                // A mirror reflects the environment, so this level is a copy
+                // and has to keep every bit of the source's resolution.
+                let mut plane = Vec::with_capacity(width * height);
+                for y in 0..height {
+                    let v = (y as f32 + 0.5) / height as f32;
+                    for x in 0..width {
+                        let u = (x as f32 + 0.5) / width as f32;
+                        let radiance = environment.sample(equirect_direction(u, v));
+                        plane.push([radiance[0], radiance[1], radiance[2], 1.0]);
+                    }
+                }
+                levels.push(plane);
+                continue;
+            }
+
+            // A rough level is smooth by construction, so it is computed small
+            // and stretched back up. That is where the cost goes: the same
+            // sample budget on a sixteenth of the texels is a far better
+            // estimate of each of them, and nothing is lost because there was
+            // no detail at this roughness to begin with.
+            let small_width = (width >> level).max(8);
+            let small_height = (height >> level).max(4);
+            let mut small = vec![[0.0f32; 4]; small_width * small_height];
+            for y in 0..small_height {
+                let v = (y as f32 + 0.5) / small_height as f32;
+                for x in 0..small_width {
+                    let u = (x as f32 + 0.5) / small_width as f32;
                     // Split sum assumes the view, the normal and the reflection
                     // all agree, which is what lets one table serve every angle.
                     let normal = equirect_direction(u, v);
-                    if roughness <= 0.0 {
-                        let radiance = environment.sample(normal);
-                        plane[y * width + x] = [radiance[0], radiance[1], radiance[2], 1.0];
-                        continue;
-                    }
                     let up = if normal.z.abs() < 0.999 {
                         glam::Vec3::Z
                     } else {
@@ -320,7 +344,35 @@ impl SpecularEnvironment {
                             *accumulated /= weight;
                         }
                     }
-                    plane[y * width + x] = [total[0], total[1], total[2], 1.0];
+                    small[y * small_width + x] = [total[0], total[1], total[2], 1.0];
+                }
+            }
+
+            // Back up to the size every level is stored at, so one array can
+            // hold the ladder and the shader can blend between two of them.
+            let mut plane = vec![[0.0f32; 4]; width * height];
+            for y in 0..height {
+                let fy = ((y as f32 + 0.5) / height as f32) * small_height as f32 - 0.5;
+                let y0 = fy.floor();
+                let ty = fy - y0;
+                let y0 = (y0 as i64).clamp(0, small_height as i64 - 1) as usize;
+                let y1 = (y0 + 1).min(small_height - 1);
+                for x in 0..width {
+                    let fx = ((x as f32 + 0.5) / width as f32) * small_width as f32 - 0.5;
+                    let x0 = fx.floor();
+                    let tx = fx - x0;
+                    let x0 = (x0 as i64).rem_euclid(small_width as i64) as usize;
+                    let x1 = (x0 + 1) % small_width;
+                    let mut texel = [0.0f32; 4];
+                    for channel in 0..3 {
+                        let top = small[y0 * small_width + x0][channel] * (1.0 - tx)
+                            + small[y0 * small_width + x1][channel] * tx;
+                        let bottom = small[y1 * small_width + x0][channel] * (1.0 - tx)
+                            + small[y1 * small_width + x1][channel] * tx;
+                        texel[channel] = top * (1.0 - ty) + bottom * ty;
+                    }
+                    texel[3] = 1.0;
+                    plane[y * width + x] = texel;
                 }
             }
             levels.push(plane);
