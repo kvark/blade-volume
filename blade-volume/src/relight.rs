@@ -355,6 +355,37 @@ pub fn specular_scale(f0: [f32; 3], roughness: f32, n_dot_v: f32) -> [f32; 3] {
     ]
 }
 
+/// Depth over which surfels are taken to be the same surface, in units of the
+/// nearest one's radius.
+///
+/// Surfels that overlap on one surface have to be averaged rather than
+/// composited: compositing lets the front one dominate, which is what leaves
+/// each disc showing its own flat normal. Ones belonging to a *different*
+/// surface further along the ray have to occlude rather than average. The band
+/// is what separates the two cases, and a couple of radii is the width over
+/// which the same sheet can wobble.
+pub const SURFACE_BAND: f32 = 2.0;
+
+/// How much of a ray a surfel covers, as a function of how far from its centre
+/// the ray passed, in units of its radius squared.
+///
+/// Taking the nearest surfel and shading it opaquely makes every disc edge a
+/// visible discontinuity, because two neighbours that overlap disagree about
+/// their normals and the picture switches abruptly from one to the other.
+/// Falling off towards the rim instead lets the overlap do what it is for:
+/// neighbours blend where they meet, and a silhouette gets a soft edge rather
+/// than a staircase.
+///
+/// The inner part of a disc counts fully and only the rim tapers. A falloff
+/// that starts dropping immediately leaves the *interior* of a surface partly
+/// transparent — between two disc centres neither one is contributing much —
+/// and the background bleeding through there is far worse than the facets the
+/// blending is meant to remove.
+pub fn coverage(normalized_radius_squared: f32) -> f32 {
+    let t = ((normalized_radius_squared - 0.4) / 0.6).clamp(0.0, 1.0);
+    1.0 - t * t * (3.0 - 2.0 * t)
+}
+
 /// Shade one surface point, on the CPU.
 ///
 /// The reference the GPU shader is checked against: the same arithmetic in a

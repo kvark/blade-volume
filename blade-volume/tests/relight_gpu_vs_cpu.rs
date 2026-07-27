@@ -286,6 +286,7 @@ fn gpu_shading_matches_the_cpu_reference() {
     );
     let camera = camera(4.0);
     let rendered = harness.render(&mut tracer, camera);
+    let irradiance = environment.diffuse_irradiance();
 
     let mut covered = 0usize;
     let mut worst = 0.0f32;
@@ -294,9 +295,10 @@ fn gpu_shading_matches_the_cpu_reference() {
             let direction = ray_direction(&camera, x, y);
             let origin = glam::Vec3::from(camera.cam_position);
 
-            // Nearest surfel the ray passes through, the same test the shader
-            // makes, so the comparison is of shading rather than of geometry.
-            let mut nearest: Option<(f32, &vol::relight::Surfel)> = None;
+            // Every surfel the ray passes through, composited nearest first,
+            // which is what the renderer does. Taking only the nearest would
+            // disagree at every disc edge, where the falloff is the point.
+            let mut hits: Vec<(f32, &vol::relight::Surfel, f32)> = Vec::new();
             for surfel in &model.surfels {
                 let normal = glam::Vec3::from(surfel.normal);
                 let denominator = direction.dot(normal);
@@ -308,31 +310,58 @@ fn gpu_shading_matches_the_cpu_reference() {
                     continue;
                 }
                 let offset = origin + t * direction - glam::Vec3::from(surfel.center);
-                if offset.length_squared() > surfel.radius * surfel.radius {
+                let normalized = offset.length_squared() / (surfel.radius * surfel.radius);
+                let coverage = vol::relight::coverage(normalized);
+                if coverage <= 0.0 {
                     continue;
                 }
-                if nearest.is_none_or(|(best, _)| t < best) {
-                    nearest = Some((t, surfel));
-                }
+                hits.push((t, surfel, coverage));
             }
+            hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
-            let expected = match nearest {
-                Some((_, surfel)) => {
-                    covered += 1;
+            // Grouped the same way the renderer groups: surfels within a band
+            // of the nearest are one surface and get averaged, the next group
+            // occludes.
+            let mut expected = [0.0f32; 3];
+            let mut transmittance = 1.0f32;
+            let mut index = 0usize;
+            while index < hits.len() && transmittance > 0.003 {
+                let band = vol::relight::SURFACE_BAND * hits[index].1.radius;
+                let limit = hits[index].0 + band;
+                let mut sum_color = [0.0f32; 3];
+                let mut sum_weight = 0.0f32;
+                while index < hits.len() && hits[index].0 <= limit {
+                    let (_, surfel, coverage) = hits[index];
                     let mut normal = glam::Vec3::from(surfel.normal);
                     if normal.dot(direction) > 0.0 {
                         normal = -normal;
                     }
-                    vol::relight::shade(
+                    let lit = vol::relight::shade(
                         normal,
                         -direction,
                         &model.materials[surfel.material as usize],
-                        &environment.diffuse_irradiance(),
+                        &irradiance,
                         &specular,
-                    )
+                    );
+                    for channel in 0..3 {
+                        sum_color[channel] += coverage * lit[channel];
+                    }
+                    sum_weight += coverage;
+                    index += 1;
                 }
-                None => background,
-            };
+                let alpha = sum_weight.min(1.0);
+                for channel in 0..3 {
+                    expected[channel] +=
+                        transmittance * alpha * sum_color[channel] / sum_weight.max(1.0e-6);
+                }
+                transmittance *= 1.0 - alpha;
+            }
+            if !hits.is_empty() {
+                covered += 1;
+            }
+            for channel in 0..3 {
+                expected[channel] += transmittance * background[channel];
+            }
 
             let actual = rendered[(y * SIZE[0] + x) as usize];
             for channel in 0..3 {

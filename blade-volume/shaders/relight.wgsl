@@ -106,47 +106,153 @@ fn shade(normal: vec3<f32>, view: vec3<f32>, material: Material) -> vec3<f32> {
     return out;
 }
 
+// How many overlapping surfels are resolved in one traversal before the walk
+// has to be resumed from the last of them. Deep enough that a single surface
+// layer is always covered in one pass.
+const HIT_WINDOW: u32 = 12u;
+// Below this the remaining surfels cannot change the pixel.
+const MIN_TRANSMITTANCE: f32 = 0.003;
+// Matches `relight::SURFACE_BAND`.
+const SURFACE_BAND: f32 = 2.0;
+
 struct Hit {
-    found: bool,
-    distance: f32,
-    surfel: u32,
+    t: f32,
+    index: u32,
+    // Fraction of the ray this surfel covers, from the falloff towards its rim.
+    coverage: f32,
 }
 
-// Nearest surfel whose disc the ray actually passes through.
-//
-// The acceleration structure holds a triangle that circumscribes each disc, so
-// a committed hit is a candidate rather than an answer: the corners of that
-// triangle lie outside the disc it stands for. Rejecting them here is what
-// makes the primitive round, and it is why the geometry is not opaque.
-fn trace(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> Hit {
-    var rq: ray_query;
-    rayQueryInitialize(&rq, g_tlas, RayDesc(
-        0u, 0xFFu, 0.0, g_camera.depth, ray_origin, ray_dir
-    ));
+fn hit_less(a: Hit, b: Hit) -> bool {
+    return a.t < b.t || (a.t == b.t && a.index < b.index);
+}
 
-    var best = Hit(false, g_camera.depth, 0u);
-    while (rayQueryProceed(&rq)) {
-        let candidate = rayQueryGetCandidateIntersection(&rq);
-        if (candidate.kind != RAY_QUERY_INTERSECTION_TRIANGLE) {
-            continue;
-        }
-        let index = candidate.instance_index;
-        let surfel = g_surfels[index];
-        let denominator = dot(ray_dir, surfel.normal);
-        if (abs(denominator) < 1.0e-8) {
-            continue;
-        }
-        let t = dot(surfel.center - ray_origin, surfel.normal) / denominator;
-        if (t <= 0.0 || t >= best.distance) {
-            continue;
-        }
-        let offset = ray_origin + t * ray_dir - surfel.center;
-        if (dot(offset, offset) > surfel.radius * surfel.radius) {
-            continue;
-        }
-        best = Hit(true, t, index);
+// Matches `relight::coverage` on the host.
+fn coverage_of(normalized_radius_squared: f32) -> f32 {
+    let t = clamp((normalized_radius_squared - 0.4) / 0.6, 0.0, 1.0);
+    return 1.0 - t * t * (3.0 - 2.0 * t);
+}
+
+// Where a ray meets a surfel's disc, and how much of it that disc covers.
+fn intersect_surfel(index: u32, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> Hit {
+    var miss = Hit(0.0, index, 0.0);
+    let surfel = g_surfels[index];
+    let denominator = dot(ray_dir, surfel.normal);
+    if (abs(denominator) < 1.0e-8) {
+        return miss;
     }
-    return best;
+    let t = dot(surfel.center - ray_origin, surfel.normal) / denominator;
+    if (t <= 0.0) {
+        return miss;
+    }
+    let offset = ray_origin + t * ray_dir - surfel.center;
+    let normalized = dot(offset, offset) / (surfel.radius * surfel.radius);
+    return Hit(t, index, coverage_of(normalized));
+}
+
+fn shade_surfel(index: u32, ray_dir: vec3<f32>) -> vec3<f32> {
+    let surfel = g_surfels[index];
+    // A disc has two sides and a ray may arrive at either; shading the one it
+    // actually met keeps a surface lit rather than black when the conversion
+    // wound it the other way.
+    var normal = surfel.normal;
+    if (dot(normal, ray_dir) > 0.0) {
+        normal = -normal;
+    }
+    return shade(normal, -ray_dir, g_materials[surfel.material]);
+}
+
+// Composite every surfel the ray passes through, nearest first.
+//
+// The acceleration structure holds a triangle circumscribing each disc, so a
+// candidate is a candidate rather than an answer, and the ray query hands them
+// over in whatever order the traversal reached them. Compositing is not
+// commutative, so they have to be sorted; the window below keeps the next few
+// in order and the walk resumes from the last one when more remain.
+fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
+    var radiance = vec3<f32>(0.0);
+    var transmittance = 1.0;
+    var cursor = Hit(0.0, 0u, 0.0);
+    var cursor_valid = false;
+
+    // Bounded so a pathological cloud cannot spin here forever.
+    for (var pass_index = 0u; pass_index < 8u; pass_index += 1u) {
+        var rq: ray_query;
+        rayQueryInitialize(&rq, g_tlas, RayDesc(
+            0u, 0xFFu, 0.0, g_camera.depth, ray_origin, ray_dir
+        ));
+
+        var hit_count = 0u;
+        var hits: array<Hit, HIT_WINDOW>;
+        var in_progress = true;
+        while (in_progress) {
+            in_progress = rayQueryProceed(&rq);
+            let intersection = rayQueryGetCandidateIntersection(&rq);
+            if (intersection.kind != RAY_QUERY_INTERSECTION_TRIANGLE) {
+                continue;
+            }
+            var candidate = intersect_surfel(intersection.instance_index, ray_origin, ray_dir);
+            if (candidate.coverage <= 0.0) {
+                continue;
+            }
+            if (cursor_valid && !hit_less(cursor, candidate)) {
+                continue;
+            }
+            // Insertion sort, so the window holds the nearest few in order
+            // whatever order the traversal produced them in.
+            for (var i = 0u; i < hit_count; i += 1u) {
+                let other = hits[i];
+                if (hit_less(candidate, other)) {
+                    hits[i] = candidate;
+                    candidate = other;
+                }
+            }
+            if (hit_count < HIT_WINDOW) {
+                hits[hit_count] = candidate;
+                hit_count += 1u;
+            }
+        }
+
+        if (hit_count == 0u) {
+            break;
+        }
+        // Surfels close together in depth are one surface and get averaged;
+        // the next group along the ray is behind it and occludes instead.
+        // Compositing all of them alike lets whichever disc happens to be in
+        // front carry the pixel, which is exactly what makes its flat normal
+        // visible as a facet.
+        var i = 0u;
+        while (i < hit_count && transmittance > MIN_TRANSMITTANCE) {
+            let band = SURFACE_BAND * g_surfels[hits[i].index].radius;
+            let limit = hits[i].t + band;
+            var sum_color = vec3<f32>(0.0);
+            var sum_weight = 0.0;
+            var j = i;
+            while (j < hit_count && hits[j].t <= limit) {
+                let hit = hits[j];
+                sum_color += hit.coverage * shade_surfel(hit.index, ray_dir);
+                sum_weight += hit.coverage;
+                j += 1u;
+            }
+            // Coverage weights the average; it does not decide opacity.
+            // Compositing the weights instead leaves the interior of a surface
+            // partly transparent wherever a ray happens to pass near the rim
+            // of every disc covering it, and the background bleeding through
+            // there is far worse than the facets this is meant to remove.
+            // Saturating the sum keeps the inside solid and still lets a
+            // silhouette, where only a sliver of one disc is left, go soft.
+            let alpha = min(1.0, sum_weight);
+            radiance += transmittance * alpha * sum_color / max(sum_weight, 1.0e-6);
+            transmittance *= 1.0 - alpha;
+            i = j;
+        }
+        if (transmittance <= MIN_TRANSMITTANCE || hit_count < HIT_WINDOW) {
+            break;
+        }
+        cursor = hits[hit_count - 1u];
+        cursor_valid = true;
+    }
+
+    return vec4<f32>(radiance, transmittance);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -165,18 +271,8 @@ fn trace_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let local_dir = vec3<f32>((ndc - g_camera.principal) * tan_half, 1.0);
     let ray_dir = normalize(qrot(g_camera.orientation, local_dir));
 
-    let hit = trace(g_camera.position, ray_dir);
-    var radiance = g_params.background;
-    if (hit.found) {
-        let surfel = g_surfels[hit.surfel];
-        // A disc has two sides and a ray may arrive at either; shading the one
-        // it actually met keeps a surface lit rather than black when the
-        // conversion wound it the other way.
-        var normal = surfel.normal;
-        if (dot(normal, ray_dir) > 0.0) {
-            normal = -normal;
-        }
-        radiance = shade(normal, -ray_dir, g_materials[surfel.material]);
-    }
+    let traced = trace_blended(g_camera.position, ray_dir);
+    // Whatever the surfels did not cover shows the environment behind them.
+    let radiance = traced.xyz + traced.w * g_params.background;
     textureStore(g_out, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(radiance, 1.0));
 }
