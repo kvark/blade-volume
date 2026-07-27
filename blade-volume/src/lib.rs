@@ -3,6 +3,7 @@
 mod adjacency;
 mod camera;
 pub mod gpu;
+pub mod relight;
 mod scene;
 pub mod shaders;
 mod shape;
