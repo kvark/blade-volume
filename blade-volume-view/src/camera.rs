@@ -111,8 +111,10 @@ impl ControlledCamera {
         let center = 0.5 * (min + max);
         let radius = (0.5 * (max - min)).length().max(1.0e-6);
         // Far enough that the bounding sphere fits the narrower field of view,
-        // with a margin so the thing is not touching the frame edges.
-        let distance = 1.4 * radius / (0.5 * self.fov_y).sin().max(1.0e-3);
+        // with a margin so the thing is not touching the frame edges. The
+        // sphere is the diagonal of the box, so most assets already sit well
+        // inside it and a large margin just renders a small picture.
+        let distance = 1.15 * radius / (0.5 * self.fov_y).sin().max(1.0e-3);
         self.position = center + glam::Vec3::new(0.7, 0.45, 1.0).normalize() * distance;
         self.look_at(center);
         self.depth = distance + 8.0 * radius;

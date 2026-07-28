@@ -55,6 +55,11 @@ pub struct RelightSettings {
     /// is half of it. Cost is roughly quadratic in this, and the mirror end of
     /// the ladder cannot resolve a source smaller than one of its texels.
     pub specular_width: usize,
+    /// Which of the environments to open under.
+    ///
+    /// Only this one is prefiltered at startup, so choosing a light on the
+    /// command line costs no more than taking the first.
+    pub initial_environment: usize,
 }
 
 impl Default for RelightSettings {
@@ -64,6 +69,7 @@ impl Default for RelightSettings {
             show_environment: true,
             exposure: 1.0,
             specular_width: 256,
+            initial_environment: 0,
         }
     }
 }
@@ -147,12 +153,13 @@ impl RelightBackend {
             "a relightable model needs at least one environment to be lit by"
         );
         let specular_width = settings.specular_width.max(8);
-        ensure_prefiltered(&mut environments[0], specular_width);
+        let current = settings.initial_environment.min(environments.len() - 1);
+        ensure_prefiltered(&mut environments[current], specular_width);
 
         let tracer = vol::gpu::RelightTracer::new(
             model,
-            &environments[0].environment,
-            environments[0].specular.as_ref().unwrap(),
+            &environments[current].environment,
+            environments[current].specular.as_ref().unwrap(),
             vol::gpu::RelightSettings {
                 background_rgb: [0.0; 3],
                 diffuse_samples: settings.diffuse_samples,
@@ -202,7 +209,7 @@ impl RelightBackend {
                 pad: [0; 2],
             },
             environments,
-            current: 0,
+            current,
             specular_width,
             surfels: model.surfels.len(),
             materials: model.materials.len(),
@@ -257,6 +264,10 @@ impl RelightBackend {
 
     pub fn current_environment(&self) -> usize {
         self.current
+    }
+
+    pub fn current_environment_name(&self) -> &str {
+        &self.environments[self.current].name
     }
 
     pub fn environment_count(&self) -> usize {

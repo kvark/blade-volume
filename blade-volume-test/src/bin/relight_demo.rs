@@ -367,6 +367,7 @@ fn main() {
             show_environment: false,
             exposure,
             specular_width: 256,
+            initial_environment: 0,
         },
         &context,
         &mut encoder,

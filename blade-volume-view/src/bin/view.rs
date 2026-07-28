@@ -63,9 +63,11 @@ struct Arguments {
     /// viewer builds a sky and moves the sun around it.
     #[argh(option)]
     environment: Option<String>,
-    /// multiply radiance by this before the display curve (surfel only)
-    #[argh(option, default = "1.0")]
-    exposure: f32,
+    /// multiply radiance by this before the display curve (surfel only).
+    /// Without it the viewer picks one from the environment's average
+    /// radiance, which is in whatever units the capture used.
+    #[argh(option)]
+    exposure: Option<f32>,
     /// rays per shading point for shadowing and one bounce (surfel only).
     /// Zero keeps the analytic path, which is noise free and seven times
     /// faster, and measures closer to a path traced reference than shadows
@@ -76,6 +78,10 @@ struct Arguments {
     /// environment (surfel only). Seconds of CPU work, once per light.
     #[argh(option, default = "256")]
     specular_size: usize,
+    /// which environment to open under, by name or index (surfel only).
+    /// `L` cycles through the rest.
+    #[argh(option)]
+    light: Option<String>,
     /// max traversal steps (RadFoam only)
     #[argh(option, default = "1024")]
     max_steps: u32,
@@ -135,12 +141,54 @@ fn load_environments(argument: Option<&str>) -> Vec<view::NamedEnvironment> {
     default_skies()
 }
 
+/// An exposure that puts an ordinary surface somewhere near the middle.
+///
+/// Radiance arrives in whatever units the environment was captured in — the
+/// reference datasets here run from a tenth to a hundred and forty within one
+/// map — so a fixed multiplier renders one of them and blows out or blackens
+/// the rest. Aim the photographic key at 18 %, which is what a light meter
+/// does and is wrong in exactly the cases a light meter is wrong.
+fn exposure_for(entry: &view::NamedEnvironment) -> f32 {
+    let key = entry.environment.key_luminance();
+    if key <= 0.0 {
+        return 1.0;
+    }
+    let exposure = 0.18 / key;
+    log::info!("exposure {exposure:.3} from a key luminance of {key:.4}");
+    exposure.clamp(1.0e-3, 1.0e3)
+}
+
+/// Find an environment by name, or by position if the name is a number.
+///
+/// A name that matches nothing is a mistake worth stopping for: silently
+/// opening under the wrong light would look like the renderer ignoring the
+/// request rather than like the request being wrong.
+fn resolve_light(wanted: &str, environments: &[view::NamedEnvironment]) -> usize {
+    if let Some(index) = environments.iter().position(|entry| entry.name == wanted) {
+        return index;
+    }
+    if let Ok(index) = wanted.parse::<usize>() {
+        if index < environments.len() {
+            return index;
+        }
+    }
+    let names = environments
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    panic!("no environment called '{wanted}'; loaded: {names}");
+}
+
 fn default_skies() -> Vec<view::NamedEnvironment> {
     const WIDTH: usize = 512;
     const HEIGHT: usize = 256;
-    // Bright enough against the sky around it to cast a shadow and produce a
-    // highlight, which a uniform environment cannot do at any intensity.
-    const SUN: [f32; 3] = [140.0, 128.0, 108.0];
+    // Carrying about half the energy in the sky, which is what makes moving
+    // it visible. A tenth of that is still a sun and still physical, and the
+    // difference between one side of the car and the other is then small
+    // enough to argue about — the nine-coefficient irradiance basis smooths a
+    // small source out, so a timid one arrives as a gentle gradient.
+    const SUN: [f32; 3] = [420.0, 390.0, 330.0];
     const ELEVATION: f32 = 0.6;
 
     let sun_at = |azimuth: f32| {
@@ -298,14 +346,26 @@ impl Example {
                 }
             }
             let environments = load_environments(args.environment.as_deref());
+            let initial = match args.light {
+                Some(ref wanted) => resolve_light(wanted, &environments),
+                None => 0,
+            };
+            // Chosen once, from the light the viewer opens under, and left
+            // alone when the light changes: an exposure that followed the
+            // environment would cancel out the very difference that switching
+            // between them is meant to show.
+            let exposure = args
+                .exposure
+                .unwrap_or_else(|| exposure_for(&environments[initial]));
             let backend = view::RenderBackend::Relight(view::RelightBackend::new(
                 &model,
                 environments,
                 view::RelightSettings {
                     diffuse_samples: args.diffuse_samples,
                     show_environment: true,
-                    exposure: args.exposure,
+                    exposure,
                     specular_width: args.specular_size,
+                    initial_environment: initial,
                 },
                 &context,
                 &mut command_encoder,
@@ -777,6 +837,9 @@ impl Example {
                 ));
             }
             view::RenderBackend::Relight(ref backend) => {
+                // Including the light: a reproduction that came back under a
+                // different one would not be a reproduction.
+                args.push_str(&format!(" --light {}", backend.current_environment_name()));
                 args.push_str(&format!(" --exposure {}", backend.exposure()));
                 args.push_str(&format!(" --diffuse-samples {}", backend.diffuse_samples()));
             }

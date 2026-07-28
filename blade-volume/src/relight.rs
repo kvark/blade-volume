@@ -257,6 +257,47 @@ impl Environment {
         self.texels[y * self.width + x]
     }
 
+    /// The luminance an exposure should be built around.
+    ///
+    /// The log average, solid angle weighted, which is the photographic key
+    /// rather than the arithmetic mean. The difference matters here because
+    /// every environment worth relighting under has a sun in it: a source
+    /// covering a thousandth of the sphere at four hundred times the sky
+    /// carries a quarter of the energy, so an arithmetic mean halves the
+    /// exposure and renders the sky — and everything lit by it — dark. The log
+    /// average is what a light meter measures instead.
+    ///
+    /// Radiance is in whatever units the environment was captured or invented
+    /// in, and nothing else says how bright the number one is meant to look.
+    pub fn key_luminance(&self) -> f32 {
+        // Rec. 709 luminance, the same weighting a display applies.
+        const WEIGHT: [f32; 3] = [0.2126, 0.7152, 0.0722];
+        // Keeps a black texel from taking the whole average to zero.
+        const FLOOR: f32 = 1.0e-4;
+
+        let mut total = 0.0f64;
+        let mut solid_angle = 0.0f64;
+        for y in 0..self.height {
+            let v = (y as f32 + 0.5) / self.height as f32;
+            let row = (std::f32::consts::PI * v).sin() as f64;
+            for x in 0..self.width {
+                let texel = self.texels[y * self.width + x];
+                let luminance: f32 = texel
+                    .iter()
+                    .zip(WEIGHT)
+                    .map(|(value, weight)| value.max(0.0) * weight)
+                    .sum();
+                total += (luminance.max(FLOOR)).ln() as f64 * row;
+                solid_angle += row;
+            }
+        }
+        if solid_angle > 0.0 {
+            ((total / solid_angle) as f32).exp()
+        } else {
+            0.0
+        }
+    }
+
     /// Project onto the diffuse basis, with the Lambertian convolution and the
     /// BRDF's `1 / PI` folded in, so the result is the outgoing radiance of a
     /// unit albedo directly.
@@ -742,6 +783,27 @@ mod tests {
             "the sun covers {bright} of {} texels",
             sky.texels.len()
         );
+    }
+
+    #[test]
+    fn the_exposure_key_ignores_the_sun_and_follows_the_sky() {
+        // A sun carrying a quarter of the energy must not halve the exposure,
+        // or every environment with one in it renders dark.
+        let plain = Environment::uniform([0.2; 3], 128, 64);
+        let mut sunny = plain.clone();
+        for index in 0..12 {
+            sunny.texels[20 * 128 + 40 + index] = [400.0; 3];
+        }
+        let plain_key = plain.key_luminance();
+        let sunny_key = sunny.key_luminance();
+        assert!(
+            (sunny_key / plain_key - 1.0).abs() < 0.1,
+            "the sun moved the key from {plain_key:.4} to {sunny_key:.4}"
+        );
+        // And it still tracks the overall level, or it would not be an
+        // exposure at all.
+        let bright = Environment::uniform([2.0; 3], 128, 64);
+        assert!(bright.key_luminance() > 5.0 * plain_key);
     }
 
     #[test]

@@ -86,7 +86,10 @@ cargo run -p blade-volume-view -- <path_to_file.ply> --kind=gaussian
   --min-transmittance <F>  Minimum transmittance for Gaussian rendering (default: 0.01)
   --environment <a.f32,b.f32> Lights for a .surfel asset; without it the viewer
                            builds a sky and moves the sun around it
-  --exposure <F>           Multiply radiance before the display curve (surfel only)
+  --light <name|index>     Environment to open under (surfel only); L cycles
+  --exposure <F>           Multiply radiance before the display curve (surfel
+                           only). Without it, chosen from the environment's
+                           photographic key, so any capture's units render
   --diffuse-samples <N>    Shadow rays per shading point (surfel only, default: 0)
   --specular-size <N>      Prefiltered environment width (surfel only, default: 256)
   --debug                  Start in debug mode (particle density visualization)
@@ -109,7 +112,10 @@ cargo run --release -p blade-volume-view -- model.surfel
 
 The viewer opens framed on the asset with a procedural sky; `L` moves the sun,
 and the model is not rebuilt between lights. `--environment` takes measured
-environments instead, as the float planes blade's `relight_data` writes.
+environments instead, as the float planes blade's `relight_data` writes, and
+`--light` picks which to open under. Exposure comes from the environment's own
+key luminance unless you set it, because radiance arrives in whatever units
+the capture used.
 
 Scored against blade's canonical path tracer over six views of `police.glb`
 under five environments, the direct-lighting path reaches **27.95 dB linear /
