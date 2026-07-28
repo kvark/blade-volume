@@ -392,6 +392,34 @@ prefilter_seconds_256x128 = 1.0
 prefilter_threads = 12
 prefilter_cached_on_return = true
 environment_switch_after_prefilter = "two uploads, no rebuild of the acceleration structures"
-# Nobody has opened the window: this session had no display, so the winit and
-# swapchain path is compiled and unrun.
-window_path_exercised = false
+# The window path does run. Checked on a virtual X server, which presents by
+# software copy, so the frame rate below is a floor rather than a measurement
+# of the renderer: 1100x760 with 235k surfels, direct lighting.
+window_path_exercised = "Xvfb :99, NVIDIA ICD, captured with ffmpeg x11grab"
+window_fps_floor = 130
+window_swapchain_format = "B8G8R8A8_UNORM"
+# Synthetic input through XTEST, since a bare X server assigns no focus and a
+# key sent to it otherwise goes nowhere. Both interactive paths run: `L`
+# cycles the light on a live window, and `W` moves at a tenth of the asset per
+# press rather than the whole of it.
+input_checked = ["L cycles environments", "W flies at the framed scale"]
+
+# Two more defaults were wrong in ways only a window shows. Framing at 1.4
+# times the bounding sphere renders a small picture of a large empty frame,
+# and a fixed exposure of one renders whichever environment happens to be in
+# the right units. The exposure key is the log average rather than the mean,
+# because every environment worth relighting under has a sun in it and an
+# arithmetic mean halves the exposure for a source covering a thousandth of
+# the sphere.
+[relight_quality.viewer.defaults]
+framing_margin_before = 1.4
+framing_margin_after = 1.15
+exposure_key = "log average luminance, solid angle weighted, aimed at 0.18"
+exposure_studio = 4.76
+exposure_sun_east = 1.51
+# The procedural sun was also too weak to see when it moved: a tenth of this
+# is still physical, but the nine-coefficient irradiance basis smooths a small
+# source out and the difference between two sun positions arrived as a gentle
+# gradient rather than as a light moving.
+default_sun_radiance_before = 140.0
+default_sun_radiance_after = 420.0
