@@ -71,6 +71,7 @@ cargo run -p blade-volume-view -- <path_to_file.ply> --kind=gaussian
 | Mouse wheel | Adjust fly speed |
 | I | Print info (camera pose, GPU timings) |
 | Tab | Toggle debug mode (particle density visualization) |
+| L | Next environment (relightable surfels) |
 | Escape | Exit |
 
 ### Options
@@ -78,13 +79,45 @@ cargo run -p blade-volume-view -- <path_to_file.ply> --kind=gaussian
 ```
   --resolution <W,H>       Target resolution (e.g. 1920,1080)
   --cam-pose <x,y,z,r,p,y> Camera position and orientation (Euler degrees)
-  --kind <gaussian|radfoam> Override format auto-detection
+  --kind <gaussian|radfoam|surfel> Override format auto-detection
   --max-steps <N>          Max traversal steps (RadFoam only, default: 1024)
   --weight-threshold <F>   Stop when transmittance <= threshold (RadFoam only, default: 0.001)
   --min-opacity <F>        Minimum opacity for Gaussian rendering (default: 0.01)
   --min-transmittance <F>  Minimum transmittance for Gaussian rendering (default: 0.01)
+  --environment <a.f32,b.f32> Lights for a .surfel asset; without it the viewer
+                           builds a sky and moves the sun around it
+  --exposure <F>           Multiply radiance before the display curve (surfel only)
+  --diffuse-samples <N>    Shadow rays per shading point (surfel only, default: 0)
+  --specular-size <N>      Prefiltered environment width (surfel only, default: 256)
   --debug                  Start in debug mode (particle density visualization)
 ```
+
+## Relightable Surfels
+
+The other representations store what a point looked like: the light that was
+there when it was captured is already inside the number, and cannot be taken
+back out. This one stores what the surface is made of — albedo, specular
+reflectance, roughness, and an exact normal — and works out the radiance at
+render time from whatever environment it is handed.
+
+Convert once, then light it as often as you like:
+
+```bash
+cargo run --release -p blade-volume-convert -- model.glb --kind surfel --resolution 400
+cargo run --release -p blade-volume-view -- model.surfel
+```
+
+The viewer opens framed on the asset with a procedural sky; `L` moves the sun,
+and the model is not rebuilt between lights. `--environment` takes measured
+environments instead, as the float planes blade's `relight_data` writes.
+
+Scored against blade's canonical path tracer over six views of `police.glb`
+under five environments, the direct-lighting path reaches **27.95 dB linear /
+23.78 dB tone mapped at 0.7 ms a frame** (320x240, 235k surfels). Shadow rays
+are available and are *not* an improvement: they buy visibility and one bounce
+at seven times the cost, and against a four-bounce reference they score worse
+than leaving both out. See `benchmarks/mesh_conversion.toml` for the numbers
+and what they do not cover.
 
 ## Gaussian Blobs
 

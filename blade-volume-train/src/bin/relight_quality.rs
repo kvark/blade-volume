@@ -34,7 +34,8 @@ struct Args {
     #[argh(option)]
     dataset: String,
 
-    /// the glTF the reference was rendered from
+    /// the glTF the reference was rendered from, or a `.surfel` file already
+    /// converted from it
     #[argh(option)]
     asset: String,
 
@@ -168,18 +169,34 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let options = convert::ConvertOptions {
-        resolution: Some(args.resolution),
-        ..Default::default()
-    };
-    let model = match convert::relight_model_from_gltf(std::path::Path::new(&args.asset), &options)
-    {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("cannot convert {}: {e:?}", args.asset);
-            std::process::exit(1);
+    // A converted file scores as itself rather than as the glTF it came from.
+    // Any difference between the two would be the format losing something, and
+    // this is where it would show: against a path traced reference, not against
+    // another copy of the same numbers.
+    let asset = std::path::Path::new(&args.asset);
+    let started = std::time::Instant::now();
+    let model = if asset.extension().and_then(|e| e.to_str()) == Some(vol::io::SURFEL_EXTENSION) {
+        match vol::io::try_load_relight(asset) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("cannot load {}: {e}", args.asset);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        let options = convert::ConvertOptions {
+            resolution: Some(args.resolution),
+            ..Default::default()
+        };
+        match convert::relight_model_from_gltf(asset, &options) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("cannot convert {}: {e:?}", args.asset);
+                std::process::exit(1);
+            }
         }
     };
+    println!("asset ready in {:.3} s", started.elapsed().as_secs_f64());
     println!(
         "{} surfels over {} materials, against {} views x {} environments at {}x{}",
         model.surfels.len(),

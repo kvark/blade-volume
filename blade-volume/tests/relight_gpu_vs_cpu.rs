@@ -441,6 +441,136 @@ fn relighting_changes_the_image_and_nothing_else_has_to() {
     harness.destroy();
 }
 
+/// Swapping the light in place has to give the same image as never having had
+/// the old one.
+///
+/// This is the claim an interactive viewer rests on. Changing the environment
+/// without rebuilding the acceleration structures replaces three things — the
+/// irradiance coefficients, the prefiltered ladder and the sampling table —
+/// and leaving any of them stale would produce an image that is nearly right,
+/// which is exactly the kind of wrong that survives being looked at.
+#[test]
+fn swapping_the_environment_matches_building_the_tracer_with_it() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let model = scene();
+    let camera = camera(4.0);
+
+    let first = vol::relight::Environment::uniform([0.9, 0.35, 0.2], 64, 32);
+    let first_specular = vol::relight::SpecularEnvironment::prefilter(&first, 64, 32);
+    // Structured rather than uniform, so a stale ladder or a stale alias table
+    // cannot pass by being flat.
+    let second = environment();
+    let second_specular = vol::relight::SpecularEnvironment::prefilter(&second, 128, 64);
+
+    let mut swapped = vol::gpu::RelightTracer::new(
+        &model,
+        &first,
+        &first_specular,
+        vol::gpu::RelightSettings::default(),
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let before = harness.render(&mut swapped, camera);
+    swapped.set_environment(
+        &second,
+        &second_specular,
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let after = harness.render(&mut swapped, camera);
+    swapped.deinit(&harness.context);
+
+    let mut fresh = vol::gpu::RelightTracer::new(
+        &model,
+        &second,
+        &second_specular,
+        vol::gpu::RelightSettings::default(),
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let reference = harness.render(&mut fresh, camera);
+    fresh.deinit(&harness.context);
+
+    let mut worst = 0.0f32;
+    let mut moved = 0.0f32;
+    for ((a, b), c) in after.iter().zip(&reference).zip(&before) {
+        for channel in 0..3 {
+            worst = worst.max((a[channel] - b[channel]).abs());
+            moved = moved.max((a[channel] - c[channel]).abs());
+        }
+    }
+    println!(
+        "swap differs from a fresh tracer by {worst:.5}, and from the old light by {moved:.4}"
+    );
+    assert!(
+        moved > 0.05,
+        "the image did not change, so nothing was proved about the swap"
+    );
+    // The two paths upload the same bytes, so this is exact rather than close.
+    assert!(
+        worst < 1.0e-4,
+        "a swapped environment differs from a fresh one by {worst:.5}"
+    );
+
+    harness.destroy();
+}
+
+/// A model that has been through the file format renders the same as the one
+/// it was written from.
+///
+/// The round trip is checked field by field elsewhere. What this adds is that
+/// nothing downstream reads a field the format does not carry, which a
+/// comparison of the structs cannot see.
+#[test]
+fn a_saved_model_renders_identically_to_the_one_it_came_from() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let model = scene();
+    let environment = environment();
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 128, 64);
+    let camera = camera(4.0);
+
+    let path = std::env::temp_dir().join(format!(
+        "blade-volume-relight-render-{}.surfel",
+        std::process::id()
+    ));
+    vol::io::try_save_relight(&path, &model).unwrap();
+    let loaded = vol::io::try_load_relight(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+
+    let mut images = Vec::new();
+    for source in [&model, &loaded] {
+        let mut tracer = vol::gpu::RelightTracer::new(
+            source,
+            &environment,
+            &specular,
+            vol::gpu::RelightSettings::default(),
+            &harness.context,
+            &mut harness.encoder,
+        );
+        images.push(harness.render(&mut tracer, camera));
+        tracer.deinit(&harness.context);
+    }
+
+    let mut worst = 0.0f32;
+    let mut lit = 0usize;
+    for (a, b) in images[0].iter().zip(&images[1]) {
+        if a[0] + a[1] + a[2] > 0.0 {
+            lit += 1;
+        }
+        for channel in 0..3 {
+            worst = worst.max((a[channel] - b[channel]).abs());
+        }
+    }
+    assert!(lit > 500, "too little of the frame was lit: {lit}");
+    assert_eq!(worst, 0.0, "a saved model rendered differently by {worst}");
+
+    harness.destroy();
+}
+
 /// One isolated surfel has nothing to shadow it and nothing to bounce off, so
 /// the sampled estimator has to land on the analytic irradiance it replaces.
 ///

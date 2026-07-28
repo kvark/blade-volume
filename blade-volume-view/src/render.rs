@@ -404,6 +404,13 @@ impl RadFoamBackend {
 pub enum RenderBackend {
     Gaussian(GaussianBackend),
     RadFoam(RadFoamBackend),
+    /// Relightable surfels. Reached through [`RelightBackend::new`] rather
+    /// than through [`RenderBackend::new_for_model`], because it is built from
+    /// a different model and needs a light as well as geometry.
+    ///
+    /// [`RelightBackend::new`]: ../relight_render/struct.RelightBackend.html
+    /// [`RenderBackend::new_for_model`]: #method.new_for_model
+    Relight(crate::RelightBackend),
 }
 
 impl RenderBackend {
@@ -440,6 +447,7 @@ impl RenderBackend {
         match *self {
             RenderBackend::Gaussian(_) => {}
             RenderBackend::RadFoam(ref mut backend) => backend.resize(context, size),
+            RenderBackend::Relight(ref mut backend) => backend.resize(context, size),
         }
     }
 
@@ -447,6 +455,9 @@ impl RenderBackend {
         match *self {
             RenderBackend::Gaussian(ref mut backend) => backend.set_debug_mode(mode),
             RenderBackend::RadFoam(ref mut backend) => backend.set_debug_mode(mode),
+            // Nothing to visualise: a surfel has no density to show, and its
+            // material is what the ordinary image already displays.
+            RenderBackend::Relight(_) => {}
         }
     }
 
@@ -465,6 +476,9 @@ impl RenderBackend {
             RenderBackend::RadFoam(ref mut backend) => {
                 backend.render(encoder, frame_view, camera_params, camera_position, size);
             }
+            RenderBackend::Relight(ref mut backend) => {
+                backend.render(encoder, frame_view, camera_params, size);
+            }
         }
     }
 
@@ -478,6 +492,10 @@ impl RenderBackend {
                 println!("Backend: RadFoam Compute");
                 backend.print_info();
             }
+            RenderBackend::Relight(ref backend) => {
+                println!("Backend: Relightable Surfels");
+                backend.print_info();
+            }
         }
     }
 
@@ -485,6 +503,7 @@ impl RenderBackend {
         match self {
             RenderBackend::Gaussian(backend) => backend.destroy(context),
             RenderBackend::RadFoam(backend) => backend.destroy(context),
+            RenderBackend::Relight(backend) => backend.destroy(context),
         }
     }
 }

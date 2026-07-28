@@ -1,6 +1,15 @@
 mod ply;
 mod radfoam_ply;
 mod spz;
+mod surfel;
+
+pub use surfel::{
+    load as load_relight, load_environment, save as save_relight, try_load as try_load_relight,
+    try_load_environment, try_save as try_save_relight, try_save_environment,
+};
+
+/// The extension a relightable surfel asset is written with.
+pub const SURFEL_EXTENSION: &str = "surfel";
 
 use std::{error, fmt, fs, io, path};
 
@@ -61,6 +70,11 @@ pub enum VolumeKind {
     Gaussian,
     /// RadFoam format (Voronoi cell-based).
     RadFoam,
+    /// Relightable surfels, which carry materials rather than radiance and so
+    /// are not a point cloud at all. Loaded through [`try_load_relight`].
+    ///
+    /// [`try_load_relight`]: fn.try_load_relight.html
+    Surfel,
 }
 
 /// Coordinate conventions used by common Gaussian interchange files.
@@ -165,9 +179,11 @@ pub fn try_detect_format(file_path: &str) -> Result<FormatInfo, LoadError> {
         detect_ply_format(file_path)?
     } else if has_extension(file_path, "spz") {
         VolumeKind::Gaussian
+    } else if has_extension(file_path, SURFEL_EXTENSION) {
+        VolumeKind::Surfel
     } else {
         return Err(LoadError::unsupported(format!(
-            "'{file_path}' has no supported .ply or .spz extension"
+            "'{file_path}' has no supported .ply, .spz or .{SURFEL_EXTENSION} extension"
         )));
     };
     Ok(FormatInfo {
@@ -191,6 +207,12 @@ pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
     match info.kind {
         VolumeKind::Gaussian => try_load_gaussian(file_path),
         VolumeKind::RadFoam => try_load_radfoam(file_path),
+        // Deliberately not a silent conversion: a surfel carries a material
+        // and no radiance, so there is nothing to put in the SH slots that
+        // would not be an invention.
+        VolumeKind::Surfel => Err(LoadError::unsupported(format!(
+            "'{file_path}' holds relightable surfels, which load through try_load_relight"
+        ))),
     }
 }
 

@@ -18,7 +18,7 @@ pub use adjacency::{
 };
 #[cfg(feature = "qhull")]
 pub use adjacency::{compute_adjacency_qhull, compute_adjacency_qhull_default};
-pub use camera::CameraParams;
+pub use camera::{orientation_looking, CameraParams};
 pub use gpu::{
     GaussianGpuCloud, InitParameters, MeshReferenceSettings, MeshReferenceTracer, RadFoamGpuCloud,
     RadFoamGpuTracer, RadFoamTraceSettings, ReferenceMesh,

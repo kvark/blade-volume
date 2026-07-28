@@ -110,6 +110,40 @@ fn basis_from_normal(normal: glam::Vec3) -> glam::Mat3 {
 }
 
 impl RelightTracer {
+    /// The prefiltered ladder as one array texture, a layer per roughness.
+    fn create_specular(
+        context: &gpu::Context,
+        specular: &relight::SpecularEnvironment,
+    ) -> (gpu::Texture, gpu::TextureView, gpu::Extent) {
+        let format = gpu::TextureFormat::Rgba32Float;
+        let extent = gpu::Extent {
+            width: specular.width as u32,
+            height: specular.height as u32,
+            depth: 1,
+        };
+        let texture = context.create_texture(gpu::TextureDesc {
+            name: "relight-specular",
+            format,
+            size: extent,
+            dimension: gpu::TextureDimension::D2,
+            array_layer_count: relight::SPECULAR_LEVELS,
+            mip_level_count: 1,
+            usage: gpu::TextureUsage::COPY | gpu::TextureUsage::RESOURCE,
+            sample_count: 1,
+            external: None,
+        });
+        let view = context.create_texture_view(
+            texture,
+            gpu::TextureViewDesc {
+                name: "relight-specular",
+                format,
+                dimension: gpu::ViewDimension::D2Array,
+                subresources: &Default::default(),
+            },
+        );
+        (texture, view, extent)
+    }
+
     pub fn new(
         model: &relight::RelightModel,
         environment: &relight::Environment,
@@ -226,32 +260,8 @@ impl RelightTracer {
             size: tlas_sizes.data,
         });
 
-        let format = gpu::TextureFormat::Rgba32Float;
-        let specular_extent = gpu::Extent {
-            width: specular.width as u32,
-            height: specular.height as u32,
-            depth: 1,
-        };
-        let specular_texture = context.create_texture(gpu::TextureDesc {
-            name: "relight-specular",
-            format,
-            size: specular_extent,
-            dimension: gpu::TextureDimension::D2,
-            array_layer_count: relight::SPECULAR_LEVELS,
-            mip_level_count: 1,
-            usage: gpu::TextureUsage::COPY | gpu::TextureUsage::RESOURCE,
-            sample_count: 1,
-            external: None,
-        });
-        let specular_view = context.create_texture_view(
-            specular_texture,
-            gpu::TextureViewDesc {
-                name: "relight-specular",
-                format,
-                dimension: gpu::ViewDimension::D2Array,
-                subresources: &Default::default(),
-            },
-        );
+        let (specular_texture, specular_view, specular_extent) =
+            Self::create_specular(context, specular);
         let sampler = context.create_sampler(gpu::SamplerDesc {
             name: "relight-specular",
             address_modes: [
@@ -400,6 +410,125 @@ impl RelightTracer {
             blas,
             tlas,
         }
+    }
+
+    /// Put the model under a different light.
+    ///
+    /// The whole claim of this representation is that the environment is an
+    /// argument rather than part of the asset, and this is where that gets
+    /// paid off: the surfels, the materials and both acceleration structures
+    /// are untouched, and only what describes the light is replaced. Nothing
+    /// is rebuilt that does not depend on the environment, which is why this
+    /// costs a couple of uploads rather than a conversion.
+    ///
+    /// The prefiltered ladder is passed in rather than computed here, because
+    /// prefiltering is seconds of CPU work and the caller is the one that
+    /// knows whether it can afford to do it now.
+    pub fn set_environment(
+        &mut self,
+        environment: &relight::Environment,
+        specular: &relight::SpecularEnvironment,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) {
+        assert!(
+            specular.levels.len() == relight::SPECULAR_LEVELS as usize,
+            "expected {} prefiltered levels, got {}",
+            relight::SPECULAR_LEVELS,
+            specular.levels.len()
+        );
+
+        let sampler_table = relight::EnvironmentSampler::build(environment);
+        let alias_size =
+            (sampler_table.entries.len() * mem::size_of::<relight::AliasEntry>()) as u64;
+        let alias_buf = context.create_buffer(gpu::BufferDesc {
+            name: "relight-alias",
+            size: alias_size,
+            memory: gpu::Memory::Device,
+        });
+        let (specular_texture, specular_view, specular_extent) =
+            Self::create_specular(context, specular);
+
+        let level_size = specular.level_bytes() as u64;
+        let stage = context.create_buffer(gpu::BufferDesc {
+            name: "relight-environment-stage",
+            size: alias_size + level_size * relight::SPECULAR_LEVELS as u64,
+            memory: gpu::Memory::Upload,
+        });
+        unsafe {
+            let alias = slice::from_raw_parts_mut(
+                stage.data() as *mut relight::AliasEntry,
+                sampler_table.entries.len(),
+            );
+            alias.copy_from_slice(&sampler_table.entries);
+            for (level, plane) in specular.levels.iter().enumerate() {
+                ptr::copy_nonoverlapping(
+                    plane.as_ptr(),
+                    stage
+                        .data()
+                        .add(alias_size as usize + level * level_size as usize)
+                        as *mut [f32; 4],
+                    plane.len(),
+                );
+            }
+        }
+
+        encoder.start();
+        encoder.init_texture(specular_texture);
+        if let mut pass = encoder.transfer("relight-environment") {
+            pass.copy_buffer_to_buffer(stage.at(0), alias_buf.at(0), alias_size);
+            for level in 0..relight::SPECULAR_LEVELS {
+                pass.copy_buffer_to_texture(
+                    stage.at(alias_size + level as u64 * level_size),
+                    specular_extent.width * mem::size_of::<[f32; 4]>() as u32,
+                    gpu::TexturePiece {
+                        texture: specular_texture,
+                        mip_level: 0,
+                        array_layer: level,
+                        origin: [0; 3],
+                    },
+                    specular_extent,
+                );
+            }
+        }
+        let sync_point = context.submit(encoder);
+        // Everything submitted before this is done too, so what the old
+        // bindings pointed at is no longer being read.
+        let _ = context.wait_for(&sync_point, !0);
+
+        context.destroy_buffer(stage);
+        context.destroy_texture_view(self.specular_view);
+        context.destroy_texture(self.specular_texture);
+        context.destroy_buffer(self.alias_buf);
+
+        self.alias_buf = alias_buf;
+        self.specular_texture = specular_texture;
+        self.specular_view = specular_view;
+        self.params.irradiance = environment.diffuse_irradiance();
+        self.params.env_width = environment.width as u32;
+        self.params.env_height = environment.height as u32;
+        self.params.frame_index = 0;
+    }
+
+    /// Rays cast per shading point for the shadowed diffuse term.
+    ///
+    /// See [`RelightSettings::diffuse_samples`]. Zero is the analytic path.
+    ///
+    /// [`RelightSettings::diffuse_samples`]: struct.RelightSettings.html#structfield.diffuse_samples
+    pub fn diffuse_samples_mut(&mut self) -> &mut u32 {
+        &mut self.params.diffuse_samples
+    }
+
+    pub fn diffuse_samples(&self) -> u32 {
+        self.params.diffuse_samples
+    }
+
+    pub fn set_show_environment(&mut self, show: bool) {
+        self.params.show_environment = show as u32;
+    }
+
+    pub fn show_environment(&self) -> bool {
+        self.params.show_environment != 0
     }
 
     pub fn dispatch(
