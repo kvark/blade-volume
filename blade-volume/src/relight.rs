@@ -191,6 +191,61 @@ impl Environment {
         }
     }
 
+    /// A sky with a sun in it, for when there is no captured environment.
+    ///
+    /// Not a model of anything: a gradient from the horizon to the zenith, a
+    /// flat ground below, and a disc of concentrated radiance. What it is for
+    /// is having the one property that matters to this renderer and that a
+    /// uniform environment does not have — most of the energy in a small part
+    /// of the sphere, which is what produces a shadow, a highlight and a
+    /// visible difference when the light moves.
+    ///
+    /// `sun_direction` points from the scene towards the sun. `sun_radiance`
+    /// is the radiance inside the disc, which for a plausible daylight sky is
+    /// two or three orders of magnitude above the sky around it.
+    pub fn sky(
+        sun_direction: glam::Vec3,
+        sun_radiance: [f32; 3],
+        sun_angular_radius: f32,
+        width: usize,
+        height: usize,
+    ) -> Self {
+        const ZENITH: [f32; 3] = [0.10, 0.16, 0.32];
+        const HORIZON: [f32; 3] = [0.34, 0.38, 0.44];
+        const GROUND: [f32; 3] = [0.07, 0.06, 0.05];
+
+        let sun = sun_direction.normalize_or_zero();
+        let cos_sun = sun_angular_radius.max(0.0).cos();
+        let mut texels = Vec::with_capacity(width * height);
+        for y in 0..height {
+            let v = (y as f32 + 0.5) / height as f32;
+            for x in 0..width {
+                let u = (x as f32 + 0.5) / width as f32;
+                let direction = equirect_direction(u, v);
+                let elevation = direction.y;
+                let mut radiance = if elevation >= 0.0 {
+                    let t = elevation.sqrt();
+                    let mut sky = [0.0f32; 3];
+                    for channel in 0..3 {
+                        sky[channel] = HORIZON[channel] * (1.0 - t) + ZENITH[channel] * t;
+                    }
+                    sky
+                } else {
+                    GROUND
+                };
+                if sun.length_squared() > 0.0 && direction.dot(sun) >= cos_sun {
+                    radiance = sun_radiance;
+                }
+                texels.push(radiance);
+            }
+        }
+        Self {
+            width,
+            height,
+            texels,
+        }
+    }
+
     pub fn sample(&self, direction: glam::Vec3) -> [f32; 3] {
         // Inverse of `equirect_direction`.
         let yaw = direction.y.clamp(-1.0, 1.0).asin();
@@ -306,47 +361,66 @@ impl SpecularEnvironment {
             let small_width = (width >> level).max(8);
             let small_height = (height >> level).max(4);
             let mut small = vec![[0.0f32; 4]; small_width * small_height];
-            for y in 0..small_height {
-                let v = (y as f32 + 0.5) / small_height as f32;
-                for x in 0..small_width {
-                    let u = (x as f32 + 0.5) / small_width as f32;
-                    // Split sum assumes the view, the normal and the reflection
-                    // all agree, which is what lets one table serve every angle.
-                    let normal = equirect_direction(u, v);
-                    let up = if normal.z.abs() < 0.999 {
-                        glam::Vec3::Z
-                    } else {
-                        glam::Vec3::X
-                    };
-                    let tangent = up.cross(normal).normalize();
-                    let bitangent = normal.cross(tangent);
+            // Rows are independent, and there are millions of samples behind
+            // each level, so this is split across the machine. It is the one
+            // thing standing between changing the light and seeing it change.
+            let threads = std::thread::available_parallelism().map_or(1, |count| count.get());
+            let rows_per_chunk = small_height.div_ceil(threads).max(1);
+            std::thread::scope(|scope| {
+                for (chunk_index, chunk) in
+                    small.chunks_mut(rows_per_chunk * small_width).enumerate()
+                {
+                    scope.spawn(move || {
+                        let first_row = chunk_index * rows_per_chunk;
+                        for (row, texels) in chunk.chunks_mut(small_width).enumerate() {
+                            let v = ((first_row + row) as f32 + 0.5) / small_height as f32;
+                            for (x, texel) in texels.iter_mut().enumerate() {
+                                let u = (x as f32 + 0.5) / small_width as f32;
+                                // Split sum assumes the view, the normal and the
+                                // reflection all agree, which is what lets one
+                                // table serve every angle.
+                                let normal = equirect_direction(u, v);
+                                let up = if normal.z.abs() < 0.999 {
+                                    glam::Vec3::Z
+                                } else {
+                                    glam::Vec3::X
+                                };
+                                let tangent = up.cross(normal).normalize();
+                                let bitangent = normal.cross(tangent);
 
-                    let mut total = [0.0f32; 3];
-                    let mut weight = 0.0f32;
-                    for index in 0..SAMPLES {
-                        let hammersley =
-                            glam::Vec2::new(index as f32 / SAMPLES as f32, radical_inverse(index));
-                        let local = importance_sample_ggx(hammersley, roughness);
-                        let half = tangent * local.x + bitangent * local.y + normal * local.z;
-                        let light = (2.0 * normal.dot(half) * half - normal).normalize();
-                        let cosine = normal.dot(light);
-                        if cosine <= 0.0 {
-                            continue;
+                                let mut total = [0.0f32; 3];
+                                let mut weight = 0.0f32;
+                                for index in 0..SAMPLES {
+                                    let hammersley = glam::Vec2::new(
+                                        index as f32 / SAMPLES as f32,
+                                        radical_inverse(index),
+                                    );
+                                    let local = importance_sample_ggx(hammersley, roughness);
+                                    let half =
+                                        tangent * local.x + bitangent * local.y + normal * local.z;
+                                    let light =
+                                        (2.0 * normal.dot(half) * half - normal).normalize();
+                                    let cosine = normal.dot(light);
+                                    if cosine <= 0.0 {
+                                        continue;
+                                    }
+                                    let radiance = environment.sample(light);
+                                    for (accumulated, value) in total.iter_mut().zip(radiance) {
+                                        *accumulated += value * cosine;
+                                    }
+                                    weight += cosine;
+                                }
+                                if weight > 0.0 {
+                                    for accumulated in total.iter_mut() {
+                                        *accumulated /= weight;
+                                    }
+                                }
+                                *texel = [total[0], total[1], total[2], 1.0];
+                            }
                         }
-                        let radiance = environment.sample(light);
-                        for (accumulated, value) in total.iter_mut().zip(radiance) {
-                            *accumulated += value * cosine;
-                        }
-                        weight += cosine;
-                    }
-                    if weight > 0.0 {
-                        for accumulated in total.iter_mut() {
-                            *accumulated /= weight;
-                        }
-                    }
-                    small[y * small_width + x] = [total[0], total[1], total[2], 1.0];
+                    });
                 }
-            }
+            });
 
             // Back up to the size every level is stored at, so one array can
             // hold the ladder and the shader can blend between two of them.
@@ -647,6 +721,27 @@ mod tests {
                 "expected the environment back, got {lit:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_procedural_sky_puts_the_sun_where_it_was_asked_to() {
+        let direction = glam::Vec3::new(0.4, 0.7, -0.3).normalize();
+        let sky = Environment::sky(direction, [200.0; 3], 0.05, 256, 128);
+
+        // The sun is where it was put, and nowhere else.
+        assert!(sky.sample(direction)[0] > 100.0);
+        assert!(sky.sample(-direction)[0] < 1.0);
+        // Below the horizon is ground rather than sky, and both are dim
+        // against the sun: that contrast is the whole reason to prefer this
+        // over a uniform environment.
+        assert!(sky.sample(glam::Vec3::NEG_Y)[2] < sky.sample(glam::Vec3::Y)[2]);
+        let bright = sky.texels.iter().filter(|texel| texel[0] > 100.0).count();
+        let fraction = bright as f32 / sky.texels.len() as f32;
+        assert!(
+            fraction > 0.0 && fraction < 0.01,
+            "the sun covers {bright} of {} texels",
+            sky.texels.len()
+        );
     }
 
     #[test]

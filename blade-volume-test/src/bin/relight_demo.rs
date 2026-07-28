@@ -7,12 +7,22 @@
 //! only the light differs. A cloud that stored spherical harmonics could not
 //! produce the second image at all without being rebuilt.
 //!
+//! This goes through the viewer's backend rather than driving the tracer
+//! directly, into a target in the format a swapchain would hand over. What
+//! comes out is what the window shows — the same tone mapping, the same
+//! environment switching — so these images are evidence about the interactive
+//! path and not about a second one that resembles it.
+//!
 //! Usage:
-//!   relight_demo [--out <dir>] [--size WxH]
+//!   relight_demo [--out <dir>] [--size WxH] [--asset <file>] [--exposure F]
 
 use blade_graphics as gpu;
 use blade_volume as vol;
 use blade_volume_convert as convert;
+use blade_volume_view as view;
+
+/// What blade asks a surface for when it can get it.
+const FORMAT: gpu::TextureFormat = gpu::TextureFormat::Bgra8Unorm;
 
 const DEFAULT_SIZE: [u32; 2] = [320, 240];
 
@@ -161,18 +171,6 @@ fn environments() -> Vec<(&'static str, vol::relight::Environment)> {
     ]
 }
 
-fn encode_srgb(value: f32) -> u8 {
-    // Reinhard first, because a sun a hundred times brighter than the sky has
-    // nowhere to go in a display image otherwise.
-    let mapped = value.max(0.0) / (1.0 + value.max(0.0));
-    let encoded = if mapped <= 0.003_130_8 {
-        12.92 * mapped
-    } else {
-        1.055 * mapped.powf(1.0 / 2.4) - 0.055
-    };
-    (encoded.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
 fn main() {
     let mut out_dir = std::path::PathBuf::from("relight-demo");
     let mut size = DEFAULT_SIZE;
@@ -184,6 +182,7 @@ fn main() {
     let mut resolution = 96.0f32;
     // Rays per shading point for shadowing and the bounce that comes with it.
     let mut samples = 0u32;
+    let mut exposure = 1.0f32;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -204,6 +203,13 @@ fn main() {
                     .expect("bad tessellation");
             }
             "--asset" => asset = Some(args.next().expect("--asset needs a path")),
+            "--exposure" => {
+                exposure = args
+                    .next()
+                    .expect("--exposure needs a number")
+                    .parse()
+                    .expect("bad exposure");
+            }
             "--samples" => {
                 samples = args
                     .next()
@@ -248,15 +254,29 @@ fn main() {
     // and come out relightable without anything being fitted.
     let model = match asset {
         Some(ref path) => {
-            let options = convert::ConvertOptions {
-                resolution: Some(resolution),
-                ..Default::default()
-            };
-            match convert::relight_model_from_gltf(std::path::Path::new(path), &options) {
-                Ok(model) => model,
-                Err(e) => {
-                    eprintln!("cannot convert {path}: {e:?}");
-                    std::process::exit(1);
+            let path = std::path::Path::new(path);
+            // A converted file loads as itself. Converting is seconds and
+            // deterministic, so anything that renders an asset more than once
+            // should be reading one of these instead.
+            if path.extension().and_then(|e| e.to_str()) == Some(vol::io::SURFEL_EXTENSION) {
+                match vol::io::try_load_relight(path) {
+                    Ok(model) => model,
+                    Err(e) => {
+                        eprintln!("cannot load {}: {e}", path.display());
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                let options = convert::ConvertOptions {
+                    resolution: Some(resolution),
+                    ..Default::default()
+                };
+                match convert::relight_model_from_gltf(path, &options) {
+                    Ok(model) => model,
+                    Err(e) => {
+                        eprintln!("cannot convert {}: {e:?}", path.display());
+                        std::process::exit(1);
+                    }
                 }
             }
         }
@@ -273,30 +293,29 @@ fn main() {
         height: size[1],
         depth: 1,
     };
-    let format = gpu::TextureFormat::Rgba16Float;
     let texture = context.create_texture(gpu::TextureDesc {
         name: "relight-demo",
-        format,
+        format: FORMAT,
         size: extent,
         dimension: gpu::TextureDimension::D2,
         array_layer_count: 1,
         mip_level_count: 1,
-        usage: gpu::TextureUsage::STORAGE | gpu::TextureUsage::COPY,
+        usage: gpu::TextureUsage::TARGET | gpu::TextureUsage::COPY,
         sample_count: 1,
         external: None,
     });
-    let view = context.create_texture_view(
+    let target = context.create_texture_view(
         texture,
         gpu::TextureViewDesc {
             name: "relight-demo",
-            format,
+            format: FORMAT,
             dimension: gpu::ViewDimension::D2,
             subresources: &Default::default(),
         },
     );
     let readback = context.create_buffer(gpu::BufferDesc {
         name: "relight-demo-readback",
-        size: (size[0] * size[1]) as u64 * 8,
+        size: (size[0] * size[1]) as u64 * 4,
         memory: gpu::Memory::Shared,
     });
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
@@ -307,71 +326,94 @@ fn main() {
 
     let fov_y = 0.85f32;
     let aspect = size[0] as f32 / size[1] as f32;
-    // Frame whatever came in, rather than assuming the grid's extent.
+    // Frame whatever came in, rather than assuming the grid's extent. The
+    // same three-quarter view the viewer opens on, through the same helper:
+    // composing the rotation by hand here is what produced a camera whose
+    // local `+Y` was world up rather than image down, and so a series of
+    // upside-down renders that read as an odd angle rather than as a bug.
     let (min, max) = model.bounds().expect("the model has no surfels");
     let center = 0.5 * (min + max);
     let radius = 0.5 * (max - min).length();
-    let distance = radius / (0.5 * fov_y).tan() * 1.15;
-    // A three-quarter view, so an asset is seen the way anyone would look at
-    // it rather than straight down an axis.
-    let (azimuth, elevation) = (0.6f32, 0.35f32);
-    let rotation = glam::Quat::from_rotation_y(azimuth) * glam::Quat::from_rotation_x(elevation);
-    let camera = vol::CameraParams {
-        cam_position: (center - rotation * glam::Vec3::Z * distance).into(),
-        depth: 10.0 * distance.max(1.0),
-        cam_orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
-        fov: [2.0 * ((0.5 * fov_y).tan() * aspect).atan(), fov_y],
-        principal: [0.0, 0.0],
+    let distance = 1.15 * radius / (0.5 * fov_y).sin();
+    let position = center + glam::Vec3::new(0.7, 0.45, 1.0).normalize() * distance;
+    let camera = vol::CameraParams::looking_at(
+        position,
+        center,
+        fov_y,
+        aspect,
+        distance + 8.0 * radius.max(0.1),
+    );
+
+    let named = environments()
+        .into_iter()
+        .map(|(name, environment)| view::NamedEnvironment::new(name, environment))
+        .collect::<Vec<_>>();
+    let names = named
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect::<Vec<_>>();
+    let render_size = view::RenderSize {
+        width: size[0],
+        height: size[1],
     };
+    let mut backend = view::RelightBackend::new(
+        &model,
+        named,
+        view::RelightSettings {
+            diffuse_samples: samples,
+            // The model against a flat background, so what differs between
+            // these images is what the light did to it rather than the sky
+            // behind it.
+            show_environment: false,
+            exposure,
+            specular_width: 256,
+        },
+        &context,
+        &mut encoder,
+        FORMAT,
+        render_size,
+    );
 
-    for (name, environment) in environments() {
-        let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 256, 128);
-        let mut tracer = vol::gpu::RelightTracer::new(
-            &model,
-            &environment,
-            &specular,
-            vol::gpu::RelightSettings {
-                background_rgb: [0.02, 0.025, 0.035],
-                diffuse_samples: samples,
-                show_environment: false,
-            },
-            &context,
-            &mut encoder,
-        );
-
+    for (index, name) in names.iter().enumerate() {
+        // Timed, because this is the cost the viewer pays when the light
+        // changes: prefiltering the environment, once, on first use.
+        let started = std::time::Instant::now();
+        backend.set_environment(index, &context, &mut encoder);
+        let switched = started.elapsed();
         encoder.start();
         encoder.init_texture(texture);
-        tracer.dispatch(&mut encoder, view, camera, size);
+        backend.render(&mut encoder, target, camera, render_size);
         if let mut pass = encoder.transfer("relight-demo-readback") {
-            pass.copy_texture_to_buffer(texture.into(), readback.into(), size[0] * 8, extent);
+            pass.copy_texture_to_buffer(texture.into(), readback.into(), size[0] * 4, extent);
         }
         let sync_point = context.submit(&mut encoder);
         assert!(context.wait_for(&sync_point, 30_000).unwrap());
 
         let count = (size[0] * size[1]) as usize;
-        let halves =
-            unsafe { std::slice::from_raw_parts(readback.data() as *const u16, count * 4) };
+        let texels =
+            unsafe { std::slice::from_raw_parts(readback.data() as *const [u8; 4], count) };
         let mut image = image::RgbImage::new(size[0], size[1]);
-        for (index, texel) in halves.chunks_exact(4).enumerate() {
+        for (index, texel) in texels.iter().enumerate() {
+            // Bgra as the surface stores it, already through the display
+            // curve: this is the frame, not a second rendering of it.
             image.put_pixel(
                 index as u32 % size[0],
                 index as u32 / size[0],
-                image::Rgb([
-                    encode_srgb(half::f16::from_bits(texel[0]).to_f32()),
-                    encode_srgb(half::f16::from_bits(texel[1]).to_f32()),
-                    encode_srgb(half::f16::from_bits(texel[2]).to_f32()),
-                ]),
+                image::Rgb([texel[2], texel[1], texel[0]]),
             );
         }
         let path = out_dir.join(format!("{name}.png"));
         image.save(&path).unwrap();
-        println!("wrote {}", path.display());
-
-        tracer.deinit(&context);
+        println!(
+            "wrote {} (switching to this light took {:.2} s)",
+            path.display(),
+            switched.as_secs_f64()
+        );
     }
 
+    backend.destroy(&context);
     context.destroy_buffer(readback);
-    context.destroy_texture_view(view);
+    context.destroy_texture_view(target);
     context.destroy_texture(texture);
     context.destroy_command_encoder(&mut encoder);
 }

@@ -10,7 +10,13 @@
 //! The rendering method is automatically detected based on file contents:
 //!   - PLY files are examined to detect RadFoam vs Gaussian format
 //!   - SPZ files are always Gaussian format
+//!   - `.surfel` files hold relightable surfels and are lit at render time
 //!   - Use --kind to override auto-detection
+//!
+//! A `.surfel` asset carries materials and no light, so one has to be supplied:
+//! `--environment` takes a comma-separated list of float environment planes,
+//! and with none given the viewer makes a sky and moves the sun around it. `L`
+//! cycles through them, which is the thing this representation exists to do.
 //!
 //! Controls:
 //!   WASD/ZX - Move camera
@@ -19,6 +25,7 @@
 //!   Mouse wheel - Adjust fly speed
 //!   I - Print info (camera pose, timings)
 //!   Tab - Toggle debug mode (particle density visualization)
+//!   L - Next environment (relightable surfels)
 //!   F1 - Toggle UI overlay
 //!   Escape - Exit
 
@@ -48,9 +55,27 @@ struct Arguments {
     /// camera position and orientation (as Euler degrees): x,y,z,roll,pitch,yaw
     #[argh(option)]
     cam_pose: Option<String>,
-    /// override format detection: "gaussian" or "radfoam"
+    /// override format detection: "gaussian", "radfoam" or "surfel"
     #[argh(option)]
     kind: Option<String>,
+    /// environment maps to light relightable surfels with, comma separated.
+    /// Float planes as written by blade's relight_data. Without this the
+    /// viewer builds a sky and moves the sun around it.
+    #[argh(option)]
+    environment: Option<String>,
+    /// multiply radiance by this before the display curve (surfel only)
+    #[argh(option, default = "1.0")]
+    exposure: f32,
+    /// rays per shading point for shadowing and one bounce (surfel only).
+    /// Zero keeps the analytic path, which is noise free and seven times
+    /// faster, and measures closer to a path traced reference than shadows
+    /// without a bounce do.
+    #[argh(option, default = "0")]
+    diffuse_samples: u32,
+    /// equirectangular width the specular ladder is prefiltered at, per
+    /// environment (surfel only). Seconds of CPU work, once per light.
+    #[argh(option, default = "256")]
+    specular_size: usize,
     /// max traversal steps (RadFoam only)
     #[argh(option, default = "1024")]
     max_steps: u32,
@@ -80,6 +105,72 @@ where
         *elem = sub.parse().unwrap();
     }
     vec
+}
+
+/// The environments a relightable asset can be put under.
+///
+/// A list of float planes if the caller has any, and otherwise a sky with the
+/// sun moved around it. The synthetic set is not a substitute for measured
+/// light — it exists so that a converted asset can be looked at, and relit,
+/// without also having to produce a dataset first.
+fn load_environments(argument: Option<&str>) -> Vec<view::NamedEnvironment> {
+    if let Some(list) = argument {
+        let loaded = list
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| {
+                let path = std::path::Path::new(entry);
+                let name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or(entry);
+                view::NamedEnvironment::new(name, vol::io::load_environment(path))
+            })
+            .collect::<Vec<_>>();
+        if !loaded.is_empty() {
+            return loaded;
+        }
+    }
+    default_skies()
+}
+
+fn default_skies() -> Vec<view::NamedEnvironment> {
+    const WIDTH: usize = 512;
+    const HEIGHT: usize = 256;
+    // Bright enough against the sky around it to cast a shadow and produce a
+    // highlight, which a uniform environment cannot do at any intensity.
+    const SUN: [f32; 3] = [140.0, 128.0, 108.0];
+    const ELEVATION: f32 = 0.6;
+
+    let sun_at = |azimuth: f32| {
+        glam::Vec3::new(
+            ELEVATION.cos() * azimuth.sin(),
+            ELEVATION.sin(),
+            ELEVATION.cos() * azimuth.cos(),
+        )
+    };
+    let quarter = std::f32::consts::FRAC_PI_2;
+    vec![
+        view::NamedEnvironment::new(
+            "sun-east",
+            vol::relight::Environment::sky(sun_at(quarter), SUN, 0.05, WIDTH, HEIGHT),
+        ),
+        view::NamedEnvironment::new(
+            "sun-front",
+            vol::relight::Environment::sky(sun_at(0.0), SUN, 0.05, WIDTH, HEIGHT),
+        ),
+        view::NamedEnvironment::new(
+            "sun-west",
+            vol::relight::Environment::sky(sun_at(-quarter), SUN, 0.05, WIDTH, HEIGHT),
+        ),
+        // No sun at all: everything is lit by the sky, which is what removes
+        // every shadow and every highlight at once.
+        view::NamedEnvironment::new(
+            "overcast",
+            vol::relight::Environment::sky(glam::Vec3::ZERO, SUN, 0.0, WIDTH, HEIGHT),
+        ),
+    ]
 }
 
 // ============================================================================
@@ -178,6 +269,69 @@ impl Example {
             manual_barriers: false,
         });
 
+        let size = view::RenderSize {
+            width: window_size.width,
+            height: window_size.height,
+        };
+
+        // Relightable surfels are not a point cloud and do not go through the
+        // cloud loader at all: they carry a material and no radiance, and need
+        // a light supplied before they can be drawn.
+        let relightable = match args.kind.as_deref() {
+            Some("surfel") => true,
+            Some(_) => false,
+            None => vol::io::try_detect_format(&args.input_file)
+                .is_ok_and(|info| info.kind == vol::io::VolumeKind::Surfel),
+        };
+        if relightable {
+            let model = vol::io::load_relight(std::path::Path::new(&args.input_file));
+            log::info!(
+                "Loaded {} surfels over {} materials",
+                model.surfels.len(),
+                model.materials.len()
+            );
+            // Assets arrive at whatever scale their author used, so the
+            // default camera is inside some of them and nowhere near others.
+            if args.cam_pose.is_none() {
+                if let Some((min, max)) = model.bounds() {
+                    camera.frame_bounds(min, max);
+                }
+            }
+            let environments = load_environments(args.environment.as_deref());
+            let backend = view::RenderBackend::Relight(view::RelightBackend::new(
+                &model,
+                environments,
+                view::RelightSettings {
+                    diffuse_samples: args.diffuse_samples,
+                    show_environment: true,
+                    exposure: args.exposure,
+                    specular_width: args.specular_size,
+                },
+                &context,
+                &mut command_encoder,
+                surface_info.format,
+                size,
+            ));
+            return Self {
+                camera,
+                backend,
+                command_encoder,
+                prev_sync_point: None,
+                window_size,
+                surface,
+                context,
+                debug_mode: view::DebugMode::Off,
+                input_file: args.input_file,
+
+                ui_ctx,
+                ui_state,
+                ui_painter,
+                ui_show,
+
+                frame_times: VecDeque::with_capacity(FRAME_TIME_HISTORY_SIZE),
+            };
+        }
+
         // Load volume data - use --kind override or auto-detect
         let model = match args.kind.as_deref() {
             Some("gaussian") => {
@@ -212,10 +366,6 @@ impl Example {
             view::DebugMode::ParticleDensity
         } else {
             view::DebugMode::Off
-        };
-        let size = view::RenderSize {
-            width: window_size.width,
-            height: window_size.height,
         };
         let gaussian_settings = view::GaussianSettings {
             min_opacity: args.min_opacity,
@@ -260,6 +410,30 @@ impl Example {
             ui_show,
 
             frame_times: VecDeque::with_capacity(FRAME_TIME_HISTORY_SIZE),
+        }
+    }
+
+    /// Put the model under one of the loaded environments.
+    ///
+    /// Nothing but the light is rebuilt, so this is the cheap operation the
+    /// representation is for — except the first time a given environment is
+    /// used, when prefiltering it costs a second or two of CPU.
+    fn set_environment(&mut self, index: usize) {
+        if let view::RenderBackend::Relight(ref mut backend) = self.backend {
+            backend.set_environment(index, &self.context, &mut self.command_encoder);
+        }
+    }
+
+    fn next_environment(&mut self) {
+        if let view::RenderBackend::Relight(ref mut backend) = self.backend {
+            backend.next_environment(&self.context, &mut self.command_encoder);
+            println!(
+                "Light: {}",
+                backend
+                    .environment_names()
+                    .nth(backend.current_environment())
+                    .unwrap_or("?")
+            );
         }
     }
 
@@ -308,6 +482,9 @@ impl Example {
 
         // Pre-compute command line for the UI button (to avoid borrow conflicts)
         let command_line = self.generate_command_line();
+        // Applied after the pass is closed: switching a light submits its own
+        // uploads and waits on them, which cannot happen mid-frame.
+        let mut chosen_environment: Option<usize> = None;
 
         if self.ui_show {
             ui::Window::new("blade-volume-view")
@@ -322,8 +499,28 @@ impl Example {
                             view::RenderBackend::RadFoam(_) => {
                                 ui.label("RadFoam compute");
                             }
+                            view::RenderBackend::Relight(_) => {
+                                ui.label("Relightable surfels");
+                            }
                         }
                     });
+
+                    // The light, which for this backend is a control rather
+                    // than a property of the asset. Switching to one that has
+                    // not been prefiltered yet blocks for a second or two.
+                    if let view::RenderBackend::Relight(ref backend) = self.backend {
+                        let names = backend.environment_names().collect::<Vec<_>>();
+                        let current = backend.current_environment();
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("Light:");
+                            for (index, name) in names.iter().enumerate() {
+                                if ui.selectable_label(index == current, *name).clicked() {
+                                    chosen_environment = Some(index);
+                                }
+                            }
+                        });
+                    }
 
                     ui.separator();
 
@@ -352,6 +549,29 @@ impl Example {
                                     .logarithmic(true)
                                     .text("Weight threshold"),
                             );
+                        }
+                        view::RenderBackend::Relight(ref mut backend) => {
+                            ui.add(
+                                ui::Slider::new(backend.exposure_mut(), 0.01..=100.0)
+                                    .logarithmic(true)
+                                    .text("Exposure"),
+                            );
+                            ui.add(
+                                ui::Slider::new(backend.diffuse_samples_mut(), 0..=64)
+                                    .text("Shadow rays"),
+                            );
+                            // Said plainly, because the slider above looks
+                            // like a quality control and is not one: it buys
+                            // shadows and one bounce, at seven times the cost,
+                            // and against a path traced reference it scores
+                            // worse than leaving both out.
+                            ui.small(
+                                "0 is analytic: no shadows, no noise, and closer to a path trace",
+                            );
+                            let mut show = backend.show_environment();
+                            if ui.checkbox(&mut show, "Show the environment").changed() {
+                                backend.set_show_environment(show);
+                            }
                         }
                     });
 
@@ -448,6 +668,10 @@ impl Example {
         let paint_jobs = self
             .ui_ctx
             .tessellate(full_output.shapes, full_output.pixels_per_point);
+
+        if let Some(index) = chosen_environment {
+            self.set_environment(index);
+        }
 
         let frame = self.surface.acquire_frame();
 
@@ -552,6 +776,10 @@ impl Example {
                     backend.weight_threshold()
                 ));
             }
+            view::RenderBackend::Relight(ref backend) => {
+                args.push_str(&format!(" --exposure {}", backend.exposure()));
+                args.push_str(&format!(" --diffuse-samples {}", backend.diffuse_samples()));
+            }
         }
 
         // Add debug flag if active
@@ -628,6 +856,9 @@ impl winit::application::ApplicationHandler for App {
                 }
                 if key_code == winit::keyboard::KeyCode::Tab {
                     example.toggle_debug_mode();
+                }
+                if key_code == winit::keyboard::KeyCode::KeyL {
+                    example.next_environment();
                 }
                 if !example.ui_ctx.egui_wants_keyboard_input() {
                     example.camera.on_key(key_code, 1.0);

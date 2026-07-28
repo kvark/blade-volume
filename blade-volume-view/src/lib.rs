@@ -11,10 +11,12 @@
 #![allow(irrefutable_let_patterns)]
 
 mod camera;
+mod relight_render;
 mod render;
 mod scene_renderer;
 
 pub use camera::ControlledCamera;
+pub use relight_render::{NamedEnvironment, RelightBackend, RelightSettings};
 pub use render::{DebugMode, GaussianSettings, RadFoamSettings, RenderBackend, RenderSize};
 pub use scene_renderer::{SceneDebugMode, SceneParams, SceneRenderer};
 

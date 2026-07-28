@@ -1,5 +1,6 @@
+use blade_volume as vol;
 use blade_volume_convert as convert;
-use std::{env, process, time};
+use std::{env, path, process, time};
 
 fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -11,6 +12,11 @@ fn main() {
         }
         Err(ref err) => usage(err),
     };
+
+    if parsed.surfels {
+        convert_surfels(&parsed);
+        return;
+    }
 
     let started = time::Instant::now();
     let model = match convert::convert_gltf(&parsed.input, &parsed.options) {
@@ -42,6 +48,39 @@ fn main() {
     println!("seconds: {:.3}", converted.as_secs_f64());
 }
 
+/// Convert to relightable surfels rather than to a point cloud.
+///
+/// A separate path rather than another output kind, because it is a different
+/// conversion and not a different way of writing the same one: what comes out
+/// carries materials and normals and no radiance at all, so none of the
+/// appearance options above apply to it.
+fn convert_surfels(parsed: &ParsedArgs) {
+    let started = time::Instant::now();
+    let model =
+        match convert::relight_model_from_gltf(path::Path::new(&parsed.input), &parsed.options) {
+            Ok(model) => model,
+            Err(ref err) => fail(&format!("conversion failed: {err:?}")),
+        };
+    let converted = started.elapsed();
+
+    let output = path::Path::new(&parsed.output);
+    if let Err(ref err) = vol::io::try_save_relight(output, &model) {
+        fail(&format!("save failed: {err}"));
+    }
+
+    let bytes = std::fs::metadata(output)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    println!("output: {}", parsed.output);
+    println!("surfels: {}", model.surfels.len());
+    println!("materials: {}", model.materials.len());
+    println!("megabytes: {:.1}", bytes as f64 / (1024.0 * 1024.0));
+    if let Some((min, max)) = model.bounds() {
+        println!("bounds: {min:?} to {max:?}");
+    }
+    println!("seconds: {:.3}", converted.as_secs_f64());
+}
+
 fn usage_text() -> String {
     let defaults = convert::ConvertOptions::default();
     format!(
@@ -51,8 +90,13 @@ Offline conversion of a glTF asset into a point-sampled cloud. No rendering,
 no training: geometry and materials are sampled directly.
 
 Output:
-  -o, --output PATH            output PLY path (default: input with .ply)
-  -k, --kind KIND              gaussian | radfoam (default: gaussian)
+  -o, --output PATH            output path (default: input with the extension
+                               the kind implies)
+  -k, --kind KIND              gaussian | radfoam | surfel (default: gaussian).
+                               surfel writes relightable surfels to .surfel:
+                               materials and normals, no baked radiance, so the
+                               light is supplied at render time. None of the
+                               appearance options below apply to it.
   -f, --format FORMAT          ascii | binary (default: binary)
 
 Sampling rate (pick one; later flags win):
@@ -133,13 +177,13 @@ fn fail(message: &str) -> ! {
     process::exit(1);
 }
 
-fn default_output_path(input: &str) -> String {
+fn default_output_path(input: &str, extension: &str) -> String {
     if let Some(pos) = input.rfind('.') {
         let mut output = input.to_string();
-        output.replace_range(pos + 1.., "ply");
+        output.replace_range(pos + 1.., extension);
         output
     } else {
-        format!("{input}.ply")
+        format!("{input}.{extension}")
     }
 }
 
@@ -147,6 +191,8 @@ struct ParsedArgs {
     input: String,
     output: String,
     format: convert::PlyFormat,
+    /// Relightable surfels rather than a point cloud.
+    surfels: bool,
     options: convert::ConvertOptions,
 }
 
@@ -155,6 +201,7 @@ fn parse_args(args: &[String]) -> Result<Option<ParsedArgs>, String> {
     let mut input: Option<String> = None;
     let mut output: Option<String> = None;
     let mut format = convert::PlyFormat::Binary;
+    let mut surfels = false;
     let mut options = convert::ConvertOptions::default();
 
     let mut i = 0usize;
@@ -169,9 +216,16 @@ fn parse_args(args: &[String]) -> Result<Option<ParsedArgs>, String> {
         match arg {
             "-h" | "--help" => return Ok(None),
             "-k" | "--kind" => {
+                surfels = false;
                 options.output = match value()?.as_str() {
                     "gaussian" => convert::OutputKind::Gaussian,
                     "radfoam" => convert::OutputKind::RadFoam,
+                    "surfel" => {
+                        surfels = true;
+                        // Unused by the surfel path, and left at the default
+                        // rather than given a meaning it does not have.
+                        convert::OutputKind::Gaussian
+                    }
                     other => return Err(format!("unknown output kind: {other}")),
                 };
             }
@@ -258,12 +312,18 @@ fn parse_args(args: &[String]) -> Result<Option<ParsedArgs>, String> {
     }
 
     let input = input.ok_or("missing input gltf path")?;
-    let output = output.unwrap_or_else(|| default_output_path(&input));
+    let extension = if surfels {
+        vol::io::SURFEL_EXTENSION
+    } else {
+        "ply"
+    };
+    let output = output.unwrap_or_else(|| default_output_path(&input, extension));
 
     Ok(Some(ParsedArgs {
         input,
         output,
         format,
+        surfels,
         options,
     }))
 }
@@ -368,6 +428,23 @@ mod tests {
         assert_eq!(options.spring_step, 0.4);
         assert!(options.assign_radii);
         assert_eq!(options.radius_factor, 0.75);
+    }
+
+    #[test]
+    fn the_surfel_kind_picks_its_own_path_and_extension() {
+        let parsed = parse(&["model.glb", "--kind", "surfel"]);
+        assert!(parsed.surfels);
+        assert_eq!(parsed.output, "model.surfel");
+
+        // Asking for a cloud after asking for surfels gets a cloud, so the
+        // last flag decides here the way it does for the sampling rate.
+        let parsed = parse(&["model.glb", "--kind", "surfel", "--kind", "radfoam"]);
+        assert!(!parsed.surfels);
+        assert_eq!(parsed.output, "model.ply");
+
+        // An explicit output is never overridden by the kind.
+        let parsed = parse(&["model.glb", "--kind", "surfel", "-o", "elsewhere.bin"]);
+        assert_eq!(parsed.output, "elsewhere.bin");
     }
 
     #[test]

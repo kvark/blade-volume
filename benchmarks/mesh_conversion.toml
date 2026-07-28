@@ -345,3 +345,53 @@ studio_worst_linear = 10.69
 studio_worst_tonemapped = 20.53
 reference_peak_worst_view = 5.6
 reference_peak_best_view = 0.2
+
+# A file format for converted surfels, so an asset is converted once and read
+# after that. The claim it has to survive is that nothing is lost: the same
+# file scores against the path traced reference exactly as the glTF it came
+# from does, to two decimals, in all five environments.
+#
+# The honest part is the second half. On this asset the format saves almost
+# nothing, because converting `police.glb` is 77 ms and reading the result is
+# 58 ms — a small mesh sampled densely is cheap to convert and the file is a
+# hundred megabytes to read back. The saving would be real for an asset whose
+# conversion is expensive; it is not real here, and the reason to keep the
+# format is that a viewer needs something to open, not that it is faster.
+[relight_quality.serialization]
+format = "blade-volume/src/io/surfel.rs"
+bytes_per_surfel = 32
+psnr_from_gltf = 27.95
+psnr_from_file = 27.95
+tonemapped_from_gltf = 23.78
+tonemapped_from_file = 23.78
+# 3.75M surfels, 114.5 MB, the same asset at resolution 1600.
+convert_seconds = 0.077
+load_seconds = 0.058
+# Decoding field by field first: making the read a straight copy into the
+# tables halved it, which is the only thing that made it competitive at all.
+load_seconds_before_bulk_read = 0.120
+
+# The viewer's own path, which the offline tools do not exercise. Two defects
+# were only visible here, and both would have shipped: the presentation blit
+# sampled upside down, because blade renders with a flipped viewport while the
+# tracer writes its first row at texture y = 0; and the camera's fly speed had
+# a floor of one world unit, which is the whole length of a car.
+#
+# The blit failure is the same shape as every earlier one in this project:
+# whichever number is not being checked is the one that moves. Colour was
+# checked and was right; orientation was not checked and was wrong, through a
+# full round of renders that read as an odd camera angle.
+[relight_quality.viewer]
+backend = "blade-volume-view/src/relight_render.rs"
+checked_headless = "blade-volume-view/tests/relight_backend.rs"
+# Prefiltering is per environment and blocks the frame it happens on. One
+# second is a visible stall; it is kept because 256x128 is the resolution the
+# scored configuration uses, and under-resolving a small bright source is
+# worth several decibels. `--specular-size` trades it back.
+prefilter_seconds_256x128 = 1.0
+prefilter_threads = 12
+prefilter_cached_on_return = true
+environment_switch_after_prefilter = "two uploads, no rebuild of the acceleration structures"
+# Nobody has opened the window: this session had no display, so the winit and
+# swapchain path is compiled and unrun.
+window_path_exercised = false

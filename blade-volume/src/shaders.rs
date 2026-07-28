@@ -6,6 +6,7 @@ pub const RADFOAM: &str = include_str!("../shaders/radfoam.wgsl");
 pub const GAUSSIAN: &str = include_str!("../shaders/gaussian.wgsl");
 pub const MESH_REFERENCE: &str = include_str!("../shaders/mesh_reference.wgsl");
 pub const RELIGHT: &str = include_str!("../shaders/relight.wgsl");
+pub const RELIGHT_BLIT: &str = include_str!("../shaders/relight_blit.wgsl");
 pub const SCENE_TRAVERSE: &str = include_str!("../shaders/scene_traverse.wgsl");
 pub const SCENE_RADFOAM: &str = include_str!("../shaders/scene_radfoam.wgsl");
 pub const RADFOAM_BLIT: &str = include_str!("../shaders/radfoam_blit.wgsl");
