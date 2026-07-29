@@ -1,0 +1,287 @@
+//! Posed photographs in, a relightable scene out, and the score for it.
+//!
+//! Everything this prints is one of two kinds of number, and they are not
+//! interchangeable:
+//!
+//!   - **re-rendering**, which says how close the scene comes to the images it
+//!     was built from. This is what was asked for, and it can be reached by
+//!     cheating: paint the illumination onto the surfaces and it goes up.
+//!   - **decomposition**, which says whether the material and the light are
+//!     separately anything. Only a capture with known truth can measure it,
+//!     which is what `--truth` is for.
+//!
+//! The material count is the knob between them. One material per surfel
+//! re-renders best and has decomposed nothing; a few hundred shared materials
+//! forces the light to explain the shading, and costs re-rendering accuracy to
+//! do it. The sweep is the experiment, so the flag is exposed rather than
+//! tuned out of sight.
+//!
+//! Usage:
+//!   reconstruct --sparse etc/data/bonsai/sparse/0 --images etc/data/bonsai/images
+
+use blade_volume as vol;
+use blade_volume_train as train;
+use std::path;
+
+#[derive(argh::FromArgs)]
+/// Reconstruct geometry, material and light from a posed capture.
+struct Args {
+    /// path to the COLMAP `sparse/0` directory
+    #[argh(option)]
+    sparse: String,
+
+    /// path to the COLMAP images directory
+    #[argh(option)]
+    images: String,
+
+    /// width to work at (default 320). Height follows the camera's aspect.
+    #[argh(option, default = "320")]
+    width: usize,
+
+    /// keep every n-th image (default 4)
+    #[argh(option, default = "4")]
+    stride: usize,
+
+    /// hold out every n-th kept image for testing (default 8, 0 = none)
+    #[argh(option, default = "8")]
+    test_every: usize,
+
+    /// materials the surfels are clustered into (default 256; 0 = one each,
+    /// which fits best and decomposes nothing)
+    #[argh(option, default = "256")]
+    materials: usize,
+
+    /// equirectangular width of the recovered environment (default 32)
+    #[argh(option, default = "32")]
+    environment_width: usize,
+
+    /// alternations between solving for albedo and for light (default 24)
+    #[argh(option, default = "24")]
+    iterations: usize,
+
+    /// disc radius as a multiple of the local point spacing (default 1.4)
+    #[argh(option, default = "1.4")]
+    radius_factor: f32,
+
+    /// shadow rays per shading point when scoring (default 0 = analytic)
+    #[argh(option, default = "0")]
+    diffuse_samples: u32,
+
+    /// write the reconstructed scene here
+    #[argh(option)]
+    output: Option<String>,
+
+    /// write rendered and reference images for the test views here
+    #[argh(option)]
+    dump: Option<String>,
+}
+
+fn main() {
+    env_logger::init();
+    let args: Args = argh::from_env();
+
+    let sparse = path::Path::new(&args.sparse);
+    let images = path::Path::new(&args.images);
+
+    // The working height follows the camera rather than being asked for: a
+    // square render of a 3:2 photograph compares two different framings and
+    // scores the difference as reconstruction error.
+    let height = match aspect_height(sparse, args.width) {
+        Ok(h) => h,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+    };
+
+    let started = std::time::Instant::now();
+    let (capture, reconstruction) = match train::inverse::capture::Capture::from_colmap(
+        sparse,
+        images,
+        args.width,
+        height,
+        args.stride,
+    ) {
+        Ok(pair) => pair,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+    };
+    let (train_views, test_views) = capture.split(args.test_every);
+    println!(
+        "capture: {} views at {}x{} ({} train, {} test), {} sparse points, loaded in {:.1} s",
+        capture.views.len(),
+        capture.width,
+        capture.height,
+        train_views.len(),
+        test_views.len(),
+        reconstruction.points.len(),
+        started.elapsed().as_secs_f64()
+    );
+
+    // ------------------------------------------------------------- geometry
+    let started = std::time::Instant::now();
+    let points: Vec<glam::Vec3> = reconstruction
+        .points
+        .iter()
+        .map(|p| glam::Vec3::new(p.xyz[0] as f32, p.xyz[1] as f32, p.xyz[2] as f32))
+        .collect();
+    let cameras: Vec<glam::Vec3> = capture
+        .views
+        .iter()
+        .map(|v| glam::Vec3::from(v.camera.cam_position))
+        .collect();
+    let (surfels, dropped) = train::inverse::surface::surfels_from_points(
+        &points,
+        &cameras,
+        train::inverse::surface::SurfaceOptions {
+            radius_factor: args.radius_factor,
+            ..Default::default()
+        },
+    );
+    let mut geometry = vol::relight::RelightModel {
+        surfels,
+        materials: vec![vol::relight::Material::default()],
+    };
+    let flipped = train::inverse::surface::orient_towards_views(&mut geometry.surfels, &capture);
+    println!(
+        "geometry: {} surfels ({dropped} points dropped, {flipped} normals turned round) in {:.1} s",
+        geometry.surfels.len(),
+        started.elapsed().as_secs_f64()
+    );
+    if geometry.surfels.is_empty() {
+        eprintln!("no geometry survived; nothing to fit");
+        std::process::exit(1);
+    }
+
+    // ---------------------------------------------------- material and light
+    let started = std::time::Instant::now();
+    let observations = train::inverse::decompose::observe(
+        &geometry,
+        &capture,
+        &train_views,
+        train::inverse::decompose::FitOptions::default().min_facing,
+    );
+    println!(
+        "observed: {} of {} surfels seen by at least one training view, in {:.1} s",
+        observations.seen(),
+        geometry.surfels.len(),
+        started.elapsed().as_secs_f64()
+    );
+
+    let started = std::time::Instant::now();
+    let fitted = train::inverse::decompose::fit(
+        &geometry,
+        &observations,
+        train::inverse::decompose::FitOptions {
+            materials: args.materials,
+            environment_width: args.environment_width,
+            iterations: args.iterations,
+            ..Default::default()
+        },
+    );
+    println!(
+        "decomposed: {} materials, residual {:.4}, {} surfels unseen, in {:.1} s",
+        fitted.scene.model.materials.len(),
+        fitted.residual,
+        fitted.unseen,
+        started.elapsed().as_secs_f64()
+    );
+    describe_light(&fitted.scene.environment);
+
+    if let Some(ref output) = args.output {
+        let output = path::Path::new(output);
+        if let Err(e) = vol::io::try_save_relight(output, &fitted.scene.model) {
+            eprintln!("cannot write {}: {e}", output.display());
+        } else {
+            println!("wrote {}", output.display());
+        }
+        let environment = output.with_extension("f32");
+        if let Err(e) = vol::io::try_save_environment(&environment, &fitted.scene.environment) {
+            eprintln!("cannot write {}: {e}", environment.display());
+        } else {
+            println!("wrote {}", environment.display());
+        }
+    }
+
+    // ---------------------------------------------------------------- score
+    let mut renderer = match train::inverse::score::Renderer::new(capture.width, capture.height) {
+        Ok(r) => r,
+        Err(message) => {
+            eprintln!("cannot score: {message}");
+            std::process::exit(1);
+        }
+    };
+    println!("\nGPU: {}", renderer.device_name());
+    if let Some(ref directory) = args.dump {
+        let _ = std::fs::create_dir_all(directory);
+    }
+    let dump = args.dump.as_deref().map(path::Path::new);
+
+    println!(
+        "\n{:<8}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}",
+        "split", "views", "psnr srgb", "worst", "psnr linear", "coverage", "where hit"
+    );
+    for (name, indices, dump) in [("train", &train_views, None), ("test", &test_views, dump)] {
+        if indices.is_empty() {
+            continue;
+        }
+        let summary = renderer.score(&fitted.scene, &capture, indices, args.diffuse_samples, dump);
+        println!(
+            "{name:<8}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{:>12.2}",
+            summary.views,
+            summary.srgb_psnr,
+            summary.worst_srgb_psnr,
+            summary.linear_psnr,
+            100.0 * summary.coverage,
+            summary.covered_srgb_psnr
+        );
+    }
+    renderer.destroy();
+}
+
+/// The height that keeps the camera's aspect ratio at the chosen width.
+fn aspect_height(sparse: &path::Path, width: usize) -> Result<usize, String> {
+    let cameras = train::colmap::try_load_cameras(&sparse.join("cameras.bin"))
+        .map_err(|e| format!("cannot read cameras: {e}"))?;
+    let camera = cameras
+        .first()
+        .ok_or_else(|| "the reconstruction has no cameras".to_string())?;
+    Ok(((width * camera.height as usize) / camera.width as usize).max(1))
+}
+
+/// Say what the recovered light looks like, in terms that can be checked.
+///
+/// A single number for the whole sky hides the only thing worth knowing about
+/// it — whether it has any structure at all, or whether the fit gave up and
+/// returned the uniform it started from.
+fn describe_light(environment: &vol::relight::Environment) {
+    let mut brightest = (glam::Vec3::ZERO, f32::NEG_INFINITY);
+    let mut total = 0.0f64;
+    let mut weight = 0.0f64;
+    for y in 0..environment.height {
+        let v = (y as f32 + 0.5) / environment.height as f32;
+        let row = (std::f32::consts::PI * v).sin() as f64;
+        for x in 0..environment.width {
+            let u = (x as f32 + 0.5) / environment.width as f32;
+            let texel = environment.texels[y * environment.width + x];
+            let luminance = 0.2126 * texel[0] + 0.7152 * texel[1] + 0.0722 * texel[2];
+            if luminance > brightest.1 {
+                brightest = (vol::relight::equirect_direction(u, v), luminance);
+            }
+            total += luminance as f64 * row;
+            weight += row;
+        }
+    }
+    let mean = (total / weight.max(1.0e-9)) as f32;
+    let direction = brightest.0;
+    println!(
+        "light: mean {mean:.3}, brightest {:.3} towards ({:.2}, {:.2}, {:.2}), contrast {:.1}x",
+        brightest.1,
+        direction.x,
+        direction.y,
+        direction.z,
+        brightest.1 / mean.max(1.0e-6)
+    );
+}

@@ -31,6 +31,7 @@ use blade_volume as vol;
 pub mod colmap;
 pub mod diff_render;
 pub mod fit;
+pub mod inverse;
 pub mod metrics;
 pub mod pipeline;
 pub mod relight;
