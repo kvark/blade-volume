@@ -1,0 +1,213 @@
+# Posed photographs in, a relightable scene out.
+#
+# Two kinds of number live here and they are not interchangeable:
+#
+#   - **re-rendering**, how close the recovered scene comes to the images it
+#     was built from. This is the goal, and it can be reached by cheating:
+#     paint the illumination onto the surfaces and it goes up.
+#   - **decomposition**, whether the material and the light are separately
+#     anything. Only a capture whose answer is known can measure it, which is
+#     what the `truth` section is.
+#
+# A run that reports only the first has not shown that anything was recovered.
+#
+# Reproduce with:
+#   cargo build --release -p blade-volume-train --features qhull --bins
+#   ./target/release/inverse_truth --views 24 --width 320 --height 240
+#   ./target/release/reconstruct --sparse etc/data/bonsai-full/sparse/0 \
+#       --images etc/data/bonsai-full/images --foam <trained.ply> \
+#       --width 256 --stride 8 --materials 256 \
+#       --voxel-factor 4 --min-peak 0.05 --disc-radius 2.5
+
+[manifest]
+name = "inverse_rendering"
+git_commit = "pending"
+gpu = "NVIDIA GeForce RTX 5070"
+driver = "595.71.05"
+cpu = "12th Gen Intel(R) Core(TM) i5-12400F"
+profile = "release"
+
+# ---------------------------------------------------------------- the truth
+
+# A studio scene built for the purpose: four spheres on a floor in front of a
+# wall, five diffuse albedos, under a sky with a sun in it. Photographed with
+# 64 shadow rays, which buys shadowing and one bounce together; fitted with a
+# model that has to earn both back.
+#
+# `police.glb` was tried first and is unusable for this: all nine of its
+# materials are authored fully metallic, so `albedo = base * (1 - metallic)`
+# is zero everywhere and there is no diffuse response to recover. The measured
+# "0.0% albedo error" it produced was the error of comparing zero to zero.
+[truth]
+scene = "blade-volume-train/src/inverse/truth.rs::studio"
+surfels = 92037
+materials = 5
+views = 24
+size = "320x240"
+capture_shadow_rays = 64
+
+# What the model can express at all, with the real materials and the real
+# light substituted in. No solver gets under this, and a solver that appears
+# to is fitting the gap rather than the scene.
+#
+# The gap the shadowed number still carries is one bounce and a specular term
+# the fit has no representation for.
+[truth.forward_model_floor]
+open_sky_error = 0.386
+shadowed_error = 0.269
+
+# The sweep across shared materials, which is the knob between re-rendering
+# and decomposing. Errors are what survives a per-channel gauge; the gauge
+# itself is an assumption and is reported rather than folded in.
+[[truth.sweep]]
+materials = 1
+albedo_error = 0.361
+light_error = 0.896
+psnr = 29.36
+
+[[truth.sweep]]
+materials = 16
+albedo_error = 0.226
+light_error = 0.311
+psnr = 34.53
+
+[[truth.sweep]]
+materials = 256
+albedo_error = 0.232
+light_error = 0.346
+psnr = 33.37
+
+[[truth.sweep]]
+materials = 4096
+albedo_error = 0.328
+light_error = 0.351
+psnr = 32.20
+
+# The degenerate end, kept because it is the control. The fit is nearly exact
+# on the observations and the light is the worst of the sweep: with albedo
+# free everywhere the product is under-determined and the illumination gets
+# painted onto the surface.
+[[truth.sweep]]
+materials = 0
+label = "one per surfel"
+albedo_error = 0.227
+light_error = 0.416
+psnr = 34.98
+
+# The truth scene's five materials are best matched by sixteen clusters, and
+# the error rises on both sides of it. Too few and one albedo has to cover
+# surfaces that differ; too many and each one sees too little of the sphere to
+# constrain the light.
+[truth.selection]
+materials = 16
+reason = "lowest albedo and light error; the scene has five materials"
+
+# Shadowing without the bounce that fills it is worse than neither, measured
+# rather than assumed. A patch the model says is fully shadowed is not black
+# in any photograph, because whatever shadows it also lights it; with nowhere
+# to put that light the fit puts it in the sky, which comes back wrong in
+# shape and not merely in scale.
+[truth.shadowing]
+no_shadows_albedo_error = 0.294
+no_shadows_light_error = 0.456
+shadows_no_bounce_albedo_error = 0.291
+shadows_no_bounce_light_error = 1.588
+shadows_and_bounce_albedo_error = 0.232
+shadows_and_bounce_light_error = 0.346
+verdict = "shadowing pays only with the bounce; alone it is a large regression"
+
+# An earlier version splatted every disc as its circumscribed circle, which is
+# right only at normal incidence. At a grazing angle a disc covers a sliver,
+# and the circle had every element occluding its own neighbours.
+[truth.shadow_footprint]
+circle_sky_open = 0.17
+ellipse_sky_open = 0.30
+
+# ------------------------------------------------------------------ the room
+
+# Mip-NeRF 360 bonsai, 292 images, every eighth kept, every eighth of those
+# held out. Geometry comes from a foam trained by this repo's own pipeline;
+# the held-out views are excluded from the depth tracing as well as from the
+# fit, or the test number would be measuring images it had already seen.
+[bonsai]
+dataset = "etc/data/bonsai-full"
+views = 37
+train_views = 33
+test_views = 4
+size = "256x170"
+sparse_points = 206613
+
+[bonsai.foam]
+cells = 197906
+train_psnr = 21.70
+test_psnr = 20.01
+wall_seconds = 1224.8
+note = "the radiance field the geometry is extracted from; its quality caps everything downstream"
+
+# Sparse COLMAP points, which need no training and cover only what COLMAP
+# could triangulate.
+[bonsai.geometry_sparse]
+surfels = 169432
+coverage = 0.443
+train_psnr = 10.39
+test_psnr = 10.00
+psnr_where_hit = 14.85
+
+# Depth fused from the trained foam. Three separate mistakes were made getting
+# here and each cost about a decibel-decade:
+#
+#   1. **Expected depth.** A field trained on photographs has long thin tails
+#      and the mean sits out in them, so views agree about a surface and
+#      disagree about where their tails end. Fusing means gave a shell dozens
+#      of sheets thick: only 13% of surfels were ever the frontmost thing in
+#      any view.
+#   2. **No surface test.** A room's field is genuinely foggy — 100% of rays
+#      reach full absorption — so mean, median and mode all return a confident
+#      position for a ray that met nothing. Requiring one segment to carry a
+#      minimum share of the absorption is the only available signal that
+#      separates a wall from haze.
+#   3. **Discs too small to meet.** At 0.75 of the merge cell they cannot tile
+#      it, and every pixel came out part background. That reads as a uniformly
+#      dark render rather than as visible holes.
+[bonsai.geometry_foam]
+surfels = 302070
+voxel_factor = 4.0
+disc_radius = 2.5
+min_peak = 0.05
+rays_meeting_a_surface = 1.0
+train_coverage = 0.995
+test_coverage = 0.617
+train_psnr = 14.01
+test_psnr = 10.40
+train_psnr_where_hit = 14.03
+test_psnr_where_hit = 12.64
+
+[bonsai.geometry_foam.depth_estimator]
+expected_depth_surfels_seen = 0.13
+median_depth_surfels_seen = 0.26
+mode_depth_surfels_seen = 0.75
+selection = "mode, with a minimum peak weight"
+
+# On this scene shadowing is a regression, which is the opposite of what it is
+# on the truth scene. The difference is the geometry: a cloud fused from
+# per-view depth is a scatter rather than a surface, it self-occludes to 13%
+# of the sky, and occlusion computed against wrong geometry is worse than none.
+[bonsai.shadowing]
+open_sky_train_psnr = 14.01
+shadowed_train_psnr = 11.06
+sky_open_fraction = 0.13
+verdict = "shadowing pays only once the geometry is a surface"
+
+# The honest summary. The re-rendering is far from the goal, and the reason is
+# not the material/light split — that is measured on the truth scene and works.
+# It is that a surfel cloud fused from the depth maps of a 21 dB radiance field
+# is not a surface: 14 dB on the views it was built from and 10 dB on the ones
+# it was not, a gap no view-independent shading model should produce and which
+# therefore belongs entirely to the geometry.
+[bonsai.status]
+goal = "re-render the capture closely"
+reached = false
+train_psnr = 14.01
+test_psnr = 10.40
+limiting_stage = "geometry"
+next = "a surface the views agree on, rather than a per-view point cloud"
