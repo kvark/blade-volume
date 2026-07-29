@@ -603,6 +603,7 @@ dependencies = [
  "half",
  "log",
  "winit",
+ "x11-dl",
 ]
 
 [[package]]

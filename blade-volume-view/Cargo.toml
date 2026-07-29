@@ -29,5 +29,12 @@ egui-winit = "0.34"
 [dev-dependencies]
 half.workspace = true
 
+# Driving the real binary through a virtual X server: keys, drags, resizes and
+# window capture, for the application paths an offscreen target cannot reach.
+# Loaded at run time, so a machine without X skips the test rather than failing
+# to build, and it never enters a shipped binary.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11-dl = "2"
+
 [lints]
 workspace = true
