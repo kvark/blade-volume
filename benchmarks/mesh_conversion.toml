@@ -402,7 +402,28 @@ window_swapchain_format = "B8G8R8A8_UNORM"
 # key sent to it otherwise goes nowhere. Both interactive paths run: `L`
 # cycles the light on a live window, and `W` moves at a tenth of the asset per
 # press rather than the whole of it.
-input_checked = ["L cycles environments", "W flies at the framed scale"]
+input_checked = [
+  "L cycles environments",
+  "W flies at the framed scale",
+  "drag looks around",
+  "resize: 1240x780, 420x300, 8x8, 1100x500",
+]
+# The debug build runs the Khronos validation layer, confirmed loaded through
+# the loader's own log rather than assumed from a silent run. Two environment
+# switches and two resizes — which destroy and recreate the specular array,
+# the alias table and the HDR target under a running swapchain — produce no
+# validation message at all.
+validation_messages = 0
+
+# Dragging found one more: the pitch was unclamped, so a drag of a few hundred
+# pixels at 0.01 radians each went past vertical and left the world upside
+# down, recoverable only by rolling with Q or E. It now stops two degrees short
+# of the pole and keeps yawing. Nothing about this is specific to surfels — it
+# has been true of every backend in this viewer.
+[relight_quality.viewer.pitch]
+was = "unclamped, inverts past vertical"
+now = "stops at 88 degrees, yaw still applied"
+drag_radians_per_pixel = 0.01
 
 # Two more defaults were wrong in ways only a window shows. Framing at 1.4
 # times the bounding sphere renders a small picture of a large empty frame,
