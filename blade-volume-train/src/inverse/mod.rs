@@ -14,5 +14,8 @@
 
 pub mod capture;
 pub mod decompose;
+pub mod depth;
 pub mod score;
 pub mod surface;
+pub mod truth;
+pub mod visibility;

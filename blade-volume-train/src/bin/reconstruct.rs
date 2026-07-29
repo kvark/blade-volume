@@ -59,13 +59,45 @@ struct Args {
     #[argh(option, default = "24")]
     iterations: usize,
 
-    /// disc radius as a multiple of the local point spacing (default 1.4)
+    /// disc radius as a multiple of the local point spacing (default 1.4).
+    /// Applies to the sparse-cloud geometry only.
     #[argh(option, default = "1.4")]
     radius_factor: f32,
 
-    /// shadow rays per shading point when scoring (default 0 = analytic)
-    #[argh(option, default = "0")]
+    /// a trained foam PLY to take the geometry from, instead of the sparse
+    /// points. The surface is where each ray was absorbed, fused across views.
+    #[argh(option)]
+    foam: Option<String>,
+
+    /// merge cell size when fusing depth, as a multiple of the pixel
+    /// footprint at the median depth (default 1.0)
+    #[argh(option, default = "1.0")]
+    voxel_factor: f32,
+
+    /// absorption below which a ray is treated as having hit nothing
+    /// (default 0.5)
+    #[argh(option, default = "0.5")]
+    min_alpha: f32,
+
+    /// weight the strongest segment of a ray must carry for it to count as
+    /// having met a surface rather than haze (default 0.15)
+    #[argh(option, default = "0.15")]
+    min_peak: f32,
+
+    /// disc radius as a multiple of the merge cell (default 1.0). Below 0.71
+    /// the discs do not meet and the render is part background everywhere.
+    #[argh(option, default = "1.0")]
+    disc_radius: f32,
+
+    /// shadow rays per shading point when scoring (default 32). A scene
+    /// fitted with shadowing has to be rendered with it, or the comparison
+    /// measures two renderer settings rather than the scene.
+    #[argh(option, default = "32")]
     diffuse_samples: u32,
+
+    /// fit without shadowing or indirect light
+    #[argh(switch)]
+    no_shadows: bool,
 
     /// write the reconstructed scene here
     #[argh(option)]
@@ -122,31 +154,21 @@ fn main() {
 
     // ------------------------------------------------------------- geometry
     let started = std::time::Instant::now();
-    let points: Vec<glam::Vec3> = reconstruction
-        .points
-        .iter()
-        .map(|p| glam::Vec3::new(p.xyz[0] as f32, p.xyz[1] as f32, p.xyz[2] as f32))
-        .collect();
-    let cameras: Vec<glam::Vec3> = capture
-        .views
-        .iter()
-        .map(|v| glam::Vec3::from(v.camera.cam_position))
-        .collect();
-    let (surfels, dropped) = train::inverse::surface::surfels_from_points(
-        &points,
-        &cameras,
-        train::inverse::surface::SurfaceOptions {
-            radius_factor: args.radius_factor,
-            ..Default::default()
-        },
-    );
+    let surfels = match args.foam {
+        Some(ref foam) => surfels_from_foam(path::Path::new(foam), &capture, &train_views, &args),
+        None => surfels_from_sparse(&reconstruction, &capture, &args),
+    };
     let mut geometry = vol::relight::RelightModel {
         surfels,
         materials: vec![vol::relight::Material::default()],
     };
-    let flipped = train::inverse::surface::orient_towards_views(&mut geometry.surfels, &capture);
+    if args.foam.is_none() {
+        let flipped =
+            train::inverse::surface::orient_towards_views(&mut geometry.surfels, &capture);
+        println!("geometry: {flipped} normals turned round to face the cameras");
+    }
     println!(
-        "geometry: {} surfels ({dropped} points dropped, {flipped} normals turned round) in {:.1} s",
+        "geometry: {} surfels in {:.1} s",
         geometry.surfels.len(),
         started.elapsed().as_secs_f64()
     );
@@ -170,6 +192,25 @@ fn main() {
         started.elapsed().as_secs_f64()
     );
 
+    let shadows = if args.no_shadows {
+        None
+    } else {
+        let started = std::time::Instant::now();
+        let directions = train::inverse::decompose::environment_directions(args.environment_width);
+        let computed = train::inverse::visibility::compute(
+            &geometry,
+            &directions,
+            train::inverse::visibility::VisibilityOptions::default(),
+        );
+        println!(
+            "shadowing: {} directions, {:.0}% of the sky open on average, in {:.1} s",
+            directions.len(),
+            100.0 * computed.mean_openness(),
+            started.elapsed().as_secs_f64()
+        );
+        Some(computed)
+    };
+
     let started = std::time::Instant::now();
     let fitted = train::inverse::decompose::fit(
         &geometry,
@@ -180,6 +221,7 @@ fn main() {
             iterations: args.iterations,
             ..Default::default()
         },
+        shadows.as_ref(),
     );
     println!(
         "decomposed: {} materials, residual {:.4}, {} surfels unseen, in {:.1} s",
@@ -239,6 +281,105 @@ fn main() {
         );
     }
     renderer.destroy();
+}
+
+/// Discs from the COLMAP sparse points.
+///
+/// The cheap geometry, and the one that needs no training. It covers whatever
+/// COLMAP could triangulate, which is the textured parts of the scene and not
+/// the blank wall behind them.
+fn surfels_from_sparse(
+    reconstruction: &train::colmap::Reconstruction,
+    capture: &train::inverse::capture::Capture,
+    args: &Args,
+) -> Vec<vol::relight::Surfel> {
+    let points: Vec<glam::Vec3> = reconstruction
+        .points
+        .iter()
+        .map(|p| glam::Vec3::new(p.xyz[0] as f32, p.xyz[1] as f32, p.xyz[2] as f32))
+        .collect();
+    let cameras: Vec<glam::Vec3> = capture
+        .views
+        .iter()
+        .map(|v| glam::Vec3::from(v.camera.cam_position))
+        .collect();
+    let (surfels, dropped) = train::inverse::surface::surfels_from_points(
+        &points,
+        &cameras,
+        train::inverse::surface::SurfaceOptions {
+            radius_factor: args.radius_factor,
+            ..Default::default()
+        },
+    );
+    println!(
+        "geometry: {} of {} sparse points dropped as outliers",
+        dropped,
+        points.len()
+    );
+    surfels
+}
+
+/// Discs from where a trained density field absorbed each ray.
+fn surfels_from_foam(
+    foam: &path::Path,
+    capture: &train::inverse::capture::Capture,
+    views: &[usize],
+    args: &Args,
+) -> Vec<vol::relight::Surfel> {
+    let mut model = match vol::io::try_load(&foam.to_string_lossy()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("cannot read {}: {e}", foam.display());
+            std::process::exit(1);
+        }
+    };
+    if model.adjacency.is_none() {
+        println!("geometry: the foam carries no adjacency, building it");
+        model.compute_adjacency_default();
+    }
+    println!("geometry: {} cells in the foam", model.points.len());
+
+    let options = train::inverse::depth::DepthOptions {
+        voxel_factor: args.voxel_factor,
+        min_alpha: args.min_alpha,
+        min_peak: args.min_peak,
+        disc_radius: args.disc_radius,
+        ..Default::default()
+    };
+    // Training views only. Tracing the held-out ones would build geometry from
+    // the images the score is supposed to be surprised by, and the test number
+    // would be measuring nothing.
+    let mut maps = Vec::with_capacity(views.len());
+    let mut hit = 0usize;
+    let mut total = 0usize;
+    for &index in views {
+        let view = &capture.views[index];
+        let start =
+            train::pipeline::pick_start_cell(&model, glam::Vec3::from(view.camera.cam_position));
+        let map = train::inverse::depth::trace_depth(
+            &model,
+            &view.camera,
+            capture.width,
+            capture.height,
+            start,
+            options.max_steps,
+        );
+        hit += map
+            .alpha
+            .iter()
+            .zip(&map.peak)
+            .filter(|&(&a, &p)| a >= options.min_alpha && p >= options.min_peak)
+            .count();
+        total += map.alpha.len();
+        maps.push((view.camera, map));
+    }
+    println!(
+        "geometry: {:.1}% of traced rays met a surface",
+        100.0 * hit as f64 / total.max(1) as f64
+    );
+    let (surfels, voxel) = train::inverse::depth::surfels_from_depth(&maps, options);
+    println!("geometry: merged at a cell size of {voxel:.4} world units");
+    surfels
 }
 
 /// The height that keeps the camera's aspect ratio at the chosen width.

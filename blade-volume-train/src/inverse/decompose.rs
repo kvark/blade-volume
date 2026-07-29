@@ -26,7 +26,7 @@
 //! is therefore the smoothest non-negative one consistent with what was seen,
 //! and its resolution is a rendering convenience rather than a claim.
 
-use crate::inverse::{capture, score};
+use crate::inverse::{capture, score, visibility};
 use blade_volume as vol;
 use std::thread;
 
@@ -44,6 +44,13 @@ pub struct FitOptions {
     /// ignored: at a glancing angle one surfel covers a sliver of a pixel and
     /// the colour read from it is mostly its neighbour's.
     pub min_facing: f32,
+    /// Rounds of indirect light folded into the fit.
+    ///
+    /// Only meaningful with shadowing, and close to mandatory with it: a patch
+    /// the model says is fully shadowed is not black in any real photograph,
+    /// because whatever shadows it also lights it. Zero leaves that light
+    /// unexplained, and the fit puts it in the sky instead.
+    pub bounces: usize,
     /// The brightest recovered albedo, which anchors the global scale.
     ///
     /// Albedo and light trade off exactly: doubling one and halving the other
@@ -59,6 +66,7 @@ impl Default for FitOptions {
             materials: 256,
             environment_width: 32,
             iterations: 24,
+            bounces: 3,
             min_facing: 0.15,
             brightest_albedo: 0.8,
         }
@@ -275,15 +283,15 @@ fn cluster_by_chromaticity(
 /// coefficients. The exact lobe is used rather than its band-limited version:
 /// it is non-negative, which is what keeps the update below from ever asking
 /// for a negative light.
-struct Kernel {
-    directions: Vec<glam::Vec3>,
-    solid_angles: Vec<f32>,
-    width: usize,
-    height: usize,
+pub struct Kernel {
+    pub directions: Vec<glam::Vec3>,
+    pub solid_angles: Vec<f32>,
+    pub width: usize,
+    pub height: usize,
 }
 
 impl Kernel {
-    fn new(width: usize, height: usize) -> Self {
+    pub fn new(width: usize, height: usize) -> Self {
         let mut directions = Vec::with_capacity(width * height);
         let mut solid_angles = Vec::with_capacity(width * height);
         let base =
@@ -305,12 +313,12 @@ impl Kernel {
         }
     }
 
-    fn texels(&self) -> usize {
+    pub fn texels(&self) -> usize {
         self.directions.len()
     }
 
     /// Weights of every texel for one normal, written into `out`.
-    fn weights(&self, normal: glam::Vec3, out: &mut [f32]) {
+    pub fn weights(&self, normal: glam::Vec3, out: &mut [f32]) {
         for (index, direction) in self.directions.iter().enumerate() {
             let cosine = normal.dot(*direction);
             out[index] = if cosine > 0.0 {
@@ -320,6 +328,109 @@ impl Kernel {
             };
         }
     }
+}
+
+/// The directions the environment texels of a fit look in.
+///
+/// Exposed so a caller can compute visibility against the same layout the fit
+/// will use. Getting the two out of step would shadow each texel with a
+/// different one's occlusion, which is worse than no shadowing at all.
+pub fn environment_directions(width: usize) -> Vec<glam::Vec3> {
+    Kernel::new(width, width / 2).directions
+}
+
+/// The sky a fit of this width works against.
+pub fn environment_kernel(width: usize) -> Kernel {
+    Kernel::new(width, width / 2)
+}
+
+/// Direct shading for every surfel, computed rather than cached.
+///
+/// The cached table in the fit covers only the surfels that were seen. A
+/// bounce needs every surfel, because a surface nobody photographed still
+/// blocks light and still reflects it.
+fn shade_all(
+    model: &vol::relight::RelightModel,
+    kernel: &Kernel,
+    light: &[[f32; 3]],
+    visibility: Option<&visibility::Visibility>,
+) -> Vec<[f32; 3]> {
+    let texels = kernel.texels();
+    let count = model.surfels.len();
+    let mut out = vec![[0.0f32; 3]; count];
+    let threads = thread::available_parallelism().map_or(1, |n| n.get());
+    let chunk = count.div_ceil(threads).max(1);
+    thread::scope(|scope| {
+        for (block, rows) in out.chunks_mut(chunk).enumerate() {
+            scope.spawn(move || {
+                let mut weights = vec![0.0f32; texels];
+                for (local, row) in rows.iter_mut().enumerate() {
+                    let index = block * chunk + local;
+                    kernel.weights(glam::Vec3::from(model.surfels[index].normal), &mut weights);
+                    let mut total = [0.0f32; 3];
+                    for (texel, &weight) in weights.iter().enumerate() {
+                        if weight == 0.0 {
+                            continue;
+                        }
+                        if visibility.is_some_and(|v| !v.visible(index, texel)) {
+                            continue;
+                        }
+                        for (value, source) in total.iter_mut().zip(light[texel]) {
+                            *value += weight * source;
+                        }
+                    }
+                    *row = total;
+                }
+            });
+        }
+    });
+    out
+}
+
+/// What the fit's own forward model says each surfel should look like.
+///
+/// The point of having this separately from the solver is that it can be
+/// pointed at the truth. Given the real materials and the real light, the
+/// difference between this and the photographs is what the model cannot
+/// express — no solver can do better than that, and a solver that appears to
+/// is fitting the gap rather than the scene.
+pub fn predict(
+    model: &vol::relight::RelightModel,
+    environment: &vol::relight::Environment,
+    visibility: Option<&visibility::Visibility>,
+) -> Vec<[f32; 3]> {
+    let kernel = Kernel::new(environment.width, environment.height);
+    let texels = kernel.texels();
+    if let Some(visibility) = visibility {
+        assert_eq!(
+            visibility.texels, texels,
+            "the visibility was computed for a different sky than this one, so \
+             every texel would be shadowed by the wrong direction"
+        );
+    }
+    let mut weights = vec![0.0f32; texels];
+    let mut out = Vec::with_capacity(model.surfels.len());
+    for (index, surfel) in model.surfels.iter().enumerate() {
+        kernel.weights(glam::Vec3::from(surfel.normal), &mut weights);
+        let albedo = model.materials[surfel.material as usize].albedo;
+        let mut radiance = [0.0f32; 3];
+        for (texel, &weight) in weights.iter().enumerate() {
+            if weight == 0.0 {
+                continue;
+            }
+            if visibility.is_some_and(|v| !v.visible(index, texel)) {
+                continue;
+            }
+            for (value, source) in radiance.iter_mut().zip(environment.texels[texel]) {
+                *value += weight * source;
+            }
+        }
+        for (value, gain) in radiance.iter_mut().zip(albedo) {
+            *value *= gain;
+        }
+        out.push(radiance);
+    }
+    out
 }
 
 /// A recovered scene, and what it cost to recover.
@@ -345,6 +456,7 @@ pub fn fit(
     model: &vol::relight::RelightModel,
     observations: &Observations,
     options: FitOptions,
+    visibility: Option<&visibility::Visibility>,
 ) -> Decomposition {
     let kernel = Kernel::new(options.environment_width, options.environment_width / 2);
     let texels = kernel.texels();
@@ -360,10 +472,18 @@ pub fn fit(
     // iteration by both halves of the alternation.
     let mut response = vec![0.0f32; active.len() * texels];
     for (slot, &index) in active.iter().enumerate() {
-        kernel.weights(
-            glam::Vec3::from(model.surfels[index].normal),
-            &mut response[slot * texels..(slot + 1) * texels],
-        );
+        let row = &mut response[slot * texels..(slot + 1) * texels];
+        kernel.weights(glam::Vec3::from(model.surfels[index].normal), row);
+        // A texel the surfel cannot see contributes nothing to it. This is
+        // the whole of shadowing, and without it the only way for a patch in
+        // shadow to be dark is for its material to be dark.
+        if let Some(visibility) = visibility {
+            for (texel, weight) in row.iter_mut().enumerate() {
+                if !visibility.visible(index, texel) {
+                    *weight = 0.0;
+                }
+            }
+        }
     }
 
     // Start from a uniform sky bright enough that a mid albedo explains the
@@ -380,11 +500,32 @@ pub fn fit(
 
     let mut albedo = vec![[0.5f32; 3]; clusters];
     let mut shade = vec![[0.0f32; 3]; active.len()];
+    // Irradiance arriving from other surfels rather than from the sky. Zero
+    // until there is something to bounce, and refreshed a few times: it
+    // depends on the current answer, so it is a fixed point rather than a
+    // quantity that can be computed once.
+    let mut indirect = vec![[0.0f32; 3]; count];
+    let mut total = vec![[0.0f32; 3]; active.len()];
+    let bounces = if visibility.is_some() {
+        options.bounces
+    } else {
+        0
+    };
+    let refresh = if bounces > 0 {
+        (options.iterations.max(1) / (bounces + 1)).max(1)
+    } else {
+        usize::MAX
+    };
     let mut residual = 0.0f32;
-    for _ in 0..options.iterations.max(1) {
+    for iteration in 0..options.iterations.max(1) {
         evaluate_shade(&response, &light, texels, &mut shade);
+        for (slot, &index) in active.iter().enumerate() {
+            for channel in 0..3 {
+                total[slot][channel] = shade[slot][channel] + indirect[index][channel];
+            }
+        }
         solve_albedo(
-            &shade,
+            &total,
             observations,
             &active,
             &assignment,
@@ -394,14 +535,35 @@ pub fn fit(
         );
         residual = update_light(
             &response,
-            &shade,
+            &total,
             observations,
             &active,
             &assignment,
             &albedo,
+            &indirect,
             texels,
             &mut light,
         );
+        if iteration > 0 && iteration % refresh == 0 {
+            let direct = shade_all(model, &kernel, &light, visibility);
+            let outgoing: Vec<[f32; 3]> = (0..count)
+                .map(|index| {
+                    let rho = albedo[assignment[index] as usize];
+                    let mut radiance = [0.0f32; 3];
+                    for channel in 0..3 {
+                        radiance[channel] =
+                            rho[channel] * (direct[index][channel] + indirect[index][channel]);
+                    }
+                    radiance
+                })
+                .collect();
+            indirect = visibility::bounce(
+                model,
+                &kernel,
+                &outgoing,
+                visibility::VisibilityOptions::default(),
+            );
+        }
     }
 
     // Two gauges have to be fixed by assumption, because no image can fix
@@ -585,6 +747,7 @@ fn update_light(
     active: &[usize],
     assignment: &[u32],
     albedo: &[[f32; 3]],
+    indirect: &[[f32; 3]],
     texels: usize,
     light: &mut [[f32; 3]],
 ) -> f32 {
@@ -621,8 +784,16 @@ fn update_light(
                         let weight = weight as f64 * confidence;
                         for channel in 0..3 {
                             let rho = rho[channel] as f64;
-                            seen[texel][channel] +=
-                                weight * rho * observations.mean[index][channel] as f64;
+                            // What the sky still has to account for, once the
+                            // bounce has been credited. Clamped at zero: a
+                            // surfel already over-explained by indirect light
+                            // asks the sky for nothing, not for less than
+                            // nothing, and a negative would turn the
+                            // multiplicative step into a sign flip.
+                            let residual = (observations.mean[index][channel] as f64
+                                - rho * indirect[index][channel] as f64)
+                                .max(0.0);
+                            seen[texel][channel] += weight * rho * residual;
                             predicted[texel][channel] +=
                                 weight * rho * rho * shade[slot][channel] as f64;
                         }
@@ -757,8 +928,10 @@ mod tests {
                 environment_width: 32,
                 iterations: 60,
                 min_facing: 0.0,
+                bounces: 0,
                 brightest_albedo: 0.6,
             },
+            None,
         );
 
         // The recovered light is brightest towards the east.
@@ -836,8 +1009,10 @@ mod tests {
                 environment_width: 16,
                 iterations: 80,
                 min_facing: 0.0,
+                bounces: 0,
                 brightest_albedo: 0.8,
             },
+            None,
         );
         assert_eq!(fitted.scene.model.materials.len(), 2);
         // Whichever cluster is which, the two ratios have to match the truth.
@@ -887,8 +1062,10 @@ mod tests {
                 environment_width: 16,
                 iterations: 30,
                 min_facing: 0.0,
+                bounces: 0,
                 brightest_albedo: 0.8,
             },
+            None,
         );
         assert!(
             fitted.residual < 1.0e-3,

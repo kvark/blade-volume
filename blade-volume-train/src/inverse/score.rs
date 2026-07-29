@@ -234,6 +234,56 @@ impl Renderer {
             .to_vec()
     }
 
+    /// A tracer for one scene, ready to draw.
+    ///
+    /// The tracer starts and submits the encoder itself; wrapping the call in
+    /// another start/submit pair submits it twice and the driver takes the
+    /// process down with it.
+    fn tracer(
+        &mut self,
+        scene: &Scene,
+        diffuse_samples: u32,
+        show_environment: bool,
+    ) -> vol::gpu::RelightTracer {
+        let specular = vol::relight::SpecularEnvironment::prefilter(
+            &scene.environment,
+            scene.environment.width,
+            scene.environment.height,
+        );
+        vol::gpu::RelightTracer::new(
+            &scene.model,
+            &scene.environment,
+            &specular,
+            vol::gpu::RelightSettings {
+                background_rgb: [0.0; 3],
+                diffuse_samples,
+                show_environment,
+            },
+            &self.context,
+            &mut self.encoder,
+        )
+    }
+
+    /// Draw a scene from a set of poses, with no reference to compare against.
+    ///
+    /// This is how a capture with known truth is made: the scene is the truth,
+    /// and what comes out is what a camera would have recorded of it.
+    pub fn render_views(
+        &mut self,
+        scene: &Scene,
+        cameras: &[vol::CameraParams],
+        diffuse_samples: u32,
+        show_environment: bool,
+    ) -> Vec<Vec<[f32; 4]>> {
+        let mut tracer = self.tracer(scene, diffuse_samples, show_environment);
+        let frames = cameras
+            .iter()
+            .map(|camera| self.draw(&mut tracer, *camera))
+            .collect();
+        tracer.deinit(&self.context);
+        frames
+    }
+
     /// Render the given views and score them against their photographs.
     ///
     /// Each view is drawn twice, against a black background and a white one.
@@ -250,26 +300,7 @@ impl Renderer {
     ) -> Summary {
         assert_eq!(capture.width, self.width);
         assert_eq!(capture.height, self.height);
-        let specular = vol::relight::SpecularEnvironment::prefilter(
-            &scene.environment,
-            scene.environment.width,
-            scene.environment.height,
-        );
-        // The tracer starts and submits this encoder itself; wrapping the call
-        // in another start/submit pair submits it twice and the driver takes
-        // the process down with it.
-        let mut tracer = vol::gpu::RelightTracer::new(
-            &scene.model,
-            &scene.environment,
-            &specular,
-            vol::gpu::RelightSettings {
-                background_rgb: [0.0; 3],
-                diffuse_samples,
-                show_environment: false,
-            },
-            &self.context,
-            &mut self.encoder,
-        );
+        let mut tracer = self.tracer(scene, diffuse_samples, false);
 
         let mut scores = Vec::new();
         let mut elapsed = std::time::Duration::ZERO;
