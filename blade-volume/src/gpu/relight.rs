@@ -523,6 +523,15 @@ impl RelightTracer {
         self.params.diffuse_samples
     }
 
+    /// Radiance for rays that hit nothing, when the environment is not shown.
+    ///
+    /// Rendering the same pose against two of these measures how much of the
+    /// frame the geometry actually covers: the part that changes is the part
+    /// that missed everything.
+    pub fn set_background(&mut self, rgb: [f32; 3]) {
+        self.params.background = rgb;
+    }
+
     pub fn set_show_environment(&mut self, show: bool) {
         self.params.show_environment = show as u32;
     }
