@@ -414,6 +414,14 @@ input_checked = [
 # the alias table and the HDR target under a running swapchain — produce no
 # validation message at all.
 validation_messages = 0
+# Now a test rather than a session: `viewer_smoke` starts its own Xvfb, runs
+# the shipped binary against it, and captures the window with XGetImage — no
+# screenshot tool, nothing to install but Xvfb. Checked against a mutation:
+# disabling the L handler fails it with "the most it moved was 0.000". It
+# skips loudly without a GPU, an X server, or the X libraries, which is what
+# CI has today.
+smoke_test = "blade-volume-view/tests/viewer_smoke.rs"
+smoke_test_seconds = 3.4
 
 # Dragging found one more: the pitch was unclamped, so a drag of a few hundred
 # pixels at 0.01 radians each went past vertical and left the world upside
