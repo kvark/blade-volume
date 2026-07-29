@@ -15,6 +15,13 @@ const MAX_FLY_SPEED: f32 = 1_000_000.0;
 /// that is three: every step crossed the whole car. The floor has to be below
 /// the scale of the smallest thing anyone would want to fly around.
 const MIN_FLY_SPEED: f32 = 1.0e-4;
+/// How far from level the camera may pitch, as the sine of the angle its own
+/// up axis is allowed to make with the world's.
+///
+/// Two degrees short of vertical. Exactly vertical is where the yaw axis and
+/// the view coincide and the controls stop meaning anything, so the limit sits
+/// just before it.
+const SIN_PITCH_LIMIT: f32 = 0.035;
 
 /// A camera that can be controlled via keyboard and mouse input.
 #[derive(Clone)]
@@ -136,7 +143,17 @@ impl ControlledCamera {
         let right = prev * glam::Vec3::X;
         let pitch = glam::Quat::from_axis_angle(right, dy * drag_speed);
 
-        self.orientation = yaw * pitch * prev;
+        // Stop at the poles rather than tipping over them. A drag of a few
+        // hundred pixels is more than a right angle at this sensitivity, so
+        // without this an ordinary look-up ends with the world upside down and
+        // no way back short of rolling with Q or E. Yaw is still applied: the
+        // camera keeps turning, it just stops pitching.
+        let candidate = yaw * pitch * prev;
+        self.orientation = if (candidate * glam::Vec3::Y).dot(world_up) < -SIN_PITCH_LIMIT {
+            candidate
+        } else {
+            yaw * prev
+        };
     }
 
     /// The direction the camera looks, in world space.
@@ -196,6 +213,59 @@ mod tests {
         }
         // And the controls are scaled to the thing rather than to nothing.
         assert!(camera.fly_speed < radius && camera.fly_speed > 0.0);
+    }
+
+    #[test]
+    fn dragging_past_vertical_stops_rather_than_turning_the_world_over() {
+        let mut camera = ControlledCamera {
+            position: glam::Vec3::new(0.0, 1.0, -4.0),
+            ..Default::default()
+        };
+        camera.look_at(glam::Vec3::ZERO);
+
+        // Far more than a right angle, in the steps a mouse actually delivers.
+        // Dragging down looks up: the pitch turns about the camera's own right
+        // axis, and this frame's `+Y` is the bottom of the image.
+        for _ in 0..60 {
+            camera.on_mouse_drag(6.0, 20.0, 0.01);
+            assert!(
+                (camera.orientation * glam::Vec3::Y).dot(glam::Vec3::Y) < 0.0,
+                "the camera turned over: up is {:?}",
+                camera.orientation * glam::Vec3::Y
+            );
+        }
+        // It went as far up as it is allowed and stayed there.
+        assert!(
+            camera.forward().y > 0.9,
+            "it never pitched: forward is {:?}",
+            camera.forward()
+        );
+
+        // And the same going the other way.
+        for _ in 0..120 {
+            camera.on_mouse_drag(0.0, -20.0, 0.01);
+            assert!((camera.orientation * glam::Vec3::Y).dot(glam::Vec3::Y) < 0.0);
+        }
+        assert!(
+            camera.forward().y < -0.9,
+            "it never pitched back down: forward is {:?}",
+            camera.forward()
+        );
+    }
+
+    #[test]
+    fn a_drag_still_turns_the_camera() {
+        // The clamp must not cost the ordinary case: a small drag near level
+        // has to move the view by about what it asks for.
+        let mut camera = ControlledCamera::default();
+        let before = camera.forward();
+        camera.on_mouse_drag(50.0, 0.0, 0.01);
+        let after = camera.forward();
+        let turned = before.dot(after).clamp(-1.0, 1.0).acos();
+        assert!(
+            (turned - 0.5).abs() < 0.05,
+            "a half radian drag turned {turned:.3}"
+        );
     }
 
     #[test]
