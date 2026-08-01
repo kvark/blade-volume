@@ -672,6 +672,61 @@ pub fn coverage(normalized_radius_squared: f32) -> f32 {
     1.0 - t * t * (3.0 - 2.0 * t)
 }
 
+/// The prefiltered environment in one direction, at one roughness.
+///
+/// The first half of the split sum, fetched the way the renderer's sampler
+/// fetches it: bilinear, wrapping in longitude and clamping in latitude, and
+/// interpolating between the two roughness levels either side. Taking the
+/// nearest texel instead disagrees with the shader by more than the whole of
+/// everything else wherever the environment has a bright feature in it.
+///
+/// Extracted so a solver fitting roughness against photographs evaluates the
+/// same arithmetic the renderer will, rather than an approximation of it.
+pub fn sample_prefiltered(
+    specular: &SpecularEnvironment,
+    direction: glam::Vec3,
+    roughness: f32,
+) -> [f32; 3] {
+    let scaled = roughness.clamp(0.0, 1.0) * (SPECULAR_LEVELS - 1) as f32;
+    let low = scaled.floor() as usize;
+    let high = (low + 1).min(SPECULAR_LEVELS as usize - 1);
+    let blend = scaled - low as f32;
+
+    let yaw = direction.y.clamp(-1.0, 1.0).asin();
+    let pitch = direction.x.atan2(direction.z);
+    let u = (pitch / (2.0 * std::f32::consts::PI) + 0.5).rem_euclid(1.0);
+    let v = (0.5 - yaw / std::f32::consts::PI).clamp(0.0, 1.0);
+    let fx = u * specular.width as f32 - 0.5;
+    let fy = v * specular.height as f32 - 0.5;
+    let x0 = fx.floor();
+    let y0 = fy.floor();
+    let tx = fx - x0;
+    let ty = fy - y0;
+    let wrap_x = |x: i64| x.rem_euclid(specular.width as i64) as usize;
+    let clamp_y = |y: i64| y.clamp(0, specular.height as i64 - 1) as usize;
+    let (x0, x1) = (wrap_x(x0 as i64), wrap_x(x0 as i64 + 1));
+    let (y0, y1) = (clamp_y(y0 as i64), clamp_y(y0 as i64 + 1));
+    let fetch = |level: usize| {
+        let plane = &specular.levels[level];
+        let mut out = [0.0f32; 3];
+        for (channel, value) in out.iter_mut().enumerate() {
+            let top = plane[y0 * specular.width + x0][channel] * (1.0 - tx)
+                + plane[y0 * specular.width + x1][channel] * tx;
+            let bottom = plane[y1 * specular.width + x0][channel] * (1.0 - tx)
+                + plane[y1 * specular.width + x1][channel] * tx;
+            *value = top * (1.0 - ty) + bottom * ty;
+        }
+        out
+    };
+    let a = fetch(low);
+    let b = fetch(high);
+    [
+        a[0] + (b[0] - a[0]) * blend,
+        a[1] + (b[1] - a[1]) * blend,
+        a[2] + (b[2] - a[2]) * blend,
+    ]
+}
+
 /// Shade one surface point, on the CPU.
 ///
 /// The reference the GPU shader is checked against: the same arithmetic in a
@@ -694,46 +749,10 @@ pub fn shade(
     let n_dot_v = normal.dot(view);
     if n_dot_v > 0.0 {
         let reflection = (2.0 * n_dot_v * normal - view).normalize();
-        let scaled = material.roughness.clamp(0.0, 1.0) * (SPECULAR_LEVELS - 1) as f32;
-        let low = scaled.floor() as usize;
-        let high = (low + 1).min(SPECULAR_LEVELS as usize - 1);
-        let blend = scaled - low as f32;
-        // Bilinear, wrapping in longitude and clamping in latitude, which is
-        // what the renderer's sampler does. Fetching the nearest texel instead
-        // would disagree with it by more than the whole of everything else
-        // wherever the environment has a bright feature in it.
-        let yaw = reflection.y.clamp(-1.0, 1.0).asin();
-        let pitch = reflection.x.atan2(reflection.z);
-        let u = (pitch / (2.0 * std::f32::consts::PI) + 0.5).rem_euclid(1.0);
-        let v = (0.5 - yaw / std::f32::consts::PI).clamp(0.0, 1.0);
-        let fx = u * specular.width as f32 - 0.5;
-        let fy = v * specular.height as f32 - 0.5;
-        let x0 = fx.floor();
-        let y0 = fy.floor();
-        let tx = fx - x0;
-        let ty = fy - y0;
-        let wrap_x = |x: i64| x.rem_euclid(specular.width as i64) as usize;
-        let clamp_y = |y: i64| y.clamp(0, specular.height as i64 - 1) as usize;
-        let (x0, x1) = (wrap_x(x0 as i64), wrap_x(x0 as i64 + 1));
-        let (y0, y1) = (clamp_y(y0 as i64), clamp_y(y0 as i64 + 1));
-        let fetch = |level: usize| {
-            let plane = &specular.levels[level];
-            let mut out = [0.0f32; 3];
-            for channel in 0..3 {
-                let top = plane[y0 * specular.width + x0][channel] * (1.0 - tx)
-                    + plane[y0 * specular.width + x1][channel] * tx;
-                let bottom = plane[y1 * specular.width + x0][channel] * (1.0 - tx)
-                    + plane[y1 * specular.width + x1][channel] * tx;
-                out[channel] = top * (1.0 - ty) + bottom * ty;
-            }
-            out
-        };
-        let a = fetch(low);
-        let b = fetch(high);
+        let prefiltered = sample_prefiltered(specular, reflection, material.roughness);
         let gain = specular_scale(material.specular_f0, material.roughness, n_dot_v);
-        for channel in 0..3 {
-            let prefiltered = a[channel] + (b[channel] - a[channel]) * blend;
-            out[channel] += prefiltered * gain[channel];
+        for (value, (radiance, gain)) in out.iter_mut().zip(prefiltered.into_iter().zip(gain)) {
+            *value += radiance * gain;
         }
     }
     out

@@ -55,18 +55,29 @@ struct Args {
     #[argh(option, default = "64")]
     samples: u32,
 
-    /// material counts to sweep (default "1,16,256,4096,0"; 0 = one per surfel)
-    #[argh(option, default = "String::from(\"1,16,256,4096,0\")")]
+    /// material counts to sweep (default "0,256"; 0 = one per surfel)
+    #[argh(option, default = "String::from(\"0,256\")")]
     materials: String,
 
     /// alternations between solving for albedo and for light (default 24)
     #[argh(option, default = "24")]
     iterations: usize,
 
+    /// rounds in which roughness and F0 are re-chosen (default 3; 0 leaves
+    /// every surface a rough dielectric, which is the albedo-only fit)
+    #[argh(option, default = "3")]
+    specular_rounds: usize,
+
     /// fit without shadowing, so a patch in shadow has only its material to
     /// explain being dark
     #[argh(switch)]
     no_shadows: bool,
+
+    /// hand the real light to the fit instead of recovering it, which
+    /// separates a material solver that does not work from one that was given
+    /// a sky too coarse to fit a lobe against
+    #[argh(switch)]
+    true_light: bool,
 
     /// write photographs and re-renders here
     #[argh(option)]
@@ -195,6 +206,7 @@ fn main() {
     // entry would only cost time.
     let options = train::inverse::decompose::FitOptions {
         iterations: args.iterations,
+        specular_rounds: args.specular_rounds,
         ..Default::default()
     };
     let shadows = if args.no_shadows {
@@ -219,41 +231,32 @@ fn main() {
 
     // The ceiling. With the real materials and the real light, whatever is
     // left is what the model cannot say — and no solver gets under it.
+    //
     // At the truth sky's own resolution, not the fit's: this is measuring the
     // model rather than the solver, so it should not inherit the solver's
     // coarser sky.
-    let truth_shadows = train::inverse::visibility::compute(
+    let truth_shadows = Some(train::inverse::visibility::compute(
         &model,
         &train::inverse::decompose::environment_directions(2 * truth.environment.height),
         train::inverse::visibility::VisibilityOptions::default(),
-    );
-    for (label, shadows) in [("open sky", None), ("shadowed", Some(&truth_shadows))] {
-        let predicted = train::inverse::decompose::predict(&model, &truth.environment, shadows);
-        let mut error = 0.0f64;
-        let mut scale = 0.0f64;
-        let mut count = 0usize;
-        for (index, &weight) in observations.weight.iter().enumerate() {
-            if weight <= 0.0 {
-                continue;
-            }
-            for (value, truth) in predicted[index].iter().zip(observations.mean[index]) {
-                let difference = (value - truth) as f64;
-                error += difference * difference;
-                scale += truth as f64;
-            }
-            count += 3;
-        }
-        let mean = (scale / count.max(1) as f64).max(1.0e-9);
+    ));
+    for (label, shadows) in [("open sky", None), ("shadowed", truth_shadows.as_ref())] {
         println!(
             "forward model with the truth in it, {label:>8}: {:.1}% off the photographs",
-            100.0 * (error / count.max(1) as f64).sqrt() / mean
+            100.0
+                * train::inverse::decompose::forward_error(
+                    &model,
+                    &truth.environment,
+                    shadows,
+                    &observations
+                )
         );
     }
     println!();
 
     println!(
-        "{:>10}{:>12}{:>10}{:>12}{:>10}{:>12}",
-        "materials", "albedo err", "gauge", "light err", "psnr", "residual"
+        "{:>10}{:>12}{:>10}{:>12}{:>10}{:>10}{:>10}",
+        "materials", "albedo err", "gauge", "light err", "psnr", "rough err", "lobe evid"
     );
     for count in args.materials.split(',') {
         let Ok(count) = count.trim().parse::<usize>() else {
@@ -266,7 +269,14 @@ fn main() {
                 materials: count,
                 ..options
             },
-            shadows.as_ref(),
+            train::inverse::decompose::Given {
+                visibility: if args.true_light {
+                    truth_shadows.as_ref()
+                } else {
+                    shadows.as_ref()
+                },
+                light: args.true_light.then_some(&truth.environment),
+            },
         );
         let albedo = train::inverse::truth::compare_albedo(&model, &fitted.scene.model);
         let light = train::inverse::truth::compare_environment(
@@ -283,14 +293,41 @@ fn main() {
         } else {
             count.to_string()
         };
+        let rough = train::inverse::truth::compare_roughness(&model, &fitted.scene.model);
         println!(
-            "{label:>10}{:>11.1}%{:>10.2}{:>11.1}%{:>12.2}{:>12.4}",
+            "{label:>10}{:>11.1}%{:>10.2}{:>11.1}%{:>10.2}{:>9.2}{:>9.0}%",
             100.0 * albedo.relative_rms,
             albedo.gauge[1],
             100.0 * light.relative_rms,
             summary.srgb_psnr,
-            fitted.residual
+            rough,
+            100.0 * fitted.with_lobe_evidence
         );
+
+        if count == 0 {
+            println!(
+                "\n{:>8}{:>9}{:>22}{:>22}{:>12}{:>12}{:>11}",
+                "material", "surfels", "albedo", "recovered", "roughness", "recovered", "lobe"
+            );
+            for report in train::inverse::truth::per_material(
+                &model,
+                &fitted.scene.model,
+                &truth.environment,
+                &observations,
+            ) {
+                println!(
+                    "{:>8}{:>9}{:>22}{:>22}{:>12.2}{:>12.2}{:>10.0}%",
+                    describe(&report.truth),
+                    report.surfels,
+                    rgb(report.truth.albedo),
+                    rgb(report.albedo),
+                    report.truth.roughness,
+                    report.roughness,
+                    100.0 * report.lobe_share
+                );
+            }
+            println!();
+        }
 
         if let Some(ref directory) = args.dump {
             let frames =
@@ -306,7 +343,25 @@ fn main() {
     println!(
         "\nalbedo err and light err are what survives a per-channel gauge, which is\n\
          assumed rather than recovered; gauge is that factor on the green channel.\n\
-         psnr re-renders the photographs the same way the fit modelled them."
+         psnr re-renders the photographs the same way the fit modelled them.\n\
+         rough err is the mean absolute roughness error; lobe evid is the share of\n\
+         materials seen from angles far enough apart for a lobe to be identifiable."
     );
     renderer.destroy();
+}
+
+/// A short name for a material, from what it is rather than from a label.
+fn describe(material: &vol::relight::Material) -> String {
+    let diffuse: f32 = material.albedo.iter().sum();
+    if diffuse < 0.01 {
+        "metal".to_string()
+    } else if material.roughness > 0.7 {
+        "matte".to_string()
+    } else {
+        "glossy".to_string()
+    }
+}
+
+fn rgb(value: [f32; 3]) -> String {
+    format!("{:.2} {:.2} {:.2}", value[0], value[1], value[2])
 }

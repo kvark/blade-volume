@@ -56,9 +56,13 @@ capture_shadow_rays = 64
 open_sky_error = 0.386
 shadowed_error = 0.269
 
-# The sweep across shared materials, which is the knob between re-rendering
-# and decomposing. Errors are what survives a per-channel gauge; the gauge
-# itself is an assumption and is reported rather than folded in.
+# The sweep across shared materials. Sharing was originally presented as what
+# turns the fit into a decomposition; that was reading one column of three.
+# Per-surfel albedo is the best albedo *and* the best re-rendering, and sharing
+# only buys a better-shaped light. One material per surfel is now the default.
+#
+# Errors are what survives a per-channel gauge; the gauge itself is an
+# assumption and is reported rather than folded in.
 [[truth.sweep]]
 materials = 1
 albedo_error = 0.361
@@ -211,3 +215,106 @@ train_psnr = 14.01
 test_psnr = 10.40
 limiting_stage = "geometry"
 next = "a surface the views agree on, rather than a per-view point cloud"
+
+
+# ------------------------------------------------- material beyond the albedo
+
+# Observations are now kept per view rather than averaged. Averaging is lossless
+# for a Lambertian albedo — a diffuse surface looks the same from everywhere —
+# and fatal for anything else: roughness and reflectance are recoverable *only*
+# from how one surfel changes between views.
+[material]
+observations = "per (surfel, view), CSR by surfel"
+model = "albedo, roughness, F0 per surfel; metalness is an outcome, not a parameter"
+hypotheses = "dielectric (F0 fixed at 0.04, albedo free) or metal (no diffuse term, F0 free)"
+roughness = "chosen from the eight prefiltered levels by residual"
+
+# The measurement that makes every roughness number readable: how much of each
+# material's brightness the lobe actually accounts for, using the truth material
+# and the truth light.
+#
+# A rough dielectric puts two to nine per cent of its brightness in the lobe.
+# Nothing recovers a parameter that moves two per cent of the signal, and the
+# solver correctly declines to try — the margin below leaves those surfaces at
+# the default roughness rather than picking a level out of noise.
+[[material.lobe_share]]
+kind = "matte dielectric"
+truth_roughness = 0.90
+share = 0.02
+
+[[material.lobe_share]]
+kind = "glossy dielectric"
+truth_roughness = 0.55
+share = 0.07
+
+[[material.lobe_share]]
+kind = "glossy dielectric"
+truth_roughness = 0.30
+share = 0.09
+
+[[material.lobe_share]]
+kind = "glossy dielectric"
+truth_roughness = 0.15
+share = 0.06
+
+[[material.lobe_share]]
+kind = "metal"
+truth_roughness = 0.25
+share = 0.97
+
+# Three corrections, measured with the real light handed to the fit so the sky's
+# resolution is not a confound. The first two are mine; the third is the data's.
+[material.corrections]
+# A free two-by-two for albedo and F0 is close to collinear at four per cent
+# lobe, so the solver split the difference and returned half-metals.
+free_solve_albedo_error = 0.592
+# Two physical hypotheses instead, each one unknown per channel.
+two_hypotheses_albedo_error = 0.520
+# The diffuse half knew about shadowing and the lobe did not. A metal sphere on
+# a floor reflects that floor over much of its surface; a fit that thinks it is
+# reflecting open sky over-predicts the lobe and rejects the metal hypothesis.
+occluded_lobe_albedo_error = 0.357
+albedo_only_baseline = 0.313
+
+# What the margin is for. Below it the residuals of every hypothesis are within
+# noise of each other, and calling a coin toss either way is worse than
+# declining to call it: without one, about a third of a matte floor came back
+# as metal, each of those surfels losing its albedo completely.
+[material.margin]
+value = 0.15
+without_margin_floor_albedo = "0.46 0.45 0.42"
+with_margin_floor_albedo = "0.64 0.63 0.60"
+truth_floor_albedo = "0.72 0.70 0.66"
+
+# The solver is correct in isolation: one sphere, one metal, the real light, and
+# the renderer's own CPU shading for the photographs. It recovers the albedo,
+# the reflectance and the roughness, and the assertion is a unit test.
+#
+# It does not recover the metal in the full studio scene, where the photographs
+# carry a bounce the lobe path does not model and the orbit is at one elevation.
+# That gap is the open item, not a solver defect.
+[material.metal]
+isolated_unit_test = "passes"
+studio_recovered_albedo = "0.51 0.43 0.26"
+studio_truth_albedo = "0.00 0.00 0.00"
+status = "not yet recovered in the pipeline"
+
+# Surfels nothing ever saw have no material of their own, and they still get
+# drawn: the renderer averages every disc within a depth band, so an unlit-grey
+# neighbour dilutes a surface that was measured. On bonsai seventy per cent of
+# the geometry is buried, and this alone was the whole of the case for sharing
+# materials.
+#
+# Copying the nearest measured surfel's material is local evidence rather than a
+# scene-wide prior, and it makes one material per surfel the better default on
+# both scenes.
+[material.unseen_surfels]
+bonsai_seen = 89073
+bonsai_total = 302070
+per_surfel_before_train_psnr = 11.03
+per_surfel_before_test_psnr = 7.21
+per_surfel_after_train_psnr = 14.71
+per_surfel_after_test_psnr = 10.25
+shared_256_train_psnr = 14.23
+shared_256_test_psnr = 10.30
+selection = "one material per surfel, filled from the nearest measured neighbour"
