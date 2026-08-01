@@ -87,12 +87,54 @@ Alternating least squares. Given the light, each material's albedo is a ratio
 of sums; given the albedo, the light is a multiplicative update that cannot
 step past zero and so stays a light without a constraint solver.
 
-**Sharing is what makes it a decomposition.** The number of materials is the
-knob between re-rendering and recovering: one per surfel fits best and
-recovers nothing, while a few hundred shared across many normals leave the
-light as the only remaining explanation for how shading varies. The knob is
-exposed rather than tuned out of sight, because the sweep across it is the
-measurement.
+**One material per surfel**, and this was got wrong once. Sharing materials
+across surfels was originally presented as what turns the fit into a
+decomposition. It is not: per-surfel albedo was already the best albedo *and*
+the best re-rendering, and sharing only bought a light of better shape. The
+claim was made by reading one column of three.
+
+What sharing was really covering for is that most of a room's surfels are never
+seen by any view — seventy per cent of bonsai's — and still get drawn, because
+the renderer averages every disc within a depth band. A shared material gave
+those a fitted albedo by accident. Copying the nearest *measured* surfel's
+material does the same thing on local evidence rather than a scene-wide prior,
+and it is worth 3.7 dB. Sharing remains available and measured; it is not the
+default.
+
+### beyond albedo: roughness and metalness
+
+A Lambertian surface looks the same from every direction, so averaging a
+surfel's observations across views loses nothing — which is why the first
+version did it, and why that had to be undone. A lobe is the opposite: gloss
+and reflectance are recoverable *only* from how one surfel changes between
+views. Observations are now kept per view.
+
+The two material hypotheses are solved separately rather than as one free fit:
+
+- a **dielectric** reflects about 4 % at normal incidence whatever colour it is,
+  and carries its colour in the diffuse term;
+- a **metal** has no diffuse term at all, and carries its colour in the
+  reflectance.
+
+Left free they are close to collinear — a bright lobe and a bright albedo both
+make a surfel brighter — and the solver returns a half-metal that is neither.
+Solved separately each is one unknown per channel, and metalness becomes a
+decision with a residual behind it.
+
+Neither is believed without a margin. **A rough dielectric puts two to nine per
+cent of its brightness in the lobe**, measured on the truth scene, and at that
+level every hypothesis fits equally well. Without a margin about a third of a
+matte floor came back as metal, each of those surfels losing its albedo
+entirely — which cost far more than the metals it was trying to find were
+worth. With one, those surfaces keep the default roughness, which is the honest
+answer: the data does not say.
+
+The lobe is occluded the same way the diffuse term is. Leaving it unshadowed is
+not a small inconsistency — a metal sphere standing on a floor reflects that
+floor over much of its surface, and a fit that thinks it is reflecting open sky
+over-predicts the lobe, rejects the metal hypothesis, and puts the metal's
+colour in the wrong channel. Occluding both is worth sixteen points of albedo
+error.
 
 Two gauges have no evidence behind them at all and are therefore **assumed and
 stated**:
@@ -128,10 +170,19 @@ because each ray either reaches the sky or meets something.
 
 ## Where it stands
 
-On a scene whose answer is known, the split works: albedo recovered to 23 %
-and the light's shape to 35 %, against a forward model that is itself 27 % away
-from the photographs because it has no term for the second bounce or for
-gloss.
+On a scene whose answer is known, the albedo/light split works: albedo
+recovered to 23 % and the light's shape to 35 %, against a forward model that is
+itself 27 % away from the photographs because it has no term for the second
+bounce.
+
+**Roughness and metalness are not recovered**, and the two reasons are
+different. Dielectric roughness is not a solver failure — the parameter moves
+two to nine per cent of the signal and the fit correctly declines to guess it.
+The metal is a genuine open item: the solver recovers a gold sphere's
+reflectance and roughness exactly when it is given the real light and the
+renderer's own shading, which is asserted as a unit test, and still fails in the
+studio scene, where the photographs carry a bounce the lobe path does not model
+and the orbit sees each surfel from one elevation.
 
 On bonsai it does not yet reach the goal: 14 dB on the views the geometry was
 built from and 10 dB on those it was not. That gap is the finding. A
@@ -148,7 +199,8 @@ agree about.
    because occlusion computed against the wrong surface is worse than none.
 2. **The radiance field itself**, at 21.7 dB train / 20.0 test, is the ceiling
    the geometry is extracted from.
-3. **The shading model**: Lambertian, no specular term, one bounce. Worth
-   about 27 % on the truth scene even with everything else exact.
+3. **The shading model**: one bounce, and a lobe that only pays where the lobe
+   is a meaningful share of the brightness. Worth about 27 % on the truth scene
+   even with everything else exact.
 
 The order matters: improving 3 before 1 would be measuring the wrong thing.
