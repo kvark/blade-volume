@@ -41,13 +41,23 @@ use blade_volume as vol;
 ///   - **Things that occlude each other.** The spheres shadow the floor and
 ///     bounce onto it, so the photographs contain light the fit has no term
 ///     for. That is the whole point of the exercise.
+///   - **Gloss that varies, and one metal.** Roughness and F0 are recoverable
+///     only from how a surface changes between views, so a scene where every
+///     material is a rough dielectric would be passed by a solver that always
+///     answers "rough dielectric". The ladder from 0.9 down to 0.15, plus a
+///     gold sphere with no diffuse response at all, is what makes those two
+///     parameters answerable.
 pub fn studio(spacing: f32) -> vol::relight::RelightModel {
-    const ALBEDOS: [[f32; 3]; 5] = [
-        [0.72, 0.70, 0.66], // floor, near neutral
-        [0.66, 0.18, 0.14], // red
-        [0.16, 0.42, 0.20], // green
-        [0.20, 0.30, 0.70], // blue
-        [0.75, 0.68, 0.22], // yellow, the brightest
+    /// Albedo, roughness, and reflectance at normal incidence.
+    ///
+    /// Metalness is not a field here for the same reason it is not one in the
+    /// fit: a metal is what zero albedo and a high coloured F0 *mean*.
+    const MATERIALS: [([f32; 3], f32, [f32; 3]); 5] = [
+        ([0.72, 0.70, 0.66], 0.90, [0.04; 3]), // floor and wall, near neutral
+        ([0.66, 0.18, 0.14], 0.55, [0.04; 3]), // red, slightly glossy
+        ([0.16, 0.42, 0.20], 0.30, [0.04; 3]), // green, glossier
+        ([0.20, 0.30, 0.70], 0.15, [0.04; 3]), // blue, nearly a mirror
+        ([0.0; 3], 0.25, [1.0, 0.72, 0.29]),   // gold: a metal
     ];
     let spacing = spacing.max(1.0e-4);
     let radius = spacing * 0.75;
@@ -117,16 +127,16 @@ pub fn studio(spacing: f32) -> vol::relight::RelightModel {
 
     vol::relight::RelightModel {
         surfels,
-        materials: ALBEDOS
+        materials: MATERIALS
             .iter()
-            .map(|albedo| vol::relight::Material {
-                albedo: *albedo,
-                roughness: 1.0,
-                // Dielectric and rough: the fit has no specular term, and a
-                // glossy truth would make this a test of that omission
-                // instead of a test of the split.
-                specular_f0: [0.04; 3],
-                _padding: 0.0,
+            .map(|entry| {
+                let (albedo, roughness, specular_f0) = *entry;
+                vol::relight::Material {
+                    albedo,
+                    roughness,
+                    specular_f0,
+                    _padding: 0.0,
+                }
             })
             .collect(),
     }
@@ -255,6 +265,168 @@ pub fn compare_environment(
         .map(|(x, y)| ([x[0], x[1], x[2]], [y[0], y[1], y[2]]))
         .collect();
     compare_triples(&pairs)
+}
+
+/// Compare recovered reflectance at normal incidence.
+///
+/// F0 shares the albedo's gauge problem only partly: it is not traded against
+/// the light in the same way, because the lobe and the diffuse term scale
+/// together. It is compared through the same machinery for consistency, and the
+/// gauge it reports should be near one.
+pub fn compare_f0(
+    truth: &vol::relight::RelightModel,
+    recovered: &vol::relight::RelightModel,
+) -> Error {
+    let pairs: Vec<([f32; 3], [f32; 3])> = truth
+        .surfels
+        .iter()
+        .zip(&recovered.surfels)
+        .map(|(a, b)| {
+            (
+                truth.materials[a.material as usize].specular_f0,
+                recovered.materials[b.material as usize].specular_f0,
+            )
+        })
+        .collect();
+    compare_triples(&pairs)
+}
+
+/// What came back for one of the materials the scene was built from.
+pub struct MaterialReport {
+    pub truth: vol::relight::Material,
+    pub surfels: usize,
+    pub albedo: [f32; 3],
+    pub roughness: f32,
+    pub specular_f0: [f32; 3],
+    /// Mean share of the observed radiance that the lobe accounts for, using
+    /// the truth material and the truth light.
+    ///
+    /// This is the identifiability of the gloss, and it is the number that
+    /// makes a roughness error readable. A rough dielectric puts about four
+    /// per cent of its brightness in the lobe; no solver recovers a parameter
+    /// that moves four per cent of the signal, and reporting its error next to
+    /// a metal's is comparing a measurement with a guess.
+    pub lobe_share: f32,
+}
+
+/// Break the recovery down by the material it was supposed to find.
+///
+/// An aggregate over a scene whose floor is most of its surfels reports the
+/// floor and calls it the scene.
+pub fn per_material(
+    truth: &vol::relight::RelightModel,
+    recovered: &vol::relight::RelightModel,
+    environment: &vol::relight::Environment,
+    observations: &crate::inverse::decompose::Observations,
+) -> Vec<MaterialReport> {
+    let count = truth.materials.len();
+    let mut surfels = vec![0usize; count];
+    let mut albedo = vec![[0.0f64; 3]; count];
+    let mut roughness = vec![0.0f64; count];
+    let mut specular_f0 = vec![[0.0f64; 3]; count];
+    for (a, b) in truth.surfels.iter().zip(&recovered.surfels) {
+        let slot = a.material as usize;
+        let found = &recovered.materials[b.material as usize];
+        surfels[slot] += 1;
+        roughness[slot] += found.roughness as f64;
+        for channel in 0..3 {
+            albedo[slot][channel] += found.albedo[channel] as f64;
+            specular_f0[slot][channel] += found.specular_f0[channel] as f64;
+        }
+    }
+
+    let shares = lobe_shares(truth, environment, observations, count);
+    (0..count)
+        .map(|slot| {
+            let n = surfels[slot].max(1) as f64;
+            MaterialReport {
+                truth: truth.materials[slot],
+                surfels: surfels[slot],
+                albedo: [
+                    (albedo[slot][0] / n) as f32,
+                    (albedo[slot][1] / n) as f32,
+                    (albedo[slot][2] / n) as f32,
+                ],
+                roughness: (roughness[slot] / n) as f32,
+                specular_f0: [
+                    (specular_f0[slot][0] / n) as f32,
+                    (specular_f0[slot][1] / n) as f32,
+                    (specular_f0[slot][2] / n) as f32,
+                ],
+                lobe_share: shares[slot],
+            }
+        })
+        .collect()
+}
+
+/// How much of each material's brightness the lobe actually accounts for.
+fn lobe_shares(
+    truth: &vol::relight::RelightModel,
+    environment: &vol::relight::Environment,
+    observations: &crate::inverse::decompose::Observations,
+    count: usize,
+) -> Vec<f32> {
+    let specular = vol::relight::SpecularEnvironment::prefilter(
+        environment,
+        environment.width,
+        environment.height,
+    );
+    let irradiance = environment.diffuse_irradiance();
+    let mut lobe = vec![0.0f64; count];
+    let mut total = vec![0.0f64; count];
+    for (index, surfel) in truth.surfels.iter().enumerate() {
+        let slot = surfel.material as usize;
+        let material = &truth.materials[slot];
+        let normal = glam::Vec3::from(surfel.normal);
+        let mut diffuse_only = *material;
+        diffuse_only.specular_f0 = [0.0; 3];
+        for sample in observations.of(index) {
+            let full =
+                vol::relight::shade(normal, sample.towards, material, &irradiance, &specular);
+            let without = vol::relight::shade(
+                normal,
+                sample.towards,
+                &diffuse_only,
+                &irradiance,
+                &specular,
+            );
+            for channel in 0..3 {
+                lobe[slot] += (full[channel] - without[channel]).max(0.0) as f64;
+                total[slot] += full[channel].max(0.0) as f64;
+            }
+        }
+    }
+    (0..count)
+        .map(|slot| {
+            if total[slot] > 1.0e-9 {
+                (lobe[slot] / total[slot]) as f32
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+/// Mean absolute roughness error, weighted by nothing.
+///
+/// Roughness has no gauge: it is not traded off against the light the way
+/// albedo is, so it can be compared directly. It is also the parameter with the
+/// least evidence behind it — a surface seen from one direction says nothing
+/// about its own gloss — so read it next to the share of materials that had any
+/// angular spread at all.
+pub fn compare_roughness(
+    truth: &vol::relight::RelightModel,
+    recovered: &vol::relight::RelightModel,
+) -> f64 {
+    let mut error = 0.0f64;
+    let mut count = 0usize;
+    for (a, b) in truth.surfels.iter().zip(&recovered.surfels) {
+        let expected = truth.materials[a.material as usize].roughness;
+        let found = recovered.materials[b.material as usize].roughness;
+        error += (found - expected).abs() as f64;
+        count += 1;
+    }
+    error / count.max(1) as f64
 }
 
 /// Least-squares per-channel gauge, then the error that survives it.

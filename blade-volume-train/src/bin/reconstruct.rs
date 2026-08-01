@@ -46,9 +46,10 @@ struct Args {
     #[argh(option, default = "8")]
     test_every: usize,
 
-    /// materials the surfels are clustered into (default 256; 0 = one each,
-    /// which fits best and decomposes nothing)
-    #[argh(option, default = "256")]
+    /// materials the surfels are clustered into (default 0 = one per surfel).
+    /// Sharing is a prior about the scene rather than something the
+    /// photographs said, and it costs both the albedo and the re-rendering.
+    #[argh(option, default = "0")]
     materials: usize,
 
     /// equirectangular width of the recovered environment (default 32)
@@ -58,6 +59,11 @@ struct Args {
     /// alternations between solving for albedo and for light (default 24)
     #[argh(option, default = "24")]
     iterations: usize,
+
+    /// rounds in which roughness and reflectance are re-chosen (default 3;
+    /// 0 leaves every surface a rough dielectric, which is the albedo-only fit)
+    #[argh(option, default = "3")]
+    specular_rounds: usize,
 
     /// disc radius as a multiple of the local point spacing (default 1.4).
     /// Applies to the sparse-cloud geometry only.
@@ -219,9 +225,13 @@ fn main() {
             materials: args.materials,
             environment_width: args.environment_width,
             iterations: args.iterations,
+            specular_rounds: args.specular_rounds,
             ..Default::default()
         },
-        shadows.as_ref(),
+        train::inverse::decompose::Given {
+            visibility: shadows.as_ref(),
+            light: None,
+        },
     );
     println!(
         "decomposed: {} materials, residual {:.4}, {} surfels unseen, in {:.1} s",
