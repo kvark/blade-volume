@@ -109,7 +109,7 @@ impl<'a> DepthTracer<'a> {
                 max_steps,
                 start_point,
                 depth: camera.depth,
-                eval_mode: vol::trace::EvalMode::ConstantRgb(glam::Vec3::ONE),
+                eval_mode: vol::trace::EvalMode::Opacity,
             },
             origin: glam::Vec3::from(camera.cam_position),
             rays: capture::PixelRays::new(camera, width, height),

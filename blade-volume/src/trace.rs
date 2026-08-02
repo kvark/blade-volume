@@ -38,6 +38,9 @@ pub struct Ray {
 /// Controls how RGB is produced per traversed cell.
 #[derive(Clone, Copy, Debug)]
 pub enum EvalMode {
+    /// Skip colour evaluation and accumulation. Alpha and depth statistics are
+    /// still integrated normally.
+    Opacity,
     /// Ignore SH coefficients; use a constant RGB for every visited cell.
     ConstantRgb(glam::Vec3),
     /// Evaluate the model's packed SH coefficients in the ray direction.
@@ -150,6 +153,52 @@ fn read_radius(model: &PointCloudModel, point_idx: u32) -> f32 {
         .radii
         .as_deref()
         .map_or(0.0, |r| r[point_idx as usize])
+}
+
+struct ExitQuery {
+    current_pos: glam::Vec3,
+    current_radius: f32,
+    ray_origin: glam::Vec3,
+    ray_dir: glam::Vec3,
+    t0: f32,
+    depth: f32,
+}
+
+#[inline]
+fn find_exit_face<const WEIGHTED: bool>(
+    points: &[glam::Vec4],
+    radii: &[f32],
+    neighbours: &[u32],
+    query: &ExitQuery,
+) -> (f32, Option<usize>) {
+    // The const branch keeps plain RadFoam's hot neighbour loop free of the
+    // radius loads, squared distance, and radical-plane division.
+    let mut best_t1 = query.depth;
+    let mut next_face = None;
+    let r_i_sq = query.current_radius * query.current_radius;
+    for (face, &next_idx_u32) in neighbours.iter().enumerate() {
+        let next_idx = next_idx_u32 as usize;
+        let next_p = points[next_idx];
+        let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
+        let offset = next_pos - query.current_pos;
+        let shift = if WEIGHTED {
+            let r_j = radii[next_idx];
+            let dsq = offset.length_squared().max(1e-20);
+            0.5 + 0.5 * (r_i_sq - r_j * r_j) / dsq
+        } else {
+            0.5
+        };
+        let face_origin = query.current_pos + shift * offset;
+        let dp = offset.dot(query.ray_dir);
+        if dp > 0.0 {
+            let t = (face_origin - query.ray_origin).dot(offset) / dp;
+            if t.is_finite() && t > query.t0 && t < best_t1 {
+                best_t1 = t;
+                next_face = Some(face);
+            }
+        }
+    }
+    (best_t1, next_face)
 }
 
 /// Intersect a power-cell interval with its site's support sphere. Plain
@@ -960,33 +1009,19 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
         let begin = adjacency.offsets[current as usize] as usize;
         let end = adjacency.offsets[current as usize + 1] as usize;
 
-        let mut best_t1 = settings.depth;
-        let mut next_face: Option<usize> = None;
-        let r_i_sq = current_radius * current_radius;
-
-        for (j, &next_idx_u32) in adjacency.neighbors[begin..end].iter().enumerate() {
-            let next_idx = next_idx_u32 as usize;
-            let next_p = model.points[next_idx];
-            let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
-            let r_j = read_radius(model, next_idx_u32);
-            let offset = next_pos - current_pos;
-
-            // Radical plane between weighted spheres; reduces to the bisector
-            // when both radii are zero. Matches shaders/radfoam_trace.wgsl.
-            let dsq = offset.length_squared().max(1e-20);
-            let shift = 0.5 + 0.5 * (r_i_sq - r_j * r_j) / dsq;
-            let face_origin = current_pos + shift * offset;
-            let face_normal = offset;
-
-            let dp = face_normal.dot(dir);
-            if dp > 0.0 {
-                let t = (face_origin - ray.origin).dot(face_normal) / dp;
-                if t.is_finite() && t > t0 && t < best_t1 {
-                    best_t1 = t;
-                    next_face = Some(j);
-                }
-            }
-        }
+        let neighbours = &adjacency.neighbors[begin..end];
+        let exit_query = ExitQuery {
+            current_pos,
+            current_radius,
+            ray_origin: ray.origin,
+            ray_dir: dir,
+            t0,
+            depth: settings.depth,
+        };
+        let (best_t1, next_face) = match model.radii.as_deref() {
+            Some(radii) => find_exit_face::<true>(&model.points, radii, neighbours, &exit_query),
+            None => find_exit_face::<false>(&model.points, &[], neighbours, &exit_query),
+        };
 
         if let Some((segment_start, segment_end)) = support_interval(
             bounded,
@@ -1002,11 +1037,11 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
                 let dt = segment_end - segment_start;
                 let alpha = 1.0 - (-s * dt).exp();
                 let w = transmittance * alpha;
-                let rgb = match settings.eval_mode {
-                    EvalMode::ConstantRgb(c) => c,
-                    EvalMode::Sh => eval_rgb_sh(model, current, dir),
-                };
-                accum_rgb += w * rgb;
+                match settings.eval_mode {
+                    EvalMode::Opacity => {}
+                    EvalMode::ConstantRgb(c) => accum_rgb += w * c,
+                    EvalMode::Sh => accum_rgb += w * eval_rgb_sh(model, current, dir),
+                }
                 if w > peak_weight {
                     peak_weight = w;
                     depth_mode = 0.5 * (segment_start + segment_end);
@@ -1023,7 +1058,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
             break;
         };
 
-        let next_idx_u32 = adjacency.neighbors[begin + j];
+        let next_idx_u32 = neighbours[j];
         let next_idx = next_idx_u32;
         let next_p = model.points[next_idx as usize];
         let next_pos = glam::Vec3::new(next_p.x, next_p.y, next_p.z);
@@ -1078,6 +1113,32 @@ mod path_tests {
             depth: 100.0,
             eval_mode: EvalMode::ConstantRgb(glam::Vec3::ONE),
         }
+    }
+
+    #[test]
+    fn opacity_trace_preserves_every_non_colour_result() {
+        let model = tetra_model();
+        let ray = Ray {
+            origin: glam::Vec3::new(-1.0, 0.1, 0.1),
+            direction: glam::Vec3::X,
+        };
+        let settings = settings_for(0);
+        let colour = trace_one_ray(&model, ray, settings);
+        let opacity = trace_one_ray(
+            &model,
+            ray,
+            TraceSettings {
+                eval_mode: EvalMode::Opacity,
+                ..settings
+            },
+        );
+        assert_eq!(opacity.rgba.truncate(), glam::Vec3::ZERO);
+        assert_eq!(opacity.rgba.w, colour.rgba.w);
+        assert_eq!(opacity.steps, colour.steps);
+        assert_eq!(opacity.last_point, colour.last_point);
+        assert_eq!(opacity.t_end, colour.t_end);
+        assert_eq!(opacity.depth_mode, colour.depth_mode);
+        assert_eq!(opacity.peak_weight, colour.peak_weight);
     }
 
     #[test]
