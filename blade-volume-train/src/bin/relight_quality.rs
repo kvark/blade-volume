@@ -138,26 +138,6 @@ fn save(path: &std::path::Path, pixels: &[[f32; 4]], width: usize, height: usize
     let _ = image.save(path);
 }
 
-/// The reference's camera, in this renderer's convention.
-///
-/// Blade looks down its local `-Z` with the film flipped vertically; this one
-/// looks down `+Z`. A half turn about `X` is exactly that difference, and
-/// getting it wrong would show up as a comparison against a mirrored image
-/// rather than as an error.
-fn camera_of(view: &train::relight::View, width: usize, height: usize) -> vol::CameraParams {
-    let flip = glam::Quat::from_rotation_x(std::f32::consts::PI);
-    let orientation = view.orientation * flip;
-    let aspect = width as f32 / height as f32;
-    let fov_y = view.fov_y;
-    vol::CameraParams {
-        cam_position: view.position.into(),
-        depth: 1000.0,
-        cam_orientation: [orientation.x, orientation.y, orientation.z, orientation.w],
-        fov: [2.0 * ((0.5 * fov_y).tan() * aspect).atan(), fov_y],
-        principal: [0.0, 0.0],
-    }
-}
-
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
@@ -320,7 +300,7 @@ fn main() {
             tracer.dispatch(
                 &mut encoder,
                 target_view,
-                camera_of(view, dataset.width, dataset.height),
+                train::relight::camera_params(view, dataset.width, dataset.height),
                 [dataset.width as u32, dataset.height as u32],
             );
             if let mut pass = encoder.transfer("relight-quality-readback") {

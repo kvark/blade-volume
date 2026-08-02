@@ -6,7 +6,7 @@
 //! looks like a plausible albedo and is not one. The decode happens once, on
 //! load, and nothing downstream has to remember.
 
-use crate::{colmap, pipeline};
+use crate::{colmap, pipeline, relight};
 use blade_volume as vol;
 use std::path;
 
@@ -120,6 +120,58 @@ impl PixelRays {
 }
 
 impl Capture {
+    /// Load one environment of Blade's synthetic relighting dataset.
+    ///
+    /// When `foreground_only` is set, pixels whose geometry plane records a
+    /// miss become black. That lets reconstruction scoring distinguish missing
+    /// point-cloud geometry from the unrelated task of reproducing a visible
+    /// environment background.
+    pub fn from_relight_dataset(
+        dataset: &relight::Dataset,
+        environment: usize,
+        foreground_only: bool,
+    ) -> Result<Self, String> {
+        let Some(environment_name) = dataset.environments.get(environment) else {
+            return Err(format!(
+                "environment {environment} is outside a dataset with {} environments",
+                dataset.environments.len()
+            ));
+        };
+        let mut views = Vec::with_capacity(dataset.views.len());
+        for view in &dataset.views {
+            let radiance = dataset.read_plane(&view.radiance[environment])?;
+            let geometry = if foreground_only {
+                Some(dataset.read_plane(&view.geometry)?)
+            } else {
+                None
+            };
+            let pixels = radiance
+                .iter()
+                .enumerate()
+                .map(|(index, texel)| {
+                    if geometry
+                        .as_ref()
+                        .is_some_and(|plane| plane[index][3] <= 0.0)
+                    {
+                        [0.0; 3]
+                    } else {
+                        [texel[0], texel[1], texel[2]]
+                    }
+                })
+                .collect();
+            views.push(View {
+                name: format!("view_{:03}-{environment_name}", view.index),
+                camera: relight::camera_params(view, dataset.width, dataset.height),
+                pixels,
+            });
+        }
+        Ok(Self {
+            width: dataset.width,
+            height: dataset.height,
+            views,
+        })
+    }
+
     /// Read a COLMAP reconstruction and the images it poses.
     ///
     /// `stride` keeps every n-th image; the full mip-NeRF scenes are 290

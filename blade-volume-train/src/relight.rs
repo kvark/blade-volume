@@ -14,6 +14,7 @@
 //! bound: a real reconstruction also has to estimate the geometry this hands
 //! over for free.
 
+use blade_volume as vol;
 use std::{fs, path};
 
 /// Spherical harmonic coefficients of the diffuse response, per colour channel.
@@ -136,6 +137,24 @@ pub struct Dataset {
     pub environments: Vec<String>,
     pub environment_files: Vec<path::PathBuf>,
     pub views: Vec<View>,
+}
+
+/// Convert a Blade dataset camera to blade-volume's camera convention.
+///
+/// Blade looks along local `-Z` with image `+Y` pointing down after the film
+/// flip. blade-volume looks along local `+Z` with local `+Y` pointing down.
+/// A half turn about local `X` is exactly that basis change.
+pub fn camera_params(view: &View, width: usize, height: usize) -> vol::CameraParams {
+    let basis_change = glam::Quat::from_rotation_x(std::f32::consts::PI);
+    let orientation = view.orientation * basis_change;
+    let aspect = width as f32 / height as f32;
+    vol::CameraParams {
+        cam_position: view.position.into(),
+        depth: 1000.0,
+        cam_orientation: orientation.into(),
+        fov: [2.0 * ((0.5 * view.fov_y).tan() * aspect).atan(), view.fov_y],
+        principal: [0.0, 0.0],
+    }
 }
 
 /// Pull `key = ...` out of a line, if that is what the line is.
@@ -328,10 +347,34 @@ impl Dataset {
 
     /// Prefilter every environment for the specular lobe.
     pub fn environment_specular(&self) -> Result<Vec<SpecularEnvironment>, String> {
+        let indices: Vec<usize> = (0..self.environment_files.len()).collect();
+        self.environment_specular_for(&indices)
+    }
+
+    /// Prefilter selected environments and leave cheap black placeholders for
+    /// the rest, preserving manifest indices for the fitting routines.
+    pub fn environment_specular_for(
+        &self,
+        environment_indices: &[usize],
+    ) -> Result<Vec<SpecularEnvironment>, String> {
+        let mut selected = vec![false; self.environment_files.len()];
+        for &index in environment_indices {
+            let Some(slot) = selected.get_mut(index) else {
+                return Err(format!(
+                    "environment {index} is outside a dataset with {} environments",
+                    self.environment_files.len()
+                ));
+            };
+            *slot = true;
+        }
         let mut out = Vec::with_capacity(self.environment_files.len());
-        for file in &self.environment_files {
-            let (texels, width, height) = read_environment_plane(file)?;
-            out.push(SpecularEnvironment::prefilter(&texels, width, height));
+        for (index, file) in self.environment_files.iter().enumerate() {
+            if selected[index] {
+                let (texels, width, height) = read_environment_plane(file)?;
+                out.push(SpecularEnvironment::prefilter(&texels, width, height));
+            } else {
+                out.push(SpecularEnvironment::black());
+            }
         }
         Ok(out)
     }
@@ -447,69 +490,91 @@ fn sample_equirect(texels: &[[f32; 3]], width: usize, height: usize, dir: glam::
     texels[y * width + x]
 }
 
-impl SpecularEnvironment {
-    /// Convolve an environment with the GGX lobe at each roughness level.
-    pub fn prefilter(texels: &[[f32; 3]], width: usize, height: usize) -> Self {
-        const SAMPLES: u32 = 128;
-        let (out_width, out_height) = SPECULAR_SIZE;
-        let mut levels = Vec::with_capacity(SPECULAR_LEVELS);
-        for level in 0..SPECULAR_LEVELS {
-            let roughness = level as f32 / (SPECULAR_LEVELS - 1) as f32;
-            let mut plane = vec![[0.0f32; 3]; out_width * out_height];
-            for y in 0..out_height {
-                let v = (y as f32 + 0.5) / out_height as f32;
-                for x in 0..out_width {
-                    let u = (x as f32 + 0.5) / out_width as f32;
-                    // Split-sum assumes the view and the normal agree with the
-                    // reflection direction, which is what makes one table
-                    // serve every viewing angle.
-                    let normal = equirect_direction(u, v);
-                    if roughness <= 0.0 {
-                        plane[y * out_width + x] = sample_equirect(texels, width, height, normal);
-                        continue;
-                    }
-                    let up = if normal.z.abs() < 0.999 {
-                        glam::Vec3::Z
-                    } else {
-                        glam::Vec3::X
-                    };
-                    let tangent = up.cross(normal).normalize();
-                    let bitangent = normal.cross(tangent);
+fn prefilter_specular_level(
+    texels: &[[f32; 3]],
+    width: usize,
+    height: usize,
+    level: usize,
+) -> Vec<[f32; 3]> {
+    const SAMPLES: u32 = 128;
+    let (out_width, out_height) = SPECULAR_SIZE;
+    let roughness = level as f32 / (SPECULAR_LEVELS - 1) as f32;
+    let mut plane = vec![[0.0f32; 3]; out_width * out_height];
+    for y in 0..out_height {
+        let v = (y as f32 + 0.5) / out_height as f32;
+        for x in 0..out_width {
+            let u = (x as f32 + 0.5) / out_width as f32;
+            // Split-sum assumes the view and the normal agree with the
+            // reflection direction, which is what makes one table serve every
+            // viewing angle.
+            let normal = equirect_direction(u, v);
+            if roughness <= 0.0 {
+                plane[y * out_width + x] = sample_equirect(texels, width, height, normal);
+                continue;
+            }
+            let up = if normal.z.abs() < 0.999 {
+                glam::Vec3::Z
+            } else {
+                glam::Vec3::X
+            };
+            let tangent = up.cross(normal).normalize();
+            let bitangent = normal.cross(tangent);
 
-                    let mut total = [0.0f32; 3];
-                    let mut weight = 0.0f32;
-                    for index in 0..SAMPLES {
-                        let hammersley =
-                            glam::Vec2::new(index as f32 / SAMPLES as f32, radical_inverse(index));
-                        let local = importance_sample_ggx(hammersley, roughness);
-                        let half = tangent * local.x + bitangent * local.y + normal * local.z;
-                        let light = (2.0 * normal.dot(half) * half - normal).normalize();
-                        let cosine = normal.dot(light);
-                        if cosine <= 0.0 {
-                            continue;
-                        }
-                        let radiance = sample_equirect(texels, width, height, light);
-                        for (accumulated, value) in total.iter_mut().zip(radiance) {
-                            *accumulated += value * cosine;
-                        }
-                        weight += cosine;
-                    }
-                    if weight > 0.0 {
-                        for accumulated in total.iter_mut() {
-                            *accumulated /= weight;
-                        }
-                    }
-                    plane[y * out_width + x] = total;
+            let mut total = [0.0f32; 3];
+            let mut weight = 0.0f32;
+            for index in 0..SAMPLES {
+                let hammersley =
+                    glam::Vec2::new(index as f32 / SAMPLES as f32, radical_inverse(index));
+                let local = importance_sample_ggx(hammersley, roughness);
+                let half = tangent * local.x + bitangent * local.y + normal * local.z;
+                let light = (2.0 * normal.dot(half) * half - normal).normalize();
+                let cosine = normal.dot(light);
+                if cosine <= 0.0 {
+                    continue;
+                }
+                let radiance = sample_equirect(texels, width, height, light);
+                for (accumulated, value) in total.iter_mut().zip(radiance) {
+                    *accumulated += value * cosine;
+                }
+                weight += cosine;
+            }
+            if weight > 0.0 {
+                for accumulated in &mut total {
+                    *accumulated /= weight;
                 }
             }
-            levels.push(plane);
+            plane[y * out_width + x] = total;
         }
+    }
+    plane
+}
+
+impl SpecularEnvironment {
+    fn black() -> Self {
+        Self { levels: Vec::new() }
+    }
+
+    /// Convolve an environment with the GGX lobe at each roughness level.
+    pub fn prefilter(texels: &[[f32; 3]], width: usize, height: usize) -> Self {
+        let levels = std::thread::scope(|scope| {
+            let jobs: Vec<_> = (0..SPECULAR_LEVELS)
+                .map(|level| {
+                    scope.spawn(move || prefilter_specular_level(texels, width, height, level))
+                })
+                .collect();
+            jobs.into_iter()
+                .map(|job| job.join().expect("specular prefilter worker panicked"))
+                .collect()
+        });
         Self { levels }
     }
 
     /// Prefiltered radiance along `reflection` at `roughness`, interpolated
     /// between the two neighbouring levels.
     pub fn sample(&self, reflection: glam::Vec3, roughness: f32) -> [f32; 3] {
+        if self.levels.is_empty() {
+            return [0.0; 3];
+        }
         let (width, height) = SPECULAR_SIZE;
         let scaled = roughness.clamp(0.0, 1.0) * (SPECULAR_LEVELS - 1) as f32;
         let low = scaled.floor() as usize;
@@ -590,8 +655,38 @@ pub struct Sample {
 
 /// Gather the foreground pixels of every view.
 pub fn gather_samples(dataset: &Dataset) -> Result<Vec<Sample>, String> {
+    gather_selected_samples(dataset, &vec![true; dataset.views.len()])
+}
+
+/// Gather foreground pixels only from the selected views.
+///
+/// This is the reconstruction path: held-out views must never be loaded and
+/// filtered afterwards, because doing so makes it too easy for a later fusion
+/// or fitting step to retain their geometry by accident.
+pub fn gather_samples_for_views(
+    dataset: &Dataset,
+    view_indices: &[usize],
+) -> Result<Vec<Sample>, String> {
+    let mut selected = vec![false; dataset.views.len()];
+    for &index in view_indices {
+        let Some(slot) = selected.get_mut(index) else {
+            return Err(format!(
+                "view {index} is outside a dataset with {} views",
+                dataset.views.len()
+            ));
+        };
+        *slot = true;
+    }
+    gather_selected_samples(dataset, &selected)
+}
+
+fn gather_selected_samples(dataset: &Dataset, selected: &[bool]) -> Result<Vec<Sample>, String> {
     let mut samples = Vec::new();
-    for view in &dataset.views {
+    for view in dataset
+        .views
+        .iter()
+        .filter(|view| selected.get(view.index).copied().unwrap_or(false))
+    {
         let geometry = dataset.read_plane(&view.geometry)?;
         let material = dataset.read_plane(&view.material)?;
         let specular = match view.specular {
@@ -787,6 +882,239 @@ pub fn seed_elements_from_truth(elements: &mut [Element], samples: &[Sample]) {
         }
         element.roughness = roughness / count;
     }
+}
+
+/// Which material values to put on reconstructed surface particles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ElementMaterial {
+    /// Parameters recovered from the training observations.
+    Fitted,
+    /// Mean authored parameters of the training samples in each element.
+    Truth,
+}
+
+fn element_geometry(element: &Element, samples: &[Sample]) -> Option<(glam::Vec3, glam::Vec3)> {
+    if element.samples.is_empty() {
+        return None;
+    }
+    let mut center = glam::Vec3::ZERO;
+    let mut normal = glam::Vec3::ZERO;
+    for &index in &element.samples {
+        center += samples[index as usize].position;
+        normal += samples[index as usize].normal;
+    }
+    center /= element.samples.len() as f32;
+    normal = normal.normalize_or_zero();
+    (normal != glam::Vec3::ZERO && center.is_finite()).then_some((center, normal))
+}
+
+fn fitted_material(element: &Element) -> vol::relight::Material {
+    vol::relight::Material {
+        albedo: element.albedo,
+        roughness: element.roughness,
+        specular_f0: element.specular_f0,
+        _padding: 0.0,
+    }
+}
+
+fn truth_material(element: &Element, samples: &[Sample]) -> vol::relight::Material {
+    let mut albedo = [0.0f32; 3];
+    let mut specular_f0 = [0.0f32; 3];
+    let mut roughness = 0.0f32;
+    for &index in &element.samples {
+        let sample = &samples[index as usize];
+        for channel in 0..3 {
+            albedo[channel] += sample.albedo_truth[channel];
+            specular_f0[channel] += sample.specular_f0[channel];
+        }
+        roughness += sample.roughness;
+    }
+    let inverse_count = 1.0 / element.samples.len().max(1) as f32;
+    vol::relight::Material {
+        albedo: albedo.map(|value| value * inverse_count),
+        roughness: roughness * inverse_count,
+        specular_f0: specular_f0.map(|value| value * inverse_count),
+        _padding: 0.0,
+    }
+}
+
+/// Turn fused training-view elements into a relightable point cloud.
+///
+/// Geometry is identical for fitted and truth-material controls: one particle
+/// at the mean sample position, oriented by the mean shading normal. Held-out
+/// views cannot contribute because `elements` only index the supplied sample
+/// slice. This unclustered form is the material-capacity control; use
+/// [`model_from_elements_with_palette`] for the compact shared-material model.
+pub fn model_from_elements(
+    elements: &[Element],
+    samples: &[Sample],
+    radius: f32,
+    kernel: vol::relight::ParticleKernel,
+    material_source: ElementMaterial,
+) -> vol::relight::RelightModel {
+    assert!(radius.is_finite() && radius > 0.0);
+    let mut model = vol::relight::RelightModel {
+        kernel,
+        surfels: Vec::with_capacity(elements.len()),
+        materials: Vec::with_capacity(elements.len()),
+    };
+
+    for element in elements {
+        let Some((center, normal)) = element_geometry(element, samples) else {
+            continue;
+        };
+
+        let material = match material_source {
+            ElementMaterial::Fitted => fitted_material(element),
+            ElementMaterial::Truth => truth_material(element, samples),
+        };
+        let material_index = model.materials.len() as u32;
+        model.materials.push(material);
+        model.surfels.push(vol::relight::Surfel {
+            center: center.into(),
+            radius,
+            normal: normal.into(),
+            material: material_index,
+        });
+    }
+    model
+}
+
+/// A compact shared-material table and the material used by each element.
+pub struct MaterialPalette {
+    pub materials: Vec<vol::relight::Material>,
+    pub assignments: Vec<u32>,
+}
+
+fn material_values(element: &Element) -> [f32; 7] {
+    [
+        element.albedo[0],
+        element.albedo[1],
+        element.albedo[2],
+        element.specular_f0[0],
+        element.specular_f0[1],
+        element.specular_f0[2],
+        element.roughness,
+    ]
+}
+
+fn material_from_values(values: [f32; 7]) -> vol::relight::Material {
+    vol::relight::Material {
+        albedo: [values[0], values[1], values[2]],
+        roughness: values[6],
+        specular_f0: [values[3], values[4], values[5]],
+        _padding: 0.0,
+    }
+}
+
+fn material_distance(a: [f32; 7], b: [f32; 7]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
+}
+
+fn nearest_material(values: [f32; 7], centers: &[[f32; 7]]) -> usize {
+    centers
+        .iter()
+        .enumerate()
+        .min_by(|left, right| {
+            material_distance(values, *left.1).total_cmp(&material_distance(values, *right.1))
+        })
+        .map_or(0, |(index, _)| index)
+}
+
+/// Cluster fitted element parameters into a deterministic shared palette.
+///
+/// Farthest-point initialization keeps rare metals from being swallowed by a
+/// floor-sized diffuse cluster, then a small fixed Lloyd iteration makes the
+/// result independent of hash iteration or random seeds. This is a capacity
+/// prior, not a truth prior: only fitted parameters enter it.
+pub fn fit_material_palette(
+    elements: &[Element],
+    maximum_materials: usize,
+    iterations: usize,
+) -> MaterialPalette {
+    assert!(maximum_materials > 0);
+    if elements.is_empty() {
+        return MaterialPalette {
+            materials: Vec::new(),
+            assignments: Vec::new(),
+        };
+    }
+    let values: Vec<[f32; 7]> = elements.iter().map(material_values).collect();
+    let mut centers = vec![values[0]];
+    let mut nearest_squared = vec![f32::INFINITY; values.len()];
+    while centers.len() < maximum_materials.min(values.len()) {
+        let latest = *centers.last().unwrap();
+        for (distance, &value) in nearest_squared.iter_mut().zip(&values) {
+            *distance = distance.min(material_distance(value, latest));
+        }
+        let (index, &distance) = nearest_squared
+            .iter()
+            .enumerate()
+            .max_by(|left, right| left.1.total_cmp(right.1))
+            .unwrap();
+        if distance <= 1.0e-12 {
+            break;
+        }
+        centers.push(values[index]);
+    }
+
+    let mut assignments = vec![0u32; values.len()];
+    for _ in 0..iterations.max(1) {
+        let mut totals = vec![[0.0f32; 7]; centers.len()];
+        let mut counts = vec![0u32; centers.len()];
+        for (assignment, &value) in assignments.iter_mut().zip(&values) {
+            let cluster = nearest_material(value, &centers);
+            *assignment = cluster as u32;
+            for (total, component) in totals[cluster].iter_mut().zip(value) {
+                *total += component;
+            }
+            counts[cluster] += 1;
+        }
+        for (index, center) in centers.iter_mut().enumerate() {
+            if counts[index] > 0 {
+                for (component, total) in center.iter_mut().zip(totals[index]) {
+                    *component = total / counts[index] as f32;
+                }
+            }
+        }
+    }
+    for (assignment, &value) in assignments.iter_mut().zip(&values) {
+        *assignment = nearest_material(value, &centers) as u32;
+    }
+    MaterialPalette {
+        materials: centers.into_iter().map(material_from_values).collect(),
+        assignments,
+    }
+}
+
+/// Build a point cloud whose particles refer to a shared fitted palette.
+pub fn model_from_elements_with_palette(
+    elements: &[Element],
+    samples: &[Sample],
+    radius: f32,
+    kernel: vol::relight::ParticleKernel,
+    palette: &MaterialPalette,
+) -> vol::relight::RelightModel {
+    assert!(radius.is_finite() && radius > 0.0);
+    assert_eq!(elements.len(), palette.assignments.len());
+    let mut model = vol::relight::RelightModel {
+        kernel,
+        surfels: Vec::with_capacity(elements.len()),
+        materials: palette.materials.clone(),
+    };
+    for (element, &material) in elements.iter().zip(&palette.assignments) {
+        let Some((center, normal)) = element_geometry(element, samples) else {
+            continue;
+        };
+        assert!((material as usize) < model.materials.len());
+        model.surfels.push(vol::relight::Surfel {
+            center: center.into(),
+            radius,
+            normal: normal.into(),
+            material,
+        });
+    }
+    model
 }
 
 /// Predicted radiance for one observation under one environment.
@@ -1328,5 +1656,138 @@ mod tests {
             forward.z > 0.99,
             "the middle looks along +Z, got {forward:?}"
         );
+    }
+
+    #[test]
+    fn an_unselected_specular_environment_is_black() {
+        assert_eq!(
+            SpecularEnvironment::black().sample(glam::Vec3::Y, 0.4),
+            [0.0; 3]
+        );
+    }
+
+    #[test]
+    fn blade_camera_rays_survive_the_basis_change() {
+        let view = View {
+            index: 0,
+            position: glam::Vec3::new(1.0, 2.0, 3.0),
+            orientation: glam::Quat::from_euler(glam::EulerRot::YXZ, 0.4, -0.2, 0.1),
+            fov_y: 0.9,
+            radiance: Vec::new(),
+            material: path::PathBuf::new(),
+            geometry: path::PathBuf::new(),
+            specular: None,
+        };
+        let width = 13;
+        let height = 9;
+        let camera = camera_params(&view, width, height);
+        let tan_half_y = (0.5 * view.fov_y).tan();
+        let tan_half_x = tan_half_y * width as f32 / height as f32;
+        for (x, y) in [(0, 0), (6, 4), (12, 8), (3, 7)] {
+            let ndc = glam::Vec2::new(
+                (x as f32 + 0.5) / (0.5 * width as f32) - 1.0,
+                (y as f32 + 0.5) / (0.5 * height as f32) - 1.0,
+            );
+            let blade_local = glam::Vec3::new(ndc.x * tan_half_x, -ndc.y * tan_half_y, -1.0);
+            let expected = (view.orientation * blade_local).normalize();
+            let actual = crate::inverse::capture::pixel_direction(&camera, width, height, x, y);
+            assert!(
+                expected.dot(actual) > 0.999_999,
+                "pixel ({x}, {y}) expected {expected:?}, got {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fused_elements_become_gaussian_particles_without_material_leakage() {
+        let samples = vec![
+            Sample {
+                normal: glam::Vec3::Y,
+                albedo_truth: [0.2, 0.4, 0.6],
+                specular_f0: [0.03, 0.04, 0.05],
+                roughness: 0.2,
+                view: glam::Vec3::Y,
+                position: glam::Vec3::new(0.0, 1.0, 2.0),
+                view_index: 0,
+                pixel: 0,
+                radiance: vec![[0.0; 3]],
+            },
+            Sample {
+                normal: glam::Vec3::Y,
+                albedo_truth: [0.4, 0.6, 0.8],
+                specular_f0: [0.05, 0.06, 0.07],
+                roughness: 0.6,
+                view: glam::Vec3::Y,
+                position: glam::Vec3::new(2.0, 1.0, 2.0),
+                view_index: 1,
+                pixel: 1,
+                radiance: vec![[0.0; 3]],
+            },
+        ];
+        let elements = vec![Element {
+            samples: vec![0, 1],
+            albedo: [0.9, 0.8, 0.7],
+            specular_f0: [0.11, 0.12, 0.13],
+            roughness: 0.75,
+        }];
+        let fitted = model_from_elements(
+            &elements,
+            &samples,
+            0.3,
+            vol::relight::ParticleKernel::Gaussian,
+            ElementMaterial::Fitted,
+        );
+        assert_eq!(fitted.kernel, vol::relight::ParticleKernel::Gaussian);
+        assert_eq!(fitted.surfels.len(), 1);
+        assert_eq!(fitted.surfels[0].center, [1.0, 1.0, 2.0]);
+        assert_eq!(fitted.materials[0].albedo, elements[0].albedo);
+        fitted.validate().unwrap();
+
+        let truth = model_from_elements(
+            &elements,
+            &samples,
+            0.3,
+            vol::relight::ParticleKernel::Gaussian,
+            ElementMaterial::Truth,
+        );
+        for (actual, expected) in truth.materials[0].albedo.iter().zip([0.3, 0.5, 0.7]) {
+            assert!((actual - expected).abs() < 1.0e-6);
+        }
+        assert!((truth.materials[0].roughness - 0.4).abs() < 1.0e-6);
+        for (actual, expected) in truth.materials[0]
+            .specular_f0
+            .iter()
+            .zip([0.04, 0.05, 0.06])
+        {
+            assert!((actual - expected).abs() < 1.0e-6);
+        }
+
+        let palette = fit_material_palette(&elements, 1, 2);
+        let compact = model_from_elements_with_palette(
+            &elements,
+            &samples,
+            0.3,
+            vol::relight::ParticleKernel::Gaussian,
+            &palette,
+        );
+        assert_eq!(compact.materials.len(), 1);
+        assert_eq!(compact.surfels[0].material, 0);
+        compact.validate().unwrap();
+    }
+
+    #[test]
+    fn material_palette_separates_distant_fitted_materials() {
+        let element = |value: f32| Element {
+            samples: Vec::new(),
+            albedo: [value; 3],
+            specular_f0: [value; 3],
+            roughness: value,
+        };
+        let elements = vec![element(0.0), element(0.02), element(0.98), element(1.0)];
+        let palette = fit_material_palette(&elements, 2, 4);
+        assert_eq!(palette.materials.len(), 2);
+        assert_eq!(palette.assignments[0], palette.assignments[1]);
+        assert_eq!(palette.assignments[2], palette.assignments[3]);
+        assert_ne!(palette.assignments[0], palette.assignments[2]);
     }
 }

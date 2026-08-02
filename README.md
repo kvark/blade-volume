@@ -95,7 +95,7 @@ cargo run -p blade-volume-view -- <path_to_file.ply> --kind=gaussian
   --debug                  Start in debug mode (particle density visualization)
 ```
 
-## Relightable Surfels
+## Relightable Surface Particles
 
 The other representations store what a point looked like: the light that was
 there when it was captured is already inside the number, and cannot be taken
@@ -116,6 +116,19 @@ environments instead, as the float planes blade's `relight_data` writes, and
 `--light` picks which to open under. Exposure comes from the environment's own
 key luminance unless you set it, because radiance arrives in whatever units
 the capture used.
+
+To reconstruct Gaussian particles from selected cameras of Blade's synthetic
+relighting fixture and score both unseen poses and unseen illumination:
+
+```bash
+cargo run --release -p blade-volume-train --bin synthetic_reconstruct -- \
+  --dataset /path/to/relight-data --output target/reconstruction.rply
+```
+
+This command is deliberately a geometry upper bound: it fuses depth and normal
+truth from training views only, while materials are fitted from radiance. It
+prints a matched truth-material control and never uses held-out camera geometry
+for fusion. The RGB-only geometry stage remains future work.
 
 Scored against blade's canonical path tracer over six views of `police.glb`
 under five environments, the direct-lighting path reaches **27.95 dB linear /
