@@ -15,7 +15,7 @@
 
 use crate::inverse::capture;
 use blade_volume as vol;
-use std::{collections::HashMap, thread};
+use std::{collections::HashMap, sync::atomic, thread};
 
 /// Where the surface is, from one point of view.
 pub struct DepthMap {
@@ -192,7 +192,9 @@ pub fn trace_depth(
 /// [`trace_depth`] parallelizes one image and is the convenient one-view API.
 /// Reconstruction has many equally sized images; assigning whole views to a
 /// fixed set of workers avoids creating a fresh set of operating-system
-/// threads for every camera.
+/// threads for every camera. Workers take the next unclaimed view because two
+/// cameras can traverse very different numbers of cells through the same
+/// scene.
 pub fn trace_depths(
     model: &vol::PointCloudModel,
     views: &[(vol::CameraParams, u32)],
@@ -212,26 +214,32 @@ pub fn trace_depths(
             })
             .collect();
     }
+    let next_view = atomic::AtomicUsize::new(0);
     thread::scope(|scope| {
         let mut workers = Vec::with_capacity(threads);
-        for worker in 0..threads {
-            let begin = worker * views.len() / threads;
-            let end = (worker + 1) * views.len() / threads;
-            let requests = &views[begin..end];
+        for _ in 0..threads {
+            let next_view = &next_view;
             workers.push(scope.spawn(move || {
-                requests
-                    .iter()
-                    .map(|&(ref camera, start_point)| {
-                        trace_depth_serial(model, camera, width, height, start_point, max_steps)
-                    })
-                    .collect::<Vec<_>>()
+                let mut maps = Vec::new();
+                loop {
+                    let index = next_view.fetch_add(1, atomic::Ordering::Relaxed);
+                    let Some(&(ref camera, start_point)) = views.get(index) else {
+                        break;
+                    };
+                    maps.push((
+                        index,
+                        trace_depth_serial(model, camera, width, height, start_point, max_steps),
+                    ));
+                }
+                maps
             }));
         }
         let mut maps = Vec::with_capacity(views.len());
         for worker in workers {
             maps.extend(worker.join().expect("depth worker panicked"));
         }
-        maps
+        maps.sort_unstable_by_key(|&(index, _)| index);
+        maps.into_iter().map(|(_, map)| map).collect()
     })
 }
 
