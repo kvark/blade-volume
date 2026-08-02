@@ -1,34 +1,21 @@
 use crate::{shaders, CameraParams, PointCloudModel};
 use blade_graphics as gpu;
 
+use super::radfoam_trace::TraceParams;
+
 #[derive(Clone, Copy, Debug)]
-pub struct RadFoamTraceSettings {
+pub struct RadFoamDepthSettings {
     pub max_steps: u32,
     pub weight_threshold: f32,
-    pub debug_cell_density: bool,
 }
 
-impl Default for RadFoamTraceSettings {
+impl Default for RadFoamDepthSettings {
     fn default() -> Self {
         Self {
             max_steps: 1024,
             weight_threshold: 0.001,
-            debug_cell_density: false,
         }
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-pub(super) struct TraceParams {
-    pub(super) sh_degree: u32,
-    pub(super) weight_threshold: f32,
-    pub(super) max_steps: u32,
-    pub(super) start_point: u32,
-    pub(super) debug_mode: u32,
-    pub(super) align_pad: [u32; 3],
-    pub(super) power_foam: u32,
-    pub(super) size_pad: [u32; 3],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -42,34 +29,34 @@ struct TraceData {
     g_out: gpu::TextureView,
 }
 
-/// Reusable production RadFoam/PowerFoam compute tracer.
+/// Full-precision depth-mode output from the production RadFoam/PowerFoam
+/// compute walk.
 ///
-/// The caller owns the output storage texture and command encoder. Keeping
-/// those outside lets windowed rendering and headless readback share the same
-/// cloud upload, uniform layout, and WGSL entry point.
-pub struct RadFoamGpuTracer {
+/// The caller owns the `rgba32float` output texture. Its channels are mode
+/// depth, accumulated alpha, peak segment weight, and one respectively.
+pub struct RadFoamGpuDepthTracer {
     cloud: super::RadFoamGpuCloud,
     pipeline: gpu::ComputePipeline,
     params: TraceParams,
 }
 
-impl RadFoamGpuTracer {
+impl RadFoamGpuDepthTracer {
     pub fn new(
         model: &PointCloudModel,
-        settings: RadFoamTraceSettings,
+        settings: RadFoamDepthSettings,
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Self {
-        let source = shaders::compose(shaders::RADFOAM);
+        let source = shaders::compose(shaders::RADFOAM_DEPTH);
         let shader = context.create_shader(gpu::ShaderDesc {
             source: &source,
             naga_module: None,
         });
         let layout = <TraceData as gpu::ShaderData>::layout();
         let pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
-            name: "radfoam-trace",
+            name: "radfoam-depth",
             data_layouts: &[&layout],
-            compute: shader.at("trace_main"),
+            compute: shader.at("trace_depth_main"),
         });
         let cloud = super::RadFoamGpuCloud::new(model, context, encoder);
         let params = TraceParams {
@@ -77,7 +64,7 @@ impl RadFoamGpuTracer {
             weight_threshold: settings.weight_threshold,
             max_steps: settings.max_steps,
             start_point: 0,
-            debug_mode: settings.debug_cell_density as u32,
+            debug_mode: 0,
             align_pad: [0; 3],
             power_foam: cloud.is_power_foam as u32,
             size_pad: [0; 3],
@@ -96,12 +83,12 @@ impl RadFoamGpuTracer {
         camera: CameraParams,
         size: [u32; 2],
     ) {
-        assert!(size[0] > 0 && size[1] > 0, "render size must be non-zero");
+        assert!(size[0] > 0 && size[1] > 0, "depth map must be non-empty");
         self.params.start_point = self
             .cloud
             .containing_point(glam::Vec3::from(camera.cam_position));
 
-        let mut pass = encoder.compute("radfoam-trace");
+        let mut pass = encoder.compute("radfoam-depth");
         let mut pen = pass.with(&self.pipeline);
         pen.bind(
             0,
@@ -118,55 +105,8 @@ impl RadFoamGpuTracer {
         pen.dispatch([size[0].div_ceil(8), size[1].div_ceil(8), 1]);
     }
 
-    pub fn max_steps(&self) -> u32 {
-        self.params.max_steps
-    }
-
-    pub fn max_steps_mut(&mut self) -> &mut u32 {
-        &mut self.params.max_steps
-    }
-
-    pub fn set_max_steps(&mut self, max_steps: u32) {
-        self.params.max_steps = max_steps;
-    }
-
-    pub fn weight_threshold(&self) -> f32 {
-        self.params.weight_threshold
-    }
-
-    pub fn weight_threshold_mut(&mut self) -> &mut f32 {
-        &mut self.params.weight_threshold
-    }
-
-    pub fn set_weight_threshold(&mut self, weight_threshold: f32) {
-        self.params.weight_threshold = weight_threshold;
-    }
-
-    pub fn set_debug_cell_density(&mut self, enabled: bool) {
-        self.params.debug_mode = enabled as u32;
-    }
-
-    pub fn sh_degree(&self) -> u32 {
-        self.params.sh_degree
-    }
-
-    pub fn start_point(&self) -> u32 {
-        self.params.start_point
-    }
-
     pub fn deinit(&mut self, context: &gpu::Context) {
         context.destroy_compute_pipeline(&mut self.pipeline);
         self.cloud.deinit(context);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::TraceParams;
-
-    #[test]
-    fn power_flag_matches_wgsl_uniform_layout() {
-        assert_eq!(std::mem::size_of::<TraceParams>(), 48);
-        assert_eq!(std::mem::offset_of!(TraceParams, power_foam), 32);
     }
 }

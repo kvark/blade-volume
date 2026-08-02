@@ -141,6 +141,7 @@ fn scene_trace_radfoam(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
     params.max_steps = g_scene_params.max_steps;
     params.weight_threshold = g_scene_params.weight_threshold;
     params.integration_start = t_start;
+    params.record_depth = false;
 
     // Start in the camera-containing cell for a topologically valid walk, but
     // clip optical integration to the software-TLAS interval.

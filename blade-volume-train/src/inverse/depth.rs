@@ -14,8 +14,9 @@
 //! structure — which in a room is most of them.
 
 use crate::inverse::capture;
+use blade_graphics as gpu;
 use blade_volume as vol;
-use std::{collections::HashMap, sync::atomic, thread};
+use std::{collections::HashMap, sync, sync::atomic, thread};
 
 /// Where the surface is, from one point of view.
 pub struct DepthMap {
@@ -30,6 +31,125 @@ pub struct DepthMap {
     /// The largest share of the ray any one segment absorbed. Low values are
     /// haze: absorbed, but not by anything that is a surface.
     pub peak: Vec<f32>,
+}
+
+struct GpuDepthTracer {
+    context: sync::Arc<gpu::Context>,
+    encoder: gpu::CommandEncoder,
+    tracer: vol::RadFoamGpuDepthTracer,
+    output: gpu::Texture,
+    output_view: gpu::TextureView,
+    readback: gpu::Buffer,
+    extent: gpu::Extent,
+}
+
+impl GpuDepthTracer {
+    fn new(
+        model: &vol::PointCloudModel,
+        width: usize,
+        height: usize,
+        max_steps: u32,
+        context: sync::Arc<gpu::Context>,
+    ) -> Self {
+        assert!(width > 0 && height > 0, "depth map must be non-empty");
+        let extent = gpu::Extent {
+            width: width as u32,
+            height: height as u32,
+            depth: 1,
+        };
+        let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+            name: "radfoam-depth",
+            buffer_count: 1,
+            manual_barriers: false,
+        });
+        let tracer = vol::RadFoamGpuDepthTracer::new(
+            model,
+            vol::RadFoamDepthSettings {
+                max_steps,
+                weight_threshold: 0.001,
+            },
+            &context,
+            &mut encoder,
+        );
+        let output = context.create_texture(gpu::TextureDesc {
+            name: "radfoam-depth",
+            format: gpu::TextureFormat::Rgba32Float,
+            size: extent,
+            array_layer_count: 1,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: gpu::TextureDimension::D2,
+            usage: gpu::TextureUsage::STORAGE | gpu::TextureUsage::COPY,
+            external: None,
+        });
+        let output_view = context.create_texture_view(
+            output,
+            gpu::TextureViewDesc {
+                name: "radfoam-depth",
+                format: gpu::TextureFormat::Rgba32Float,
+                dimension: gpu::ViewDimension::D2,
+                subresources: &gpu::TextureSubresources::default(),
+            },
+        );
+        let readback = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-depth-readback",
+            size: width as u64 * height as u64 * 16,
+            memory: gpu::Memory::Download,
+        });
+        Self {
+            context,
+            encoder,
+            tracer,
+            output,
+            output_view,
+            readback,
+            extent,
+        }
+    }
+
+    fn trace(&mut self, camera: vol::CameraParams) -> Result<DepthMap, String> {
+        self.encoder.start();
+        self.encoder.init_texture(self.output);
+        self.tracer.dispatch(
+            &mut self.encoder,
+            self.output_view,
+            camera,
+            [self.extent.width, self.extent.height],
+        );
+        if let mut pass = self.encoder.transfer("radfoam-depth-readback") {
+            pass.copy_texture_to_buffer(
+                self.output.into(),
+                self.readback.into(),
+                self.extent.width * 16,
+                self.extent,
+            );
+        }
+        let sync_point = self.context.submit(&mut self.encoder);
+        match self.context.wait_for(&sync_point, 60_000) {
+            Ok(true) => {}
+            Ok(false) => return Err("GPU depth tracing timed out".to_string()),
+            Err(error) => return Err(format!("GPU depth tracing failed: {error:?}")),
+        }
+
+        let count = self.extent.width as usize * self.extent.height as usize;
+        let values =
+            unsafe { std::slice::from_raw_parts(self.readback.data() as *const [f32; 4], count) };
+        let mut map = empty_depth_map(self.extent.width as usize, self.extent.height as usize);
+        for (slot, value) in values.iter().enumerate() {
+            map.distance[slot] = value[0];
+            map.alpha[slot] = value[1];
+            map.peak[slot] = value[2];
+        }
+        Ok(map)
+    }
+
+    fn deinit(mut self) {
+        self.context.destroy_buffer(self.readback);
+        self.context.destroy_texture_view(self.output_view);
+        self.context.destroy_texture(self.output);
+        self.tracer.deinit(&self.context);
+        self.context.destroy_command_encoder(&mut self.encoder);
+    }
 }
 
 /// How a density field is turned into discs.
@@ -241,6 +361,30 @@ pub fn trace_depths(
         maps.sort_unstable_by_key(|&(index, _)| index);
         maps.into_iter().map(|(_, map)| map).collect()
     })
+}
+
+/// Trace several views with the production GPU RadFoam/PowerFoam walk.
+///
+/// The full-precision output avoids quantizing world-space depth before views
+/// are fused. The cloud upload and pipeline are shared across every view.
+pub fn trace_depths_gpu(
+    model: &vol::PointCloudModel,
+    views: &[(vol::CameraParams, u32)],
+    width: usize,
+    height: usize,
+    max_steps: u32,
+    context: sync::Arc<gpu::Context>,
+) -> Result<Vec<DepthMap>, String> {
+    if views.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tracer = GpuDepthTracer::new(model, width, height, max_steps, context);
+    let maps = views
+        .iter()
+        .map(|&(camera, _)| tracer.trace(camera))
+        .collect();
+    tracer.deinit();
+    maps
 }
 
 fn trace_depth_serial(
@@ -475,6 +619,58 @@ mod tests {
             assert_eq!(batched.distance, one.distance);
             assert_eq!(batched.alpha, one.alpha);
             assert_eq!(batched.peak, one.peak);
+        }
+    }
+
+    #[test]
+    fn gpu_depth_tracing_matches_the_cpu_oracle() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping gpu_depth_tracing_matches_the_cpu_oracle: no GPU");
+            return;
+        };
+        for weighted in [false, true] {
+            let mut model = tiny_foam();
+            if weighted {
+                model.radii = Some(vec![2.0, 1.8, 1.6, 1.4]);
+                model.adjacency = None;
+                model.compute_adjacency_default();
+            }
+            let cameras = [camera_looking_at_a_wall(2.0), camera_looking_at_a_wall(2.5)];
+            let requests = cameras.map(|camera| {
+                let start =
+                    crate::pipeline::pick_start_cell(&model, glam::Vec3::from(camera.cam_position));
+                (camera, start)
+            });
+            let expected = trace_depths(&model, &requests, 16, 12, 64);
+            let actual = trace_depths_gpu(&model, &requests, 16, 12, 64, gpu.clone()).unwrap();
+
+            let mut max_distance_delta = 0.0f32;
+            let mut max_alpha_delta = 0.0f32;
+            let mut max_peak_delta = 0.0f32;
+            for (expected, actual) in expected.iter().zip(&actual) {
+                for (a, b) in expected.distance.iter().zip(&actual.distance) {
+                    max_distance_delta = max_distance_delta.max((a - b).abs());
+                }
+                for (a, b) in expected.alpha.iter().zip(&actual.alpha) {
+                    max_alpha_delta = max_alpha_delta.max((a - b).abs());
+                }
+                for (a, b) in expected.peak.iter().zip(&actual.peak) {
+                    max_peak_delta = max_peak_delta.max((a - b).abs());
+                }
+            }
+            assert!(
+                max_distance_delta <= 0.02,
+                "weighted={weighted}: maximum depth-mode delta is {max_distance_delta}"
+            );
+            assert!(
+                max_alpha_delta <= 0.002,
+                "weighted={weighted}: maximum alpha delta is {max_alpha_delta}"
+            );
+            assert!(
+                max_peak_delta <= 0.002,
+                "weighted={weighted}: maximum peak-weight delta is {max_peak_delta}"
+            );
         }
     }
 

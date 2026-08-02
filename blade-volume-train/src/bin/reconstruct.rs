@@ -110,6 +110,10 @@ struct Args {
     #[argh(switch)]
     observation_diagnostics: bool,
 
+    /// trace foam depth on the CPU instead of the GPU
+    #[argh(switch)]
+    cpu_depth: bool,
+
     /// write the reconstructed scene here
     #[argh(option)]
     output: Option<String>,
@@ -406,13 +410,34 @@ fn surfels_from_foam(
             (camera, start)
         })
         .collect();
-    let depth_maps = train::inverse::depth::trace_depths(
-        &model,
-        &requests,
-        capture.width,
-        capture.height,
-        options.max_steps,
-    );
+    let depth_maps = if args.cpu_depth {
+        train::inverse::depth::trace_depths(
+            &model,
+            &requests,
+            capture.width,
+            capture.height,
+            options.max_steps,
+        )
+    } else {
+        let Some(gpu) = train::fit::try_init_gpu() else {
+            eprintln!("cannot initialize a supported GPU for depth tracing");
+            std::process::exit(1);
+        };
+        match train::inverse::depth::trace_depths_gpu(
+            &model,
+            &requests,
+            capture.width,
+            capture.height,
+            options.max_steps,
+            gpu,
+        ) {
+            Ok(maps) => maps,
+            Err(message) => {
+                eprintln!("cannot trace depth on the GPU: {message}");
+                std::process::exit(1);
+            }
+        }
+    };
     let mut maps = Vec::with_capacity(views.len());
     let mut hit = 0usize;
     let mut total = 0usize;

@@ -27,11 +27,14 @@ struct RadFoamTraceParams {
     max_steps: u32,
     weight_threshold: f32,
     integration_start: f32,
+    record_depth: bool,
 }
 
 struct RadFoamTraceResult {
     color: vec4<f32>,    // rgb + alpha
     cells_visited: u32,
+    depth_mode: f32,
+    peak_weight: f32,
 }
 
 fn rf_support_interval(
@@ -72,6 +75,8 @@ fn radfoam_trace(
     var transmittance = 1.0;
     var accum_rgb = vec3<f32>(0.0);
     var cells_visited: u32 = 0u;
+    var depth_mode = 0.0;
+    var peak_weight = 0.0;
 
     var current = params.start_point;
     var current_pos = rf_get_point(current);
@@ -122,8 +127,15 @@ fn radfoam_trace(
                 let dt = support.y - integration_begin;
                 let alpha = 1.0 - exp(-s * dt);
                 let w = transmittance * alpha;
-                let rgb = rf_get_color(current, normalize(ray_dir));
-                accum_rgb += w * rgb;
+                if (params.record_depth) {
+                    if (w > peak_weight) {
+                        peak_weight = w;
+                        depth_mode = 0.5 * (integration_begin + support.y);
+                    }
+                } else {
+                    let rgb = rf_get_color(current, normalize(ray_dir));
+                    accum_rgb += w * rgb;
+                }
                 transmittance *= (1.0 - alpha);
             }
         }
@@ -145,5 +157,7 @@ fn radfoam_trace(
     var result: RadFoamTraceResult;
     result.color = vec4<f32>(accum_rgb, 1.0 - transmittance);
     result.cells_visited = cells_visited;
+    result.depth_mode = depth_mode;
+    result.peak_weight = peak_weight;
     return result;
 }

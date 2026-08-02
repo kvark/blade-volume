@@ -1,8 +1,10 @@
 pub const COMMON: &str = include_str!("../shaders/common.wgsl");
 pub const SH_EVAL: &str = include_str!("../shaders/sh_eval.wgsl");
 pub const RADFOAM_TRACE: &str = include_str!("../shaders/radfoam_trace.wgsl");
+pub const RADFOAM_MODEL: &str = include_str!("../shaders/radfoam_model.wgsl");
 pub const GAUSSIAN_TRACE: &str = include_str!("../shaders/gaussian_trace.wgsl");
 pub const RADFOAM: &str = include_str!("../shaders/radfoam.wgsl");
+pub const RADFOAM_DEPTH: &str = include_str!("../shaders/radfoam_depth.wgsl");
 pub const GAUSSIAN: &str = include_str!("../shaders/gaussian.wgsl");
 pub const MESH_REFERENCE: &str = include_str!("../shaders/mesh_reference.wgsl");
 pub const RELIGHT: &str = include_str!("../shaders/relight.wgsl");
@@ -17,6 +19,7 @@ const INCLUDES: &[(&str, &str)] = &[
     ("common.wgsl", COMMON),
     ("sh_eval.wgsl", SH_EVAL),
     ("radfoam_trace.wgsl", RADFOAM_TRACE),
+    ("radfoam_model.wgsl", RADFOAM_MODEL),
     ("gaussian_trace.wgsl", GAUSSIAN_TRACE),
     (
         "scene_bindings.wgsl",
