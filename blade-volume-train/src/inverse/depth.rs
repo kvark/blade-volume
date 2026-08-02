@@ -75,10 +75,10 @@ impl Default for DepthOptions {
     fn default() -> Self {
         Self {
             min_alpha: 0.5,
-            min_peak: 0.15,
+            min_peak: 0.05,
             max_steps: 512,
-            voxel_factor: 1.0,
-            disc_radius: 1.0,
+            voxel_factor: 5.0,
+            disc_radius: 1.7,
             max_depth_step: 0.02,
             min_views: 2,
         }

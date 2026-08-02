@@ -71,8 +71,8 @@ struct Args {
     foam: Option<String>,
 
     /// merge cell size when fusing depth, as a multiple of the pixel
-    /// footprint at the median depth (default 1.0)
-    #[argh(option, default = "1.0")]
+    /// footprint at the median depth (default 5.0)
+    #[argh(option, default = "5.0")]
     voxel_factor: f32,
 
     /// absorption below which a ray is treated as having hit nothing
@@ -81,13 +81,13 @@ struct Args {
     min_alpha: f32,
 
     /// weight the strongest segment of a ray must carry for it to count as
-    /// having met a surface rather than haze (default 0.15)
-    #[argh(option, default = "0.15")]
+    /// having met a surface rather than haze (default 0.05)
+    #[argh(option, default = "0.05")]
     min_peak: f32,
 
-    /// disc radius as a multiple of the merge cell (default 1.0). Below 0.71
+    /// disc radius as a multiple of the merge cell (default 1.7). Below 0.71
     /// the discs do not meet and the render is part background everywhere.
-    #[argh(option, default = "1.0")]
+    #[argh(option, default = "1.7")]
     disc_radius: f32,
 
     /// distinct training views that must support a fused depth cell (default
