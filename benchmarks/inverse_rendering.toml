@@ -440,6 +440,72 @@ peak_memory_bytes = 272330752
 memory_events = 0
 verdict = "local PCA normals slightly help Room and consistently regress held-out Bonsai; shared positions must be optimized instead"
 
+# Rejecting cells whose depth-derived normals disagree can raise average PSNR
+# by deleting the difficult parts of the cloud. The worst held-out view exposes
+# that trade: Bonsai's mean keeps rising while its worst view and coverage fall,
+# and Room eventually follows. The narrow 0.325--0.35 boundary is too small and
+# inconsistent to justify another public threshold.
+[bonsai.geometry_consensus.rejected_normal_agreement]
+thresholds = [0.325, 0.35, 0.375, 0.4, 0.5, 0.7, 0.9]
+control_bonsai_psnr = [14.34, 13.55, 11.33]
+candidate_bonsai_train_psnr = [14.34, 14.36, 14.44, 14.46, 14.52, 14.63, 14.83]
+candidate_bonsai_test_psnr = [13.57, 13.59, 13.68, 13.72, 13.78, 13.71, 14.01]
+candidate_bonsai_worst_test_psnr = [11.33, 11.32, 11.25, 11.25, 11.04, 10.80, 10.78]
+control_room_psnr = [14.40, 14.08, 12.98]
+candidate_room_train_psnr = [14.40, 14.40, 14.41, 14.42, 14.39, 14.39, 14.05]
+candidate_room_test_psnr = [14.08, 14.09, 14.10, 14.10, 14.08, 14.04, 13.49]
+candidate_room_worst_test_psnr = [12.97, 12.97, 12.97, 12.98, 12.90, 12.85, 12.57]
+verdict = "mean PSNR is bought by pruning hard geometry; worst-view and cross-scene gates reject it"
+
+# A depth sample seen square-on is geometrically better conditioned than one at
+# grazing incidence. Multiplying peak confidence by that facing term is
+# principled but not broadly beneficial here: stronger weights improve the
+# worst view while shifting which scene/split loses average quality.
+[bonsai.geometry_consensus.rejected_incidence_weight]
+strengths = [0.25, 0.5, 0.75, 1.0]
+control_bonsai_psnr = [14.34, 13.55, 11.33]
+candidate_bonsai_train_psnr = [14.32, 14.32, 14.32, 14.24]
+candidate_bonsai_test_psnr = [13.55, 13.55, 13.58, 13.58]
+candidate_bonsai_worst_test_psnr = [11.33, 11.31, 11.36, 11.49]
+control_room_psnr = [14.40, 14.08, 12.98]
+candidate_room_train_psnr = [14.42, 14.41, 14.42, 14.43]
+candidate_room_test_psnr = [14.09, 14.06, 14.05, 14.05]
+candidate_room_worst_test_psnr = [13.00, 13.01, 13.03, 13.05]
+verdict = "a split-dependent trade, not a generally better fusion confidence"
+
+# Weighted RMS spread within a voxel measures whether its samples form one
+# compact cluster. Filtering the broadest cells removes thousands of particles
+# without improving both scenes; the voxel boundary already bounds this signal
+# too tightly for it to distinguish a second layer reliably.
+[bonsai.geometry_consensus.rejected_cell_spread]
+maximum_spread_voxels = [0.4, 0.45, 0.5]
+control_bonsai_psnr = [14.34, 13.55, 11.33]
+candidate_bonsai_train_psnr = [14.37, 14.36, 14.34]
+candidate_bonsai_test_psnr = [13.50, 13.56, 13.54]
+candidate_bonsai_worst_test_psnr = [11.27, 11.33, 11.34]
+control_room_psnr = [14.40, 14.08, 12.98]
+candidate_room_train_psnr = [14.40, 14.40, 14.39]
+candidate_room_test_psnr = [14.06, 14.07, 14.08]
+candidate_room_worst_test_psnr = [12.98, 12.95, 12.97]
+verdict = "within-voxel compactness removes coverage rather than separating fused layers"
+
+# The first differentiable final-surface objective used the production disc
+# equations with fixed candidate visibility and one normal-offset parameter per
+# surfel. It lowers its own image loss, but a known-truth displacement test
+# shows that this is mostly overlap rearrangement: it barely repairs a 0.05
+# offset and moves an exact surface further than the correction it learned.
+[bonsai.geometry_consensus.rejected_screen_space_refinement]
+truth_initial_offset = 0.05
+rounds = [4, 8, 8]
+learning_rates = [0.003, 0.001, 0.003]
+truth_final_error = [0.04963, 0.04980, 0.04930]
+zero_offset_control_final_error = 0.00271
+selected_bonsai_psnr = [14.32, 13.56, 11.38]
+selected_room_psnr = [14.41, 14.09, 13.00]
+peak_memory_bytes = 198483968
+memory_events = 0
+verdict = "loss falls without recovering known geometry; fixed appearance and rim-only coverage gradients admit overlap motion"
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047

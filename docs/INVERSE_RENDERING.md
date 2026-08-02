@@ -224,6 +224,24 @@ Together with the responsibility result, these controls say that normal or
 weight corrections around independently fused depths are not the missing
 algorithm. Positions must be coupled by one multi-view objective.
 
+Tighter fusion statistics do not change that conclusion. Raising the existing
+normal-agreement cutoff improves Bonsai's average by pruning difficult cells,
+while its worst held-out view falls by as much as 0.55 dB and Room eventually
+regresses. Weighting square-on samples more strongly merely moves error between
+splits, and rejecting cells by their within-voxel RMS spread removes coverage
+without separating layers. All three experimental controls were removed.
+
+The first differentiable final-surface attempt also fails a stronger test. It
+used the production disc intersection, rim coverage, first-surface blend and
+fixed visibility candidates, differentiating one normal offset per surfel. Its
+own loss fell, and both real scenes moved by roughly one hundredth of a decibel,
+but a known surface displaced by 0.05 recovered at most 0.00070 while the same
+optimizer moved an exact surface by 0.00271. Fixed appearance and coverage
+gradients confined to disc rims let it rearrange overlap instead of recovering
+depth, so the entire stage was removed. A useful shared objective needs a
+radiance model that remains tied to observations as geometry moves, plus a
+synthetic displacement test as a mandatory gate.
+
 Depth extraction no longer rebuilds camera ray constants for every pixel or an
 operating-system worker pool for every view. It traces all training cameras in
 one scoped pool and retains the one-view API for small callers. On five
