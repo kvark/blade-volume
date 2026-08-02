@@ -23,7 +23,7 @@
 
 [manifest]
 name = "inverse_rendering"
-git_commit = "141796b"
+git_commit = "5ab418c"
 gpu = "NVIDIA GeForce RTX 5070"
 driver = "595.71.05"
 cpu = "12th Gen Intel(R) Core(TM) i5-12400F"
@@ -214,6 +214,7 @@ source_cells = 200000
 voxel_factor = 4.0
 disc_radius = 2.5
 min_peak = 0.05
+selection = "two views, then weight each depth sample by its peak absorption"
 
 [bonsai.geometry_consensus.control]
 min_views = 1
@@ -242,6 +243,26 @@ artifact = "target/audit-runs/inverse-consensus-selected.rply"
 artifact_sha256 = "d1e0d04a4f7210e0377394d523ebecdb72a7d211b4821fa07eb71f09957902da"
 environment_sha256 = "70d8100f4fe93fb4c7fe3dd4c73ec07b81e0bd02c24bea688434a6e2be7aa390"
 
+# A mode just above the haze threshold and a mode carrying most of its ray are
+# not equally reliable depths. Using the already-computed peak absorption as
+# the center/normal weight is a small but broad improvement with no new knob.
+[bonsai.geometry_consensus.confidence_weighted]
+git_commit = "5ab418c"
+min_views = 2
+surfels = 37217
+observed_surfels = 9319
+train_psnr = 14.34
+test_psnr = 13.55
+worst_test_psnr = 11.33
+train_coverage = 0.993
+test_coverage = 0.968
+test_psnr_where_hit = 13.99
+wall_seconds = 4.840
+peak_memory_bytes = 204681216
+artifact = "target/audit-runs/inverse-confidence-selected.rply"
+artifact_sha256 = "6a1c8ea10a2bd4407bf78c4f9d504a171027626ec9b66138b303835432315459"
+environment_sha256 = "9c45d2caa1e96f5763cb2ef6680dc9de2c86318a00afa1697cb91acd8ab33da0"
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047
@@ -257,6 +278,8 @@ control_train_psnr = 13.75
 selected_train_psnr = 14.17
 control_test_psnr = 13.18
 selected_test_psnr = 13.42
+confidence_train_psnr = 14.20
+confidence_test_psnr = 13.43
 verdict = "consensus helps the relit path too, but open-sky remains better"
 
 # On this scene shadowing is a regression, which is the opposite of what it is
@@ -280,8 +303,8 @@ verdict = "shadowing pays only once the geometry is a surface"
 [bonsai.status]
 goal = "re-render the capture closely"
 reached = false
-train_psnr = 14.30
-test_psnr = 13.49
+train_psnr = 14.34
+test_psnr = 13.55
 limiting_stage = "geometry"
 next = "optimize one shared oriented particle surface against all views"
 

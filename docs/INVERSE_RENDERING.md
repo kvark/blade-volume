@@ -84,7 +84,10 @@ and getting a usable surface out of it took four corrections:
    camera's density tail, not a surface. Requiring two distinct training views
    removes 48 % of the fused surfels while retaining 98 % of those the material
    fit actually observed. Three views begins to remove real coverage, so two is
-   the selected boundary.
+   the selected boundary. Within a surviving cell, the peak absorption also
+   weights the center and normal: a sharply localized mode is better evidence
+   than one that barely cleared the haze threshold. That adds another 0.06 dB
+   held out without changing coverage.
 
 ### decompose
 
@@ -190,10 +193,11 @@ studio scene, where the photographs carry a bounce the lobe path does not model
 and the orbit sees each surfel from one elevation.
 
 On bonsai it does not yet reach the goal. The fresh Smooth-L1 foam plus
-two-view depth consensus reaches 14.30 dB on the views used for extraction and
-13.49 dB on held-out views. That supersedes the earlier 14.71/10.25 result: the
-four-decibel generalisation failure is gone, but the absolute reconstruction is
-still visibly a coarse set of fused layers. Consensus removes a large
+two-view depth consensus and confidence weighting reaches 14.34 dB on the views
+used for extraction and 13.55 dB on held-out views. That supersedes the earlier
+14.71/10.25 result: the four-decibel generalisation failure is gone, but the
+absolute reconstruction is still visibly a coarse set of fused layers.
+Consensus removes a large
 unsupported foreground sheet in the held-out renders; it does not recover the
 thin structure, normals, or material boundaries that the density field never
 made into one shared surface.
