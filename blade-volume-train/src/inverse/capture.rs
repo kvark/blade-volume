@@ -91,21 +91,6 @@ pub fn pixel_direction(
     (orientation * glam::Vec3::new(local.x, local.y, 1.0)).normalize()
 }
 
-impl View {
-    /// The texel a pixel coordinate falls in, or `None` outside the frame.
-    pub fn at(&self, pixel: [f32; 2], width: usize, height: usize) -> Option<[f32; 3]> {
-        if !(pixel[0] >= 0.0 && pixel[1] >= 0.0) {
-            return None;
-        }
-        let x = pixel[0] as usize;
-        let y = pixel[1] as usize;
-        if x >= width || y >= height {
-            return None;
-        }
-        Some(self.pixels[y * width + x])
-    }
-}
-
 impl Capture {
     /// Read a COLMAP reconstruction and the images it poses.
     ///

@@ -7,14 +7,9 @@
 //!     was built from. This is what was asked for, and it can be reached by
 //!     cheating: paint the illumination onto the surfaces and it goes up.
 //!   - **decomposition**, which says whether the material and the light are
-//!     separately anything. Only a capture with known truth can measure it,
-//!     which is what `--truth` is for.
-//!
-//! The material count is the knob between them. One material per surfel
-//! re-renders best and has decomposed nothing; a few hundred shared materials
-//! forces the light to explain the shading, and costs re-rendering accuracy to
-//! do it. The sweep is the experiment, so the flag is exposed rather than
-//! tuned out of sight.
+//!     separately anything. No photograph of a real room can measure that, so
+//!     it is measured elsewhere, against a scene whose answer is known — see
+//!     the `inverse_truth` binary.
 //!
 //! Usage:
 //!   reconstruct --sparse etc/data/bonsai/sparse/0 --images etc/data/bonsai/images

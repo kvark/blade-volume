@@ -16,12 +16,12 @@
 #   ./target/release/inverse_truth --views 24 --width 320 --height 240
 #   ./target/release/reconstruct --sparse etc/data/bonsai-full/sparse/0 \
 #       --images etc/data/bonsai-full/images --foam <trained.ply> \
-#       --width 256 --stride 8 --materials 256 \
+#       --width 256 --stride 8 \
 #       --voxel-factor 4 --min-peak 0.05 --disc-radius 2.5
 
 [manifest]
 name = "inverse_rendering"
-git_commit = "pending"
+git_commit = "f64199e"
 gpu = "NVIDIA GeForce RTX 5070"
 driver = "595.71.05"
 cpu = "12th Gen Intel(R) Core(TM) i5-12400F"
@@ -181,6 +181,9 @@ min_peak = 0.05
 rays_meeting_a_surface = 1.0
 train_coverage = 0.995
 test_coverage = 0.617
+# With 256 shared materials, which is what this was measured at before one
+# material per surfel became the default. See `material.unseen_surfels` for
+# the current numbers: 14.71 train, 10.25 test.
 train_psnr = 14.01
 test_psnr = 10.40
 train_psnr_where_hit = 14.03
@@ -211,8 +214,8 @@ verdict = "shadowing pays only once the geometry is a surface"
 [bonsai.status]
 goal = "re-render the capture closely"
 reached = false
-train_psnr = 14.01
-test_psnr = 10.40
+train_psnr = 14.71
+test_psnr = 10.25
 limiting_stage = "geometry"
 next = "a surface the views agree on, rather than a per-view point cloud"
 
@@ -318,3 +321,14 @@ per_surfel_after_test_psnr = 10.25
 shared_256_train_psnr = 14.23
 shared_256_test_psnr = 10.30
 selection = "one material per surfel, filled from the nearest measured neighbour"
+
+# Reflectance is reported as a mean absolute error on its own [0, 1] scale
+# rather than relative to the truth. Most surfaces in any scene are dielectrics
+# sitting at 0.04, so a relative measure divides by almost nothing: the first
+# version of this reported 221 % for a fit whose dielectrics came back at 0.08,
+# which is a real error and not a catastrophic one.
+[material.reflectance]
+metric = "mean absolute error"
+dielectric_truth = 0.04
+dielectric_recovered = 0.08
+error = 0.07
