@@ -718,6 +718,91 @@ mod tests {
         surfels
     }
 
+    fn sphere_fixture() -> (capture::Capture, Vec<depth::DepthMap>) {
+        const WIDTH: usize = 64;
+        const HEIGHT: usize = 64;
+        const RADIUS: f32 = 0.5;
+        let cameras = [
+            camera(glam::Vec3::new(0.0, 0.0, -1.5)),
+            camera(glam::Vec3::new(-0.35, 0.0, -1.5)),
+            camera(glam::Vec3::new(0.35, 0.0, -1.5)),
+            camera(glam::Vec3::new(0.0, -0.3, -1.5)),
+            camera(glam::Vec3::new(0.0, 0.3, -1.5)),
+        ];
+        let mut depths = Vec::with_capacity(cameras.len());
+        let views = cameras
+            .iter()
+            .enumerate()
+            .map(|(index, camera)| {
+                let origin = glam::Vec3::from(camera.cam_position);
+                let mut pixels = Vec::with_capacity(WIDTH * HEIGHT);
+                let mut distance = Vec::with_capacity(WIDTH * HEIGHT);
+                let mut alpha = Vec::with_capacity(WIDTH * HEIGHT);
+                for y in 0..HEIGHT {
+                    for x in 0..WIDTH {
+                        let direction = capture::pixel_direction(camera, WIDTH, HEIGHT, x, y);
+                        let middle = -origin.dot(direction);
+                        let discriminant =
+                            middle * middle - origin.length_squared() + RADIUS * RADIUS;
+                        if discriminant < 0.0 {
+                            pixels.push([0.0; 3]);
+                            distance.push(0.0);
+                            alpha.push(0.0);
+                            continue;
+                        }
+                        let along = middle - discriminant.sqrt();
+                        let point = origin + along * direction;
+                        pixels.push(texture(point));
+                        distance.push(along);
+                        alpha.push(1.0);
+                    }
+                }
+                let peak = alpha.clone();
+                depths.push(depth::DepthMap {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    distance,
+                    alpha,
+                    peak,
+                });
+                capture::View {
+                    name: format!("sphere-{index}"),
+                    camera: *camera,
+                    pixels,
+                }
+            })
+            .collect();
+        (
+            capture::Capture {
+                width: WIDTH,
+                height: HEIGHT,
+                views,
+            },
+            depths,
+        )
+    }
+
+    fn sphere_surfels(offset: f32) -> Vec<vol::relight::Surfel> {
+        const RADIUS: f32 = 0.5;
+        let mut surfels = Vec::new();
+        for y in 0..7 {
+            for x in 0..7 {
+                let px = (x as f32 - 3.0) * 0.06;
+                let py = (y as f32 - 3.0) * 0.06;
+                let pz = -(RADIUS * RADIUS - px * px - py * py).sqrt();
+                let truth = glam::Vec3::new(px, py, pz);
+                let normal = truth.normalize();
+                surfels.push(vol::relight::Surfel {
+                    center: (truth + offset * normal).to_array(),
+                    radius: 0.1,
+                    normal: normal.to_array(),
+                    material: surfels.len() as u32,
+                });
+            }
+        }
+        surfels
+    }
+
     #[test]
     fn plane_sweep_recovers_displacement_and_preserves_exact_surface() {
         let (capture, depths) = plane_fixture();
@@ -759,6 +844,52 @@ mod tests {
         assert!(
             exact_error < 1.0e-6,
             "an exact surface moved by {exact_error}; stats={exact_stats:?}"
+        );
+    }
+
+    #[test]
+    fn sphere_sweep_repairs_supported_curvature_without_moving_exact_surface() {
+        const RADIUS: f32 = 0.5;
+        let (capture, depths) = sphere_fixture();
+        let views: Vec<RefinementView<'_>> = (0..capture.views.len())
+            .map(|capture_index| RefinementView {
+                capture_index,
+                depth: Some(&depths[capture_index]),
+            })
+            .collect();
+        let options = RefineOptions::default();
+
+        let mut displaced = sphere_surfels(0.0375);
+        let displaced_stats = refine(&mut displaced, &capture, &views, options);
+        let displaced_error = displaced
+            .iter()
+            .map(|surfel| (glam::Vec3::from(surfel.center).length() - RADIUS).abs())
+            .sum::<f32>()
+            / displaced.len() as f32;
+        assert!(
+            displaced_error < 0.028,
+            "known 0.0375 displacement remained {displaced_error}; stats={displaced_stats:?}"
+        );
+        let corrected = displaced
+            .iter()
+            .filter(|surfel| (glam::Vec3::from(surfel.center).length() - RADIUS).abs() < 0.002)
+            .count();
+        assert!(
+            displaced_stats.moved >= displaced.len() / 3,
+            "too few displaced surfels moved: {displaced_stats:?}"
+        );
+        assert_eq!(corrected, displaced_stats.moved);
+
+        let mut exact = sphere_surfels(0.0);
+        let exact_stats = refine(&mut exact, &capture, &views, options);
+        let exact_error = exact
+            .iter()
+            .map(|surfel| (glam::Vec3::from(surfel.center).length() - RADIUS).abs())
+            .sum::<f32>()
+            / exact.len() as f32;
+        assert!(
+            exact_error < 1.0e-6 && exact_stats.moved == 0,
+            "an exact sphere moved by {exact_error}; stats={exact_stats:?}"
         );
     }
 }
