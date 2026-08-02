@@ -150,6 +150,7 @@ pub fn trace_depth(
 struct Sample {
     position: glam::Vec3,
     normal: glam::Vec3,
+    confidence: f32,
 }
 
 /// Unproject a depth map into oriented world-space samples.
@@ -199,6 +200,7 @@ fn samples_from(map: &DepthMap, camera: &vol::CameraParams, options: DepthOption
             samples.push(Sample {
                 position: here,
                 normal,
+                confidence: map.peak[y * width + x],
             });
         }
     }
@@ -241,7 +243,7 @@ pub fn surfels_from_depth(
     struct Cell {
         positions: glam::Vec3,
         normals: glam::Vec3,
-        samples: u32,
+        weight: f32,
         views: usize,
         last_view: usize,
     }
@@ -258,13 +260,16 @@ pub fn surfels_from_depth(
             let entry = cells.entry(key).or_insert(Cell {
                 positions: glam::Vec3::ZERO,
                 normals: glam::Vec3::ZERO,
-                samples: 0,
+                weight: 0.0,
                 views: 0,
                 last_view: usize::MAX,
             });
-            entry.positions += sample.position;
-            entry.normals += sample.normal;
-            entry.samples += 1;
+            // Passing the haze threshold does not make every mode equally
+            // sharp. Let a segment that carried more of its ray pull the
+            // merged particle further than a barely accepted one.
+            entry.positions += sample.position * sample.confidence;
+            entry.normals += sample.normal * sample.confidence;
+            entry.weight += sample.confidence;
             if entry.last_view != view {
                 entry.views += 1;
                 entry.last_view = view;
@@ -282,14 +287,14 @@ pub fn surfels_from_depth(
         }
         // Half the samples pointing one way and half the other cancel, and a
         // cell like that is two surfaces sharing a voxel rather than one.
-        let Some(normal) = (entry.normals / entry.samples as f32).try_normalize() else {
+        let Some(normal) = (entry.normals / entry.weight).try_normalize() else {
             continue;
         };
-        if entry.normals.length() < 0.3 * entry.samples as f32 {
+        if entry.normals.length() < 0.3 * entry.weight {
             continue;
         }
         surfels.push(vol::relight::Surfel {
-            center: (entry.positions / entry.samples as f32).to_array(),
+            center: (entry.positions / entry.weight).to_array(),
             radius,
             normal: normal.to_array(),
             material: surfels.len() as u32,
@@ -428,6 +433,37 @@ mod tests {
         assert!(
             !together.is_empty(),
             "two cameras produced no consensus surface"
+        );
+    }
+
+    #[test]
+    fn sharper_depth_mode_has_more_influence_on_the_surface() {
+        let camera = camera_looking_at_a_wall(3.0);
+        let sharp = wall_map(&camera, 32);
+        let mut hazy = wall_map(&camera, 32);
+        for y in 0..hazy.height {
+            for x in 0..hazy.width {
+                let slot = y * hazy.width + x;
+                let direction = capture::pixel_direction(&camera, hazy.width, hazy.height, x, y);
+                hazy.distance[slot] += 0.02 / direction.z;
+                hazy.peak[slot] = 0.2;
+            }
+        }
+        let options = DepthOptions {
+            min_peak: 0.05,
+            min_views: 2,
+            ..Default::default()
+        };
+        let (surfels, _) = surfels_from_depth(&[(camera, sharp), (camera, hazy)], options);
+        assert!(!surfels.is_empty());
+        let mean_z = surfels
+            .iter()
+            .map(|surfel| surfel.center[2].abs())
+            .sum::<f32>()
+            / surfels.len() as f32;
+        assert!(
+            mean_z < 0.005,
+            "low-confidence depth pulled the surface to z={mean_z}"
         );
     }
 }
