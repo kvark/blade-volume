@@ -214,6 +214,16 @@ no known-truth albedo error, and is rejected. The excess depth has to be removed
 or moved as geometry; a scalar weight cannot turn dozens of layers into one
 surface.
 
+Four further local shortcuts fail the same gate. Per-ray distortion loss makes
+the source field worse before it makes the fused geometry better. Sparse COLMAP
+anchors either fragment fusion or leak points triangulated from held-out views.
+Training-only photometric normal offsets improve Bonsai but regress Room, and
+local PCA plane normals do the reverse. The full measurements are recorded in
+`benchmarks/inverse_rendering.toml`; none remains as a command-line option.
+Together with the responsibility result, these controls say that normal or
+weight corrections around independently fused depths are not the missing
+algorithm. Positions must be coupled by one multi-view objective.
+
 Depth extraction no longer rebuilds camera ray constants for every pixel or an
 operating-system worker pool for every view. It traces all training cameras in
 one scoped pool and retains the one-view API for small callers. On five

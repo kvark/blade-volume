@@ -351,6 +351,56 @@ test_psnr = 13.55
 worst_test_psnr = 11.33
 quality_changed = false
 
+# Four local geometry shortcuts were gated after the overlap diagnostic. None
+# survives both Bonsai and Room. The source for every experimental switch was
+# removed; these numbers are retained so a scene-local gain is not mistaken for
+# a generally useful reconstruction stage.
+[bonsai.geometry_consensus.rejected_absolute_distortion]
+continuation_steps = 400
+weights = [0.0003, 0.001, 0.01]
+control_radiance_psnr = [26.78, 24.48, 24.94]
+candidate_radiance_train_psnr = [26.58, 26.14, 24.58]
+candidate_radiance_selected_test_psnr = [24.40, 24.20, 23.35]
+candidate_radiance_all_views_psnr = [24.84, 24.54, 23.44]
+control_inverse_psnr = [14.34, 13.55, 11.33]
+candidate_inverse_train_psnr = [14.33, 14.52, 14.38]
+candidate_inverse_test_psnr = [13.40, 13.55, 13.59]
+candidate_inverse_worst_test_psnr = [11.31, 11.55, 11.73]
+control_mean_projected_supports = 42.5
+candidate_mean_projected_supports = [42.7, 43.1, 44.7]
+verdict = "compact rays trade radiance quality for no robust held-out geometry gain and increase overlap"
+
+[bonsai.geometry_consensus.rejected_sparse_anchors]
+radius_voxels = 0.5
+control_psnr = [14.34, 13.55, 11.33]
+nearest_anchor_psnr = [14.30, 13.60, 11.65]
+nearest_anchor_surfels = 37405
+post_fusion_median_psnr = [14.30, 13.49, 11.30]
+verdict = "the apparent worst-view gain came from fragmented fusion, was not durable after fusion, and COLMAP points include held-out evidence"
+
+[bonsai.geometry_consensus.rejected_photometric_offsets]
+control_bonsai_psnr = [14.34, 13.55, 11.33]
+loose_bonsai_psnr = [14.46, 13.68, 11.46]
+control_room_psnr = [14.40, 14.08, 12.98]
+loose_room_psnr = [14.35, 13.94]
+fixed_support_bonsai_psnr = [14.36, 13.58, 11.46]
+fixed_support_room_psnr = [14.40, 14.06, 12.99]
+verdict = "training-only local normal offsets help Bonsai but regress Room; fixed support removes nearly all of the apparent gain"
+
+[bonsai.geometry_consensus.rejected_planar_normals]
+strengths = [0.25, 0.5, 1.0]
+control_bonsai_psnr = [14.34, 13.55, 11.33]
+candidate_bonsai_train_psnr = [14.33, 14.35, 14.39]
+candidate_bonsai_test_psnr = [13.51, 13.48, 13.35]
+candidate_bonsai_worst_test_psnr = [11.32, 11.34, 10.72]
+control_room_psnr = [14.40, 14.08, 12.98]
+candidate_room_train_psnr = [14.41, 14.43, 14.46]
+candidate_room_test_psnr = [14.10, 14.13, 14.13]
+candidate_room_worst_test_psnr = [13.00, 12.99, 12.96]
+peak_memory_bytes = 272330752
+memory_events = 0
+verdict = "local PCA normals slightly help Room and consistently regress held-out Bonsai; shared positions must be optimized instead"
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047
