@@ -16,12 +16,14 @@
 #   ./target/release/inverse_truth --views 24 --width 320 --height 240
 #   ./target/release/reconstruct --sparse etc/data/bonsai-full/sparse/0 \
 #       --images etc/data/bonsai-full/images --foam <trained.ply> \
-#       --width 256 --stride 8 \
-#       --voxel-factor 4 --min-peak 0.05 --disc-radius 2.5
+#       --width 256 --stride 8 --test-every 8 \
+#       --voxel-factor 4 --min-peak 0.05 --disc-radius 2.5 \
+#       --min-views 2 --materials 0 --specular-rounds 0 \
+#       --no-shadows --diffuse-samples 0
 
 [manifest]
 name = "inverse_rendering"
-git_commit = "f64199e"
+git_commit = "141796b"
 gpu = "NVIDIA GeForce RTX 5070"
 driver = "595.71.05"
 cpu = "12th Gen Intel(R) Core(TM) i5-12400F"
@@ -157,8 +159,8 @@ train_psnr = 10.39
 test_psnr = 10.00
 psnr_where_hit = 14.85
 
-# Depth fused from the trained foam. Three separate mistakes were made getting
-# here and each cost about a decibel-decade:
+# Depth fused from the trained foam. Four separate mistakes were made getting
+# here; the first three cost about a decibel-decade each:
 #
 #   1. **Expected depth.** A field trained on photographs has long thin tails
 #      and the mean sits out in them, so views agree about a surface and
@@ -173,6 +175,9 @@ psnr_where_hit = 14.85
 #   3. **Discs too small to meet.** At 0.75 of the merge cell they cannot tile
 #      it, and every pixel came out part background. That reads as a uniformly
 #      dark render rather than as visible holes.
+#   4. **One-view layers.** Accepting a merge cell supported by only one depth
+#      map retains view-specific density tails. Two-view consensus removes
+#      nearly half the surfels without removing the measured surface.
 [bonsai.geometry_foam]
 surfels = 302070
 voxel_factor = 4.0
@@ -183,7 +188,7 @@ train_coverage = 0.995
 test_coverage = 0.617
 # With 256 shared materials, which is what this was measured at before one
 # material per surfel became the default. See `material.unseen_surfels` for
-# the current numbers: 14.71 train, 10.25 test.
+# the historical per-surfel numbers: 14.71 train, 10.25 test.
 train_psnr = 14.01
 test_psnr = 10.40
 train_psnr_where_hit = 14.03
@@ -195,10 +200,70 @@ median_depth_surfels_seen = 0.26
 mode_depth_surfels_seen = 0.75
 selection = "mode, with a minimum peak weight"
 
+# Fresh Smooth-L1 source foam, evaluated with one material per surfel and the
+# open-sky albedo-only protocol printed at the top of this file. The only
+# control variable is how many distinct training cameras must contribute to a
+# merge cell. Two is the selected boundary: it removes 48% of the cloud while
+# retaining 98% of the surfels that were actually observed during fitting.
+# Three begins losing both coverage and PSNR.
+[bonsai.geometry_consensus]
+git_commit = "141796b"
+source_foam = "target/audit-runs/bonsai-fresh-batch4096-smooth-l1-step20400-local/model.ply"
+source_foam_sha256 = "18481e5530c24d077f7612351ef8987dced52f6fe14867711d99980a17d515fa"
+source_cells = 200000
+voxel_factor = 4.0
+disc_radius = 2.5
+min_peak = 0.05
+
+[bonsai.geometry_consensus.control]
+min_views = 1
+surfels = 71980
+observed_surfels = 9477
+train_psnr = 14.03
+test_psnr = 13.34
+train_coverage = 1.000
+test_coverage = 0.989
+test_psnr_where_hit = 13.51
+wall_seconds = 5.197
+peak_memory_bytes = 222879744
+
+[bonsai.geometry_consensus.selected]
+min_views = 2
+surfels = 37217
+observed_surfels = 9290
+train_psnr = 14.30
+test_psnr = 13.49
+train_coverage = 0.993
+test_coverage = 0.968
+test_psnr_where_hit = 13.93
+wall_seconds = 4.825
+peak_memory_bytes = 186060800
+artifact = "target/audit-runs/inverse-consensus-selected.rply"
+artifact_sha256 = "d1e0d04a4f7210e0377394d523ebecdb72a7d211b4821fa07eb71f09957902da"
+environment_sha256 = "70d8100f4fe93fb4c7fe3dd4c73ec07b81e0bd02c24bea688434a6e2be7aa390"
+
+[[bonsai.geometry_consensus.rejected]]
+min_views = 3
+surfels = 23047
+train_psnr = 14.07
+test_psnr = 13.08
+train_coverage = 0.974
+test_coverage = 0.920
+
+[bonsai.geometry_consensus.shadowing]
+control_sky_open = 0.23
+selected_sky_open = 0.25
+control_train_psnr = 13.75
+selected_train_psnr = 14.17
+control_test_psnr = 13.18
+selected_test_psnr = 13.42
+verdict = "consensus helps the relit path too, but open-sky remains better"
+
 # On this scene shadowing is a regression, which is the opposite of what it is
-# on the truth scene. The difference is the geometry: a cloud fused from
-# per-view depth is a scatter rather than a surface, it self-occludes to 13%
-# of the sky, and occlusion computed against wrong geometry is worse than none.
+# on the truth scene. The difference is the original geometry: a cloud fused
+# from per-view depth is a scatter rather than a surface, it self-occludes to
+# 13% of the sky, and occlusion computed against wrong geometry is worse than
+# none. The consensus result above improves but does not reverse that verdict.
 [bonsai.shadowing]
 open_sky_train_psnr = 14.01
 shadowed_train_psnr = 11.06
@@ -207,17 +272,18 @@ verdict = "shadowing pays only once the geometry is a surface"
 
 # The honest summary. The re-rendering is far from the goal, and the reason is
 # not the material/light split — that is measured on the truth scene and works.
-# It is that a surfel cloud fused from the depth maps of a 21 dB radiance field
-# is not a surface: 14 dB on the views it was built from and 10 dB on the ones
-# it was not, a gap no view-independent shading model should produce and which
-# therefore belongs entirely to the geometry.
+# The fresh radiance field and two-view consensus close the old four-decibel
+# train/test split, but 14 dB is still visibly a coarse set of fused depth
+# layers rather than a faithful surface. The next geometry step must optimize
+# one shared particle surface against the views, not add another polygonal
+# intermediate.
 [bonsai.status]
 goal = "re-render the capture closely"
 reached = false
-train_psnr = 14.71
-test_psnr = 10.25
+train_psnr = 14.30
+test_psnr = 13.49
 limiting_stage = "geometry"
-next = "a surface the views agree on, rather than a per-view point cloud"
+next = "optimize one shared oriented particle surface against all views"
 
 
 # ------------------------------------------------- material beyond the albedo

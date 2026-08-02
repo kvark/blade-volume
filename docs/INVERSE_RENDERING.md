@@ -62,7 +62,7 @@ bonsai.
 
 **A trained foam.** Trace every training view through this repo's own
 reconstruction and take where each ray was absorbed. This covers the frame,
-and getting a usable surface out of it took three corrections:
+and getting a usable surface out of it took four corrections:
 
 1. **Where along the ray.** A density field trained on photographs has long
    thin tails. The *mean* absorption depth sits out in them, and two views of
@@ -80,6 +80,11 @@ and getting a usable surface out of it took three corrections:
    every pixel comes out part background. This reads as a uniformly dark
    render rather than as visible holes, which is why it survived a round of
    looking at pictures.
+4. **Views that agree.** A merge cell supported by one camera is still one
+   camera's density tail, not a surface. Requiring two distinct training views
+   removes 48 % of the fused surfels while retaining 98 % of those the material
+   fit actually observed. Three views begins to remove real coverage, so two is
+   the selected boundary.
 
 ### decompose
 
@@ -184,21 +189,27 @@ renderer's own shading, which is asserted as a unit test, and still fails in the
 studio scene, where the photographs carry a bounce the lobe path does not model
 and the orbit sees each surfel from one elevation.
 
-On bonsai it does not yet reach the goal: 14 dB on the views the geometry was
-built from and 10 dB on those it was not. That gap is the finding. A
-view-independent shading model should not care which views it is scored on, so
-a four-decibel train/test difference is not the material or the light — it is
-the geometry, which is a per-view point cloud rather than a surface the views
-agree about.
+On bonsai it does not yet reach the goal. The fresh Smooth-L1 foam plus
+two-view depth consensus reaches 14.30 dB on the views used for extraction and
+13.49 dB on held-out views. That supersedes the earlier 14.71/10.25 result: the
+four-decibel generalisation failure is gone, but the absolute reconstruction is
+still visibly a coarse set of fused layers. Consensus removes a large
+unsupported foreground sheet in the held-out renders; it does not recover the
+thin structure, normals, or material boundaries that the density field never
+made into one shared surface.
 
 ## What the numbers are limited by, in order
 
-1. **Geometry.** A surfel cloud fused from the depth maps of a 21 dB radiance
-   field is a scatter. Everything downstream inherits it, and shadowing —
-   which is a clear win on good geometry — is a 3 dB regression on this one,
-   because occlusion computed against the wrong surface is worse than none.
-2. **The radiance field itself**, at 21.7 dB train / 20.0 test, is the ceiling
-   the geometry is extracted from.
+1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a
+   final surface. Two-view consensus halves the cloud and improves both open-sky
+   and shadowed scores, yet three quarters of the retained surfels are still
+   never directly observed by the material fit. The next step is to optimize
+   one shared oriented particle cloud against all views, without introducing a
+   polygonal intermediate.
+2. **The radiance field itself.** The selected fresh Smooth-L1 foam reaches
+   24.94 dB over all 37 every-eighth views at 128². Its density modes are still
+   a much weaker geometry signal than its rendered colour, so a better colour
+   score alone is not proof of a better surface.
 3. **The shading model**: one bounce, and a lobe that only pays where the lobe
    is a meaningful share of the brightness. Worth about 27 % on the truth scene
    even with everything else exact.
