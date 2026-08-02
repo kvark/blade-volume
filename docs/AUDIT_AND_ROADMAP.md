@@ -510,6 +510,18 @@ At the audited revision:
   medians fall 3.73→2.45 seconds on Bonsai and 6.93→3.19 on Room, with selected
   quality preserved. The complete GPU-inclusive workspace suite peaks at
   5,226,614,784 bytes inside its 6 GiB scope with zero swap or memory events.
+- Commit `3211300` adds a cloud-only normal-direction plane sweep after depth
+  fusion. Normalized world-space tangent patches, candidate-specific source
+  depth visibility, and local spatial coherence recover all 49 particles in a
+  synthetic 0.05-unit displacement while leaving an exact surface fixed. On
+  same-binary gates it changes Bonsai train/held-out PSNR from 14.89/14.03 to
+  14.97/14.07 dB and Room from 14.59/14.14 to 14.59/14.17 dB. Coverage is
+  unchanged and Bonsai's worst held-out view improves 0.19 dB; one training
+  tail regresses 0.11 dB. The pass costs 0.11–0.20 seconds and moves only
+  11–12% of the clouds, so it is selected as an initializer refinement rather
+  than evidence that shared-surface reconstruction is solved. The latest full
+  workspace suite peaks at 5,069,111,296 bytes inside 6 GiB with zero swap,
+  pressure, OOM, or GPU faults.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its

@@ -721,6 +721,87 @@ peak_memory_bytes = 198483968
 memory_events = 0
 verdict = "loss falls without recovering known geometry; fixed appearance and rim-only coverage gradients admit overlap motion"
 
+# The selected shared-view refinement keeps the runtime representation as
+# oriented particles. It searches along each normal using normalized
+# world-space tangent patches, source-depth visibility, and spatial coherence.
+# These are same-release-binary A/B runs; `--no-multi-view-refine` is the
+# control. Only training photographs and their foam depths enter geometry.
+[surface_refinement.multi_view]
+parent_commit = "9f8577d"
+git_commit = "3211300"
+default = "enabled for foam reconstruction; --no-multi-view-refine selects raw fusion"
+search_radius_in_surfel_radii = 0.5
+candidates = 9
+patch_side = 3
+minimum_views = 4
+maximum_views = 8
+synthetic_particles = 49
+synthetic_initial_error = 0.05
+synthetic_final_error_max = 0.000001
+synthetic_moved = 49
+synthetic_exact_surface_final_error_max = 0.000001
+synthetic_exact_surface_moved = 0
+full_workspace_test_peak_memory_bytes = 5069111296
+full_workspace_test_memory_events = 0
+
+[surface_refinement.multi_view.bonsai]
+surfels = 28316
+scored = 5445
+moved = 3398
+mean_absolute_offset_cells = 0.416
+mean_objective_reduction = 0.230
+mean_views = 4.7
+control_observed_surfels = 7923
+refined_observed_surfels = 7889
+control_wall_seconds = 2.449
+refined_wall_seconds = 2.557
+control_peak_memory_bytes = 151683072
+refined_peak_memory_bytes = 154423296
+control_train_psnr = 14.89
+refined_train_psnr = 14.97
+control_worst_train_psnr = 11.69
+refined_worst_train_psnr = 11.58
+control_test_psnr = 14.03
+refined_test_psnr = 14.07
+control_worst_test_psnr = 11.48
+refined_worst_test_psnr = 11.67
+control_train_coverage = 0.991
+refined_train_coverage = 0.991
+control_test_coverage = 0.960
+refined_test_coverage = 0.960
+artifact = "target/audit-runs/multi-view-refined-bonsai-local/scene.rply"
+artifact_sha256 = "bfef33e76154436ea6cc5bf0efee340e566241287f32f8c41d9fe39b035b47c3"
+control_artifact_sha256 = "d5fd4edf4e1092a8fc61adb0622261580c2dcf8b3636f708fe8ffcdae3302fc5"
+
+[surface_refinement.multi_view.room]
+surfels = 29658
+scored = 5407
+moved = 3255
+mean_absolute_offset_cells = 0.402
+mean_objective_reduction = 0.217
+mean_views = 5.1
+control_observed_surfels = 7987
+refined_observed_surfels = 7908
+control_wall_seconds = 3.187
+refined_wall_seconds = 3.389
+control_peak_memory_bytes = 289923072
+refined_peak_memory_bytes = 308449280
+control_train_psnr = 14.59
+refined_train_psnr = 14.59
+control_worst_train_psnr = 12.24
+refined_worst_train_psnr = 12.23
+control_test_psnr = 14.14
+refined_test_psnr = 14.17
+control_worst_test_psnr = 13.08
+refined_worst_test_psnr = 13.08
+control_train_coverage = 0.977
+refined_train_coverage = 0.977
+control_test_coverage = 0.979
+refined_test_coverage = 0.979
+artifact = "target/audit-runs/multi-view-refined-room-local/scene.rply"
+artifact_sha256 = "37342d5565ab66d77dd69dcc486e30a1bb991d1fe1f36487e436e2446ca874fb"
+control_artifact_sha256 = "8c4d93eea7957bc190d5c812dd49fa362bcef2ac2db09717e2bea79dd96a1f93"
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047
@@ -761,11 +842,11 @@ verdict = "shadowing pays only once the geometry is a surface"
 [bonsai.status]
 goal = "re-render the capture closely"
 reached = false
-train_psnr = 14.89
-test_psnr = 14.03
-worst_test_psnr = 11.47
+train_psnr = 14.97
+test_psnr = 14.07
+worst_test_psnr = 11.67
 limiting_stage = "geometry"
-next = "optimize one shared oriented particle surface against all views"
+next = "expand shared-view refinement to thin and low-texture geometry, then update normals/support"
 
 
 # ------------------------------------------------- material beyond the albedo

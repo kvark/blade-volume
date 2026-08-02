@@ -194,13 +194,14 @@ and the orbit sees each surfel from one elevation.
 
 On bonsai it does not yet reach the goal. The fresh Smooth-L1 foam plus
 two-view depth consensus and confidence weighting reaches 14.89 dB on the views
-used for extraction and 14.03 dB on held-out views. That supersedes the earlier
-14.71/10.25 result: the four-decibel generalisation failure is gone, but the
-absolute reconstruction is still visibly a coarse set of fused layers.
-Consensus removes a large
-unsupported foreground sheet in the held-out renders; it does not recover the
-thin structure, normals, or material boundaries that the density field never
-made into one shared surface.
+used for extraction and 14.03 dB on held-out views. The selected multi-view
+surface refinement raises those to 14.97/14.07 dB and improves the worst
+held-out view from 11.48 to 11.67 dB. That supersedes the earlier 14.71/10.25
+result: the four-decibel generalisation failure is gone, but the absolute
+reconstruction is still visibly a coarse set of fused layers. Consensus
+removes a large unsupported foreground sheet in the held-out renders; it does
+not recover the thin structure, normals, or material boundaries that the
+density field never made into one shared surface.
 
 The observation pass now has an opt-in overlap diagnostic. It rules out one
 tempting local fix. Only 2.9 % of Bonsai samples share their *centre pixel*, but
@@ -241,6 +242,23 @@ gradients confined to disc rims let it rearrange overlap instead of recovering
 depth, so the entire stage was removed. A useful shared objective needs a
 radiance model that remains tied to observations as geometry moves, plus a
 synthetic displacement test as a mandatory gate.
+
+The selected refinement meets that gate without introducing another geometry
+representation. It searches nine positions over half a surfel radius in each
+normal direction, reprojects a 3×3 world-space tangent patch into four to eight
+training photographs, and minimizes robust pairwise normalized patch error.
+Candidate-specific source-foam depth rejects occluded matches, and a local
+median keeps nearby, similarly oriented moves coherent. In the synthetic gate,
+all 49 particles recover a known 0.05-unit displacement to below `1e-6`, while
+an exact surface moves no particles. On Bonsai it scores 5,445 of 28,316
+surfels, moves 3,398, and raises train/held-out PSNR from 14.89/14.03 to
+14.97/14.07 dB; worst held out improves 11.48→11.67 dB, while worst training
+falls 11.69→11.58 dB. On Room it scores 5,407 of 29,658, moves 3,255, preserves
+14.59 dB training PSNR, and raises held out 14.14→14.17 dB with the 13.08 dB
+tail and both coverage values unchanged. The same-binary pass adds 0.11 seconds
+on Bonsai and 0.20 seconds on Room. This is a real generalization improvement,
+not completion: only 18–19% of surfels have enough visible texture to score and
+11–12% move.
 
 Depth extraction no longer rebuilds camera ray constants for every pixel or an
 operating-system worker pool for every view. It traces all training cameras in
@@ -294,18 +312,21 @@ defaults. Durable scenes and comparison images are under
 `target/audit-runs/inverse-coarse-consensus-{bonsai,room}-local/`.
 The latest GPU-produced equivalents are under
 `target/audit-runs/gpu-depth-selected-{bonsai,room}-local/`.
+The selected refined scenes and held-out comparison images are under
+`target/audit-runs/multi-view-refined-{bonsai,room}-local/`.
 
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a
-   final surface. Two-view consensus halves the cloud and improves both open-sky
-   and shadowed scores, yet nearly three quarters of the retained surfels are
-   still never directly observed by the material fit, and the overlap
-   diagnostic finds an order of magnitude more projected supports than on the
-   truth surface. The next step is to optimize one shared oriented particle
-   cloud against all views, without introducing a polygonal intermediate.
-   Observation weighting is now measured and is not a substitute for that
-   optimization.
+   final surface. Two-view consensus halves the cloud, and the first selected
+   shared-view plane sweep improves held-out quality without changing coverage.
+   It can act only on the 18–19% of particles that have four visible textured
+   patches, however; nearly three quarters of the retained surfels are still
+   never directly observed by the material fit, and the overlap diagnostic
+   finds an order of magnitude more projected supports than on the truth
+   surface. The next step is a multi-scale curved/occlusion fixture followed by
+   iterative cloud-only refinement that expands support to thin and low-texture
+   geometry and updates normals or support radii when positions move.
 2. **The radiance field itself.** The selected fresh Smooth-L1 foam reaches
    24.94 dB over all 37 every-eighth views at 128². Its density modes are still
    a much weaker geometry signal than its rendered colour, so a better colour
