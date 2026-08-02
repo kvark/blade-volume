@@ -291,6 +291,14 @@ acceptance threshold changes only twelve Room moves and not the tail. This path
 was also removed; source depth remains an occlusion check for the photometric
 objective.
 
+Refitting normals only within coherently moved neighborhoods does not repair
+that limitation either. A 25% blend toward the local least-variance direction
+raises Bonsai held-out PSNR 14.07→14.11 dB, but drops Room's worst held-out view
+13.08→13.06 dB and costs Bonsai 0.1 percentage point of coverage. Reducing the
+blend to 10% removes the average gain and drops both Bonsai tails by 0.02 dB.
+The code was removed. Even after photometric motion, the fused neighborhood is
+not a reliable enough surface estimate to replace the depth-derived normal.
+
 Scoring now keeps one GPU relight tracer alive across the training and held-out
 splits instead of rebuilding the same acceleration structure and prefiltered
 environment twice. Five complete Room runs fall from a 3.25-second median to

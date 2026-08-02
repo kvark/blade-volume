@@ -544,6 +544,11 @@ At the audited revision:
   acceptance threshold retains the same tail. Because it reuses the foam depths
   that initialized fusion rather than adding evidence, it is removed and those
   depths remain visibility checks only.
+- Re-estimating normals only among photometrically moved neighbors also fails
+  the cross-scene tail gate. A 25% local-plane blend raises Bonsai held out by
+  0.04 dB but lowers Room's worst held-out view by 0.02 dB; a 10% blend removes
+  the mean gain and lowers both Bonsai tails by 0.02 dB. The implementation is
+  removed. Fused local neighborhoods remain too noisy to supply final normals.
 - Commit `b593e3c` reuses one relight tracer and prefiltered environment across
   reconstruction's train/test score splits. Five complete Room runs fall from
   a 3.25-second median to 3.18 seconds (1.022×), with median user CPU down

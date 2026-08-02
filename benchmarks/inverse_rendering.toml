@@ -859,6 +859,20 @@ room_test_psnr = [14.18, 14.18]
 room_worst_test_psnr = [13.07, 13.07]
 verdict = "re-fitting textureless particles to the foam depths improves Room averages by 0.01--0.02 dB but loses 0.01 dB worst held out; the source depth remains a visibility check only"
 
+[surface_refinement.multi_view.rejected_moved_normal_refit]
+blend_strengths = [0.25, 0.10]
+bonsai_normals_updated = [1428, 1428]
+bonsai_train_psnr = [15.00, 14.97]
+bonsai_worst_train_psnr = [11.57, 11.56]
+bonsai_test_psnr = [14.11, 14.07]
+bonsai_worst_test_psnr = [11.70, 11.65]
+bonsai_test_coverage = [0.959, 0.960]
+room_0_25_normals_updated = 1203
+room_0_25_train_psnr = 14.59
+room_0_25_test_psnr = 14.17
+room_0_25_worst_test_psnr = 13.06
+verdict = "a 25% local-plane blend helps Bonsai averages but loses the Room tail; 10% loses both Bonsai tails, so moved neighborhoods do not supply reliable normals"
+
 [surface_refinement.multi_view.rejected_second_pass]
 minimum_improvements = [0.02, 0.05]
 bonsai_second_pass_moved = [1220, 1153]
