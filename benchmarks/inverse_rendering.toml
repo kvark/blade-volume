@@ -263,6 +263,68 @@ artifact = "target/audit-runs/inverse-confidence-selected.rply"
 artifact_sha256 = "6a1c8ea10a2bd4407bf78c4f9d504a171027626ec9b66138b303835432315459"
 environment_sha256 = "9c45d2caa1e96f5763cb2ef6680dc9de2c86318a00afa1697cb91acd8ab33da0"
 
+# The observer reads the pixel under every visible surfel centre, while the
+# production renderer coverage-blends all nearby discs in its first surface
+# band. The opt-in diagnostic added in `8045213` measures both centre claims
+# and the observer's circular projected support approximation. It does not
+# alter the observations or the selected reconstruction.
+#
+# Centre collisions are uncommon on the fused Bonsai geometry, but footprint
+# overlap is not: every sampled pixel lies under many discs. The known-truth
+# studio scene establishes that overlap by itself is expected for a watertight
+# surfel surface, although Bonsai is an order of magnitude deeper. The shader's
+# bounded hit window means the Bonsai support maximum is a geometry-density
+# diagnostic, not a claim that all 114 discs are shaded.
+[bonsai.observation_overlap]
+git_commit = "8045213"
+samples = 21187
+sample_pixels = 20878
+samples_sharing_center_pixel = 0.029
+samples_with_multiple_projected_supports = 1.0
+mean_projected_supports = 42.5
+max_projected_supports = 114
+unsupported_samples = 0
+
+[bonsai.observation_overlap.truth_control]
+samples = 384895
+sample_pixels = 147371
+samples_sharing_center_pixel = 0.946
+samples_with_multiple_projected_supports = 0.987
+mean_projected_supports = 3.3
+max_projected_supports = 11
+unsupported_samples = 543
+
+# Weighting each observation by its circular coverage divided by total
+# projected coverage is the simplest responsibility approximation. It is
+# rejected: it slightly worsens both Bonsai splits, and on an analytic,
+# true-light studio control it changes no albedo error while lowering the
+# re-render score. The experimental switch and sample-weight plumbing were
+# removed; only the diagnostic remains.
+[bonsai.observation_overlap.rejected_responsibility]
+control_train_psnr = 14.34
+candidate_train_psnr = 14.30
+control_test_psnr = 13.55
+candidate_test_psnr = 13.53
+truth_control_albedo_error = 0.324
+truth_candidate_albedo_error = 0.324
+truth_control_psnr = 39.08
+truth_candidate_psnr = 38.70
+verdict = "overlap is evidence for a better shared surface, not for scalar observation weights"
+
+# Projection caching is decision-preserving and stays on the ordinary path;
+# the deeper footprint scan is opt-in. Three alternating full commands on the
+# selected protocol keep every quality number identical. The end-to-end gain
+# is small because depth tracing, not observation, dominates this command.
+[bonsai.observation_overlap.performance]
+parent_commit = "93788e5"
+control_wall_seconds = [4.92, 4.79, 4.76]
+cached_wall_seconds = [4.79, 4.73, 4.70]
+control_median_seconds = 4.79
+cached_median_seconds = 4.73
+diagnostics_observation_seconds = 0.7
+ordinary_observation_seconds = 0.4
+quality_changed = false
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047

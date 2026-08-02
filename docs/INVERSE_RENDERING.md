@@ -202,14 +202,28 @@ unsupported foreground sheet in the held-out renders; it does not recover the
 thin structure, normals, or material boundaries that the density field never
 made into one shared surface.
 
+The observation pass now has an opt-in overlap diagnostic. It rules out one
+tempting local fix. Only 2.9 % of Bonsai samples share their *centre pixel*, but
+every sampled pixel is covered by several projected disc footprints: 42.5 on
+average and as many as 114 under the observer's circular support approximation.
+Overlap itself is correct — the known-truth studio surface also overlaps at
+98.7 % of its samples — but that scene averages 3.3 supports rather than 42.5.
+Dividing each observation's confidence by its share of the projected coverage
+does not deblend the image: it loses 0.04 dB train and 0.02 dB held out, changes
+no known-truth albedo error, and is rejected. The excess depth has to be removed
+or moved as geometry; a scalar weight cannot turn dozens of layers into one
+surface.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a
    final surface. Two-view consensus halves the cloud and improves both open-sky
    and shadowed scores, yet three quarters of the retained surfels are still
-   never directly observed by the material fit. The next step is to optimize
-   one shared oriented particle cloud against all views, without introducing a
-   polygonal intermediate.
+   never directly observed by the material fit, and the overlap diagnostic
+   finds an order of magnitude more projected supports than on the truth
+   surface. The next step is to optimize one shared oriented particle cloud
+   against all views, without introducing a polygonal intermediate. Observation
+   weighting is now measured and is not a substitute for that optimization.
 2. **The radiance field itself.** The selected fresh Smooth-L1 foam reaches
    24.94 dB over all 37 every-eighth views at 128². Its density modes are still
    a much weaker geometry signal than its rendered colour, so a better colour
