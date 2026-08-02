@@ -255,8 +255,8 @@ fn main() {
     println!();
 
     println!(
-        "{:>10}{:>12}{:>10}{:>12}{:>10}{:>10}{:>10}",
-        "materials", "albedo err", "gauge", "light err", "psnr", "rough err", "lobe evid"
+        "{:>10}{:>12}{:>10}{:>12}{:>10}{:>10}{:>9}{:>10}",
+        "materials", "albedo err", "gauge", "light err", "psnr", "rough err", "f0 err", "lobe evid"
     );
     for count in args.materials.split(',') {
         let Ok(count) = count.trim().parse::<usize>() else {
@@ -294,20 +294,30 @@ fn main() {
             count.to_string()
         };
         let rough = train::inverse::truth::compare_roughness(&model, &fitted.scene.model);
+        let reflectance = train::inverse::truth::compare_reflectance(&model, &fitted.scene.model);
         println!(
-            "{label:>10}{:>11.1}%{:>10.2}{:>11.1}%{:>10.2}{:>9.2}{:>9.0}%",
+            "{label:>10}{:>11.1}%{:>10.2}{:>11.1}%{:>10.2}{:>10.2}{:>9.2}{:>9.0}%",
             100.0 * albedo.relative_rms,
             albedo.gauge[1],
             100.0 * light.relative_rms,
             summary.srgb_psnr,
             rough,
+            reflectance,
             100.0 * fitted.with_lobe_evidence
         );
 
         if count == 0 {
             println!(
-                "\n{:>8}{:>9}{:>22}{:>22}{:>12}{:>12}{:>11}",
-                "material", "surfels", "albedo", "recovered", "roughness", "recovered", "lobe"
+                "\n{:>8}{:>9}{:>22}{:>22}{:>22}{:>22}{:>10}{:>10}{:>7}",
+                "material",
+                "surfels",
+                "albedo",
+                "recovered",
+                "reflectance",
+                "recovered",
+                "rough",
+                "found",
+                "lobe"
             );
             for report in train::inverse::truth::per_material(
                 &model,
@@ -316,11 +326,13 @@ fn main() {
                 &observations,
             ) {
                 println!(
-                    "{:>8}{:>9}{:>22}{:>22}{:>12.2}{:>12.2}{:>10.0}%",
+                    "{:>8}{:>9}{:>22}{:>22}{:>22}{:>22}{:>10.2}{:>10.2}{:>6.0}%",
                     describe(&report.truth),
                     report.surfels,
                     rgb(report.truth.albedo),
                     rgb(report.albedo),
+                    rgb(report.truth.specular_f0),
+                    rgb(report.specular_f0),
                     report.truth.roughness,
                     report.roughness,
                     100.0 * report.lobe_share
@@ -344,8 +356,9 @@ fn main() {
         "\nalbedo err and light err are what survives a per-channel gauge, which is\n\
          assumed rather than recovered; gauge is that factor on the green channel.\n\
          psnr re-renders the photographs the same way the fit modelled them.\n\
-         rough err is the mean absolute roughness error; lobe evid is the share of\n\
-         materials seen from angles far enough apart for a lobe to be identifiable."
+         rough err and f0 err are mean absolute errors on their own [0, 1] scale;\n\
+         lobe evid is the share of materials seen from angles far enough apart for\n\
+         a lobe to be identifiable at all."
     );
     renderer.destroy();
 }

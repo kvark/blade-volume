@@ -267,28 +267,29 @@ pub fn compare_environment(
     compare_triples(&pairs)
 }
 
-/// Compare recovered reflectance at normal incidence.
+/// Mean absolute error in reflectance at normal incidence.
 ///
-/// F0 shares the albedo's gauge problem only partly: it is not traded against
-/// the light in the same way, because the lobe and the diffuse term scale
-/// together. It is compared through the same machinery for consistency, and the
-/// gauge it reports should be near one.
-pub fn compare_f0(
+/// Absolute rather than relative to the truth, which is what the albedo and the
+/// light get. Most surfaces in any scene are dielectrics sitting at 0.04, so a
+/// relative measure divides by almost nothing: the first version of this
+/// reported 221 % for a fit whose dielectrics came back at 0.08, which is a
+/// real error and not a catastrophic one. F0 lives on the same [0, 1] scale
+/// roughness does and reads the same way.
+pub fn compare_reflectance(
     truth: &vol::relight::RelightModel,
     recovered: &vol::relight::RelightModel,
-) -> Error {
-    let pairs: Vec<([f32; 3], [f32; 3])> = truth
-        .surfels
-        .iter()
-        .zip(&recovered.surfels)
-        .map(|(a, b)| {
-            (
-                truth.materials[a.material as usize].specular_f0,
-                recovered.materials[b.material as usize].specular_f0,
-            )
-        })
-        .collect();
-    compare_triples(&pairs)
+) -> f64 {
+    let mut error = 0.0f64;
+    let mut count = 0usize;
+    for (a, b) in truth.surfels.iter().zip(&recovered.surfels) {
+        let expected = truth.materials[a.material as usize].specular_f0;
+        let found = recovered.materials[b.material as usize].specular_f0;
+        for channel in 0..3 {
+            error += (found[channel] - expected[channel]).abs() as f64;
+            count += 1;
+        }
+    }
+    error / count.max(1) as f64
 }
 
 /// What came back for one of the materials the scene was built from.

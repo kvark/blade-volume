@@ -446,11 +446,6 @@ pub fn environment_directions(width: usize) -> Vec<glam::Vec3> {
     Kernel::new(width, width / 2).directions
 }
 
-/// The sky a fit of this width works against.
-pub fn environment_kernel(width: usize) -> Kernel {
-    Kernel::new(width, width / 2)
-}
-
 /// Direct shading for every surfel, computed rather than cached.
 ///
 /// The cached table in the fit covers only the surfels that were seen. A

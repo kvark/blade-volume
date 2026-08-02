@@ -75,36 +75,23 @@ pub struct TraceResult {
     pub last_point: u32,
     /// Parametric `t` at which traversal stopped.
     pub t_end: f32,
-    /// Expected distance along the ray at which the ray was absorbed, weighted
-    /// by the same per-segment contribution the colour is.
-    ///
-    /// This is where the surface is, as far as a density field has one. Divide
-    /// by `rgba.w` to get the mean over the part of the ray that was opaque;
-    /// left un-normalised here so a caller that wants the raw first moment,
-    /// or that has an alpha of zero, does not have to undo a division.
-    pub depth_moment: f32,
-    /// Distance at which half the ray's light had been absorbed.
-    ///
-    /// The median rather than the mean, and a better answer to "where is the
-    /// surface" for the same reason a median usually is: a density field
-    /// trained to reproduce images has long thin tails, and the mean sits out
-    /// in them. Two views of one wall agree on where its half-way point is and
-    /// disagree about where their tails end, so a cloud fused from means comes
-    /// out many sheets thick and one fused from medians does not.
-    ///
-    /// Zero when the ray never reached half absorption, which is also when
-    /// `rgba.w < 0.5` and the caller should be discarding it anyway.
-    pub depth_median: f32,
     /// Distance to the single segment that absorbed the most light, and how
-    /// much that was.
+    /// much of the ray that segment took.
     ///
-    /// The mode, and the only one of the three that can say "there is no
-    /// surface here". A field trained on photographs of a room is genuinely
-    /// foggy: every ray eventually reaches full absorption, so both the mean
-    /// and the median return a confident position in mid-air for a ray that
-    /// passed through haze. A low `peak_weight` is that ray admitting it never
-    /// met anything, and is the only signal available that distinguishes a
-    /// wall from a volume of dust.
+    /// Where the surface is, as far as a density field has one — and the mode
+    /// rather than the mean or the median, which were both tried and are both
+    /// worse. A field trained to reproduce photographs has long thin tails: two
+    /// views of one wall agree about the wall and disagree about where their
+    /// tails end, so a cloud fused from mean depths comes out many sheets
+    /// thick. Fusing modes instead took the share of surfels that were ever the
+    /// frontmost thing in any view from 13% to 75%.
+    ///
+    /// `peak_weight` is the part neither of the others has. A room's field is
+    /// genuinely foggy — every ray reaches full absorption eventually — so mean,
+    /// median and mode alike return a confident position in mid-air for a ray
+    /// that passed through haze and met nothing. A low peak is that ray
+    /// admitting it, and is the only available signal that tells a wall from a
+    /// volume of dust.
     pub depth_mode: f32,
     pub peak_weight: f32,
 }
@@ -944,8 +931,6 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
             steps: 0,
             last_point: settings.start_point,
             t_end: 0.0,
-            depth_moment: 0.0,
-            depth_median: 0.0,
             depth_mode: 0.0,
             peak_weight: 0.0,
         };
@@ -955,8 +940,6 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
     let mut t0 = 0.0f32;
     let mut transmittance = 1.0f32;
     let mut accum_rgb = glam::Vec3::ZERO;
-    let mut depth_moment = 0.0f32;
-    let mut depth_median = 0.0f32;
     let mut depth_mode = 0.0f32;
     let mut peak_weight = 0.0f32;
 
@@ -1031,17 +1014,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
                 // The middle of the segment, which is where a uniform-density
                 // cell puts its mass. Using the entry point instead biases
                 // every surface towards the camera by half a cell.
-                depth_moment += w * 0.5 * (segment_start + segment_end);
-                // Where the running absorption crosses one half, interpolated
-                // inside the segment that crosses it rather than snapped to a
-                // cell boundary.
-                let before = 1.0 - transmittance;
                 transmittance *= 1.0 - alpha;
-                let after = 1.0 - transmittance;
-                if depth_median == 0.0 && after >= 0.5 && after > before {
-                    let t = (0.5 - before) / (after - before);
-                    depth_median = segment_start + t * (segment_end - segment_start);
-                }
             }
         }
 
@@ -1066,8 +1039,6 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
         steps,
         last_point: current,
         t_end: t0,
-        depth_moment,
-        depth_median,
         depth_mode,
         peak_weight,
     }
