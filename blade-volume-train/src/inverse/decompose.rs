@@ -124,6 +124,43 @@ pub struct Observations {
     pub offsets: Vec<u32>,
 }
 
+/// How much of an observation pass assigned one pixel to more than one surfel.
+///
+/// Counts are summed over views: the same pixel coordinate in two photographs
+/// is two pixels here. A shared pixel is not automatically an error — the
+/// renderer deliberately blends overlapping discs on one surface — but every
+/// surfel currently receives the whole pixel radiance. This makes the amount
+/// of sharing important evidence before changing how observations are
+/// weighted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObservationDiagnostics {
+    /// Accepted `(surfel, view)` samples.
+    pub samples: usize,
+    /// Distinct `(pixel, view)` pairs carrying at least one sample.
+    pub pixels: usize,
+    /// Pixels carrying samples from two or more surfels.
+    pub shared_pixels: usize,
+    /// Samples that read one of those shared pixels.
+    pub samples_on_shared_pixels: usize,
+    /// Largest number of accepted surfels reading one pixel in one view.
+    pub max_samples_per_pixel: usize,
+    /// Samples whose pixel is covered by more than one visible disc footprint.
+    pub samples_with_multiple_supports: usize,
+    /// Sum of visible disc footprints over all sampled pixels.
+    pub support_count_sum: usize,
+    /// Samples whose selected pixel is not covered by even their own circular
+    /// footprint approximation.
+    pub samples_without_support: usize,
+    /// Largest number of visible disc footprints covering one sampled pixel.
+    pub max_supports_per_sample: usize,
+}
+
+impl ObservationDiagnostics {
+    pub fn mean_supports_per_sample(&self) -> f64 {
+        self.support_count_sum as f64 / self.samples.max(1) as f64
+    }
+}
+
 impl Observations {
     pub fn of(&self, surfel: usize) -> &[Sample] {
         let begin = self.offsets[surfel] as usize;
@@ -200,10 +237,60 @@ pub fn observe(
     views: &[usize],
     min_facing: f32,
 ) -> Observations {
+    observe_impl(model, capture, views, min_facing, false).0
+}
+
+/// Gather observations and report how often their projected centres collide.
+pub fn observe_with_diagnostics(
+    model: &vol::relight::RelightModel,
+    capture: &capture::Capture,
+    views: &[usize],
+    min_facing: f32,
+) -> (Observations, ObservationDiagnostics) {
+    observe_impl(model, capture, views, min_facing, true)
+}
+
+fn observe_impl(
+    model: &vol::relight::RelightModel,
+    capture: &capture::Capture,
+    views: &[usize],
+    min_facing: f32,
+    collect_diagnostics: bool,
+) -> (Observations, ObservationDiagnostics) {
+    struct Projected {
+        surfel: usize,
+        pixel: [f32; 2],
+        distance: f32,
+        radius: f32,
+    }
+
+    struct Candidate {
+        surfel: usize,
+        pixel: usize,
+        sample: Sample,
+    }
+
     let count = model.surfels.len();
     let (width, height) = (capture.width, capture.height);
     let mut depth = vec![f32::INFINITY; width * height];
+    let mut depth_radius = vec![0.0f32; width * height];
+    let mut claims = if collect_diagnostics {
+        vec![0usize; width * height]
+    } else {
+        Vec::new()
+    };
+    let mut sampled = if collect_diagnostics {
+        vec![false; width * height]
+    } else {
+        Vec::new()
+    };
+    let mut supports = if collect_diagnostics {
+        vec![0usize; width * height]
+    } else {
+        Vec::new()
+    };
     let mut per_surfel: Vec<Vec<Sample>> = vec![Vec::new(); count];
+    let mut diagnostics = ObservationDiagnostics::default();
 
     for &view_index in views {
         let view = &capture.views[view_index];
@@ -211,47 +298,118 @@ pub fn observe(
         // Pixels per world unit at unit distance, for the disc's footprint.
         let focal = 0.5 * height as f32 / (0.5 * camera.fov[1]).tan();
         depth.fill(f32::INFINITY);
-        for surfel in &model.surfels {
+        depth_radius.fill(0.0);
+        let mut projected = Vec::with_capacity(count);
+        for (index, surfel) in model.surfels.iter().enumerate() {
             let center = glam::Vec3::from(surfel.center);
             let Some((pixel, distance)) = capture::project(camera, width, height, center) else {
                 continue;
             };
-            splat(
+            let radius = (surfel.radius * focal / distance).clamp(0.5, 64.0);
+            splat_depth(
                 &mut depth,
+                &mut depth_radius,
                 width,
                 height,
                 pixel,
-                (surfel.radius * focal / distance).clamp(0.5, 64.0),
+                radius,
                 distance,
+                surfel.radius,
             );
+            projected.push(Projected {
+                surfel: index,
+                pixel,
+                distance,
+                radius,
+            });
         }
 
-        for (index, surfel) in model.surfels.iter().enumerate() {
+        let mut candidates = Vec::new();
+        for projection in &projected {
+            let index = projection.surfel;
+            let surfel = &model.surfels[index];
             let center = glam::Vec3::from(surfel.center);
             let normal = glam::Vec3::from(surfel.normal);
-            let Some((pixel, distance)) = capture::project(camera, width, height, center) else {
-                continue;
-            };
             let towards = (glam::Vec3::from(camera.cam_position) - center).normalize_or_zero();
             let facing = normal.dot(towards);
             if facing < min_facing {
                 continue;
             }
-            let x = pixel[0] as usize;
-            let y = pixel[1] as usize;
-            if pixel[0] < 0.0 || pixel[1] < 0.0 || x >= width || y >= height {
+            if projection.pixel[0] < 0.0 || projection.pixel[1] < 0.0 {
+                continue;
+            }
+            let x = projection.pixel[0] as usize;
+            let y = projection.pixel[1] as usize;
+            if x >= width || y >= height {
                 continue;
             }
             // The disc has depth of its own, so being behind the winner by
             // less than its radius still counts as being the winner.
-            if distance > depth[y * width + x] + surfel.radius {
+            if projection.distance > depth[y * width + x] + surfel.radius {
                 continue;
             }
-            per_surfel[index].push(Sample {
-                radiance: view.pixels[y * width + x],
-                towards,
-                facing,
+            let pixel = y * width + x;
+            if collect_diagnostics {
+                claims[pixel] += 1;
+                sampled[pixel] = true;
+            }
+            candidates.push(Candidate {
+                surfel: index,
+                pixel,
+                sample: Sample {
+                    radiance: view.pixels[pixel],
+                    towards,
+                    facing,
+                },
             });
+        }
+
+        if collect_diagnostics {
+            diagnostics.samples += candidates.len();
+            for &claim_count in &claims {
+                if claim_count == 0 {
+                    continue;
+                }
+                diagnostics.pixels += 1;
+                diagnostics.max_samples_per_pixel =
+                    diagnostics.max_samples_per_pixel.max(claim_count);
+                if claim_count > 1 {
+                    diagnostics.shared_pixels += 1;
+                    diagnostics.samples_on_shared_pixels += claim_count;
+                }
+            }
+            for projection in &projected {
+                splat_supports(
+                    &mut supports,
+                    &sampled,
+                    &depth,
+                    &depth_radius,
+                    width,
+                    height,
+                    projection.pixel,
+                    projection.radius,
+                    projection.distance,
+                );
+            }
+            for candidate in &candidates {
+                let support_count = supports[candidate.pixel];
+                diagnostics.support_count_sum += support_count;
+                diagnostics.max_supports_per_sample =
+                    diagnostics.max_supports_per_sample.max(support_count);
+                if support_count == 0 {
+                    diagnostics.samples_without_support += 1;
+                } else if support_count > 1 {
+                    diagnostics.samples_with_multiple_supports += 1;
+                }
+            }
+        }
+        for candidate in candidates {
+            per_surfel[candidate.surfel].push(candidate.sample);
+            if collect_diagnostics {
+                claims[candidate.pixel] = 0;
+                sampled[candidate.pixel] = false;
+                supports[candidate.pixel] = 0;
+            }
         }
     }
 
@@ -262,16 +420,18 @@ pub fn observe(
         samples.extend_from_slice(list);
         offsets.push(samples.len() as u32);
     }
-    Observations { samples, offsets }
+    (Observations { samples, offsets }, diagnostics)
 }
 
-fn splat(
+fn splat_depth(
     depth: &mut [f32],
+    depth_radius: &mut [f32],
     width: usize,
     height: usize,
     pixel: [f32; 2],
     radius: f32,
     distance: f32,
+    world_radius: f32,
 ) {
     let min_x = ((pixel[0] - radius).floor() as isize).max(0) as usize;
     let min_y = ((pixel[1] - radius).floor() as isize).max(0) as usize;
@@ -291,9 +451,50 @@ fn splat(
             let slot = &mut depth[y * width + x];
             if distance < *slot {
                 *slot = distance;
+                depth_radius[y * width + x] = world_radius;
             }
         }
     }
+}
+
+fn splat_supports(
+    supports: &mut [usize],
+    sampled: &[bool],
+    depth: &[f32],
+    depth_radius: &[f32],
+    width: usize,
+    height: usize,
+    pixel: [f32; 2],
+    radius: f32,
+    distance: f32,
+) {
+    let min_x = ((pixel[0] - radius).floor() as isize).max(0) as usize;
+    let min_y = ((pixel[1] - radius).floor() as isize).max(0) as usize;
+    let max_x = ((pixel[0] + radius).ceil() as isize).min(width as isize - 1);
+    let max_y = ((pixel[1] + radius).ceil() as isize).min(height as isize - 1);
+    if max_x < 0 || max_y < 0 {
+        return;
+    }
+    for y in min_y..=max_y as usize {
+        for x in min_x..=max_x as usize {
+            let index = y * width + x;
+            if !sampled[index]
+                || distance > depth[index] + vol::relight::SURFACE_BAND * depth_radius[index]
+            {
+                continue;
+            }
+            let coverage = projected_coverage(pixel, radius, x, y);
+            if coverage > 0.0 {
+                supports[index] += 1;
+            }
+        }
+    }
+}
+
+fn projected_coverage(pixel: [f32; 2], radius: f32, x: usize, y: usize) -> f32 {
+    let dx = x as f32 + 0.5 - pixel[0];
+    let dy = y as f32 + 0.5 - pixel[1];
+    vol::relight::coverage((dx * dx + dy * dy) / (radius * radius))
 }
 
 // ------------------------------------------------------------------ materials
@@ -1453,6 +1654,56 @@ mod tests {
             samples,
             offsets: (0..=mean.len() as u32).collect(),
         }
+    }
+
+    #[test]
+    fn observation_diagnostics_count_surfels_reading_the_same_pixel() {
+        let surfel = |x: f32| vol::relight::Surfel {
+            center: [x, 0.0, 2.0],
+            radius: 0.2,
+            normal: [0.0, 0.0, -1.0],
+            material: 0,
+        };
+        let model = vol::relight::RelightModel {
+            surfels: vec![surfel(0.0), surfel(0.01)],
+            materials: vec![vol::relight::Material::default()],
+        };
+        let capture = capture::Capture {
+            width: 8,
+            height: 8,
+            views: vec![capture::View {
+                name: "shared".to_string(),
+                camera: vol::CameraParams {
+                    cam_position: [0.0; 3],
+                    depth: 10.0,
+                    cam_orientation: glam::Quat::IDENTITY.to_array(),
+                    fov: [1.0; 2],
+                    principal: [0.0; 2],
+                },
+                pixels: vec![[0.2, 0.3, 0.4]; 64],
+            }],
+        };
+
+        let (observations, diagnostics) = observe_with_diagnostics(&model, &capture, &[0], 0.15);
+        let plain = observe(&model, &capture, &[0], 0.15);
+
+        assert_eq!(plain.offsets, observations.offsets);
+        assert_eq!(plain.samples.len(), observations.samples.len());
+        for (fast, measured) in plain.samples.iter().zip(&observations.samples) {
+            assert_eq!(fast.radiance, measured.radiance);
+            assert_eq!(fast.towards, measured.towards);
+            assert_eq!(fast.facing, measured.facing);
+        }
+        assert_eq!(observations.seen(), 2);
+        assert_eq!(diagnostics.samples, 2);
+        assert_eq!(diagnostics.pixels, 1);
+        assert_eq!(diagnostics.shared_pixels, 1);
+        assert_eq!(diagnostics.samples_on_shared_pixels, 2);
+        assert_eq!(diagnostics.max_samples_per_pixel, 2);
+        assert_eq!(diagnostics.samples_with_multiple_supports, 2);
+        assert_eq!(diagnostics.support_count_sum, 4);
+        assert_eq!(diagnostics.samples_without_support, 0);
+        assert_eq!(diagnostics.max_supports_per_sample, 2);
     }
 
     /// A sphere of surfels, one material, under a light from one side.

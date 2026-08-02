@@ -106,6 +106,10 @@ struct Args {
     #[argh(switch)]
     no_shadows: bool,
 
+    /// measure how many visible disc footprints overlap each observation
+    #[argh(switch)]
+    observation_diagnostics: bool,
+
     /// write the reconstructed scene here
     #[argh(option)]
     output: Option<String>,
@@ -186,18 +190,49 @@ fn main() {
 
     // ---------------------------------------------------- material and light
     let started = std::time::Instant::now();
-    let observations = train::inverse::decompose::observe(
-        &geometry,
-        &capture,
-        &train_views,
-        train::inverse::decompose::FitOptions::default().min_facing,
-    );
+    let (observations, observation_diagnostics) = if args.observation_diagnostics {
+        let (observations, diagnostics) = train::inverse::decompose::observe_with_diagnostics(
+            &geometry,
+            &capture,
+            &train_views,
+            train::inverse::decompose::FitOptions::default().min_facing,
+        );
+        (observations, Some(diagnostics))
+    } else {
+        (
+            train::inverse::decompose::observe(
+                &geometry,
+                &capture,
+                &train_views,
+                train::inverse::decompose::FitOptions::default().min_facing,
+            ),
+            None,
+        )
+    };
     println!(
         "observed: {} of {} surfels seen by at least one training view, in {:.1} s",
         observations.seen(),
         geometry.surfels.len(),
         started.elapsed().as_secs_f64()
     );
+    if let Some(observation_diagnostics) = observation_diagnostics {
+        let shared = 100.0 * observation_diagnostics.samples_on_shared_pixels as f64
+            / observation_diagnostics.samples.max(1) as f64;
+        let blended = 100.0 * observation_diagnostics.samples_with_multiple_supports as f64
+            / observation_diagnostics.samples.max(1) as f64;
+        println!(
+            "observed: {} samples over {} pixels, {shared:.1}% share a pixel (at most {} surfels)",
+            observation_diagnostics.samples,
+            observation_diagnostics.pixels,
+            observation_diagnostics.max_samples_per_pixel,
+        );
+        println!(
+            "observed: {blended:.1}% sample pixels blend disc footprints (mean {:.1}, at most {} supports; {} unsupported)",
+            observation_diagnostics.mean_supports_per_sample(),
+            observation_diagnostics.max_supports_per_sample,
+            observation_diagnostics.samples_without_support,
+        );
+    }
 
     let shadows = if args.no_shadows {
         None

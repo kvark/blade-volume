@@ -73,6 +73,10 @@ struct Args {
     #[argh(switch)]
     no_shadows: bool,
 
+    /// measure how many visible disc footprints overlap each observation
+    #[argh(switch)]
+    observation_diagnostics: bool,
+
     /// hand the real light to the fit instead of recovering it, which
     /// separates a material solver that does not work from one that was given
     /// a sky too coarse to fit a lobe against
@@ -189,17 +193,45 @@ fn main() {
     }
 
     let all: Vec<usize> = (0..capture.views.len()).collect();
-    let observations = train::inverse::decompose::observe(
-        &model,
-        &capture,
-        &all,
-        train::inverse::decompose::FitOptions::default().min_facing,
-    );
+    let (observations, diagnostics) = if args.observation_diagnostics {
+        let (observations, diagnostics) = train::inverse::decompose::observe_with_diagnostics(
+            &model,
+            &capture,
+            &all,
+            train::inverse::decompose::FitOptions::default().min_facing,
+        );
+        (observations, Some(diagnostics))
+    } else {
+        (
+            train::inverse::decompose::observe(
+                &model,
+                &capture,
+                &all,
+                train::inverse::decompose::FitOptions::default().min_facing,
+            ),
+            None,
+        )
+    };
     println!(
-        "{} of {} surfels were seen by at least one view\n",
+        "{} of {} surfels were seen by at least one view",
         observations.seen(),
         model.surfels.len()
     );
+    if let Some(diagnostics) = diagnostics {
+        let shared =
+            100.0 * diagnostics.samples_on_shared_pixels as f64 / diagnostics.samples.max(1) as f64;
+        let blended = 100.0 * diagnostics.samples_with_multiple_supports as f64
+            / diagnostics.samples.max(1) as f64;
+        println!(
+            "{} samples over {} pixels; {shared:.1}% share centres and {blended:.1}% blend footprints (mean {:.1}, max {}; {} unsupported)",
+            diagnostics.samples,
+            diagnostics.pixels,
+            diagnostics.mean_supports_per_sample(),
+            diagnostics.max_supports_per_sample,
+            diagnostics.samples_without_support,
+        );
+    }
+    println!();
 
     // Computed once: it depends on the geometry and the sky's resolution, and
     // on neither the materials nor the light, so recomputing it per sweep
