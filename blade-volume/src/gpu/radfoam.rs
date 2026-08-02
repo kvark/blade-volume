@@ -127,6 +127,10 @@ impl RadFoamGpuCloud {
         let points_size = (num_points * mem::size_of::<[f32; 4]>()) as u64;
         let attrs_size = (num_points * attr_dim * mem::size_of::<f32>()) as u64;
         let adj_size = (num_adjacency * mem::size_of::<u32>()) as u64;
+        // An isolated PowerFoam site has a valid empty neighbor array, but
+        // Vulkan does not have zero-sized buffers. Keep one unread dummy word
+        // while retaining the logical edge count in `num_adjacency`.
+        let adj_buffer_size = adj_size.max(mem::size_of::<u32>() as u64);
         let adj_off_size = (adjacency.offsets.len() * mem::size_of::<u32>()) as u64;
         // The mutable tree's fixed leaf buckets panic on point clouds with
         // many repeated coordinates along one axis (regular grids, planes,
@@ -147,7 +151,7 @@ impl RadFoamGpuCloud {
         });
         let point_adjacency_buf = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-adjacency",
-            size: adj_size,
+            size: adj_buffer_size,
             memory: gpu::Memory::Device,
         });
         let point_adjacency_offsets_buf = context.create_buffer(gpu::BufferDesc {
@@ -169,7 +173,7 @@ impl RadFoamGpuCloud {
         });
         let adjacency_stage = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-adjacency-upload",
-            size: adj_size,
+            size: adj_buffer_size,
             memory: gpu::Memory::Upload,
         });
         let adjacency_offsets_stage = context.create_buffer(gpu::BufferDesc {

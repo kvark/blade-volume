@@ -22,6 +22,7 @@ struct Target {
     texture: gpu::Texture,
     view: gpu::TextureView,
     readback: gpu::Buffer,
+    initialized: bool,
 }
 
 impl Target {
@@ -59,6 +60,7 @@ impl Target {
             texture,
             view,
             readback,
+            initialized: false,
         }
     }
 
@@ -140,9 +142,13 @@ fn read_pixel(
     renderer: &mut view::SceneRenderer,
     context: &gpu::Context,
     encoder: &mut gpu::CommandEncoder,
-    target: &Target,
+    target: &mut Target,
 ) -> glam::Vec4 {
     encoder.start();
+    if !target.initialized {
+        encoder.init_texture(target.texture);
+        target.initialized = true;
+    }
     renderer.render(
         encoder,
         target.view,
@@ -210,7 +216,7 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
     renderer.background_rgb = BACKGROUND.to_array();
     let color = glam::Vec3::new(0.8, 0.25, 0.1);
     let object = renderer.add_radfoam(&powerfoam_model(color), &context, &mut encoder);
-    let target = Target::new(&context);
+    let mut target = Target::new(&context);
 
     renderer.scene.set_transform(
         object,
@@ -219,7 +225,7 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
             ..vol::Transform::identity()
         },
     );
-    let identity = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let identity = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     assert_close(
         identity.truncate(),
         composite(color, 1.0 - (-1.0_f32).exp()),
@@ -235,7 +241,7 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
             ..vol::Transform::identity()
         },
     );
-    let uniform_scale = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let uniform_scale = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     assert_close(
         uniform_scale.truncate(),
         composite(color, 1.0 - (-2.0_f32).exp()),
@@ -248,7 +254,7 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
         ..vol::Transform::identity()
     };
     renderer.scene.set_transform(object, elongated);
-    let nonuniform_scale = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let nonuniform_scale = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     let interval = (1.0_f32 - (0.35_f32 / 1.0).powi(2)).sqrt();
     assert_close(
         nonuniform_scale.truncate(),
@@ -263,7 +269,7 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
             ..elongated
         },
     );
-    let rotated_miss = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let rotated_miss = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     assert_close(rotated_miss.truncate(), BACKGROUND, 2.0e-3);
 
     renderer.scene.set_transform(
@@ -273,7 +279,7 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
             ..vol::Transform::identity()
         },
     );
-    let translated_miss = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let translated_miss = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     assert_close(translated_miss.truncate(), BACKGROUND, 2.0e-3);
 
     target.destroy(&context);
@@ -310,12 +316,12 @@ fn gaussian_scene_uses_independent_clouds_and_transforms() {
         blue_object,
         vol::Transform::from_position(glam::Vec3::new(0.0, 0.0, 4.0)),
     );
-    let target = Target::new(&context);
-    let layered = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let mut target = Target::new(&context);
+    let layered = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     renderer.set_debug_mode(view::SceneDebugMode::Bounds);
-    let bounds_debug = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let bounds_debug = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     renderer.set_debug_mode(view::SceneDebugMode::ObjectType);
-    let type_debug = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let type_debug = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     renderer.set_debug_mode(view::SceneDebugMode::Off);
     assert_close(bounds_debug.truncate(), glam::Vec3::X, 2.0e-3);
     assert_close(
@@ -357,7 +363,7 @@ fn gaussian_scene_uses_independent_clouds_and_transforms() {
     );
     let elongated = vol::Transform::from_position(glam::Vec3::new(0.25, 0.0, 3.0));
     renderer.scene.set_transform(anisotropic_object, elongated);
-    let unrotated = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let unrotated = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     assert!(
         (unrotated.truncate() - BACKGROUND).abs().max_element() > 0.05,
         "unrotated anisotropic Gaussian should cover the center ray: {unrotated:?}"
@@ -370,7 +376,7 @@ fn gaussian_scene_uses_independent_clouds_and_transforms() {
             ..elongated
         },
     );
-    let rotated = read_pixel(&mut renderer, &context, &mut encoder, &target);
+    let rotated = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     assert_close(rotated.truncate(), BACKGROUND, 2.0e-3);
 
     target.destroy(&context);

@@ -152,6 +152,7 @@ fn gaussian_gpu_orders_overlapping_scales_like_cpu_oracle() {
     };
 
     encoder.start();
+    encoder.init_texture(output);
     let mut pass = encoder.render(
         "gaussian-oracle-test",
         gpu::RenderTargetSet {
