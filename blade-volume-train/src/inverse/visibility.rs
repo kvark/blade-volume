@@ -389,6 +389,7 @@ mod tests {
             }
         }
         vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Compact,
             surfels,
             materials: vec![vol::relight::Material::default()],
         }

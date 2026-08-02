@@ -17,8 +17,8 @@
 //! with `E` nine coefficients of diffuse irradiance and the specular term the
 //! usual split sum. Three things about it are measured rather than chosen:
 //!
-//! - **Normals are exact.** A surfel is a disc, so its normal is a property of
-//!   the primitive rather than something inferred from a covariance. Five
+//! - **Normals are explicit.** A surface particle carries its normal rather
+//!   than asking the renderer to infer one from a covariance. Five
 //!   degrees of normal error costs 1.3 dB and ten costs 3.6, which is more than
 //!   any other approximation here.
 //! - **No spherical harmonics.** With a material and a light, view dependence
@@ -42,7 +42,25 @@ use std::mem;
 /// smudge and the highlight it should have produced is lost.
 pub const SPECULAR_LEVELS: u32 = 8;
 
-/// An oriented disc of surface.
+/// The finite footprint carried by each relightable surface particle.
+///
+/// Both variants are point-cloud primitives. `Compact` is the historical
+/// flat-core, smooth-rim kernel. `Gaussian` is an isotropic surface Gaussian
+/// whose stored radius is three standard deviations; it is truncated there so
+/// the acceleration structure has finite support.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ParticleKernel {
+    #[default]
+    Compact = 0,
+    Gaussian = 1,
+}
+
+/// An oriented surface particle.
+///
+/// Its centre and normal define the tangent plane. [`RelightModel::kernel`]
+/// decides whether `radius` describes a compact disc or the finite support of
+/// a surface Gaussian.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Surfel {
@@ -78,9 +96,10 @@ impl Default for Material {
     }
 }
 
-/// A set of surfels and the materials they refer to.
+/// A set of relightable surface particles and the materials they refer to.
 #[derive(Clone, Debug, Default)]
 pub struct RelightModel {
+    pub kernel: ParticleKernel,
     pub surfels: Vec<Surfel>,
     pub materials: Vec<Material>,
 }
@@ -672,6 +691,25 @@ pub fn coverage(normalized_radius_squared: f32) -> f32 {
     1.0 - t * t * (3.0 - 2.0 * t)
 }
 
+/// Coverage of one relightable particle at a normalized squared radius.
+///
+/// The Gaussian convention matches the volumetric Gaussian backend: response
+/// is `exp(-0.5 r²)`. Here the caller measures distance in support radii, and
+/// one support radius is three standard deviations, hence the factor of nine.
+/// Values outside that support are exactly zero.
+pub fn particle_coverage(kernel: ParticleKernel, normalized_radius_squared: f32) -> f32 {
+    match kernel {
+        ParticleKernel::Compact => coverage(normalized_radius_squared),
+        ParticleKernel::Gaussian => {
+            if normalized_radius_squared > 1.0 {
+                0.0
+            } else {
+                (-4.5 * normalized_radius_squared).exp()
+            }
+        }
+    }
+}
+
 /// The prefiltered environment in one direction, at one roughness.
 ///
 /// The first half of the split sum, fetched the way the renderer's sampler
@@ -870,8 +908,23 @@ mod tests {
     }
 
     #[test]
+    fn particle_kernels_have_finite_support_and_distinct_profiles() {
+        for kernel in [ParticleKernel::Compact, ParticleKernel::Gaussian] {
+            assert_eq!(particle_coverage(kernel, 0.0), 1.0);
+            assert_eq!(particle_coverage(kernel, 1.01), 0.0);
+        }
+        let half_radius = 0.25;
+        let compact = particle_coverage(ParticleKernel::Compact, half_radius);
+        let gaussian = particle_coverage(ParticleKernel::Gaussian, half_radius);
+        assert_eq!(compact, 1.0);
+        assert!((gaussian - (-1.125f32).exp()).abs() < 1.0e-6);
+        assert!(gaussian < compact);
+    }
+
+    #[test]
     fn validation_catches_a_dangling_material() {
         let model = RelightModel {
+            kernel: ParticleKernel::Compact,
             surfels: vec![Surfel {
                 center: [0.0; 3],
                 radius: 1.0,
@@ -886,6 +939,7 @@ mod tests {
     #[test]
     fn validation_catches_an_unnormalised_normal() {
         let model = RelightModel {
+            kernel: ParticleKernel::Compact,
             surfels: vec![Surfel {
                 center: [0.0; 3],
                 radius: 1.0,

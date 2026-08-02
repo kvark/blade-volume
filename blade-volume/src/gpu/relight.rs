@@ -62,7 +62,8 @@ struct RelightParams {
     show_environment: u32,
     env_width: u32,
     env_height: u32,
-    pad: [u32; 3],
+    kernel: u32,
+    pad: [u32; 2],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -397,7 +398,8 @@ impl RelightTracer {
                 show_environment: settings.show_environment as u32,
                 env_width: environment.width as u32,
                 env_height: environment.height as u32,
-                pad: [0; 3],
+                kernel: model.kernel as u32,
+                pad: [0; 2],
             },
             mesh_buf,
             surfel_buf,

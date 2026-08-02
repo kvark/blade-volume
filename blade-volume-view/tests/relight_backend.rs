@@ -146,6 +146,7 @@ fn camera() -> vol::CameraParams {
 /// One disc facing the camera, filling much of the frame.
 fn model() -> vol::relight::RelightModel {
     vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
         surfels: vec![vol::relight::Surfel {
             center: [0.0; 3],
             radius: 1.5,
@@ -255,6 +256,7 @@ fn the_frame_is_the_right_way_up() {
     };
     // One small disc above the axis the camera looks along, and nothing else.
     let model = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
         surfels: vec![vol::relight::Surfel {
             center: [0.0, 0.7, 0.0],
             radius: 0.35,

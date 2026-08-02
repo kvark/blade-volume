@@ -98,7 +98,11 @@ fn scene(tessellation: usize) -> vol::relight::RelightModel {
             ));
         }
     }
-    vol::relight::RelightModel { surfels, materials }
+    vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
+        surfels,
+        materials,
+    }
 }
 
 fn sun(azimuth: f32, elevation: f32, color: [f32; 3], sky: [f32; 3]) -> vol::relight::Environment {

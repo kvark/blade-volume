@@ -126,6 +126,7 @@ pub fn studio(spacing: f32) -> vol::relight::RelightModel {
     }
 
     vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
         surfels,
         materials: MATERIALS
             .iter()

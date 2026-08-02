@@ -581,6 +581,7 @@ pub fn relight_model_from_gltf(
     }
 
     let model = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
         surfels,
         materials: converted,
     };

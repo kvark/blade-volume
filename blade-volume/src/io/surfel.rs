@@ -14,7 +14,7 @@
 //! ```text
 //! magic          8 bytes  "BVSURFEL"
 //! version        u32      1
-//! flags          u32      reserved, zero
+//! flags          u32      bit 0: Gaussian particle kernel
 //! surfel_count   u32
 //! material_count u32
 //! surfels        32 bytes each: centre, radius, normal, material index
@@ -35,6 +35,8 @@ const MAGIC: &[u8; 8] = b"BVSURFEL";
 const VERSION: u32 = 1;
 const HEADER_BYTES: usize = 24;
 const RECORD_BYTES: usize = 32;
+const FLAG_GAUSSIAN: u32 = 1 << 0;
+const KNOWN_FLAGS: u32 = FLAG_GAUSSIAN;
 
 /// The record layout is the in-memory layout, which is what makes reading one
 /// of these a copy rather than a decode. If a struct ever gains a field, the
@@ -98,7 +100,11 @@ pub fn try_save(path: &path::Path, model: &relight::RelightModel) -> Result<(), 
     let mut header = Vec::with_capacity(HEADER_BYTES);
     header.extend_from_slice(MAGIC);
     header.extend_from_slice(&VERSION.to_le_bytes());
-    header.extend_from_slice(&0u32.to_le_bytes());
+    let flags = match model.kernel {
+        relight::ParticleKernel::Compact => 0,
+        relight::ParticleKernel::Gaussian => FLAG_GAUSSIAN,
+    };
+    header.extend_from_slice(&flags.to_le_bytes());
     header.extend_from_slice(&(model.surfels.len() as u32).to_le_bytes());
     header.extend_from_slice(&(model.materials.len() as u32).to_le_bytes());
 
@@ -152,6 +158,19 @@ pub fn try_load(path: &path::Path) -> Result<relight::RelightModel, LoadError> {
             path.display()
         )));
     }
+    let flags = read_u32(&header, 12);
+    if flags & !KNOWN_FLAGS != 0 {
+        return Err(LoadError::invalid(format!(
+            "{} has unknown surfel flags {:#x}",
+            path.display(),
+            flags & !KNOWN_FLAGS
+        )));
+    }
+    let kernel = if flags & FLAG_GAUSSIAN != 0 {
+        relight::ParticleKernel::Gaussian
+    } else {
+        relight::ParticleKernel::Compact
+    };
     let surfel_count = read_u32(&header, 16);
     let material_count = read_u32(&header, 20);
     if surfel_count > MAX_RECORDS || material_count > MAX_RECORDS {
@@ -181,7 +200,11 @@ pub fn try_load(path: &path::Path) -> Result<relight::RelightModel, LoadError> {
     to_file_order(&mut surfels);
     to_file_order(&mut materials);
 
-    let model = relight::RelightModel { surfels, materials };
+    let model = relight::RelightModel {
+        kernel,
+        surfels,
+        materials,
+    };
     model.validate().map_err(LoadError::invalid)?;
     Ok(model)
 }
@@ -299,6 +322,7 @@ mod tests {
 
     fn model() -> relight::RelightModel {
         relight::RelightModel {
+            kernel: relight::ParticleKernel::Gaussian,
             surfels: vec![
                 relight::Surfel {
                     center: [1.0, -2.0, 3.5],
@@ -341,6 +365,7 @@ mod tests {
         // Exact rather than approximate: the format stores the bits it was
         // given, so anything less would be hiding a conversion.
         assert_eq!(loaded.surfels.len(), original.surfels.len());
+        assert_eq!(loaded.kernel, original.kernel);
         for (a, b) in loaded.surfels.iter().zip(&original.surfels) {
             assert_eq!(a.center, b.center);
             assert_eq!(a.radius, b.radius);
@@ -352,6 +377,19 @@ mod tests {
             assert_eq!(a.roughness, b.roughness);
             assert_eq!(a.specular_f0, b.specular_f0);
         }
+    }
+
+    #[test]
+    fn flag_zero_remains_the_legacy_compact_kernel() {
+        let path = temporary("compact");
+        let mut original = model();
+        original.kernel = relight::ParticleKernel::Compact;
+        try_save(&path, &original).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(read_u32(&bytes, 12), 0);
+        let loaded = try_load(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(loaded.kernel, relight::ParticleKernel::Compact);
     }
 
     #[test]
@@ -398,6 +436,21 @@ mod tests {
         fs::remove_file(&path).unwrap();
         assert!(
             matches!(error, LoadError::InvalidData(ref message) if message.contains("version")),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unknown_flags_are_refused_instead_of_ignored() {
+        let path = temporary("flags");
+        try_save(&path, &model()).unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[12..16].copy_from_slice(&(1u32 << 31).to_le_bytes());
+        fs::write(&path, &bytes).unwrap();
+        let error = try_load(&path).unwrap_err();
+        fs::remove_file(&path).unwrap();
+        assert!(
+            matches!(error, LoadError::InvalidData(ref message) if message.contains("flags")),
             "{error}"
         );
     }

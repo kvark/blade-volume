@@ -16,9 +16,11 @@ rendered. Both link `blade-volume` for shared types and shaders.
 ## Non-goals
 
 - No Python, no PyTorch, no Burn.
-- No new representations beyond what we render. The maintained trainer
-  optimises RadFoam or bounded PowerFoam. Gaussian import/rendering exists, but
-  Gaussian reconstruction does not; it remains a later go/no-go decision.
+- No new representations beyond what we render. The maintained radiance-field
+  trainer optimises RadFoam or bounded PowerFoam. Reconstruction now emits
+  finite surface-Gaussian particles for the relightable path; direct training
+  of volumetric 3DGS transforms is still not implemented. See
+  [GAUSSIAN_RECONSTRUCTION_PLAN.md](GAUSSIAN_RECONSTRUCTION_PLAN.md).
 - No on-device capture code initially — phone capture stays manual (record + transfer).
   We'll automate that later if and only if the rest of the pipeline is solid.
 

@@ -930,6 +930,63 @@ quality = "Room 14.59/14.17 dB train/held-out; Bonsai 14.97/14.07 dB, unchanged"
 full_workspace_test_peak_memory_bytes = 1825452032
 full_workspace_test_memory_events = 0
 
+# The relightable cloud historically used a flat-core compact disc footprint.
+# A finite surface Gaussian uses the same centre, normal, material and support
+# radius, changing only the response inside that support. Radius is three
+# standard deviations. These are same-binary A/B runs at the selected 1.7-cell
+# support; the compact artifacts reproduce the prior hashes exactly.
+[surface_particles.gaussian_kernel]
+date = "2026-08-02"
+support_sigmas = 3.0
+support_radius_cells = 1.7
+particle_counts = "unchanged"
+default = "Gaussian; --compact-kernel selects the legacy control"
+gpu_cpu_worst_channel_error = 0.0057
+gpu_cpu_covered_pixels = 786
+memory_events = 0
+full_workspace_test_peak_memory_bytes = 4625911808
+
+[surface_particles.gaussian_kernel.bonsai]
+particles = 28316
+compact_train_psnr = 14.97
+gaussian_train_psnr = 15.81
+compact_test_psnr = 14.07
+gaussian_test_psnr = 14.50
+compact_worst_test_psnr = 11.67
+gaussian_worst_test_psnr = 11.68
+compact_test_coverage = 0.960
+gaussian_test_coverage = 0.922
+compact_test_psnr_where_hit = 14.62
+gaussian_test_psnr_where_hit = 15.54
+compact_peak_memory_bytes = 187691008
+gaussian_peak_memory_bytes = 151834624
+compact_artifact_sha256 = "bfef33e76154436ea6cc5bf0efee340e566241287f32f8c41d9fe39b035b47c3"
+gaussian_artifact = "target/audit-runs/kernel-ab-bonsai-gaussian/scene.rply"
+gaussian_artifact_sha256 = "b90e0ddf63e115d271a0b0e8aee07d54568b11be791d4b3a31da05038b850513"
+
+[surface_particles.gaussian_kernel.room]
+particles = 29658
+compact_train_psnr = 14.59
+gaussian_train_psnr = 14.91
+compact_test_psnr = 14.17
+gaussian_test_psnr = 14.37
+compact_worst_test_psnr = 13.08
+gaussian_worst_test_psnr = 13.57
+compact_test_coverage = 0.979
+gaussian_test_coverage = 0.936
+compact_test_psnr_where_hit = 14.61
+gaussian_test_psnr_where_hit = 15.11
+compact_peak_memory_bytes = 310689792
+gaussian_peak_memory_bytes = 292061184
+compact_artifact_sha256 = "37342d5565ab66d77dd69dcc486e30a1bb991d1fe1f36487e436e2446ca874fb"
+gaussian_artifact = "target/audit-runs/kernel-ab-room-gaussian/scene.rply"
+gaussian_artifact_sha256 = "73b1e04d258339e22412bff594fd8d87c45a992aa7f80a6bc11af12b3efaeadb"
+
+[surface_particles.gaussian_kernel.support_sweep]
+radii = [1.4, 1.55, 1.65, 1.7, 2.0, 2.3, 2.6]
+selection = 1.7
+verdict = "Gaussian improves both scenes at equal particle budget; wider support restores coverage but blurs the held-out image, while narrower support loses the Room and worst-view gates"
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047

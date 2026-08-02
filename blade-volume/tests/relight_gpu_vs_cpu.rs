@@ -208,7 +208,11 @@ fn scene() -> vol::relight::RelightModel {
             material: 2,
         },
     ];
-    vol::relight::RelightModel { surfels, materials }
+    vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
+        surfels,
+        materials,
+    }
 }
 
 /// An environment with structure in it, so a mistake in the direction mapping
@@ -269,7 +273,10 @@ fn gpu_shading_matches_the_cpu_reference() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    let model = scene();
+    let mut model = scene();
+    // Compact particles already have long-lived parity coverage. Exercise the
+    // new branch here; the CPU oracle below selects from the same model field.
+    model.kernel = vol::relight::ParticleKernel::Gaussian;
     let environment = environment();
     let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 128, 64);
     let background = [0.02, 0.03, 0.05];
@@ -314,7 +321,7 @@ fn gpu_shading_matches_the_cpu_reference() {
                 }
                 let offset = origin + t * direction - glam::Vec3::from(surfel.center);
                 let normalized = offset.length_squared() / (surfel.radius * surfel.radius);
-                let coverage = vol::relight::coverage(normalized);
+                let coverage = vol::relight::particle_coverage(model.kernel, normalized);
                 if coverage <= 0.0 {
                     continue;
                 }
@@ -585,6 +592,7 @@ fn sampling_converges_to_the_analytic_irradiance_with_nothing_in_the_way() {
     };
     // A single disc facing the camera, big enough to fill much of the frame.
     let model = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
         surfels: vec![vol::relight::Surfel {
             center: [0.0; 3],
             radius: 1.6,

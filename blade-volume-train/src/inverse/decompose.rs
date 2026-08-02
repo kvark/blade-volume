@@ -384,6 +384,7 @@ fn observe_impl(
                     &sampled,
                     &depth,
                     &depth_radius,
+                    model.kernel,
                     width,
                     height,
                     projection.pixel,
@@ -462,6 +463,7 @@ fn splat_supports(
     sampled: &[bool],
     depth: &[f32],
     depth_radius: &[f32],
+    kernel: vol::relight::ParticleKernel,
     width: usize,
     height: usize,
     pixel: [f32; 2],
@@ -483,7 +485,7 @@ fn splat_supports(
             {
                 continue;
             }
-            let coverage = projected_coverage(pixel, radius, x, y);
+            let coverage = projected_coverage(kernel, pixel, radius, x, y);
             if coverage > 0.0 {
                 supports[index] += 1;
             }
@@ -491,10 +493,16 @@ fn splat_supports(
     }
 }
 
-fn projected_coverage(pixel: [f32; 2], radius: f32, x: usize, y: usize) -> f32 {
+fn projected_coverage(
+    kernel: vol::relight::ParticleKernel,
+    pixel: [f32; 2],
+    radius: f32,
+    x: usize,
+    y: usize,
+) -> f32 {
     let dx = x as f32 + 0.5 - pixel[0];
     let dy = y as f32 + 0.5 - pixel[1];
-    vol::relight::coverage((dx * dx + dy * dy) / (radius * radius))
+    vol::relight::particle_coverage(kernel, (dx * dx + dy * dy) / (radius * radius))
 }
 
 // ------------------------------------------------------------------ materials
@@ -1099,7 +1107,11 @@ pub fn fit(
 
     Decomposition {
         scene: score::Scene {
-            model: vol::relight::RelightModel { surfels, materials },
+            model: vol::relight::RelightModel {
+                kernel: model.kernel,
+                surfels,
+                materials,
+            },
             environment: vol::relight::Environment {
                 width: kernel.width,
                 height: kernel.height,
@@ -1665,6 +1677,7 @@ mod tests {
             material: 0,
         };
         let model = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Compact,
             surfels: vec![surfel(0.0), surfel(0.01)],
             materials: vec![vol::relight::Material::default()],
         };
@@ -1723,6 +1736,7 @@ mod tests {
             });
         }
         vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Compact,
             surfels,
             materials: vec![vol::relight::Material {
                 albedo,

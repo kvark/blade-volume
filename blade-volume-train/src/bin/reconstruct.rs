@@ -118,6 +118,11 @@ struct Args {
     #[argh(switch)]
     no_multi_view_refine: bool,
 
+    /// use the legacy compact particle footprint instead of a surface
+    /// Gaussian. Intended for matched representation ablations.
+    #[argh(switch)]
+    compact_kernel: bool,
+
     /// write the reconstructed scene here
     #[argh(option)]
     output: Option<String>,
@@ -177,7 +182,13 @@ fn main() {
         Some(ref foam) => surfels_from_foam(path::Path::new(foam), &capture, &train_views, &args),
         None => surfels_from_sparse(&reconstruction, &capture, &args),
     };
+    let kernel = if args.compact_kernel {
+        vol::relight::ParticleKernel::Compact
+    } else {
+        vol::relight::ParticleKernel::Gaussian
+    };
     let mut geometry = vol::relight::RelightModel {
+        kernel,
         surfels,
         materials: vec![vol::relight::Material::default()],
     };
@@ -187,8 +198,9 @@ fn main() {
         println!("geometry: {flipped} normals turned round to face the cameras");
     }
     println!(
-        "geometry: {} surfels in {:.1} s",
+        "geometry: {} {:?} particles in {:.1} s",
         geometry.surfels.len(),
+        geometry.kernel,
         started.elapsed().as_secs_f64()
     );
     if geometry.surfels.is_empty() {

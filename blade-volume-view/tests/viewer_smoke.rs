@@ -365,6 +365,7 @@ fn write_asset(path: &path::Path) {
         });
     }
     let model = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
         surfels,
         materials: vec![
             vol::relight::Material {

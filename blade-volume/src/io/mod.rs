@@ -70,8 +70,8 @@ pub enum VolumeKind {
     Gaussian,
     /// RadFoam format (Voronoi cell-based).
     RadFoam,
-    /// Relightable surfels, which carry materials rather than radiance and so
-    /// are not a point cloud at all. Loaded through [`try_load_relight`].
+    /// Relightable surface-particle clouds, which carry materials rather than
+    /// baked radiance. Loaded through [`try_load_relight`].
     ///
     /// [`try_load_relight`]: fn.try_load_relight.html
     Surfel,

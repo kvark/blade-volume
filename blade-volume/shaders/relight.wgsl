@@ -40,11 +40,12 @@ struct Parameters {
     // Dimensions of the environment the alias table was built over.
     env_width: u32,
     env_height: u32,
-    // Three scalars of tail, so the block lands on a multiple of sixteen and
+    // Relightable particle footprint: zero compact, one Gaussian.
+    kernel: u32,
+    // Two scalars of tail, so the block lands on a multiple of sixteen and
     // matches what the host lays out.
     pad0: u32,
     pad1: u32,
-    pad2: u32,
 }
 var<uniform> g_params: Parameters;
 
@@ -301,8 +302,16 @@ fn hit_less(a: Hit, b: Hit) -> bool {
     return a.t < b.t || (a.t == b.t && a.index < b.index);
 }
 
-// Matches `relight::coverage` on the host.
+// Matches `relight::particle_coverage` on the host. A Gaussian's radius is
+// three standard deviations, and its response is truncated at that finite
+// support so the triangle proxy remains conservative.
 fn coverage_of(normalized_radius_squared: f32) -> f32 {
+    if (g_params.kernel == 1u) {
+        if (normalized_radius_squared > 1.0) {
+            return 0.0;
+        }
+        return exp(-4.5 * normalized_radius_squared);
+    }
     let t = clamp((normalized_radius_squared - 0.4) / 0.6, 0.0, 1.0);
     return 1.0 - t * t * (3.0 - 2.0 * t);
 }
