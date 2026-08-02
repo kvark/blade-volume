@@ -114,6 +114,10 @@ struct Args {
     #[argh(switch)]
     cpu_depth: bool,
 
+    /// keep raw fused surfels instead of refining them across training views
+    #[argh(switch)]
+    no_multi_view_refine: bool,
+
     /// write the reconstructed scene here
     #[argh(option)]
     output: Option<String>,
@@ -457,11 +461,39 @@ fn surfels_from_foam(
         trace_started.elapsed().as_secs_f64(),
     );
     let fuse_started = std::time::Instant::now();
-    let (surfels, voxel) = train::inverse::depth::surfels_from_depth(&maps, options);
+    let (mut surfels, voxel) = train::inverse::depth::surfels_from_depth(&maps, options);
     println!(
         "geometry: merged at a cell size of {voxel:.4} world units in {:.1} s",
         fuse_started.elapsed().as_secs_f64(),
     );
+    if !args.no_multi_view_refine {
+        let refine_started = std::time::Instant::now();
+        let refine_views: Vec<train::inverse::refine::RefinementView<'_>> = views
+            .iter()
+            .zip(&maps)
+            .map(
+                |(capture_index, entry)| train::inverse::refine::RefinementView {
+                    capture_index: *capture_index,
+                    depth: Some(&entry.1),
+                },
+            )
+            .collect();
+        let stats = train::inverse::refine::refine(
+            &mut surfels,
+            capture,
+            &refine_views,
+            train::inverse::refine::RefineOptions::default(),
+        );
+        println!(
+            "geometry: multi-view patches scored {} and moved {} surfels by {:.3} cells on average ({:.1}% lower cost, {:.1} views) in {:.1} s",
+            stats.scored,
+            stats.moved,
+            stats.mean_absolute_offset / voxel,
+            100.0 * stats.mean_relative_improvement,
+            stats.mean_views,
+            refine_started.elapsed().as_secs_f64(),
+        );
+    }
     surfels
 }
 
