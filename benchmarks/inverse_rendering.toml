@@ -802,6 +802,75 @@ artifact = "target/audit-runs/multi-view-refined-room-local/scene.rply"
 artifact_sha256 = "37342d5565ab66d77dd69dcc486e30a1bb991d1fe1f36487e436e2446ca874fb"
 control_artifact_sha256 = "8c4d93eea7957bc190d5c812dd49fa362bcef2ac2db09717e2bea79dd96a1f93"
 
+# The selected pass was followed by bounded one-factor gates. Geometric view
+# support is the largest exclusion: only 7,786 Bonsai and 9,504 Room surfels
+# have four front-facing, in-frame, source-visible photographs before the
+# texture test. Lowering the texture floor moves more ambiguous particles;
+# raising it loses useful ones. Repeating the sweep improves Room but trades
+# away Bonsai average quality and coverage.
+[surface_refinement.multi_view.support_diagnostic]
+bonsai_view_supported = 7786
+bonsai_texture_supported = 5445
+room_view_supported = 9504
+room_texture_supported = 5407
+
+[surface_refinement.multi_view.rejected_second_pass]
+minimum_improvements = [0.02, 0.05]
+bonsai_second_pass_moved = [1220, 1153]
+bonsai_train_psnr = [14.97, 15.00]
+bonsai_test_psnr = [14.04, 14.05]
+bonsai_worst_test_psnr = [11.70, 11.71]
+bonsai_test_coverage = [0.959, 0.959]
+room_second_pass_moved = [1103, 1007]
+room_train_psnr = [14.59, 14.59]
+room_test_psnr = [14.20, 14.20]
+room_worst_test_psnr = [13.10, 13.10]
+verdict = "Room improves, but Bonsai loses average quality and coverage; one pass remains selected"
+
+[surface_refinement.multi_view.rejected_texture_floor]
+values = [0.005, 0.02]
+bonsai_scored = [6533, 3752]
+bonsai_moved = [4116, 2353]
+bonsai_train_psnr = [14.97, 14.98]
+bonsai_test_psnr = [14.05, 14.04]
+bonsai_worst_test_psnr = [11.66, 11.67]
+room_0_005_scored = 6622
+room_0_005_moved = 4004
+room_0_005_psnr = [14.59, 14.17, 13.08]
+verdict = "lower admits ambiguous patches and higher discards useful evidence; 0.01 remains selected"
+
+[surface_refinement.multi_view.rejected_texture_first_selection]
+bonsai_scored = 5466
+bonsai_moved = 3371
+bonsai_psnr = [14.98, 14.07, 11.66]
+room_scored = 5464
+room_moved = 3238
+room_psnr = [14.60, 14.15, 13.08]
+verdict = "prefiltering texture before the facing-ranked view cap is neutral on Bonsai and loses 0.02 dB held-out Room"
+
+# Reconstruction used to construct and destroy the identical relight tracer
+# once for the training split and again for the held-out split. `score_splits`
+# keeps one acceleration structure and one prefiltered environment alive. Five
+# warm-cache runs cover the complete Room command, including model output and
+# scoring; every candidate run is faster, while the serialized scene hash and
+# every reported quality metric are unchanged.
+[inverse_scoring.tracer_reuse]
+parent_commit = "8718917"
+git_commit = "b593e3c"
+control_wall_seconds = [3.22, 3.24, 3.25, 3.30, 3.29]
+candidate_wall_seconds = [3.18, 3.18, 3.17, 3.20, 3.17]
+control_median_seconds = 3.25
+candidate_median_seconds = 3.18
+throughput_speedup = 1.022
+control_median_user_seconds = 3.36
+candidate_median_user_seconds = 3.06
+control_peak_memory_bytes = 293052416
+candidate_peak_memory_bytes = 292970496
+scene_sha256 = "37342d5565ab66d77dd69dcc486e30a1bb991d1fe1f36487e436e2446ca874fb"
+quality = "Room 14.59/14.17 dB train/held-out; Bonsai 14.97/14.07 dB, unchanged"
+full_workspace_test_peak_memory_bytes = 1825452032
+full_workspace_test_memory_events = 0
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047

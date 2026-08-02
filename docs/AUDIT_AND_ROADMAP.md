@@ -522,6 +522,20 @@ At the audited revision:
   than evidence that shared-surface reconstruction is solved. The latest full
   workspace suite peaks at 5,069,111,296 bytes inside 6 GiB with zero swap,
   pressure, OOM, or GPU faults.
+- Follow-up gates reject a second identical sweep, texture floors 0.005/0.02,
+  and texture-first view selection. Repeating improves Room held out by 0.03
+  dB but loses Bonsai average quality and coverage; threshold changes and view
+  reordering also regress at least one scene. The diagnostic finds four
+  geometrically valid/source-visible views for only 7,786 Bonsai and 9,504
+  Room surfels, before texture reduces those to 5,445/5,407. Better visibility
+  support is the next constraint; loosening local photometric confidence is
+  not selected.
+- Commit `b593e3c` reuses one relight tracer and prefiltered environment across
+  reconstruction's train/test score splits. Five complete Room runs fall from
+  a 3.25-second median to 3.18 seconds (1.022×), with median user CPU down
+  3.36→3.06 seconds, unchanged 293 MB peak memory, byte-identical scene output,
+  and unchanged Bonsai/Room scores. The full GPU workspace suite passes at a
+  1,825,452,032-byte peak with zero swap, pressure, OOM, or GPU faults.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its

@@ -260,6 +260,24 @@ on Bonsai and 0.20 seconds on Room. This is a real generalization improvement,
 not completion: only 18–19% of surfels have enough visible texture to score and
 11–12% move.
 
+The first follow-ups narrow the next problem. Before testing texture, only
+7,786 Bonsai and 9,504 Room surfels have four front-facing, in-frame,
+source-visible views; 5,445 and 5,407 respectively then pass the texture floor.
+Halving that floor scores about 1,100–1,200 more particles but loses 0.02 dB on
+Bonsai, doubling it also loses 0.03 dB, and choosing textured views before the
+facing-ranked cap loses 0.02 dB on Room. A second sweep gains 0.03 dB on Room
+but loses Bonsai average quality and 0.1 percentage point of coverage, even
+with a stricter acceptance threshold. All four changes were removed. The next
+objective needs better geometric visibility or a different cue for unsupported
+particles, not a looser patch threshold or another identical local pass.
+
+Scoring now keeps one GPU relight tracer alive across the training and held-out
+splits instead of rebuilding the same acceleration structure and prefiltered
+environment twice. Five complete Room runs fall from a 3.25-second median to
+3.18 seconds (1.022× throughput); median user CPU falls 3.36→3.06 seconds and
+peak charged memory is unchanged. The serialized scene is byte-identical and
+all Bonsai and Room scores are unchanged.
+
 Depth extraction no longer rebuilds camera ray constants for every pixel or an
 operating-system worker pool for every view. It traces all training cameras in
 one scoped pool and retains the one-view API for small callers. On five
@@ -321,12 +339,14 @@ The selected refined scenes and held-out comparison images are under
    final surface. Two-view consensus halves the cloud, and the first selected
    shared-view plane sweep improves held-out quality without changing coverage.
    It can act only on the 18–19% of particles that have four visible textured
-   patches, however; nearly three quarters of the retained surfels are still
-   never directly observed by the material fit, and the overlap diagnostic
-   finds an order of magnitude more projected supports than on the truth
-   surface. The next step is a multi-scale curved/occlusion fixture followed by
-   iterative cloud-only refinement that expands support to thin and low-texture
-   geometry and updates normals or support radii when positions move.
+   patches, however; geometric/source-depth visibility rejects most particles
+   before texture is tested, and loosening the texture floor is measured and
+   rejected. Nearly three quarters of the retained surfels are also never
+   directly observed by the material fit, and the overlap diagnostic finds an
+   order of magnitude more projected supports than on the truth surface. The
+   next step is a curved/occlusion fixture followed by cloud-only refinement
+   that carries reliable support into thin or weakly textured geometry and
+   updates normals or support radii when positions move.
 2. **The radiance field itself.** The selected fresh Smooth-L1 foam reaches
    24.94 dB over all 37 every-eighth views at 128². Its density modes are still
    a much weaker geometry signal than its rendered colour, so a better colour
