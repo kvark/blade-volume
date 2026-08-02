@@ -261,6 +261,7 @@ pub fn build_volumetric_graph(
     // Target is fed as [1, P*3] to match meganeura's "batch × dim" convention
     // for L1 loss; we reshape rather than introduce a batch dimension upstream.
     let target = g.input("labels", &[1, p * 3]);
+    let target_alpha = (opacity_weight > 0.0).then(|| g.input("target_alpha", &[p, 1]));
     let quantile_inputs = if quantile_weight > 0.0 {
         Some((
             g.input("quantile_near", &[p, 1]),
@@ -645,12 +646,12 @@ pub fn build_volumetric_graph(
         l1
     };
 
-    // RadFoam opacity loss: push accumulated opacity → 1 (the all-ones
-    // target alpha for opaque COLMAP scenes). Penalises semi-transparent
-    // floaters that random-pixel L1 alone tolerates. `loss = color +
-    // opacity_weight · mean((opacity − 1)²)`.
+    // RadFoam opacity loss. Ordinary RGB captures supply an all-ones target,
+    // preserving the opaque-scene reference behavior. A masked capture can
+    // instead supervise foreground opacity and empty background explicitly.
+    // `loss = color + opacity_weight · mean((opacity − target_alpha)²)`.
     let loss = if opacity_weight > 0.0 {
-        let op_loss = g.mse_loss(opacity, ones_p1); // scalar [1]
+        let op_loss = g.mse_loss(opacity, target_alpha.unwrap()); // scalar [1]
         let opw = g.constant(vec![opacity_weight], &[1, 1]);
         let cl_2d = g.reshape(color_loss, &[1, 1]);
         let op_2d = g.reshape(op_loss, &[1, 1]);
@@ -1204,10 +1205,10 @@ pub struct AppearanceFitConfig {
     /// Weight on the gradient L1 term when `patch_size > 0`. Common
     /// choices in the literature are 0.1–0.2.
     pub grad_loss_weight: f32,
-    /// Weight on the RadFoam opacity loss `mean((opacity − 1)²)`, which
-    /// pushes every ray to full opacity (white-background composite) and
-    /// suppresses semi-transparent floaters. `0.0` (default) disables it
-    /// and keeps the legacy un-composited L1 path.
+    /// Weight on the RadFoam opacity loss. Views without an alpha target use
+    /// one, matching the opaque-scene reference behavior. Views with a mask
+    /// train opacity to that mask, including transparent background rays.
+    /// `0.0` (default) disables the term.
     pub opacity_weight: f32,
     /// Weight on a smooth per-ray weighted depth-variance loss. `0.0`
     /// disables it. Small values such as `1e-4` discourage contribution
@@ -1812,12 +1813,14 @@ fn steps_until_fixed_densify(config: DensifyConfig, steps_done: usize) -> usize 
 
 /// One supervised view: a camera plus the pixel image the trained model should
 /// reproduce there. `target_rgb` is `width * height * 3` floats in row-major
-/// RGB order. Path recording derives the containing cell from the current
-/// model, so topology and radius updates cannot leave a stale seed here.
+/// RGB order. `target_alpha`, when present, is one float per pixel. Path
+/// recording derives the containing cell from the current model, so topology
+/// and radius updates cannot leave a stale seed here.
 #[derive(Clone)]
 pub struct ViewSupervision {
     pub camera: vol::CameraParams,
     pub target_rgb: Vec<f32>,
+    pub target_alpha: Option<Vec<f32>>,
     pub width: u32,
     pub height: u32,
 }
@@ -1867,6 +1870,19 @@ pub(crate) fn fit_appearance_multi_view_outcome(
             v.width * v.height * 3,
             "view target_rgb length mismatches its width*height*3"
         );
+        if let Some(ref target_alpha) = v.target_alpha {
+            assert_eq!(
+                target_alpha.len() as u32,
+                v.width * v.height,
+                "view target_alpha length mismatches its width*height"
+            );
+            assert!(
+                target_alpha
+                    .iter()
+                    .all(|&alpha| alpha.is_finite() && (0.0..=1.0).contains(&alpha)),
+                "view target_alpha values must be finite and in [0, 1]"
+            );
+        }
     }
 
     let p = (width as usize) * (height as usize);
@@ -3336,6 +3352,7 @@ fn fit_appearance_pixel_batched(
         };
 
     let mut target_buf = vec![0.0f32; pixel_batch * 3];
+    let mut target_alpha_buf = vec![1.0f32; pixel_batch];
     let mut pixel_indices = vec![0u32; pixel_batch];
     let mut quantile_near = vec![0.0_f32; pixel_batch];
     let mut quantile_far = vec![0.0_f32; pixel_batch];
@@ -3541,6 +3558,10 @@ fn fit_appearance_pixel_batched(
                         target_buf[k * 3] = v.target_rgb[base];
                         target_buf[k * 3 + 1] = v.target_rgb[base + 1];
                         target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+                        target_alpha_buf[k] = v
+                            .target_alpha
+                            .as_ref()
+                            .map_or(1.0, |target| target[pidx as usize]);
                         let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
                         ray_dir_per_pixel_buf[k * 3] = dir.x;
                         ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
@@ -3564,6 +3585,10 @@ fn fit_appearance_pixel_batched(
                     target_buf[k * 3] = v.target_rgb[base];
                     target_buf[k * 3 + 1] = v.target_rgb[base + 1];
                     target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+                    target_alpha_buf[k] = v
+                        .target_alpha
+                        .as_ref()
+                        .map_or(1.0, |target| target[pidx as usize]);
 
                     let ix = pidx % v.width;
                     let iy = pidx / v.width;
@@ -3591,6 +3616,10 @@ fn fit_appearance_pixel_batched(
                         target_buf[k * 3] = v.target_rgb[base];
                         target_buf[k * 3 + 1] = v.target_rgb[base + 1];
                         target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+                        target_alpha_buf[k] = v
+                            .target_alpha
+                            .as_ref()
+                            .map_or(1.0, |target| target[pidx as usize]);
 
                         let ix = pidx % v.width;
                         let iy = pidx / v.width;
@@ -3663,6 +3692,9 @@ fn fit_appearance_pixel_batched(
 
             let gpu_step_start = std::time::Instant::now();
             session.set_input("labels", &target_buf);
+            if config.opacity_weight > 0.0 {
+                session.set_input("target_alpha", &target_alpha_buf);
+            }
             session.set_input_u32("view_idx", &view_idx_buf);
             if config.quantile_weight > 0.0 {
                 for (near, far) in quantile_near.iter_mut().zip(quantile_far.iter_mut()) {
@@ -5632,6 +5664,7 @@ mod tests {
         let view = ViewSupervision {
             camera: cam,
             target_rgb: target_rgb.to_vec(),
+            target_alpha: None,
             width: 1,
             height: 1,
         };
@@ -5659,6 +5692,60 @@ mod tests {
     }
 
     #[test]
+    fn masked_opacity_separates_empty_and_opaque_rays() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping masked_opacity_separates_empty_and_opaque_rays: no GPU");
+            return;
+        };
+        const SH_C0: f32 = 0.282_094_8;
+        let mut initial = tiny_model();
+        for point in initial.points.iter_mut() {
+            point.w = 1.0;
+        }
+        for coefficients in initial.sh_coefficients.chunks_exact_mut(3) {
+            coefficients.fill(-0.5 / SH_C0);
+        }
+        let camera = vol::CameraParams {
+            cam_position: [0.05, 0.05, -1.0],
+            depth: 10.0,
+            cam_orientation: [0.0, 0.0, 0.0, 1.0],
+            fov: [0.5, 0.5],
+            principal: [0.0, 0.0],
+        };
+        let train = |target_alpha, mut model: vol::PointCloudModel| {
+            fit_appearance_multi_view(
+                &mut model,
+                &[ViewSupervision {
+                    camera,
+                    target_rgb: vec![0.0; 3],
+                    target_alpha: Some(vec![target_alpha]),
+                    width: 1,
+                    height: 1,
+                }],
+                1,
+                1,
+                16,
+                AppearanceFitConfig {
+                    learning_rate: 0.05,
+                    epochs: 40,
+                    opacity_weight: 1.0,
+                    softplus_beta: 10.0,
+                    ..AppearanceFitConfig::default()
+                },
+                gpu.clone(),
+            );
+            model.points.iter().map(|point| point.w).sum::<f32>() / model.points.len() as f32
+        };
+        let empty_density = train(0.0, initial.clone());
+        let opaque_density = train(1.0, initial);
+        assert!(
+            empty_density < opaque_density,
+            "empty density {empty_density} must fall below opaque density {opaque_density}"
+        );
+    }
+
+    #[test]
     fn position_training_rebuilds_valid_topology() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
@@ -5677,6 +5764,7 @@ mod tests {
                 principal: [0.0, 0.0],
             },
             target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
             width: 1,
             height: 1,
         };
@@ -5725,6 +5813,7 @@ mod tests {
                 principal: [0.0, 0.0],
             },
             target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
             width: 1,
             height: 1,
         };
@@ -5765,6 +5854,7 @@ mod tests {
                 principal: [0.0, 0.0],
             },
             target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
             width: 1,
             height: 1,
         };
@@ -5832,6 +5922,7 @@ mod tests {
             .map(|(camera, target)| ViewSupervision {
                 camera,
                 target_rgb: target.repeat(4),
+                target_alpha: None,
                 width: 2,
                 height: 2,
             })
@@ -5935,6 +6026,7 @@ mod tests {
                 principal: [0.0, 0.0],
             },
             target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
             width: 1,
             height: 1,
         };
@@ -6118,6 +6210,7 @@ mod tests {
         let view = ViewSupervision {
             camera: cam_a,
             target_rgb: target_a_rgb,
+            target_alpha: None,
             width: w,
             height: h,
         };
@@ -6234,6 +6327,7 @@ mod tests {
                 ViewSupervision {
                     camera: cam,
                     target_rgb: strip_alpha(&rgba),
+                    target_alpha: None,
                     width: w,
                     height: h,
                 }

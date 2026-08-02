@@ -348,6 +348,7 @@ pub fn build_views_from<'a>(
         views.push(diff_render::ViewSupervision {
             camera: cam,
             target_rgb,
+            target_alpha: None,
             width: config.resolution.0,
             height: config.resolution.1,
         });
