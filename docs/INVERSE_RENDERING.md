@@ -260,6 +260,16 @@ the neutral control: 4.53 to 4.50 seconds, inside run noise. Maps are sorted
 back into camera order before fusion, and the batch-versus-single-view test
 asserts exact depth, opacity, and peak results.
 
+The reconstruction tracer now has an opacity-only evaluation mode and a
+compile-time-specialized unweighted RadFoam neighbour loop. Opacity-only avoids
+SH evaluation that cannot affect extracted depth; specialization removes the
+radius loads, squared distance, and radical-plane division that plain RadFoam
+does not need. PowerFoam keeps the weighted equations and is covered by the
+existing CPU/GPU power-cell tests. Five alternating runs on top of dynamic
+scheduling reduce Bonsai's median from 4.50 to 4.07 seconds (1.106x) and Room's
+from 7.97 to 7.28 seconds (1.095x). Surfel counts and every reported quality
+score are unchanged; both A/B cgroups used zero swap and recorded no OOM event.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a

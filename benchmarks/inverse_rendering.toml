@@ -390,6 +390,54 @@ train_psnr = 14.40
 test_psnr = 14.08
 worst_test_psnr = 12.98
 
+# Reconstruction consumes only opacity and depth, but the CPU tracer used to
+# evaluate and accumulate SH colour for every traversed cell. Skipping colour
+# alone is a small win. The larger gain comes from const-specializing the
+# unweighted RadFoam neighbour loop so it does not load radii or evaluate the
+# radical-plane correction needed only by PowerFoam. The weighted path retains
+# the original equations and passes the CPU/GPU power-cell tests. Five
+# alternating runs compare the same dynamically scheduled parent binary with
+# the combined candidate. Both scenes reproduce the exact surfel counts and
+# quality scores. The A/B cgroups used no swap and recorded no OOM event.
+[depth_tracing.unweighted_opacity]
+parent_commit = "cdee997"
+git_commit = "cc2f3e9"
+quality_changed = false
+
+[depth_tracing.unweighted_opacity.opacity_only]
+bonsai_rgb_wall_seconds = [4.80, 4.50, 4.48, 4.45, 4.49]
+bonsai_opacity_wall_seconds = [4.44, 4.46, 4.44, 4.44, 4.48]
+bonsai_rgb_median_seconds = 4.49
+bonsai_opacity_median_seconds = 4.44
+room_rgb_wall_seconds = [8.11, 7.97, 7.95, 7.91, 7.97]
+room_opacity_wall_seconds = [7.97, 7.86, 7.93, 7.93, 7.92]
+room_rgb_median_seconds = 7.97
+room_opacity_median_seconds = 7.93
+
+[depth_tracing.unweighted_opacity.bonsai]
+control_wall_seconds = [4.51, 4.50, 4.51, 4.41, 4.49]
+specialized_wall_seconds = [4.07, 4.11, 4.14, 4.03, 4.07]
+control_median_seconds = 4.50
+specialized_median_seconds = 4.07
+throughput_speedup = 1.106
+cgroup_peak_memory_bytes = 170889216
+surfels = 37217
+train_psnr = 14.34
+test_psnr = 13.55
+worst_test_psnr = 11.33
+
+[depth_tracing.unweighted_opacity.room]
+control_wall_seconds = [7.94, 7.99, 7.91, 7.97, 7.97]
+specialized_wall_seconds = [7.29, 7.28, 7.11, 7.30, 7.20]
+control_median_seconds = 7.97
+specialized_median_seconds = 7.28
+throughput_speedup = 1.095
+cgroup_peak_memory_bytes = 273387520
+surfels = 38099
+train_psnr = 14.40
+test_psnr = 14.08
+worst_test_psnr = 12.98
+
 # Four local geometry shortcuts were gated after the overlap diagnostic. None
 # survives both Bonsai and Room. The source for every experimental switch was
 # removed; these numbers are retained so a scene-local gain is not mistaken for
