@@ -396,21 +396,27 @@ fn surfels_from_foam(
     // Training views only. Tracing the held-out ones would build geometry from
     // the images the score is supposed to be surprised by, and the test number
     // would be measuring nothing.
+    let trace_started = std::time::Instant::now();
+    let requests: Vec<(vol::CameraParams, u32)> = views
+        .iter()
+        .map(|&index| {
+            let camera = capture.views[index].camera;
+            let start =
+                train::pipeline::pick_start_cell(&model, glam::Vec3::from(camera.cam_position));
+            (camera, start)
+        })
+        .collect();
+    let depth_maps = train::inverse::depth::trace_depths(
+        &model,
+        &requests,
+        capture.width,
+        capture.height,
+        options.max_steps,
+    );
     let mut maps = Vec::with_capacity(views.len());
     let mut hit = 0usize;
     let mut total = 0usize;
-    for &index in views {
-        let view = &capture.views[index];
-        let start =
-            train::pipeline::pick_start_cell(&model, glam::Vec3::from(view.camera.cam_position));
-        let map = train::inverse::depth::trace_depth(
-            &model,
-            &view.camera,
-            capture.width,
-            capture.height,
-            start,
-            options.max_steps,
-        );
+    for ((camera, _), map) in requests.into_iter().zip(depth_maps) {
         hit += map
             .alpha
             .iter()
@@ -418,14 +424,19 @@ fn surfels_from_foam(
             .filter(|&(&a, &p)| a >= options.min_alpha && p >= options.min_peak)
             .count();
         total += map.alpha.len();
-        maps.push((view.camera, map));
+        maps.push((camera, map));
     }
     println!(
-        "geometry: {:.1}% of traced rays met a surface",
-        100.0 * hit as f64 / total.max(1) as f64
+        "geometry: {:.1}% of traced rays met a surface in {:.1} s",
+        100.0 * hit as f64 / total.max(1) as f64,
+        trace_started.elapsed().as_secs_f64(),
     );
+    let fuse_started = std::time::Instant::now();
     let (surfels, voxel) = train::inverse::depth::surfels_from_depth(&maps, options);
-    println!("geometry: merged at a cell size of {voxel:.4} world units");
+    println!(
+        "geometry: merged at a cell size of {voxel:.4} world units in {:.1} s",
+        fuse_started.elapsed().as_secs_f64(),
+    );
     surfels
 }
 

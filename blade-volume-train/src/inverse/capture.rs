@@ -81,14 +81,42 @@ pub fn pixel_direction(
     x: usize,
     y: usize,
 ) -> glam::Vec3 {
-    let ndc = glam::Vec2::new(
-        (x as f32 + 0.5) / width as f32 * 2.0 - 1.0,
-        (y as f32 + 0.5) / height as f32 * 2.0 - 1.0,
-    );
-    let tan_half = glam::Vec2::new((0.5 * camera.fov[0]).tan(), (0.5 * camera.fov[1]).tan());
-    let local = (ndc - glam::Vec2::from(camera.principal)) * tan_half;
-    let orientation = glam::Quat::from_array(camera.cam_orientation);
-    (orientation * glam::Vec3::new(local.x, local.y, 1.0)).normalize()
+    PixelRays::new(camera, width, height).direction(x, y)
+}
+
+/// Camera terms shared by every ray in one image.
+///
+/// Kept crate-private because callers generally need only one direction. The
+/// depth extractor needs every direction and must not rebuild the quaternion
+/// or evaluate the field-of-view tangents for every pixel.
+#[derive(Clone, Copy)]
+pub(crate) struct PixelRays {
+    orientation: glam::Quat,
+    tan_half: glam::Vec2,
+    principal: glam::Vec2,
+    width: f32,
+    height: f32,
+}
+
+impl PixelRays {
+    pub(crate) fn new(camera: &vol::CameraParams, width: usize, height: usize) -> Self {
+        Self {
+            orientation: glam::Quat::from_array(camera.cam_orientation),
+            tan_half: glam::Vec2::new((0.5 * camera.fov[0]).tan(), (0.5 * camera.fov[1]).tan()),
+            principal: glam::Vec2::from(camera.principal),
+            width: width as f32,
+            height: height as f32,
+        }
+    }
+
+    pub(crate) fn direction(&self, x: usize, y: usize) -> glam::Vec3 {
+        let ndc = glam::Vec2::new(
+            (x as f32 + 0.5) / self.width * 2.0 - 1.0,
+            (y as f32 + 0.5) / self.height * 2.0 - 1.0,
+        );
+        let local = (ndc - self.principal) * self.tan_half;
+        (self.orientation * glam::Vec3::new(local.x, local.y, 1.0)).normalize()
+    }
 }
 
 impl Capture {

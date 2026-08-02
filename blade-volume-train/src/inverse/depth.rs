@@ -85,6 +85,79 @@ impl Default for DepthOptions {
     }
 }
 
+struct DepthTracer<'a> {
+    model: &'a vol::PointCloudModel,
+    settings: vol::trace::TraceSettings,
+    origin: glam::Vec3,
+    rays: capture::PixelRays,
+    width: usize,
+}
+
+impl<'a> DepthTracer<'a> {
+    fn new(
+        model: &'a vol::PointCloudModel,
+        camera: &vol::CameraParams,
+        width: usize,
+        height: usize,
+        start_point: u32,
+        max_steps: u32,
+    ) -> Self {
+        Self {
+            model,
+            settings: vol::trace::TraceSettings {
+                weight_threshold: 0.001,
+                max_steps,
+                start_point,
+                depth: camera.depth,
+                eval_mode: vol::trace::EvalMode::ConstantRgb(glam::Vec3::ONE),
+            },
+            origin: glam::Vec3::from(camera.cam_position),
+            rays: capture::PixelRays::new(camera, width, height),
+            width,
+        }
+    }
+
+    fn trace_rows(
+        &self,
+        first_y: usize,
+        distance: &mut [f32],
+        alpha: &mut [f32],
+        peak: &mut [f32],
+    ) {
+        debug_assert_eq!(distance.len(), alpha.len());
+        debug_assert_eq!(distance.len(), peak.len());
+        for local_y in 0..distance.len() / self.width {
+            let y = first_y + local_y;
+            for x in 0..self.width {
+                let result = vol::trace::trace_one_ray(
+                    self.model,
+                    vol::trace::Ray {
+                        origin: self.origin,
+                        direction: self.rays.direction(x, y),
+                    },
+                    self.settings,
+                );
+                let slot = local_y * self.width + x;
+                alpha[slot] = result.rgba.w;
+                peak[slot] = result.peak_weight;
+                // The mode, not the mean or the median: it is the only one
+                // that comes with evidence that a surface was met at all.
+                distance[slot] = result.depth_mode;
+            }
+        }
+    }
+}
+
+fn empty_depth_map(width: usize, height: usize) -> DepthMap {
+    DepthMap {
+        width,
+        height,
+        distance: vec![0.0; width * height],
+        alpha: vec![0.0; width * height],
+        peak: vec![0.0; width * height],
+    }
+}
+
 /// Trace one view and keep where each ray was absorbed.
 pub fn trace_depth(
     model: &vol::PointCloudModel,
@@ -94,56 +167,86 @@ pub fn trace_depth(
     start_point: u32,
     max_steps: u32,
 ) -> DepthMap {
-    let settings = vol::trace::TraceSettings {
-        weight_threshold: 0.001,
-        max_steps,
-        start_point,
-        depth: camera.depth,
-        eval_mode: vol::trace::EvalMode::ConstantRgb(glam::Vec3::ONE),
-    };
-    let origin = glam::Vec3::from(camera.cam_position);
-    let mut distance = vec![0.0f32; width * height];
-    let mut alpha = vec![0.0f32; width * height];
-    let mut peak = vec![0.0f32; width * height];
+    let tracer = DepthTracer::new(model, camera, width, height, start_point, max_steps);
+    let mut map = empty_depth_map(width, height);
 
     let threads = thread::available_parallelism().map_or(1, |n| n.get());
     let rows = height.div_ceil(threads).max(1);
     thread::scope(|scope| {
-        for (block, ((distance, alpha), peak)) in distance
+        for (block, ((distance, alpha), peak)) in map
+            .distance
             .chunks_mut(rows * width)
-            .zip(alpha.chunks_mut(rows * width))
-            .zip(peak.chunks_mut(rows * width))
+            .zip(map.alpha.chunks_mut(rows * width))
+            .zip(map.peak.chunks_mut(rows * width))
             .enumerate()
         {
-            scope.spawn(move || {
-                for local in 0..distance.len() / width {
-                    let y = block * rows + local;
-                    for x in 0..width {
-                        let direction = capture::pixel_direction(camera, width, height, x, y);
-                        let result = vol::trace::trace_one_ray(
-                            model,
-                            vol::trace::Ray { origin, direction },
-                            settings,
-                        );
-                        let slot = local * width + x;
-                        alpha[slot] = result.rgba.w;
-                        peak[slot] = result.peak_weight;
-                        // The mode, not the mean or the median: it is the only
-                        // one that comes with evidence that a surface was met
-                        // at all.
-                        distance[slot] = result.depth_mode;
-                    }
-                }
-            });
+            let tracer = &tracer;
+            scope.spawn(move || tracer.trace_rows(block * rows, distance, alpha, peak));
         }
     });
-    DepthMap {
-        width,
-        height,
-        distance,
-        alpha,
-        peak,
+    map
+}
+
+/// Trace several views through one model with a single worker pool.
+///
+/// [`trace_depth`] parallelizes one image and is the convenient one-view API.
+/// Reconstruction has many equally sized images; assigning whole views to a
+/// fixed set of workers avoids creating a fresh set of operating-system
+/// threads for every camera.
+pub fn trace_depths(
+    model: &vol::PointCloudModel,
+    views: &[(vol::CameraParams, u32)],
+    width: usize,
+    height: usize,
+    max_steps: u32,
+) -> Vec<DepthMap> {
+    if views.is_empty() {
+        return Vec::new();
     }
+    let threads = thread::available_parallelism().map_or(1, |n| n.get());
+    if views.len() < threads {
+        return views
+            .iter()
+            .map(|&(ref camera, start_point)| {
+                trace_depth(model, camera, width, height, start_point, max_steps)
+            })
+            .collect();
+    }
+    thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(threads);
+        for worker in 0..threads {
+            let begin = worker * views.len() / threads;
+            let end = (worker + 1) * views.len() / threads;
+            let requests = &views[begin..end];
+            workers.push(scope.spawn(move || {
+                requests
+                    .iter()
+                    .map(|&(ref camera, start_point)| {
+                        trace_depth_serial(model, camera, width, height, start_point, max_steps)
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+        let mut maps = Vec::with_capacity(views.len());
+        for worker in workers {
+            maps.extend(worker.join().expect("depth worker panicked"));
+        }
+        maps
+    })
+}
+
+fn trace_depth_serial(
+    model: &vol::PointCloudModel,
+    camera: &vol::CameraParams,
+    width: usize,
+    height: usize,
+    start_point: u32,
+    max_steps: u32,
+) -> DepthMap {
+    let tracer = DepthTracer::new(model, camera, width, height, start_point, max_steps);
+    let mut map = empty_depth_map(width, height);
+    tracer.trace_rows(0, &mut map.distance, &mut map.alpha, &mut map.peak);
+    map
 }
 
 /// One oriented sample of a surface, before merging.
@@ -162,13 +265,13 @@ struct Sample {
 fn samples_from(map: &DepthMap, camera: &vol::CameraParams, options: DepthOptions) -> Vec<Sample> {
     let (width, height) = (map.width, map.height);
     let origin = glam::Vec3::from(camera.cam_position);
+    let rays = capture::PixelRays::new(camera, width, height);
     let point_at = |x: usize, y: usize| -> Option<glam::Vec3> {
         let slot = y * width + x;
         if map.alpha[slot] < options.min_alpha || map.peak[slot] < options.min_peak {
             return None;
         }
-        let direction = capture::pixel_direction(camera, width, height, x, y);
-        Some(origin + map.distance[slot] * direction)
+        Some(origin + map.distance[slot] * rays.direction(x, y))
     };
 
     let mut samples = Vec::new();
@@ -313,6 +416,25 @@ pub fn surfels_from_depth(
 mod tests {
     use super::*;
 
+    fn tiny_foam() -> vol::PointCloudModel {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 0.0, 5.0),
+            glam::Vec4::new(0.5, 0.0, 0.0, 5.0),
+            glam::Vec4::new(0.0, 0.5, 0.0, 5.0),
+            glam::Vec4::new(0.0, 0.0, 0.5, 5.0),
+        ];
+        let mut model = vol::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            points,
+            sh_degree: 0,
+            transforms: None,
+            adjacency: None,
+            radii: None,
+        };
+        model.compute_adjacency_default();
+        model
+    }
+
     fn camera_looking_at_a_wall(distance: f32) -> vol::CameraParams {
         vol::CameraParams {
             cam_position: [0.0, 0.0, -distance],
@@ -320,6 +442,31 @@ mod tests {
             cam_orientation: glam::Quat::IDENTITY.to_array(),
             fov: [1.0, 1.0],
             principal: [0.0, 0.0],
+        }
+    }
+
+    #[test]
+    fn batched_depth_tracing_matches_the_one_view_path() {
+        let model = tiny_foam();
+        let first = camera_looking_at_a_wall(2.0);
+        let second = camera_looking_at_a_wall(2.5);
+        let count = thread::available_parallelism().map_or(1, |n| n.get());
+        let requests: Vec<_> = (0..count)
+            .map(|index| {
+                if index % 2 == 0 {
+                    (first, 0)
+                } else {
+                    (second, 0)
+                }
+            })
+            .collect();
+        let batched = trace_depths(&model, &requests, 8, 8, 64);
+        for (request, batched) in requests.iter().zip(&batched) {
+            let &(ref camera, start) = request;
+            let one = trace_depth(&model, camera, 8, 8, start, 64);
+            assert_eq!(batched.distance, one.distance);
+            assert_eq!(batched.alpha, one.alpha);
+            assert_eq!(batched.peak, one.peak);
         }
     }
 
