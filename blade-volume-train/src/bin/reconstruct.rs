@@ -90,6 +90,12 @@ struct Args {
     #[argh(option, default = "1.0")]
     disc_radius: f32,
 
+    /// distinct training views that must support a fused depth cell (default
+    /// 2). Higher values reject view-specific layers but can remove surfaces
+    /// seen by only one camera.
+    #[argh(option, default = "2")]
+    min_views: usize,
+
     /// shadow rays per shading point when scoring (default 32). A scene
     /// fitted with shadowing has to be rendered with it, or the comparison
     /// measures two renderer settings rather than the scene.
@@ -349,6 +355,7 @@ fn surfels_from_foam(
         min_alpha: args.min_alpha,
         min_peak: args.min_peak,
         disc_radius: args.disc_radius,
+        min_views: args.min_views,
         ..Default::default()
     };
     // Training views only. Tracing the held-out ones would build geometry from

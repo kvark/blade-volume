@@ -63,6 +63,12 @@ pub struct DepthOptions {
     /// fraction of its own. These are silhouettes, where a normal taken from
     /// the derivatives spans two surfaces and belongs to neither.
     pub max_depth_step: f32,
+    /// Distinct camera views that must contribute to a merge cell.
+    ///
+    /// One preserves single-view surfaces. Raising this rejects density-field
+    /// layers that only one depth map supports, at the cost of surfaces seen
+    /// from just one training camera.
+    pub min_views: usize,
 }
 
 impl Default for DepthOptions {
@@ -74,6 +80,7 @@ impl Default for DepthOptions {
             voxel_factor: 1.0,
             disc_radius: 1.0,
             max_depth_step: 0.02,
+            min_views: 2,
         }
     }
 }
@@ -210,18 +217,16 @@ pub fn surfels_from_depth(
     maps: &[(vol::CameraParams, DepthMap)],
     options: DepthOptions,
 ) -> (Vec<vol::relight::Surfel>, f32) {
-    let mut samples = Vec::new();
     let mut distances = Vec::new();
     for entry in maps {
-        let (ref camera, ref map) = *entry;
-        samples.extend(samples_from(map, camera, options));
+        let (_, ref map) = *entry;
         for (slot, &alpha) in map.alpha.iter().enumerate() {
             if alpha >= options.min_alpha && map.peak[slot] >= options.min_peak {
                 distances.push(map.distance[slot]);
             }
         }
     }
-    if samples.is_empty() {
+    if distances.is_empty() {
         return (Vec::new(), 0.0);
     }
     distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -233,19 +238,38 @@ pub fn surfels_from_depth(
     let footprint = median_distance * (0.5 * camera.fov[0]).tan() * 2.0 / map.width as f32;
     let voxel = (footprint * options.voxel_factor).max(1.0e-6);
 
-    let mut cells: HashMap<[i32; 3], (glam::Vec3, glam::Vec3, u32)> = HashMap::new();
-    for sample in &samples {
-        let key = [
-            (sample.position.x / voxel).floor() as i32,
-            (sample.position.y / voxel).floor() as i32,
-            (sample.position.z / voxel).floor() as i32,
-        ];
-        let entry = cells
-            .entry(key)
-            .or_insert((glam::Vec3::ZERO, glam::Vec3::ZERO, 0));
-        entry.0 += sample.position;
-        entry.1 += sample.normal;
-        entry.2 += 1;
+    struct Cell {
+        positions: glam::Vec3,
+        normals: glam::Vec3,
+        samples: u32,
+        views: usize,
+        last_view: usize,
+    }
+
+    let mut cells: HashMap<[i32; 3], Cell> = HashMap::new();
+    for (view, entry) in maps.iter().enumerate() {
+        let (ref camera, ref map) = *entry;
+        for sample in samples_from(map, camera, options) {
+            let key = [
+                (sample.position.x / voxel).floor() as i32,
+                (sample.position.y / voxel).floor() as i32,
+                (sample.position.z / voxel).floor() as i32,
+            ];
+            let entry = cells.entry(key).or_insert(Cell {
+                positions: glam::Vec3::ZERO,
+                normals: glam::Vec3::ZERO,
+                samples: 0,
+                views: 0,
+                last_view: usize::MAX,
+            });
+            entry.positions += sample.position;
+            entry.normals += sample.normal;
+            entry.samples += 1;
+            if entry.last_view != view {
+                entry.views += 1;
+                entry.last_view = view;
+            }
+        }
     }
 
     // A disc has to reach its neighbours in the grid, and the worst case is
@@ -253,17 +277,19 @@ pub fn surfels_from_depth(
     let radius = voxel * options.disc_radius.max(0.1);
     let mut surfels = Vec::with_capacity(cells.len());
     for (_, entry) in cells {
-        let (sum, normals, count) = entry;
+        if entry.views < options.min_views.max(1) {
+            continue;
+        }
         // Half the samples pointing one way and half the other cancel, and a
         // cell like that is two surfaces sharing a voxel rather than one.
-        let Some(normal) = (normals / count as f32).try_normalize() else {
+        let Some(normal) = (entry.normals / entry.samples as f32).try_normalize() else {
             continue;
         };
-        if normals.length() < 0.3 * count as f32 {
+        if entry.normals.length() < 0.3 * entry.samples as f32 {
             continue;
         }
         surfels.push(vol::relight::Surfel {
-            center: (sum / count as f32).to_array(),
+            center: (entry.positions / entry.samples as f32).to_array(),
             radius,
             normal: normal.to_array(),
             material: surfels.len() as u32,
@@ -317,7 +343,11 @@ mod tests {
     fn a_flat_wall_comes_back_flat_and_facing_the_camera() {
         let camera = camera_looking_at_a_wall(3.0);
         let map = wall_map(&camera, 64);
-        let (surfels, voxel) = surfels_from_depth(&[(camera, map)], DepthOptions::default());
+        let options = DepthOptions {
+            min_views: 1,
+            ..Default::default()
+        };
+        let (surfels, voxel) = surfels_from_depth(&[(camera, map)], options);
         assert!(!surfels.is_empty());
         assert!(voxel > 0.0);
         for surfel in &surfels {
@@ -341,7 +371,11 @@ mod tests {
         // while the geometry does not.
         let first = camera_looking_at_a_wall(3.0);
         let second = camera_looking_at_a_wall(3.2);
-        let alone = surfels_from_depth(&[(first, wall_map(&first, 64))], DepthOptions::default())
+        let options = DepthOptions {
+            min_views: 1,
+            ..Default::default()
+        };
+        let alone = surfels_from_depth(&[(first, wall_map(&first, 64))], options)
             .0
             .len();
         let together = surfels_from_depth(
@@ -349,7 +383,7 @@ mod tests {
                 (first, wall_map(&first, 64)),
                 (second, wall_map(&second, 64)),
             ],
-            DepthOptions::default(),
+            options,
         )
         .0
         .len();
@@ -369,6 +403,31 @@ mod tests {
             surfels.is_empty(),
             "{} surfels from empty space",
             surfels.len()
+        );
+    }
+
+    #[test]
+    fn view_consensus_counts_cameras_not_samples() {
+        let camera = camera_looking_at_a_wall(3.0);
+        let map = wall_map(&camera, 32);
+        let options = DepthOptions {
+            min_views: 2,
+            ..Default::default()
+        };
+        let (alone, _) = surfels_from_depth(&[(camera, map)], options);
+        assert!(alone.is_empty(), "one camera satisfied two-view consensus");
+
+        let second = camera_looking_at_a_wall(3.2);
+        let (together, _) = surfels_from_depth(
+            &[
+                (camera, wall_map(&camera, 32)),
+                (second, wall_map(&second, 32)),
+            ],
+            options,
+        );
+        assert!(
+            !together.is_empty(),
+            "two cameras produced no consensus surface"
         );
     }
 }
