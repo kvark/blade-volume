@@ -325,6 +325,32 @@ diagnostics_observation_seconds = 0.7
 ordinary_observation_seconds = 0.4
 quality_changed = false
 
+# Depth extraction dominated the selected command. Caching the camera terms
+# shared by every pixel and tracing all training cameras through one scoped
+# worker pool removes 33 short-lived per-image pools. Five alternating runs
+# compare the parent binary against the candidate on the same machine. The
+# reconstruction is decision-identical; the small RSS increase is the bounded
+# cost of the pooled workers and their allocator high-water marks. The complete
+# ten-run cgroup peaked at 171757568 charged bytes, with no swap, pressure, or
+# OOM event.
+[bonsai.depth_tracing.performance]
+parent_commit = "b5f311a"
+git_commit = "cfa1bba"
+control_wall_seconds = [4.87, 4.77, 4.74, 4.77, 4.71]
+batched_wall_seconds = [4.51, 4.49, 4.43, 4.48, 4.54]
+control_median_seconds = 4.77
+batched_median_seconds = 4.49
+throughput_speedup = 1.062
+control_median_max_rss_bytes = 352366592
+batched_median_max_rss_bytes = 365891584
+cgroup_peak_memory_bytes = 171757568
+surfels = 37217
+observed_surfels = 9319
+train_psnr = 14.34
+test_psnr = 13.55
+worst_test_psnr = 11.33
+quality_changed = false
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047

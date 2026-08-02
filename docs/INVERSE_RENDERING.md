@@ -214,6 +214,15 @@ no known-truth albedo error, and is rejected. The excess depth has to be removed
 or moved as geometry; a scalar weight cannot turn dozens of layers into one
 surface.
 
+Depth extraction no longer rebuilds camera ray constants for every pixel or an
+operating-system worker pool for every view. It traces all training cameras in
+one scoped pool and retains the one-view API for small callers. On five
+alternating runs of the selected Bonsai protocol this reduces median wall time
+from 4.77 to 4.49 seconds (1.06x throughput) while producing the same 37,217
+surfels and identical train, held-out, and worst-view scores. Median maximum RSS
+rises by 12.9 MiB; the complete benchmark cgroup stayed below 164 MiB of charged
+memory with no swap, pressure, or OOM event.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a
