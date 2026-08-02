@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-07-24
+Last updated: 2026-08-02
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -499,6 +499,12 @@ At the audited revision:
   26.78/24.48/24.94 dB at the same 20,400-step, 200,000-cell endpoint —
   +0.73/+0.48/+0.25 dB over the L1 control. It leads at every measured
   checkpoint, so the loss is selected rather than merely opt-in on this scene.
+- The relightable depth-mode extractor now defaults to the two-scene selected
+  factor-5 fusion and 1.7-cell disc support. Against the previous factor-4/2.5
+  protocol, Bonsai train/held-out PSNR rises 14.34/13.55→14.89/14.03 dB and
+  Room rises 14.40/14.08→14.59/14.14 dB, with every worst-view PSNR also
+  improving and 22–24% fewer surfels. The scenes remain visibly coarse; this
+  improves the initializer and does not close the shared-surface geometry gap.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its

@@ -193,8 +193,8 @@ studio scene, where the photographs carry a bounce the lobe path does not model
 and the orbit sees each surfel from one elevation.
 
 On bonsai it does not yet reach the goal. The fresh Smooth-L1 foam plus
-two-view depth consensus and confidence weighting reaches 14.34 dB on the views
-used for extraction and 13.55 dB on held-out views. That supersedes the earlier
+two-view depth consensus and confidence weighting reaches 14.89 dB on the views
+used for extraction and 14.03 dB on held-out views. That supersedes the earlier
 14.71/10.25 result: the four-decibel generalisation failure is gone, but the
 absolute reconstruction is still visibly a coarse set of fused layers.
 Consensus removes a large
@@ -270,16 +270,29 @@ scheduling reduce Bonsai's median from 4.50 to 4.07 seconds (1.106x) and Room's
 from 7.97 to 7.28 seconds (1.095x). Surfel counts and every reported quality
 score are unchanged; both A/B cgroups used zero swap and recorded no OOM event.
 
+An independent extraction sweep then found that the factor-4/2.5-disc recipe
+was over-dense. Fusing at five pixel footprints and rendering discs at 1.7
+merge cells removes redundant layers while reducing world-space support. On
+Bonsai this raises train/held-out PSNR from 14.34/13.55 to 14.89/14.03 dB and
+cuts 37,217 surfels to 28,312. On Room it raises 14.40/14.08 to 14.59/14.14 dB
+and cuts 38,099 to 29,662. Worst-view PSNR improves on both scenes; coverage
+falls by at most 0.8 percentage points, and the score already includes that
+loss. Radius 1.6 through 1.8 is a stable aggregate improvement, with 1.7 the
+first value that also passes every tail gate. These are now the library and CLI
+defaults. Durable scenes and comparison images are under
+`target/audit-runs/inverse-coarse-consensus-{bonsai,room}-local/`.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a
    final surface. Two-view consensus halves the cloud and improves both open-sky
-   and shadowed scores, yet three quarters of the retained surfels are still
-   never directly observed by the material fit, and the overlap diagnostic
-   finds an order of magnitude more projected supports than on the truth
-   surface. The next step is to optimize one shared oriented particle cloud
-   against all views, without introducing a polygonal intermediate. Observation
-   weighting is now measured and is not a substitute for that optimization.
+   and shadowed scores, yet nearly three quarters of the retained surfels are
+   still never directly observed by the material fit, and the overlap
+   diagnostic finds an order of magnitude more projected supports than on the
+   truth surface. The next step is to optimize one shared oriented particle
+   cloud against all views, without introducing a polygonal intermediate.
+   Observation weighting is now measured and is not a substitute for that
+   optimization.
 2. **The radiance field itself.** The selected fresh Smooth-L1 foam reaches
    24.94 dB over all 37 every-eighth views at 128². Its density modes are still
    a much weaker geometry signal than its rendered colour, so a better colour
