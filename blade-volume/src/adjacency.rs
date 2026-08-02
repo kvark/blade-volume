@@ -331,16 +331,13 @@ pub fn radii_from_nearest_neighbour(points: &[glam::Vec4], factor: f32) -> Vec<f
         return vec![0.0; n];
     }
 
-    let mut tree: kiddo::KdTree<f32, 3> = kiddo::KdTree::new();
-    for (index, position) in unique_positions.iter().enumerate() {
-        tree.add(position, index as u64);
-    }
+    let tree = kiddo::ImmutableKdTree::new_from_slice(&unique_positions);
     points
         .iter()
         .map(|point| {
             let query = [point.x, point.y, point.z];
             let nearest_distinct = tree
-                .nearest_n::<kiddo::SquaredEuclidean>(&query, 2)
+                .nearest_n::<kiddo::SquaredEuclidean>(&query, std::num::NonZero::new(2).unwrap())
                 .into_iter()
                 .find(|hit| hit.distance > 0.0)
                 .map_or(0.0, |hit| hit.distance.sqrt());
@@ -1003,6 +1000,16 @@ mod tests {
         let radii = radii_from_nearest_neighbour(&points, 0.5);
         assert_eq!(radii.len(), points.len());
         assert!(radii.iter().all(|&radius| (radius - 1.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn radii_from_nearest_neighbour_handles_planar_grids() {
+        let points = (0..32)
+            .flat_map(|x| (0..32).map(move |y| glam::Vec4::new(x as f32, y as f32, 0.0, 1.0)))
+            .collect::<Vec<_>>();
+        let radii = radii_from_nearest_neighbour(&points, 0.5);
+        assert_eq!(radii.len(), points.len());
+        assert!(radii.iter().all(|&radius| (radius - 0.5).abs() < 1.0e-6));
     }
 
     #[test]
