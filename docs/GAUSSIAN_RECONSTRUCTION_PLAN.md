@@ -47,9 +47,14 @@ appearance and reduce PSNR.
 3. Store only the generator and a manifest schema in Git. Generated planes,
    images, and benchmark outputs stay under `target/audit-runs`.
 
-The existing Blade harness at `9a5e0ec` has been revalidated locally: 8 poses,
-5 environments, 200x150, 128 paths, direct lighting. It completed in 1.9 s on
-an RTX 5070, peaked at 241 MB of cgroup memory, and recorded no memory events.
+Current result (2026-08-02): the harness is ported onto Blade's exact revision
+pinned by this workspace and pushed as Blade branch
+`reconstruction-relight-data`. The port exposed and includes the missing
+environment-map lifetime fix: assigning a real map used to destroy its prepare
+pipeline and jump through an invalid driver handle. Its GPU regression passes,
+and the 4-view smoke fixture is bit-for-bit identical to the research-branch
+output. The full direct-light fixture is 8 poses, 5 environments, 200x150 and
+128 paths; generated data remains under `target/audit-runs`.
 
 ## C. Close the synthetic upper bound
 
@@ -64,6 +69,29 @@ an RTX 5070, peaked at 241 MB of cgroup memory, and recorded no memory events.
 4. Replace truth materials, then truth normals, one at a time. Do not proceed
    to harder geometry while a simpler stage is below its measured ceiling for
    unexplained reasons.
+
+Current result (2026-08-02): the first upper bound is implemented by
+`synthetic_reconstruct`. Six selected training cameras contribute 99,881
+foreground G-buffer samples; held-out cameras 1 and 5 are not loaded by fusion.
+At a 0.08 voxel and 1.7-cell support they produce 28,835 Gaussian particles,
+whose 56.4% held-out coverage is within 0.3 percentage points of truth. A
+single known `sun-east` light fits the material, and unseen `studio` lighting
+at the two unseen poses scores 26.57 dB (worst 25.79). Truth materials on the
+identical geometry score 27.33 dB, leaving a measured 0.76 dB material gap.
+The compact-kernel control reaches 26.06 dB, while 16 sampled visibility rays
+fall to 25.06 dB and cost roughly 35x more per frame.
+
+The fitted parameters are deterministically clustered into 64 shared PBR
+materials. This reduces the asset from 1.85 MB to 0.92 MB while changing the
+held-out score by only 0.01 dB. Parallel roughness-level prefiltering reduces
+the two-light setup from 3.70 s to 0.64 s with identical scores. The latest
+artifact is
+`target/audit-runs/synthetic-reconstruct-final-v2/scene.rply`, SHA-256
+`1f2cd852e3508d057c4c4ddfef3675b5f356d9cd263edfea07c42f4941a32cc0`.
+
+This remains explicitly a depth/normal-truth result. The next honest ablation
+is to estimate normals from training-view positions while retaining truth
+depth; after that, replace truth depth with the image-trained foam surface.
 
 ## D. Remove truth geometry
 

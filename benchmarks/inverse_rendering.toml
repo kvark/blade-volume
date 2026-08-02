@@ -987,6 +987,51 @@ radii = [1.4, 1.55, 1.65, 1.7, 2.0, 2.3, 2.6]
 selection = 1.7
 verdict = "Gaussian improves both scenes at equal particle budget; wider support restores coverage but blurs the held-out image, while narrower support loses the Room and worst-view gates"
 
+# Geometry and normals come only from six selected training-view G-buffers;
+# views 1 and 5 are never loaded by fusion. Materials are fitted from sun-east
+# alone, while studio is never passed to the optimizer. The oracle row changes
+# only the materials on the identical fused Gaussian geometry, so its gap is a
+# material bound rather than a geometry leak.
+[synthetic_reconstruction.gaussian_pbr_upper_bound]
+date = "2026-08-02"
+fixture_manifest_sha256 = "cf40fda53ad7bc501b9b1769ca4e24e924d017a0ecf03ca86d7ca9376882e08e"
+fixture = "Blade direct lighting, 8 views x 5 environments, 200x150, 128 spp"
+training_views = [0, 2, 3, 4, 6, 7]
+held_out_views = [1, 5]
+training_environment = "sun-east"
+held_out_environment = "studio"
+voxel = 0.08
+support_radius_cells = 1.7
+particles = 28835
+materials_before_palette = 28835
+materials_after_palette = 64
+unclustered_asset_bytes = 1845464
+palette_asset_bytes = 924792
+palette_asset = "target/audit-runs/synthetic-reconstruct-final-v2/scene.rply"
+palette_asset_sha256 = "1f2cd852e3508d057c4c4ddfef3675b5f356d9cd263edfea07c42f4941a32cc0"
+truth_test_coverage = 0.567
+gaussian_test_coverage = 0.564
+fitted_training_light_test_psnr = 28.86
+fitted_relight_test_psnr = 26.57
+fitted_relight_worst_test_psnr = 25.79
+fitted_relight_test_psnr_where_hit = 24.89
+oracle_relight_test_psnr = 27.33
+oracle_relight_worst_test_psnr = 26.40
+oracle_relight_test_psnr_where_hit = 25.85
+compact_relight_test_psnr = 26.06
+compact_oracle_relight_test_psnr = 26.34
+shadowed_16_sample_relight_test_psnr = 25.06
+render_ms_per_frame = 0.30
+prefilter_control_seconds = 3.70
+prefilter_parallel_seconds = 0.64
+prefilter_speedup = 5.78
+material_fit_seconds = 2.66
+warm_peak_memory_bytes = 153919488
+end_to_end_peak_memory_bytes = 818544640
+full_workspace_test_peak_memory_bytes = 2547023872
+memory_events = 0
+verdict = "The Gaussian cloud reconstructs held-out shape nearly exactly and beats the compact kernel by 0.51 dB. Fitted PBR materials sit 0.76 dB below the identical-geometry oracle; direct visibility plus one bounce is both 35x slower and 1.51 dB worse on this direct-only fixture. This is a depth/normal-truth upper bound, not RGB-only geometry reconstruction."
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047
