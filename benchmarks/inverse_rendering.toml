@@ -987,11 +987,12 @@ radii = [1.4, 1.55, 1.65, 1.7, 2.0, 2.3, 2.6]
 selection = 1.7
 verdict = "Gaussian improves both scenes at equal particle budget; wider support restores coverage but blurs the held-out image, while narrower support loses the Room and worst-view gates"
 
-# Geometry and normals come only from six selected training-view G-buffers;
-# views 1 and 5 are never loaded by fusion. Materials are fitted from sun-east
-# alone, while studio is never passed to the optimizer. The oracle row changes
-# only the materials on the identical fused Gaussian geometry, so its gap is a
-# material bound rather than a geometry leak.
+# This is the truth-normal control. Geometry and normals come only from six
+# selected training-view G-buffers; views 1 and 5 are never loaded by fusion.
+# Materials are fitted from sun-east alone, while studio is never passed to the
+# optimizer. The oracle row changes only the materials on the identical fused
+# Gaussian geometry, so its gap is a material bound rather than a geometry
+# leak.
 [synthetic_reconstruction.gaussian_pbr_upper_bound]
 date = "2026-08-02"
 fixture_manifest_sha256 = "cf40fda53ad7bc501b9b1769ca4e24e924d017a0ecf03ca86d7ca9376882e08e"
@@ -1030,7 +1031,36 @@ warm_peak_memory_bytes = 153919488
 end_to_end_peak_memory_bytes = 818544640
 full_workspace_test_peak_memory_bytes = 2547023872
 memory_events = 0
-verdict = "The Gaussian cloud reconstructs held-out shape nearly exactly and beats the compact kernel by 0.51 dB. Fitted PBR materials sit 0.76 dB below the identical-geometry oracle; direct visibility plus one bounce is both 35x slower and 1.51 dB worse on this direct-only fixture. This is a depth/normal-truth upper bound, not RGB-only geometry reconstruction."
+verdict = "The Gaussian cloud reconstructs held-out shape nearly exactly and beats the compact kernel by 0.51 dB. Fitted PBR materials sit 0.76 dB below the identical-geometry oracle; direct visibility plus one bounce is both 35x slower and 1.51 dB worse on this direct-only fixture. This is the explicit depth/normal-truth control, not RGB-only geometry reconstruction."
+
+# Default depth-only upper bound. Centers still come from training-view depth
+# truth, but normals use only the fused centers and the cameras that observed
+# each element. Centroiding the covariance is important on curved, one-sided
+# neighbourhoods. Seven neighbours was selected from 4, 6, 7, 8, 12 and 16:
+# it ties the best fitted mean while improving the worst view and matched
+# oracle. The truth-normal rows above are otherwise identical controls.
+[synthetic_reconstruction.position_normals]
+neighbours = 7
+method = "least-variance direction of centroided local covariance; sign voted by contributing views"
+normal_rmse_degrees = 1.965
+fitted_training_light_test_psnr = 28.68
+fitted_training_light_worst_test_psnr = 27.65
+fitted_relight_test_psnr = 26.45
+fitted_relight_worst_test_psnr = 25.70
+fitted_relight_test_psnr_where_hit = 24.79
+oracle_relight_test_psnr = 27.18
+oracle_relight_worst_test_psnr = 26.30
+oracle_relight_test_psnr_where_hit = 25.71
+gaussian_test_coverage = 0.565
+fusion_and_normal_seconds = 0.080
+truth_normal_fitted_gap_db = 0.12
+truth_normal_oracle_gap_db = 0.15
+artifact = "target/audit-runs/synthetic-reconstruct-final-v3/scene.rply"
+artifact_bytes = 924792
+artifact_sha256 = "a4ec939a45d6ab5bdef3f774dcb3d81a375ac7130e04a72b722dacf16c54e886"
+peak_memory_bytes = 269725696
+memory_events = 0
+verdict = "Position-only normals close to within 0.12 dB fitted and 0.15 dB oracle of the G-buffer-normal control. Truth depth, not orientation, is now the remaining geometry oracle."
 
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3

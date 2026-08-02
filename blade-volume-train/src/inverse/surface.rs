@@ -43,11 +43,19 @@ fn least_variance_direction(offsets: &[glam::Vec3]) -> Option<glam::Vec3> {
     if offsets.len() < 3 {
         return None;
     }
+    // Fit the plane through the query (offset zero) and its neighbours around
+    // their centroid. Covariance around the query instead biases a curved or
+    // one-sided neighbourhood towards whichever side happened to contain more
+    // samples.
+    let mean = offsets.iter().sum::<glam::Vec3>() / (offsets.len() + 1) as f32;
     let mut covariance = glam::Mat3::ZERO;
     for offset in offsets {
+        let offset = *offset - mean;
         covariance +=
-            glam::Mat3::from_cols(*offset * offset.x, *offset * offset.y, *offset * offset.z);
+            glam::Mat3::from_cols(offset * offset.x, offset * offset.y, offset * offset.z);
     }
+    let query = -mean;
+    covariance += glam::Mat3::from_cols(query * query.x, query * query.y, query * query.z);
     let trace = covariance.x_axis.x + covariance.y_axis.y + covariance.z_axis.z;
     if trace <= 0.0 || !trace.is_finite() {
         return None;
@@ -66,19 +74,26 @@ fn least_variance_direction(offsets: &[glam::Vec3]) -> Option<glam::Vec3> {
     vector.try_normalize()
 }
 
-/// Build discs from a cloud, facing whichever cameras can see them.
+/// Local surface inferred around one point without any polygonal intermediate.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfaceEstimate {
+    pub normal: glam::Vec3,
+    pub spacing: f32,
+}
+
+/// Estimate an oriented local surface around every point.
 ///
-/// Every surfel is given material zero; the caller decides what that material
-/// is. Points whose neighbourhood is too spread out to be a surface are
-/// dropped, and the count of those is returned so the caller can say how much
-/// of the cloud survived.
-pub fn surfels_from_points(
+/// A missing entry is an outlier or a neighbourhood that does not define a
+/// plane. The vector remains aligned with `points`, which lets callers retain
+/// their own material and observation indexing while dropping unsupported
+/// particles.
+pub fn estimate_surfaces(
     points: &[glam::Vec3],
     cameras: &[glam::Vec3],
     options: SurfaceOptions,
-) -> (Vec<vol::relight::Surfel>, usize) {
+) -> Vec<Option<SurfaceEstimate>> {
     if points.len() < options.neighbours + 1 {
-        return (Vec::new(), points.len());
+        return vec![None; points.len()];
     }
     let positions: Vec<[f32; 3]> = points.iter().map(|p| p.to_array()).collect();
     let tree = kiddo::ImmutableKdTree::new_from_slice(&positions);
@@ -120,18 +135,17 @@ pub fn surfels_from_points(
     };
     let spacing_limit = median * options.outlier_factor;
 
-    let mut surfels = Vec::with_capacity(points.len());
-    let mut dropped = 0usize;
+    let mut estimates = Vec::with_capacity(points.len());
     for (index, point) in points.iter().enumerate() {
         let spacing = spacings[index];
         if !spacing.is_finite() || spacing <= 0.0 || spacing > spacing_limit {
-            dropped += 1;
+            estimates.push(None);
             continue;
         }
         let normal = match least_variance_direction(&neighbourhoods[index]) {
             Some(n) => n,
             None => {
-                dropped += 1;
+                estimates.push(None);
                 continue;
             }
         };
@@ -143,12 +157,36 @@ pub fn surfels_from_points(
         } else {
             normal
         };
+        estimates.push(Some(SurfaceEstimate { normal, spacing }));
+    }
+    estimates
+}
+
+/// Build discs from a cloud, facing whichever cameras can see them.
+///
+/// Every surfel is given material zero; the caller decides what that material
+/// is. Points whose neighbourhood is too spread out to be a surface are
+/// dropped, and the count of those is returned so the caller can say how much
+/// of the cloud survived.
+pub fn surfels_from_points(
+    points: &[glam::Vec3],
+    cameras: &[glam::Vec3],
+    options: SurfaceOptions,
+) -> (Vec<vol::relight::Surfel>, usize) {
+    let estimates = estimate_surfaces(points, cameras, options);
+    let mut surfels = Vec::with_capacity(points.len());
+    let mut dropped = 0usize;
+    for (point, estimate) in points.iter().zip(estimates) {
+        let Some(estimate) = estimate else {
+            dropped += 1;
+            continue;
+        };
         // One material per surviving surfel, numbered in the order they come
         // out: the caller builds a table of exactly this length.
         surfels.push(vol::relight::Surfel {
             center: point.to_array(),
-            radius: spacing * options.radius_factor,
-            normal: normal.to_array(),
+            radius: estimate.spacing * options.radius_factor,
+            normal: estimate.normal.to_array(),
             material: surfels.len() as u32,
         });
     }
@@ -260,5 +298,16 @@ mod tests {
         for surfel in &surfels {
             assert!(surfel.center[1] < 10.0, "the outlier became a disc");
         }
+    }
+
+    #[test]
+    fn surface_estimates_stay_aligned_when_an_outlier_is_dropped() {
+        let mut points = plane_cloud(glam::Vec3::Y, 10);
+        points.push(glam::Vec3::new(0.0, 40.0, 0.0));
+        let estimates =
+            estimate_surfaces(&points, &[glam::Vec3::Y * 3.0], SurfaceOptions::default());
+        assert_eq!(estimates.len(), points.len());
+        assert!(estimates[..points.len() - 1].iter().all(Option::is_some));
+        assert!(estimates.last().unwrap().is_none());
     }
 }

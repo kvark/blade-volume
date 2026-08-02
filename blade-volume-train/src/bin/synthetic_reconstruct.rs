@@ -1,8 +1,8 @@
 //! Reconstruct and score a Gaussian PBR point cloud from Blade synthetic data.
 //!
-//! This is deliberately the geometry upper bound, not an RGB-only claim. It
-//! fuses depth and normal truth from training cameras, never from held-out
-//! cameras, then fits PBR materials only to selected training illumination.
+//! This is deliberately a depth upper bound, not an RGB-only claim. It fuses
+//! depth truth from training cameras, estimates normals from those positions,
+//! then fits PBR materials only to selected training illumination.
 //! The resulting point cloud is scored at unseen poses under both a seen light
 //! and an unseen light. An oracle-material cloud with identical fused geometry
 //! separates representation/shading error from material-fitting error.
@@ -41,6 +41,14 @@ struct Args {
     /// particle support radius divided by voxel size
     #[argh(option, default = "1.7")]
     radius_factor: f32,
+
+    /// retain G-buffer normals as an explicit upper-bound control
+    #[argh(switch)]
+    truth_normals: bool,
+
+    /// fused-particle neighbours used for position-only normal estimation
+    #[argh(option, default = "7")]
+    normal_neighbours: usize,
 
     /// joint material-fit iterations per fused element
     #[argh(option, default = "120")]
@@ -172,6 +180,7 @@ fn foreground_coverage(
 fn reconstruction_error(
     elements: &[train::relight::Element],
     samples: &[train::relight::Sample],
+    truth_normals: &[glam::Vec3],
     palette: Option<&train::relight::MaterialPalette>,
 ) -> ReconstructionError {
     let mut position_squared = 0.0f64;
@@ -201,7 +210,10 @@ fn reconstruction_error(
         for &index in &element.samples {
             let sample = &samples[index as usize];
             position_squared += (center - sample.position).length_squared() as f64;
-            let angle = normal.dot(sample.normal).clamp(-1.0, 1.0).acos();
+            let angle = normal
+                .dot(truth_normals[index as usize])
+                .clamp(-1.0, 1.0)
+                .acos();
             normal_squared += angle.to_degrees().powi(2) as f64;
             for channel in 0..3 {
                 albedo_squared += (albedo[channel] - sample.albedo_truth[channel]).powi(2) as f64;
@@ -219,6 +231,59 @@ fn reconstruction_error(
         specular_rmse: (specular_squared / (3 * observations).max(1) as f64).sqrt(),
         roughness_rmse: (roughness_squared / observations.max(1) as f64).sqrt(),
     }
+}
+
+fn estimate_element_normals(
+    elements: &mut Vec<train::relight::Element>,
+    samples: &mut [train::relight::Sample],
+    dataset: &train::relight::Dataset,
+    training_views: &[usize],
+    neighbours: usize,
+) -> usize {
+    let points: Vec<glam::Vec3> = elements
+        .iter()
+        .map(|element| {
+            let mut center = glam::Vec3::ZERO;
+            for &index in &element.samples {
+                center += samples[index as usize].position;
+            }
+            center / element.samples.len().max(1) as f32
+        })
+        .collect();
+    let cameras: Vec<glam::Vec3> = training_views
+        .iter()
+        .map(|&index| dataset.views[index].position)
+        .collect();
+    let estimates = train::inverse::surface::estimate_surfaces(
+        &points,
+        &cameras,
+        train::inverse::surface::SurfaceOptions {
+            neighbours,
+            ..Default::default()
+        },
+    );
+    let previous = std::mem::take(elements);
+    let mut retained = Vec::with_capacity(previous.len());
+    let mut dropped = 0usize;
+    for (element, estimate) in previous.into_iter().zip(estimates) {
+        let Some(mut estimate) = estimate else {
+            dropped += 1;
+            continue;
+        };
+        let mut towards_observers = glam::Vec3::ZERO;
+        for &index in &element.samples {
+            towards_observers += samples[index as usize].view;
+        }
+        if estimate.normal.dot(towards_observers) < 0.0 {
+            estimate.normal = -estimate.normal;
+        }
+        for &index in &element.samples {
+            samples[index as usize].normal = estimate.normal;
+        }
+        retained.push(element);
+    }
+    *elements = retained;
+    dropped
 }
 
 fn view_support(
@@ -318,23 +383,50 @@ fn main() {
         dataset.environments[held_out_environment]
     );
 
-    let started = time::Instant::now();
-    let samples = train::relight::gather_samples_for_views(&dataset, &training_views)
+    let load_started = time::Instant::now();
+    let mut samples = train::relight::gather_samples_for_views(&dataset, &training_views)
         .unwrap_or_else(|error| fail(error));
-    let sample_time = started.elapsed();
+    let load_time = load_started.elapsed();
+    let truth_normals: Vec<glam::Vec3> = samples.iter().map(|sample| sample.normal).collect();
+    let fusion_started = time::Instant::now();
     let mut elements = train::relight::build_elements(&samples, args.voxel);
+    let dropped = if args.truth_normals {
+        0
+    } else {
+        estimate_element_normals(
+            &mut elements,
+            &mut samples,
+            &dataset,
+            &training_views,
+            args.normal_neighbours,
+        )
+    };
+    let fusion_time = fusion_started.elapsed();
     let (mean_views, multi_view) = view_support(&elements, &samples);
     let training_coverage =
         foreground_coverage(&dataset, &training_views).unwrap_or_else(|error| fail(error));
     let held_out_coverage =
         foreground_coverage(&dataset, &held_out_views).unwrap_or_else(|error| fail(error));
     println!(
-        "{} training foreground samples ({:.1}% of pixels) fused into {} elements in {:.3} s",
+        "{} training foreground samples ({:.1}% of pixels) loaded in {:.3} s",
         samples.len(),
         100.0 * training_coverage,
-        elements.len(),
-        sample_time.as_secs_f64()
+        load_time.as_secs_f64()
     );
+    if args.truth_normals {
+        println!(
+            "fused into {} elements in {:.3} s; retaining G-buffer normal control",
+            elements.len(),
+            fusion_time.as_secs_f64(),
+        );
+    } else {
+        println!(
+            "fused into {} elements in {:.3} s; {} dropped by position-only normal estimation",
+            elements.len(),
+            fusion_time.as_secs_f64(),
+            dropped
+        );
+    }
     println!(
         "{mean_views:.2} distinct training views per element; {:.1}% multi-view; held-out truth covers {:.1}%",
         100.0 * multi_view,
@@ -368,7 +460,7 @@ fn main() {
         },
     );
     let fit_time = fit_started.elapsed();
-    let element_error = reconstruction_error(&elements, &samples, None);
+    let element_error = reconstruction_error(&elements, &samples, &truth_normals, None);
     println!(
         "material fit in {:.3} s: loss {:.6}, albedo {:.4}, F0 {:.4}, roughness {:.4} RMSE",
         fit_time.as_secs_f64(),
@@ -391,7 +483,8 @@ fn main() {
         )
     });
     if let Some(ref palette) = palette {
-        let palette_error = reconstruction_error(&elements, &samples, Some(palette));
+        let palette_error =
+            reconstruction_error(&elements, &samples, &truth_normals, Some(palette));
         println!(
             "clustered to {} shared materials in {:.3} s: albedo {:.4}, F0 {:.4}, roughness {:.4} RMSE",
             palette.materials.len(),

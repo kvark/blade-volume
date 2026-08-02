@@ -86,12 +86,17 @@ materials. This reduces the asset from 1.85 MB to 0.92 MB while changing the
 held-out score by only 0.01 dB. Parallel roughness-level prefiltering reduces
 the two-light setup from 3.70 s to 0.64 s with identical scores. The latest
 artifact is
-`target/audit-runs/synthetic-reconstruct-final-v2/scene.rply`, SHA-256
-`1f2cd852e3508d057c4c4ddfef3675b5f356d9cd263edfea07c42f4941a32cc0`.
+`target/audit-runs/synthetic-reconstruct-final-v3/scene.rply`, SHA-256
+`a4ec939a45d6ab5bdef3f774dcb3d81a375ac7130e04a72b722dacf16c54e886`.
 
-This remains explicitly a depth/normal-truth result. The next honest ablation
-is to estimate normals from training-view positions while retaining truth
-depth; after that, replace truth depth with the image-trained foam surface.
+The default now retains depth truth only. It estimates each particle normal by
+centroided local covariance over the fused positions and resolves its sign from
+the cameras that actually contributed that particle. Seven neighbours give
+1.97-degree normal RMSE. The fitted held-out relight score is 26.45 dB versus
+26.57 dB with truth normals; the matched material oracle is 27.18 versus 27.33
+dB. This closes the normal-truth ablation to 0.12--0.15 dB without adding any
+polygonal geometry. `--truth-normals` retains the old control. The next honest
+ablation is to replace truth depth with the image-trained foam surface.
 
 ## D. Remove truth geometry
 

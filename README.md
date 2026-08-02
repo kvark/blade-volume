@@ -125,10 +125,11 @@ cargo run --release -p blade-volume-train --bin synthetic_reconstruct -- \
   --dataset /path/to/relight-data --output target/reconstruction.rply
 ```
 
-This command is deliberately a geometry upper bound: it fuses depth and normal
-truth from training views only, while materials are fitted from radiance. It
-prints a matched truth-material control and never uses held-out camera geometry
-for fusion. The RGB-only geometry stage remains future work.
+This command is deliberately a depth upper bound: it fuses depth truth from
+training views only, estimates normals from the resulting cloud, and fits
+materials from radiance. It prints a matched truth-material control and never
+uses held-out camera geometry for fusion. `--truth-normals` selects the earlier
+normal upper bound; RGB-only depth remains future work.
 
 Scored against blade's canonical path tracer over six views of `police.glb`
 under five environments, the direct-lighting path reaches **27.95 dB linear /
