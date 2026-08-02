@@ -530,6 +530,14 @@ At the audited revision:
   Room surfels, before texture reduces those to 5,445/5,407. Better visibility
   support is the next constraint; loosening local photometric confidence is
   not selected.
+- Commit `cfb7005` adds an analytic textured-sphere gate with curvature and
+  self-occlusion. All 25 of 49 displaced particles that retain four valid
+  views recover the exact 0.0375 radial correction; an exact sphere scores all
+  49 and moves none. Three rounds of similarly oriented neighbor propagation
+  fill most of the synthetic support gap, but lose 0.01 dB held-out Bonsai
+  under both 75% and unanimous sign agreement; Room is neutral for the broader
+  form. The propagation code is removed; unsupported particles require an
+  independent cue.
 - Commit `b593e3c` reuses one relight tracer and prefiltered environment across
   reconstruction's train/test score splits. Five complete Room runs fall from
   a 3.25-second median to 3.18 seconds (1.022×), with median user CPU down

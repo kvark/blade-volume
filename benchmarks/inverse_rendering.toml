@@ -814,6 +814,39 @@ bonsai_texture_supported = 5445
 room_view_supported = 9504
 room_texture_supported = 5407
 
+# An analytic textured sphere adds curvature and self-occlusion to the planar
+# displacement gate. With production defaults, every supported displaced
+# particle chooses the exact radial correction and exact geometry stays fixed.
+# The remaining error is entirely the 24 particles without four valid views.
+[surface_refinement.multi_view.curved_gate]
+git_commit = "cfb7005"
+particles = 49
+sphere_radius = 0.5
+initial_radial_error = 0.0375
+displaced_scored = 25
+displaced_moved = 25
+mean_moved_offset = 0.0375
+mean_objective_reduction = 0.98278123
+final_mean_radial_error = 0.01836735
+exact_scored = 49
+exact_moved = 0
+exact_final_mean_error_max = 0.000001
+
+[surface_refinement.multi_view.rejected_spatial_propagation]
+minimum_neighbors = 4
+rounds = 3
+agreement_fractions = [0.75, 1.0]
+bonsai_propagated = [273, 137]
+bonsai_total_moved = [3671, 3535]
+bonsai_train_psnr = [14.97, 14.97]
+bonsai_worst_train_psnr = [11.57, 11.57]
+bonsai_test_psnr = [14.06, 14.06]
+bonsai_worst_test_psnr = [11.67, 11.67]
+room_0_75_propagated = 57
+room_0_75_total_moved = 3312
+room_0_75_psnr = [14.59, 14.17, 13.08]
+verdict = "neighbor motion fills most of the synthetic support gap but loses 0.01 dB Bonsai held out even with unanimous signs; unsupported particles stay fixed"
+
 [surface_refinement.multi_view.rejected_second_pass]
 minimum_improvements = [0.02, 0.05]
 bonsai_second_pass_moved = [1220, 1153]

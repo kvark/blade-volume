@@ -271,6 +271,17 @@ with a stricter acceptance threshold. All four changes were removed. The next
 objective needs better geometric visibility or a different cue for unsupported
 particles, not a looser patch threshold or another identical local pass.
 
+An analytic textured sphere now makes that boundary a test rather than an
+inference. With curvature and self-occlusion, all 25 particles that retain four
+valid views recover an exact 0.0375 radial displacement; the other 24 account
+for all remaining error. Starting from the exact sphere scores all 49 and moves
+none. Propagating a median correction through nearby, similarly oriented
+particles fills most of the synthetic gap, but the 75%-agreement form loses
+0.01 dB held-out Bonsai and an all-neighbor-unanimous form loses the same
+amount. Room is neutral for the broader form. Propagation was removed:
+unsupported geometry needs evidence, not just a smoother version of its
+neighbors' decision.
+
 Scoring now keeps one GPU relight tracer alive across the training and held-out
 splits instead of rebuilding the same acceleration structure and prefiltered
 environment twice. Five complete Room runs fall from a 3.25-second median to
@@ -344,9 +355,10 @@ The selected refined scenes and held-out comparison images are under
    rejected. Nearly three quarters of the retained surfels are also never
    directly observed by the material fit, and the overlap diagnostic finds an
    order of magnitude more projected supports than on the truth surface. The
-   next step is a curved/occlusion fixture followed by cloud-only refinement
-   that carries reliable support into thin or weakly textured geometry and
-   updates normals or support radii when positions move.
+   analytic curved/occlusion fixture now covers this boundary. The next step is
+   cloud-only refinement that gains reliable evidence for thin or weakly
+   textured geometry and updates normals or support radii when positions move;
+   local offset propagation is measured and is not that evidence.
 2. **The radiance field itself.** The selected fresh Smooth-L1 foam reaches
    24.94 dB over all 37 every-eighth views at 128². Its density modes are still
    a much weaker geometry signal than its rendered colour, so a better colour
