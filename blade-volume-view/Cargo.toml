@@ -22,7 +22,7 @@ env_logger.workspace = true
 # `epaint::TexturesDelta` type mismatches (two different `epaint` versions).
 #
 # The `blade-egui` git dependency pins the compatible egui stack.
-blade-egui = { git = "https://github.com/kvark/blade", rev = "19f787080c3034a81c1030554c1b33daacf3066d", package = "blade-egui" }
+blade-egui = { git = "https://github.com/kvark/blade", rev = "bd74bdc82f870f8d7f02589de5f0fbb949b6e8a8", package = "blade-egui" }
 egui = "0.34"
 egui-winit = "0.34"
 
