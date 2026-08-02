@@ -351,6 +351,45 @@ test_psnr = 13.55
 worst_test_psnr = 11.33
 quality_changed = false
 
+# Whole-camera jobs are not equally expensive: a view through empty space can
+# terminate much earlier than one looking through the densest part of the
+# field. Static contiguous camera blocks therefore leave workers idle behind
+# the slowest block. A shared next-view counter keeps the existing fixed worker
+# pool but balances those jobs as workers finish. Five alternating runs show a
+# clear gain on the larger Room field and a neutral result on Bonsai. Results
+# are restored to camera order, and the exact-depth-map regression test is
+# unchanged.
+[depth_tracing.dynamic_work_queue]
+parent_commit = "92f8cd0"
+git_commit = "4b8397c"
+quality_changed = false
+
+[depth_tracing.dynamic_work_queue.bonsai]
+control_wall_seconds = [4.79, 4.48, 4.51, 4.53, 4.54]
+dynamic_wall_seconds = [4.43, 4.54, 4.50, 4.44, 4.51]
+control_median_seconds = 4.53
+dynamic_median_seconds = 4.50
+throughput_speedup = 1.007
+control_median_max_rss_bytes = 365727744
+dynamic_median_max_rss_bytes = 365940736
+surfels = 37217
+train_psnr = 14.34
+test_psnr = 13.55
+worst_test_psnr = 11.33
+
+[depth_tracing.dynamic_work_queue.room]
+control_wall_seconds = [8.56, 8.38, 8.44, 8.49, 8.36]
+dynamic_wall_seconds = [7.95, 7.90, 7.97, 7.93, 7.94]
+control_median_seconds = 8.44
+dynamic_median_seconds = 7.94
+throughput_speedup = 1.063
+control_median_max_rss_bytes = 362381312
+dynamic_median_max_rss_bytes = 362233856
+surfels = 38099
+train_psnr = 14.40
+test_psnr = 14.08
+worst_test_psnr = 12.98
+
 # Four local geometry shortcuts were gated after the overlap diagnostic. None
 # survives both Bonsai and Room. The source for every experimental switch was
 # removed; these numbers are retained so a scene-local gain is not mistaken for

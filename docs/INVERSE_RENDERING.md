@@ -233,6 +233,15 @@ surfels and identical train, held-out, and worst-view scores. Median maximum RSS
 rises by 12.9 MiB; the complete benchmark cgroup stayed below 164 MiB of charged
 memory with no swap, pressure, or OOM event.
 
+The workers now claim cameras dynamically instead of receiving contiguous
+blocks. Camera costs vary with how many foam cells their rays traverse, so the
+static split left cores idle behind its slowest block on the larger Room field.
+Five alternating runs reduce Room's median end-to-end time from 8.44 to 7.94
+seconds (1.063x) with unchanged RSS and quality. Bonsai is deliberately kept as
+the neutral control: 4.53 to 4.50 seconds, inside run noise. Maps are sorted
+back into camera order before fusion, and the batch-versus-single-view test
+asserts exact depth, opacity, and peak results.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a
