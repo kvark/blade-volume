@@ -270,6 +270,17 @@ scheduling reduce Bonsai's median from 4.50 to 4.07 seconds (1.106x) and Room's
 from 7.97 to 7.28 seconds (1.095x). Surfel counts and every reported quality
 score are unchanged; both A/B cgroups used zero swap and recorded no OOM event.
 
+Depth extraction now uses that same production walk on the GPU. Its dedicated
+full-precision target returns mode depth, alpha, and peak weight without
+evaluating SH colour; the ordinary viewer target remains half precision. A
+half-float depth prototype failed the Bonsai held-out gate and was rejected.
+Across five runs, full-precision GPU extraction reduces the complete selected
+Bonsai command from 3.73 to 2.45 seconds (1.52x) and Room from 6.93 to 3.19
+seconds (2.17x). Bonsai remains 14.89/14.03 dB with its worst held-out view
+improving 11.47→11.48; every reported Room score is unchanged. The CPU oracle
+remains available through `--cpu-depth`. Both A/B cgroups use zero swap and
+record no memory event.
+
 An independent extraction sweep then found that the factor-4/2.5-disc recipe
 was over-dense. Fusing at five pixel footprints and rendering discs at 1.7
 merge cells removes redundant layers while reducing world-space support. On
@@ -281,6 +292,8 @@ loss. Radius 1.6 through 1.8 is a stable aggregate improvement, with 1.7 the
 first value that also passes every tail gate. These are now the library and CLI
 defaults. Durable scenes and comparison images are under
 `target/audit-runs/inverse-coarse-consensus-{bonsai,room}-local/`.
+The latest GPU-produced equivalents are under
+`target/audit-runs/gpu-depth-selected-{bonsai,room}-local/`.
 
 ## What the numbers are limited by, in order
 

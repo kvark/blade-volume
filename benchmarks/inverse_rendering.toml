@@ -529,6 +529,82 @@ train_psnr = 14.40
 test_psnr = 14.08
 worst_test_psnr = 12.98
 
+# Reconstruction now dispatches the same production RadFoam/PowerFoam walk on
+# the GPU and reads mode depth, alpha, and peak weight from a dedicated
+# rgba32float target. A half-float prototype was faster but failed the Bonsai
+# tail gate; full precision restores the selected two-scene quality. The colour
+# renderer keeps its rgba16float target, and `--cpu-depth` retains the CPU
+# oracle. Five-run medians include capture loading, fusion, decomposition, and
+# scoring rather than timing the kernel alone. Both A/B cgroups used zero swap
+# and recorded no pressure or OOM event.
+[depth_tracing.gpu]
+parent_commit = "b8b67c2"
+git_commit = "2fb8152"
+default = "GPU; --cpu-depth selects the CPU oracle"
+output_format = "rgba32float: mode depth, alpha, peak weight, one"
+full_workspace_test_peak_memory_bytes = 5226614784
+full_workspace_test_memory_events = 0
+
+[depth_tracing.gpu.bonsai]
+cpu_wall_seconds = [3.79, 3.72, 3.75, 3.73, 3.73]
+gpu_wall_seconds = [2.54, 2.52, 2.45, 2.43, 2.43]
+cpu_median_seconds = 3.73
+gpu_median_seconds = 2.45
+throughput_speedup = 1.522
+cpu_cgroup_peak_memory_bytes = 176545792
+gpu_cgroup_peak_memory_bytes = 155631616
+cpu_surfels = 28312
+gpu_surfels = 28316
+cpu_observed_surfels = 7923
+gpu_observed_surfels = 7923
+cpu_train_psnr = 14.89
+gpu_train_psnr = 14.89
+cpu_worst_train_psnr = 11.69
+gpu_worst_train_psnr = 11.69
+cpu_test_psnr = 14.03
+gpu_test_psnr = 14.03
+cpu_worst_test_psnr = 11.47
+gpu_worst_test_psnr = 11.48
+gpu_train_coverage = 0.991
+gpu_test_coverage = 0.960
+artifact = "target/audit-runs/gpu-depth-selected-bonsai-local/scene.rply"
+artifact_sha256 = "d5fd4edf4e1092a8fc61adb0622261580c2dcf8b3636f708fe8ffcdae3302fc5"
+environment_sha256 = "08d5765adefbe72397302fb1b3e37a8a8ba818cc4fced4fd32ba095f2b4c2dc7"
+
+[depth_tracing.gpu.room]
+cpu_wall_seconds = [7.03, 6.93, 6.94, 6.89, 6.92]
+gpu_wall_seconds = [3.24, 3.19, 3.15, 3.18, 3.24]
+cpu_median_seconds = 6.93
+gpu_median_seconds = 3.19
+throughput_speedup = 2.172
+cpu_cgroup_peak_memory_bytes = 311148544
+gpu_cgroup_peak_memory_bytes = 310083584
+cpu_surfels = 29662
+gpu_surfels = 29658
+cpu_observed_surfels = 7987
+gpu_observed_surfels = 7987
+cpu_train_psnr = 14.59
+gpu_train_psnr = 14.59
+cpu_worst_train_psnr = 12.24
+gpu_worst_train_psnr = 12.24
+cpu_test_psnr = 14.14
+gpu_test_psnr = 14.14
+cpu_worst_test_psnr = 13.08
+gpu_worst_test_psnr = 13.08
+gpu_train_coverage = 0.977
+gpu_test_coverage = 0.979
+artifact = "target/audit-runs/gpu-depth-selected-room-local/scene.rply"
+artifact_sha256 = "8c4d93eea7957bc190d5c812dd49fa362bcef2ac2db09717e2bea79dd96a1f93"
+environment_sha256 = "05403d438018cfd2f5caf5f3b1c97a19cd13a8a549e413f6ac3cffcb3ae0847d"
+
+[depth_tracing.gpu.rejected_half_precision]
+metric_order = "train, held-out, worst held-out PSNR"
+bonsai_surfels = 28319
+bonsai_psnr = [14.90, 13.99, 11.42]
+room_surfels = 29692
+room_psnr = [14.61, 14.14, 13.13]
+verdict = "reject: half-float world depth costs 0.04 dB average and 0.05 dB worst held-out Bonsai quality"
+
 # Four local geometry shortcuts were gated after the overlap diagnostic. None
 # survives both Bonsai and Room. The source for every experimental switch was
 # removed; these numbers are retained so a scene-local gain is not mistaken for

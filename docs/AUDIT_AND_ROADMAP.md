@@ -505,6 +505,11 @@ At the audited revision:
   Room rises 14.40/14.08→14.59/14.14 dB, with every worst-view PSNR also
   improving and 22–24% fewer surfels. The scenes remain visibly coarse; this
   improves the initializer and does not close the shared-surface geometry gap.
+- The extractor now runs the production RadFoam/PowerFoam walk on the GPU and
+  writes full-precision mode depth, alpha, and peak weight. Five-run end-to-end
+  medians fall 3.73→2.45 seconds on Bonsai and 6.93→3.19 on Room, with selected
+  quality preserved. The complete GPU-inclusive workspace suite peaks at
+  5,226,614,784 bytes inside its 6 GiB scope with zero swap or memory events.
 - The physical path-record integration tests used to initialize two GPU
   contexts concurrently under Cargo's default test threading. On this NVIDIA
   driver that can leave one test busy-waiting indefinitely even though its
