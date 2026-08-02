@@ -538,6 +538,12 @@ At the audited revision:
   under both 75% and unanimous sign agreement; Room is neutral for the broader
   form. The propagation code is removed; unsupported particles require an
   independent cue.
+- A robust source-depth fallback scores all 7,786/9,504 geometrically supported
+  Bonsai/Room particles and improves Room average train/held-out PSNR by
+  0.02/0.01 dB, but loses 0.01 dB on the worst held-out view. A stricter 5%
+  acceptance threshold retains the same tail. Because it reuses the foam depths
+  that initialized fusion rather than adding evidence, it is removed and those
+  depths remain visibility checks only.
 - Commit `b593e3c` reuses one relight tracer and prefiltered environment across
   reconstruction's train/test score splits. Five complete Room runs fall from
   a 3.25-second median to 3.18 seconds (1.022×), with median user CPU down

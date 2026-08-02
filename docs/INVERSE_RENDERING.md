@@ -282,6 +282,15 @@ amount. Room is neutral for the broader form. Propagation was removed:
 unsupported geometry needs evidence, not just a smoother version of its
 neighbors' decision.
 
+Using robust multi-view source-depth residual as a fallback does cover every
+geometrically supported particle, but it is still not independent evidence:
+those are the same foam depths that initialized fusion. It leaves Bonsai's
+rounded scores unchanged and raises Room train/held-out averages by 0.02/0.01
+dB, while its worst held-out view falls 13.08→13.07 dB. Raising the fallback's
+acceptance threshold changes only twelve Room moves and not the tail. This path
+was also removed; source depth remains an occlusion check for the photometric
+objective.
+
 Scoring now keeps one GPU relight tracer alive across the training and held-out
 splits instead of rebuilding the same acceleration structure and prefiltered
 environment twice. Five complete Room runs fall from a 3.25-second median to
