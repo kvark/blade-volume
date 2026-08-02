@@ -273,7 +273,9 @@ asserts exact depth, opacity, and peak results.
 2. **The radiance field itself.** The selected fresh Smooth-L1 foam reaches
    24.94 dB over all 37 every-eighth views at 128². Its density modes are still
    a much weaker geometry signal than its rendered colour, so a better colour
-   score alone is not proof of a better surface.
+   score alone is not proof of a better surface. A matched 200K→229K capacity
+   gate makes that concrete: +0.02 dB all-view radiance at step 14,000 becomes
+   -0.32 dB held-out and -1.10 dB worst-view after depth-mode extraction.
 3. **The shading model**: one bounce, and a lobe that only pays where the lobe
    is a meaningful share of the brightness. Worth about 27 % on the truth scene
    even with everything else exact.

@@ -1036,6 +1036,18 @@ and the final 400 updates add 0.02 dB all-37 — the same flat tail the L1 arm
 showed. So Smooth-L1 improves the trajectory rather than the ceiling: this
 schedule, not the loss, is what closes.
 
+The 200,000-cell cap is not that ceiling. A fresh-trajectory capacity gate
+branches at step 10,000, grows once to 229,273 cells at step 10,500, and settles
+against the existing controls. At step 12,000 it changes train/selected/all-37
+by +0.05/-0.02/+0.02 dB; at step 14,000 by +0.07/+0.04/+0.02 dB, while taking
+14.4% and 6.7% longer over the two matched 2,000-step segments. More
+importantly, depth-mode extraction at step 14,000 changes the relightable
+scene's train/test/worst PSNR from 13.38/11.23/4.29 to 13.43/10.91/3.19. The
+extra cells marginally fit radiance while making the shared-surface signal
+worse. Reopening the cap only after step 20,400 is a stronger failure: even
+after 500 settling updates the source field loses 1.28 dB selected and 1.01 dB
+all-37. Both branches stay experimental artifacts; 200,000 remains selected.
+
 Profiling originally showed exhaustive all-view contribution scans dominating
 densification. The correctness oracle remains exhaustive, but its GPU results
 now land in cached download memory before the unchanged CPU scoring pass.

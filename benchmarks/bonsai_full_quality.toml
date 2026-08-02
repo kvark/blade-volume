@@ -422,6 +422,57 @@ train_psnr = 26.78
 selected_8_psnr = 24.48
 all_37_psnr = 24.94
 
+# The earlier 230K rejection began from geometry formed by the old tiny-batch
+# trajectory. This matched gate repeats it on the selected fresh Smooth-L1
+# path: branch at step 10,000, split once at 10,500, and compare at the same
+# later steps. The small radiance gain does not transfer to the relightable
+# surface extracted from depth modes, and the larger field costs more time.
+[fresh_mixed_view.loss_gate.capacity_gate]
+source_step = 10000
+densify_step = 10500
+control_cells = 200000
+candidate_cells = 229273
+control_step10000_to_12000_wall_seconds = 252.325
+candidate_step10000_to_12000_wall_seconds = 288.565
+control_step12000_to_14000_wall_seconds = 250.742
+candidate_step12000_to_14000_wall_seconds = 267.533
+candidate_peak_memory_bytes = 1465843712
+memory_swap_bytes = 0
+memory_events = 0
+selection = "retain 200000 cells"
+
+[fresh_mixed_view.loss_gate.capacity_gate.step12000]
+control_train_psnr = 24.50
+control_selected_8_psnr = 23.15
+control_all_37_psnr = 23.56
+candidate_train_psnr = 24.55
+candidate_selected_8_psnr = 23.13
+candidate_all_37_psnr = 23.58
+
+[fresh_mixed_view.loss_gate.capacity_gate.step14000]
+control_train_psnr = 25.26
+control_selected_8_psnr = 23.64
+control_all_37_psnr = 24.09
+candidate_train_psnr = 25.33
+candidate_selected_8_psnr = 23.68
+candidate_all_37_psnr = 24.11
+control_inverse_psnr = [13.38, 11.23, 4.29]
+candidate_inverse_psnr = [13.43, 10.91, 3.19]
+
+# Growing only after the selected schedule is exhausted establishes the other
+# boundary: the low learning-rate floor cannot settle new sites, and both the
+# source field and extracted surface regress.
+[fresh_mixed_view.loss_gate.capacity_gate.late_growth]
+source_step = 20400
+evaluation_step = 21000
+control_cells = 200000
+candidate_cells = 229327
+control_radiance_psnr = [26.80, 24.49, 24.94]
+candidate_radiance_psnr = [25.12, 23.21, 23.93]
+control_inverse_psnr = [14.33, 13.55, 11.44]
+candidate_inverse_psnr = [14.25, 13.63, 11.30]
+verdict = "late capacity cannot settle; active-schedule capacity gains 0.02 dB all-view but harms extracted geometry"
+
 [contribution_readback_performance]
 interval = "steps 12000..13000 with one 200000 to 230000-cell densification round"
 shared_contribution_seconds = 561.315
