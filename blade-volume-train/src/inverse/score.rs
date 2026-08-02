@@ -298,19 +298,52 @@ impl Renderer {
         diffuse_samples: u32,
         dump: Option<&path::Path>,
     ) -> Summary {
+        self.score_splits(scene, capture, &[(indices, dump)], diffuse_samples)[0]
+    }
+
+    /// Score several view sets while reusing one scene tracer.
+    ///
+    /// Building the acceleration structure and prefiltering the environment
+    /// do not depend on the camera split. Keeping them alive also guarantees
+    /// every split is evaluated against exactly the same GPU scene state.
+    pub fn score_splits(
+        &mut self,
+        scene: &Scene,
+        capture: &capture::Capture,
+        splits: &[(&[usize], Option<&path::Path>)],
+        diffuse_samples: u32,
+    ) -> Vec<Summary> {
         assert_eq!(capture.width, self.width);
         assert_eq!(capture.height, self.height);
+        if splits.is_empty() {
+            return Vec::new();
+        }
         let mut tracer = self.tracer(scene, diffuse_samples, false);
 
+        let summaries = splits
+            .iter()
+            .map(|&(indices, dump)| self.score_with_tracer(&mut tracer, capture, indices, dump))
+            .collect();
+        tracer.deinit(&self.context);
+        summaries
+    }
+
+    fn score_with_tracer(
+        &mut self,
+        tracer: &mut vol::gpu::RelightTracer,
+        capture: &capture::Capture,
+        indices: &[usize],
+        dump: Option<&path::Path>,
+    ) -> Summary {
         let mut scores = Vec::new();
         let mut elapsed = std::time::Duration::ZERO;
         for &index in indices {
             let view = &capture.views[index];
             let started = std::time::Instant::now();
             tracer.set_background([0.0; 3]);
-            let dark = self.draw(&mut tracer, view.camera);
+            let dark = self.draw(tracer, view.camera);
             tracer.set_background([1.0; 3]);
-            let bright = self.draw(&mut tracer, view.camera);
+            let bright = self.draw(tracer, view.camera);
             elapsed += started.elapsed();
 
             let covered: Vec<f32> = dark
@@ -338,7 +371,6 @@ impl Renderer {
                 );
             }
         }
-        tracer.deinit(&self.context);
         // Two draws per view, so milliseconds per frame is half the mean.
         let per_frame_ms = elapsed.as_secs_f64() * 1000.0 / (2 * indices.len().max(1)) as f64;
         Summary::of(&scores, per_frame_ms)

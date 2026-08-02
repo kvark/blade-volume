@@ -319,11 +319,18 @@ fn main() {
         "\n{:<8}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}",
         "split", "views", "psnr srgb", "worst", "psnr linear", "coverage", "where hit"
     );
-    for (name, indices, dump) in [("train", &train_views, None), ("test", &test_views, dump)] {
+    let splits = [
+        (train_views.as_slice(), None),
+        (test_views.as_slice(), dump),
+    ];
+    let summaries = renderer.score_splits(&fitted.scene, &capture, &splits, args.diffuse_samples);
+    for ((name, indices), summary) in [("train", &train_views), ("test", &test_views)]
+        .into_iter()
+        .zip(summaries)
+    {
         if indices.is_empty() {
             continue;
         }
-        let summary = renderer.score(&fitted.scene, &capture, indices, args.diffuse_samples, dump);
         println!(
             "{name:<8}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{:>12.2}",
             summary.views,
