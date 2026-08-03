@@ -83,7 +83,12 @@ both arms use the corrected disconnected-support compute splat and start from
 identical reference-initialized radii. Through step 4,000, learned radii improve
 fresh-Ply train/all-37 held-out PSNR from 14.32/14.05 to 14.66/14.36 dB at the
 same 100,569-site capacity. This selects radius learning for the endpoint run;
-it does not yet clear the full PowerFoam production gate.
+the selected arm reaches 15.22/14.81 dB at step 6,000 with 175,895 sites. That
+checkpoint also separates the real candidate and path budgets: evaluation
+needs 647 sphere hits but only 127 surviving intervals. Commit `7d5bf5a` keeps
+1,024 candidate slots while retaining 128-step path rows; all 37 held-out PNGs
+are byte-identical to the 256-step control, and a matched 100-step segment is
+16.4% faster. The run does not yet clear the full PowerFoam production gate.
 
 The first full-dataset attempt, from commit `93c996f`, deliberately stopped at
 step 10,000 of 20,400 after

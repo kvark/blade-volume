@@ -176,7 +176,7 @@ after 2,000 steps.
   non-positive.
 - A CPU oracle and physical GPU tests cover disconnected components, exact
   interval/Jacobian parity, translated geometry, and compact evaluation paths.
-  Candidate rows are bounded to `max(4 * max_steps, 256)` entries; synchronized
+  Candidate rows are bounded to `max(4 * max_steps, 1024)` entries; synchronized
   training and evaluation reject overflow instead of silently truncating.
 - Headless weighted evaluation now uses the same compute-splat semantics. The
   existing RadFoam walk remains unchanged for unweighted clouds and the
@@ -409,7 +409,7 @@ resize and live settings handling, is the remaining presentation step.
   1.01 GB because the fused schedule changes buffer lifetimes, but the 6 GB
   cgroup records no swap, limit, or OOM event.
 
-#### M2p — Real-scene PowerFoam radius-learning gate (selected through step 4,000)
+#### M2p — Real-scene PowerFoam radius-learning gate (selected through step 6,000)
 
 - The first fixed-versus-trainable radius experiments used the invalid
   camera-seeded walk and cannot judge bounded supports. The corrected gate
@@ -427,9 +427,36 @@ resize and live settings handling, is the remaining presentation step.
   both arms record zero truncation, swap, memory-pressure, OOM, or GPU-fault
   events under a 6 GB cgroup. The full protocol and ignored artifacts are
   recorded by `benchmarks/bonsai_powerfoam_radius_learning.toml`.
+- Continuing the selected arm through four more growth rounds reaches 175,895
+  sites and 8,120,582 directed edges at step 6,000. Fresh-Ply train/all-37
+  quality rises to 15.22/14.81 dB; 8,192,000 optimizer rays use at most
+  109/128 intervals and none truncate. The sharp edge-count growth is now an
+  explicit stability signal to inspect at the 200,000-site boundary.
 
 The trainable arm advances toward the 200,000-site/20,400-step endpoint. The
 larger appearance model remains gated on that completed quality curve.
+
+#### M2q — Independent PowerFoam candidate and path budgets (implemented and gated)
+
+- A learned-radius support can intersect a ray without surviving radical-plane
+  clipping. Candidate-hit count therefore cannot be inferred from the shorter
+  differentiable path depth. The step-6,000 checkpoint demonstrates the
+  distinction: full evaluation needs as many as 647 sphere candidates but only
+  127 surviving intervals. The previous 512-candidate row rejected this valid
+  128-step render.
+- Commit `7d5bf5a` gives splat candidate rows a 1,024-entry floor while leaving
+  path/Jacobian rows controlled by `max_steps`. Evaluation reports both observed
+  budgets and still fails loudly on either overflow. Physical GPU path tests,
+  the default and all-feature workspace suites, and strict clippy pass; the two
+  workspace suites peak at 5.47 and 5.06 GiB in separate 6 GiB cgroups with
+  zero swap, pressure, OOM, or GPU faults.
+- Re-rendering all 37 held-out views with 128- and 256-step paths produces
+  byte-identical PNGs and the same 15.22/14.81 dB aggregate. On matched
+  100-step resumes, the 128-step graph lowers physical allocation from
+  1,895.8 to 1,034.7 MB and device-local allocation from 872.9 to 475.3 MB.
+  Training falls from 9.733 to 8.141 seconds (16.4%) and GPU wait from 6.103
+  to 4.699 seconds (23.0%); host peak falls from 936 to 762 MB. This retains
+  the smaller path budget without silently constraining support discovery.
 
 ### M3 — Training crate scaffolding
 

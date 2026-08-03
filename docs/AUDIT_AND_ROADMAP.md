@@ -591,8 +591,10 @@ At the audited revision:
 - Weighted-cloud densification follows the reference resampler's photometric
   responsibility signal, 99th-percentile cap, copied radius, conserved sibling
   statistic, and 5%-support-scale split. The corrected compute-splat path reaches
-  13.52 dB all-37 after the first 2,000-step/57,500-site gate; the matched
-  200,000-cell/20,400-step endpoint remains outstanding.
+  13.52 dB all-37 after the first 2,000-step/57,500-site gate. The selected
+  learned-radius arm reaches 15.22/14.81 dB train/all-37 at step 6,000 and
+  175,895 sites; the matched 200,000-cell/20,400-step endpoint remains
+  outstanding.
 - The real checkpoint/resume path reaches 100,569 sites at step 4,000 and
   improves Bonsai train/all-37 PSNR to 14.65/14.35 dB. Conservative projected
   candidates preserve those pixels exactly and make the complete weighted
@@ -605,6 +607,12 @@ At the audited revision:
   truncation, reducing the matched training run by another 7.4% and its peak
   by 32.9%. A 64-step render silently clipped 0.0762% of full-view rays and is
   retained only as an approximate setting.
+- Candidate-hit pressure is now measured separately from surviving path depth.
+  The step-6,000 cloud needs 647 candidate supports but only 127 path intervals;
+  a 1,024-candidate floor fixes the former 512-entry rejection without enlarging
+  every path/Jacobian row. All 37 held-out renders are byte-identical between
+  128- and 256-step paths. The smaller path graph cuts physical/device-local
+  allocation by 45.4%/45.6% and matched training time by 16.4%.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -1208,8 +1216,9 @@ with no systematic streaking from stale topology.
 
 Items 1-5 are implemented at the CPU-oracle, production-WGSL, recorder, and
 training-graph levels and pass physical-GPU integration. Weighted densification
-uses the reference copied-radius split policy. Items 6-7 and a real-scene
-radius-learning/densification ablation remain.
+uses the reference copied-radius split policy, and a real-scene radius-learning
+ablation is positive through step 6,000. Its full endpoint plus items 6-7
+remain.
 
 Acceptance gate: CPU, GPU, and brute-force bounded traversal agree; a reference
 checkpoint renders within a defined image tolerance; trained radii improve a
@@ -1397,8 +1406,14 @@ material path.
    13.70/13.51 dB. At step 4,000, after four topology-changing growth rounds,
    it improves 14.32/14.05 to 14.66/14.36 dB at the identical 100,569-site
    capacity. Both arms record zero truncation, swap, OOM, or GPU faults; the
-   learned arm remains selected. Continue it to the 200,000-cell/20,400-step
-   endpoint before clearing the production gate.)
+   learned arm remains selected. At step 6,000 it reaches 175,895 sites and
+   15.22/14.81 dB, while the graph expands to 8,120,582 directed edges. Its
+   647 candidate hits versus 127 surviving path intervals prompted independent
+   candidate/path capacities; 128-step output stays byte-identical to the
+   256-step control and makes matched training 16.4% faster. Continue to the
+   200,000-cell boundary only after checking that topology and radius growth
+   remain bounded, then finish the 20,400-step endpoint before clearing the
+   production gate.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
