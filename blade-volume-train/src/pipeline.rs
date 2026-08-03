@@ -783,6 +783,28 @@ fn initialize_surface_normals(
     fitted
 }
 
+fn initialize_spherical_voronoi(point_count: usize) -> vol::SphericalVoronoi {
+    const TEMPERATURE: f32 = 4.0;
+    let mut site_axes = [glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
+    for (site, axis) in site_axes.iter_mut().enumerate() {
+        *axis = TEMPERATURE
+            * glam::Vec3::new(
+                if site & 1 == 0 { -1.0 } else { 1.0 },
+                if site & 2 == 0 { -1.0 } else { 1.0 },
+                if site & 4 == 0 { -1.0 } else { 1.0 },
+            )
+            .normalize();
+    }
+    let mut axes = Vec::with_capacity(point_count * vol::SPHERICAL_VORONOI_SITES);
+    for _ in 0..point_count {
+        axes.extend_from_slice(&site_axes);
+    }
+    vol::SphericalVoronoi {
+        axes,
+        colors: vec![glam::Vec3::ZERO; point_count * vol::SPHERICAL_VORONOI_SITES],
+    }
+}
+
 /// Convenience wrapper that calls [`train_colmap_appearance_split`] with no
 /// test views. Returns just the trained model for backwards compatibility.
 pub fn train_colmap_appearance(
@@ -1082,6 +1104,25 @@ pub fn train_colmap_appearance_split(
             model.points.len(),
         );
     }
+    if (config.fit.spherical_voronoi_axis_lr_ratio > 0.0
+        || config.fit.spherical_voronoi_color_lr_ratio > 0.0)
+        && model.spherical_voronoi.is_none()
+    {
+        assert!(
+            config.fit.resume_state_path.is_none(),
+            "cannot add Spherical Voronoi appearance while restoring an optimizer checkpoint; \
+             initialize a fresh directional model first"
+        );
+        assert!(
+            model.surface_normals.is_some() && model.radii.is_some(),
+            "Spherical Voronoi training requires --oriented-powerfoam or an oriented input PLY"
+        );
+        model.spherical_voronoi = Some(initialize_spherical_voronoi(model.points.len()));
+        log::info!(
+            "initialized {} oriented PowerFoam Spherical Voronoi residuals to zero",
+            model.points.len(),
+        );
+    }
 
     let training_start = std::time::Instant::now();
     let fit_outcome = diff_render::fit_appearance_multi_view_outcome(
@@ -1154,6 +1195,31 @@ mod tests {
         first.validate().unwrap();
     }
 
+    #[test]
+    fn spherical_voronoi_initialization_is_deterministic_and_zero_preserving() {
+        let first = initialize_spherical_voronoi(3);
+        let second = initialize_spherical_voronoi(3);
+        assert_eq!(first, second);
+        assert_eq!(first.axes.len(), 3 * vol::SPHERICAL_VORONOI_SITES);
+        assert_eq!(first.colors.len(), 3 * vol::SPHERICAL_VORONOI_SITES);
+        assert!(first
+            .axes
+            .iter()
+            .all(|axis| (axis.length() - 4.0).abs() < 1.0e-6));
+        assert!(first.colors.iter().all(|color| *color == glam::Vec3::ZERO));
+        for point in 0..3 {
+            assert_eq!(
+                &first.axes[point * vol::SPHERICAL_VORONOI_SITES
+                    ..(point + 1) * vol::SPHERICAL_VORONOI_SITES],
+                &first.axes[..vol::SPHERICAL_VORONOI_SITES],
+            );
+            assert_eq!(
+                vol::trace::eval_spherical_voronoi(&first, point as u32, glam::Vec3::X),
+                glam::Vec3::ZERO,
+            );
+        }
+    }
+
     fn tiny_model_far_apart() -> vol::PointCloudModel {
         let points = vec![
             glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
@@ -1191,11 +1257,13 @@ mod tests {
                 0.0;
                 model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3
             ]);
+        model.spherical_voronoi = Some(initialize_spherical_voronoi(model.points.len()));
         rebuild_adjacency(&mut model, AdjacencyKind::Delaunay, &[]);
         assert!(model.radii.is_none());
         assert!(model.surface_normals.is_none());
         assert!(model.surface_offsets.is_none());
         assert!(model.surface_color_coefficients.is_none());
+        assert!(model.spherical_voronoi.is_none());
         model.validate().unwrap();
     }
 

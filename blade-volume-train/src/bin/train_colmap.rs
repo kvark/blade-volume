@@ -343,6 +343,18 @@ struct Args {
     #[argh(option, default = "0.0")]
     surface_color_lr_ratio: f32,
 
+    /// spherical Voronoi raw-axis learning rate as a fraction of the main
+    /// rate (default 0 = no directional table). Under the radfoam-v1
+    /// schedule, 1 selects the absolute 0.05 to 0.005 axis rate.
+    #[argh(option, default = "0.0")]
+    spherical_voronoi_axis_lr_ratio: f32,
+
+    /// spherical Voronoi RGB-site learning rate as a fraction of the main
+    /// rate (default 0 = no directional table). Under the radfoam-v1
+    /// schedule, 1 selects the absolute 0.005 to 0.0005 color rate.
+    #[argh(option, default = "0.0")]
+    spherical_voronoi_color_lr_ratio: f32,
+
     /// initial weight on PowerFoam's view-facing normal loss (default 0 =
     /// off; reference value 0.1, decaying to 0.01).
     #[argh(option, default = "0.0")]
@@ -536,6 +548,18 @@ fn main() {
         eprintln!("--surface-color-lr-ratio must be finite and non-negative");
         std::process::exit(2);
     }
+    if !args.spherical_voronoi_axis_lr_ratio.is_finite()
+        || args.spherical_voronoi_axis_lr_ratio < 0.0
+    {
+        eprintln!("--spherical-voronoi-axis-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
+    if !args.spherical_voronoi_color_lr_ratio.is_finite()
+        || args.spherical_voronoi_color_lr_ratio < 0.0
+    {
+        eprintln!("--spherical-voronoi-color-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
     if !args.surface_normal_weight.is_finite() || args.surface_normal_weight < 0.0 {
         eprintln!("--surface-normal-weight must be finite and non-negative");
         std::process::exit(2);
@@ -581,6 +605,8 @@ fn main() {
     if (args.surface_normal_lr_ratio > 0.0
         || args.surface_offset_lr_ratio > 0.0
         || args.surface_color_lr_ratio > 0.0
+        || args.spherical_voronoi_axis_lr_ratio > 0.0
+        || args.spherical_voronoi_color_lr_ratio > 0.0
         || args.surface_normal_weight > 0.0)
         && !args.oriented_powerfoam
         && args.init_ply.is_none()
@@ -768,6 +794,8 @@ fn main() {
             surface_normal_lr_ratio: args.surface_normal_lr_ratio,
             surface_offset_lr_ratio: args.surface_offset_lr_ratio,
             surface_color_lr_ratio: args.surface_color_lr_ratio,
+            spherical_voronoi_axis_lr_ratio: args.spherical_voronoi_axis_lr_ratio,
+            spherical_voronoi_color_lr_ratio: args.spherical_voronoi_color_lr_ratio,
             surface_normal_weight: args.surface_normal_weight,
             powerfoam_candidate_capacity: args.powerfoam_candidate_capacity,
             geometry_rebuild_every: args.geometry_rebuild_every,

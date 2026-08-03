@@ -49,6 +49,8 @@ pub struct VolumetricGraph {
     pub sh_coefficients: Vec<Vec<mn::NodeId>>,
     /// Optional `[N, 12]` channel-major spatial surface residual table.
     pub surface_color_coefficients: Option<mn::NodeId>,
+    /// Optional eight-site directional residual parameter tables.
+    pub spherical_voronoi: Option<SphericalVoronoiGraph>,
     /// Per-view, per-channel RGB gain: one `[num_views, 1]` table per
     /// channel. Multiplies each rendered pixel before the L1 loss.
     /// Initialised to 1.0; frozen at 1.0 when the `exposure_*` LR
@@ -79,6 +81,14 @@ pub struct VolumetricGraph {
     /// compute it differentiably from positions; weighted models use the
     /// recorder's radical-plane/sphere-clipped interval.
     pub dt_from_positions: mn::NodeId,
+}
+
+#[derive(Clone, Debug)]
+pub struct SphericalVoronoiGraph {
+    /// `[N, 24]` site-major raw axes. Vector magnitude is temperature.
+    pub axes: mn::NodeId,
+    /// `[N, 24]` channel-major RGB site values.
+    pub colors: mn::NodeId,
 }
 
 #[derive(Clone, Debug)]
@@ -366,6 +376,7 @@ pub fn build_volumetric_graph(
     use_surface_offsets: bool,
     use_surface_color: bool,
     collect_point_error: bool,
+    use_spherical_voronoi: bool,
     color_loss_kind: ColorLoss,
 ) -> VolumetricGraph {
     assert!(
@@ -398,6 +409,10 @@ pub fn build_volumetric_graph(
     assert!(
         !use_surface_color || use_surface_normals,
         "surface color requires oriented surfaces",
+    );
+    assert!(
+        !use_spherical_voronoi || use_surface_normals,
+        "Spherical Voronoi appearance requires oriented surfaces",
     );
     let p = n_pixels;
     let l = max_steps;
@@ -470,6 +485,16 @@ pub fn build_volumetric_graph(
             "surface_color_coefficients",
             &[n_cells, vol::SURFACE_COLOR_COMPONENTS * 3],
         )
+    });
+    let spherical_voronoi = use_spherical_voronoi.then(|| SphericalVoronoiGraph {
+        axes: g.parameter(
+            "spherical_voronoi_axes",
+            &[n_cells, vol::SPHERICAL_VORONOI_SITES * 3],
+        ),
+        colors: g.parameter(
+            "spherical_voronoi_colors",
+            &[n_cells, vol::SPHERICAL_VORONOI_SITES * 3],
+        ),
     });
     let normalized_surface_normals = surface_normals.map(|normals| {
         let unit_scale = 1.0_f32 / 3.0_f32.sqrt();
@@ -794,6 +819,9 @@ pub fn build_volumetric_graph(
         &sh_coefficients,
         surface_color_coefficients,
         surface_basis,
+        spherical_voronoi
+            .as_ref()
+            .map(|parameters| (parameters, ray_dir_pl)),
         &basis_inputs,
         pixel_idx_per_step,
         weight,
@@ -1050,6 +1078,7 @@ pub fn build_volumetric_graph(
         weighted_path,
         sh_coefficients,
         surface_color_coefficients,
+        spherical_voronoi,
         exposure_r,
         exposure_g,
         exposure_b,
@@ -1276,6 +1305,7 @@ fn pixel_sh(
     sh_coefficients: &[Vec<mn::NodeId>], // 3 × K parameter tables [N, 1]
     surface_color_coefficients: Option<mn::NodeId>,
     surface_basis: Option<mn::NodeId>,
+    spherical_voronoi: Option<(&SphericalVoronoiGraph, mn::NodeId)>,
     basis_inputs: &[mn::NodeId], // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
     pixel_idx_per_step: mn::NodeId,
     weight: mn::NodeId,
@@ -1355,6 +1385,49 @@ fn pixel_sh(
         }
         (None, None) => color,
         _ => unreachable!("surface color parameter and basis must be declared together"),
+    };
+    let color = match spherical_voronoi {
+        Some((parameters, ray_dir_pl)) => {
+            let axes = g.embedding(cell_indices, parameters.axes);
+            let axes = g.reshape(axes, &[pl * vol::SPHERICAL_VORONOI_SITES, 3]);
+
+            let direction = g.stop_gradient(ray_dir_pl);
+            let direction_flat = g.reshape(direction, &[pl * 3]);
+            let direction_2 = g.concat(direction_flat, direction_flat, pl as u32, 3, 3, 1);
+            let direction_4 = g.concat(direction_2, direction_2, pl as u32, 6, 6, 1);
+            let direction_8 = g.concat(direction_4, direction_4, pl as u32, 12, 12, 1);
+            let direction_sites = g.reshape(direction_8, &[pl * vol::SPHERICAL_VORONOI_SITES, 3]);
+            let logit_terms = g.mul(axes, direction_sites);
+            let logits_flat = g.sum_inner(logit_terms);
+            let logits = g.reshape(logits_flat, &[pl, vol::SPHERICAL_VORONOI_SITES]);
+            let weights = g.softmax(logits);
+
+            let colors = g.embedding(cell_indices, parameters.colors);
+            let weights_flat = g.reshape(weights, &[pl * vol::SPHERICAL_VORONOI_SITES]);
+            let weights_rg = g.concat(
+                weights_flat,
+                weights_flat,
+                pl as u32,
+                vol::SPHERICAL_VORONOI_SITES as u32,
+                vol::SPHERICAL_VORONOI_SITES as u32,
+                1,
+            );
+            let weights_rgb_flat = g.concat(
+                weights_rg,
+                weights_flat,
+                pl as u32,
+                (2 * vol::SPHERICAL_VORONOI_SITES) as u32,
+                vol::SPHERICAL_VORONOI_SITES as u32,
+                1,
+            );
+            let weights_rgb = g.reshape(weights_rgb_flat, &[pl, 3 * vol::SPHERICAL_VORONOI_SITES]);
+            let terms = g.mul(colors, weights_rgb);
+            let terms_rgb = g.reshape(terms, &[pl * 3, vol::SPHERICAL_VORONOI_SITES]);
+            let residual_flat = g.sum_inner(terms_rgb);
+            let residual = g.reshape(residual_flat, &[pl, 3]);
+            g.add(color, residual)
+        }
+        None => color,
     };
 
     let bias = g.constant(vec![0.5; pl * 3], &[pl, 3]);
@@ -1656,6 +1729,15 @@ pub struct AppearanceFitConfig {
     /// Under [`LrSchedule::RadFoamV1`] it scales the same `5e-3 → 5e-4`
     /// schedule as the surface-plane offset. `0.0` freezes the residual.
     pub surface_color_lr_ratio: f32,
+    /// Raw Spherical Voronoi axis learning rate as a fraction of the global
+    /// rate. Axis magnitude is directional temperature. Under
+    /// [`LrSchedule::RadFoamV1`] this scales PowerFoam's `5e-2 → 5e-3`
+    /// directional-axis schedule. `0.0` freezes the sites.
+    pub spherical_voronoi_axis_lr_ratio: f32,
+    /// Spherical Voronoi RGB-site learning rate as a fraction of the global
+    /// rate. Under [`LrSchedule::RadFoamV1`] this scales PowerFoam's
+    /// `5e-3 → 5e-4` directional-color schedule. `0.0` freezes the values.
+    pub spherical_voronoi_color_lr_ratio: f32,
     /// Initial weight of PowerFoam's view-facing normal regularizer. It
     /// decays exponentially to one tenth of this value over training. `0.0`
     /// disables the term; the reference uses `0.1`.
@@ -1811,6 +1893,8 @@ impl Default for AppearanceFitConfig {
             surface_normal_lr_ratio: 0.0,
             surface_offset_lr_ratio: 0.0,
             surface_color_lr_ratio: 0.0,
+            spherical_voronoi_axis_lr_ratio: 0.0,
+            spherical_voronoi_color_lr_ratio: 0.0,
             surface_normal_weight: 0.0,
             powerfoam_candidate_capacity: 0,
             geometry_rebuild_every: 0,
@@ -2101,6 +2185,14 @@ fn configure_optimizer(
             session.set_lr_multiplier("surface_normals", config.surface_normal_lr_ratio);
             session.set_lr_multiplier("surface_offsets", config.surface_offset_lr_ratio);
             session.set_lr_multiplier("surface_color_coefficients", config.surface_color_lr_ratio);
+            session.set_lr_multiplier(
+                "spherical_voronoi_axes",
+                config.spherical_voronoi_axis_lr_ratio,
+            );
+            session.set_lr_multiplier(
+                "spherical_voronoi_colors",
+                config.spherical_voronoi_color_lr_ratio,
+            );
         }
         LrSchedule::RadFoamV1 => {
             let rates = radfoam_v1_lrs(step, total_steps);
@@ -2124,6 +2216,16 @@ fn configure_optimizer(
             session.set_lr_multiplier(
                 "surface_color_coefficients",
                 surface_offset_rate * config.surface_color_lr_ratio,
+            );
+            let spherical_axis_rate =
+                radfoam_cosine_lr(step, total_steps, 5.0e-2, 5.0e-3, 0, total_steps);
+            session.set_lr_multiplier(
+                "spherical_voronoi_axes",
+                spherical_axis_rate * config.spherical_voronoi_axis_lr_ratio,
+            );
+            session.set_lr_multiplier(
+                "spherical_voronoi_colors",
+                surface_offset_rate * config.spherical_voronoi_color_lr_ratio,
             );
         }
     }
@@ -2537,6 +2639,16 @@ pub(crate) fn fit_appearance_multi_view_outcome(
         "surface_color_lr_ratio must be finite and non-negative"
     );
     assert!(
+        config.spherical_voronoi_axis_lr_ratio.is_finite()
+            && config.spherical_voronoi_axis_lr_ratio >= 0.0,
+        "spherical_voronoi_axis_lr_ratio must be finite and non-negative"
+    );
+    assert!(
+        config.spherical_voronoi_color_lr_ratio.is_finite()
+            && config.spherical_voronoi_color_lr_ratio >= 0.0,
+        "spherical_voronoi_color_lr_ratio must be finite and non-negative"
+    );
+    assert!(
         config.surface_normal_weight.is_finite() && config.surface_normal_weight >= 0.0,
         "surface_normal_weight must be finite and non-negative"
     );
@@ -2555,6 +2667,12 @@ pub(crate) fn fit_appearance_multi_view_outcome(
     assert!(
         config.surface_color_lr_ratio == 0.0 || model.surface_color_coefficients.is_some(),
         "surface-color optimisation requires initialized surface coefficients"
+    );
+    assert!(
+        (config.spherical_voronoi_axis_lr_ratio == 0.0
+            && config.spherical_voronoi_color_lr_ratio == 0.0)
+            || model.spherical_voronoi.is_some(),
+        "Spherical Voronoi optimisation requires initialized axes and colors"
     );
     assert!(
         config.surface_normal_weight == 0.0 || model.surface_normals.is_some(),
@@ -2716,6 +2834,24 @@ fn upload_model_parameters(
             }
         }
         session.set_parameter("surface_color_coefficients", &packed);
+    }
+    if let Some(ref spherical_voronoi) = model.spherical_voronoi {
+        let sites = vol::SPHERICAL_VORONOI_SITES;
+        let mut axes = Vec::with_capacity(n_cells * sites * 3);
+        for &axis in &spherical_voronoi.axes {
+            axes.extend_from_slice(&axis.to_array());
+        }
+        let mut colors = vec![0.0_f32; n_cells * sites * 3];
+        for point in 0..n_cells {
+            for site in 0..sites {
+                let color = spherical_voronoi.colors[point * sites + site];
+                for channel in 0..3 {
+                    colors[point * sites * 3 + channel * sites + site] = color[channel];
+                }
+            }
+        }
+        session.set_parameter("spherical_voronoi_axes", &axes);
+        session.set_parameter("spherical_voronoi_colors", &colors);
     }
 
     // `model.sh_coefficients` layout (lib.rs spec):
@@ -3089,6 +3225,25 @@ fn download_model_parameters(
                     coefficients[point * components * 3 + basis * 3 + channel] =
                         packed[point * components * 3 + channel * components + basis];
                 }
+            }
+        }
+    }
+    if let Some(ref mut spherical_voronoi) = model.spherical_voronoi {
+        let sites = vol::SPHERICAL_VORONOI_SITES;
+        let mut axes = vec![0.0_f32; n_cells * sites * 3];
+        let mut colors = vec![0.0_f32; n_cells * sites * 3];
+        session.read_param("spherical_voronoi_axes", &mut axes);
+        session.read_param("spherical_voronoi_colors", &mut colors);
+        for point in 0..n_cells {
+            for site in 0..sites {
+                let base = point * sites * 3;
+                spherical_voronoi.axes[point * sites + site] =
+                    glam::Vec3::from_slice(&axes[base + site * 3..base + site * 3 + 3]);
+                spherical_voronoi.colors[point * sites + site] = glam::Vec3::new(
+                    colors[base + site],
+                    colors[base + sites + site],
+                    colors[base + 2 * sites + site],
+                );
             }
         }
     }
@@ -3597,6 +3752,14 @@ fn prune_and_densify(
         .surface_color_coefficients
         .as_ref()
         .map(|_| Vec::with_capacity(n_new * surface_color_block));
+    let mut new_spherical_voronoi =
+        model
+            .spherical_voronoi
+            .as_ref()
+            .map(|_| vol::SphericalVoronoi {
+                axes: Vec::with_capacity(n_new * vol::SPHERICAL_VORONOI_SITES),
+                colors: Vec::with_capacity(n_new * vol::SPHERICAL_VORONOI_SITES),
+            });
     let mut new_transforms = model.transforms.as_ref().map(|_| vol::Transforms {
         rotations: Vec::with_capacity(n_new),
         scales: Vec::with_capacity(n_new),
@@ -3625,6 +3788,17 @@ fn prune_and_densify(
             let old = model.surface_color_coefficients.as_ref().unwrap();
             coefficients
                 .extend_from_slice(&old[oi * surface_color_block..(oi + 1) * surface_color_block]);
+        }
+        if let Some(ref mut spherical_voronoi) = new_spherical_voronoi {
+            let old = model.spherical_voronoi.as_ref().unwrap();
+            let begin = oi * vol::SPHERICAL_VORONOI_SITES;
+            let end = begin + vol::SPHERICAL_VORONOI_SITES;
+            spherical_voronoi
+                .axes
+                .extend_from_slice(&old.axes[begin..end]);
+            spherical_voronoi
+                .colors
+                .extend_from_slice(&old.colors[begin..end]);
         }
         if let Some(ref mut transforms) = new_transforms {
             let old = model.transforms.as_ref().unwrap();
@@ -3661,6 +3835,17 @@ fn prune_and_densify(
             coefficients
                 .extend_from_slice(&old[oi * surface_color_block..(oi + 1) * surface_color_block]);
         }
+        if let Some(ref mut spherical_voronoi) = new_spherical_voronoi {
+            let old = model.spherical_voronoi.as_ref().unwrap();
+            let begin = oi * vol::SPHERICAL_VORONOI_SITES;
+            let end = begin + vol::SPHERICAL_VORONOI_SITES;
+            spherical_voronoi
+                .axes
+                .extend_from_slice(&old.axes[begin..end]);
+            spherical_voronoi
+                .colors
+                .extend_from_slice(&old.colors[begin..end]);
+        }
         if let Some(ref mut transforms) = new_transforms {
             let old = model.transforms.as_ref().unwrap();
             transforms.rotations.push(old.rotations[oi]);
@@ -3674,6 +3859,7 @@ fn prune_and_densify(
     model.surface_normals = new_surface_normals;
     model.surface_offsets = new_surface_offsets;
     model.surface_color_coefficients = new_surface_color;
+    model.spherical_voronoi = new_spherical_voronoi;
     model.transforms = new_transforms;
     model.adjacency = None;
     (new_to_old, pruned, added)
@@ -3682,13 +3868,15 @@ fn prune_and_densify(
 /// Enumerate every per-cell parameter name with its per-cell element
 /// stride. Stride is 1 for scalar tables (`log_density`, `log_radii`,
 /// `surface_offsets`, `sh_<chan>_<k>`) and 3 for vector tables (`positions`,
-/// `surface_normals`). Spatial surface color uses stride 12.
+/// `surface_normals`). Spatial surface color uses stride 12; both Spherical
+/// Voronoi tables use stride 24.
 fn per_cell_param_names_with_stride(
     sh_degree: usize,
     has_radii: bool,
     has_surface_normals: bool,
     has_surface_offsets: bool,
     has_surface_color: bool,
+    has_spherical_voronoi: bool,
     has_point_error: bool,
 ) -> Vec<(String, usize)> {
     let num_components = (1 + sh_degree) * (1 + sh_degree);
@@ -3706,6 +3894,16 @@ fn per_cell_param_names_with_stride(
         names.push((
             "surface_color_coefficients".to_string(),
             vol::SURFACE_COLOR_COMPONENTS * 3,
+        ));
+    }
+    if has_spherical_voronoi {
+        names.push((
+            "spherical_voronoi_axes".to_string(),
+            vol::SPHERICAL_VORONOI_SITES * 3,
+        ));
+        names.push((
+            "spherical_voronoi_colors".to_string(),
+            vol::SPHERICAL_VORONOI_SITES * 3,
         ));
     }
     if has_point_error {
@@ -3758,6 +3956,7 @@ fn save_adam_state(
     has_surface_normals: bool,
     has_surface_offsets: bool,
     has_surface_color: bool,
+    has_spherical_voronoi: bool,
     has_point_error: bool,
 ) -> AdamSnapshot {
     let names = per_cell_param_names_with_stride(
@@ -3766,6 +3965,7 @@ fn save_adam_state(
         has_surface_normals,
         has_surface_offsets,
         has_surface_color,
+        has_spherical_voronoi,
         has_point_error,
     );
     let mut entries = Vec::with_capacity(names.len());
@@ -3820,6 +4020,7 @@ fn restore_adam_state_remap(
     has_surface_normals: bool,
     has_surface_offsets: bool,
     has_surface_color: bool,
+    has_spherical_voronoi: bool,
     has_point_error: bool,
 ) {
     let n_new = new_to_old.len();
@@ -3829,6 +4030,7 @@ fn restore_adam_state_remap(
         has_surface_normals,
         has_surface_offsets,
         has_surface_color,
+        has_spherical_voronoi,
         has_point_error,
     );
     debug_assert_eq!(names.len(), snap.entries.len());
@@ -3926,6 +4128,8 @@ fn build_train_session(
     surface_normal_lr_ratio: f32,
     surface_offset_lr_ratio: f32,
     surface_color_lr_ratio: f32,
+    spherical_voronoi_axis_lr_ratio: f32,
+    spherical_voronoi_color_lr_ratio: f32,
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
@@ -3949,6 +4153,7 @@ fn build_train_session(
         model.surface_offsets.is_some(),
         model.surface_color_coefficients.is_some(),
         collect_point_error,
+        model.spherical_voronoi.is_some(),
         color_loss,
     );
     if interpenetration_samples > 0 {
@@ -4057,6 +4262,10 @@ fn build_train_session(
     }
     if model.surface_color_coefficients.is_some() {
         session.set_lr_multiplier("surface_color_coefficients", surface_color_lr_ratio);
+    }
+    if model.spherical_voronoi.is_some() {
+        session.set_lr_multiplier("spherical_voronoi_axes", spherical_voronoi_axis_lr_ratio);
+        session.set_lr_multiplier("spherical_voronoi_colors", spherical_voronoi_color_lr_ratio);
     }
     if collect_point_error {
         session.set_parameter(POINT_ERROR_PROBE, &vec![0.0; n_cells]);
@@ -4423,6 +4632,8 @@ fn fit_appearance_pixel_batched(
         config.surface_normal_lr_ratio,
         config.surface_offset_lr_ratio,
         config.surface_color_lr_ratio,
+        config.spherical_voronoi_axis_lr_ratio,
+        config.spherical_voronoi_color_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
     );
     if let Some(ref state_path) = config.resume_state_path {
@@ -4825,6 +5036,7 @@ fn fit_appearance_pixel_batched(
                     model.surface_normals.is_some(),
                     model.surface_offsets.is_some(),
                     model.surface_color_coefficients.is_some(),
+                    model.spherical_voronoi.is_some(),
                     collect_powerfoam_point_error,
                 );
                 phase_timings.state_readback += state_readback_start.elapsed();
@@ -5011,6 +5223,8 @@ fn fit_appearance_pixel_batched(
                     config.surface_normal_lr_ratio,
                     config.surface_offset_lr_ratio,
                     config.surface_color_lr_ratio,
+                    config.spherical_voronoi_axis_lr_ratio,
+                    config.spherical_voronoi_color_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
                 );
                 session = rebuilt.0;
@@ -5032,6 +5246,7 @@ fn fit_appearance_pixel_batched(
                     model.surface_normals.is_some(),
                     model.surface_offsets.is_some(),
                     model.surface_color_coefficients.is_some(),
+                    model.spherical_voronoi.is_some(),
                     collect_powerfoam_point_error,
                 );
                 session.set_adam_step_count(adam_snap.t);
@@ -5425,6 +5640,7 @@ mod tests {
             &[vec![sh_r], vec![sh_g], vec![sh_b]],
             None,
             None,
+            None,
             &[],
             pixel_idx_per_step,
             weight,
@@ -5488,6 +5704,7 @@ mod tests {
             &mut graph,
             cell_indices,
             &sh_coefficients,
+            None,
             None,
             None,
             &basis_inputs,
@@ -5601,6 +5818,7 @@ mod tests {
             &sh_coefficients,
             Some(surface_color),
             Some(surface_basis),
+            None,
             &[],
             pixel_idx_per_step,
             weight,
@@ -5670,6 +5888,129 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn packed_spherical_voronoi_matches_cpu_reference_and_backpropagates() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping packed Spherical Voronoi graph test: no GPU");
+            return;
+        };
+        let (n_cells, p, l) = (2usize, 1usize, 2usize);
+        let sites = vol::SPHERICAL_VORONOI_SITES;
+        let mut graph = mn::Graph::new();
+        let cell_indices = graph.input_u32("cell_indices", &[p * l]);
+        let pixel_idx_per_step = graph.input_u32("pixel_idx_per_step", &[p * l]);
+        let weight = graph.input("weight", &[p, l]);
+        let ray_directions = graph.input("ray_directions", &[p * l, 3]);
+        let parameters = SphericalVoronoiGraph {
+            axes: graph.parameter("spherical_voronoi_axes", &[n_cells, sites * 3]),
+            colors: graph.parameter("spherical_voronoi_colors", &[n_cells, sites * 3]),
+        };
+        let sh_coefficients = ["sh_r", "sh_g", "sh_b"]
+            .map(|name| vec![graph.parameter(name, &[n_cells, 1])])
+            .to_vec();
+        let ones_l1 = graph.constant(vec![1.0; l], &[l, 1]);
+        let pixels = pixel_sh(
+            &mut graph,
+            cell_indices,
+            &sh_coefficients,
+            None,
+            None,
+            Some((&parameters, ray_directions)),
+            &[],
+            pixel_idx_per_step,
+            weight,
+            ones_l1,
+            n_cells,
+            p,
+            l,
+        )
+        .pixels;
+        let sum_r = graph.sum_all(pixels[0]);
+        let sum_g = graph.sum_all(pixels[1]);
+        let sum_b = graph.sum_all(pixels[2]);
+        let sum_rg = graph.add(sum_r, sum_g);
+        let loss = graph.add(sum_rg, sum_b);
+        graph.set_outputs(vec![loss, pixels[0], pixels[1], pixels[2]]);
+
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        for channel in ["sh_r", "sh_g", "sh_b"] {
+            session.set_parameter(channel, &[0.0; 2]);
+        }
+        let axes = (0..n_cells * sites)
+            .map(|index| {
+                let site = (index % sites) as f32;
+                glam::Vec3::new(0.35 * site - 1.2, 0.2 - 0.15 * site, 0.1 * site - 0.3)
+            })
+            .collect::<Vec<_>>();
+        let colors = (0..n_cells * sites)
+            .map(|index| {
+                let value = (index % sites) as f32 * 0.02 - 0.06;
+                glam::Vec3::new(value, -0.5 * value, 0.25 * value)
+            })
+            .collect::<Vec<_>>();
+        let mut packed_axes = Vec::with_capacity(n_cells * sites * 3);
+        for &axis in &axes {
+            packed_axes.extend_from_slice(&axis.to_array());
+        }
+        let mut packed_colors = vec![0.0_f32; n_cells * sites * 3];
+        for cell in 0..n_cells {
+            for site in 0..sites {
+                for channel in 0..3 {
+                    packed_colors[cell * sites * 3 + channel * sites + site] =
+                        colors[cell * sites + site][channel];
+                }
+            }
+        }
+        let directions = [glam::Vec3::X, glam::Vec3::Y];
+        let direction_values = directions
+            .iter()
+            .flat_map(|direction| direction.to_array())
+            .collect::<Vec<_>>();
+        let weights = [0.4_f32, 0.6];
+        session.set_parameter("spherical_voronoi_axes", &packed_axes);
+        session.set_parameter("spherical_voronoi_colors", &packed_colors);
+        session.set_input_u32("cell_indices", &[0, 1]);
+        session.set_input_u32("pixel_idx_per_step", &[0, 0]);
+        session.set_input("weight", &weights);
+        session.set_input("ray_directions", &direction_values);
+        session.set_adam(0.0, 0.9, 0.999, 1.0e-8);
+        session.step();
+        session.wait();
+
+        let spherical_voronoi = vol::SphericalVoronoi { axes, colors };
+        let mut expected = glam::Vec3::ZERO;
+        for step in 0..l {
+            let residual = vol::trace::eval_spherical_voronoi(
+                &spherical_voronoi,
+                step as u32,
+                directions[step],
+            );
+            expected += weights[step] * (glam::Vec3::splat(0.5) + residual).max(glam::Vec3::ZERO);
+        }
+        for channel in 0..3 {
+            let mut actual = [0.0_f32];
+            session.read_output_by_index(channel + 1, &mut actual);
+            assert!((actual[0] - expected[channel]).abs() < 2.0e-6);
+        }
+
+        let mut axis_gradient = vec![0.0_f32; packed_axes.len()];
+        let mut color_gradient = vec![0.0_f32; packed_colors.len()];
+        session.read_param_grad("spherical_voronoi_axes", &mut axis_gradient);
+        session.read_param_grad("spherical_voronoi_colors", &mut color_gradient);
+        assert!(axis_gradient.iter().all(|value| value.is_finite()));
+        assert!(color_gradient.iter().all(|value| value.is_finite()));
+        assert!(axis_gradient.iter().any(|value| value.abs() > 1.0e-7));
+        assert!(color_gradient.iter().any(|value| value.abs() > 1.0e-7));
     }
 
     #[test]
@@ -6193,8 +6534,9 @@ mod tests {
     #[test]
     fn per_cell_param_names_includes_positions_with_stride_3() {
         for sh_degree in 0..=3 {
-            let names =
-                per_cell_param_names_with_stride(sh_degree, false, false, false, false, false);
+            let names = per_cell_param_names_with_stride(
+                sh_degree, false, false, false, false, false, false,
+            );
             // Required entries:
             assert!(names.contains(&("log_density".to_string(), 1)));
             assert!(names.contains(&("positions".to_string(), 3)));
@@ -6202,19 +6544,27 @@ mod tests {
             let num_components = (1 + sh_degree) * (1 + sh_degree);
             assert_eq!(names.len(), 2 + 3 * num_components);
             let weighted_names =
-                per_cell_param_names_with_stride(sh_degree, true, false, false, false, true);
+                per_cell_param_names_with_stride(sh_degree, true, false, false, false, false, true);
             assert!(weighted_names.contains(&("log_radii".to_string(), 1)));
             assert!(weighted_names.contains(&(POINT_ERROR_PROBE.to_string(), 1)));
             assert_eq!(weighted_names.len(), names.len() + 2);
             let oriented_names =
-                per_cell_param_names_with_stride(sh_degree, true, true, true, true, true);
+                per_cell_param_names_with_stride(sh_degree, true, true, true, true, true, true);
             assert!(oriented_names.contains(&("surface_normals".to_string(), 3)));
             assert!(oriented_names.contains(&("surface_offsets".to_string(), 1)));
             assert!(oriented_names.contains(&(
                 "surface_color_coefficients".to_string(),
                 vol::SURFACE_COLOR_COMPONENTS * 3,
             )));
-            assert_eq!(oriented_names.len(), names.len() + 5);
+            assert!(oriented_names.contains(&(
+                "spherical_voronoi_axes".to_string(),
+                vol::SPHERICAL_VORONOI_SITES * 3,
+            )));
+            assert!(oriented_names.contains(&(
+                "spherical_voronoi_colors".to_string(),
+                vol::SPHERICAL_VORONOI_SITES * 3,
+            )));
+            assert_eq!(oriented_names.len(), names.len() + 7);
         }
     }
 
@@ -6243,6 +6593,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 false,
@@ -6289,6 +6640,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             ColorLoss::L1,
         );
         assert!(vg.weighted_path.is_some());
@@ -6311,6 +6663,7 @@ mod tests {
             true,
             true,
             true,
+            false,
             false,
             false,
             ColorLoss::L1,
@@ -6345,6 +6698,7 @@ mod tests {
             0.0,
             [0.0; 3],
             true,
+            false,
             false,
             false,
             true,
@@ -6485,6 +6839,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            false,
             false,
             false,
             false,
@@ -7069,6 +7424,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             ColorLoss::L1,
         );
 
@@ -7170,6 +7526,7 @@ mod tests {
             true,
             true,
             false,
+            false,
             ColorLoss::SmoothL1,
         );
         let (mut session, _) = mn::build(
@@ -7252,6 +7609,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            false,
             false,
             false,
             false,
@@ -7372,6 +7730,7 @@ mod tests {
             true,
             true,
             true,
+            false,
             false,
             false,
             ColorLoss::L1,
@@ -7540,6 +7899,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             ColorLoss::L1,
         );
         let (mut session, _) = mn::build(
@@ -7626,6 +7986,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
                 ColorLoss::L1,
             );
             let (mut session, _) = mn::build(
@@ -7688,6 +8049,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 false,
@@ -7758,6 +8120,7 @@ mod tests {
                 if quantiles.is_some() { 1.0 } else { 0.0 },
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 false,
@@ -8121,6 +8484,10 @@ mod tests {
                 0.0;
                 model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3
             ]);
+        model.spherical_voronoi = Some(vol::SphericalVoronoi {
+            axes: vec![4.0 * glam::Vec3::Z; model.points.len() * vol::SPHERICAL_VORONOI_SITES],
+            colors: vec![glam::Vec3::ZERO; model.points.len() * vol::SPHERICAL_VORONOI_SITES],
+        });
         model.compute_adjacency_default();
         let view = ViewSupervision {
             camera: vol::CameraParams {
@@ -8149,6 +8516,8 @@ mod tests {
                 surface_normal_lr_ratio: 0.1,
                 surface_offset_lr_ratio: 0.1,
                 surface_color_lr_ratio: 0.1,
+                spherical_voronoi_axis_lr_ratio: 0.1,
+                spherical_voronoi_color_lr_ratio: 0.1,
                 surface_normal_weight: 0.1,
                 geometry_rebuild_every: 1,
                 densify: Some(DensifyConfig {
@@ -8174,12 +8543,27 @@ mod tests {
             model.surface_color_coefficients.as_ref().unwrap().len(),
             5 * vol::SURFACE_COLOR_COMPONENTS * 3
         );
+        assert_eq!(
+            model.spherical_voronoi.as_ref().unwrap().axes.len(),
+            5 * vol::SPHERICAL_VORONOI_SITES
+        );
+        assert_eq!(
+            model.spherical_voronoi.as_ref().unwrap().colors.len(),
+            5 * vol::SPHERICAL_VORONOI_SITES
+        );
         assert!(model
             .surface_color_coefficients
             .as_ref()
             .unwrap()
             .iter()
             .any(|value| value.abs() > 1.0e-7));
+        assert!(model
+            .spherical_voronoi
+            .as_ref()
+            .unwrap()
+            .colors
+            .iter()
+            .any(|color| color.abs().max_element() > 1.0e-7));
         assert!(model
             .surface_offsets
             .as_ref()
@@ -8349,6 +8733,20 @@ mod tests {
                     0.0;
                     model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3
                 ]);
+            model.spherical_voronoi = Some(vol::SphericalVoronoi {
+                axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
+                    .map(|index| {
+                        let site = index % vol::SPHERICAL_VORONOI_SITES;
+                        4.0 * glam::Vec3::new(
+                            if site & 1 == 0 { -1.0 } else { 1.0 },
+                            if site & 2 == 0 { -1.0 } else { 1.0 },
+                            if site & 4 == 0 { -1.0 } else { 1.0 },
+                        )
+                        .normalize()
+                    })
+                    .collect(),
+                colors: vec![glam::Vec3::ZERO; model.points.len() * vol::SPHERICAL_VORONOI_SITES],
+            });
             model.compute_adjacency_default();
             model
         };
@@ -8359,6 +8757,8 @@ mod tests {
             surface_normal_lr_ratio: 0.1,
             surface_offset_lr_ratio: 0.1,
             surface_color_lr_ratio: 0.1,
+            spherical_voronoi_axis_lr_ratio: 0.1,
+            spherical_voronoi_color_lr_ratio: 0.1,
             surface_normal_weight: 0.1,
             geometry_rebuild_every: 1,
             ..AppearanceFitConfig::default()
@@ -8421,6 +8821,7 @@ mod tests {
             uninterrupted.surface_color_coefficients,
             resumed.surface_color_coefficients
         );
+        assert_eq!(uninterrupted.spherical_voronoi, resumed.spherical_voronoi);
         let uninterrupted_adjacency = uninterrupted.adjacency.as_ref().unwrap();
         let resumed_adjacency = resumed.adjacency.as_ref().unwrap();
         assert_eq!(uninterrupted_adjacency.offsets, resumed_adjacency.offsets);
