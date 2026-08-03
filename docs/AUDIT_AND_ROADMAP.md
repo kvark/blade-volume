@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-08-02
+Last updated: 2026-08-03
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -675,6 +675,29 @@ At the audited revision:
   dB held out but raises that tail to 2.92%, so 0.005 is the safer cross-scene
   choice. Offsets remain opt-in because they are one value per site, not the
   reference detail-site/spherical-Voronoi appearance model.
+- An opt-in four-component spatial surface-color residual now addresses part
+  of the remaining within-cell appearance gap without introducing meshes or a
+  per-site tangent frame. Each oriented site stores 12 floats and evaluates
+  RGB against `(q.x, q.y, q.z, min(dot(q,q), 1))`, where `q` is the query on
+  the displaced plane, projected tangent and normalized by support radius.
+  The model, ASCII/binary PLY, CPU oracle, all WGSL render paths, Meganeura
+  training graph, pruning/densification ancestry, and exact resume path share
+  the same layout. Zero coefficients preserve the preceding pixels exactly.
+  A matched 8,160-step Bonsai replay at ratio 0.02 reaches
+  17.5094/16.4759 dB train/all-37 held out, +0.0480/+0.0176 dB over the
+  oriented-offset control and improves 24/37 held-out frames. Training rises
+  497.689→521.475 seconds (+4.8%), the 200K-site PLY grows 77→86 MiB, while
+  complete GPU evaluation changes only 28.844→28.972 seconds. The independent
+  2,040-step Room replay reaches 25.4107/23.2551 dB train/all-39 held out,
+  +0.0714/+0.0149 dB, improving 22/39 frames. Its conservative 256-row graph
+  raises training 160.571→184.053 seconds (+14.6%) and peak host memory
+  761,446,400→1,241,747,456 bytes; all rays actually fit within 110 rows, so
+  the already selected 160-row budget removes avoidable padding. Both 6 GiB
+  scopes record zero swap, pressure, OOM, truncation, or GPU fault. Ratio 0.02
+  is selected for the experimental spatial arm, but the option remains off by
+  default: the cross-scene gain is consistent yet small, some tail views
+  regress, and this linear basis is not the reference detail-site and
+  spherical-Voronoi color model.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
@@ -1520,10 +1543,14 @@ material path.
    0.0190 dB for 2× time. The independent Room gate raises normal-only held-out
    quality from 23.0112 to 23.2402 dB at the safer 0.005 offset ratio and
    improves 37/39 frames. Keep both fields explicit because this is still one
-   plane per site, and proceed to spatial texel appearance rather than another
-   duration increase. On Room, a 160-entry path budget is exact on all 294
-   views and cuts a matched zero-rate training replay by 14.6% versus 256;
-   retain the larger candidate floor and select path budgets from telemetry.)
+   plane per site. The first minimal spatial-color arm now passes the two-scene
+   mean gate at ratio 0.02: +0.0176 dB all-37 on Bonsai and +0.0149 dB all-39
+   on Room, for +4.8% and +14.6% training time at their measured graph sizes.
+   Keep it opt-in while implementing the reference detail-site and
+   spherical-Voronoi appearance semantics and checking the regressed tail
+   views. On Room, a 160-entry path budget is exact on all 294 views and cuts a
+   matched zero-rate training replay by 14.6% versus 256; retain the larger
+   candidate floor and select path budgets from telemetry.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
