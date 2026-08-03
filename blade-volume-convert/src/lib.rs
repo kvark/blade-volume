@@ -853,6 +853,7 @@ pub fn convert_gltf(
         radii: None,
         surface_normals: None,
         surface_offsets: None,
+        surface_color_coefficients: None,
     };
 
     match options.output {
@@ -1740,6 +1741,11 @@ fn write_radfoam_ply_ascii(
     if model.surface_offsets.is_some() {
         writeln!(file, "property float surface_offset")?;
     }
+    if model.surface_color_coefficients.is_some() {
+        for component in 0..vol::SURFACE_COLOR_COMPONENTS * 3 {
+            writeln!(file, "property float blade_surface_color_{component}")?;
+        }
+    }
     writeln!(file, "element adjacency {}", num_adjacency)?;
     writeln!(file, "property uint adjacency")?;
     writeln!(file, "end_header")?;
@@ -1782,6 +1788,12 @@ fn write_radfoam_ply_ascii(
         }
         if let Some(ref offsets) = model.surface_offsets {
             write!(file, " {}", offsets[i])?;
+        }
+        if let Some(ref coefficients) = model.surface_color_coefficients {
+            let stride = vol::SURFACE_COLOR_COMPONENTS * 3;
+            for value in &coefficients[i * stride..(i + 1) * stride] {
+                write!(file, " {value}")?;
+            }
         }
         writeln!(file)?;
     }
@@ -1840,6 +1852,11 @@ fn write_radfoam_ply_binary(
     if model.surface_offsets.is_some() {
         writeln!(file, "property float surface_offset")?;
     }
+    if model.surface_color_coefficients.is_some() {
+        for component in 0..vol::SURFACE_COLOR_COMPONENTS * 3 {
+            writeln!(file, "property float blade_surface_color_{component}")?;
+        }
+    }
     writeln!(file, "element adjacency {}", num_adjacency)?;
     writeln!(file, "property uint adjacency")?;
     writeln!(file, "end_header")?;
@@ -1883,6 +1900,12 @@ fn write_radfoam_ply_binary(
         }
         if let Some(ref offsets) = model.surface_offsets {
             file.write_all(&offsets[i].to_le_bytes())?;
+        }
+        if let Some(ref coefficients) = model.surface_color_coefficients {
+            let stride = vol::SURFACE_COLOR_COMPONENTS * 3;
+            for value in &coefficients[i * stride..(i + 1) * stride] {
+                file.write_all(&value.to_le_bytes())?;
+            }
         }
     }
 
@@ -2384,6 +2407,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
 
         let mut path = std::env::temp_dir();
@@ -2413,6 +2437,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
 
         let path = std::env::temp_dir().join("blade_volume_convert_roundtrip_sh3.ply");
@@ -2454,6 +2479,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
 
         let suffix = match format {
@@ -2501,6 +2527,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
 
         let mut path = std::env::temp_dir();
@@ -2532,6 +2559,7 @@ mod tests {
             radii: Some(radii),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             transforms: None,
             sh_degree: 0,
             points,
@@ -2577,6 +2605,11 @@ mod tests {
             glam::Vec3::new(0.2, 0.3, -0.9),
         ]);
         model.surface_offsets = Some(vec![-0.01, 0.0, 0.025]);
+        model.surface_color_coefficients = Some(
+            (0..model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3)
+                .map(|index| index as f32 * 0.01 - 0.2)
+                .collect(),
+        );
         let suffix = match format {
             PlyFormat::Ascii => "ascii",
             PlyFormat::Binary => "binary",
@@ -2589,6 +2622,10 @@ mod tests {
         assert_eq!(loaded.radii, model.radii);
         assert_eq!(loaded.surface_normals, model.surface_normals);
         assert_eq!(loaded.surface_offsets, model.surface_offsets);
+        assert_eq!(
+            loaded.surface_color_coefficients,
+            model.surface_color_coefficients
+        );
         std::fs::remove_file(path).unwrap();
     }
 

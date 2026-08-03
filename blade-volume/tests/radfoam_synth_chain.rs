@@ -98,6 +98,7 @@ pub fn make_chain_model(
         radii: None,
         surface_normals: None,
         surface_offsets: None,
+        surface_color_coefficients: None,
     }
 }
 

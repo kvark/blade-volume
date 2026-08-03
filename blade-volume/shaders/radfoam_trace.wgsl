@@ -10,7 +10,7 @@
 //   fn rf_get_surface_normal(idx: u32) -> vec3<f32>;
 //   fn rf_get_surface_offset(idx: u32) -> f32;
 //   fn rf_get_density(idx: u32) -> f32;
-//   fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32>;
+//   fn rf_get_color(idx: u32, ray_origin: vec3<f32>, dir: vec3<f32>) -> vec3<f32>;
 //   fn rf_adjacency_begin(idx: u32) -> u32;
 //   fn rf_adjacency_end(idx: u32) -> u32;
 //   fn rf_get_neighbor(adj_idx: u32) -> u32;
@@ -155,7 +155,7 @@ fn radfoam_trace(
                         depth_mode = 0.5 * (integration_begin + support.y);
                     }
                 } else {
-                    let rgb = rf_get_color(current, normalize(ray_dir));
+                    let rgb = rf_get_color(current, ray_origin, normalize(ray_dir));
                     accum_rgb += w * rgb;
                 }
                 transmittance *= (1.0 - alpha);

@@ -1129,6 +1129,7 @@ mod tests {
             radii: Some(vec![1.0, 0.5, 0.5, 0.5]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         model.compute_adjacency_default();
@@ -1180,6 +1181,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         spring_relax(&mut model, 8, 0.5);
         let after = min_pairwise(&model.points);

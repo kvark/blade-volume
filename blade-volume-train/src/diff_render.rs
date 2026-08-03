@@ -5464,6 +5464,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         m.compute_adjacency_default();
@@ -5710,6 +5711,7 @@ mod tests {
             radii: Some(vec![0.02; points.len()]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         let config = DensifyConfig {
@@ -5759,6 +5761,7 @@ mod tests {
             radii: Some(vec![1.0; points.len()]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         let config = DensifyConfig {
@@ -6143,6 +6146,7 @@ mod tests {
             radii: Some(vec![1.0; points.len()]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         let initial_weight = 1.0e-4;

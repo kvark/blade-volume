@@ -257,10 +257,8 @@ fn sh_basis_constants() -> [f32; 16] {
     ]
 }
 
-/// Evaluate SH RGB for a single point. Mirrors the WGSL implementation.
-/// For degree < 3 the extra coefficients are ignored. The `0.5 +` bias matches
-/// `shaders/radfoam.wgsl::rf_get_color`.
-pub fn eval_rgb_sh(model: &PointCloudModel, point_idx: u32, dir: glam::Vec3) -> glam::Vec3 {
+/// Evaluate unclamped SH RGB for a single point.
+fn eval_rgb_sh_unclamped(model: &PointCloudModel, point_idx: u32, dir: glam::Vec3) -> glam::Vec3 {
     let deg = (model.sh_degree as u32).min(3);
     let comps = sh_component_count(deg).min(16);
 
@@ -387,10 +385,63 @@ pub fn eval_rgb_sh(model: &PointCloudModel, point_idx: u32, dir: glam::Vec3) -> 
         color.z += c15 * model.sh_coefficients[base + 47] * t15;
     }
 
+    0.5 + color
+}
+
+/// Evaluate SH RGB for a single point. Mirrors the WGSL implementation.
+/// For degree < 3 the extra coefficients are ignored. The `0.5 +` bias matches
+/// `shaders/radfoam.wgsl::rf_get_color`.
+pub fn eval_rgb_sh(model: &PointCloudModel, point_idx: u32, dir: glam::Vec3) -> glam::Vec3 {
     // RadFoam clamps the evaluated radiance before compositing. This is a
     // per-cell clamp, so applying it only to the final pixel is not
     // equivalent when several cells contribute to a ray.
-    (0.5 + color).max(glam::Vec3::ZERO)
+    eval_rgb_sh_unclamped(model, point_idx, dir).max(glam::Vec3::ZERO)
+}
+
+/// Evaluate the normalized spatial surface basis used by oriented PowerFoam.
+pub fn surface_color_basis(
+    model: &PointCloudModel,
+    point_idx: u32,
+    ray_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+) -> glam::Vec4 {
+    let index = point_idx as usize;
+    let center = model.points[index].truncate();
+    let radius = model.radii.as_ref().unwrap()[index].max(1.0e-6);
+    let normal = model.surface_normals.as_ref().unwrap()[index].normalize();
+    let offset = model
+        .surface_offsets
+        .as_deref()
+        .map_or(0.0, |offsets| offsets[index]);
+    let denominator = ray_direction.dot(normal);
+    let numerator = (center - ray_origin).dot(normal) + offset;
+    let t = numerator * denominator / (denominator * denominator + 1.0e-12);
+    let hit = ray_origin + t * ray_direction;
+    let relative = hit - (center + offset * normal);
+    let tangent = relative - relative.dot(normal) * normal;
+    let q = (tangent / radius).clamp(glam::Vec3::splat(-1.0), glam::Vec3::ONE);
+    q.extend(q.length_squared().min(1.0))
+}
+
+/// Evaluate SH plus the optional within-cell oriented-surface residual.
+pub fn eval_rgb_surface(
+    model: &PointCloudModel,
+    point_idx: u32,
+    ray_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+) -> glam::Vec3 {
+    let mut color = eval_rgb_sh_unclamped(model, point_idx, ray_direction);
+    if let Some(ref coefficients) = model.surface_color_coefficients {
+        let basis = surface_color_basis(model, point_idx, ray_origin, ray_direction);
+        let base = point_idx as usize * crate::SURFACE_COLOR_COMPONENTS * 3;
+        for component in 0..crate::SURFACE_COLOR_COMPONENTS {
+            let coefficient = glam::Vec3::from_slice(
+                &coefficients[base + component * 3..base + component * 3 + 3],
+            );
+            color += basis[component] * coefficient;
+        }
+    }
+    color.max(glam::Vec3::ZERO)
 }
 
 /// Exhaustively trace Gaussian ellipsoids and composite them in the 3DGRT
@@ -502,12 +553,42 @@ mod gaussian_tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
 
         let color = eval_rgb_sh(&model, 0, glam::Vec3::Z);
         assert_eq!(color.x, 0.0);
         assert!((color.y - 0.25).abs() < 1.0e-6);
         assert!((color.z - 2.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn oriented_surface_color_uses_plane_query_coordinates() {
+        let mut coefficients = vec![0.0; crate::SURFACE_COLOR_COMPONENTS * 3];
+        coefficients[0..3].copy_from_slice(&[0.4, -0.2, 0.0]);
+        coefficients[9..12].copy_from_slice(&[0.0, 0.0, 0.8]);
+        let model = PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 1.0)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: Some(vec![2.0]),
+            surface_normals: Some(vec![glam::Vec3::Z]),
+            surface_offsets: None,
+            surface_color_coefficients: Some(coefficients),
+        };
+        let origin = glam::Vec3::new(1.0, 0.0, -1.0);
+        let direction = glam::Vec3::Z;
+        let basis = surface_color_basis(&model, 0, origin, direction);
+        assert!((basis.x - 0.5).abs() < 1.0e-6);
+        assert!(basis.y.abs() < 1.0e-6 && basis.z.abs() < 1.0e-6);
+        assert!((basis.w - 0.25).abs() < 1.0e-6);
+        let color = eval_rgb_surface(&model, 0, origin, direction);
+        assert!((color - glam::Vec3::new(0.7, 0.4, 0.7)).abs().max_element() < 1.0e-6);
     }
 
     fn two_gaussians() -> PointCloudModel {
@@ -536,6 +617,7 @@ mod gaussian_tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         }
     }
 
@@ -1118,7 +1200,9 @@ pub fn trace_powerfoam_splats(
         match settings.eval_mode {
             EvalMode::Opacity => {}
             EvalMode::ConstantRgb(color) => accum_rgb += weight * color,
-            EvalMode::Sh => accum_rgb += weight * eval_rgb_sh(model, cell, ray_dir),
+            EvalMode::Sh => {
+                accum_rgb += weight * eval_rgb_surface(model, cell, ray.origin, ray_dir)
+            }
         }
         if weight > peak_weight {
             peak_weight = weight;
@@ -1350,7 +1434,9 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
                 match settings.eval_mode {
                     EvalMode::Opacity => {}
                     EvalMode::ConstantRgb(c) => accum_rgb += w * c,
-                    EvalMode::Sh => accum_rgb += w * eval_rgb_sh(model, current, dir),
+                    EvalMode::Sh => {
+                        accum_rgb += w * eval_rgb_surface(model, current, ray.origin, dir)
+                    }
                 }
                 if w > peak_weight {
                     peak_weight = w;
@@ -1412,6 +1498,7 @@ mod path_tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         m.compute_adjacency_default();
         m
@@ -1533,6 +1620,7 @@ mod path_tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1567,6 +1655,7 @@ mod path_tests {
             radii: Some(vec![1.0]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.0, 0.0, -2.0),
@@ -1600,6 +1689,7 @@ mod path_tests {
             radii: Some(vec![1.0]),
             surface_normals: Some(vec![-glam::Vec3::Z]),
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1636,6 +1726,7 @@ mod path_tests {
             radii: Some(vec![1.0]),
             surface_normals: Some(vec![-glam::Vec3::Z]),
             surface_offsets: Some(vec![0.25]),
+            surface_color_coefficients: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1670,6 +1761,7 @@ mod path_tests {
             radii: Some(vec![2.0]),
             surface_normals: Some(vec![glam::Vec3::X]),
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         let settings = TraceSettings {
             depth: 10.0,
@@ -1709,6 +1801,7 @@ mod path_tests {
             radii: Some(vec![0.5, 0.5]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1773,6 +1866,7 @@ mod path_tests {
             radii: Some(vec![1.4, 0.9, 1.6]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         let ray = Ray {
@@ -1911,6 +2005,7 @@ mod path_tests {
             radii: Some(vec![2.0, 2.0, 2.0]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         let ray = Ray {
@@ -1965,6 +2060,7 @@ mod path_tests {
             radii: Some(vec![1.0]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.2, 0.1, -2.0),
@@ -2004,6 +2100,7 @@ mod path_tests {
             radii: Some(vec![2.0]),
             surface_normals: Some(vec![normal]),
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.3, 0.1, 0.0),
@@ -2045,6 +2142,7 @@ mod path_tests {
             radii: Some(vec![2.0]),
             surface_normals: Some(vec![glam::Vec3::new(-0.2, 0.1, -1.0).normalize()]),
             surface_offsets: Some(vec![0.15]),
+            surface_color_coefficients: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.3, 0.1, 0.0),
@@ -2088,6 +2186,7 @@ mod path_tests {
             radii: Some(vec![0.95, 0.1, 0.95]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         let ray = Ray {

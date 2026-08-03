@@ -9,13 +9,16 @@ struct SplatIntegrateParams {
     width: u32,
     height: u32,
     weight_threshold: f32,
-    _padding: [f32; 3],
+    surface_color: u32,
+    _padding: [u32; 2],
 }
 
 #[derive(blade_macros::ShaderData)]
 struct SplatIntegrateData {
     g_camera: CameraParams,
     g_params: SplatIntegrateParams,
+    g_points: gpu::BufferPiece,
+    g_surface_normals: gpu::BufferPiece,
     g_attributes: gpu::BufferPiece,
     g_cells: gpu::BufferPiece,
     g_dts: gpu::BufferPiece,
@@ -109,7 +112,8 @@ impl PowerFoamGpuSplatTracer {
             width: resolution[0],
             height: resolution[1],
             weight_threshold: settings.weight_threshold,
-            _padding: [0.0; 3],
+            surface_color: cloud.has_surface_color as u32,
+            _padding: [0; 2],
         };
         Self {
             cloud,
@@ -159,6 +163,8 @@ impl PowerFoamGpuSplatTracer {
             &SplatIntegrateData {
                 g_camera: camera,
                 g_params: self.params,
+                g_points: self.cloud.points(),
+                g_surface_normals: self.cloud.surface_normals(),
                 g_attributes: self.cloud.attributes(),
                 g_cells: self.buffers.cells.into(),
                 g_dts: self.buffers.dts.into(),

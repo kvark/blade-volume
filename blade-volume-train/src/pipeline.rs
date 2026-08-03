@@ -875,6 +875,7 @@ fn radfoam_v1_initial_model(
         radii: None,
         surface_normals: None,
         surface_offsets: None,
+        surface_color_coefficients: None,
         points,
     }
 }
@@ -1141,6 +1142,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         }
     }
@@ -1174,6 +1176,7 @@ mod tests {
             radii: Some(vec![1.0; points.len()]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         let camera = vol::CameraParams {
@@ -1282,10 +1285,18 @@ mod tests {
             ..PipelineConfig::default()
         };
 
-        for weighted in [false, true] {
+        for mode in 0..3 {
             let mut model = tiny_model_far_apart();
-            if weighted {
+            if mode != 0 {
                 model.radii = Some(vec![0.2; model.points.len()]);
+            }
+            if mode == 2 {
+                model.surface_normals = Some(vec![-glam::Vec3::Z; model.points.len()]);
+                model.surface_color_coefficients = Some(
+                    (0..model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3)
+                        .map(|index| (index % 13) as f32 * 0.01 - 0.06)
+                        .collect(),
+                );
             }
             model.compute_adjacency_default();
             let cpu = render::render_cpu(
@@ -1310,7 +1321,7 @@ mod tests {
                 .fold(0.0_f32, f32::max);
             assert!(
                 max_delta <= 5e-3,
-                "weighted={weighted}: max GPU/CPU delta {max_delta}"
+                "mode={mode}: max GPU/CPU delta {max_delta}"
             );
         }
     }
@@ -1337,6 +1348,7 @@ mod tests {
             radii: Some(vec![0.5, 0.5]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         };
         let camera = vol::CameraParams {
             cam_position: [0.0; 3],

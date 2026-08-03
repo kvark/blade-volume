@@ -68,7 +68,7 @@ impl RadFoamGpuDepthTracer {
             debug_mode: 0,
             align_pad: [0; 3],
             power_foam: cloud.is_power_foam as u32,
-            size_pad: [cloud.is_oriented as u32, 0, 0],
+            size_pad: [cloud.is_oriented as u32, cloud.has_surface_color as u32, 0],
         };
         Self {
             cloud,

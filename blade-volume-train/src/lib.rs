@@ -104,6 +104,9 @@ pub struct TrainerState {
 
     /// Optional signed offsets of the oriented PowerFoam surface planes.
     pub surface_offsets: Option<Vec<f32>>,
+
+    /// Optional within-cell oriented-surface RGB residuals.
+    pub surface_color_coefficients: Option<Vec<f32>>,
 }
 
 impl TrainerState {
@@ -141,6 +144,7 @@ impl TrainerState {
             log_radii,
             surface_normals: model.surface_normals.clone(),
             surface_offsets: model.surface_offsets.clone(),
+            surface_color_coefficients: model.surface_color_coefficients.clone(),
         }
     }
 
@@ -160,6 +164,9 @@ impl TrainerState {
         }
         if let Some(ref offsets) = self.surface_offsets {
             assert_eq!(offsets.len(), n);
+        }
+        if let Some(ref coefficients) = self.surface_color_coefficients {
+            assert_eq!(coefficients.len(), n * vol::SURFACE_COLOR_COMPONENTS * 3);
         }
         let mut points = Vec::with_capacity(n);
         for (i, p) in self.positions.iter().enumerate() {
@@ -183,6 +190,7 @@ impl TrainerState {
             radii,
             surface_normals: self.surface_normals.clone(),
             surface_offsets: self.surface_offsets.clone(),
+            surface_color_coefficients: self.surface_color_coefficients.clone(),
         }
     }
 }
@@ -225,6 +233,7 @@ mod tests {
             },
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         }
     }
@@ -269,11 +278,20 @@ mod tests {
         let mut model = tiny_model(true);
         model.surface_normals = Some(vec![glam::Vec3::X, -glam::Vec3::Y, glam::Vec3::Z]);
         model.surface_offsets = Some(vec![-0.01, 0.0, 0.025]);
+        model.surface_color_coefficients = Some(
+            (0..model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3)
+                .map(|index| index as f32 * 0.01)
+                .collect(),
+        );
 
         let back = TrainerState::from_model(&model).to_model();
 
         assert_eq!(back.surface_normals, model.surface_normals);
         assert_eq!(back.surface_offsets, model.surface_offsets);
+        assert_eq!(
+            back.surface_color_coefficients,
+            model.surface_color_coefficients
+        );
     }
 
     #[test]

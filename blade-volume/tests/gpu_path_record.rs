@@ -72,6 +72,7 @@ fn build_grid_model(n: usize) -> vol::PointCloudModel {
         radii: None,
         surface_normals: None,
         surface_offsets: None,
+        surface_color_coefficients: None,
     }
 }
 
@@ -810,6 +811,7 @@ fn gpu_powerfoam_splats_cross_disconnected_cech_components() {
         radii: Some(vec![0.3; points.len()]),
         surface_normals: None,
         surface_offsets: None,
+        surface_color_coefficients: None,
         points,
     };
 
@@ -848,6 +850,7 @@ fn build_disconnected_ray_model(point_count: usize) -> vol::PointCloudModel {
         radii: Some(vec![0.2; point_count]),
         surface_normals: None,
         surface_offsets: None,
+        surface_color_coefficients: None,
     }
 }
 
@@ -894,6 +897,7 @@ fn gpu_projected_tile_overflow_falls_back_to_exhaustive_scan() {
         radii: Some(radii),
         surface_normals: None,
         surface_offsets: None,
+        surface_color_coefficients: None,
     };
 
     assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, true, false);

@@ -46,6 +46,13 @@ pub const fn get_sh_degree(count: usize) -> usize {
 
 pub const MAX_SH_DEGREE: usize = 3;
 pub const MAX_SH_COMPONENTS: usize = get_sh_component_count(MAX_SH_DEGREE);
+/// Spatial RGB residual basis terms stored for each oriented PowerFoam site.
+///
+/// The basis is `(q.x, q.y, q.z, dot(q, q))`, where `q` is the normalized
+/// surface-plane query coordinate. Three world-coordinate terms span the
+/// two-dimensional tangent plane without storing an arbitrary tangent frame;
+/// the last term captures a radial center-to-edge change.
+pub const SURFACE_COLOR_COMPONENTS: usize = 4;
 
 // ============================================================================
 // Unified Point Cloud Model
@@ -82,6 +89,7 @@ pub struct Adjacency {
 /// - `radii`: per-point weight/radius for Power-Foam-style power diagrams
 /// - `surface_normals`: oriented PowerFoam faces; the normal-facing half is empty
 /// - `surface_offsets`: optional signed displacement of each oriented face
+/// - `surface_color_coefficients`: optional within-cell surface appearance
 #[derive(Clone)]
 pub struct PointCloudModel {
     /// Position (xyz) + density/opacity (w) for each point.
@@ -122,6 +130,14 @@ pub struct PointCloudModel {
     /// exactly zero for backward-compatible oriented clouds. Length must equal
     /// `points.len()`, and `surface_normals` must also be present.
     pub surface_offsets: Option<Vec<f32>>,
+
+    /// Optional spatial RGB residuals for oriented PowerFoam surfaces.
+    ///
+    /// Layout matches SH coefficients: `[point][basis component][RGB]`, with
+    /// [`SURFACE_COLOR_COMPONENTS`] components per point. The residual is
+    /// added to the view-dependent SH color before the non-negative clamp.
+    /// This field requires both `radii` and `surface_normals`.
+    pub surface_color_coefficients: Option<Vec<f32>>,
 }
 
 impl PointCloudModel {
@@ -222,16 +238,38 @@ impl PointCloudModel {
                 return Err("surface offsets must be finite".to_string());
             }
         }
+        if let Some(ref coefficients) = self.surface_color_coefficients {
+            if self.surface_normals.is_none() || self.radii.is_none() {
+                return Err(
+                    "surface color coefficients require PowerFoam radii and surface normals"
+                        .to_string(),
+                );
+            }
+            let expected = count * SURFACE_COLOR_COMPONENTS * 3;
+            if coefficients.len() != expected {
+                return Err(format!(
+                    "surface color coefficient length is {}, expected {expected}",
+                    coefficients.len()
+                ));
+            }
+            if coefficients.iter().any(|value| !value.is_finite()) {
+                return Err("surface color coefficients must be finite".to_string());
+            }
+        }
         if let Some(ref adjacency) = self.adjacency {
             adjacency::validate_csr_result(&adjacency.offsets, &adjacency.neighbors, count)?;
         }
         Ok(())
     }
 
-    /// Returns the packed per-point attribute row length for RadFoam: `sh_dim + 1`.
+    /// Returns the packed per-point attribute row length for RadFoam.
     /// This is used when packing attributes for the GPU shader.
     pub fn attribute_dim(&self) -> usize {
         1 + 3 * self.sh_component_count()
+            + self
+                .surface_color_coefficients
+                .as_ref()
+                .map_or(0, |_| 3 * SURFACE_COLOR_COMPONENTS)
     }
 
     /// Returns the number of points.
@@ -345,6 +383,7 @@ mod model_tests {
             radii: Some(vec![1.0]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         }
     }
 
@@ -361,6 +400,7 @@ mod model_tests {
             radii: Some(vec![1.0; 2]),
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
         }
     }
 
@@ -399,6 +439,22 @@ mod model_tests {
         assert!(model.validate().unwrap_err().contains("length"));
 
         model.surface_offsets = Some(vec![f32::NAN]);
+        assert!(model.validate().unwrap_err().contains("must be finite"));
+    }
+
+    #[test]
+    fn model_validation_checks_surface_color_coefficients() {
+        let mut model = valid_model();
+        model.surface_color_coefficients = Some(vec![0.0; SURFACE_COLOR_COMPONENTS * 3]);
+        assert!(model.validate().unwrap_err().contains("require PowerFoam"));
+
+        model.surface_normals = Some(vec![glam::Vec3::Z]);
+        assert!(model.validate().is_ok());
+        assert_eq!(model.attribute_dim(), 3 + 1 + SURFACE_COLOR_COMPONENTS * 3);
+
+        model.surface_color_coefficients = Some(Vec::new());
+        assert!(model.validate().unwrap_err().contains("length"));
+        model.surface_color_coefficients = Some(vec![f32::NAN; SURFACE_COLOR_COMPONENTS * 3]);
         assert!(model.validate().unwrap_err().contains("must be finite"));
     }
 

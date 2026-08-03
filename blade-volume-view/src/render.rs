@@ -539,6 +539,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_color_coefficients: None,
             points,
         };
         model.compute_adjacency_default();

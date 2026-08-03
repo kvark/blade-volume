@@ -4,6 +4,7 @@
 
 // #include "common.wgsl"
 // #include "sh_eval.wgsl"
+// #include "surface_color.wgsl"
 
 struct SplatIntegrateParams {
     sh_degree: u32,
@@ -11,13 +12,15 @@ struct SplatIntegrateParams {
     width: u32,
     height: u32,
     weight_threshold: f32,
+    surface_color: u32,
     _padding0: f32,
     _padding1: f32,
-    _padding2: f32,
 };
 
 var<uniform> g_camera: Camera;
 var<uniform> g_params: SplatIntegrateParams;
+var<storage, read> g_points: array<vec4<f32>>;
+var<storage, read> g_surface_normals: array<vec4<f32>>;
 var<storage, read> g_attributes: array<f32>;
 var<storage, read> g_cells: array<u32>;
 var<storage, read> g_dts: array<f32>;
@@ -25,7 +28,8 @@ var<storage, read> g_mask: array<f32>;
 var g_out: texture_storage_2d<rgba16float, write>;
 
 fn attribute_dimension() -> u32 {
-    return 3u * min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS) + 1u;
+    return 3u * min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS) + 1u
+        + select(0u, 3u * SURFACE_COLOR_COMPONENTS, g_params.surface_color != 0u);
 }
 
 fn cell_density(cell: u32) -> f32 {
@@ -33,7 +37,7 @@ fn cell_density(cell: u32) -> f32 {
     return g_attributes[cell * attribute_dimension() + 3u * components];
 }
 
-fn cell_color(cell: u32, direction: vec3<f32>) -> vec3<f32> {
+fn cell_color(cell: u32, ray_origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     let components = min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS);
     let base = cell * attribute_dimension();
     var coefficients: array<vec3<f32>, MAX_SH_COMPONENTS>;
@@ -45,10 +49,29 @@ fn cell_color(cell: u32, direction: vec3<f32>) -> vec3<f32> {
             g_attributes[offset + 2u],
         );
     }
-    return max(
-        vec3<f32>(0.0),
-        0.5 + sh_eval_color(coefficients, direction, g_params.sh_degree),
-    );
+    var color = 0.5 + sh_eval_color(coefficients, direction, g_params.sh_degree);
+    if (g_params.surface_color != 0u) {
+        let point = g_points[cell];
+        let surface = g_surface_normals[cell];
+        let basis = surface_color_basis(
+            point.xyz,
+            point.w,
+            surface.xyz,
+            surface.w,
+            ray_origin,
+            direction,
+        );
+        let surface_base = base + 3u * components + 1u;
+        for (var component = 0u; component < SURFACE_COLOR_COMPONENTS; component += 1u) {
+            let offset = surface_base + 3u * component;
+            color += basis[component] * vec3<f32>(
+                g_attributes[offset],
+                g_attributes[offset + 1u],
+                g_attributes[offset + 2u],
+            );
+        }
+    }
+    return max(vec3<f32>(0.0), color);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -78,7 +101,7 @@ fn integrate_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
         let density = cell_density(cell);
         if (density > 1e-6) {
             let alpha = 1.0 - exp(-density * g_dts[slot]);
-            color += transmittance * alpha * cell_color(cell, direction);
+            color += transmittance * alpha * cell_color(cell, g_camera.position, direction);
             transmittance *= 1.0 - alpha;
         }
     }

@@ -123,6 +123,7 @@ fn powerfoam_model(color: glam::Vec3) -> vol::PointCloudModel {
         radii: Some(vec![0.5]),
         surface_normals: None,
         surface_offsets: None,
+        surface_color_coefficients: None,
     }
 }
 
@@ -139,6 +140,7 @@ fn gaussian_model(color: glam::Vec3, scale: glam::Vec3) -> vol::PointCloudModel 
         radii: None,
         surface_normals: None,
         surface_offsets: None,
+        surface_color_coefficients: None,
     }
 }
 
@@ -309,11 +311,16 @@ fn oriented_powerfoam_scene_applies_the_surface_offset() {
     let mut model = powerfoam_model(color);
     model.surface_normals = Some(vec![-glam::Vec3::Z]);
     model.surface_offsets = Some(vec![0.125]);
+    let mut surface_color = vec![0.0; vol::SURFACE_COLOR_COMPONENTS * 3];
+    surface_color[0..3].copy_from_slice(&[0.4, 0.0, 0.0]);
+    surface_color[9..12].copy_from_slice(&[0.0, 0.3, 0.0]);
+    model.surface_color_coefficients = Some(surface_color);
     let object = renderer.add_radfoam(&model, &context, &mut encoder);
+    let position = glam::Vec3::new(0.2, 0.0, 3.0);
     renderer.scene.set_transform(
         object,
         vol::Transform {
-            position: glam::Vec3::new(0.0, 0.0, 3.0),
+            position,
             ..vol::Transform::identity()
         },
     );
@@ -321,9 +328,25 @@ fn oriented_powerfoam_scene_applies_the_surface_offset() {
 
     let pixel = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
 
+    let local_ray = vol::trace::Ray {
+        origin: -position,
+        direction: glam::Vec3::Z,
+    };
+    let expected = vol::trace::trace_one_ray(
+        &model,
+        local_ray,
+        vol::trace::TraceSettings {
+            start_point: 0,
+            max_steps: 128,
+            depth: 10.0,
+            weight_threshold: 0.001,
+            eval_mode: vol::trace::EvalMode::Sh,
+        },
+    )
+    .rgba;
     assert_close(
         pixel.truncate(),
-        composite(color, 1.0 - (-0.625_f32).exp()),
+        expected.truncate() + (1.0 - expected.w) * BACKGROUND,
         3.0e-3,
     );
     assert!((pixel.w - 1.0).abs() <= 1.0e-3);

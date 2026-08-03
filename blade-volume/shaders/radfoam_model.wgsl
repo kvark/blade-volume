@@ -1,5 +1,6 @@
 // Bindings and accessors shared by the standalone RadFoam colour and depth
-// tracers. Include common.wgsl and sh_eval.wgsl before this fragment.
+// tracers. Include common.wgsl, sh_eval.wgsl, and surface_color.wgsl before
+// this fragment.
 
 struct Params {
     sh_degree: u32,
@@ -21,7 +22,7 @@ var<storage, read> g_adjacency_offsets: array<u32>;
 
 fn rf_compute_attr_dim() -> u32 {
     let comps = min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS);
-    return 3u * comps + 1u;
+    return 3u * comps + 1u + select(0u, 3u * SURFACE_COLOR_COMPONENTS, rf_has_surface_color());
 }
 
 fn rf_get_point(idx: u32) -> vec3<f32> {
@@ -44,6 +45,10 @@ fn rf_is_oriented() -> bool {
     return g_params.pad.y != 0u;
 }
 
+fn rf_has_surface_color() -> bool {
+    return g_params.pad.z != 0u;
+}
+
 fn rf_get_surface_normal(idx: u32) -> vec3<f32> {
     return g_surface_normals[idx].xyz;
 }
@@ -59,7 +64,11 @@ fn rf_get_density(idx: u32) -> f32 {
     return g_attributes[idx * attr_dim + sh_dim];
 }
 
-fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32> {
+fn rf_get_color(
+    idx: u32,
+    ray_origin: vec3<f32>,
+    dir: vec3<f32>,
+) -> vec3<f32> {
     let attr_dim = rf_compute_attr_dim();
     let comps = min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS);
     let base = idx * attr_dim;
@@ -73,7 +82,27 @@ fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32> {
             g_attributes[offset + 2u]
         );
     }
-    return max(vec3<f32>(0.0), 0.5 + sh_eval_color(coeffs, dir, g_params.sh_degree));
+    var color = 0.5 + sh_eval_color(coeffs, dir, g_params.sh_degree);
+    if (rf_has_surface_color()) {
+        let surface_base = base + 3u * comps + 1u;
+        let basis = surface_color_basis(
+            rf_get_point(idx),
+            rf_get_radius(idx),
+            rf_get_surface_normal(idx),
+            rf_get_surface_offset(idx),
+            ray_origin,
+            dir,
+        );
+        for (var component = 0u; component < SURFACE_COLOR_COMPONENTS; component += 1u) {
+            let offset = surface_base + 3u * component;
+            color += basis[component] * vec3<f32>(
+                g_attributes[offset],
+                g_attributes[offset + 1u],
+                g_attributes[offset + 2u],
+            );
+        }
+    }
+    return max(vec3<f32>(0.0), color);
 }
 
 fn rf_adjacency_begin(idx: u32) -> u32 {

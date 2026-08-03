@@ -10,8 +10,8 @@ use std::{mem, ptr, slice};
 /// - `surface_normals`: `vec4<f32>[N]` containing unit dipole normals in xyz
 ///   and signed surface-plane offsets in w, or one zero dummy element for an
 ///   unoriented cloud
-/// - `attributes`: packed `f32[N * attr_dim]`, where `attr_dim = 1 + 3 * (1 + sh_degree)^2`
-///   and the last scalar in each row is density
+/// - `attributes`: packed `f32[N * attr_dim]`: SH, density, then optional
+///   oriented-surface color coefficients
 /// - `point_adjacency`: flattened neighbor list `u32[K]`
 /// - `point_adjacency_offsets`: CSR offsets `u32[N+1]`
 ///
@@ -32,6 +32,7 @@ pub struct RadFoamGpuCloud {
     pub num_adjacency: usize,
     pub is_power_foam: bool,
     pub is_oriented: bool,
+    pub has_surface_color: bool,
 }
 
 struct PointIndex {
@@ -124,7 +125,7 @@ impl RadFoamGpuCloud {
 
         let num_adjacency = adjacency.neighbors.len();
         let sh_component_count = model.sh_component_count();
-        let attr_dim = 1 + 3 * sh_component_count; // SH coefficients + density
+        let attr_dim = model.attribute_dim();
 
         assert!(num_points > 0, "Model has zero points; nothing to upload");
 
@@ -239,7 +240,7 @@ impl RadFoamGpuCloud {
                 }
             }
 
-            // Attributes: pack as [sh_coeffs..., density] per point
+            // Attributes: pack as [sh_coeffs..., density, surface coefficients...] per point
             // This matches the shader's expected layout
             let dst_attrs = slice::from_raw_parts_mut(
                 attributes_stage.data() as *mut f32,
@@ -252,6 +253,12 @@ impl RadFoamGpuCloud {
                 dst_attrs[base..base + sh_len]
                     .copy_from_slice(&model.sh_coefficients[sh_base..sh_base + sh_len]);
                 dst_attrs[base + sh_len] = model.points[i].w;
+                if let Some(ref coefficients) = model.surface_color_coefficients {
+                    let surface_len = crate::SURFACE_COLOR_COMPONENTS * 3;
+                    let surface_base = i * surface_len;
+                    dst_attrs[base + sh_len + 1..base + sh_len + 1 + surface_len]
+                        .copy_from_slice(&coefficients[surface_base..surface_base + surface_len]);
+                }
             }
 
             // Adjacency: contiguous u32 array
@@ -330,6 +337,7 @@ impl RadFoamGpuCloud {
             num_adjacency,
             is_power_foam: model.radii.is_some(),
             is_oriented: model.surface_normals.is_some(),
+            has_surface_color: model.surface_color_coefficients.is_some(),
         }
     }
 

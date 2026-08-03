@@ -264,7 +264,7 @@ fn assert_gpu_matches_cpu(
         pad: [
             model.radii.is_some() as u32,
             model.surface_normals.is_some() as u32,
-            0,
+            model.surface_color_coefficients.is_some() as u32,
         ],
         _size_pad: 0,
     };
@@ -459,6 +459,11 @@ fn oriented_powerfoam_gpu_matches_cpu() {
     model.radii = Some(vec![0.08; model.points.len()]);
     model.surface_normals = Some(vec![-glam::Vec3::Z; model.points.len()]);
     model.surface_offsets = Some(vec![0.01; model.points.len()]);
+    model.surface_color_coefficients = Some(
+        (0..model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3)
+            .map(|index| (index % 17) as f32 * 0.01 - 0.08)
+            .collect(),
+    );
 
     // The shared oracle helper replaces these normals after creating the GPU
     // cloud, exercising the lightweight training-cadence upload path.

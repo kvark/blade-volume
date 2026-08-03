@@ -1,8 +1,8 @@
 //! Loader for RadFoam and weighted PowerFoam PLY point clouds.
 //!
 //! The vertex element carries position, density, CSR end offsets, SH data, and
-//! optional radius, oriented-surface normal, and signed surface offset. The
-//! adjacency element carries the flattened CSR neighbours. Binary
+//! optional radius, oriented-surface normal, signed surface offset, and
+//! spatial surface-color coefficients. The adjacency element carries the flattened CSR neighbours. Binary
 //! little-endian and ASCII PLY 1.0 are supported.
 
 use super::LoadError;
@@ -107,6 +107,7 @@ struct Schema {
     radius: Option<usize>,
     surface_normal: Option<[usize; 3]>,
     surface_offset: Option<usize>,
+    surface_color: Vec<usize>,
     adjacency: usize,
 }
 
@@ -198,6 +199,42 @@ impl Schema {
             ));
         }
 
+        let mut surface_color = Vec::new();
+        for property in &vertex.properties {
+            if let Some(suffix) = property.name.strip_prefix("blade_surface_color_") {
+                if property.ty != PlyScalarType::Float32 {
+                    return Err(LoadError::invalid(format!(
+                        "RadFoam PLY property '{}' must be float32",
+                        property.name
+                    )));
+                }
+                let index = suffix.parse::<usize>().map_err(|_| {
+                    LoadError::invalid(format!("invalid RadFoam PLY property '{}'", property.name))
+                })?;
+                surface_color.push((index, property.offset));
+            }
+        }
+        surface_color.sort_unstable_by_key(|entry| entry.0);
+        for (expected, &(actual, _)) in surface_color.iter().enumerate() {
+            if actual != expected {
+                return Err(LoadError::invalid(format!(
+                    "RadFoam PLY surface-color indices must be contiguous; expected {expected}, got {actual}"
+                )));
+            }
+        }
+        let expected_surface_color = crate::SURFACE_COLOR_COMPONENTS * 3;
+        if !surface_color.is_empty() && surface_color.len() != expected_surface_color {
+            return Err(LoadError::invalid(format!(
+                "RadFoam PLY surface-color property count is {}, expected {expected_surface_color}",
+                surface_color.len()
+            )));
+        }
+        if !surface_color.is_empty() && surface_normal.is_none() {
+            return Err(LoadError::invalid(
+                "RadFoam PLY surface color requires radius, nx, ny, and nz properties",
+            ));
+        }
+
         Ok(Self {
             point_count: vertex.count,
             adjacency_count: adjacency.count,
@@ -216,6 +253,7 @@ impl Schema {
             radius,
             surface_normal,
             surface_offset,
+            surface_color: surface_color.into_iter().map(|entry| entry.1).collect(),
             adjacency: adjacency
                 .require("adjacency", PlyScalarType::Uint32)?
                 .offset,
@@ -452,6 +490,15 @@ fn allocate_model(
         Some(_) => Some(allocate_vec(schema.point_count, 0.0, "surface offset")?),
         None => None,
     };
+    let surface_color_coefficients = if schema.surface_color.is_empty() {
+        None
+    } else {
+        let count = schema
+            .point_count
+            .checked_mul(crate::SURFACE_COLOR_COMPONENTS * 3)
+            .ok_or_else(|| LoadError::invalid("RadFoam PLY surface-color allocation overflow"))?;
+        Some(allocate_vec(count, 0.0, "surface color")?)
+    };
     let model = crate::PointCloudModel {
         points: allocate_vec(schema.point_count, glam::Vec4::ZERO, "point")?,
         sh_coefficients: allocate_vec(sh_count, 0.0, "SH")?,
@@ -461,6 +508,7 @@ fn allocate_model(
         radii,
         surface_normals,
         surface_offsets,
+        surface_color_coefficients,
     };
     Ok((
         model,
@@ -536,6 +584,12 @@ fn decode_binary(
             (model.surface_offsets.as_mut(), schema.surface_offset)
         {
             offsets[index] = read_f32(&row, offset);
+        }
+        if let Some(ref mut coefficients) = model.surface_color_coefficients {
+            let stride = crate::SURFACE_COLOR_COMPONENTS * 3;
+            for (component, &offset) in schema.surface_color.iter().enumerate() {
+                coefficients[index * stride + component] = read_f32(&row, offset);
+            }
         }
     }
 
@@ -615,6 +669,7 @@ fn decode_ascii(
         let mut radius = 0.0;
         let mut surface_normal = glam::Vec3::ZERO;
         let mut surface_offset = 0.0;
+        let mut surface_color = [0.0_f32; crate::SURFACE_COLOR_COMPONENTS * 3];
         let coefficients =
             &mut model.sh_coefficients[index * schema.sh_stride..(index + 1) * schema.sh_stride];
         for property in &vertex.properties {
@@ -640,6 +695,12 @@ fn decode_ascii(
                 "ny" => surface_normal.y = parse_f32(token, "ny")?,
                 "nz" => surface_normal.z = parse_f32(token, "nz")?,
                 "surface_offset" => surface_offset = parse_f32(token, "surface_offset")?,
+                name if name.starts_with("blade_surface_color_") => {
+                    let component = name["blade_surface_color_".len()..]
+                        .parse::<usize>()
+                        .unwrap();
+                    surface_color[component] = parse_f32(token, name)?;
+                }
                 name if name.starts_with("color_sh_") => {
                     let rest = name["color_sh_".len()..].parse::<usize>().unwrap();
                     coefficients[3 + rest] = parse_f32(token, name)?;
@@ -662,6 +723,10 @@ fn decode_ascii(
         }
         if let Some(ref mut offsets) = model.surface_offsets {
             offsets[index] = surface_offset;
+        }
+        if let Some(ref mut coefficients) = model.surface_color_coefficients {
+            let stride = crate::SURFACE_COLOR_COMPONENTS * 3;
+            coefficients[index * stride..(index + 1) * stride].copy_from_slice(&surface_color);
         }
     }
 

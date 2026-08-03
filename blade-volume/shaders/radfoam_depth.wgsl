@@ -4,6 +4,7 @@
 
 // #include "common.wgsl"
 // #include "sh_eval.wgsl"
+// #include "surface_color.wgsl"
 // #include "radfoam_model.wgsl"
 
 var g_out: texture_storage_2d<rgba32float, write>;

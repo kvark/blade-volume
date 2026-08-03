@@ -76,6 +76,7 @@ fn find_next_object_hit(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
 var<private> g_rf_obj: u32;
 var<private> g_rf_bounded: bool;
 var<private> g_rf_oriented: bool;
+var<private> g_rf_surface_color: bool;
 var<private> g_rf_sh_degree: u32;
 var<private> g_rf_attribute_stride: u32;
 
@@ -110,7 +111,11 @@ fn rf_get_density(idx: u32) -> f32 {
     return g_radfoam_attributes[g_rf_obj].data[idx * attr_dim + sh_dim];
 }
 
-fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32> {
+fn rf_get_color(
+    idx: u32,
+    ray_origin: vec3<f32>,
+    dir: vec3<f32>,
+) -> vec3<f32> {
     let attr_dim = g_rf_attribute_stride;
     let comps = min(sh_component_count(g_rf_sh_degree), MAX_SH_COMPONENTS);
     let base = idx * attr_dim;
@@ -124,7 +129,27 @@ fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32> {
             g_radfoam_attributes[g_rf_obj].data[offset + 2u]
         );
     }
-    return max(vec3<f32>(0.0), 0.5 + sh_eval_color(coeffs, dir, g_rf_sh_degree));
+    var color = 0.5 + sh_eval_color(coeffs, dir, g_rf_sh_degree);
+    if (g_rf_surface_color) {
+        let surface_base = base + 3u * comps + 1u;
+        let basis = surface_color_basis(
+            rf_get_point(idx),
+            rf_get_radius(idx),
+            rf_get_surface_normal(idx),
+            rf_get_surface_offset(idx),
+            ray_origin,
+            dir,
+        );
+        for (var component = 0u; component < SURFACE_COLOR_COMPONENTS; component += 1u) {
+            let offset = surface_base + 3u * component;
+            color += basis[component] * vec3<f32>(
+                g_radfoam_attributes[g_rf_obj].data[offset],
+                g_radfoam_attributes[g_rf_obj].data[offset + 1u],
+                g_radfoam_attributes[g_rf_obj].data[offset + 2u],
+            );
+        }
+    }
+    return max(vec3<f32>(0.0), color);
 }
 
 fn rf_adjacency_begin(idx: u32) -> u32 {
@@ -147,6 +172,7 @@ fn scene_trace_radfoam(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
     g_rf_obj = bounds.data_index;
     g_rf_bounded = (bounds.flags & 1u) != 0u;
     g_rf_oriented = (bounds.flags & 2u) != 0u;
+    g_rf_surface_color = (bounds.flags & 4u) != 0u;
     g_rf_sh_degree = bounds.sh_degree;
     g_rf_attribute_stride = bounds.attribute_stride;
 
