@@ -621,6 +621,32 @@ At the audited revision:
   200 cuts a matched 2,000-step phase 12.8% without held-out loss. These are
   adaptive continuation choices, not part of the earlier fixed-radius causal
   comparison.
+- Starting the same `1e-6` overlap control at step 4,000, while growth is still
+  active, reduces the matched step-6,500 graph 11,191,518→10,143,250 edges and
+  changes train/all-37 quality 15.34/14.92→15.36/14.95 dB. Continuing that arm
+  through step 20,400 reaches 17.23/16.41 dB with 8,340,572 edges. Its sampled
+  support overlap is modestly lower, but 256² renders retain the same discs,
+  holes, blurred thin structure, and background floaters.
+- Raw density is not the missing quality mechanism. A bounded 400,000-site
+  branch reaches 16.21/15.62 dB at step 10,000 versus 16.15/15.61 for the
+  200,000-site control, while exact Čech adjacency grows 8.89M→49.90M directed
+  edges. The 400K graph spends 100.6 of 365.2 seconds per 1,000 steps in
+  topology/resource rebuilds and does not visibly repair the scene, so it is
+  rejected.
+- The 400K run found a correctness boundary before any memory boundary: a
+  264,500-site ray needed 1,050 sphere candidates despite a much shorter path.
+  Commit `6184551` makes the minimum candidate capacity explicit and independent
+  of the path/Jacobian row. Resumed 304K training and full evaluation pass with
+  2,048 candidates and zero truncation; the eventual 400K checkpoint uses at
+  most 1,822/2,048 candidates and 171/192 path entries.
+- A cloud-only surface-aware split prototype estimates a normal from each
+  site's 12 nearest Čech neighbours and projects the reference 5%-radius jitter
+  into the tangent plane when least-normal variance is at most 5% of total
+  local variance. 88.6% of 20,000 sampled step-4K neighbourhoods pass that
+  confidence gate, but the matched step-6,500 arm ties isotropic splitting at
+  14.95 dB held out with effectively identical edges and runtime. It is not
+  landed; learned orientation plus spatial texel appearance, not split direction
+  alone, is the remaining reference-semantic hypothesis.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but

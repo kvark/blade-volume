@@ -101,6 +101,23 @@ cadence 200 cuts the matched step-10K→12K training phase 12.8% with unchanged
 checkpoints and 256² comparisons remain ignored under `target`. Visible support
 discs, holes, and background floaters still fail the PowerFoam production gate.
 
+Applying the same weak overlap control during the remaining growth rounds is a
+small improvement: the matched step-6,500 graph is 9.4% smaller and all-37
+quality is 0.03 dB higher. Its completed step-20,400 continuation reaches
+17.23/16.41 dB with 8,340,572 directed edges. Two follow-up geometry gates are
+negative. Doubling the point budget to 400,000 adds only 0.01 dB held out at
+step 10,000 while expanding the graph from 8.89M to 49.90M edges, and an
+adjacency-derived tangent-plane split ties isotropic splitting at 14.95 dB.
+Neither branch is selected. Their raw artifacts remain ignored; the compact
+measurements and paths are recorded in the manifest.
+
+The 400K gate also exposed a real capacity issue rather than a memory failure:
+at 264,500 sites one ray needed 1,050 sphere candidates while its surviving
+path remained much shorter. Commit `6184551` exposes a candidate budget that is
+independent of path length through the library, trainer, evaluator, and CLI.
+The resumed 304,175-site training/evaluation passes with a 2,048-entry budget,
+zero truncation, and zero cgroup memory or GPU-fault events.
+
 The first full-dataset attempt, from commit `93c996f`, deliberately stopped at
 step 10,000 of 20,400 after
 held-out PSNR stayed flat through three evaluations. Its final metrics do come

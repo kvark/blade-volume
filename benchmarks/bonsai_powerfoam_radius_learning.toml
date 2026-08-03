@@ -142,6 +142,81 @@ selected_train_psnr = 16.53
 control_test_psnr = 15.89
 selected_test_psnr = 15.89
 
+[adaptive_continuation.growth_overlap_gate]
+source_step = 4000
+endpoint_step = 6500
+control_weight = 0.0
+control_edges = 11191518
+control_train_psnr = 15.34
+control_test_psnr = 14.92
+control_training_seconds = 143.641
+selected_weight = 1e-6
+selected_edges = 10143250
+selected_train_psnr = 15.36
+selected_test_psnr = 14.95
+selected_training_seconds = 142.265
+continued_geometry_rebuild_every_from_step = 10000
+continued_geometry_rebuild_every = 200
+endpoint_step20400_edges = 8340572
+endpoint_step20400_train_psnr = 17.23
+endpoint_step20400_test_psnr = 16.41
+endpoint_comparisons_256 = "powerfoam-growth-overlap/interpenetration1e-6-cadence200-step20400/comparisons-256"
+selection = "apply weak overlap control during growth; modest graph/overlap improvement but no visible support-disc improvement"
+
+[candidate_capacity_override]
+commit = "6184551"
+failed_scale_point_count = 264500
+failed_required_candidates = 1050
+old_capacity = 1024
+validated_capacity = 2048
+validated_point_count = 304175
+validated_training_max_candidates = 1071
+validated_eval_max_candidates = 1314
+validated_truncated_rays = 0
+selection = "candidate scratch is explicit and independent of surviving path rows"
+
+[scale_gate_400k]
+source_step = 6500
+comparison_step = 10000
+control_points = 200000
+control_edges = 8894194
+control_train_psnr = 16.15
+control_test_psnr = 15.61
+candidate_points = 400000
+candidate_edges = 49902754
+candidate_train_psnr = 16.21
+candidate_test_psnr = 15.62
+candidate_path_capacity = 192
+candidate_max_path_used = 171
+candidate_scratch_capacity = 2048
+candidate_max_candidates_used = 1822
+candidate_training_seconds_per_1000 = 365.234
+candidate_max_host_bytes = 2124173312
+candidate_memory_swap_bytes = 0
+candidate_oom_events = 0
+candidate_gpu_faults = 0
+artifact = "target/audit-runs/powerfoam-growth-overlap-400k/interpenetration1e-6-step10000-cap2048-path192/model.ply"
+comparisons_256 = "target/audit-runs/powerfoam-growth-overlap-400k/interpenetration1e-6-step10000-cap2048-path192/comparisons-256"
+selection = "reject 400K: +0.01 dB held out does not justify 5.6x graph edges and persistent visual artifacts"
+
+[tangent_split_gate]
+status = "rejected-prototype"
+source_step = 4000
+endpoint_step = 6500
+normal_neighbours = 12
+normal_variance_ratio_max = 0.05
+sampled_neighbourhoods = 20000
+planar_fraction_at_threshold = 0.886
+control_edges = 10143250
+control_train_psnr = 15.36
+control_test_psnr = 14.95
+candidate_edges = 10144954
+candidate_train_psnr = 15.39
+candidate_test_psnr = 14.95
+control_training_seconds = 142.265
+candidate_training_seconds = 142.933
+selection = "do not land: local tangent projection ties held-out quality, graph size, and runtime"
+
 [result]
 status = "adaptive-endpoint-complete"
 fresh_ply_reload = true
