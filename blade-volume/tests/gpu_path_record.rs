@@ -329,7 +329,7 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         buffer_count: 1,
         manual_barriers: false,
     });
-    let mut cloud = RadFoamGpuCloud::new(&model, &ctx, &mut encoder);
+    let mut cloud = RadFoamGpuCloud::new_path_recording(&model, &ctx, &mut encoder);
     let mut recorder = PathRecorder::new(&ctx);
     let mut bufs = if weighted && !batched_exhaustive {
         PathRecordBuffers::new_projected(

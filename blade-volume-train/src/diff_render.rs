@@ -379,6 +379,55 @@ pub fn build_volumetric_graph(
     use_spherical_voronoi: bool,
     color_loss_kind: ColorLoss,
 ) -> VolumetricGraph {
+    build_volumetric_graph_with_surface_normal_loss(
+        g,
+        n_cells,
+        n_pixels,
+        max_steps,
+        sh_degree,
+        num_views,
+        patch_size,
+        grad_loss_weight,
+        opacity_weight,
+        distortion_weight,
+        quantile_weight,
+        softplus_beta,
+        background_rgb,
+        use_recorded_dt,
+        use_surface_normals,
+        use_surface_normals,
+        use_surface_offsets,
+        use_surface_color,
+        collect_point_error,
+        use_spherical_voronoi,
+        color_loss_kind,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_volumetric_graph_with_surface_normal_loss(
+    g: &mut mn::Graph,
+    n_cells: usize,
+    n_pixels: usize,
+    max_steps: usize,
+    sh_degree: usize,
+    num_views: usize,
+    patch_size: usize,
+    grad_loss_weight: f32,
+    opacity_weight: f32,
+    distortion_weight: f32,
+    quantile_weight: f32,
+    softplus_beta: f32,
+    background_rgb: [f32; 3],
+    use_recorded_dt: bool,
+    use_surface_normals: bool,
+    use_surface_normal_loss: bool,
+    use_surface_offsets: bool,
+    use_surface_color: bool,
+    collect_point_error: bool,
+    use_spherical_voronoi: bool,
+    color_loss_kind: ColorLoss,
+) -> VolumetricGraph {
     assert!(
         sh_degree <= 3,
         "build_volumetric_graph: sh_degree {sh_degree} not supported (max 3)",
@@ -403,6 +452,10 @@ pub fn build_volumetric_graph(
         "oriented surfaces require weighted recorded paths",
     );
     assert!(
+        !use_surface_normal_loss || use_surface_normals,
+        "surface-normal loss requires oriented surfaces",
+    );
+    assert!(
         !use_surface_offsets || use_surface_normals,
         "surface offsets require oriented surfaces",
     );
@@ -424,19 +477,18 @@ pub fn build_volumetric_graph(
     let recorded_dt = g.input("recorded_dt", &[pl]);
     let mask = g.input("mask", &[pl]);
     let weighted_inputs = use_recorded_dt.then(|| {
-        let surface_inputs = use_surface_normals.then(|| {
-            (
-                g.input("dt_grad_surface_normal", &[pl, 4]),
-                g.input("surface_normal_loss_scale", &[1, 1]),
-            )
-        });
+        let dt_grad_surface_normal =
+            use_surface_normals.then(|| g.input("dt_grad_surface_normal", &[pl, 4]));
+        let surface_normal_loss_scale =
+            use_surface_normal_loss.then(|| g.input("surface_normal_loss_scale", &[1, 1]));
         (
             g.input("dt_reference_tangent", &[pl]),
             g.input_u32("previous_cell_indices", &[pl]),
             g.input("dt_grad_previous", &[pl, 4]),
             g.input("dt_grad_current", &[pl, 4]),
             g.input("dt_grad_next", &[pl, 4]),
-            surface_inputs,
+            dt_grad_surface_normal,
+            surface_normal_loss_scale,
         )
     });
     // Target is fed as [1, P*3] to match meganeura's "batch × dim" convention
@@ -508,12 +560,9 @@ pub fn build_volumetric_graph(
             dt_grad_previous,
             dt_grad_current,
             dt_grad_next,
-            surface_inputs,
+            dt_grad_surface_normal,
+            surface_normal_loss_scale,
         )| {
-            let (dt_grad_surface_normal, surface_normal_loss_scale) = surface_inputs
-                .map_or((None, None), |(gradient, scale)| {
-                    (Some(gradient), Some(scale))
-                });
             WeightedPathGraph {
                 log_radii: log_radii.unwrap(),
                 dt_reference_tangent,
@@ -802,8 +851,8 @@ pub fn build_volumetric_graph(
             let mean = g.mul(sum_2d, mean_scale);
             Some(g.mul(mean, scale))
         }
-        (None, None) => None,
-        _ => unreachable!("oriented normal parameter and loss scale must be declared together"),
+        (_, None) => None,
+        (None, Some(_)) => unreachable!("surface-normal loss requires oriented normals"),
     };
 
     // Per-channel pixel: pixel_c = (weight * color_c) @ ones_L
@@ -4091,7 +4140,7 @@ fn build_training_gpu_cloud(
         buffer_count: 1,
         manual_barriers: false,
     });
-    let cloud = vol::RadFoamGpuCloud::new(model, gpu, &mut init_encoder);
+    let cloud = vol::RadFoamGpuCloud::new_path_recording(model, gpu, &mut init_encoder);
     gpu.destroy_command_encoder(&mut init_encoder);
     cloud
 }
@@ -4126,6 +4175,7 @@ fn build_train_session(
     position_lr_ratio: f32,
     radius_lr_ratio: f32,
     surface_normal_lr_ratio: f32,
+    use_surface_normal_loss: bool,
     surface_offset_lr_ratio: f32,
     surface_color_lr_ratio: f32,
     spherical_voronoi_axis_lr_ratio: f32,
@@ -4134,7 +4184,7 @@ fn build_train_session(
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
     let mut g = mn::Graph::new();
-    let mut vg = build_volumetric_graph(
+    let mut vg = build_volumetric_graph_with_surface_normal_loss(
         &mut g,
         n_cells,
         pixel_batch,
@@ -4150,6 +4200,7 @@ fn build_train_session(
         background_rgb,
         model.radii.is_some(),
         model.surface_normals.is_some(),
+        use_surface_normal_loss,
         model.surface_offsets.is_some(),
         model.surface_color_coefficients.is_some(),
         collect_point_error,
@@ -4630,6 +4681,7 @@ fn fit_appearance_pixel_batched(
         config.position_lr_ratio,
         config.radius_lr_ratio,
         config.surface_normal_lr_ratio,
+        config.surface_normal_weight > 0.0,
         config.surface_offset_lr_ratio,
         config.surface_color_lr_ratio,
         config.spherical_voronoi_axis_lr_ratio,
@@ -4912,7 +4964,7 @@ fn fit_appearance_pixel_batched(
                     config.interpenetration_weight,
                 );
             }
-            if model.surface_normals.is_some() {
+            if config.surface_normal_weight > 0.0 {
                 let normal_weight =
                     surface_normal_weight_at_step(config.surface_normal_weight, step, total_steps);
                 session.set_input("surface_normal_loss_scale", &[normal_weight]);
@@ -5221,6 +5273,7 @@ fn fit_appearance_pixel_batched(
                     config.position_lr_ratio,
                     config.radius_lr_ratio,
                     config.surface_normal_lr_ratio,
+                    config.surface_normal_weight > 0.0,
                     config.surface_offset_lr_ratio,
                     config.surface_color_lr_ratio,
                     config.spherical_voronoi_axis_lr_ratio,
@@ -6673,6 +6726,34 @@ mod tests {
         assert!(weighted.surface_offsets.is_some());
         assert!(weighted.dt_grad_surface_normal.is_some());
         assert!(weighted.surface_normal_loss_scale.is_some());
+
+        let mut graph = mn::Graph::new();
+        let vg = build_volumetric_graph_with_surface_normal_loss(
+            &mut graph,
+            16,
+            4,
+            3,
+            0,
+            2,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            true,
+            true,
+            false,
+            true,
+            false,
+            false,
+            false,
+            ColorLoss::L1,
+        );
+        let weighted = vg.weighted_path.unwrap();
+        assert!(weighted.dt_grad_surface_normal.is_some());
+        assert!(weighted.surface_normal_loss_scale.is_none());
     }
 
     #[test]

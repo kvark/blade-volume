@@ -25,6 +25,7 @@ pub struct RadFoamGpuCloud {
     point_adjacency_buf: gpu::Buffer,
     point_adjacency_offsets_buf: gpu::Buffer,
     point_index: PointIndex,
+    has_attributes: bool,
 
     pub sh_degree: usize,
     pub attr_dim: usize,
@@ -109,6 +110,27 @@ impl RadFoamGpuCloud {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Self {
+        Self::new_inner(model, context, encoder, true)
+    }
+
+    /// Creates geometry-only GPU storage for path recording.
+    ///
+    /// This omits the SH, density, and optional appearance payload. The
+    /// resulting cloud is valid only with [`super::PathRecorder`].
+    pub fn new_path_recording(
+        model: &crate::PointCloudModel,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) -> Self {
+        Self::new_inner(model, context, encoder, false)
+    }
+
+    fn new_inner(
+        model: &crate::PointCloudModel,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+        upload_attributes: bool,
+    ) -> Self {
         model
             .validate()
             .unwrap_or_else(|err| panic!("invalid RadFoam model: {err}"));
@@ -138,7 +160,11 @@ impl RadFoamGpuCloud {
             1
         };
         let surface_normals_size = (surface_normal_count * mem::size_of::<[f32; 4]>()) as u64;
-        let attrs_size = (num_points * attr_dim * mem::size_of::<f32>()) as u64;
+        let attrs_size = if upload_attributes {
+            (num_points * attr_dim * mem::size_of::<f32>()) as u64
+        } else {
+            mem::size_of::<f32>() as u64
+        };
         let adj_size = (num_adjacency * mem::size_of::<u32>()) as u64;
         // An isolated PowerFoam site has a valid empty neighbor array, but
         // Vulkan does not have zero-sized buffers. Keep one unread dummy word
@@ -243,43 +269,49 @@ impl RadFoamGpuCloud {
 
             // Attributes: pack as [SH, density, spatial residual, SV axes, SV colors] per point.
             // This matches the shader's expected layout
-            let dst_attrs = slice::from_raw_parts_mut(
-                attributes_stage.data() as *mut f32,
-                num_points * attr_dim,
-            );
-            for i in 0..num_points {
-                let base = i * attr_dim;
-                let sh_len = sh_component_count * 3;
-                let sh_base = i * sh_len;
-                dst_attrs[base..base + sh_len]
-                    .copy_from_slice(&model.sh_coefficients[sh_base..sh_base + sh_len]);
-                dst_attrs[base + sh_len] = model.points[i].w;
-                let mut attribute_offset = base + sh_len + 1;
-                if let Some(ref coefficients) = model.surface_color_coefficients {
-                    let surface_len = crate::SURFACE_COLOR_COMPONENTS * 3;
-                    let surface_base = i * surface_len;
-                    dst_attrs[attribute_offset..attribute_offset + surface_len]
-                        .copy_from_slice(&coefficients[surface_base..surface_base + surface_len]);
-                    attribute_offset += surface_len;
-                }
-                if let Some(ref spherical_voronoi) = model.spherical_voronoi {
-                    let spherical_base = i * crate::SPHERICAL_VORONOI_SITES;
-                    for &axis in &spherical_voronoi.axes
-                        [spherical_base..spherical_base + crate::SPHERICAL_VORONOI_SITES]
-                    {
-                        dst_attrs[attribute_offset..attribute_offset + 3]
-                            .copy_from_slice(&axis.to_array());
-                        attribute_offset += 3;
+            if upload_attributes {
+                let dst_attrs = slice::from_raw_parts_mut(
+                    attributes_stage.data() as *mut f32,
+                    num_points * attr_dim,
+                );
+                for i in 0..num_points {
+                    let base = i * attr_dim;
+                    let sh_len = sh_component_count * 3;
+                    let sh_base = i * sh_len;
+                    dst_attrs[base..base + sh_len]
+                        .copy_from_slice(&model.sh_coefficients[sh_base..sh_base + sh_len]);
+                    dst_attrs[base + sh_len] = model.points[i].w;
+                    let mut attribute_offset = base + sh_len + 1;
+                    if let Some(ref coefficients) = model.surface_color_coefficients {
+                        let surface_len = crate::SURFACE_COLOR_COMPONENTS * 3;
+                        let surface_base = i * surface_len;
+                        dst_attrs[attribute_offset..attribute_offset + surface_len]
+                            .copy_from_slice(
+                                &coefficients[surface_base..surface_base + surface_len],
+                            );
+                        attribute_offset += surface_len;
                     }
-                    for &color in &spherical_voronoi.colors
-                        [spherical_base..spherical_base + crate::SPHERICAL_VORONOI_SITES]
-                    {
-                        dst_attrs[attribute_offset..attribute_offset + 3]
-                            .copy_from_slice(&color.to_array());
-                        attribute_offset += 3;
+                    if let Some(ref spherical_voronoi) = model.spherical_voronoi {
+                        let spherical_base = i * crate::SPHERICAL_VORONOI_SITES;
+                        for &axis in &spherical_voronoi.axes
+                            [spherical_base..spherical_base + crate::SPHERICAL_VORONOI_SITES]
+                        {
+                            dst_attrs[attribute_offset..attribute_offset + 3]
+                                .copy_from_slice(&axis.to_array());
+                            attribute_offset += 3;
+                        }
+                        for &color in &spherical_voronoi.colors
+                            [spherical_base..spherical_base + crate::SPHERICAL_VORONOI_SITES]
+                        {
+                            dst_attrs[attribute_offset..attribute_offset + 3]
+                                .copy_from_slice(&color.to_array());
+                            attribute_offset += 3;
+                        }
                     }
+                    debug_assert_eq!(attribute_offset, base + attr_dim);
                 }
-                debug_assert_eq!(attribute_offset, base + attr_dim);
+            } else {
+                *(attributes_stage.data() as *mut f32) = 0.0;
             }
 
             // Adjacency: contiguous u32 array
@@ -352,6 +384,7 @@ impl RadFoamGpuCloud {
             point_adjacency_buf,
             point_adjacency_offsets_buf,
             point_index,
+            has_attributes: upload_attributes,
             sh_degree: model.sh_degree,
             attr_dim,
             num_points,
@@ -422,6 +455,7 @@ impl RadFoamGpuCloud {
 
     /// Storage buffer view for packed attributes.
     pub fn attributes(&self) -> gpu::BufferPiece {
+        assert!(self.has_attributes, "geometry-only cloud has no attributes");
         self.attributes_buf.into()
     }
 
