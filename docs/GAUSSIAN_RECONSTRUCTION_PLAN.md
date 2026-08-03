@@ -128,8 +128,18 @@ unseen light (17.94 worst). A second independent training run reaches 24.27 dB
 radiance and 18.38 dB relighting, so the result is not a selected lucky
 checkpoint.
 
-This is progress, not completion. The surface still has 0.629 world-unit
-position RMSE and 66.45-degree normal RMSE. Specular fitting is therefore
+The 2026-08-03 rerun keeps the conservative 256-cell path cap and removes
+contention from its exact-zero padded gradients in Meganeura. Full training
+falls from 65.60 to 29.51 seconds, while held-pose radiance remains 24.18 dB
+and unseen-light relighting reaches 18.56 dB (18.30 worst). It extracts 2,167
+Gaussian particles at 53.9% coverage with 0.6201 position RMSE. The latest
+artifacts are `target/audit-runs/synthetic-foam-zero-scatter-v1/model.ply`
+(SHA-256 `90e32fe1ed1bf6021204f8d9a3e8aa3bd7e2dd381adaf618b48e0e4a007f8374`)
+and `scene.rply`
+(SHA-256 `38221090e2f45f94bf8122015a8e2d195a5224f9d062b10b10e1ef66ffc198da`).
+
+This is progress, not completion. The surface still has 0.620 world-unit
+position RMSE and 66.42-degree normal RMSE. Specular fitting is therefore
 disabled for this gate: with two shared materials it can mistake a noisy
 cluster for a perfect mirror and move held-light quality from 18.50 to 14.70
 dB across otherwise similar runs. The fixed rough-dielectric fit is stable
@@ -148,3 +158,15 @@ normal error and multi-light control show that they are identifiable.
 4. Before each pushed milestone: format, clippy with warnings denied, full
    workspace tests, physical-GPU parity, cgroup peak memory/events, and a
    committed benchmark manifest with artifact hashes.
+
+Current result (2026-08-03): GPU timestamps isolate the training step, not path
+recording or CPU work, as the bottleneck. At 2,048 pixels and 256 path slots, 28
+scalar embedding-gradient scatters (density plus degree-2 RGB SH) spent about
+80 ms per update atomically adding mostly zero padding. Meganeura `59f15ac`
+skips exact-zero atomic sources, reducing that group to 5.1--6.5 ms and the
+120-update GPU wait from 8.291 to 2.804 seconds. The full 1,200-update gate is
+2.22x faster with stable quality. Ordinary gathers now lead the profile at
+about 13 ms per update. The next performance experiment is therefore compact
+active path storage or shared/fused coefficient gathers; it must preserve the
+256-step truncation safety and beat the current quality/memory gate before it
+is selected.
