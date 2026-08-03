@@ -544,8 +544,8 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   17.5798/16.4097 at 16,320. The original unoriented cloud is
   17.2334/16.4105, so 8,160 steps is the practical point (within 0.020 dB held
   out) and 16,320 establishes parity within 0.001 dB. Oriented dipoles remain
-  explicit rather than default; spatial texel appearance is still the next
-  semantic gate for improving beyond parity and removing visible support discs.
+  explicit rather than default; M2v is the first spatial-appearance gate beyond
+  this geometry-parity result.
 
 #### M2u — Signed oriented-surface offsets (implemented, opt-in, selected)
 
@@ -624,6 +624,65 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   the projected-index crossover from 1,024 to 256 rays is also rejected: on
   the same sparse mixed-view replay it increases training time by 36% because
   index construction costs more than the exhaustive gather saves.
+
+#### M2v — Compact spatial surface colour (implemented, opt-in, selected experimentally)
+
+- `PointCloudModel.surface_color_coefficients` stores twelve floats per
+  oriented site: four basis coefficients for each RGB channel. The basis is
+  `(q.x, q.y, q.z, min(dot(q, q), 1))`, where `q` is the displaced-plane ray
+  intersection projected into the tangent plane, divided by support radius,
+  and clamped. Keeping `q` in object space removes an arbitrary tangent-frame
+  gauge and makes the compact representation rotate with the cloud.
+- Binary and ASCII PLY, the CPU oracle, standalone/depth/scene/splat WGSL,
+  Meganeura training, densification ancestry, Adam remapping, and exact
+  segmented resume share the same basis-major interchange layout. The
+  differentiable graph uses a channel-major working layout and stops geometry
+  gradients at the basis, isolating the appearance experiment. Zero
+  coefficients preserve every M2u pixel exactly.
+- A matched 8,160-step Bonsai replay at colour-rate ratio 0.02 reaches
+  17.5094/16.4759 dB train/all-37 held out: +0.0480/+0.0176 dB over the
+  oriented-offset control, with 24/37 held-out frames improving. Training
+  rises 497.689→521.475 seconds (+4.8%), the 200K-site PLY grows from about
+  77 to 86 MiB, and complete GPU evaluation changes only
+  28.844→28.972 seconds.
+- An independent 2,040-step Room replay reaches 25.4107/23.2551 dB
+  train/all-39 held out: +0.0714/+0.0149 dB, with 22/39 frames improving.
+  Its deliberately conservative 256-entry graph costs 184.053 seconds and
+  peaks at 1,241,747,456 bytes although training uses at most 110 entries.
+  Replaying the identical arm at the already validated 160-entry Room budget
+  reaches 25.4133/23.2645 dB, trains in 148.774 seconds (-19.2%), and peaks at
+  1,003,597,824 bytes (-19.2%). GPU-step wait falls
+  129.448→96.320 seconds (-25.6%); all 8.36M training rays remain untruncated
+  and the cgroup records zero swap, pressure, OOM, or GPU fault.
+- Ratio 0.02 is selected only for the experimental spatial arm. The small
+  cross-scene mean gain is causal, but several tail views regress and this
+  four-term residual is not PowerFoam's full detail-site model.
+
+#### M2w — PowerFoam appearance reference audit (complete; implementation staged)
+
+- The released implementation was audited at official commit `9639225`.
+  It uses eight detail sites per power cell and eight spherical axes per
+  detail site. A normalized quaternion supplies normal, tangent, and
+  bitangent; each two-dimensional detail-site coordinate is scaled by the
+  support radius. Each site also has a radius-scaled height and a directional
+  RGB function. That is 412 additional floats per point before optimizer
+  moments, versus 12 for M2v: about 314 MiB of parameter storage alone at
+  200K points. The full representation must therefore land as independently
+  gated pieces, not as one unprofiled model-format expansion.
+- The source first blends height at the base-plane intersection, shifts the
+  plane along its normal, then re-evaluates spatial weights at the displaced
+  intersection for colour. Its spatial Warp kernel uses
+  `exp(-10 * squared_distance / radius²)`. Equations 3 and 4 of the paper
+  instead print an unsquared Euclidean norm. Checkpoint-compatible code must
+  follow the released kernel or explicitly version the alternative.
+- The standalone Spherical Voronoi definition uses
+  `softmax(temperature * dot(axis, direction))`. The PowerFoam repository
+  derives each axis and temperature from one raw vector but evaluates
+  `exp(-temperature * length(direction - axis))`. These are not identical
+  when learned temperatures differ. The first directional experiment must
+  state which contract it implements and test its CPU/WGSL/training parity;
+  it must not claim official-checkpoint parity until this discrepancy is
+  resolved against a published checkpoint.
 
 ### M3 — Training crate scaffolding
 
@@ -824,7 +883,9 @@ manifest accidentally.
 
 ## Out-of-scope (for now)
 
-- Texel/spherical-Voronoi appearance model from PowerFoam (M2 keeps SH).
+- Full eight-detail-site displacement and spherical-Voronoi appearance from
+  PowerFoam. M2v is only a compact spatial residual; M2w records the exact
+  remaining semantics and their storage cost.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.

@@ -698,6 +698,24 @@ At the audited revision:
   default: the cross-scene gain is consistent yet small, some tail views
   regress, and this linear basis is not the reference detail-site and
   spherical-Voronoi color model.
+- The matched 160-row Room replay closes that performance gate: it reaches
+  25.4133/23.2645 dB, slightly above the separate 256-row run, while training
+  falls 184.053→148.774 seconds (-19.2%), GPU-step wait
+  129.448→96.320 seconds (-25.6%), command time 188.697→153.394 seconds
+  (-18.7%), and peak host memory 1,241,747,456→1,003,597,824 bytes (-19.2%).
+  All 8,355,840 optimizer rays fit within 110/160 entries, candidate use peaks
+  at 227/1,024, and the scope records no swap, pressure, OOM, or GPU fault.
+- The official PowerFoam appearance source was audited at commit `9639225`.
+  Its complete per-point increment is 412 floats: one quaternion, eight 2D
+  detail sites, eight heights, and eight directional functions with eight
+  axis/RGB pairs each. At 200K points that is about 314 MiB for parameters
+  before Adam moments or graph intermediates, so it will be staged and gated
+  component by component. The audit also found two paper/source differences:
+  paper equations 3/4 print an unsquared spatial norm while the Warp texture
+  kernel uses squared normalized distance at temperature 10; the standalone
+  Spherical Voronoi definition is dot-product softmax while the PowerFoam
+  kernel uses temperature-scaled chordal distance. Those alternatives need
+  explicit versioned semantics rather than being silently conflated.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
@@ -714,11 +732,12 @@ At the audited revision:
   geometry rates, and Adam epsilon, so it remains opt-in rather than a default.
 - No official pretrained checkpoint is published by the reference project, so
   cross-rendering and a matched training ablation remain outstanding.
-- The reference quaternion, detail-site, and spherical-Voronoi colour model
-  remains outstanding. Learned dipole normals plus a per-site height subset
-  now pass a real-scene causal gate, so spatial appearance is the next
-  reference-semantic experiment rather than another increase in identical site
-  count or training duration.
+- The reference quaternion, eight detail sites, per-site displacement, and
+  eight-axis spherical-Voronoi colour model remain outstanding. The exact
+  released layout, initialization, schedules, evaluation order, and
+  paper/source discrepancies are now documented; the next implementation is
+  a bounded directional or spatial slice with an explicit storage/performance
+  gate, not another increase in identical site count or training duration.
 
 ### Adjacency and traversal
 
@@ -1548,9 +1567,13 @@ material path.
    on Room, for +4.8% and +14.6% training time at their measured graph sizes.
    Keep it opt-in while implementing the reference detail-site and
    spherical-Voronoi appearance semantics and checking the regressed tail
-   views. On Room, a 160-entry path budget is exact on all 294 views and cuts a
-   matched zero-rate training replay by 14.6% versus 256; retain the larger
-   candidate floor and select path budgets from telemetry.)
+   views. On Room, a 160-entry path budget is exact on all 294 views; the full
+   learned spatial-colour replay cuts training by 19.2% and peak host memory by
+   19.2% versus 256 while slightly improving held-out PSNR. Retain the larger
+   candidate floor and select path budgets from telemetry. The official
+   appearance audit at commit `9639225` counts 412 extra floats per point and
+   identifies spatial-norm and directional-kernel differences between paper
+   and source, so each staged increment must name its exact contract.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
