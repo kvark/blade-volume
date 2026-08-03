@@ -47,6 +47,8 @@ pub struct VolumetricGraph {
     /// `sh_coefficients[c][k]` is the `[n_cells, 1]` parameter table for
     /// channel `c` ∈ {0=R, 1=G, 2=B} and SH component `k` ∈ `0..(1+sh_degree)²`.
     pub sh_coefficients: Vec<Vec<mn::NodeId>>,
+    /// Optional `[N, 12]` channel-major spatial surface residual table.
+    pub surface_color_coefficients: Option<mn::NodeId>,
     /// Per-view, per-channel RGB gain: one `[num_views, 1]` table per
     /// channel. Multiplies each rendered pixel before the L1 loss.
     /// Initialised to 1.0; frozen at 1.0 when the `exposure_*` LR
@@ -173,6 +175,92 @@ fn weighted_role_linear_term(
     g.sum_inner(product)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn surface_color_basis_graph(
+    g: &mut mn::Graph,
+    cell_indices: mn::NodeId,
+    positions: mn::NodeId,
+    normalized_surface_normals: mn::NodeId,
+    surface_offsets: Option<mn::NodeId>,
+    actual_radii: mn::NodeId,
+    ray_origin_pl: mn::NodeId,
+    ray_dir_pl: mn::NodeId,
+    pl: usize,
+) -> mn::NodeId {
+    let centers = g.embedding(cell_indices, positions);
+    let normals = g.embedding(cell_indices, normalized_surface_normals);
+    let neg_ray_origin = g.neg(ray_origin_pl);
+    let center_relative = g.add(centers, neg_ray_origin);
+    let numerator_terms = g.mul(center_relative, normals);
+    let mut numerator = g.sum_inner(numerator_terms);
+    let step_offsets = surface_offsets.map(|offsets| g.embedding(cell_indices, offsets));
+    if let Some(offsets) = step_offsets {
+        numerator = g.add(numerator, offsets);
+    }
+    let denominator_terms = g.mul(ray_dir_pl, normals);
+    let denominator = g.sum_inner(denominator_terms);
+    let denominator_squared = g.mul(denominator, denominator);
+    let epsilon_squared = g.constant(vec![1.0e-12_f32; pl], &[pl, 1]);
+    let regularized_denominator = g.add(denominator_squared, epsilon_squared);
+    let regularized_numerator = g.mul(numerator, denominator);
+    let t = g.div(regularized_numerator, regularized_denominator);
+
+    let ones_1_3 = g.constant(vec![1.0_f32; 3], &[1, 3]);
+    let t_xyz = g.matmul(t, ones_1_3);
+    let ray_offset = g.mul(ray_dir_pl, t_xyz);
+    let hit = g.add(ray_origin_pl, ray_offset);
+    let plane_center = match step_offsets {
+        Some(offsets) => {
+            let offset_xyz = g.matmul(offsets, ones_1_3);
+            let normal_offset = g.mul(normals, offset_xyz);
+            g.add(centers, normal_offset)
+        }
+        None => centers,
+    };
+    let neg_plane_center = g.neg(plane_center);
+    let relative = g.add(hit, neg_plane_center);
+    let normal_distance_terms = g.mul(relative, normals);
+    let normal_distance = g.sum_inner(normal_distance_terms);
+    let normal_distance_xyz = g.matmul(normal_distance, ones_1_3);
+    let normal_component = g.mul(normals, normal_distance_xyz);
+    let neg_normal_component = g.neg(normal_component);
+    let tangent = g.add(relative, neg_normal_component);
+
+    let radii = g.embedding(cell_indices, actual_radii);
+    let negative_radius_floor = g.constant(vec![-1.0e-6_f32; pl], &[pl, 1]);
+    let radius_above_floor = g.add(radii, negative_radius_floor);
+    let radius_above_floor = g.relu(radius_above_floor);
+    let radius_floor = g.constant(vec![1.0e-6_f32; pl], &[pl, 1]);
+    let radii = g.add(radius_above_floor, radius_floor);
+    let radius_xyz = g.matmul(radii, ones_1_3);
+    let q = g.div(tangent, radius_xyz);
+
+    // clamp(q, -1, 1) = relu(q + 1) - relu(q - 1) - 1.
+    let ones_pl3 = g.constant(vec![1.0_f32; pl * 3], &[pl, 3]);
+    let neg_ones_pl3 = g.neg(ones_pl3);
+    let q_plus_one = g.add(q, ones_pl3);
+    let lower_clamped = g.relu(q_plus_one);
+    let q_minus_one = g.add(q, neg_ones_pl3);
+    let upper_excess = g.relu(q_minus_one);
+    let neg_upper_excess = g.neg(upper_excess);
+    let lower_minus_upper = g.add(lower_clamped, neg_upper_excess);
+    let q = g.add(lower_minus_upper, neg_ones_pl3);
+    let q_squared = g.mul(q, q);
+    let q_squared = g.sum_inner(q_squared);
+    let ones_pl1 = g.constant(vec![1.0_f32; pl], &[pl, 1]);
+    let neg_q_squared = g.neg(q_squared);
+    let remaining = g.add(ones_pl1, neg_q_squared);
+    let remaining = g.relu(remaining);
+    let neg_remaining = g.neg(remaining);
+    let radial = g.add(ones_pl1, neg_remaining);
+
+    let q_flat = g.reshape(q, &[pl * 3]);
+    let radial_flat = g.reshape(radial, &[pl]);
+    let basis_flat = g.concat(q_flat, radial_flat, pl as u32, 3, 1, 1);
+    let basis = g.reshape(basis_flat, &[pl, vol::SURFACE_COLOR_COMPONENTS]);
+    g.stop_gradient(basis)
+}
+
 /// Add a sampled PowerFoam interpenetration penalty to a scalar loss.
 ///
 /// `edge_direction` is the unit vector from endpoint B to endpoint A at the
@@ -276,6 +364,7 @@ pub fn build_volumetric_graph(
     use_recorded_dt: bool,
     use_surface_normals: bool,
     use_surface_offsets: bool,
+    use_surface_color: bool,
     collect_point_error: bool,
     color_loss_kind: ColorLoss,
 ) -> VolumetricGraph {
@@ -305,6 +394,10 @@ pub fn build_volumetric_graph(
     assert!(
         !use_surface_offsets || use_surface_normals,
         "surface offsets require oriented surfaces",
+    );
+    assert!(
+        !use_surface_color || use_surface_normals,
+        "surface color requires oriented surfaces",
     );
     let p = n_pixels;
     let l = max_steps;
@@ -372,6 +465,12 @@ pub fn build_volumetric_graph(
         use_surface_normals.then(|| g.parameter("surface_normals", &[n_cells, 3]));
     let surface_offsets =
         use_surface_offsets.then(|| g.parameter("surface_offsets", &[n_cells, 1]));
+    let surface_color_coefficients = use_surface_color.then(|| {
+        g.parameter(
+            "surface_color_coefficients",
+            &[n_cells, vol::SURFACE_COLOR_COMPONENTS * 3],
+        )
+    });
     let normalized_surface_normals = surface_normals.map(|normals| {
         let unit_scale = 1.0_f32 / 3.0_f32.sqrt();
         let weight = g.constant(vec![unit_scale; 3], &[3]);
@@ -404,6 +503,9 @@ pub fn build_volumetric_graph(
             }
         },
     );
+    let actual_radii = weighted_path
+        .as_ref()
+        .map(|weighted| positive_activation(g, weighted.log_radii, n_cells, RADIUS_SOFTPLUS_BETA));
     // Per-view RGB gain: separate `[num_views, 1]` table per channel
     // so each channel's gradient flows back through `embedding`
     // (which has a `scatter_add` backward). Folding channels into a
@@ -470,6 +572,19 @@ pub fn build_volumetric_graph(
     // Gather per-pixel origins and directions into the `[P*L, 3]` path layout.
     let ray_origin_pl = g.embedding(pixel_idx_per_step, ray_origin);
     let ray_dir_pl = g.embedding(pixel_idx_per_step, ray_dir_per_pixel);
+    let surface_basis = surface_color_coefficients.map(|_| {
+        surface_color_basis_graph(
+            g,
+            cell_indices,
+            positions,
+            normalized_surface_normals.unwrap(),
+            surface_offsets,
+            actual_radii.unwrap(),
+            ray_origin_pl,
+            ray_dir_pl,
+            pl,
+        )
+    });
 
     let neg_ray_origin_pl = g.neg(ray_origin_pl);
     let mo_diff = g.add(midpoint, neg_ray_origin_pl); // [P*L, 3]
@@ -531,8 +646,7 @@ pub fn build_volumetric_graph(
         // positions/radii separately, but avoids repeating the radius
         // activation over every padded path slot and keeps each vec4
         // Jacobian intact instead of copying it through split kernels.
-        let actual_radii =
-            positive_activation(g, weighted.log_radii, n_cells, RADIUS_SOFTPLUS_BETA);
+        let actual_radii = actual_radii.unwrap();
         // Concat uses flat NCHW operands. Keep explicit views here so its
         // backward pass recovers the right batch and reshapes gradients back
         // to the original parameter tables.
@@ -678,6 +792,8 @@ pub fn build_volumetric_graph(
         g,
         cell_indices,
         &sh_coefficients,
+        surface_color_coefficients,
+        surface_basis,
         &basis_inputs,
         pixel_idx_per_step,
         weight,
@@ -933,6 +1049,7 @@ pub fn build_volumetric_graph(
         point_error_probe,
         weighted_path,
         sh_coefficients,
+        surface_color_coefficients,
         exposure_r,
         exposure_g,
         exposure_b,
@@ -1157,7 +1274,9 @@ fn pixel_sh(
     g: &mut mn::Graph,
     cell_indices: mn::NodeId,
     sh_coefficients: &[Vec<mn::NodeId>], // 3 × K parameter tables [N, 1]
-    basis_inputs: &[mn::NodeId],         // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
+    surface_color_coefficients: Option<mn::NodeId>,
+    surface_basis: Option<mn::NodeId>,
+    basis_inputs: &[mn::NodeId], // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
     pixel_idx_per_step: mn::NodeId,
     weight: mn::NodeId,
     ones_l1: mn::NodeId, // [L, 1] for the final reduce
@@ -1207,6 +1326,36 @@ fn pixel_sh(
     let terms_rgb = g.reshape(terms, &[pl * 3, k]);
     let color_flat = g.sum_inner(terms_rgb);
     let color = g.reshape(color_flat, &[pl, 3]);
+    let color = match (surface_color_coefficients, surface_basis) {
+        (Some(coefficient_table), Some(basis)) => {
+            let coefficients = g.embedding(cell_indices, coefficient_table); // [PL, 12]
+            let basis_flat = g.reshape(basis, &[pl * vol::SURFACE_COLOR_COMPONENTS]);
+            let basis_rg = g.concat(
+                basis_flat,
+                basis_flat,
+                pl as u32,
+                vol::SURFACE_COLOR_COMPONENTS as u32,
+                vol::SURFACE_COLOR_COMPONENTS as u32,
+                1,
+            );
+            let basis_rgb_flat = g.concat(
+                basis_rg,
+                basis_flat,
+                pl as u32,
+                (2 * vol::SURFACE_COLOR_COMPONENTS) as u32,
+                vol::SURFACE_COLOR_COMPONENTS as u32,
+                1,
+            );
+            let basis_rgb = g.reshape(basis_rgb_flat, &[pl, 3 * vol::SURFACE_COLOR_COMPONENTS]);
+            let terms = g.mul(coefficients, basis_rgb);
+            let terms_rgb = g.reshape(terms, &[pl * 3, vol::SURFACE_COLOR_COMPONENTS]);
+            let residual_flat = g.sum_inner(terms_rgb);
+            let residual = g.reshape(residual_flat, &[pl, 3]);
+            g.add(color, residual)
+        }
+        (None, None) => color,
+        _ => unreachable!("surface color parameter and basis must be declared together"),
+    };
 
     let bias = g.constant(vec![0.5; pl * 3], &[pl, 3]);
     let biased = g.add(color, bias);
@@ -1503,6 +1652,10 @@ pub struct AppearanceFitConfig {
     /// rate. Under [`LrSchedule::RadFoamV1`] it scales PowerFoam's
     /// `5e-3 → 5e-4` height schedule. `0.0` freezes offsets.
     pub surface_offset_lr_ratio: f32,
+    /// Spatial surface-color learning rate as a fraction of the global rate.
+    /// Under [`LrSchedule::RadFoamV1`] it scales the same `5e-3 → 5e-4`
+    /// schedule as the surface-plane offset. `0.0` freezes the residual.
+    pub surface_color_lr_ratio: f32,
     /// Initial weight of PowerFoam's view-facing normal regularizer. It
     /// decays exponentially to one tenth of this value over training. `0.0`
     /// disables the term; the reference uses `0.1`.
@@ -1657,6 +1810,7 @@ impl Default for AppearanceFitConfig {
             radius_lr_ratio: 0.0,
             surface_normal_lr_ratio: 0.0,
             surface_offset_lr_ratio: 0.0,
+            surface_color_lr_ratio: 0.0,
             surface_normal_weight: 0.0,
             powerfoam_candidate_capacity: 0,
             geometry_rebuild_every: 0,
@@ -1946,6 +2100,7 @@ fn configure_optimizer(
             );
             session.set_lr_multiplier("surface_normals", config.surface_normal_lr_ratio);
             session.set_lr_multiplier("surface_offsets", config.surface_offset_lr_ratio);
+            session.set_lr_multiplier("surface_color_coefficients", config.surface_color_lr_ratio);
         }
         LrSchedule::RadFoamV1 => {
             let rates = radfoam_v1_lrs(step, total_steps);
@@ -1965,6 +2120,10 @@ fn configure_optimizer(
             session.set_lr_multiplier(
                 "surface_offsets",
                 surface_offset_rate * config.surface_offset_lr_ratio,
+            );
+            session.set_lr_multiplier(
+                "surface_color_coefficients",
+                surface_offset_rate * config.surface_color_lr_ratio,
             );
         }
     }
@@ -2374,6 +2533,10 @@ pub(crate) fn fit_appearance_multi_view_outcome(
         "surface_offset_lr_ratio must be finite and non-negative"
     );
     assert!(
+        config.surface_color_lr_ratio.is_finite() && config.surface_color_lr_ratio >= 0.0,
+        "surface_color_lr_ratio must be finite and non-negative"
+    );
+    assert!(
         config.surface_normal_weight.is_finite() && config.surface_normal_weight >= 0.0,
         "surface_normal_weight must be finite and non-negative"
     );
@@ -2388,6 +2551,10 @@ pub(crate) fn fit_appearance_multi_view_outcome(
     assert!(
         config.surface_offset_lr_ratio == 0.0 || model.surface_offsets.is_some(),
         "surface-offset optimisation requires initialized surface offsets"
+    );
+    assert!(
+        config.surface_color_lr_ratio == 0.0 || model.surface_color_coefficients.is_some(),
+        "surface-color optimisation requires initialized surface coefficients"
     );
     assert!(
         config.surface_normal_weight == 0.0 || model.surface_normals.is_some(),
@@ -2536,6 +2703,19 @@ fn upload_model_parameters(
     }
     if let Some(ref offsets) = model.surface_offsets {
         session.set_parameter("surface_offsets", offsets);
+    }
+    if let Some(ref coefficients) = model.surface_color_coefficients {
+        let components = vol::SURFACE_COLOR_COMPONENTS;
+        let mut packed = vec![0.0_f32; n_cells * components * 3];
+        for point in 0..n_cells {
+            for basis in 0..components {
+                for channel in 0..3 {
+                    packed[point * components * 3 + channel * components + basis] =
+                        coefficients[point * components * 3 + basis * 3 + channel];
+                }
+            }
+        }
+        session.set_parameter("surface_color_coefficients", &packed);
     }
 
     // `model.sh_coefficients` layout (lib.rs spec):
@@ -2896,6 +3076,19 @@ fn download_model_parameters(
             session.read_param(&parameter_name(chan, k), &mut out_chan);
             for (i, &c) in out_chan.iter().enumerate() {
                 model.sh_coefficients[i * row_stride + k * 3 + chan_idx] = c;
+            }
+        }
+    }
+    if let Some(ref mut coefficients) = model.surface_color_coefficients {
+        let components = vol::SURFACE_COLOR_COMPONENTS;
+        let mut packed = vec![0.0_f32; n_cells * components * 3];
+        session.read_param("surface_color_coefficients", &mut packed);
+        for point in 0..n_cells {
+            for basis in 0..components {
+                for channel in 0..3 {
+                    coefficients[point * components * 3 + basis * 3 + channel] =
+                        packed[point * components * 3 + channel * components + basis];
+                }
             }
         }
     }
@@ -3399,6 +3592,11 @@ fn prune_and_densify(
         .surface_offsets
         .as_ref()
         .map(|_| Vec::with_capacity(n_new));
+    let surface_color_block = vol::SURFACE_COLOR_COMPONENTS * 3;
+    let mut new_surface_color = model
+        .surface_color_coefficients
+        .as_ref()
+        .map(|_| Vec::with_capacity(n_new * surface_color_block));
     let mut new_transforms = model.transforms.as_ref().map(|_| vol::Transforms {
         rotations: Vec::with_capacity(n_new),
         scales: Vec::with_capacity(n_new),
@@ -3422,6 +3620,11 @@ fn prune_and_densify(
         }
         if let Some(ref mut offsets) = new_surface_offsets {
             offsets.push(model.surface_offsets.as_ref().unwrap()[oi]);
+        }
+        if let Some(ref mut coefficients) = new_surface_color {
+            let old = model.surface_color_coefficients.as_ref().unwrap();
+            coefficients
+                .extend_from_slice(&old[oi * surface_color_block..(oi + 1) * surface_color_block]);
         }
         if let Some(ref mut transforms) = new_transforms {
             let old = model.transforms.as_ref().unwrap();
@@ -3453,6 +3656,11 @@ fn prune_and_densify(
         if let Some(ref mut offsets) = new_surface_offsets {
             offsets.push(model.surface_offsets.as_ref().unwrap()[oi]);
         }
+        if let Some(ref mut coefficients) = new_surface_color {
+            let old = model.surface_color_coefficients.as_ref().unwrap();
+            coefficients
+                .extend_from_slice(&old[oi * surface_color_block..(oi + 1) * surface_color_block]);
+        }
         if let Some(ref mut transforms) = new_transforms {
             let old = model.transforms.as_ref().unwrap();
             transforms.rotations.push(old.rotations[oi]);
@@ -3465,6 +3673,7 @@ fn prune_and_densify(
     model.radii = new_radii;
     model.surface_normals = new_surface_normals;
     model.surface_offsets = new_surface_offsets;
+    model.surface_color_coefficients = new_surface_color;
     model.transforms = new_transforms;
     model.adjacency = None;
     (new_to_old, pruned, added)
@@ -3473,12 +3682,13 @@ fn prune_and_densify(
 /// Enumerate every per-cell parameter name with its per-cell element
 /// stride. Stride is 1 for scalar tables (`log_density`, `log_radii`,
 /// `surface_offsets`, `sh_<chan>_<k>`) and 3 for vector tables (`positions`,
-/// `surface_normals`).
+/// `surface_normals`). Spatial surface color uses stride 12.
 fn per_cell_param_names_with_stride(
     sh_degree: usize,
     has_radii: bool,
     has_surface_normals: bool,
     has_surface_offsets: bool,
+    has_surface_color: bool,
     has_point_error: bool,
 ) -> Vec<(String, usize)> {
     let num_components = (1 + sh_degree) * (1 + sh_degree);
@@ -3491,6 +3701,12 @@ fn per_cell_param_names_with_stride(
     }
     if has_surface_offsets {
         names.push(("surface_offsets".to_string(), 1));
+    }
+    if has_surface_color {
+        names.push((
+            "surface_color_coefficients".to_string(),
+            vol::SURFACE_COLOR_COMPONENTS * 3,
+        ));
     }
     if has_point_error {
         names.push((POINT_ERROR_PROBE.to_string(), 1));
@@ -3541,6 +3757,7 @@ fn save_adam_state(
     has_radii: bool,
     has_surface_normals: bool,
     has_surface_offsets: bool,
+    has_surface_color: bool,
     has_point_error: bool,
 ) -> AdamSnapshot {
     let names = per_cell_param_names_with_stride(
@@ -3548,6 +3765,7 @@ fn save_adam_state(
         has_radii,
         has_surface_normals,
         has_surface_offsets,
+        has_surface_color,
         has_point_error,
     );
     let mut entries = Vec::with_capacity(names.len());
@@ -3601,6 +3819,7 @@ fn restore_adam_state_remap(
     has_radii: bool,
     has_surface_normals: bool,
     has_surface_offsets: bool,
+    has_surface_color: bool,
     has_point_error: bool,
 ) {
     let n_new = new_to_old.len();
@@ -3609,6 +3828,7 @@ fn restore_adam_state_remap(
         has_radii,
         has_surface_normals,
         has_surface_offsets,
+        has_surface_color,
         has_point_error,
     );
     debug_assert_eq!(names.len(), snap.entries.len());
@@ -3705,6 +3925,7 @@ fn build_train_session(
     radius_lr_ratio: f32,
     surface_normal_lr_ratio: f32,
     surface_offset_lr_ratio: f32,
+    surface_color_lr_ratio: f32,
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
@@ -3726,6 +3947,7 @@ fn build_train_session(
         model.radii.is_some(),
         model.surface_normals.is_some(),
         model.surface_offsets.is_some(),
+        model.surface_color_coefficients.is_some(),
         collect_point_error,
         color_loss,
     );
@@ -3832,6 +4054,9 @@ fn build_train_session(
     }
     if model.surface_offsets.is_some() {
         session.set_lr_multiplier("surface_offsets", surface_offset_lr_ratio);
+    }
+    if model.surface_color_coefficients.is_some() {
+        session.set_lr_multiplier("surface_color_coefficients", surface_color_lr_ratio);
     }
     if collect_point_error {
         session.set_parameter(POINT_ERROR_PROBE, &vec![0.0; n_cells]);
@@ -4197,6 +4422,7 @@ fn fit_appearance_pixel_batched(
         config.radius_lr_ratio,
         config.surface_normal_lr_ratio,
         config.surface_offset_lr_ratio,
+        config.surface_color_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
     );
     if let Some(ref state_path) = config.resume_state_path {
@@ -4598,6 +4824,7 @@ fn fit_appearance_pixel_batched(
                     model.radii.is_some(),
                     model.surface_normals.is_some(),
                     model.surface_offsets.is_some(),
+                    model.surface_color_coefficients.is_some(),
                     collect_powerfoam_point_error,
                 );
                 phase_timings.state_readback += state_readback_start.elapsed();
@@ -4783,6 +5010,7 @@ fn fit_appearance_pixel_batched(
                     config.radius_lr_ratio,
                     config.surface_normal_lr_ratio,
                     config.surface_offset_lr_ratio,
+                    config.surface_color_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
                 );
                 session = rebuilt.0;
@@ -4803,6 +5031,7 @@ fn fit_appearance_pixel_batched(
                     model.radii.is_some(),
                     model.surface_normals.is_some(),
                     model.surface_offsets.is_some(),
+                    model.surface_color_coefficients.is_some(),
                     collect_powerfoam_point_error,
                 );
                 session.set_adam_step_count(adam_snap.t);
@@ -5194,6 +5423,8 @@ mod tests {
             &mut graph,
             cell_indices,
             &[vec![sh_r], vec![sh_g], vec![sh_b]],
+            None,
+            None,
             &[],
             pixel_idx_per_step,
             weight,
@@ -5257,6 +5488,8 @@ mod tests {
             &mut graph,
             cell_indices,
             &sh_coefficients,
+            None,
+            None,
             &basis_inputs,
             pixel_idx_per_step,
             weight,
@@ -5339,6 +5572,167 @@ mod tests {
                     "missing packed gradient for {name}: {gradient:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn packed_surface_color_matches_scalar_reference_and_backpropagates() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping packed surface-color graph test: no GPU");
+            return;
+        };
+        let (n_cells, p, l) = (2usize, 1usize, 2usize);
+        let components = vol::SURFACE_COLOR_COMPONENTS;
+        let mut graph = mn::Graph::new();
+        let cell_indices = graph.input_u32("cell_indices", &[p * l]);
+        let pixel_idx_per_step = graph.input_u32("pixel_idx_per_step", &[p * l]);
+        let weight = graph.input("weight", &[p, l]);
+        let surface_basis = graph.input("surface_basis", &[p * l, components]);
+        let surface_color =
+            graph.parameter("surface_color_coefficients", &[n_cells, components * 3]);
+        let sh_coefficients = ["sh_r", "sh_g", "sh_b"]
+            .map(|name| vec![graph.parameter(name, &[n_cells, 1])])
+            .to_vec();
+        let ones_l1 = graph.constant(vec![1.0; l], &[l, 1]);
+        let pixels = pixel_sh(
+            &mut graph,
+            cell_indices,
+            &sh_coefficients,
+            Some(surface_color),
+            Some(surface_basis),
+            &[],
+            pixel_idx_per_step,
+            weight,
+            ones_l1,
+            n_cells,
+            p,
+            l,
+        )
+        .pixels;
+        let sum_r = graph.sum_all(pixels[0]);
+        let sum_g = graph.sum_all(pixels[1]);
+        let sum_b = graph.sum_all(pixels[2]);
+        let sum_rg = graph.add(sum_r, sum_g);
+        let loss = graph.add(sum_rg, sum_b);
+        graph.set_outputs(vec![loss, pixels[0], pixels[1], pixels[2]]);
+
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        for channel in ["sh_r", "sh_g", "sh_b"] {
+            session.set_parameter(channel, &[0.0; 2]);
+        }
+        let coefficients: Vec<f32> = (0..n_cells * components * 3)
+            .map(|index| 0.01 * (index + 1) as f32)
+            .collect();
+        let basis = [0.25_f32, -0.5, 0.75, 0.4, -0.2, 0.1, 0.3, 0.14];
+        let weights = [0.4_f32, 0.6];
+        session.set_parameter("surface_color_coefficients", &coefficients);
+        session.set_input_u32("cell_indices", &[0, 1]);
+        session.set_input_u32("pixel_idx_per_step", &[0, 0]);
+        session.set_input("weight", &weights);
+        session.set_input("surface_basis", &basis);
+        session.set_adam(0.0, 0.9, 0.999, 1.0e-8);
+        session.step();
+        session.wait();
+
+        for channel in 0..3 {
+            let mut actual = [0.0_f32];
+            session.read_output_by_index(channel + 1, &mut actual);
+            let expected = (0..l)
+                .map(|step| {
+                    let base = step * components * 3 + channel * components;
+                    let residual = (0..components)
+                        .map(|component| {
+                            coefficients[base + component] * basis[step * components + component]
+                        })
+                        .sum::<f32>();
+                    weights[step] * (0.5 + residual)
+                })
+                .sum::<f32>();
+            assert!((actual[0] - expected).abs() < 2.0e-6);
+        }
+
+        let mut gradient = vec![0.0_f32; coefficients.len()];
+        session.read_param_grad("surface_color_coefficients", &mut gradient);
+        for step in 0..l {
+            for channel in 0..3 {
+                for component in 0..components {
+                    let index = step * components * 3 + channel * components + component;
+                    let expected = weights[step] * basis[step * components + component];
+                    assert!((gradient[index] - expected).abs() < 2.0e-6);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn differentiable_surface_basis_matches_cpu_oracle() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping differentiable surface-basis test: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        let cells = graph.input_u32("cells", &[1]);
+        let positions = graph.parameter("positions", &[1, 3]);
+        let normals = graph.parameter("normals", &[1, 3]);
+        let offsets = graph.parameter("offsets", &[1, 1]);
+        let radii = graph.parameter("radii", &[1, 1]);
+        let ray_origin = graph.input("ray_origin", &[1, 3]);
+        let ray_direction = graph.input("ray_direction", &[1, 3]);
+        let basis = surface_color_basis_graph(
+            &mut graph,
+            cells,
+            positions,
+            normals,
+            Some(offsets),
+            radii,
+            ray_origin,
+            ray_direction,
+            1,
+        );
+        graph.set_outputs(vec![basis]);
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Inference,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        let mut model = tiny_model();
+        model.points.truncate(1);
+        model.sh_coefficients.truncate(3);
+        model.radii = Some(vec![2.0]);
+        model.surface_normals = Some(vec![glam::Vec3::Z]);
+        model.surface_offsets = Some(vec![0.2]);
+        model.adjacency = Some(vol::Adjacency {
+            neighbors: Vec::new(),
+            offsets: vec![0, 0],
+        });
+        let origin = glam::Vec3::new(1.0, 0.0, -1.0);
+        let direction = glam::Vec3::Z;
+        session.set_parameter("positions", &model.points[0].truncate().to_array());
+        session.set_parameter("normals", &glam::Vec3::Z.to_array());
+        session.set_parameter("offsets", &[0.2]);
+        session.set_parameter("radii", &[2.0]);
+        session.set_input_u32("cells", &[0]);
+        session.set_input("ray_origin", &origin.to_array());
+        session.set_input("ray_direction", &direction.to_array());
+        session.step();
+        session.wait();
+        let mut actual = [0.0_f32; vol::SURFACE_COLOR_COMPONENTS];
+        session.read_output_by_index(0, &mut actual);
+        let expected = vol::trace::surface_color_basis(&model, 0, origin, direction);
+        for (actual, expected) in actual.iter().zip(expected.to_array()) {
+            assert!((actual - expected).abs() < 1.0e-6, "{actual} != {expected}");
         }
     }
 
@@ -5595,6 +5989,11 @@ mod tests {
         let normal = glam::Vec3::new(0.2, -0.3, 1.0).normalize();
         model.surface_normals = Some(vec![normal; model.points.len()]);
         model.surface_offsets = Some(vec![-0.03, -0.01, 0.02, 0.04]);
+        model.surface_color_coefficients = Some(
+            (0..model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3)
+                .map(|index| index as f32)
+                .collect(),
+        );
         model.compute_adjacency_default();
         let parent = 2;
         let parent_point = model.points[parent];
@@ -5626,6 +6025,12 @@ mod tests {
         assert_eq!(
             model.surface_offsets.as_ref().unwrap(),
             &vec![-0.03, -0.01, 0.02, 0.04, 0.02]
+        );
+        let coefficients = model.surface_color_coefficients.as_ref().unwrap();
+        let block = vol::SURFACE_COLOR_COMPONENTS * 3;
+        assert_eq!(
+            &coefficients[4 * block..5 * block],
+            &coefficients[2 * block..3 * block]
         );
         model.validate().unwrap();
     }
@@ -5785,7 +6190,8 @@ mod tests {
     #[test]
     fn per_cell_param_names_includes_positions_with_stride_3() {
         for sh_degree in 0..=3 {
-            let names = per_cell_param_names_with_stride(sh_degree, false, false, false, false);
+            let names =
+                per_cell_param_names_with_stride(sh_degree, false, false, false, false, false);
             // Required entries:
             assert!(names.contains(&("log_density".to_string(), 1)));
             assert!(names.contains(&("positions".to_string(), 3)));
@@ -5793,15 +6199,19 @@ mod tests {
             let num_components = (1 + sh_degree) * (1 + sh_degree);
             assert_eq!(names.len(), 2 + 3 * num_components);
             let weighted_names =
-                per_cell_param_names_with_stride(sh_degree, true, false, false, true);
+                per_cell_param_names_with_stride(sh_degree, true, false, false, false, true);
             assert!(weighted_names.contains(&("log_radii".to_string(), 1)));
             assert!(weighted_names.contains(&(POINT_ERROR_PROBE.to_string(), 1)));
             assert_eq!(weighted_names.len(), names.len() + 2);
             let oriented_names =
-                per_cell_param_names_with_stride(sh_degree, true, true, true, true);
+                per_cell_param_names_with_stride(sh_degree, true, true, true, true, true);
             assert!(oriented_names.contains(&("surface_normals".to_string(), 3)));
             assert!(oriented_names.contains(&("surface_offsets".to_string(), 1)));
-            assert_eq!(oriented_names.len(), names.len() + 4);
+            assert!(oriented_names.contains(&(
+                "surface_color_coefficients".to_string(),
+                vol::SURFACE_COLOR_COMPONENTS * 3,
+            )));
+            assert_eq!(oriented_names.len(), names.len() + 5);
         }
     }
 
@@ -5830,6 +6240,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 false,
@@ -5874,6 +6285,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             ColorLoss::L1,
         );
         assert!(vg.weighted_path.is_some());
@@ -5896,6 +6308,7 @@ mod tests {
             true,
             true,
             true,
+            false,
             false,
             ColorLoss::L1,
         );
@@ -5932,6 +6345,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             ColorLoss::L1,
         );
         assert!(vg.point_error_probe.is_some());
@@ -6068,6 +6482,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            false,
             false,
             false,
             false,
@@ -6649,6 +7064,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             ColorLoss::L1,
         );
 
@@ -6724,6 +7140,11 @@ mod tests {
         model.radii = Some(vec![1.0; model.points.len()]);
         model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
         model.surface_offsets = Some(vec![0.0; model.points.len()]);
+        model.surface_color_coefficients =
+            Some(vec![
+                3.0;
+                model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3
+            ]);
         let n_cells = model.points.len();
         let mut graph = mn::Graph::new();
         build_volumetric_graph(
@@ -6740,6 +7161,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            true,
             true,
             true,
             true,
@@ -6785,6 +7207,10 @@ mod tests {
             ("log_radii", n_cells),
             ("surface_normals", 3 * n_cells),
             ("surface_offsets", n_cells),
+            (
+                "surface_color_coefficients",
+                vol::SURFACE_COLOR_COMPONENTS * 3 * n_cells,
+            ),
             ("sh_r", n_cells),
             ("sh_g", n_cells),
             ("sh_b", n_cells),
@@ -6822,6 +7248,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            false,
             false,
             false,
             false,
@@ -6941,6 +7368,7 @@ mod tests {
             true,
             true,
             true,
+            false,
             false,
             ColorLoss::L1,
         );
@@ -7107,6 +7535,7 @@ mod tests {
             true,
             false,
             false,
+            false,
             ColorLoss::L1,
         );
         let (mut session, _) = mn::build(
@@ -7192,6 +7621,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
                 ColorLoss::L1,
             );
             let (mut session, _) = mn::build(
@@ -7254,6 +7684,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 false,
@@ -7323,6 +7754,7 @@ mod tests {
                 if quantiles.is_some() { 1.0 } else { 0.0 },
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 false,
@@ -7680,6 +8112,11 @@ mod tests {
             model.points.len()
         ]);
         model.surface_offsets = Some(vec![0.01; model.points.len()]);
+        model.surface_color_coefficients =
+            Some(vec![
+                0.0;
+                model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3
+            ]);
         model.compute_adjacency_default();
         let view = ViewSupervision {
             camera: vol::CameraParams {
@@ -7707,6 +8144,7 @@ mod tests {
                 radius_lr_ratio: 0.01,
                 surface_normal_lr_ratio: 0.1,
                 surface_offset_lr_ratio: 0.1,
+                surface_color_lr_ratio: 0.1,
                 surface_normal_weight: 0.1,
                 geometry_rebuild_every: 1,
                 densify: Some(DensifyConfig {
@@ -7728,6 +8166,16 @@ mod tests {
         assert_eq!(model.radii.as_ref().unwrap().len(), 5);
         assert_eq!(model.surface_normals.as_ref().unwrap().len(), 5);
         assert_eq!(model.surface_offsets.as_ref().unwrap().len(), 5);
+        assert_eq!(
+            model.surface_color_coefficients.as_ref().unwrap().len(),
+            5 * vol::SURFACE_COLOR_COMPONENTS * 3
+        );
+        assert!(model
+            .surface_color_coefficients
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|value| value.abs() > 1.0e-7));
         assert!(model
             .surface_offsets
             .as_ref()
@@ -7892,6 +8340,11 @@ mod tests {
                 model.points.len()
             ]);
             model.surface_offsets = Some(vec![0.01; model.points.len()]);
+            model.surface_color_coefficients =
+                Some(vec![
+                    0.0;
+                    model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3
+                ]);
             model.compute_adjacency_default();
             model
         };
@@ -7901,6 +8354,7 @@ mod tests {
             steps_per_view: 4,
             surface_normal_lr_ratio: 0.1,
             surface_offset_lr_ratio: 0.1,
+            surface_color_lr_ratio: 0.1,
             surface_normal_weight: 0.1,
             geometry_rebuild_every: 1,
             ..AppearanceFitConfig::default()
@@ -7959,6 +8413,10 @@ mod tests {
         assert_eq!(uninterrupted.radii, resumed.radii);
         assert_eq!(uninterrupted.surface_normals, resumed.surface_normals);
         assert_eq!(uninterrupted.surface_offsets, resumed.surface_offsets);
+        assert_eq!(
+            uninterrupted.surface_color_coefficients,
+            resumed.surface_color_coefficients
+        );
         let uninterrupted_adjacency = uninterrupted.adjacency.as_ref().unwrap();
         let resumed_adjacency = resumed.adjacency.as_ref().unwrap();
         assert_eq!(uninterrupted_adjacency.offsets, resumed_adjacency.offsets);

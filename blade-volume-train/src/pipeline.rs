@@ -681,6 +681,7 @@ fn rebuild_adjacency(
             model.radii = None;
             model.surface_normals = None;
             model.surface_offsets = None;
+            model.surface_color_coefficients = None;
             model.compute_adjacency_default();
         }
         AdjacencyKind::DelaunayQhull => {
@@ -691,6 +692,7 @@ fn rebuild_adjacency(
             model.radii = None;
             model.surface_normals = None;
             model.surface_offsets = None;
+            model.surface_color_coefficients = None;
             #[cfg(feature = "qhull")]
             {
                 model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
@@ -706,6 +708,7 @@ fn rebuild_adjacency(
             model.radii = None;
             model.surface_normals = None;
             model.surface_offsets = None;
+            model.surface_color_coefficients = None;
             model.adjacency = Some(vol::compute_knn(&model.points, k));
         }
         AdjacencyKind::Cech { radius_factor } => {
@@ -1055,6 +1058,26 @@ pub fn train_colmap_appearance_split(
             model.points.len(),
         );
     }
+    if config.fit.surface_color_lr_ratio > 0.0 && model.surface_color_coefficients.is_none() {
+        assert!(
+            config.fit.resume_state_path.is_none(),
+            "cannot add spatial PowerFoam color while restoring an optimizer checkpoint; \
+             initialize a fresh spatial-color model first"
+        );
+        assert!(
+            model.surface_normals.is_some() && model.radii.is_some(),
+            "spatial surface-color training requires --oriented-powerfoam or an oriented input PLY"
+        );
+        model.surface_color_coefficients =
+            Some(vec![
+                0.0;
+                model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3
+            ]);
+        log::info!(
+            "initialized {} oriented PowerFoam spatial-color residuals to zero",
+            model.points.len(),
+        );
+    }
 
     let training_start = std::time::Instant::now();
     let fit_outcome = diff_render::fit_appearance_multi_view_outcome(
@@ -1157,9 +1180,17 @@ mod tests {
         model.validate().unwrap();
 
         model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
+        model.surface_offsets = Some(vec![0.0; model.points.len()]);
+        model.surface_color_coefficients =
+            Some(vec![
+                0.0;
+                model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3
+            ]);
         rebuild_adjacency(&mut model, AdjacencyKind::Delaunay, &[]);
         assert!(model.radii.is_none());
         assert!(model.surface_normals.is_none());
+        assert!(model.surface_offsets.is_none());
+        assert!(model.surface_color_coefficients.is_none());
         model.validate().unwrap();
     }
 
