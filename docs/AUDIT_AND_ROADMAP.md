@@ -103,8 +103,9 @@ At the audited revision:
 - Optional position/radius optimization downloads geometry, rebuilds topology
   and paths on an explicit cadence, and validates active-path Jacobians against
   finite differences.
-- Densification uses position-gradient × cell-radius signal, contribution-aware
-  pruning, optimizer ancestry, and the weighted copied-radius split policy.
+- Densification uses position-gradient × cell-radius for unweighted RadFoam and
+  a device-resident per-site photometric-error EMA for weighted PowerFoam, plus
+  contribution-aware pruning and optimizer ancestry.
 - Quantile regularization, explicit background compositing, lossless DC SH, and
   versioned parameter/Adam/RNG checkpoints are implemented.
 - Trainer-scale quality remains the blocker, but the first Bonsai plateau was
@@ -587,10 +588,11 @@ At the audited revision:
   integration suite now passes on a physical NVIDIA GPU, including finite
   differences, weighted intervals, topology rebuilds, densification, and
   multi-view/novel-pose cases.
-- Weighted-cloud densification follows the reference resampler's copied-radius,
-  5%-support-scale split; the complete Bonsai fixed-count ablation now selects
-  trainable radii (+2.29 dB all-37 over fixed support), but the matched
-  200,000-cell/20,400-step densification gate remains outstanding.
+- Weighted-cloud densification follows the reference resampler's photometric
+  responsibility signal, 99th-percentile cap, copied radius, conserved sibling
+  statistic, and 5%-support-scale split. The corrected compute-splat path reaches
+  13.52 dB all-37 after the first 2,000-step/57,500-site gate; the matched
+  200,000-cell/20,400-step endpoint remains outstanding.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -840,8 +842,8 @@ the isolated Qhull feature explicitly. A post-Meganeura-uprev rerun on commit
 
 Stage 2 now has topology-safe opt-in position optimization, exact symmetric
 adjacency caps, terminal-segment integration, reference position-gradient ×
-cell-radius densification, explicit background compositing, and opt-in smooth
-depth-variance regularization. Analytical unweighted position gradients now
+cell-radius RadFoam densification, explicit background compositing, and opt-in
+smooth depth-variance regularization. Analytical unweighted position gradients now
 match central finite differences on a fixed, smooth cell path. Densification
 now collects maximum per-view ray contribution on the GPU at a deterministic
 2× downsample, protects contributing cells and their adjacency neighbours,
@@ -868,8 +870,10 @@ WGSL recorder stores those same position/radius Jacobians, and the meganeura
 graph optimizes radii through a beta=100 softplus while periodically rebuilding
 the discrete Čech graph and recorded paths. Static WGSL validation, the full
 CPU-isolated workspace suite, and all 33 physical-GPU differentiable-renderer
-tests pass. Weighted densification copies the parent's radius and optimizer
-ancestry while applying the reference 5%-of-radius perturbation;
+tests pass. Weighted densification samples a 99th-percentile-capped
+`T × alpha × L1(cell_color, target)` EMA without per-step host readback, then
+copies the parent's radius and optimizer ancestry while applying the reference
+5%-of-radius perturbation;
 reference-checkpoint and real-scene radius ablations still remain.
 
 The first bundled RadFoam-v1 semantic direction check is also complete. At
@@ -1341,7 +1345,10 @@ material path.
    unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate
    Room PSNR is identical, and the 255+8-view pass is 4.58× faster. Weighted
    PowerFoam now uses its separate compute-splat evaluator; treating the Čech
-   graph as a global traversal graph was invalid.)
+   graph as a global traversal graph was invalid. Device-resident photometric
+   resampling then removes 26.6 seconds of per-step gradient readback: matched
+   2,000-step training is 14.6% faster and all-37 quality changes from 13.51 to
+   13.52 dB.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 
@@ -1351,7 +1358,7 @@ material path.
    and spherical-Voronoi appearance model. (The earlier 50,000-cell ablation is
    superseded: its camera-seeded weighted walk missed disconnected Čech
    components and sat near the black baseline. The corrected compute-splat
-   trainer reaches 11.67 dB after 10 steps, 12.55 after 100, and 13.51 after
+   trainer reaches 11.67 dB after 10 steps, 12.55 after 100, and 13.52 after
    2,000 on all 37 Bonsai held-out views, versus 9.33 after 2,000 broken-walk
    steps. It grows 50,000 → 57,500 sites without hard pruning and remains
    topology-stable. Continue to the selected 200,000-cell/20,400-step endpoint

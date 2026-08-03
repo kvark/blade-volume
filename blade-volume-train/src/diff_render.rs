@@ -38,6 +38,10 @@ pub struct VolumetricGraph {
 
     pub log_density: mn::NodeId,
     pub positions: mn::NodeId,
+    /// Weighted-densification-only zero-valued parameter. Its gradient is the
+    /// per-site `T * alpha * L1(cell_color, target)` score; its frozen Adam
+    /// first moment retains that statistic on the GPU between resamples.
+    pub point_error_probe: Option<mn::NodeId>,
     /// Weighted-cloud-only radius parameter and differential path inputs.
     pub weighted_path: Option<WeightedPathGraph>,
     /// `sh_coefficients[c][k]` is the `[n_cells, 1]` parameter table for
@@ -99,6 +103,7 @@ fn parameter_name(channel: &str, k: usize) -> String {
 }
 
 const RADIUS_SOFTPLUS_BETA: f32 = 100.0;
+const POINT_ERROR_PROBE: &str = "point_error_probe";
 
 /// Positive activation for a flat `[count, 1]` tensor. This is the stable
 /// identity `(relu(βx) - log(sigmoid(|βx|))) / β`, which avoids needing an
@@ -248,6 +253,7 @@ pub fn build_volumetric_graph(
     softplus_beta: f32,
     background_rgb: [f32; 3],
     use_recorded_dt: bool,
+    collect_point_error: bool,
     color_loss_kind: ColorLoss,
 ) -> VolumetricGraph {
     assert!(
@@ -265,6 +271,10 @@ pub fn build_volumetric_graph(
             "patch mode: n_pixels must equal patch_size²"
         );
     }
+    assert!(
+        !collect_point_error || use_recorded_dt,
+        "point-error collection is only defined for weighted splats",
+    );
     let p = n_pixels;
     let l = max_steps;
     let pl = p * l;
@@ -546,7 +556,7 @@ pub fn build_volumetric_graph(
     // Accumulated opacity per pixel = Σ_L weight = 1 − T_final. Drives the
     // RadFoam opacity loss + white-background compositing.
     let opacity = g.matmul(weight, ones_l1); // [P, 1]
-    let [pixel_r, pixel_g, pixel_b] = pixel_sh(
+    let sh = pixel_sh(
         g,
         cell_indices,
         &sh_coefficients,
@@ -558,6 +568,7 @@ pub fn build_volumetric_graph(
         p,
         l,
     );
+    let [pixel_r, pixel_g, pixel_b] = sh.pixels;
 
     // Three per-channel L1 losses summed into one scalar. We could concat
     // and call l1_loss once, but concat in meganeura works on flat NCHW
@@ -571,6 +582,35 @@ pub fn build_volumetric_graph(
     let target_g = g.reshape(split_g, &[p, 1]);
     let split_b = g.split_b(target_rest_2d, p as u32, 1, 1, 1);
     let target_b = g.reshape(split_b, &[p, 1]);
+
+    // PowerFoam resamples sites according to an EMA of each site's
+    // photometric responsibility, not position-gradient magnitude. Encode the
+    // exact per-segment score into the gradient of a frozen, zero-forward
+    // probe parameter. Build this branch as soon as its inputs exist so the
+    // per-step colors need not stay live through the remaining loss graph.
+    let point_error = collect_point_error.then(|| {
+        let target_channels = [target_r, target_g, target_b];
+        let mut errors = Vec::with_capacity(3);
+        for (color, target_channel) in sh.step_colors.into_iter().zip(target_channels) {
+            let target_per_step = g.matmul(target_channel, ones_1l);
+            let neg_target = g.neg(target_per_step);
+            let difference = g.add(color, neg_target);
+            errors.push(g.abs(difference));
+        }
+        let error_rg = g.add(errors[0], errors[1]);
+        let color_error = g.add(error_rg, errors[2]);
+        let weighted_error = g.mul(weight, color_error);
+        let weighted_error_flat = g.reshape(weighted_error, &[pl, 1]);
+        let weighted_error_flat = g.stop_gradient(weighted_error_flat);
+
+        let probe = g.parameter(POINT_ERROR_PROBE, &[n_cells, 1]);
+        let gathered = g.embedding(cell_indices, probe);
+        let frozen = g.stop_gradient(gathered);
+        let neg_frozen = g.neg(frozen);
+        let zero_forward = g.add(gathered, neg_frozen);
+        let encoded_error = g.mul(zero_forward, weighted_error_flat);
+        (probe, g.sum_all(encoded_error))
+    });
 
     // --- Per-view exposure ---
     //
@@ -746,6 +786,11 @@ pub fn build_volumetric_graph(
         loss
     };
 
+    let (loss, point_error_probe) = match point_error {
+        Some((probe, probe_loss)) => (g.add(loss, probe_loss), Some(probe)),
+        None => (loss, None),
+    };
+
     // `dt_from_positions` as a second output so callers can compare the graph
     // interval against the recorder during geometry-optimisation checks.
     g.set_outputs(vec![loss, dt_from_positions]);
@@ -758,6 +803,7 @@ pub fn build_volumetric_graph(
         num_views,
         log_density,
         positions,
+        point_error_probe,
         weighted_path,
         sh_coefficients,
         exposure_r,
@@ -974,6 +1020,11 @@ fn concat_columns(g: &mut mn::Graph, columns: &[mn::NodeId], rows: usize) -> mn:
     g.reshape(flat, &[rows, channels as usize])
 }
 
+struct PixelSh {
+    pixels: [mn::NodeId; 3],
+    step_colors: [mn::NodeId; 3],
+}
+
 #[allow(clippy::too_many_arguments)]
 fn pixel_sh(
     g: &mut mn::Graph,
@@ -986,7 +1037,7 @@ fn pixel_sh(
     n_cells: usize,
     p: usize,
     l: usize,
-) -> [mn::NodeId; 3] {
+) -> PixelSh {
     assert_eq!(sh_coefficients.len(), 3, "pixel_sh needs RGB tables");
     let k = sh_coefficients[0].len();
     assert!(
@@ -1044,11 +1095,15 @@ fn pixel_sh(
     let green = g.split_a(gb, pl as u32, 1, 1, 1);
     let blue = g.split_b(gb, pl as u32, 1, 1, 1);
 
-    [red, green, blue].map(|channel| {
-        let color_2d = g.reshape(channel, &[p, l]);
+    let step_colors = [red, green, blue].map(|channel| g.reshape(channel, &[p, l]));
+    let pixels = step_colors.map(|color_2d| {
         let weighted = g.mul(weight, color_2d);
         g.matmul(weighted, ones_l1)
-    })
+    });
+    PixelSh {
+        pixels,
+        step_colors,
+    }
 }
 
 /// Flatten per-pixel paths into the three tensors meganeura consumes.
@@ -1252,8 +1307,9 @@ pub struct AppearanceFitConfig {
     /// [`ColorLoss::SmoothL1`]; [`ColorLoss::L1`] preserves the historical
     /// blade-volume behavior.
     pub color_loss: ColorLoss,
-    /// Adaptive densification: split cells with the largest accumulated
-    /// position-gradient magnitude times cell radius. `None` disables
+    /// Adaptive densification. Unweighted RadFoam samples by accumulated
+    /// position-gradient magnitude times cell radius; weighted PowerFoam
+    /// samples by per-site photometric-error EMA. `None` disables
     /// densification entirely (geometry stays at its initial cell count).
     pub densify: Option<DensifyConfig>,
     /// Patch-based sampling + structural-gradient L1 loss. When
@@ -1351,9 +1407,10 @@ pub struct AppearanceFitConfig {
     pub resume_training_state: Option<TrainingState>,
 }
 
-/// Adaptive densification: on the selected [`DensifySchedule`] after
-/// `warmup`, split cells sampled by accumulated
-/// `|grad(position)| × cell_radius`.
+/// Adaptive densification on the selected [`DensifySchedule`] after `warmup`.
+/// RadFoam splits cells sampled by accumulated
+/// `|grad(position)| × cell_radius`; PowerFoam uses the 99th-percentile-capped
+/// EMA of `T × alpha × L1(cell_color, target)`.
 /// RadFoam inserts a sibling near the farthest face. PowerFoam copies the
 /// support radius and perturbs both sites by 5% of that radius, following the
 /// reference resampler without introducing its deferred normal semantics. The
@@ -1369,8 +1426,8 @@ pub struct DensifyConfig {
     /// Steps between densify rounds under [`DensifySchedule::Fixed`].
     pub every: usize,
     /// Per-round growth factor: each round adds `fraction × current_cells`
-    /// new cells (RadFoam uses 0.15 = +15%/round), selected by weighted
-    /// multinomial on `accumulated|grad(position)| × cell_radius`.
+    /// new cells (RadFoam uses 0.15 = +15%/round), selected by the
+    /// method-specific statistic documented on [`DensifyConfig`].
     pub fraction: f32,
     /// Unused legacy knob (sibling jitter). RadFoam placement and PowerFoam's
     /// 5%-of-support-radius resampling are method-specific and fixed. Kept for
@@ -2665,6 +2722,23 @@ struct PathContributionStats {
     max_steps_used: usize,
 }
 
+fn finite_quantile(values: impl Iterator<Item = f32>, quantile: f32) -> f32 {
+    debug_assert!((0.0..=1.0).contains(&quantile));
+    let mut sorted = values
+        .filter(|value| value.is_finite())
+        .map(|value| value.max(0.0))
+        .collect::<Vec<_>>();
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    sorted.sort_by(f32::total_cmp);
+    let position = quantile * (sorted.len() - 1) as f32;
+    let lower = position.floor() as usize;
+    let upper = position.ceil() as usize;
+    let fraction = position - lower as f32;
+    sorted[lower] + fraction * (sorted[upper] - sorted[lower])
+}
+
 fn accumulate_path_contributions(
     cells: &[u32],
     next_cells: &[u32],
@@ -2921,11 +2995,13 @@ fn collect_path_contributions(
 ///    contribution (`contribution <= prune_contribution && cell_radius <
 ///    prune_radius`) — the RadFoam floater remover.
 /// 2. **Densify** by appending `fraction × survivors` children, parents
-///    drawn by weighted multinomial (without replacement) on
-///    `grad_accum × cell_radius`. Unweighted children sit 0.25× toward the
-///    parent's farthest neighbour plus a small random kick. Weighted parent
-///    and child sites each move by 0.05× the copied support radius, adapting
-///    PowerFoam's reference resampling to the current normal-free SH model.
+///    drawn by weighted multinomial (without replacement). Unweighted
+///    RadFoam uses `position_gradient × cell_radius`; weighted PowerFoam uses
+///    its per-site photometric-error EMA directly. Unweighted children sit
+///    0.25× toward the parent's farthest neighbour plus a small random kick.
+///    Weighted parent and child sites each move by 0.05× the copied support
+///    radius, adapting PowerFoam's reference resampling to the current
+///    normal-free SH model.
 ///    Density, appearance, radius, and optimizer ancestry are inherited.
 ///
 /// Returns `(new_to_old, pruned, added)`: `new_to_old[j]` is the OLD cell
@@ -2934,14 +3010,14 @@ fn collect_path_contributions(
 /// session rebuild.
 fn prune_and_densify(
     model: &mut vol::PointCloudModel,
-    grad_accum: &[f32],
+    densify_score: &[f32],
     contribution: &[f32],
     cfg: &DensifyConfig,
     rng_state: &mut u64,
     softplus_beta: f32,
 ) -> (Vec<usize>, usize, usize) {
     let n_old = model.points.len();
-    assert_eq!(grad_accum.len(), n_old);
+    assert_eq!(densify_score.len(), n_old);
     assert_eq!(contribution.len(), n_old);
     let sh_block = model.sh_component_count() * 3;
     let (neighbor_radius, farthest) = per_cell_farthest(model);
@@ -2990,6 +3066,8 @@ fn prune_and_densify(
     }
     let n_surv = survivors.len();
     let pruned = n_old - n_surv;
+    let point_error_cap = weighted
+        .then(|| finite_quantile(survivors.iter().map(|&index| densify_score[index]), 0.99));
 
     if cfg.prune {
         let suppressed_density = density_activation(-1.0, softplus_beta);
@@ -3010,7 +3088,12 @@ fn prune_and_densify(
         let mut keyed: Vec<(f32, usize)> = (0..n_surv)
             .map(|local| {
                 let oi = survivors[local];
-                let w = (grad_accum[oi] * cell_radius[oi]).max(1e-12);
+                let w = if weighted {
+                    densify_score[oi].min(point_error_cap.unwrap())
+                } else {
+                    densify_score[oi] * cell_radius[oi]
+                }
+                .max(1e-12);
                 let u = (next_unit() * 0.5 + 0.5).clamp(1e-6, 1.0); // (0,1]
                 (u.ln() / w, local)
             })
@@ -3101,11 +3184,18 @@ fn prune_and_densify(
 /// Enumerate every per-cell parameter name with its per-cell element
 /// stride. Stride is 1 for scalar tables (`log_density`, `log_radii`,
 /// `sh_<chan>_<k>`) and 3 for `positions`.
-fn per_cell_param_names_with_stride(sh_degree: usize, has_radii: bool) -> Vec<(String, usize)> {
+fn per_cell_param_names_with_stride(
+    sh_degree: usize,
+    has_radii: bool,
+    has_point_error: bool,
+) -> Vec<(String, usize)> {
     let num_components = (1 + sh_degree) * (1 + sh_degree);
     let mut names = vec![("log_density".to_string(), 1), ("positions".to_string(), 3)];
     if has_radii {
         names.push(("log_radii".to_string(), 1));
+    }
+    if has_point_error {
+        names.push((POINT_ERROR_PROBE.to_string(), 1));
     }
     for chan in ["sh_r", "sh_g", "sh_b"] {
         for k in 0..num_components {
@@ -3151,8 +3241,9 @@ fn save_adam_state(
     n_cells: usize,
     num_views: usize,
     has_radii: bool,
+    has_point_error: bool,
 ) -> AdamSnapshot {
-    let names = per_cell_param_names_with_stride(sh_degree, has_radii);
+    let names = per_cell_param_names_with_stride(sh_degree, has_radii, has_point_error);
     let mut entries = Vec::with_capacity(names.len());
     for (name, stride) in names {
         let size = n_cells * stride;
@@ -3202,10 +3293,20 @@ fn restore_adam_state_remap(
     new_to_old: &[usize],
     sh_degree: usize,
     has_radii: bool,
+    has_point_error: bool,
 ) {
     let n_new = new_to_old.len();
-    let names = per_cell_param_names_with_stride(sh_degree, has_radii);
+    let names = per_cell_param_names_with_stride(sh_degree, has_radii, has_point_error);
     debug_assert_eq!(names.len(), snap.entries.len());
+    let n_old = snap
+        .entries
+        .first()
+        .map(|entry| entry.m.len() / entry.stride)
+        .unwrap_or(0);
+    let mut inheritance_count = vec![0usize; n_old];
+    for &old_index in new_to_old {
+        inheritance_count[old_index] += 1;
+    }
     for (i, name_and_stride) in names.iter().enumerate() {
         let entry = &snap.entries[i];
         debug_assert_eq!(entry.stride, name_and_stride.1);
@@ -3215,6 +3316,12 @@ fn restore_adam_state_remap(
         for (j, &oi) in new_to_old.iter().enumerate() {
             m[j * s..j * s + s].copy_from_slice(&entry.m[oi * s..oi * s + s]);
             v[j * s..j * s + s].copy_from_slice(&entry.v[oi * s..oi * s + s]);
+            if entry.name == POINT_ERROR_PROBE {
+                debug_assert_eq!(s, 1);
+                let count = inheritance_count[oi] as f32;
+                m[j] /= count;
+                v[j] /= count * count;
+            }
         }
         session.write_adam_m(&entry.name, &m);
         session.write_adam_v(&entry.name, &v);
@@ -3264,6 +3371,7 @@ fn build_train_session(
     model: &vol::PointCloudModel,
     pixel_batch: usize,
     max_steps: usize,
+    collect_point_error: bool,
     sh_degree: usize,
     color_loss: ColorLoss,
     num_views: usize,
@@ -3300,6 +3408,7 @@ fn build_train_session(
         softplus_beta,
         background_rgb,
         model.radii.is_some(),
+        collect_point_error,
         color_loss,
     );
     if interpenetration_samples > 0 {
@@ -3385,6 +3494,10 @@ fn build_train_session(
     session.set_lr_multiplier("positions", multipliers.position);
     if model.radii.is_some() {
         session.set_lr_multiplier("log_radii", radius_lr_ratio);
+    }
+    if collect_point_error {
+        session.set_parameter(POINT_ERROR_PROBE, &vec![0.0; n_cells]);
+        session.set_lr_multiplier(POINT_ERROR_PROBE, 0.0);
     }
 
     // Per-view exposure: init to 1.0 (identity). Defaults to enabled
@@ -3664,6 +3777,7 @@ fn fit_appearance_pixel_batched(
     let setup_start = std::time::Instant::now();
     let mut position_grad_accum = vec![0.0f32; model.points.len()];
     let mut position_grad_scratch = vec![0.0f32; model.points.len() * 3];
+    let collect_powerfoam_point_error = densify.is_some() && model.radii.is_some();
     let _ = n_cells;
     let mut path_bufs = vol::gpu::PathRecordBuffers::new_external_with_jacobians(
         &gpu,
@@ -3684,6 +3798,7 @@ fn fit_appearance_pixel_batched(
         model,
         pixel_batch,
         max_steps,
+        collect_powerfoam_point_error,
         sh_degree,
         config.color_loss,
         views.len(),
@@ -3992,7 +4107,10 @@ fn fit_appearance_pixel_batched(
             phase_timings.gpu_step_wait += gpu_step_start.elapsed();
 
             let gradient_readback_start = std::time::Instant::now();
-            if densify_schedule_active && session.has_param_grad("positions") {
+            if densify_schedule_active
+                && !collect_powerfoam_point_error
+                && session.has_param_grad("positions")
+            {
                 session.read_param_grad("positions", &mut position_grad_scratch);
                 for (i, accumulated) in position_grad_accum.iter_mut().enumerate() {
                     let base = i * 3;
@@ -4059,6 +4177,7 @@ fn fit_appearance_pixel_batched(
                     n_old,
                     views.len(),
                     model.radii.is_some(),
+                    collect_powerfoam_point_error,
                 );
                 phase_timings.state_readback += state_readback_start.elapsed();
 
@@ -4136,10 +4255,20 @@ fn fit_appearance_pixel_batched(
                 } else {
                     vec![f32::INFINITY; n_old]
                 };
+                let densify_score = if collect_powerfoam_point_error {
+                    adam_snap
+                        .entries
+                        .iter()
+                        .find(|entry| entry.name == POINT_ERROR_PROBE)
+                        .map(|entry| entry.m.as_slice())
+                        .expect("weighted densification requires point-error state")
+                } else {
+                    position_grad_accum.as_slice()
+                };
                 let densify_start = std::time::Instant::now();
                 let (new_to_old, pruned, added) = prune_and_densify(
                     model,
-                    &position_grad_accum,
+                    densify_score,
                     &contribution,
                     &d,
                     &mut rng_split,
@@ -4190,6 +4319,7 @@ fn fit_appearance_pixel_batched(
                     model,
                     pixel_batch,
                     max_steps,
+                    collect_powerfoam_point_error,
                     sh_degree,
                     config.color_loss,
                     views.len(),
@@ -4225,6 +4355,7 @@ fn fit_appearance_pixel_batched(
                     &new_to_old,
                     sh_degree,
                     model.radii.is_some(),
+                    collect_powerfoam_point_error,
                 );
                 session.set_adam_step_count(adam_snap.t);
                 phase_timings.resource_rebuild += resource_rebuild_start.elapsed();
@@ -4443,7 +4574,8 @@ mod tests {
             1,
             1,
             1,
-        );
+        )
+        .pixels;
         graph.set_outputs(vec![pixel]);
         let (mut session, _) = mn::build(
             &graph,
@@ -4505,7 +4637,8 @@ mod tests {
             n_cells,
             p,
             l,
-        );
+        )
+        .pixels;
         let mean_r = graph.mean_all(pixels[0]);
         let mean_g = graph.mean_all(pixels[1]);
         let mean_b = graph.mean_all(pixels[2]);
@@ -4978,16 +5111,17 @@ mod tests {
     #[test]
     fn per_cell_param_names_includes_positions_with_stride_3() {
         for sh_degree in 0..=3 {
-            let names = per_cell_param_names_with_stride(sh_degree, false);
+            let names = per_cell_param_names_with_stride(sh_degree, false, false);
             // Required entries:
             assert!(names.contains(&("log_density".to_string(), 1)));
             assert!(names.contains(&("positions".to_string(), 3)));
             // Total count: 1 (density) + 1 (positions) + 3 * (1+deg)² SH params.
             let num_components = (1 + sh_degree) * (1 + sh_degree);
             assert_eq!(names.len(), 2 + 3 * num_components);
-            let weighted_names = per_cell_param_names_with_stride(sh_degree, true);
+            let weighted_names = per_cell_param_names_with_stride(sh_degree, true, true);
             assert!(weighted_names.contains(&("log_radii".to_string(), 1)));
-            assert_eq!(weighted_names.len(), names.len() + 1);
+            assert!(weighted_names.contains(&(POINT_ERROR_PROBE.to_string(), 1)));
+            assert_eq!(weighted_names.len(), names.len() + 2);
         }
     }
 
@@ -5016,6 +5150,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 ColorLoss::L1,
             );
@@ -5054,9 +5189,94 @@ mod tests {
             0.0,
             [0.0; 3],
             true,
+            false,
             ColorLoss::L1,
         );
         assert!(vg.weighted_path.is_some());
+    }
+
+    #[test]
+    fn powerfoam_point_error_probe_tracks_local_photometric_responsibility() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping PowerFoam point-error probe test: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        let vg = build_volumetric_graph(
+            &mut graph,
+            2,
+            1,
+            2,
+            0,
+            1,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            true,
+            true,
+            ColorLoss::L1,
+        );
+        assert!(vg.point_error_probe.is_some());
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+
+        session.set_parameter("log_density", &[std::f32::consts::LN_2; 2]);
+        session.set_parameter("positions", &[0.0, 0.0, 1.0, 0.0, 0.0, 2.0]);
+        session.set_parameter("log_radii", &[inv_radius_activation(1.0); 2]);
+        let bright_coefficient = 0.5 / SH_C0;
+        for channel in ["sh_r", "sh_g", "sh_b"] {
+            session.set_parameter(channel, &[0.0, bright_coefficient]);
+        }
+        for channel in ["exposure_r", "exposure_g", "exposure_b"] {
+            session.set_parameter(channel, &[1.0]);
+        }
+        session.set_parameter(POINT_ERROR_PROBE, &[0.0; 2]);
+
+        session.set_input_u32("cell_indices", &[0, 1]);
+        session.set_input_u32("previous_cell_indices", &[0, 1]);
+        session.set_input_u32("next_cell_indices", &[0, 1]);
+        session.set_input("recorded_dt", &[1.0; 2]);
+        session.set_input("dt_reference_tangent", &[0.0; 2]);
+        session.set_input("dt_grad_previous", &[0.0; 8]);
+        session.set_input("dt_grad_current", &[0.0; 8]);
+        session.set_input("dt_grad_next", &[0.0; 8]);
+        session.set_input("mask", &[1.0; 2]);
+        session.set_input("ray_origin", &[0.0; 3]);
+        session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
+        session.set_input_u32("pixel_idx_per_step", &[0, 0]);
+        session.set_input_u32("view_idx", &[0]);
+        session.set_input("labels", &[0.5; 3]);
+        session.set_adam(0.0, 0.9, 0.999, 1.0e-8);
+        session.step();
+        session.wait();
+
+        let loss = session.read_output(1)[0];
+        assert!(loss.abs() < 1.0e-6, "probe changed forward loss: {loss}");
+        let mut gradient = [0.0_f32; 2];
+        session.read_param_grad(POINT_ERROR_PROBE, &mut gradient);
+        assert!(gradient[0].abs() < 1.0e-6);
+        assert!((gradient[1] - 0.375).abs() < 1.0e-5, "{gradient:?}");
+        let mut first_moment = [0.0_f32; 2];
+        session.read_adam_m(POINT_ERROR_PROBE, &mut first_moment);
+        assert!(first_moment[0].abs() < 1.0e-6);
+        assert!(
+            (first_moment[1] - 0.0375).abs() < 1.0e-5,
+            "{first_moment:?}",
+        );
+        let mut probe = [f32::NAN; 2];
+        session.read_param(POINT_ERROR_PROBE, &mut probe);
+        assert_eq!(probe, [0.0; 2]);
     }
 
     #[test]
@@ -5135,6 +5355,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            false,
             false,
             ColorLoss::L1,
         );
@@ -5653,6 +5874,7 @@ mod tests {
             0.0,
             [0.0; 3],
             false,
+            false,
             ColorLoss::L1,
         );
 
@@ -5743,6 +5965,7 @@ mod tests {
             0.0,
             [0.0; 3],
             true,
+            false,
             ColorLoss::SmoothL1,
         );
         let (mut session, _) = mn::build(
@@ -5817,6 +6040,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            false,
             false,
             ColorLoss::L1,
         );
@@ -5929,6 +6153,7 @@ mod tests {
             0.0,
             [0.0; 3],
             true,
+            false,
             ColorLoss::L1,
         );
         let dt_output = g.reshape(vg.dt_from_positions, &[1]);
@@ -6048,6 +6273,7 @@ mod tests {
                 0.0,
                 background_rgb,
                 false,
+                false,
                 ColorLoss::L1,
             );
             let (mut session, _) = mn::build(
@@ -6110,6 +6336,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 ColorLoss::L1,
             );
@@ -6176,6 +6403,7 @@ mod tests {
                 if quantiles.is_some() { 1.0 } else { 0.0 },
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 ColorLoss::L1,
             );
@@ -6513,6 +6741,61 @@ mod tests {
 
         assert_eq!(losses.len(), 3);
         assert_eq!(model.points.len(), 5);
+        model.validate().unwrap();
+    }
+
+    #[test]
+    fn powerfoam_point_error_survives_densification_rebuild() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping PowerFoam densification rebuild test: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        model.radii = Some(vec![0.2; model.points.len()]);
+        model.compute_adjacency_default();
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: [0.0, 0.0, 0.0, 1.0],
+                fov: [0.5, 0.5],
+                principal: [0.0, 0.0],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
+            width: 1,
+            height: 1,
+        };
+        let losses = fit_appearance_multi_view(
+            &mut model,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                learning_rate: 0.01,
+                epochs: 3,
+                position_lr_ratio: 1.0,
+                radius_lr_ratio: 0.01,
+                geometry_rebuild_every: 1,
+                densify: Some(DensifyConfig {
+                    every: 1,
+                    fraction: 0.25,
+                    warmup: 1,
+                    target_points: 5,
+                    prune: true,
+                    ..DensifyConfig::default()
+                }),
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        assert_eq!(losses.len(), 3);
+        assert!(losses.iter().all(|loss| loss.is_finite()));
+        assert_eq!(model.points.len(), 5);
+        assert_eq!(model.radii.as_ref().unwrap().len(), 5);
         model.validate().unwrap();
     }
 

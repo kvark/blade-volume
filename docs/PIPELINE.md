@@ -194,6 +194,36 @@ usable for reconstruction batches and 128² checkpoint evaluation, but the next
 performance unit is a deterministic projected-tile candidate builder shared by
 training, evaluation, and the viewer.
 
+#### M2h — Device-resident PowerFoam resampling statistic (implemented and gated)
+
+Weighted densification previously downloaded the complete position-gradient
+table after every optimizer step, accumulated its norm on the CPU, and then
+multiplied it by support radius. Besides costing 26.6 seconds in the matched
+2,000-step run, this was not PowerFoam's resampling signal.
+
+- The differentiable graph now computes each segment's
+  `T × alpha × L1(cell_color, target)` responsibility. A frozen zero-forward
+  probe receives that value as its gradient, so its Adam first moment keeps the
+  per-site EMA on the GPU. The table is read only at a resampling boundary.
+- Parent sampling caps the statistic at its survivor-set 99th percentile and
+  samples without replacement. When a site is split, its inherited statistic
+  is divided among the parent and children so their total probability is
+  conserved. Unweighted RadFoam retains position-gradient × cell-radius
+  sampling unchanged.
+- On the same Bonsai 128²/50,000-site/4,096-ray/16-view gate, 2,000-step
+  training falls from 150.9 to 128.9 seconds (14.6%). Gradient readback falls
+  from 26.6 seconds to zero; added graph work raises GPU wait from 101.7 to
+  105.1 seconds. Loss changes from 0.1507 to 0.1505, and the resulting
+  57,500-site model scores 13.72/13.52 dB train/all-37 versus 13.70/13.51 dB.
+  The isolated run peaks at 1.11 GB under a 6 GB cgroup, with no swap, pressure,
+  OOM, candidate overflow, or GPU fault.
+
+The probe currently inherits the configured optimizer's first-moment horizon
+(`beta1 = 0.9` in this gate), while the reference implementation uses 0.99 for
+this statistic. The signal, cap, and split conservation match; a dedicated
+moment override is a lower-priority ablation if resampling noise becomes the
+next measured quality limit.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

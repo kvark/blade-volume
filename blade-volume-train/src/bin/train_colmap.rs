@@ -158,12 +158,10 @@ struct Args {
     color_loss: String,
 
     /// adaptive densification: cells between splits (default 0 = off).
-    /// Recommended 500–1000. After every cycle the top
-    /// `--densify-fraction` cells by accumulated position-gradient magnitude
-    /// times cell radius
-    /// are split — each parent gets a sibling cell at `pos + jitter`
-    /// with the same density and SH coefficients, and adjacency is
-    /// rebuilt with the configured exact backend. Requires `--pixel-batch`.
+    /// Recommended 500–1000. RadFoam samples parents by accumulated position
+    /// gradient times cell radius; PowerFoam uses per-site photometric-error
+    /// EMA. Each parent gets an inherited sibling and adjacency is rebuilt
+    /// with the configured exact backend. Requires `--pixel-batch`.
     #[argh(option, default = "0")]
     densify_every: usize,
 
@@ -175,9 +173,9 @@ struct Args {
     densify_schedule: String,
 
     /// per-round growth: each densify round adds `fraction × current`
-    /// cells, parents drawn by weighted multinomial on
-    /// `|grad(position)| × cell_radius` (RadFoam uses 0.15). Ignored
-    /// when `--densify-every 0`.
+    /// cells, with parents drawn by weighted multinomial on the
+    /// backend-specific statistic (RadFoam uses 0.15). Ignored when
+    /// `--densify-every 0`.
     #[argh(option, default = "0.15")]
     densify_fraction: f32,
 
