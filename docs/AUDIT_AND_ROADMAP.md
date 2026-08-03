@@ -597,7 +597,9 @@ At the audited revision:
   improves Bonsai train/all-37 PSNR to 14.65/14.35 dB. Conservative projected
   candidates preserve those pixels exactly and make the complete weighted
   evaluation 4.4% faster; sparse 16-view training correctly retains the
-  exhaustive gather because its matched indexed arm was neutral.
+  exhaustive gather because its matched indexed arm was neutral. Packing the
+  differentiable `(position,radius)` roles then lowers the 2,000-step training
+  memory peak by 33.4% and wall time by 1.6%, with quality within 0.02 dB.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -1355,7 +1357,9 @@ material path.
    2,000-step training is 14.6% faster and all-37 quality changes from 13.51 to
    13.52 dB. Conservative 16×16 projected candidates subsequently make the
    100,569-site all-view pass 4.4% faster with identical pixels and an exact
-   overflow fallback.)
+   overflow fallback. Packing weighted geometry/Jacobians reduces the matched
+   2,000-step training peak from 1.287 GB to 0.857 GB and time from 326.71 to
+   321.50 seconds while held-out quality stays within 0.02 dB.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 

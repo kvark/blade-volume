@@ -133,23 +133,15 @@ fn positive_activation(
 fn weighted_role_linear_term(
     g: &mut mn::Graph,
     indices: mn::NodeId,
-    positions_relative_to_ray: mn::NodeId,
-    log_radii: mn::NodeId,
+    geometry: mn::NodeId,
+    neg_ray_origin_geometry: mn::NodeId,
     recorded_jacobian: mn::NodeId,
-    ones_3_1: mn::NodeId,
-    count: usize,
+    ones_4_1: mn::NodeId,
 ) -> mn::NodeId {
-    let raw_radius = g.embedding(indices, log_radii);
-    let actual_radius = positive_activation(g, raw_radius, count, RADIUS_SOFTPLUS_BETA);
-
-    let position_jacobian_flat = g.split_a(recorded_jacobian, count as u32, 3, 1, 1);
-    let position_jacobian = g.reshape(position_jacobian_flat, &[count, 3]);
-    let radius_jacobian_flat = g.split_b(recorded_jacobian, count as u32, 3, 1, 1);
-    let radius_jacobian = g.reshape(radius_jacobian_flat, &[count, 1]);
-    let position_product = g.mul(positions_relative_to_ray, position_jacobian);
-    let position_tangent = g.matmul(position_product, ones_3_1);
-    let radius_tangent = g.mul(actual_radius, radius_jacobian);
-    g.add(position_tangent, radius_tangent)
+    let role_geometry = g.embedding(indices, geometry);
+    let relative_geometry = g.add(role_geometry, neg_ray_origin_geometry);
+    let product = g.mul(relative_geometry, recorded_jacobian);
+    g.matmul(product, ones_4_1)
 }
 
 /// Add a sampled PowerFoam interpenetration penalty to a scalar loss.
@@ -470,36 +462,52 @@ pub fn build_volumetric_graph(
         // avoids losing its low bits when the tangent is much larger. Positions
         // and positive radii still affect the forward value between rebuilds.
         let weighted = weighted_path.as_ref().unwrap();
-        let pos_previous = g.embedding(weighted.previous_cell_indices, positions);
-        let pos_previous_relative = g.add(pos_previous, neg_ray_origin_pl);
-        let pos_cell_relative = g.add(pos_cell, neg_ray_origin_pl);
-        let pos_next_relative = g.add(pos_next, neg_ray_origin_pl);
+        // Activate radii once at the parameter table, then pack `(x,y,z,r)`.
+        // Gathering this table for each path role is equivalent to gathering
+        // positions/radii separately, but avoids repeating the radius
+        // activation over every padded path slot and keeps each vec4
+        // Jacobian intact instead of copying it through split kernels.
+        let actual_radii =
+            positive_activation(g, weighted.log_radii, n_cells, RADIUS_SOFTPLUS_BETA);
+        // Concat uses flat NCHW operands. Keep explicit views here so its
+        // backward pass recovers the right batch and reshapes gradients back
+        // to the original parameter tables.
+        let positions_flat = g.reshape(positions, &[n_cells * 3]);
+        let actual_radii_flat = g.reshape(actual_radii, &[n_cells]);
+        let geometry_flat = g.concat(positions_flat, actual_radii_flat, n_cells as u32, 3, 1, 1);
+        let geometry = g.reshape(geometry_flat, &[n_cells, 4]);
+        let zero_radius = g.constant(vec![0.0_f32; p], &[p, 1]);
+        let ray_origin_flat = g.reshape(ray_origin, &[p * 3]);
+        let zero_radius_flat = g.reshape(zero_radius, &[p]);
+        let ray_origin_geometry_flat =
+            g.concat(ray_origin_flat, zero_radius_flat, p as u32, 3, 1, 1);
+        let ray_origin_geometry = g.reshape(ray_origin_geometry_flat, &[p, 4]);
+        let ray_origin_geometry_pl = g.embedding(pixel_idx_per_step, ray_origin_geometry);
+        let neg_ray_origin_geometry = g.neg(ray_origin_geometry_pl);
+        let ones_4_1 = g.constant(vec![1.0_f32; 4], &[4, 1]);
         let previous_term = weighted_role_linear_term(
             g,
             weighted.previous_cell_indices,
-            pos_previous_relative,
-            weighted.log_radii,
+            geometry,
+            neg_ray_origin_geometry,
             weighted.dt_grad_previous,
-            ones_3_1,
-            pl,
+            ones_4_1,
         );
         let current_term = weighted_role_linear_term(
             g,
             cell_indices,
-            pos_cell_relative,
-            weighted.log_radii,
+            geometry,
+            neg_ray_origin_geometry,
             weighted.dt_grad_current,
-            ones_3_1,
-            pl,
+            ones_4_1,
         );
         let next_term = weighted_role_linear_term(
             g,
             next_cell_indices,
-            pos_next_relative,
-            weighted.log_radii,
+            geometry,
+            neg_ray_origin_geometry,
             weighted.dt_grad_next,
-            ones_3_1,
-            pl,
+            ones_4_1,
         );
         let entry_and_current = g.add(previous_term, current_term);
         let linear_terms = g.add(entry_and_current, next_term);

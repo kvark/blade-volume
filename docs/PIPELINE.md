@@ -252,6 +252,27 @@ The interactive viewer still uses the adjacency walk for weighted clouds.
 Promoting the now-bounded compute-splat tracer into that backend, including
 resize and live settings handling, is the remaining presentation step.
 
+#### M2j — Packed weighted path linearization (implemented and gated)
+
+- The differentiable PowerFoam path now activates the radius table once and
+  packs each live site as `(x,y,z,r)`. Previous/current/next roles gather that
+  table and dot directly with the recorder's existing `vec4` Jacobians. This is
+  algebraically identical to separately gathering positions and radii, but it
+  removes repeated million-slot radius activations and six large Jacobian
+  split/copy passes. Parameter names, optimizer state, and checkpoints do not
+  change.
+- On the 57,500-site, 4,096-ray, 256-step profile, the optimizer graph falls
+  from 432 to 396 dispatches, 30.30 to 27.45 ms GPU time, 3.06 to 2.63 GB of
+  logical scratch, and 1.99 to 1.50 GB of physical allocations. The matched
+  500-step segment falls from 45.59 to 43.93 seconds.
+- A complete 2,000-step checkpoint resume crosses four densification/resource
+  rebuilds and reaches the same 100,569-site target in 321.50 versus 326.71
+  seconds. Its cgroup peak falls from 1.287 GB to 0.857 GB with no swap,
+  pressure, OOM, or GPU fault. Train/test PSNR is 14.64/14.33 dB versus
+  14.65/14.35 dB; the 0.01–0.02 dB variation accompanies a 0.1% change in the
+  atomically sampled topology and is below the precision of this stochastic
+  gate.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
