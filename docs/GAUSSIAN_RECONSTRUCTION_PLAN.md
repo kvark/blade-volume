@@ -178,3 +178,11 @@ not transfer: the worst held-out view falls by 0.24 dB on Bonsai and 0.31 dB on
 Room as Euclidean neighbourhoods cross thin surfaces and depth layers. The
 implementation is removed. Normal updates need shared-view correspondence or
 surface-aware neighbourhoods, not another local point-cloud smoother.
+
+Balancing fused normals by observing view was also rejected. Equal view votes
+over-correct for dense close views; square-root confidence weights preserve the
+particle set and improve synthetic normal RMSE from 66.42° to 66.04°, but lose
+0.01 dB mean and 0.07 dB on the worst Bonsai held-out view. Room is neutral to
+slightly positive. Pixel-count heuristics therefore are not a reliable normal
+objective either; the next experiment should improve the shared positions and
+derive orientation from geometry that is consistent across views.

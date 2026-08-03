@@ -1243,6 +1243,37 @@ peak_memory_bytes = 308563968
 memory_events = 0
 verdict = "reject: synthetic normal denoising crosses real thin surfaces; worst held-out PSNR loses 0.24 dB on Bonsai and 0.31 dB on Room"
 
+# Depth pixels do not provide independent normal evidence: a close view can
+# place many samples in one fusion cell. Equal weighting per observing view
+# over-corrects this bias. Weighting each view by the square root of its sample
+# confidence is a gentler alternative and preserves the exact particle set,
+# but its small synthetic/Room gains do not survive the Bonsai tail gate. The
+# accumulator and its test were removed.
+[surface_particles.rejected_view_balanced_normals]
+date = "2026-08-03"
+view_weight = "sqrt(sum of sample confidence)"
+synthetic_control_normal_rmse_degrees = 66.42
+synthetic_candidate_normal_rmse_degrees = 66.04
+synthetic_control_psnr = [18.84, 18.56, 18.30]
+synthetic_candidate_psnr = [18.94, 18.64, 18.44]
+synthetic_control_coverage = 0.539
+synthetic_candidate_coverage = 0.540
+bonsai_control_psnr = [15.81, 14.50, 11.68]
+bonsai_candidate_psnr = [15.82, 14.49, 11.61]
+bonsai_control_coverage = 0.922
+bonsai_candidate_coverage = 0.922
+bonsai_candidate_artifact = "target/audit-runs/sqrt-view-normals-bonsai-v1/scene.rply"
+bonsai_candidate_sha256 = "28b2f064a935a8dc4ce5a3a6f1b7e7dac081cc00e6c3ae43729c98c497a4e916"
+room_control_psnr = [14.91, 14.37, 13.57]
+room_candidate_psnr = [14.91, 14.41, 13.57]
+room_control_coverage = 0.936
+room_candidate_coverage = 0.937
+room_candidate_artifact = "target/audit-runs/sqrt-view-normals-room-v1/scene.rply"
+room_candidate_sha256 = "04d795c82177b7067eb2b67fe3c5e10487e266a3d49c10d8eb2abf2be83053ae"
+peak_memory_bytes = 296222720
+memory_events = 0
+verdict = "reject: sublinear view balancing is nearly neutral, but the Bonsai held mean and worst view lose 0.01 and 0.07 dB"
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047
