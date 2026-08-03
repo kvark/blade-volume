@@ -693,6 +693,19 @@ byte-identical at
 Despite the numerical gain, 256² comparisons still show substantial floaters
 and background smear, so this is not a viewer-ready result.
 
+An optimizer audit subsequently found that all three SH DC names omit the
+component suffix: `sh_r`, `sh_g`, and `sh_b`. The scheduler had configured
+nonexistent `_0` names, so DC retained multiplier 1.0 while higher-order SH
+rates followed their intended schedules. Commit `2a0fd73` assigns every
+concrete component name and adds a physical-GPU update test. On a fresh
+2,000-step Bonsai PowerFoam gate, this raises legacy train/all-37 PSNR from
+13.70/13.52 to 14.24/14.04 dB and absolute RadFoam-v1 from 10.18/10.15 to
+13.54/13.45 dB. The historical tables above remain accurate for their saved
+artifacts, but their `relative RadFoam-v1` and `radfoam-v1` labels do not prove
+the intended DC schedules. Those schedule conclusions are reopened; legacy
+remains the provisional selection because it still leads at the corrected
+2,000-step boundary.
+
 At the 750-step boundary, the all-39-view coverage diagnostic improves from
 18.44 to 19.66 dB (+1.22), including large recovery near the previously weak
 capture tail. It is still not an official comparison: this bounded protocol

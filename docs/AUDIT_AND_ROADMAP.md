@@ -1435,6 +1435,14 @@ material path.
    evaluation at most 127, with zero truncation and identical rounded PSNR;
    32/37 comparison PNGs are byte-identical and the rest differ by one channel
    count in one pixel.)
+5. Correct optimizer learning-rate selection for the bare SH DC parameter
+   names. (Done in `2a0fd73`. The old code targeted nonexistent `_0` names,
+   leaving DC at multiplier 1.0 while higher-order SH rates worked. A matched
+   fresh 2,000-step Bonsai PowerFoam gate improves legacy train/all-37 PSNR
+   from 13.70/13.52 to 14.24/14.04 dB and absolute RadFoam-v1 from
+   10.18/10.15 to 13.54/13.45 dB. Earlier parameter-group artifacts retain
+   their measured quality but do not validate their labelled DC schedules and
+   must be rerun before changing the selected schedule.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 

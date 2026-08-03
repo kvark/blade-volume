@@ -777,3 +777,21 @@ artifact has 3,041,490 directed edges, SHA-256
 `18481e5530c24d077f7612351ef8987dced52f6fe14867711d99980a17d515fa`, reaches
 24.46 dB on the selected views at 256², and lives at
 `target/audit-runs/bonsai-fresh-batch4096-smooth-l1-step20400-local/`.
+
+Commit `2a0fd73` corrects the SH learning-rate mapping used by every schedule.
+Component zero is named `sh_r`, `sh_g`, or `sh_b`, while the old optimizer
+setup configured only nonexistent names ending in `_0`. Consequently legacy
+SH3 runs used an effective DC multiplier of 1.0 instead of 0.1, and the
+absolute RadFoam-v1 schedule used 1.0 instead of its 0.005→0.0005 curve.
+Higher-order components were configured correctly. The repaired setup assigns
+every concrete SH parameter name and has a physical-GPU update regression.
+
+On a fresh, otherwise identical 2,000-step Bonsai PowerFoam gate, corrected
+legacy improves train/all-37 PSNR from 13.70/13.52 to 14.24/14.04 dB.
+Corrected absolute RadFoam-v1 improves 10.18/10.15 to 13.54/13.45 dB. Legacy
+remains ahead at this early boundary, so it stays selected. Earlier comparisons
+labelled as relative or absolute RadFoam-v1 measured the old effective DC rate
+and cannot establish reference-schedule quality; their artifact metrics remain
+valid historical results. All matched runs use 128-step paths with zero
+truncation, and their 6 GiB scopes report zero swap, pressure, OOM, or GPU
+faults. Raw evidence is ignored under `target/audit-runs/dc-lr-fix-gate/`.
