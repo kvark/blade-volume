@@ -13,6 +13,7 @@
 //!   - `cells_out[u32]`
 //!   - `dts_out[f32]`
 //!   - `mask_out[f32]`
+//!   - `dt_reference_tangents_out[f32]` (PowerFoam only)
 //!   - three `dt_grad_*_out[vec4<f32>]` streams (PowerFoam only)
 //!
 //! The shader writes only the steps it actually takes; trailing slots
@@ -28,9 +29,12 @@ fn output_bytes(num_pixels: u32, max_steps: u32, with_jacobians: bool) -> u64 {
     let pl = num_pixels as u64 * max_steps as u64;
     let base = pl * (2 * mem::size_of::<u32>() + 2 * mem::size_of::<f32>()) as u64;
     if with_jacobians {
-        base + pl * (mem::size_of::<u32>() + 3 * mem::size_of::<[f32; 4]>()) as u64
+        base + pl
+            * (mem::size_of::<u32>() + mem::size_of::<f32>() + 3 * mem::size_of::<[f32; 4]>())
+                as u64
     } else {
-        base + (mem::size_of::<u32>() + 3 * mem::size_of::<[f32; 4]>()) as u64
+        base + (mem::size_of::<u32>() + mem::size_of::<f32>() + 3 * mem::size_of::<[f32; 4]>())
+            as u64
     }
 }
 
@@ -84,6 +88,7 @@ struct PathRecordData {
     g_next_cells_out: gpu::BufferPiece,
     g_dts_out: gpu::BufferPiece,
     g_mask_out: gpu::BufferPiece,
+    g_dt_reference_tangents_out: gpu::BufferPiece,
     g_dt_grad_previous_out: gpu::BufferPiece,
     g_dt_grad_current_out: gpu::BufferPiece,
     g_dt_grad_next_out: gpu::BufferPiece,
@@ -174,6 +179,7 @@ impl PathRecorder {
                 g_next_cells_out: buffers.next_cells.into(),
                 g_dts_out: buffers.dts.into(),
                 g_mask_out: buffers.mask.into(),
+                g_dt_reference_tangents_out: buffers.dt_reference_tangents.into(),
                 g_dt_grad_previous_out: buffers.dt_grad_previous.into(),
                 g_dt_grad_current_out: buffers.dt_grad_current.into(),
                 g_dt_grad_next_out: buffers.dt_grad_next.into(),
@@ -198,6 +204,9 @@ pub struct PathRecordBuffers {
     pub next_cells: gpu::Buffer,
     pub dts: gpu::Buffer,
     pub mask: gpu::Buffer,
+    /// Weighted-path tangent `J * (geometry_ref - ray_origin)`.
+    /// Raw recorded intervals remain available in [`Self::dts`].
+    pub dt_reference_tangents: gpu::Buffer,
     pub dt_grad_previous: gpu::Buffer,
     pub dt_grad_current: gpu::Buffer,
     pub dt_grad_next: gpu::Buffer,
@@ -265,6 +274,11 @@ impl PathRecordBuffers {
         } else {
             mem::size_of::<[f32; 4]>() as u64
         };
+        let reference_tangent_bytes = if with_jacobians {
+            dts_bytes
+        } else {
+            mem::size_of::<f32>() as u64
+        };
         let pix_bytes = (num_pixels as u64) * mem::size_of::<u32>() as u64;
 
         let pixel_indices = context.create_buffer(gpu::BufferDesc {
@@ -319,6 +333,11 @@ impl PathRecordBuffers {
             size: mask_bytes,
             memory: mem(external),
         });
+        let dt_reference_tangents = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-dt-reference-tangents",
+            size: reference_tangent_bytes,
+            memory: mem(external && with_jacobians),
+        });
         let dt_grad_previous = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-dt-grad-previous",
             size: jacobian_bytes,
@@ -342,6 +361,7 @@ impl PathRecordBuffers {
             next_cells,
             dts,
             mask,
+            dt_reference_tangents,
             dt_grad_previous,
             dt_grad_current,
             dt_grad_next,
@@ -398,6 +418,7 @@ impl PathRecordBuffers {
         context.destroy_buffer(self.next_cells);
         context.destroy_buffer(self.dts);
         context.destroy_buffer(self.mask);
+        context.destroy_buffer(self.dt_reference_tangents);
         context.destroy_buffer(self.dt_grad_previous);
         context.destroy_buffer(self.dt_grad_current);
         context.destroy_buffer(self.dt_grad_next);
@@ -411,7 +432,7 @@ mod tests {
     #[test]
     fn compact_path_buffers_do_not_scale_jacobian_storage() {
         let slots = 4_096_u64 * 256;
-        assert_eq!(output_bytes(4_096, 256, true), slots * 68);
-        assert_eq!(output_bytes(4_096, 256, false), slots * 16 + 52);
+        assert_eq!(output_bytes(4_096, 256, true), slots * 72);
+        assert_eq!(output_bytes(4_096, 256, false), slots * 16 + 56);
     }
 }

@@ -142,12 +142,15 @@ The selected graph-packing rerun keeps every checkpoint parameter and the
 256-step path cap, but gathers the degree-2 RGB SH coefficients as one wide
 table. Three full repeats train in 16.00--16.05 seconds and reach 24.09--24.20 dB
 held-pose radiance, 0.624--0.627 position RMSE, and 18.39--18.65 dB under the
-unseen light. The latest selected reconstruction, including the follow-up
-path-mask cleanup and weighted-reference correction, is
+unseen light. The latest selected unweighted synthetic control, produced after
+the follow-up path-mask cleanup and weighted-reference correction, is
 `target/audit-runs/weighted-reference-rebase-v3/model.ply` (SHA-256
 `cbdf65d844d7749806fa8227a49990d978bb9ee2bc6226013404cfcc3955fbe8`); its
 Gaussian PBR surface is `scene.rply` beside it (SHA-256
 `8bf8e6b3b9dd86040906ab65250b0d82329d169c24e0ab4b4e630d4d869758ae`).
+That command constructs `radii = None`, so the artifact and repeats do not
+exercise the weighted path; they remain useful only as a shared-default
+regression control.
 
 The correction closes a weighted-training error at geometry rebuilds. Fresh
 recorder intervals and Jacobians were based on the newly downloaded cloud, but
@@ -155,8 +158,8 @@ the differentiable graph still measured position/radius deltas from the
 session-initial cloud. The graph now rebases those inputs whenever the recorder
 cloud is rebuilt, so `dt_ref + J * (x - x_ref)` uses one consistent snapshot.
 A physical-GPU regression demonstrates both the stale offset and exact rebased
-identity. Three complete corrected repeats take 15.41--15.46 seconds and stay
-within the existing radiance, geometry, and held-light variation.
+identity. This physical test, rather than the unweighted synthetic repeats, is
+the correctness gate for the weighted fix.
 
 Higher camera-lattice position rates were not selected. A 0.08 ratio with a
 300-step warmup improves the first three repeats to 25.52--25.85 dB on held
@@ -230,7 +233,24 @@ and reduces held-depth RMSE, but its material/depth tail still varies; 0.03 and
 0.04 lose the worst held pose immediately. On full Bonsai, 0.02 leads 0.01 at
 step 2,000 by 0.90 dB on the selected eight and 0.24 dB over all 37 views. At
 the losslessly continued step-4,000 checkpoint, it is only +0.06 dB selected
-and is -0.23/-0.14 dB train/all-37. The shared default remains 0.01.
+and is -0.23/-0.14 dB train/all-37. Both sweeps are unweighted and therefore
+gate only the shared position-rate default, which remains 0.01.
+
+The weighted linearization no longer gathers three reference positions and
+three reference radii for every path slot. The recorder emits the raw interval,
+its Jacobians, and a ray-relative reference tangent; the graph evaluates the
+numerically stable `dt_ref + tangent_actual - tangent_ref`. A translated-world
+physical-GPU oracle rejected the simpler absolute affine intercept after an
+8.76e-4 interval error and now passes below 5e-4. On the matched 2,000-point
+weighted Bonsai subset, the selected graph falls from 366 to 362 passes and
+from 15 to 10 large embeddings; median profiled GPU time falls from 16.82 to
+14.73 ms (12.4%). A 1,200-step run with 12 geometry rebuilds takes 21.60 rather
+than 23.97 seconds and exactly retains 11.91/11.64 dB train/held PSNR, including
+both 11.63/11.65 dB held frames. Its cgroup peaks at 489 MB with no pressure,
+swap, or OOM event. The default-parallel full workspace test passed but peaked
+at 5.90 GB, too close to the 6 GiB safety cap; the identical
+`--workspace --all-targets -- --test-threads=1` gate passed at 301 MB and is the
+safe local invocation for future GPU work.
 
 Global path caps of 128 and 192 are rejected: 128 gives no meaningful speed
 advantage over packing at 256 and loses the held-view tail, while 192 produces

@@ -5,8 +5,10 @@
 // accumulating colour it writes a `(previous_cell, cell, next_cell, dt,
 // mask)` tuple for every visible segment. Weighted paths additionally write
 // the exact local derivative of `dt` with respect to each role's
-// `(x, y, z, radius)`. The cell sequence and active min/max branch remain
-// discrete; the training graph consumes the recorded local Jacobian.
+// `(x, y, z, radius)` and the ray-relative reference tangent
+// `J * (geometry_ref - ray_origin)`. The cell sequence and active min/max
+// branch remain discrete; the training graph consumes the recorded
+// linearization as `dt_ref + tangent_actual - tangent_ref`.
 //
 // `next_cell_indices` enables differentiable position optimisation:
 // with `cell` and `next_cell` known per step, the graph can compute
@@ -66,6 +68,7 @@ var<storage, read_write> g_cells_out: array<u32>;
 var<storage, read_write> g_next_cells_out: array<u32>;
 var<storage, read_write> g_dts_out: array<f32>;
 var<storage, read_write> g_mask_out: array<f32>;
+var<storage, read_write> g_dt_reference_tangents_out: array<f32>;
 var<storage, read_write> g_dt_grad_previous_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_current_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_next_out: array<vec4<f32>>;
@@ -310,6 +313,23 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
             g_mask_out[row_start + output_step] = 1.0;
             if (g_params.power_foam != 0u) {
                 g_previous_cells_out[row_start + output_step] = previous;
+                let previous_geometry = vec4<f32>(
+                    g_points[previous].xyz - ray_origin,
+                    g_points[previous].w,
+                );
+                let current_geometry = vec4<f32>(
+                    g_points[current].xyz - ray_origin,
+                    g_points[current].w,
+                );
+                let next_geometry = vec4<f32>(
+                    g_points[next_idx].xyz - ray_origin,
+                    g_points[next_idx].w,
+                );
+                let reference_tangent =
+                    dot(interval.dt_d_previous, previous_geometry) +
+                    dot(interval.dt_d_current, current_geometry) +
+                    dot(interval.dt_d_next, next_geometry);
+                g_dt_reference_tangents_out[row_start + output_step] = reference_tangent;
                 g_dt_grad_previous_out[row_start + output_step] = interval.dt_d_previous;
                 g_dt_grad_current_out[row_start + output_step] = interval.dt_d_current;
                 g_dt_grad_next_out[row_start + output_step] = interval.dt_d_next;

@@ -78,10 +78,29 @@ struct CpuRecord {
     cells: Vec<u32>,
     next_cells: Vec<u32>,
     dts: Vec<f32>,
+    dt_reference_tangents: Vec<f32>,
     mask: Vec<f32>,
     dt_grad_previous: Vec<[f32; 4]>,
     dt_grad_current: Vec<[f32; 4]>,
     dt_grad_next: Vec<[f32; 4]>,
+}
+
+fn point_geometry_relative(
+    model: &vol::PointCloudModel,
+    index: u32,
+    ray_origin: glam::Vec3,
+) -> [f32; 4] {
+    let point = model.points[index as usize];
+    let relative = point.truncate() - ray_origin;
+    let radius = model
+        .radii
+        .as_ref()
+        .map_or(0.0, |radii| radii[index as usize]);
+    [relative.x, relative.y, relative.z, radius]
+}
+
+fn dot4(left: &[f32; 4], right: &[f32; 4]) -> f32 {
+    left.iter().zip(right).map(|(a, b)| a * b).sum()
 }
 
 fn cpu_record(
@@ -103,6 +122,7 @@ fn cpu_record(
     let mut cells = vec![0u32; p * max_steps];
     let mut next_cells = vec![0u32; p * max_steps];
     let mut dts = vec![0.0f32; p * max_steps];
+    let mut dt_reference_tangents = vec![0.0f32; p * max_steps];
     let mut mask = vec![0.0f32; p * max_steps];
     let mut dt_grad_previous = vec![[0.0; 4]; p * max_steps];
     let mut dt_grad_current = vec![[0.0; 4]; p * max_steps];
@@ -122,6 +142,18 @@ fn cpu_record(
                     dt_grad_current[slot] = e.dt_d_current.to_array();
                     dt_grad_next[slot] = e.dt_d_next.to_array();
                 }
+                if model.radii.is_some() {
+                    dt_reference_tangents[slot] = dot4(
+                        &dt_grad_previous[slot],
+                        &point_geometry_relative(model, e.previous_cell, ray.origin),
+                    ) + dot4(
+                        &dt_grad_current[slot],
+                        &point_geometry_relative(model, e.cell, ray.origin),
+                    ) + dot4(
+                        &dt_grad_next[slot],
+                        &point_geometry_relative(model, e.next_cell, ray.origin),
+                    );
+                }
             }
         }
     }
@@ -130,6 +162,7 @@ fn cpu_record(
         cells,
         next_cells,
         dts,
+        dt_reference_tangents,
         mask,
         dt_grad_previous,
         dt_grad_current,
@@ -184,7 +217,10 @@ fn rays_for_pixels(
         .collect()
 }
 
-fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
+fn assert_gpu_path_record_matches_cpu(
+    mut model: vol::PointCloudModel,
+    world_translation: glam::Vec3,
+) {
     let _gpu_test_guard = GPU_TEST_LOCK
         .lock()
         .expect("GPU path-record test lock poisoned");
@@ -201,7 +237,12 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
     let depth = 100.0f32;
 
     assert_eq!(model.points.len(), n);
-    let camera = make_camera_looking_along_x(depth);
+    for point in &mut model.points {
+        *point += world_translation.extend(0.0);
+    }
+    let mut camera = make_camera_looking_along_x(depth);
+    camera.cam_position =
+        (glam::Vec3::from_array(camera.cam_position) + world_translation).to_array();
     let pixels = pixel_indices_for_rays(width, height, num_pixels);
     let rays = rays_for_pixels(&camera, &pixels, width, height);
 
@@ -239,6 +280,7 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
         tx.fill_buffer(bufs.next_cells.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.dts.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.mask.at(0), pl * 4, 0);
+        tx.fill_buffer(bufs.dt_reference_tangents.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.dt_grad_previous.at(0), pl * 16, 0);
         tx.fill_buffer(bufs.dt_grad_current.at(0), pl * 16, 0);
         tx.fill_buffer(bufs.dt_grad_next.at(0), pl * 16, 0);
@@ -291,6 +333,11 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
         size: pl * 4,
         memory: gpu::Memory::Shared,
     });
+    let dt_reference_tangents_dl = ctx.create_buffer(gpu::BufferDesc {
+        name: "dt-reference-tangents-download",
+        size: pl * 4,
+        memory: gpu::Memory::Shared,
+    });
     let dt_grad_previous_dl = ctx.create_buffer(gpu::BufferDesc {
         name: "dt-grad-previous-download",
         size: pl * 16,
@@ -313,6 +360,11 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
         tx.copy_buffer_to_buffer(bufs.next_cells.at(0), next_cells_dl.at(0), pl * 4);
         tx.copy_buffer_to_buffer(bufs.dts.at(0), dts_dl.at(0), pl * 4);
         tx.copy_buffer_to_buffer(bufs.mask.at(0), mask_dl.at(0), pl * 4);
+        tx.copy_buffer_to_buffer(
+            bufs.dt_reference_tangents.at(0),
+            dt_reference_tangents_dl.at(0),
+            pl * 4,
+        );
         tx.copy_buffer_to_buffer(
             bufs.dt_grad_previous.at(0),
             dt_grad_previous_dl.at(0),
@@ -340,6 +392,10 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
         unsafe { std::slice::from_raw_parts(dts_dl.data() as *const f32, pl as usize).to_vec() };
     let gpu_mask: Vec<f32> =
         unsafe { std::slice::from_raw_parts(mask_dl.data() as *const f32, pl as usize).to_vec() };
+    let gpu_dt_reference_tangents: Vec<f32> = unsafe {
+        std::slice::from_raw_parts(dt_reference_tangents_dl.data() as *const f32, pl as usize)
+            .to_vec()
+    };
     let gpu_dt_grad_previous: Vec<f32> = unsafe {
         std::slice::from_raw_parts(dt_grad_previous_dl.data() as *const f32, pl as usize * 4)
             .to_vec()
@@ -434,6 +490,47 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
                     }
                 }
             }
+            let tangent_absolute =
+                (cpu.dt_reference_tangents[i] - gpu_dt_reference_tangents[i]).abs();
+            let tangent_scale = cpu.dt_reference_tangents[i]
+                .abs()
+                .max(gpu_dt_reference_tangents[i].abs())
+                .max(1.0e-4);
+            if tangent_absolute > 2.0e-3 && tangent_absolute / tangent_scale > 5.0e-3 {
+                mismatches += 1;
+                if mismatches <= 8 {
+                    eprintln!(
+                        "slot {i}: reference tangent cpu={} gpu={} diff={tangent_absolute}",
+                        cpu.dt_reference_tangents[i], gpu_dt_reference_tangents[i],
+                    );
+                }
+            }
+            let mut reconstructed_dt = gpu_dts[i] - gpu_dt_reference_tangents[i];
+            let ray_origin = rays[i / max_steps].origin;
+            for (cell, gradient) in [
+                (
+                    gpu_previous_cells[i],
+                    &gpu_dt_grad_previous[i * 4..i * 4 + 4],
+                ),
+                (gpu_cells[i], &gpu_dt_grad_current[i * 4..i * 4 + 4]),
+                (gpu_next_cells[i], &gpu_dt_grad_next[i * 4..i * 4 + 4]),
+            ] {
+                reconstructed_dt += gradient
+                    .iter()
+                    .zip(point_geometry_relative(&model, cell, ray_origin))
+                    .map(|(a, b)| a * b)
+                    .sum::<f32>();
+            }
+            let reconstruction_error = (gpu_dts[i] - reconstructed_dt).abs();
+            if reconstruction_error > 5.0e-4 {
+                mismatches += 1;
+                if mismatches <= 8 {
+                    eprintln!(
+                        "slot {i}: raw dt={} reconstructed={} diff={reconstruction_error}",
+                        gpu_dts[i], reconstructed_dt,
+                    );
+                }
+            }
         }
     }
 
@@ -448,6 +545,7 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
     ctx.destroy_buffer(next_cells_dl);
     ctx.destroy_buffer(dts_dl);
     ctx.destroy_buffer(mask_dl);
+    ctx.destroy_buffer(dt_reference_tangents_dl);
     ctx.destroy_buffer(dt_grad_previous_dl);
     ctx.destroy_buffer(dt_grad_current_dl);
     ctx.destroy_buffer(dt_grad_next_dl);
@@ -459,7 +557,7 @@ fn assert_gpu_path_record_matches_cpu(model: vol::PointCloudModel) {
 
 #[test]
 fn gpu_path_record_matches_cpu_on_grid() {
-    assert_gpu_path_record_matches_cpu(build_grid_model(12));
+    assert_gpu_path_record_matches_cpu(build_grid_model(12), glam::Vec3::ZERO);
 }
 
 #[test]
@@ -470,5 +568,16 @@ fn gpu_path_record_matches_bounded_powerfoam() {
             .map(|i| 0.2 + 0.03 * (i % 3) as f32)
             .collect(),
     );
-    assert_gpu_path_record_matches_cpu(model);
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO);
+}
+
+#[test]
+fn gpu_weighted_linearization_is_translation_invariant() {
+    let mut model = build_grid_model(12);
+    model.radii = Some(
+        (0..model.points.len())
+            .map(|i| 0.2 + 0.03 * (i % 3) as f32)
+            .collect(),
+    );
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::new(8192.0, -4096.0, 2048.0));
 }

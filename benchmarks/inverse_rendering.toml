@@ -1349,9 +1349,11 @@ selection = "accept: two redundant full-path multiplies are gone; the matched th
 # 100-step geometry rebuild. It therefore combined fresh `dt_ref` and `J` with
 # stale `x_ref`, counting all motion before the rebuild a second time. The
 # reference inputs now move atomically with each continuing recorder rebuild.
-# This is a correctness fix, not a claimed quality optimization: the repeated
-# synthetic ranges overlap the stale-reference predecessor and runtime is
-# unchanged. A physical-GPU unit gate makes the identity explicit.
+# This is a correctness fix, not a claimed quality optimization. A physical-
+# GPU unit gate makes the weighted identity explicit. `synthetic_foam` creates
+# an unweighted model (`radii = None`), so the repeats below are only a post-fix
+# control for the shared RadFoam defaults; they do not exercise this weighted
+# path and must not be cited as its quality evidence.
 [synthetic_reconstruction.rgb_mask_foam.weighted_reference_rebase]
 date = "2026-08-03"
 parent_commit = "28e0018"
@@ -1364,31 +1366,32 @@ gpu_identity_radius_jacobian = 1.25
 gpu_identity_stale_result = 8.5
 gpu_identity_rebased_recorded_dt = 9.25
 gpu_identity_rebased_result = 9.25
-training_seconds = [15.448, 15.457, 15.414]
-gpu_wait_seconds = [13.998, 14.011, 13.935]
-held_pose_psnr = [24.22, 24.07, 24.19]
-held_pose_worst_psnr = [23.72, 23.49, 23.75]
-training_depth_rmse = [3.1858, 6.4785, 2.7468]
-held_depth_rmse = [2.0712, 2.0919, 2.0798]
-position_rmse = [0.6352, 0.6328, 0.6280]
-normal_rmse_degrees = [66.35, 66.82, 66.38]
-material_residual = [0.13931, 0.19930, 0.04536]
-held_light_psnr = [18.35, 18.40, 18.53]
-held_light_worst_psnr = [18.07, 18.15, 18.24]
-peak_memory_bytes = [365584384, 365326336, 365027328]
+unweighted_control_training_seconds = [15.448, 15.457, 15.414]
+unweighted_control_gpu_wait_seconds = [13.998, 14.011, 13.935]
+unweighted_control_held_pose_psnr = [24.22, 24.07, 24.19]
+unweighted_control_held_pose_worst_psnr = [23.72, 23.49, 23.75]
+unweighted_control_training_depth_rmse = [3.1858, 6.4785, 2.7468]
+unweighted_control_held_depth_rmse = [2.0712, 2.0919, 2.0798]
+unweighted_control_position_rmse = [0.6352, 0.6328, 0.6280]
+unweighted_control_normal_rmse_degrees = [66.35, 66.82, 66.38]
+unweighted_control_material_residual = [0.13931, 0.19930, 0.04536]
+unweighted_control_held_light_psnr = [18.35, 18.40, 18.53]
+unweighted_control_held_light_worst_psnr = [18.07, 18.15, 18.24]
+unweighted_control_peak_memory_bytes = [365584384, 365326336, 365027328]
 memory_events = 0
-selected_artifact = "target/audit-runs/weighted-reference-rebase-v3/model.ply"
-selected_artifact_sha256 = "cbdf65d844d7749806fa8227a49990d978bb9ee2bc6226013404cfcc3955fbe8"
-selected_surface_artifact = "target/audit-runs/weighted-reference-rebase-v3/scene.rply"
-selected_surface_sha256 = "8bf8e6b3b9dd86040906ab65250b0d82329d169c24e0ab4b4e630d4d869758ae"
-selection = "accept correctness fix: fresh weighted recorder data and graph references now share one geometry snapshot"
+unweighted_control_artifact = "target/audit-runs/weighted-reference-rebase-v3/model.ply"
+unweighted_control_artifact_sha256 = "cbdf65d844d7749806fa8227a49990d978bb9ee2bc6226013404cfcc3955fbe8"
+unweighted_control_surface_artifact = "target/audit-runs/weighted-reference-rebase-v3/scene.rply"
+unweighted_control_surface_sha256 = "8bf8e6b3b9dd86040906ab65250b0d82329d169c24e0ab4b4e630d4d869758ae"
+selection = "accept weighted correctness fix on the physical GPU identity gate; retain these repeats only as an unweighted shared-default control"
 
-# Doubling the position rate improves the corrected synthetic geometry means,
-# but the 0.03 and 0.04 arms immediately lose the held-pose tail. The safer
-# 0.02 arm wins a short Bonsai checkpoint, then loses train and all-37 quality
-# after both arms continue losslessly to step 4,000. Keep 0.01 as the shared
-# default instead of selecting on the synthetic scene or the early checkpoint.
-[synthetic_reconstruction.rgb_mask_foam.weighted_reference_rebase.rejected_position_rate]
+# These synthetic and Bonsai arms are likewise unweighted. They gate the
+# shared position-rate default, not the weighted reference correction.
+# Doubling the position rate improves the synthetic geometry means, but the
+# 0.03 and 0.04 arms immediately lose the held-pose tail. The safer 0.02 arm
+# wins a short Bonsai checkpoint, then loses train and all-37 quality after
+# both arms continue losslessly to step 4,000. Keep 0.01 as the shared default.
+[synthetic_reconstruction.rgb_mask_foam.weighted_reference_rebase.unweighted_position_rate_gate]
 control_position_lr_ratio = 0.01
 candidate_position_lr_ratio = 0.02
 control_held_pose_psnr = [24.22, 24.07, 24.19]
@@ -1412,6 +1415,56 @@ bonsai_step_4000_cells = [100163, 98128]
 bonsai_peak_memory_bytes = [1182355456, 968962048]
 memory_events = 0
 verdict = "reject default change: the 0.02 early gain does not persist through step 4000; it loses 0.23 dB train and 0.14 dB all-37"
+
+# The weighted graph used to gather three reference positions and three
+# reference radii for every path slot. The recorder can instead emit its
+# ray-relative reference tangent next to the raw interval and Jacobians, so the
+# graph evaluates the same stable form `dt_ref + tangent_actual - tangent_ref`.
+# Keeping `dt_ref` separate is important: the rejected affine-intercept form
+# failed the translated-world oracle, and the first camera-relative intercept
+# recovered translation invariance but lost 0.07 dB in the long quality gate.
+# The selected tangent form passes both and removes five large gathers net.
+[training.weighted_path_linearization]
+date = "2026-08-03"
+parent_commit = "f3d3b73"
+path_slots = 524288
+control_bytes_per_path_slot = 68
+candidate_bytes_per_path_slot = 72
+control_gpu_passes = 366
+candidate_gpu_passes = 362
+control_large_embeddings = 15
+candidate_large_embeddings = 10
+control_gpu_step_median_ms = 16.82
+candidate_gpu_step_median_ms = 14.73
+gpu_step_time_reduction = 0.124
+control_training_seconds = 23.965
+candidate_training_seconds = 21.598
+training_time_reduction = 0.099
+control_gpu_wait_seconds = 22.032
+candidate_gpu_wait_seconds = 19.669
+control_loss = [0.9320, 0.7553]
+candidate_loss = [0.9320, 0.7567]
+control_adjacency_edges = 26920
+candidate_adjacency_edges = 27332
+control_train_psnr = 11.91
+candidate_train_psnr = 11.91
+control_test_psnr = 11.64
+candidate_test_psnr = 11.64
+control_test_frame_psnr = [11.63, 11.65]
+candidate_test_frame_psnr = [11.63, 11.65]
+rejected_absolute_translated_dt_error = 0.00087606907
+translated_oracle_tolerance = 0.0005
+translated_tangent_form_passed = true
+control_peak_memory_bytes = 488583168
+candidate_peak_memory_bytes = 489107456
+workspace_parallel_test_peak_memory_bytes = 5899915264
+workspace_serial_test_peak_memory_bytes = 300818432
+workspace_safe_test_args = "--workspace --all-targets -- --test-threads=1"
+memory_events = 0
+control_artifact = "target/audit-runs/linear-intercept-control-weighted-long-v1/model.ply"
+candidate_artifact = "target/audit-runs/stable-tangent-weighted-long-v1/model.ply"
+candidate_artifact_sha256 = "f9e176101d3abc55c94d0aa28207900a60735600e77461a25f3ba38187adffe6"
+selection = "accept: stable weighted linearization preserves the matched held-view result and reduces profiled GPU step time by 12.4%"
 
 # Replacing the SH dot-product's ones-matmul with SumInner exposes a generic
 # reduction inefficiency. Meganeura 66e1664 packs 256 narrow rows into one

@@ -79,13 +79,12 @@ pub struct VolumetricGraph {
 pub struct WeightedPathGraph {
     /// Softplus pre-image of each rendered support radius.
     pub log_radii: mn::NodeId,
+    /// Ray-relative tangent `J * (geometry_ref - ray_origin)`.
+    pub dt_reference_tangent: mn::NodeId,
     pub previous_cell_indices: mn::NodeId,
     pub dt_grad_previous: mn::NodeId,
     pub dt_grad_current: mn::NodeId,
     pub dt_grad_next: mn::NodeId,
-    /// Geometry snapshot against which the recorder evaluated its Jacobians.
-    pub reference_positions: mn::NodeId,
-    pub reference_radii: mn::NodeId,
 }
 
 /// SH-component name suffix, e.g. `parameter_name("sh_r", 0)` → `"sh_r"`,
@@ -126,34 +125,25 @@ fn positive_activation(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn weighted_role_tangent(
+fn weighted_role_linear_term(
     g: &mut mn::Graph,
     indices: mn::NodeId,
-    actual_positions: mn::NodeId,
+    positions_relative_to_ray: mn::NodeId,
     log_radii: mn::NodeId,
-    reference_positions: mn::NodeId,
-    reference_radii: mn::NodeId,
     recorded_jacobian: mn::NodeId,
     ones_3_1: mn::NodeId,
     count: usize,
 ) -> mn::NodeId {
-    let reference_position = g.embedding(indices, reference_positions);
-    let neg_reference_position = g.neg(reference_position);
-    let position_delta = g.add(actual_positions, neg_reference_position);
-
     let raw_radius = g.embedding(indices, log_radii);
     let actual_radius = positive_activation(g, raw_radius, count, RADIUS_SOFTPLUS_BETA);
-    let reference_radius = g.embedding(indices, reference_radii);
-    let neg_reference_radius = g.neg(reference_radius);
-    let radius_delta = g.add(actual_radius, neg_reference_radius);
 
     let position_jacobian_flat = g.split_a(recorded_jacobian, count as u32, 3, 1, 1);
     let position_jacobian = g.reshape(position_jacobian_flat, &[count, 3]);
     let radius_jacobian_flat = g.split_b(recorded_jacobian, count as u32, 3, 1, 1);
     let radius_jacobian = g.reshape(radius_jacobian_flat, &[count, 1]);
-    let position_product = g.mul(position_delta, position_jacobian);
+    let position_product = g.mul(positions_relative_to_ray, position_jacobian);
     let position_tangent = g.matmul(position_product, ones_3_1);
-    let radius_tangent = g.mul(radius_delta, radius_jacobian);
+    let radius_tangent = g.mul(actual_radius, radius_jacobian);
     g.add(position_tangent, radius_tangent)
 }
 
@@ -245,12 +235,11 @@ pub fn build_volumetric_graph(
     let mask = g.input("mask", &[pl]);
     let weighted_inputs = use_recorded_dt.then(|| {
         (
+            g.input("dt_reference_tangent", &[pl]),
             g.input_u32("previous_cell_indices", &[pl]),
             g.input("dt_grad_previous", &[pl, 4]),
             g.input("dt_grad_current", &[pl, 4]),
             g.input("dt_grad_next", &[pl, 4]),
-            g.input("reference_positions", &[n_cells, 3]),
-            g.input("reference_radii", &[n_cells, 1]),
         )
     });
     // Target is fed as [1, P*3] to match meganeura's "batch × dim" convention
@@ -292,20 +281,20 @@ pub fn build_volumetric_graph(
     let log_radii = use_recorded_dt.then(|| g.parameter("log_radii", &[n_cells, 1]));
     let weighted_path = weighted_inputs.map(
         |(
+            dt_reference_tangent,
             previous_cell_indices,
             dt_grad_previous,
             dt_grad_current,
             dt_grad_next,
-            reference_positions,
-            reference_radii,
-        )| WeightedPathGraph {
-            log_radii: log_radii.unwrap(),
-            previous_cell_indices,
-            dt_grad_previous,
-            dt_grad_current,
-            dt_grad_next,
-            reference_positions,
-            reference_radii,
+        )| {
+            WeightedPathGraph {
+                log_radii: log_radii.unwrap(),
+                dt_reference_tangent,
+                previous_cell_indices,
+                dt_grad_previous,
+                dt_grad_current,
+                dt_grad_next,
+            }
         },
     );
     // Per-view RGB gain: separate `[num_views, 1]` table per channel
@@ -423,52 +412,51 @@ pub fn build_volumetric_graph(
     let neg_normal_gate = g.neg(normal_gate);
     let ones_for_gate = g.constant(vec![1.0_f32; pl], &[p, l]);
     let terminal_gate = g.add(ones_for_gate, neg_normal_gate);
-    let recorded_dt_2d = g.reshape(recorded_dt, &[p, l]);
     let selected_dt = if use_recorded_dt {
         // The recorder evaluates the exact weighted, sphere-clipped interval
-        // and its active-branch Jacobian at the geometry snapshot used to
-        // build the GPU cloud. Reconstruct a first-order tangent around that
-        // snapshot so both positions and positive radii affect the forward
-        // value between discrete topology rebuilds.
+        // and its active-branch Jacobian. Evaluate its local linearization as
+        // `dt_ref + tangent_actual - tangent_ref`; keeping `dt_ref` separate
+        // avoids losing its low bits when the tangent is much larger. Positions
+        // and positive radii still affect the forward value between rebuilds.
         let weighted = weighted_path.as_ref().unwrap();
         let pos_previous = g.embedding(weighted.previous_cell_indices, positions);
-        let previous_tangent = weighted_role_tangent(
+        let pos_previous_relative = g.add(pos_previous, neg_ray_origin_pl);
+        let pos_cell_relative = g.add(pos_cell, neg_ray_origin_pl);
+        let pos_next_relative = g.add(pos_next, neg_ray_origin_pl);
+        let previous_term = weighted_role_linear_term(
             g,
             weighted.previous_cell_indices,
-            pos_previous,
+            pos_previous_relative,
             weighted.log_radii,
-            weighted.reference_positions,
-            weighted.reference_radii,
             weighted.dt_grad_previous,
             ones_3_1,
             pl,
         );
-        let current_tangent = weighted_role_tangent(
+        let current_term = weighted_role_linear_term(
             g,
             cell_indices,
-            pos_cell,
+            pos_cell_relative,
             weighted.log_radii,
-            weighted.reference_positions,
-            weighted.reference_radii,
             weighted.dt_grad_current,
             ones_3_1,
             pl,
         );
-        let next_tangent = weighted_role_tangent(
+        let next_term = weighted_role_linear_term(
             g,
             next_cell_indices,
-            pos_next,
+            pos_next_relative,
             weighted.log_radii,
-            weighted.reference_positions,
-            weighted.reference_radii,
             weighted.dt_grad_next,
             ones_3_1,
             pl,
         );
-        let entry_and_current = g.add(previous_tangent, current_tangent);
-        let tangent = g.add(entry_and_current, next_tangent);
+        let entry_and_current = g.add(previous_term, current_term);
+        let linear_terms = g.add(entry_and_current, next_term);
+        let reference_tangent = g.reshape(weighted.dt_reference_tangent, &[pl, 1]);
+        let neg_reference_tangent = g.neg(reference_tangent);
+        let tangent_delta = g.add(linear_terms, neg_reference_tangent);
         let recorded_dt_flat = g.reshape(recorded_dt, &[pl, 1]);
-        let linear_dt_flat = g.add(recorded_dt_flat, tangent);
+        let linear_dt_flat = g.add(recorded_dt_flat, tangent_delta);
         let linear_dt = g.reshape(linear_dt_flat, &[p, l]);
         let positive_dt = g.relu(linear_dt);
         let neg_positive_dt = g.neg(positive_dt);
@@ -478,6 +466,7 @@ pub fn build_volumetric_graph(
         g.add(max_dt_pl, neg_within_cap)
     } else {
         let face_dt = g.mul(dt_clamped, normal_gate);
+        let recorded_dt_2d = g.reshape(recorded_dt, &[p, l]);
         let terminal_dt = g.mul(recorded_dt_2d, terminal_gate);
         g.add(face_dt, terminal_dt)
     };
@@ -2096,7 +2085,6 @@ fn upload_model_parameters(
             .map(|&radius| inv_radius_activation(radius))
             .collect();
         session.set_parameter("log_radii", &init_radii);
-        set_weighted_path_reference(session, &init_positions, radii);
     }
 
     // `model.sh_coefficients` layout (lib.rs spec):
@@ -2115,12 +2103,6 @@ fn upload_model_parameters(
             session.set_parameter(&parameter_name(chan, k), &scratch);
         }
     }
-}
-
-fn set_weighted_path_reference(session: &mut mn::Session, positions: &[f32], radii: &[f32]) {
-    assert_eq!(positions.len(), 3 * radii.len());
-    session.set_input("reference_positions", positions);
-    session.set_input("reference_radii", radii);
 }
 
 /// Bake the mean per-view exposure into the SH-DC coefficients so the
@@ -2658,6 +2640,7 @@ fn collect_path_contributions(
                 transfer.fill_buffer(buffers.mask.at(0), path_bytes, 0);
                 if buffers.has_jacobians() {
                     transfer.fill_buffer(buffers.previous_cells.at(0), path_bytes, 0);
+                    transfer.fill_buffer(buffers.dt_reference_tangents.at(0), path_bytes, 0);
                     transfer.fill_buffer(buffers.dt_grad_previous.at(0), path_bytes * 4, 0);
                     transfer.fill_buffer(buffers.dt_grad_current.at(0), path_bytes * 4, 0);
                     transfer.fill_buffer(buffers.dt_grad_next.at(0), path_bytes * 4, 0);
@@ -3134,8 +3117,8 @@ fn build_train_session(
     let gpu_cloud = build_training_gpu_cloud(model, gpu);
 
     // Unweighted interior dt is reconstructed from positions, with recorded
-    // terminal intervals. Weighted dt is the exact recorder value plus its
-    // local position/radius tangent around this model snapshot.
+    // terminal intervals. Weighted dt uses the recorder's raw interval plus
+    // the change in its local position/radius tangent.
     let pl_bytes = (pixel_batch as u64) * (max_steps as u64) * 4;
     for (slot, buf) in [
         ("cell_indices", path_bufs.cells),
@@ -3156,6 +3139,11 @@ fn build_train_session(
             "weighted training requires Jacobian path buffers"
         );
         for (slot, buf, size) in [
+            (
+                "dt_reference_tangent",
+                path_bufs.dt_reference_tangents,
+                pl_bytes,
+            ),
             ("previous_cell_indices", path_bufs.previous_cells, pl_bytes),
             ("dt_grad_previous", path_bufs.dt_grad_previous, pl_bytes * 4),
             ("dt_grad_current", path_bufs.dt_grad_current, pl_bytes * 4),
@@ -3324,13 +3312,14 @@ fn fit_appearance_pixel_batched(
     }
 
     // Path-recorder pipeline and the record-side encoder are
-    // cycle-independent. `PathRecordBuffers`, however, holds three
+    // cycle-independent. `PathRecordBuffers`, however, holds exportable
     // `Memory::External(Fd(None))` buffers; meganeura's
     // `bind_external_buffer` consumes those FDs on import (Vulkan
     // takes ownership), so once a session has imported them the
     // producer's `buffer.external` field is stale. We therefore
     // recreate `path_bufs` alongside the session+cloud each densify
-    // cycle. The buffers are small (≤1.5 MB total at our shape).
+    // cycle. They occupy at most 36 MiB at the current 2,048 × 256 weighted
+    // training shape.
     let recorder = vol::gpu::PathRecorder::new(&gpu);
     let pl_bytes = (pixel_batch as u64) * (max_steps as u64) * 4;
     let mut record_encoder = gpu.create_command_encoder(blade_graphics::CommandEncoderDesc {
@@ -3698,6 +3687,7 @@ fn fit_appearance_pixel_batched(
                 tx.fill_buffer(path_bufs.mask.at(0), pl_bytes, 0);
                 if path_bufs.has_jacobians() {
                     tx.fill_buffer(path_bufs.previous_cells.at(0), pl_bytes, 0);
+                    tx.fill_buffer(path_bufs.dt_reference_tangents.at(0), pl_bytes, 0);
                     tx.fill_buffer(path_bufs.dt_grad_previous.at(0), pl_bytes * 4, 0);
                     tx.fill_buffer(path_bufs.dt_grad_current.at(0), pl_bytes * 4, 0);
                     tx.fill_buffer(path_bufs.dt_grad_next.at(0), pl_bytes * 4, 0);
@@ -4036,19 +4026,6 @@ fn fit_appearance_pixel_batched(
                 let resource_rebuild_start = std::time::Instant::now();
                 gpu_cloud.deinit(&gpu);
                 gpu_cloud = build_training_gpu_cloud(model, &gpu);
-                if let Some(ref radii) = model.radii {
-                    // The recorder's fresh intervals and Jacobians are
-                    // linearized at this downloaded geometry. Rebase the
-                    // graph at the same point; retaining the session's
-                    // original reference would count all earlier motion a
-                    // second time in `dt_ref + J * (x - x_ref)`.
-                    let reference_positions: Vec<f32> = model
-                        .points
-                        .iter()
-                        .flat_map(|point| [point.x, point.y, point.z])
-                        .collect();
-                    set_weighted_path_reference(&mut session, &reference_positions, radii);
-                }
                 phase_timings.resource_rebuild += resource_rebuild_start.elapsed();
             }
         }
@@ -5423,6 +5400,7 @@ mod tests {
         session.set_input_u32("previous_cell_indices", &[0, 1]);
         session.set_input_u32("next_cell_indices", &[2, 3]);
         session.set_input("recorded_dt", &[10.0, 20.0]);
+        session.set_input("dt_reference_tangent", &[0.0, 0.0]);
         session.set_input("dt_grad_previous", &[1.0; 8]);
         session.set_input("dt_grad_current", &[1.0; 8]);
         session.set_input("dt_grad_next", &[1.0; 8]);
@@ -5564,7 +5542,7 @@ mod tests {
     }
 
     #[test]
-    fn weighted_graph_uses_recorded_intervals_and_jacobians() {
+    fn weighted_graph_uses_recorded_stable_linearization() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping weighted graph Jacobian test: no GPU");
@@ -5609,16 +5587,34 @@ mod tests {
         session.set_input_u32("cell_indices", &[0]);
         session.set_input_u32("previous_cell_indices", &[0]);
         session.set_input_u32("next_cell_indices", &[3]);
-        session.set_input("recorded_dt", &[7.5]);
         session.set_input("dt_grad_previous", &[0.0; 4]);
-        session.set_input("dt_grad_current", &[0.25, -0.5, 0.75, 1.25]);
+        let current_jacobian = [0.25, -0.5, 0.75, 1.25];
+        session.set_input("dt_grad_current", &current_jacobian);
         session.set_input("dt_grad_next", &[0.0; 4]);
         session.set_input("mask", &[1.0]);
-        session.set_input("ray_origin", &[0.1, 0.1, -1.0]);
+        let ray_origin = [0.1, 0.1, -1.0];
+        session.set_input("ray_origin", &ray_origin);
         session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
         session.set_input_u32("pixel_idx_per_step", &[0]);
         session.set_input_u32("view_idx", &[0]);
         session.set_input("labels", &[0.4, 0.6, 0.8]);
+        let initial_positions: Vec<f32> = model
+            .points
+            .iter()
+            .flat_map(|point| [point.x, point.y, point.z])
+            .collect();
+        let initial_radii = model.radii.as_deref().expect("fixture has radii");
+        let linear_term = |positions: &[f32], radii: &[f32]| {
+            current_jacobian[0] * (positions[0] - ray_origin[0])
+                + current_jacobian[1] * (positions[1] - ray_origin[1])
+                + current_jacobian[2] * (positions[2] - ray_origin[2])
+                + current_jacobian[3] * radii[0]
+        };
+        session.set_input("recorded_dt", &[7.5]);
+        session.set_input(
+            "dt_reference_tangent",
+            &[linear_term(&initial_positions, initial_radii)],
+        );
         session.set_adam(0.0, 0.9, 0.999, 1e-8);
         session.step();
         session.wait();
@@ -5636,11 +5632,7 @@ mod tests {
         assert!((radius_grad[0] - 1.25).abs() < 1.0e-4);
         assert!(radius_grad[1..].iter().all(|&value| value == 0.0));
 
-        let mut moved_positions: Vec<f32> = model
-            .points
-            .iter()
-            .flat_map(|point| [point.x, point.y, point.z])
-            .collect();
+        let mut moved_positions = initial_positions;
         moved_positions[0] += 2.0;
         let mut moved_radii = model.radii.clone().expect("fixture has radii");
         moved_radii[0] += 0.4;
@@ -5656,7 +5648,10 @@ mod tests {
         assert!((outputs[0] - 8.5).abs() < 1.0e-5, "outputs={outputs:?}");
 
         session.set_input("recorded_dt", &[9.25]);
-        set_weighted_path_reference(&mut session, &moved_positions, &moved_radii);
+        session.set_input(
+            "dt_reference_tangent",
+            &[linear_term(&moved_positions, &moved_radii)],
+        );
         session.step();
         session.wait();
         let outputs = session.read_output(1);
