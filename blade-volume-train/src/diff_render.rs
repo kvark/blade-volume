@@ -485,10 +485,10 @@ pub fn build_volumetric_graph(
     let dt_from_positions = dt_2d;
 
     let raw = g.mul(density, dt_2d); // [P, L], non-negative
-    let raw_masked = g.mul(raw, mask_2d); // zero-out padded steps
 
-    // cum[p, k] = sum_{i<k} raw_masked[p, i].
-    let cumsum = g.exclusive_cumsum(raw_masked, false); // [P, L]
+    // cum[p, k] = sum_{i<k} raw[p, i]. `dt_2d` is already masked, so a
+    // second multiplication by the same binary path mask would be redundant.
+    let cumsum = g.exclusive_cumsum(raw, false); // [P, L]
 
     // Transmittance: T = exp(-cumsum). Use the identity
     //   exp(-x) = recip(sigmoid(x)) - 1   (valid for x >= 0)
@@ -499,14 +499,15 @@ pub fn build_volumetric_graph(
     let neg_ones_pl = g.neg(ones_pl);
     let t = g.add(rec_sig_cum, neg_ones_pl); // [P, L]
 
-    // alpha = 1 - exp(-raw_masked) = 2 - recip(sigmoid(raw_masked))
-    let sig_raw = g.sigmoid(raw_masked);
+    // alpha = 1 - exp(-raw) = 2 - recip(sigmoid(raw))
+    let sig_raw = g.sigmoid(raw);
     let rec_sig_raw = g.recip(sig_raw);
     let neg_rec_sig_raw = g.neg(rec_sig_raw);
     let alpha = g.add(twos_pl, neg_rec_sig_raw); // [P, L]
 
+    // A padded step has masked `dt = 0`, hence `raw = 0`, `alpha = 0`, and
+    // `weight = 0`; another path-mask multiplication here would be redundant.
     let weight = g.mul(t, alpha);
-    let weight = g.mul(weight, mask_2d); // zero on padded steps
 
     // Per-channel pixel: pixel_c = (weight * color_c) @ ones_L
     let ones_l1 = g.constant(vec![1.0; l], &[l, 1]);
@@ -699,7 +700,7 @@ pub fn build_volumetric_graph(
             p,
             l,
         );
-        let total_optical_depth = g.matmul(raw_masked, ones_l1);
+        let total_optical_depth = g.matmul(raw, ones_l1);
         let valid = g.greater(total_optical_depth, quantile_far);
         let neg_near = g.neg(near_depth);
         let spread_raw = g.add(far_depth, neg_near);
@@ -5358,6 +5359,81 @@ mod tests {
         let mut updated_positions = vec![0.0_f32; positions.len()];
         session.read_param("positions", &mut updated_positions);
         assert!(updated_positions.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn padded_weighted_steps_have_zero_loss_and_parameter_gradient() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping padded weighted path test: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        model.radii = Some(vec![1.0; model.points.len()]);
+        let n_cells = model.points.len();
+        let mut graph = mn::Graph::new();
+        build_volumetric_graph(
+            &mut graph,
+            n_cells,
+            1,
+            2,
+            0,
+            1,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            true,
+            ColorLoss::SmoothL1,
+        );
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        upload_model_parameters(&mut session, &model, 0.0);
+        for channel in ["exposure_r", "exposure_g", "exposure_b"] {
+            session.set_parameter(channel, &[1.0]);
+        }
+        session.set_input_u32("cell_indices", &[1, 2]);
+        session.set_input_u32("previous_cell_indices", &[0, 1]);
+        session.set_input_u32("next_cell_indices", &[2, 3]);
+        session.set_input("recorded_dt", &[10.0, 20.0]);
+        session.set_input("dt_grad_previous", &[1.0; 8]);
+        session.set_input("dt_grad_current", &[1.0; 8]);
+        session.set_input("dt_grad_next", &[1.0; 8]);
+        session.set_input("mask", &[0.0; 2]);
+        session.set_input("ray_origin", &[0.1, 0.1, -1.0]);
+        session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
+        session.set_input_u32("pixel_idx_per_step", &[0, 0]);
+        session.set_input_u32("view_idx", &[0]);
+        session.set_input("labels", &[0.0; 3]);
+        session.set_adam(0.0, 0.9, 0.999, 1e-8);
+        session.step();
+        session.wait();
+
+        assert_eq!(session.read_loss(), 0.0);
+        for (name, count) in [
+            ("log_density", n_cells),
+            ("positions", 3 * n_cells),
+            ("log_radii", n_cells),
+            ("sh_r", n_cells),
+            ("sh_g", n_cells),
+            ("sh_b", n_cells),
+        ] {
+            let mut gradient = vec![f32::NAN; count];
+            session.read_param_grad(name, &mut gradient);
+            assert!(
+                gradient.iter().all(|&value| value == 0.0),
+                "{name} gradient is {gradient:?}"
+            );
+        }
     }
 
     #[test]

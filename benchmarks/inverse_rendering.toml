@@ -1250,6 +1250,56 @@ full_workspace_test_peak_memory_bytes = 3370094592
 full_workspace_test_memory_events = 0
 selection = "accept: checkpoint-compatible graph packing is 1.84x faster at the unchanged 256-step path cap and stays inside the repeated radiance, geometry, PBR, and memory gates"
 
+# The selected interval is already multiplied by the binary path mask before
+# density integration. A padded entry therefore has raw optical depth zero,
+# alpha zero, and weight zero without multiplying by that mask twice more.
+# A physical-GPU regression fills padded weighted-path intervals and their
+# Jacobians with nonzero data and verifies exact-zero loss and gradients. Ten
+# profiled updates and three full matched runs compare clean parent/candidate
+# builds. Atomic topology noise remains visible in both arms, but radiance,
+# geometry, and held-light ranges overlap and the candidate has no bad material
+# tail. All cgroups recorded zero pressure, swap, and OOM events.
+[synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.mask_elision]
+date = "2026-08-03"
+parent_commit = "b84ac5d"
+control_gpu_passes = 348
+optimized_gpu_passes = 346
+control_gpu_step_ms = "11.40..11.77"
+optimized_gpu_step_ms = "10.98..11.19"
+control_median_gpu_step_ms = 11.60
+optimized_median_gpu_step_ms = 11.10
+gpu_step_speedup = 1.045
+control_training_seconds = [16.042, 15.907, 15.905]
+optimized_training_seconds = [15.389, 15.450, 15.434]
+training_median_speedup = 1.031
+control_gpu_wait_seconds = [14.563, 14.444, 14.437]
+optimized_gpu_wait_seconds = [13.956, 13.934, 13.995]
+control_held_pose_psnr = [24.21, 24.22, 23.98]
+optimized_held_pose_psnr = [24.18, 24.02, 23.96]
+control_held_pose_worst_psnr = [23.73, 23.78, 23.44]
+optimized_held_pose_worst_psnr = [23.68, 23.49, 23.43]
+control_position_rmse = [0.6291, 0.6201, 0.6213]
+optimized_position_rmse = [0.6281, 0.6261, 0.6245]
+control_normal_rmse_degrees = [66.30, 66.30, 66.64]
+optimized_normal_rmse_degrees = [66.41, 66.41, 66.46]
+control_material_residual = [0.15456, 0.13858, 0.13787]
+optimized_material_residual = [0.04513, 0.04683, 0.04545]
+control_held_light_psnr = [18.33, 18.33, 18.55]
+optimized_held_light_psnr = [18.44, 18.42, 18.34]
+control_held_light_worst_psnr = [18.05, 18.03, 18.41]
+optimized_held_light_worst_psnr = [18.18, 18.14, 18.11]
+control_peak_memory_bytes = [365543424, 365027328, 365076480]
+optimized_peak_memory_bytes = [365060096, 363507712, 365248512]
+full_workspace_test_peak_memory_bytes = 3077640192
+memory_events = 0
+selected_artifact = "target/audit-runs/mask-elision-v1/model.ply"
+selected_artifact_bytes = 391493
+selected_artifact_sha256 = "700e645c9aa2b34e91d655cf941b9c9729c10ed68c2fff6bd2959daa536b8fea"
+selected_surface_artifact = "target/audit-runs/mask-elision-v1/scene.rply"
+selected_surface_artifact_bytes = 69208
+selected_surface_sha256 = "47e7342a37ba09096d9a4d4254fa7a08e1c18da9d28569206f3af387b0b2797c"
+selection = "accept: two redundant full-path multiplies are gone; the matched three-run quality ranges overlap and median training time improves by 3.1%"
+
 # Replacing the SH dot-product's ones-matmul with SumInner exposes a generic
 # reduction inefficiency. Meganeura 66e1664 packs 256 narrow rows into one
 # workgroup while retaining scalar column order; the raw output is bit-exact

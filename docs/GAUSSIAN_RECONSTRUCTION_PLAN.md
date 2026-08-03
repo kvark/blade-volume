@@ -142,11 +142,12 @@ The selected graph-packing rerun keeps every checkpoint parameter and the
 256-step path cap, but gathers the degree-2 RGB SH coefficients as one wide
 table. Three full repeats train in 16.00--16.05 seconds and reach 24.09--24.20 dB
 held-pose radiance, 0.624--0.627 position RMSE, and 18.39--18.65 dB under the
-unseen light. The latest selected reconstruction is
-`target/audit-runs/synthetic-coalesced-sh-packed-v3/model.ply` (SHA-256
-`b80ef068fe53404e4571d42c1d3e8774361d749d7242e178a5d7c3a6a904a39b`); its
+unseen light. The latest selected reconstruction, including the follow-up path
+mask cleanup, is
+`target/audit-runs/mask-elision-v1/model.ply` (SHA-256
+`700e645c9aa2b34e91d655cf941b9c9729c10ed68c2fff6bd2959daa536b8fea`); its
 Gaussian PBR surface is `scene.rply` beside it (SHA-256
-`2698967e65b989a7c61194c641f68d3f6883e2e32566d2a7668a4fe6307338c4`).
+`47e7342a37ba09096d9a4d4254fa7a08e1c18da9d28569206f3af387b0b2797c`).
 
 Higher camera-lattice position rates were not selected. A 0.08 ratio with a
 300-step warmup improves the first three repeats to 25.52--25.85 dB on held
@@ -203,6 +204,17 @@ reduces that to 849 MB, but one of two full quality repeats develops the same
 bad material/depth tail as a rejected traversal-cap arm, so RGB remains one
 atomic dispatch. A future native packed-parameter representation should remove
 the compatibility concat buffers before scaling far beyond 200K cells.
+
+The selected path-mask cleanup then removes two redundant full-path
+multiplications: the recorded interval is already masked, so padding has zero
+raw optical depth, alpha, and weight. A physical-GPU regression proves exact
+zero loss and parameter gradients even when padded weighted-path intervals and
+Jacobians contain arbitrary nonzero values. The graph falls from 348 to 346
+passes and ten profiled steps improve from a median 11.60 to 11.10 ms. Three
+matched full runs improve median training time from 15.907 to 15.434 seconds
+(3.1%), with overlapping held-pose, geometry, and held-light ranges. The full
+workspace GPU test scope peaks at 3.08 GB and records no memory event.
+
 Global path caps of 128 and 192 are rejected: 128 gives no meaningful speed
 advantage over packing at 256 and loses the held-view tail, while 192 produces
 6.80 world-unit training-depth RMSE and an unstable material fit. The next
