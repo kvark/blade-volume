@@ -52,6 +52,12 @@ struct RecordParams {
     candidate_capacity: u32,
     /// Non-zero when the consumer needs local geometry derivatives.
     write_jacobians: u32,
+    /// Projected 16x16 screen-tile layout. `tile_capacity == 0` selects the
+    /// exhaustive point scan.
+    tile_width: u32,
+    tile_height: u32,
+    tile_capacity: u32,
+    _padding: u32,
 };
 
 struct Camera {
@@ -77,10 +83,14 @@ var<storage, read_write> g_dt_grad_current_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_next_out: array<vec4<f32>>;
 var<storage, read_write> g_candidate_counts: array<u32>;
 var<storage, read_write> g_candidates: array<u32>;
+var<storage, read_write> g_projected_bounds: array<vec4<u32>>;
+var<storage, read_write> g_tile_counts: array<u32>;
+var<storage, read_write> g_tile_candidates: array<u32>;
 var<uniform> g_camera: Camera;
 var<uniform> g_params: RecordParams;
 
 var<workgroup> w_candidate_count: atomic<u32>;
+var<workgroup> w_tile_count: atomic<u32>;
 
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     let u = q.xyz;
@@ -131,6 +141,12 @@ struct PowerInterval {
     effective_near: f32,
     previous: u32,
     next: u32,
+    valid: u32,
+};
+
+struct ProjectedTileBounds {
+    min_tile: vec2<u32>,
+    max_tile: vec2<u32>,
     valid: u32,
 };
 
@@ -317,10 +333,131 @@ fn power_interval(
     return PowerInterval(face_near, face_far, effective_near, previous, next, 1u);
 }
 
+// Conservative perspective bounds for one support sphere. The camera-space
+// axis-aligned cube encloses the sphere, and all eight x/z and y/z corner
+// ratios bound its projection while the cube stays in front of the camera.
+// A sphere crossing the camera plane is assigned to the whole image. Exact
+// ray/sphere testing in the gather pass removes all false positives.
+fn projected_tile_bounds(sphere_data: vec4<f32>) -> ProjectedTileBounds {
+    let inverse_orientation = vec4<f32>(
+        -g_camera.orientation.xyz,
+        g_camera.orientation.w,
+    );
+    let center = qrot(inverse_orientation, sphere_data.xyz - g_camera.position);
+    let radius = sphere_data.w;
+    if (radius <= 0.0 ||
+        length(center) < 4.0 * radius ||
+        center.z + radius <= 0.0) {
+        return ProjectedTileBounds(vec2<u32>(0u), vec2<u32>(0u), 0u);
+    }
+
+    var ndc_min = vec2<f32>(-1.0);
+    var ndc_max = vec2<f32>(1.0);
+    let z_near = center.z - radius;
+    if (z_near > 1e-6) {
+        let z_far = center.z + radius;
+        let x_min = center.x - radius;
+        let x_max = center.x + radius;
+        let y_min = center.y - radius;
+        let y_max = center.y + radius;
+        let ratio_min = vec2<f32>(
+            min(min(x_min / z_near, x_min / z_far), min(x_max / z_near, x_max / z_far)),
+            min(min(y_min / z_near, y_min / z_far), min(y_max / z_near, y_max / z_far)),
+        );
+        let ratio_max = vec2<f32>(
+            max(max(x_min / z_near, x_min / z_far), max(x_max / z_near, x_max / z_far)),
+            max(max(y_min / z_near, y_min / z_far), max(y_max / z_near, y_max / z_far)),
+        );
+        let tan_half = tan(0.5 * g_camera.fov);
+        ndc_min = ratio_min / tan_half + g_camera.principal - vec2<f32>(1e-5);
+        ndc_max = ratio_max / tan_half + g_camera.principal + vec2<f32>(1e-5);
+    }
+    if (ndc_max.x < -1.0 || ndc_min.x > 1.0 ||
+        ndc_max.y < -1.0 || ndc_min.y > 1.0) {
+        return ProjectedTileBounds(vec2<u32>(0u), vec2<u32>(0u), 0u);
+    }
+
+    let image_size = vec2<f32>(
+        f32(g_params.image_width),
+        f32(g_params.image_height),
+    );
+    let last_pixel = image_size - vec2<f32>(1.0);
+    let pixel_min = vec2<u32>(floor(min(
+        0.5 * (clamp(ndc_min, vec2<f32>(-1.0), vec2<f32>(1.0)) + vec2<f32>(1.0)) * image_size,
+        last_pixel,
+    )));
+    let pixel_max = vec2<u32>(floor(min(
+        0.5 * (clamp(ndc_max, vec2<f32>(-1.0), vec2<f32>(1.0)) + vec2<f32>(1.0)) * image_size,
+        last_pixel,
+    )));
+    return ProjectedTileBounds(pixel_min / 16u, pixel_max / 16u, 1u);
+}
+
+// Project every sphere once in parallel. The following tile-centric pass only
+// needs integer bounds tests rather than repeating camera transforms and
+// perspective divisions for every tile.
+@compute @workgroup_size(64)
+fn project_powerfoam_candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let cell = gid.x;
+    if (cell >= g_params.num_points) {
+        return;
+    }
+    let bounds = projected_tile_bounds(g_points[cell]);
+    if (bounds.valid == 0u) {
+        g_projected_bounds[cell] = vec4<u32>(0xffffffffu);
+    } else {
+        g_projected_bounds[cell] = vec4<u32>(bounds.min_tile, bounds.max_tile);
+    }
+}
+
+// One workgroup owns one conservative 16x16 tile and scans the projected site
+// bounds in parallel. The counter stays in workgroup memory, avoiding
+// device-scope atomics while lanes write uniquely allocated storage slots.
+// Tile rows are bounded; their counters retain true occupancy, so gather can
+// detect overflow and fall back to the exact exhaustive scan.
+@compute @workgroup_size(64)
+fn bin_powerfoam_candidates(
+    @builtin(workgroup_id) workgroup_id: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+) {
+    let tile_count = g_params.tile_width * g_params.tile_height;
+    let tile = workgroup_id.x;
+    if (tile >= tile_count) {
+        return;
+    }
+    if (local_id.x == 0u) {
+        atomicStore(&w_tile_count, 0u);
+    }
+    workgroupBarrier();
+
+    let tile_xy = vec2<u32>(
+        tile % g_params.tile_width,
+        tile / g_params.tile_width,
+    );
+    for (var cell = local_id.x; cell < g_params.num_points; cell += 64u) {
+        let bounds = g_projected_bounds[cell];
+        if (bounds.x != 0xffffffffu &&
+            all(tile_xy >= bounds.xy) &&
+            all(tile_xy <= bounds.zw)) {
+            let slot = atomicAdd(&w_tile_count, 1u);
+            if (slot < g_params.tile_capacity) {
+                g_tile_candidates[tile * g_params.tile_capacity + slot] = cell;
+            }
+        }
+    }
+    workgroupBarrier();
+
+    if (local_id.x == 0u) {
+        g_tile_counts[tile] = atomicLoad(&w_tile_count);
+    }
+}
+
 // One workgroup owns one sampled ray. Its lanes scan disjoint point ranges
-// and atomically append the support spheres intersected by that ray. Candidate
-// order is intentionally irrelevant: `record_powerfoam_splats` selects the
-// next interval by exact clipped entry depth with an index tie-break.
+// and atomically append the support spheres intersected by that ray. A bounded
+// projected tile row replaces the exhaustive scan when available; overflowing
+// rows take the exhaustive path. Candidate order is intentionally irrelevant:
+// `record_powerfoam_splats` selects the next interval by exact clipped entry
+// depth with an index tie-break.
 @compute @workgroup_size(64)
 fn gather_powerfoam_candidates(
     @builtin(workgroup_id) workgroup_id: vec3<u32>,
@@ -339,7 +476,24 @@ fn gather_powerfoam_candidates(
     let pixel_idx = g_pixel_indices[output_pixel];
     let ray_dir = ray_dir_for_pixel(pixel_idx);
     let ray_origin = g_camera.position;
-    for (var cell = local_id.x; cell < g_params.num_points; cell += 64u) {
+    var use_tile = false;
+    var tile = 0u;
+    var scan_count = g_params.num_points;
+    if (g_params.tile_capacity != 0u) {
+        let ix = pixel_idx % g_params.image_width;
+        let iy = pixel_idx / g_params.image_width;
+        tile = (iy / 16u) * g_params.tile_width + ix / 16u;
+        let tile_count = g_tile_counts[tile];
+        if (tile_count <= g_params.tile_capacity) {
+            use_tile = true;
+            scan_count = tile_count;
+        }
+    }
+    for (var scan_index = local_id.x; scan_index < scan_count; scan_index += 64u) {
+        var cell = scan_index;
+        if (use_tile) {
+            cell = g_tile_candidates[tile * g_params.tile_capacity + scan_index];
+        }
         let sphere_data = g_points[cell];
         if (length(sphere_data.xyz - ray_origin) < 4.0 * sphere_data.w) {
             continue;

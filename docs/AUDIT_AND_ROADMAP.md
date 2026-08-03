@@ -593,6 +593,11 @@ At the audited revision:
   statistic, and 5%-support-scale split. The corrected compute-splat path reaches
   13.52 dB all-37 after the first 2,000-step/57,500-site gate; the matched
   200,000-cell/20,400-step endpoint remains outstanding.
+- The real checkpoint/resume path reaches 100,569 sites at step 4,000 and
+  improves Bonsai train/all-37 PSNR to 14.65/14.35 dB. Conservative projected
+  candidates preserve those pixels exactly and make the complete weighted
+  evaluation 4.4% faster; sparse 16-view training correctly retains the
+  exhaustive gather because its matched indexed arm was neutral.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -1348,7 +1353,9 @@ material path.
    graph as a global traversal graph was invalid. Device-resident photometric
    resampling then removes 26.6 seconds of per-step gradient readback: matched
    2,000-step training is 14.6% faster and all-37 quality changes from 13.51 to
-   13.52 dB.)
+   13.52 dB. Conservative 16×16 projected candidates subsequently make the
+   100,569-site all-view pass 4.4% faster with identical pixels and an exact
+   overflow fallback.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 
@@ -1380,9 +1387,9 @@ material path.
    transformed-pixel suite on Metal. Accelerate the exhaustive software-TLAS
    cursor only after pixel equivalence is locked down.
 3. PowerFoam compute splats are now required for correctness in training and
-   headless evaluation; their exhaustive gather is deliberately not wired into
-   the interactive viewer. Add deterministic projected-tile bins and validate
-   exact path/PSNR equivalence before promoting splats to window rendering.
+   headless evaluation. Conservative projected-tile candidates have exact
+   path/PSNR parity and a tested exhaustive overflow fallback; promote that
+   bounded tracer to the interactive viewer and cover resize/live settings.
    Defer the unrelated SDF and Gaussian-compute backends until the Stage 2
    quality gate is resolved.
 

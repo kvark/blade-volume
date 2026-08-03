@@ -1160,6 +1160,7 @@ pub fn flatten_paths(paths: &[vol::trace::PathResult], max_steps: usize) -> Flat
 /// gradients well-behaved without changing the renderer's CPU output (which
 /// uses real `exp` and tolerates arbitrary dt).
 pub const MAX_PATH_DT: f32 = 50.0;
+const MIN_PROJECTED_RAYS_PER_CAMERA: usize = 1024;
 
 #[derive(Clone, Debug)]
 pub struct FlatPaths {
@@ -2821,9 +2822,27 @@ fn collect_path_contributions(
         })
         .max()
         .unwrap_or(1);
+    let max_image_resolution = [
+        view_indices
+            .iter()
+            .map(|&index| views[index].width)
+            .max()
+            .unwrap_or(1),
+        view_indices
+            .iter()
+            .map(|&index| views[index].height)
+            .max()
+            .unwrap_or(1),
+    ];
     let capacity = max_sampled_pixels.clamp(1, MAX_RAYS_PER_BATCH);
     let mut buffers = if model.radii.is_some() {
-        vol::gpu::PathRecordBuffers::new(context, capacity as u32, max_steps as u32)
+        vol::gpu::PathRecordBuffers::new_projected(
+            context,
+            capacity as u32,
+            max_steps as u32,
+            model.points.len() as u32,
+            max_image_resolution,
+        )
     } else {
         vol::gpu::PathRecordBuffers::new_recorded_only(context, capacity as u32, max_steps as u32)
     };
@@ -3779,12 +3798,43 @@ fn fit_appearance_pixel_batched(
     let mut position_grad_scratch = vec![0.0f32; model.points.len() * 3];
     let collect_powerfoam_point_error = densify.is_some() && model.radii.is_some();
     let _ = n_cells;
-    let mut path_bufs = vol::gpu::PathRecordBuffers::new_external_with_jacobians(
-        &gpu,
-        pixel_batch as u32,
-        max_steps as u32,
-        model.radii.is_some(),
-    );
+    // Building a complete per-camera screen index does not pay for sparse
+    // mixed-view batches. Keep their already parallel exhaustive gather, but
+    // use projected candidates for large single-camera batches.
+    let use_projected_candidates = model.radii.is_some()
+        && pixel_batch.div_ceil(views_per_batch) >= MIN_PROJECTED_RAYS_PER_CAMERA;
+    if model.radii.is_some() {
+        log::info!(
+            "PowerFoam path candidates: {} (up to {} rays per camera)",
+            if use_projected_candidates {
+                "projected tiles"
+            } else {
+                "exhaustive gather"
+            },
+            pixel_batch.div_ceil(views_per_batch),
+        );
+    }
+    let max_image_resolution = [
+        views.iter().map(|view| view.width).max().unwrap_or(1),
+        views.iter().map(|view| view.height).max().unwrap_or(1),
+    ];
+    let mut path_bufs = if use_projected_candidates {
+        vol::gpu::PathRecordBuffers::new_external_with_jacobians_projected(
+            &gpu,
+            pixel_batch as u32,
+            max_steps as u32,
+            true,
+            model.points.len() as u32,
+            max_image_resolution,
+        )
+    } else {
+        vol::gpu::PathRecordBuffers::new_external_with_jacobians(
+            &gpu,
+            pixel_batch as u32,
+            max_steps as u32,
+            model.radii.is_some(),
+        )
+    };
     let patch_size = config.patch_size;
     let grad_loss_weight = config.grad_loss_weight;
     let interpenetration_sample_count = if config.interpenetration_weight > 0.0 {
@@ -4309,12 +4359,23 @@ fn fit_appearance_pixel_batched(
                 drop(session);
                 gpu_cloud.deinit(&gpu);
                 path_bufs.destroy(&gpu);
-                path_bufs = vol::gpu::PathRecordBuffers::new_external_with_jacobians(
-                    &gpu,
-                    pixel_batch as u32,
-                    max_steps as u32,
-                    model.radii.is_some(),
-                );
+                path_bufs = if use_projected_candidates {
+                    vol::gpu::PathRecordBuffers::new_external_with_jacobians_projected(
+                        &gpu,
+                        pixel_batch as u32,
+                        max_steps as u32,
+                        true,
+                        model.points.len() as u32,
+                        max_image_resolution,
+                    )
+                } else {
+                    vol::gpu::PathRecordBuffers::new_external_with_jacobians(
+                        &gpu,
+                        pixel_batch as u32,
+                        max_steps as u32,
+                        model.radii.is_some(),
+                    )
+                };
                 let rebuilt = build_train_session(
                     model,
                     pixel_batch,

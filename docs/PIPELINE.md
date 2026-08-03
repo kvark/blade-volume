@@ -189,10 +189,8 @@ after 2,000 steps.
   150.9 seconds, peaks near 1.1 GB host memory under a 6 GB cgroup, and records
   no memory or candidate-overflow event.
 
-The current gather is exhaustive `O(sampled_rays * sites)`. It is already
-usable for reconstruction batches and 128² checkpoint evaluation, but the next
-performance unit is a deterministic projected-tile candidate builder shared by
-training, evaluation, and the viewer.
+The exhaustive gather remains as the correctness fallback and for sparse
+multi-view mini-batches. M2i adds a projected index for dense camera batches.
 
 #### M2h — Device-resident PowerFoam resampling statistic (implemented and gated)
 
@@ -223,6 +221,36 @@ The probe currently inherits the configured optimizer's first-moment horizon
 this statistic. The signal, cap, and split conservation match; a dedicated
 moment override is a lower-priority ablation if resampling noise becomes the
 next measured quality limit.
+
+#### M2i — Conservative projected PowerFoam candidates (implemented and gated)
+
+- A parallel projection pass writes conservative screen bounds for every
+  support sphere. One workgroup per 16×16 tile compacts overlapping sites into
+  a bounded row, and each ray still performs the exact sphere and radical-plane
+  tests. Candidate ordering cannot affect output because interval selection
+  retains the depth/index tie-break.
+- Tile occupancy retains its unbounded count. If a row exceeds its storage
+  budget, rays in that tile automatically execute the original exhaustive
+  scan. The implementation needs only workgroup atomics; an early device-scope
+  atomic design was rejected after Vulkan validation caught unsupported memory
+  scope. A physical GPU test forces 16,385 sites into one tile and proves the
+  exhaustive fallback against the CPU oracle.
+- Dense headless evaluation and large per-camera training/contribution batches
+  use projected rows. Sparse mixed-view training keeps the exhaustive gather:
+  on the selected 4,096-ray/16-view shape, indexing 256 rays per camera was
+  neutral (46.28 versus 46.19 seconds for the matched 500-step segment) while
+  allocating extra scratch.
+- On the 100,569-site Bonsai step-4,000 checkpoint, maximum occupancy is
+  8,945/16,384 sites per tile and 130/1,024 exact sphere hits per ray, with no
+  fallback. Three alternating 72-view runs average 8.79 seconds projected
+  versus 9.09 seconds exhaustive (3.4% faster); the complete 292-view pass is
+  33.55 versus 35.08 seconds (4.4%). Train/test PSNR remains exactly
+  14.65/14.35 dB. The full pass peaks at 194 MB under the 6 GB cgroup with no
+  swap, pressure, OOM, candidate overflow, or GPU fault.
+
+The interactive viewer still uses the adjacency walk for weighted clouds.
+Promoting the now-bounded compute-splat tracer into that backend, including
+resize and live settings handling, is the remaining presentation step.
 
 ### M3 — Training crate scaffolding
 

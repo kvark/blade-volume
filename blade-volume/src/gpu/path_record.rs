@@ -25,6 +25,9 @@ use std::{mem, ptr, slice};
 use crate::{shaders, CameraParams};
 use blade_graphics as gpu;
 
+const SPLAT_TILE_SIZE: u32 = 16;
+const SPLAT_TILE_INDEX_BUDGET: u64 = 4 * 1024 * 1024;
+
 fn output_bytes(num_pixels: u32, max_steps: u32, with_jacobians: bool) -> u64 {
     let pl = num_pixels as u64 * max_steps as u64;
     let base = pl * (2 * mem::size_of::<u32>() + 2 * mem::size_of::<f32>()) as u64;
@@ -77,6 +80,10 @@ struct RecordParams {
     num_points: u32,
     candidate_capacity: u32,
     write_jacobians: u32,
+    tile_width: u32,
+    tile_height: u32,
+    tile_capacity: u32,
+    _padding: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -96,6 +103,9 @@ struct PathRecordData {
     g_dt_grad_next_out: gpu::BufferPiece,
     g_candidate_counts: gpu::BufferPiece,
     g_candidates: gpu::BufferPiece,
+    g_projected_bounds: gpu::BufferPiece,
+    g_tile_counts: gpu::BufferPiece,
+    g_tile_candidates: gpu::BufferPiece,
     g_camera: CameraParams,
     g_params: RecordParams,
 }
@@ -106,6 +116,8 @@ struct PathRecordData {
 /// expensive part); dispatch many times per training step.
 pub struct PathRecorder {
     walk_pipeline: gpu::ComputePipeline,
+    splat_project_pipeline: gpu::ComputePipeline,
+    splat_bin_pipeline: gpu::ComputePipeline,
     splat_gather_pipeline: gpu::ComputePipeline,
     splat_record_pipeline: gpu::ComputePipeline,
 }
@@ -124,6 +136,16 @@ impl PathRecorder {
             data_layouts: &[&layout],
             compute: shader.at("record_paths"),
         });
+        let splat_project_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+            name: "powerfoam-project-path-candidates",
+            data_layouts: &[&layout],
+            compute: shader.at("project_powerfoam_candidates"),
+        });
+        let splat_bin_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+            name: "powerfoam-bin-path-candidates",
+            data_layouts: &[&layout],
+            compute: shader.at("bin_powerfoam_candidates"),
+        });
         let splat_gather_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
             name: "powerfoam-gather-path-candidates",
             data_layouts: &[&layout],
@@ -136,6 +158,8 @@ impl PathRecorder {
         });
         Self {
             walk_pipeline,
+            splat_project_pipeline,
+            splat_bin_pipeline,
             splat_gather_pipeline,
             splat_record_pipeline,
         }
@@ -143,6 +167,8 @@ impl PathRecorder {
 
     pub fn destroy(&mut self, context: &gpu::Context) {
         context.destroy_compute_pipeline(&mut self.walk_pipeline);
+        context.destroy_compute_pipeline(&mut self.splat_project_pipeline);
+        context.destroy_compute_pipeline(&mut self.splat_bin_pipeline);
         context.destroy_compute_pipeline(&mut self.splat_gather_pipeline);
         context.destroy_compute_pipeline(&mut self.splat_record_pipeline);
     }
@@ -174,6 +200,24 @@ impl PathRecorder {
             args.max_steps, buffers.max_steps,
             "path dispatch max_steps must match buffer layout"
         );
+        let tile_width = args.image_width.div_ceil(SPLAT_TILE_SIZE);
+        let tile_height = args.image_height.div_ceil(SPLAT_TILE_SIZE);
+        let tile_count = tile_width
+            .checked_mul(tile_height)
+            .expect("path image has too many projected tiles");
+        if buffers.has_projected_splat_tiles() {
+            assert!(
+                tile_count <= buffers.splat_tile_count,
+                "path image needs {tile_count} projected tiles, but buffers hold {}",
+                buffers.splat_tile_count,
+            );
+            assert!(
+                cloud.num_points as u32 <= buffers.splat_projected_point_capacity,
+                "cloud has {} points, but projected buffers hold {}",
+                cloud.num_points,
+                buffers.splat_projected_point_capacity,
+            );
+        }
         let params = RecordParams {
             start_point: args.start_point,
             max_steps: args.max_steps,
@@ -187,6 +231,10 @@ impl PathRecorder {
             num_points: cloud.num_points as u32,
             candidate_capacity: buffers.splat_candidate_capacity,
             write_jacobians: buffers.has_jacobians as u32,
+            tile_width,
+            tile_height,
+            tile_capacity: buffers.splat_tile_capacity,
+            _padding: 0,
         };
 
         let data = PathRecordData {
@@ -205,10 +253,25 @@ impl PathRecorder {
             g_dt_grad_next_out: buffers.dt_grad_next.into(),
             g_candidate_counts: buffers.splat_candidate_counts.into(),
             g_candidates: buffers.splat_candidates.into(),
+            g_projected_bounds: buffers.splat_projected_bounds.into(),
+            g_tile_counts: buffers.splat_tile_counts.into(),
+            g_tile_candidates: buffers.splat_tile_candidates.into(),
             g_camera: args.camera,
             g_params: params,
         };
         if cloud.is_power_foam {
+            if buffers.has_projected_splat_tiles() {
+                {
+                    let mut pass = encoder.compute("powerfoam-project-path-candidates");
+                    let mut pc = pass.with(&self.splat_project_pipeline);
+                    pc.bind(0, &data);
+                    pc.dispatch([(cloud.num_points as u32).div_ceil(64), 1, 1]);
+                }
+                let mut pass = encoder.compute("powerfoam-bin-path-candidates");
+                let mut pc = pass.with(&self.splat_bin_pipeline);
+                pc.bind(0, &data);
+                pc.dispatch([tile_count, 1, 1]);
+            }
             {
                 let mut pass = encoder.compute("powerfoam-gather-path-candidates");
                 let mut pc = pass.with(&self.splat_gather_pipeline);
@@ -255,6 +318,13 @@ pub struct PathRecordBuffers {
     splat_candidate_counts: gpu::Buffer,
     /// Device-only fixed-size candidate rows used by weighted compute splats.
     splat_candidates: gpu::Buffer,
+    /// Camera-specific conservative tile bounds, one `vec4<u32>` per site.
+    splat_projected_bounds: gpu::Buffer,
+    /// Per-camera projected tile occupancy. Counts may exceed the bounded row
+    /// capacity; rays in such a tile fall back to the exhaustive point scan.
+    splat_tile_counts: gpu::Buffer,
+    /// Device-only fixed-size projected candidate rows, one per screen tile.
+    splat_tile_candidates: gpu::Buffer,
     /// Upload-side staging for `pixel_indices` (write from CPU, copy to
     /// device via a `transfer` pass before dispatching). Persistent
     /// `Memory::Upload` is much cheaper than allocating staging every
@@ -265,18 +335,41 @@ pub struct PathRecordBuffers {
     has_jacobians: bool,
     has_splat_scratch: bool,
     splat_candidate_capacity: u32,
+    splat_tile_count: u32,
+    splat_tile_capacity: u32,
+    splat_projected_point_capacity: u32,
 }
 
 impl PathRecordBuffers {
     pub fn new(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, true, true)
+        Self::new_with(context, num_pixels, max_steps, false, true, true, None)
+    }
+
+    /// Allocate full path/Jacobian streams plus a conservative projected-tile
+    /// candidate index for images up to `image_resolution`.
+    pub fn new_projected(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+        max_points: u32,
+        image_resolution: [u32; 2],
+    ) -> Self {
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            false,
+            true,
+            true,
+            Some((image_resolution, max_points)),
+        )
     }
 
     /// Allocate only the four always-written path streams. The derivative
     /// bindings are valid one-element dummies, so this is only safe to dispatch
     /// with an unweighted cloud (`RadFoamGpuCloud::is_power_foam == false`).
     pub fn new_recorded_only(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, false, false)
+        Self::new_with(context, num_pixels, max_steps, false, false, false, None)
     }
 
     /// Allocate compact base path streams plus PowerFoam candidate scratch,
@@ -286,7 +379,26 @@ impl PathRecordBuffers {
         num_pixels: u32,
         max_steps: u32,
     ) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, false, true)
+        Self::new_with(context, num_pixels, max_steps, false, false, true, None)
+    }
+
+    /// Compact PowerFoam rendering streams with projected candidate tiles.
+    pub fn new_powerfoam_recorded_only_projected(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+        max_points: u32,
+        image_resolution: [u32; 2],
+    ) -> Self {
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            false,
+            false,
+            true,
+            Some((image_resolution, max_points)),
+        )
     }
 
     /// Allocate every output stream as `Memory::External(Fd(None))` so the
@@ -296,7 +408,7 @@ impl PathRecordBuffers {
     /// Vulkan; Metal/GLES backends `unimplemented!()` on the buffer
     /// allocation.
     pub fn new_external(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, true, true, true)
+        Self::new_with(context, num_pixels, max_steps, true, true, true, None)
     }
 
     /// Allocate exportable base streams and optionally full PowerFoam
@@ -314,6 +426,28 @@ impl PathRecordBuffers {
             true,
             with_jacobians,
             with_jacobians,
+            None,
+        )
+    }
+
+    /// Exportable training streams with conservative projected candidates for
+    /// images up to `image_resolution`.
+    pub fn new_external_with_jacobians_projected(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+        with_jacobians: bool,
+        max_points: u32,
+        image_resolution: [u32; 2],
+    ) -> Self {
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            true,
+            with_jacobians,
+            with_jacobians,
+            Some((image_resolution, max_points)),
         )
     }
 
@@ -324,6 +458,7 @@ impl PathRecordBuffers {
         external: bool,
         with_jacobians: bool,
         with_splat_scratch: bool,
+        projected: Option<([u32; 2], u32)>,
     ) -> Self {
         let pl = (num_pixels as u64) * (max_steps as u64);
         let cells_bytes = pl * mem::size_of::<u32>() as u64;
@@ -360,6 +495,34 @@ impl PathRecordBuffers {
         } else {
             mem::size_of::<u32>() as u64
         };
+        let (splat_tile_count, splat_tile_capacity, splat_projected_point_capacity) =
+            match projected {
+                Some(([width, height], max_points)) => {
+                    assert!(
+                        with_splat_scratch,
+                        "projected candidates require PowerFoam scratch buffers"
+                    );
+                    assert!(
+                        width > 0 && height > 0,
+                        "projected candidate resolution must be non-zero"
+                    );
+                    assert!(max_points > 0, "projected point capacity must be non-zero");
+                    let count = width
+                        .div_ceil(SPLAT_TILE_SIZE)
+                        .checked_mul(height.div_ceil(SPLAT_TILE_SIZE))
+                        .expect("projected candidate image has too many tiles");
+                    let capacity =
+                        (SPLAT_TILE_INDEX_BUDGET / u64::from(count)).clamp(1, 16_384) as u32;
+                    (count, capacity, max_points)
+                }
+                None => (1, 0, 1),
+            };
+        let tile_count_bytes = u64::from(splat_tile_count) * mem::size_of::<u32>() as u64;
+        let tile_candidate_bytes = u64::from(splat_tile_count)
+            * u64::from(splat_tile_capacity.max(1))
+            * mem::size_of::<u32>() as u64;
+        let projected_bounds_bytes =
+            u64::from(splat_projected_point_capacity) * mem::size_of::<[u32; 4]>() as u64;
 
         let pixel_indices = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-pixels",
@@ -443,6 +606,21 @@ impl PathRecordBuffers {
             size: candidate_bytes,
             memory: gpu::Memory::Device,
         });
+        let splat_projected_bounds = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-path-projected-bounds",
+            size: projected_bounds_bytes,
+            memory: gpu::Memory::Device,
+        });
+        let splat_tile_counts = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-path-tile-counts",
+            size: tile_count_bytes,
+            memory: gpu::Memory::Shared,
+        });
+        let splat_tile_candidates = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-path-tile-candidates",
+            size: tile_candidate_bytes,
+            memory: gpu::Memory::Device,
+        });
 
         Self {
             pixel_indices,
@@ -457,12 +635,18 @@ impl PathRecordBuffers {
             dt_grad_next,
             splat_candidate_counts,
             splat_candidates,
+            splat_projected_bounds,
+            splat_tile_counts,
+            splat_tile_candidates,
             pixel_indices_stage,
             num_pixels,
             max_steps,
             has_jacobians: with_jacobians,
             has_splat_scratch: with_splat_scratch,
             splat_candidate_capacity,
+            splat_tile_count,
+            splat_tile_capacity,
+            splat_projected_point_capacity,
         }
     }
 
@@ -525,6 +709,39 @@ impl PathRecordBuffers {
         self.splat_candidate_capacity
     }
 
+    pub fn has_projected_splat_tiles(&self) -> bool {
+        self.splat_tile_capacity > 0
+    }
+
+    /// Largest projected tile row after a synchronized single-camera
+    /// dispatch. Values above [`Self::splat_tile_capacity`] used the exact
+    /// exhaustive fallback for rays in that tile.
+    pub fn max_splat_tile_candidate_count(&self, image_resolution: [u32; 2]) -> u32 {
+        assert!(
+            self.has_projected_splat_tiles(),
+            "projected tile counters require projected buffers"
+        );
+        let count = image_resolution[0]
+            .div_ceil(SPLAT_TILE_SIZE)
+            .checked_mul(image_resolution[1].div_ceil(SPLAT_TILE_SIZE))
+            .expect("projected candidate image has too many tiles");
+        assert!(
+            count <= self.splat_tile_count,
+            "projected tile range exceeds buffer capacity"
+        );
+        let counts = unsafe {
+            slice::from_raw_parts(
+                self.splat_tile_counts.data() as *const u32,
+                self.splat_tile_count as usize,
+            )
+        };
+        counts[..count as usize].iter().copied().max().unwrap_or(0)
+    }
+
+    pub fn splat_tile_capacity(&self) -> u32 {
+        self.splat_tile_capacity
+    }
+
     /// Total allocated bytes of all output streams (for sanity checks).
     pub fn out_bytes(&self) -> u64 {
         output_bytes(self.num_pixels, self.max_steps, self.has_jacobians)
@@ -544,12 +761,20 @@ impl PathRecordBuffers {
         context.destroy_buffer(self.dt_grad_next);
         context.destroy_buffer(self.splat_candidate_counts);
         context.destroy_buffer(self.splat_candidates);
+        context.destroy_buffer(self.splat_projected_bounds);
+        context.destroy_buffer(self.splat_tile_counts);
+        context.destroy_buffer(self.splat_tile_candidates);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_params_match_wgsl_uniform_layout() {
+        assert_eq!(mem::size_of::<RecordParams>(), 64);
+    }
 
     #[test]
     fn compact_path_buffers_do_not_scale_jacobian_storage() {

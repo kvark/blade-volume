@@ -67,10 +67,12 @@ impl PowerFoamGpuSplatTracer {
             .expect("PowerFoam splat resolution is too large");
         let cloud = super::RadFoamGpuCloud::new(model, context, encoder);
         let recorder = super::PathRecorder::new(context);
-        let buffers = super::PathRecordBuffers::new_powerfoam_recorded_only(
+        let buffers = super::PathRecordBuffers::new_powerfoam_recorded_only_projected(
             context,
             num_pixels,
             settings.max_steps,
+            model.points.len() as u32,
+            resolution,
         );
         let pixel_indices = (0..num_pixels).collect::<Vec<_>>();
         buffers.write_pixel_indices(&pixel_indices);
@@ -175,6 +177,11 @@ impl PowerFoamGpuSplatTracer {
         let num_pixels = (self.resolution[0] * self.resolution[1]) as usize;
         let observed = self.buffers.max_splat_candidate_count(0..num_pixels);
         let capacity = self.buffers.splat_candidate_capacity();
+        let tile_observed = self.buffers.max_splat_tile_candidate_count(self.resolution);
+        log::debug!(
+            "PowerFoam candidates: ray max={observed}/{capacity}, tile max={tile_observed}/{}",
+            self.buffers.splat_tile_capacity(),
+        );
         if observed > capacity {
             Err(format!(
                 "PowerFoam render needs {observed} candidates for one ray, but scratch capacity is {capacity}"

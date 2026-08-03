@@ -224,6 +224,7 @@ fn rays_for_pixels(
 fn assert_gpu_path_record_matches_cpu(
     mut model: vol::PointCloudModel,
     world_translation: glam::Vec3,
+    expect_tile_overflow: bool,
 ) {
     let _gpu_test_guard = GPU_TEST_LOCK
         .lock()
@@ -263,7 +264,17 @@ fn assert_gpu_path_record_matches_cpu(
     });
     let mut cloud = RadFoamGpuCloud::new(&model, &ctx, &mut encoder);
     let mut recorder = PathRecorder::new(&ctx);
-    let mut bufs = PathRecordBuffers::new(&ctx, num_pixels, max_steps as u32);
+    let mut bufs = if weighted {
+        PathRecordBuffers::new_projected(
+            &ctx,
+            num_pixels,
+            max_steps as u32,
+            model.points.len() as u32,
+            [width, height],
+        )
+    } else {
+        PathRecordBuffers::new(&ctx, num_pixels, max_steps as u32)
+    };
     bufs.write_pixel_indices(&pixels);
 
     encoder.start();
@@ -388,6 +399,17 @@ fn assert_gpu_path_record_matches_cpu(
             max_candidates <= bufs.splat_candidate_capacity(),
             "PowerFoam candidate scratch overflow: {max_candidates} > {}",
             bufs.splat_candidate_capacity(),
+        );
+        let max_tile_candidates = bufs.max_splat_tile_candidate_count([width, height]);
+        assert!(
+            max_tile_candidates > 0,
+            "weighted fixture did not populate projected candidate tiles",
+        );
+        assert_eq!(
+            max_tile_candidates > bufs.splat_tile_capacity(),
+            expect_tile_overflow,
+            "unexpected projected-tile overflow state: {max_tile_candidates} candidates, {} capacity",
+            bufs.splat_tile_capacity(),
         );
     }
 
@@ -568,7 +590,7 @@ fn assert_gpu_path_record_matches_cpu(
 
 #[test]
 fn gpu_path_record_matches_cpu_on_grid() {
-    assert_gpu_path_record_matches_cpu(build_grid_model(12), glam::Vec3::ZERO);
+    assert_gpu_path_record_matches_cpu(build_grid_model(12), glam::Vec3::ZERO, false);
 }
 
 #[test]
@@ -579,7 +601,7 @@ fn gpu_path_record_matches_bounded_powerfoam() {
             .map(|i| 0.2 + 0.03 * (i % 3) as f32)
             .collect(),
     );
-    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO);
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false);
 }
 
 #[test]
@@ -590,7 +612,7 @@ fn gpu_weighted_linearization_is_translation_invariant() {
             .map(|i| 0.2 + 0.03 * (i % 3) as f32)
             .collect(),
     );
-    assert_gpu_path_record_matches_cpu(model, glam::Vec3::new(8192.0, -4096.0, 2048.0));
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::new(8192.0, -4096.0, 2048.0), false);
 }
 
 #[test]
@@ -621,5 +643,31 @@ fn gpu_powerfoam_splats_cross_disconnected_cech_components() {
         "fixture must require crossing disconnected supports",
     );
 
-    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO);
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false);
+}
+
+#[test]
+fn gpu_projected_tile_overflow_falls_back_to_exhaustive_scan() {
+    const POINT_COUNT: usize = 16_385;
+    let camera = make_camera_looking_along_x(100.0);
+    let target_rays = rays_for_pixels(&camera, &[32 * 64 + 32, 38 * 64 + 38], 64, 64);
+    let visible = target_rays[0].origin + 10.0 * target_rays[0].direction;
+    let crowded = target_rays[1].origin + 10.0 * target_rays[1].direction;
+    let mut points = vec![visible.extend(1.0)];
+    points.resize(POINT_COUNT, crowded.extend(1.0));
+    let mut radii = vec![1.0e-4; POINT_COUNT];
+    radii[0] = 0.1;
+    let model = vol::PointCloudModel {
+        points,
+        sh_coefficients: vec![0.0; POINT_COUNT * 3],
+        sh_degree: 0,
+        transforms: None,
+        adjacency: Some(vol::Adjacency {
+            neighbors: Vec::new(),
+            offsets: vec![0; POINT_COUNT + 1],
+        }),
+        radii: Some(radii),
+    };
+
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, true);
 }
