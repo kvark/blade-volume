@@ -3759,6 +3759,7 @@ fn fit_appearance_pixel_batched(
     let mut training_path_rays = 0usize;
     let mut training_path_truncated_rays = 0usize;
     let mut training_path_max_steps_used = 0u32;
+    let mut training_candidate_max_used = 0u32;
     // Frequent loss readouts (every ~2000 steps) so long multi-hour runs
     // surface their trajectory instead of only ~10 lines total.
     let log_every = 2000.min(total_steps).max(1);
@@ -4166,6 +4167,7 @@ fn fit_appearance_pixel_batched(
             }
             if model.radii.is_some() {
                 let observed = path_bufs.max_splat_candidate_count(0..pixel_batch);
+                training_candidate_max_used = training_candidate_max_used.max(observed);
                 assert!(
                     observed <= path_bufs.splat_candidate_capacity(),
                     "PowerFoam training path needs {observed} candidates for one ray at step {}, \
@@ -4584,14 +4586,28 @@ fn fit_appearance_pixel_batched(
     } else {
         100.0 * training_path_truncated_rays as f32 / training_path_rays as f32
     };
-    log::info!(
-        "training path telemetry: {} rays, max {}/{}, {} truncated ({:.6}%)",
-        training_path_rays,
-        training_path_max_steps_used,
-        max_steps,
-        training_path_truncated_rays,
-        training_path_truncated_percent,
-    );
+    if model.radii.is_some() {
+        log::info!(
+            "training path telemetry: {} rays, max {}/{}, {} truncated ({:.6}%); \
+             candidates max {}/{}",
+            training_path_rays,
+            training_path_max_steps_used,
+            max_steps,
+            training_path_truncated_rays,
+            training_path_truncated_percent,
+            training_candidate_max_used,
+            path_bufs.splat_candidate_capacity(),
+        );
+    } else {
+        log::info!(
+            "training path telemetry: {} rays, max {}/{}, {} truncated ({:.6}%)",
+            training_path_rays,
+            training_path_max_steps_used,
+            max_steps,
+            training_path_truncated_rays,
+            training_path_truncated_percent,
+        );
+    }
 
     let finalize_start = std::time::Instant::now();
     debug_dump_exposure(&session, views.len());
