@@ -91,7 +91,10 @@ pub struct WeightedPathGraph {
     pub dt_grad_next: mn::NodeId,
     /// Raw per-site oriented surface normals, normalized in the graph.
     pub surface_normals: Option<mn::NodeId>,
-    /// Recorder derivative with respect to the selected site's unit normal.
+    /// Signed displacement of each oriented surface plane.
+    pub surface_offsets: Option<mn::NodeId>,
+    /// Recorder derivative with respect to the selected site's unit normal
+    /// in xyz and signed surface offset in w.
     pub dt_grad_surface_normal: Option<mn::NodeId>,
     /// Per-step scale for PowerFoam's view-facing normal regularizer.
     pub surface_normal_loss_scale: Option<mn::NodeId>,
@@ -272,6 +275,7 @@ pub fn build_volumetric_graph(
     background_rgb: [f32; 3],
     use_recorded_dt: bool,
     use_surface_normals: bool,
+    use_surface_offsets: bool,
     collect_point_error: bool,
     color_loss_kind: ColorLoss,
 ) -> VolumetricGraph {
@@ -297,6 +301,10 @@ pub fn build_volumetric_graph(
     assert!(
         !use_surface_normals || use_recorded_dt,
         "oriented surfaces require weighted recorded paths",
+    );
+    assert!(
+        !use_surface_offsets || use_surface_normals,
+        "surface offsets require oriented surfaces",
     );
     let p = n_pixels;
     let l = max_steps;
@@ -362,6 +370,8 @@ pub fn build_volumetric_graph(
     let log_radii = use_recorded_dt.then(|| g.parameter("log_radii", &[n_cells, 1]));
     let surface_normals =
         use_surface_normals.then(|| g.parameter("surface_normals", &[n_cells, 3]));
+    let surface_offsets =
+        use_surface_offsets.then(|| g.parameter("surface_offsets", &[n_cells, 1]));
     let normalized_surface_normals = surface_normals.map(|normals| {
         let unit_scale = 1.0_f32 / 3.0_f32.sqrt();
         let weight = g.constant(vec![unit_scale; 3], &[3]);
@@ -388,6 +398,7 @@ pub fn build_volumetric_graph(
                 dt_grad_current,
                 dt_grad_next,
                 surface_normals,
+                surface_offsets,
                 dt_grad_surface_normal,
                 surface_normal_loss_scale,
             }
@@ -560,16 +571,27 @@ pub fn build_volumetric_graph(
         );
         let entry_and_current = g.add(previous_term, current_term);
         let linear_terms = g.add(entry_and_current, next_term);
-        let linear_terms = match (normalized_surface_normals, weighted.dt_grad_surface_normal) {
-            (Some(normals), Some(recorded_gradient)) => {
+        let linear_terms = match (
+            normalized_surface_normals,
+            surface_offsets,
+            weighted.dt_grad_surface_normal,
+        ) {
+            (Some(normals), offsets, Some(recorded_gradient)) => {
                 let step_normals = g.embedding(cell_indices, normals);
                 let gradient_xyz_flat = g.split_a(recorded_gradient, pl as u32, 3, 1, 1);
                 let gradient_xyz = g.reshape(gradient_xyz_flat, &[pl, 3]);
                 let product = g.mul(step_normals, gradient_xyz);
-                let normal_term = g.sum_inner(product);
-                g.add(linear_terms, normal_term)
+                let mut surface_term = g.sum_inner(product);
+                if let Some(offsets) = offsets {
+                    let step_offsets = g.embedding(cell_indices, offsets);
+                    let gradient_w_flat = g.split_b(recorded_gradient, pl as u32, 3, 1, 1);
+                    let gradient_w = g.reshape(gradient_w_flat, &[pl, 1]);
+                    let offset_term = g.mul(step_offsets, gradient_w);
+                    surface_term = g.add(surface_term, offset_term);
+                }
+                g.add(linear_terms, surface_term)
             }
-            (None, None) => linear_terms,
+            (None, None, None) => linear_terms,
             _ => unreachable!("oriented path graph inputs must be declared together"),
         };
         let reference_tangent = g.reshape(weighted.dt_reference_tangent, &[pl, 1]);
@@ -1477,6 +1499,10 @@ pub struct AppearanceFitConfig {
     /// global rate. Under [`LrSchedule::RadFoamV1`] it instead scales the
     /// official `0.1 → 0.01` orientation schedule. `0.0` freezes orientation.
     pub surface_normal_lr_ratio: f32,
+    /// Signed surface-plane offset learning rate as a fraction of the global
+    /// rate. Under [`LrSchedule::RadFoamV1`] it scales PowerFoam's
+    /// `5e-3 → 5e-4` height schedule. `0.0` freezes offsets.
+    pub surface_offset_lr_ratio: f32,
     /// Initial weight of PowerFoam's view-facing normal regularizer. It
     /// decays exponentially to one tenth of this value over training. `0.0`
     /// disables the term; the reference uses `0.1`.
@@ -1630,6 +1656,7 @@ impl Default for AppearanceFitConfig {
             position_lr_ratio: 0.0,
             radius_lr_ratio: 0.0,
             surface_normal_lr_ratio: 0.0,
+            surface_offset_lr_ratio: 0.0,
             surface_normal_weight: 0.0,
             powerfoam_candidate_capacity: 0,
             geometry_rebuild_every: 0,
@@ -1918,6 +1945,7 @@ fn configure_optimizer(
                 config.adam_eps,
             );
             session.set_lr_multiplier("surface_normals", config.surface_normal_lr_ratio);
+            session.set_lr_multiplier("surface_offsets", config.surface_offset_lr_ratio);
         }
         LrSchedule::RadFoamV1 => {
             let rates = radfoam_v1_lrs(step, total_steps);
@@ -1931,6 +1959,12 @@ fn configure_optimizer(
             session.set_lr_multiplier(
                 "surface_normals",
                 surface_rate * config.surface_normal_lr_ratio,
+            );
+            let surface_offset_rate =
+                radfoam_cosine_lr(step, total_steps, 5.0e-3, 5.0e-4, 0, total_steps);
+            session.set_lr_multiplier(
+                "surface_offsets",
+                surface_offset_rate * config.surface_offset_lr_ratio,
             );
         }
     }
@@ -2336,6 +2370,10 @@ pub(crate) fn fit_appearance_multi_view_outcome(
         "surface_normal_lr_ratio must be finite and non-negative"
     );
     assert!(
+        config.surface_offset_lr_ratio.is_finite() && config.surface_offset_lr_ratio >= 0.0,
+        "surface_offset_lr_ratio must be finite and non-negative"
+    );
+    assert!(
         config.surface_normal_weight.is_finite() && config.surface_normal_weight >= 0.0,
         "surface_normal_weight must be finite and non-negative"
     );
@@ -2348,12 +2386,17 @@ pub(crate) fn fit_appearance_multi_view_outcome(
         "surface-normal optimisation requires an oriented PowerFoam cloud"
     );
     assert!(
+        config.surface_offset_lr_ratio == 0.0 || model.surface_offsets.is_some(),
+        "surface-offset optimisation requires initialized surface offsets"
+    );
+    assert!(
         config.surface_normal_weight == 0.0 || model.surface_normals.is_some(),
         "surface-normal loss requires an oriented PowerFoam cloud"
     );
     let geometry_requested = config.position_lr_ratio > 0.0
         || config.radius_lr_ratio > 0.0
         || config.surface_normal_lr_ratio > 0.0
+        || config.surface_offset_lr_ratio > 0.0
         || config.lr_groups == LrGroups::RadFoamV1Relative
         || config.lr_schedule == LrSchedule::RadFoamV1;
     assert!(
@@ -2490,6 +2533,9 @@ fn upload_model_parameters(
             init_normals.extend_from_slice(&normal.normalize().to_array());
         }
         session.set_parameter("surface_normals", &init_normals);
+    }
+    if let Some(ref offsets) = model.surface_offsets {
+        session.set_parameter("surface_offsets", offsets);
     }
 
     // `model.sh_coefficients` layout (lib.rs spec):
@@ -2792,17 +2838,19 @@ fn inv_radius_activation(radius: f32) -> f32 {
     inv_density_activation(radius, RADIUS_SOFTPLUS_BETA)
 }
 
-fn download_model_surface_normals(session: &mn::Session, model: &mut vol::PointCloudModel) {
-    let Some(ref mut normals) = model.surface_normals else {
-        return;
-    };
-    let mut out_normals = vec![0.0_f32; normals.len() * 3];
-    session.read_param("surface_normals", &mut out_normals);
-    for (normal, values) in normals.iter_mut().zip(out_normals.chunks_exact(3)) {
-        *normal = glam::Vec3::from_slice(values).normalize_or_zero();
-        if *normal == glam::Vec3::ZERO {
-            *normal = glam::Vec3::Z;
+fn download_model_surface_planes(session: &mn::Session, model: &mut vol::PointCloudModel) {
+    if let Some(ref mut normals) = model.surface_normals {
+        let mut out_normals = vec![0.0_f32; normals.len() * 3];
+        session.read_param("surface_normals", &mut out_normals);
+        for (normal, values) in normals.iter_mut().zip(out_normals.chunks_exact(3)) {
+            *normal = glam::Vec3::from_slice(values).normalize_or_zero();
+            if *normal == glam::Vec3::ZERO {
+                *normal = glam::Vec3::Z;
+            }
         }
+    }
+    if let Some(ref mut offsets) = model.surface_offsets {
+        session.read_param("surface_offsets", offsets);
     }
 }
 
@@ -2823,7 +2871,7 @@ fn download_model_geometry(session: &mn::Session, model: &mut vol::PointCloudMod
             *radius = radius_activation(raw);
         }
     }
-    download_model_surface_normals(session, model);
+    download_model_surface_planes(session, model);
 }
 
 fn download_model_parameters(
@@ -3347,6 +3395,10 @@ fn prune_and_densify(
         .surface_normals
         .as_ref()
         .map(|_| Vec::with_capacity(n_new));
+    let mut new_surface_offsets = model
+        .surface_offsets
+        .as_ref()
+        .map(|_| Vec::with_capacity(n_new));
     let mut new_transforms = model.transforms.as_ref().map(|_| vol::Transforms {
         rotations: Vec::with_capacity(n_new),
         scales: Vec::with_capacity(n_new),
@@ -3367,6 +3419,9 @@ fn prune_and_densify(
         }
         if let Some(ref mut normals) = new_surface_normals {
             normals.push(model.surface_normals.as_ref().unwrap()[oi]);
+        }
+        if let Some(ref mut offsets) = new_surface_offsets {
+            offsets.push(model.surface_offsets.as_ref().unwrap()[oi]);
         }
         if let Some(ref mut transforms) = new_transforms {
             let old = model.transforms.as_ref().unwrap();
@@ -3395,6 +3450,9 @@ fn prune_and_densify(
         if let Some(ref mut normals) = new_surface_normals {
             normals.push(model.surface_normals.as_ref().unwrap()[oi]);
         }
+        if let Some(ref mut offsets) = new_surface_offsets {
+            offsets.push(model.surface_offsets.as_ref().unwrap()[oi]);
+        }
         if let Some(ref mut transforms) = new_transforms {
             let old = model.transforms.as_ref().unwrap();
             transforms.rotations.push(old.rotations[oi]);
@@ -3406,6 +3464,7 @@ fn prune_and_densify(
     model.sh_coefficients = new_sh;
     model.radii = new_radii;
     model.surface_normals = new_surface_normals;
+    model.surface_offsets = new_surface_offsets;
     model.transforms = new_transforms;
     model.adjacency = None;
     (new_to_old, pruned, added)
@@ -3413,11 +3472,13 @@ fn prune_and_densify(
 
 /// Enumerate every per-cell parameter name with its per-cell element
 /// stride. Stride is 1 for scalar tables (`log_density`, `log_radii`,
-/// `sh_<chan>_<k>`) and 3 for `positions`.
+/// `surface_offsets`, `sh_<chan>_<k>`) and 3 for vector tables (`positions`,
+/// `surface_normals`).
 fn per_cell_param_names_with_stride(
     sh_degree: usize,
     has_radii: bool,
     has_surface_normals: bool,
+    has_surface_offsets: bool,
     has_point_error: bool,
 ) -> Vec<(String, usize)> {
     let num_components = (1 + sh_degree) * (1 + sh_degree);
@@ -3427,6 +3488,9 @@ fn per_cell_param_names_with_stride(
     }
     if has_surface_normals {
         names.push(("surface_normals".to_string(), 3));
+    }
+    if has_surface_offsets {
+        names.push(("surface_offsets".to_string(), 1));
     }
     if has_point_error {
         names.push((POINT_ERROR_PROBE.to_string(), 1));
@@ -3476,12 +3540,14 @@ fn save_adam_state(
     num_views: usize,
     has_radii: bool,
     has_surface_normals: bool,
+    has_surface_offsets: bool,
     has_point_error: bool,
 ) -> AdamSnapshot {
     let names = per_cell_param_names_with_stride(
         sh_degree,
         has_radii,
         has_surface_normals,
+        has_surface_offsets,
         has_point_error,
     );
     let mut entries = Vec::with_capacity(names.len());
@@ -3534,6 +3600,7 @@ fn restore_adam_state_remap(
     sh_degree: usize,
     has_radii: bool,
     has_surface_normals: bool,
+    has_surface_offsets: bool,
     has_point_error: bool,
 ) {
     let n_new = new_to_old.len();
@@ -3541,6 +3608,7 @@ fn restore_adam_state_remap(
         sh_degree,
         has_radii,
         has_surface_normals,
+        has_surface_offsets,
         has_point_error,
     );
     debug_assert_eq!(names.len(), snap.entries.len());
@@ -3636,6 +3704,7 @@ fn build_train_session(
     position_lr_ratio: f32,
     radius_lr_ratio: f32,
     surface_normal_lr_ratio: f32,
+    surface_offset_lr_ratio: f32,
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
@@ -3656,6 +3725,7 @@ fn build_train_session(
         background_rgb,
         model.radii.is_some(),
         model.surface_normals.is_some(),
+        model.surface_offsets.is_some(),
         collect_point_error,
         color_loss,
     );
@@ -3759,6 +3829,9 @@ fn build_train_session(
     }
     if model.surface_normals.is_some() {
         session.set_lr_multiplier("surface_normals", surface_normal_lr_ratio);
+    }
+    if model.surface_offsets.is_some() {
+        session.set_lr_multiplier("surface_offsets", surface_offset_lr_ratio);
     }
     if collect_point_error {
         session.set_parameter(POINT_ERROR_PROBE, &vec![0.0; n_cells]);
@@ -4012,7 +4085,9 @@ fn fit_appearance_pixel_batched(
         || config.radius_lr_ratio > 0.0
         || config.lr_groups == LrGroups::RadFoamV1Relative
         || config.lr_schedule == LrSchedule::RadFoamV1;
-    let geometry_trainable = topology_trainable || config.surface_normal_lr_ratio > 0.0;
+    let geometry_trainable = topology_trainable
+        || config.surface_normal_lr_ratio > 0.0
+        || config.surface_offset_lr_ratio > 0.0;
     let mut topology_cadence = match config.geometry_rebuild_schedule {
         GeometryRebuildSchedule::Fixed => TopologyCadenceState::disabled(),
         GeometryRebuildSchedule::RadFoamV1 => match config.resume_training_state {
@@ -4121,6 +4196,7 @@ fn fit_appearance_pixel_batched(
         config.position_lr_ratio,
         config.radius_lr_ratio,
         config.surface_normal_lr_ratio,
+        config.surface_offset_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
     );
     if let Some(ref state_path) = config.resume_state_path {
@@ -4510,6 +4586,7 @@ fn fit_appearance_pixel_batched(
                     views.len(),
                     model.radii.is_some(),
                     model.surface_normals.is_some(),
+                    model.surface_offsets.is_some(),
                     collect_powerfoam_point_error,
                 );
                 phase_timings.state_readback += state_readback_start.elapsed();
@@ -4694,6 +4771,7 @@ fn fit_appearance_pixel_batched(
                     config.position_lr_ratio,
                     config.radius_lr_ratio,
                     config.surface_normal_lr_ratio,
+                    config.surface_offset_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
                 );
                 session = rebuilt.0;
@@ -4713,6 +4791,7 @@ fn fit_appearance_pixel_batched(
                     sh_degree,
                     model.radii.is_some(),
                     model.surface_normals.is_some(),
+                    model.surface_offsets.is_some(),
                     collect_powerfoam_point_error,
                 );
                 session.set_adam_step_count(adam_snap.t);
@@ -4744,11 +4823,11 @@ fn fit_appearance_pixel_batched(
                 // appearance parameters and moments through uncached shared
                 // memory just to recreate an identical graph. When topology
                 // is frozen, positions and radii are already current on the
-                // host, so read back only the moving orientation table.
+                // host, so read back only the moving surface-plane tables.
                 if topology_trainable {
                     download_model_geometry(&session, model);
                 } else {
-                    download_model_surface_normals(&session, model);
+                    download_model_surface_planes(&session, model);
                 }
             } else {
                 download_model_parameters(&session, model, config.softplus_beta);
@@ -4770,7 +4849,7 @@ fn fit_appearance_pixel_batched(
                 );
             } else {
                 log::info!(
-                    "geometry cycle {}: refreshed orientation for {} points at step {}",
+                    "geometry cycle {}: refreshed surface planes for {} points at step {}",
                     cycle,
                     n_cells,
                     steps_done,
@@ -4959,7 +5038,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_normal_readback_leaves_frozen_topology_unchanged() {
+    fn surface_plane_readback_leaves_frozen_topology_unchanged() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping surface-normal readback test: no GPU");
@@ -4968,13 +5047,15 @@ mod tests {
         let mut model = tiny_model();
         model.radii = Some(vec![0.25; model.points.len()]);
         model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
+        model.surface_offsets = Some(vec![0.0; model.points.len()]);
         let points_before = model.points.clone();
         let radii_before = model.radii.clone();
 
         let mut graph = mn::Graph::new();
         let normals = graph.parameter("surface_normals", &[model.points.len(), 3]);
+        let offsets = graph.parameter("surface_offsets", &[model.points.len(), 1]);
         let output = graph.reshape(normals, &[model.points.len() * 3]);
-        graph.set_outputs(vec![output]);
+        graph.set_outputs(vec![output, offsets]);
         let (mut session, _) = mn::build(
             &graph,
             mn::SessionConfig {
@@ -4988,8 +5069,12 @@ mod tests {
             .flat_map(|_| raw_normal.to_array())
             .collect::<Vec<_>>();
         session.set_parameter("surface_normals", &raw_normals);
+        let raw_offsets = (0..model.points.len())
+            .map(|index| 0.01 * index as f32 - 0.02)
+            .collect::<Vec<_>>();
+        session.set_parameter("surface_offsets", &raw_offsets);
 
-        download_model_surface_normals(&session, &mut model);
+        download_model_surface_planes(&session, &mut model);
 
         assert_eq!(model.points, points_before);
         assert_eq!(model.radii, radii_before);
@@ -4997,6 +5082,86 @@ mod tests {
             model.surface_normals.as_ref().unwrap(),
             &vec![raw_normal.normalize(); model.points.len()]
         );
+        assert_eq!(model.surface_offsets.as_ref().unwrap(), &raw_offsets);
+    }
+
+    #[test]
+    fn surface_offset_only_training_keeps_topology_and_other_geometry_frozen() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping surface-offset-only training test: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        model.radii = Some(vec![0.2; model.points.len()]);
+        model.surface_normals = Some(vec![-glam::Vec3::Z; model.points.len()]);
+        model.surface_offsets = Some(vec![0.0; model.points.len()]);
+        model.compute_adjacency_default();
+        let positions_before = model
+            .points
+            .iter()
+            .map(|point| point.truncate())
+            .collect::<Vec<_>>();
+        let radii_before = model.radii.clone();
+        let normals_before = model.surface_normals.clone();
+        let adjacency_before = model.adjacency.clone().unwrap();
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.0, 0.0, -1.0],
+                depth: 10.0,
+                cam_orientation: glam::Quat::IDENTITY.to_array(),
+                fov: [0.5; 2],
+                principal: [0.0; 2],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
+            width: 1,
+            height: 1,
+        };
+
+        let losses = fit_appearance_multi_view(
+            &mut model,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                learning_rate: 0.01,
+                epochs: 2,
+                surface_offset_lr_ratio: 1.0,
+                geometry_rebuild_every: 1,
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        assert_eq!(losses.len(), 2);
+        assert!(losses.iter().all(|loss| loss.is_finite()));
+        assert!(model
+            .surface_offsets
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|offset| offset.abs() > 1.0e-6));
+        assert_eq!(
+            model
+                .points
+                .iter()
+                .map(|point| point.truncate())
+                .collect::<Vec<_>>(),
+            positions_before
+        );
+        assert_eq!(model.radii, radii_before);
+        assert_eq!(model.surface_normals, normals_before);
+        assert_eq!(
+            model.adjacency.as_ref().unwrap().offsets,
+            adjacency_before.offsets
+        );
+        assert_eq!(
+            model.adjacency.as_ref().unwrap().neighbors,
+            adjacency_before.neighbors
+        );
+        model.validate().unwrap();
     }
 
     #[test]
@@ -5417,6 +5582,7 @@ mod tests {
         model.radii = Some(vec![0.4, 0.3, 0.2, 0.1]);
         let normal = glam::Vec3::new(0.2, -0.3, 1.0).normalize();
         model.surface_normals = Some(vec![normal; model.points.len()]);
+        model.surface_offsets = Some(vec![-0.03, -0.01, 0.02, 0.04]);
         model.compute_adjacency_default();
         let parent = 2;
         let parent_point = model.points[parent];
@@ -5445,6 +5611,10 @@ mod tests {
             assert!(offset.dot(normal).abs() < 1.0e-6);
         }
         assert_eq!(model.surface_normals.as_ref().unwrap(), &vec![normal; 5]);
+        assert_eq!(
+            model.surface_offsets.as_ref().unwrap(),
+            &vec![-0.03, -0.01, 0.02, 0.04, 0.02]
+        );
         model.validate().unwrap();
     }
 
@@ -5601,20 +5771,23 @@ mod tests {
     #[test]
     fn per_cell_param_names_includes_positions_with_stride_3() {
         for sh_degree in 0..=3 {
-            let names = per_cell_param_names_with_stride(sh_degree, false, false, false);
+            let names = per_cell_param_names_with_stride(sh_degree, false, false, false, false);
             // Required entries:
             assert!(names.contains(&("log_density".to_string(), 1)));
             assert!(names.contains(&("positions".to_string(), 3)));
             // Total count: 1 (density) + 1 (positions) + 3 * (1+deg)² SH params.
             let num_components = (1 + sh_degree) * (1 + sh_degree);
             assert_eq!(names.len(), 2 + 3 * num_components);
-            let weighted_names = per_cell_param_names_with_stride(sh_degree, true, false, true);
+            let weighted_names =
+                per_cell_param_names_with_stride(sh_degree, true, false, false, true);
             assert!(weighted_names.contains(&("log_radii".to_string(), 1)));
             assert!(weighted_names.contains(&(POINT_ERROR_PROBE.to_string(), 1)));
             assert_eq!(weighted_names.len(), names.len() + 2);
-            let oriented_names = per_cell_param_names_with_stride(sh_degree, true, true, true);
+            let oriented_names =
+                per_cell_param_names_with_stride(sh_degree, true, true, true, true);
             assert!(oriented_names.contains(&("surface_normals".to_string(), 3)));
-            assert_eq!(oriented_names.len(), names.len() + 3);
+            assert!(oriented_names.contains(&("surface_offsets".to_string(), 1)));
+            assert_eq!(oriented_names.len(), names.len() + 4);
         }
     }
 
@@ -5643,6 +5816,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 false,
@@ -5685,6 +5859,7 @@ mod tests {
             true,
             false,
             false,
+            false,
             ColorLoss::L1,
         );
         assert!(vg.weighted_path.is_some());
@@ -5706,11 +5881,13 @@ mod tests {
             [0.0; 3],
             true,
             true,
+            true,
             false,
             ColorLoss::L1,
         );
         let weighted = vg.weighted_path.unwrap();
         assert!(weighted.surface_normals.is_some());
+        assert!(weighted.surface_offsets.is_some());
         assert!(weighted.dt_grad_surface_normal.is_some());
         assert!(weighted.surface_normal_loss_scale.is_some());
     }
@@ -5738,6 +5915,7 @@ mod tests {
             0.0,
             [0.0; 3],
             true,
+            false,
             false,
             true,
             ColorLoss::L1,
@@ -5876,6 +6054,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            false,
             false,
             false,
             false,
@@ -6454,6 +6633,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             ColorLoss::L1,
         );
 
@@ -6546,6 +6726,7 @@ mod tests {
             true,
             false,
             false,
+            false,
             ColorLoss::SmoothL1,
         );
         let (mut session, _) = mn::build(
@@ -6620,6 +6801,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            false,
             false,
             false,
             false,
@@ -6717,6 +6899,7 @@ mod tests {
         let mut model = tiny_model();
         model.radii = Some(vec![1.0; model.points.len()]);
         model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
+        model.surface_offsets = Some(vec![0.15; model.points.len()]);
         model.compute_adjacency_default();
         let n_cells = model.points.len();
         let mut g = mn::Graph::new();
@@ -6734,6 +6917,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            true,
             true,
             true,
             false,
@@ -6758,7 +6942,7 @@ mod tests {
         session.set_input_u32("next_cell_indices", &[3]);
         session.set_input("dt_grad_previous", &[0.0; 4]);
         let current_jacobian = [0.25, -0.5, 0.75, 1.25];
-        let surface_normal_jacobian = [0.4, -0.2, 0.75, 0.0];
+        let surface_normal_jacobian = [0.4, -0.2, 0.75, -0.6];
         session.set_input("dt_grad_current", &current_jacobian);
         session.set_input("dt_grad_next", &[0.0; 4]);
         session.set_input("dt_grad_surface_normal", &surface_normal_jacobian);
@@ -6776,15 +6960,17 @@ mod tests {
             .flat_map(|point| [point.x, point.y, point.z])
             .collect();
         let initial_radii = model.radii.as_deref().expect("fixture has radii");
-        let linear_term = |positions: &[f32], radii: &[f32], surface_normal: glam::Vec3| {
-            current_jacobian[0] * (positions[0] - ray_origin[0])
-                + current_jacobian[1] * (positions[1] - ray_origin[1])
-                + current_jacobian[2] * (positions[2] - ray_origin[2])
-                + current_jacobian[3] * radii[0]
-                + surface_normal_jacobian[0] * surface_normal.x
-                + surface_normal_jacobian[1] * surface_normal.y
-                + surface_normal_jacobian[2] * surface_normal.z
-        };
+        let linear_term =
+            |positions: &[f32], radii: &[f32], surface_normal: glam::Vec3, surface_offset: f32| {
+                current_jacobian[0] * (positions[0] - ray_origin[0])
+                    + current_jacobian[1] * (positions[1] - ray_origin[1])
+                    + current_jacobian[2] * (positions[2] - ray_origin[2])
+                    + current_jacobian[3] * radii[0]
+                    + surface_normal_jacobian[0] * surface_normal.x
+                    + surface_normal_jacobian[1] * surface_normal.y
+                    + surface_normal_jacobian[2] * surface_normal.z
+                    + surface_normal_jacobian[3] * surface_offset
+            };
         session.set_input("recorded_dt", &[7.5]);
         session.set_input(
             "dt_reference_tangent",
@@ -6792,6 +6978,7 @@ mod tests {
                 &initial_positions,
                 initial_radii,
                 glam::Vec3::Z,
+                model.surface_offsets.as_ref().unwrap()[0],
             )],
         );
         session.set_adam(0.0, 0.9, 0.999, 1e-8);
@@ -6816,6 +7003,10 @@ mod tests {
         assert!((normal_grad[1] + 0.2).abs() < 1.0e-5);
         assert!(normal_grad[2].abs() < 1.0e-5);
         assert!(normal_grad[3..].iter().all(|&value| value == 0.0));
+        let mut offset_grad = vec![0.0_f32; n_cells];
+        session.read_param_grad("surface_offsets", &mut offset_grad);
+        assert!((offset_grad[0] + 0.6).abs() < 1.0e-5);
+        assert!(offset_grad[1..].iter().all(|&value| value == 0.0));
 
         let mut moved_positions = initial_positions;
         moved_positions[0] += 2.0;
@@ -6826,6 +7017,8 @@ mod tests {
             .map(|&radius| inv_radius_activation(radius))
             .collect();
         let moved_normal = glam::Vec3::new(0.3, 0.0, 1.0).normalize();
+        let mut moved_offsets = model.surface_offsets.clone().unwrap();
+        moved_offsets[0] += 0.2;
         let mut moved_normals = vec![0.0_f32; n_cells * 3];
         for values in moved_normals.chunks_exact_mut(3) {
             values.copy_from_slice(glam::Vec3::Z.as_ref());
@@ -6834,12 +7027,14 @@ mod tests {
         session.set_parameter("positions", &moved_positions);
         session.set_parameter("log_radii", &moved_log_radii);
         session.set_parameter("surface_normals", &moved_normals);
+        session.set_parameter("surface_offsets", &moved_offsets);
         session.step();
         session.wait();
         let outputs = session.read_output(1);
         let expected = 8.5
             + glam::Vec3::from_slice(&surface_normal_jacobian[..3])
-                .dot(moved_normal - glam::Vec3::Z);
+                .dot(moved_normal - glam::Vec3::Z)
+            + surface_normal_jacobian[3] * 0.2;
         assert!(
             (outputs[0] - expected).abs() < 1.0e-5,
             "outputs={outputs:?}, expected={expected}"
@@ -6848,7 +7043,12 @@ mod tests {
         session.set_input("recorded_dt", &[9.25]);
         session.set_input(
             "dt_reference_tangent",
-            &[linear_term(&moved_positions, &moved_radii, moved_normal)],
+            &[linear_term(
+                &moved_positions,
+                &moved_radii,
+                moved_normal,
+                moved_offsets[0],
+            )],
         );
         session.step();
         session.wait();
@@ -6884,6 +7084,7 @@ mod tests {
             [0.0; 3],
             true,
             true,
+            false,
             false,
             ColorLoss::L1,
         );
@@ -6969,6 +7170,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
                 ColorLoss::L1,
             );
             let (mut session, _) = mn::build(
@@ -7031,6 +7233,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 false,
@@ -7099,6 +7302,7 @@ mod tests {
                 if quantiles.is_some() { 1.0 } else { 0.0 },
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 false,
@@ -7454,6 +7658,7 @@ mod tests {
             glam::Vec3::new(0.1, 0.0, -1.0).normalize();
             model.points.len()
         ]);
+        model.surface_offsets = Some(vec![0.01; model.points.len()]);
         model.compute_adjacency_default();
         let view = ViewSupervision {
             camera: vol::CameraParams {
@@ -7480,6 +7685,7 @@ mod tests {
                 position_lr_ratio: 1.0,
                 radius_lr_ratio: 0.01,
                 surface_normal_lr_ratio: 0.1,
+                surface_offset_lr_ratio: 0.1,
                 surface_normal_weight: 0.1,
                 geometry_rebuild_every: 1,
                 densify: Some(DensifyConfig {
@@ -7500,6 +7706,13 @@ mod tests {
         assert_eq!(model.points.len(), 5);
         assert_eq!(model.radii.as_ref().unwrap().len(), 5);
         assert_eq!(model.surface_normals.as_ref().unwrap().len(), 5);
+        assert_eq!(model.surface_offsets.as_ref().unwrap().len(), 5);
+        assert!(model
+            .surface_offsets
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|offset| offset.is_finite()));
         assert!(model
             .surface_normals
             .as_ref()
@@ -7657,6 +7870,7 @@ mod tests {
                 glam::Vec3::new(0.2, 0.0, -1.0).normalize();
                 model.points.len()
             ]);
+            model.surface_offsets = Some(vec![0.01; model.points.len()]);
             model.compute_adjacency_default();
             model
         };
@@ -7665,6 +7879,7 @@ mod tests {
             pixel_batch: Some(1),
             steps_per_view: 4,
             surface_normal_lr_ratio: 0.1,
+            surface_offset_lr_ratio: 0.1,
             surface_normal_weight: 0.1,
             geometry_rebuild_every: 1,
             ..AppearanceFitConfig::default()
@@ -7722,6 +7937,7 @@ mod tests {
         assert_eq!(uninterrupted.sh_coefficients, resumed.sh_coefficients);
         assert_eq!(uninterrupted.radii, resumed.radii);
         assert_eq!(uninterrupted.surface_normals, resumed.surface_normals);
+        assert_eq!(uninterrupted.surface_offsets, resumed.surface_offsets);
         let uninterrupted_adjacency = uninterrupted.adjacency.as_ref().unwrap();
         let resumed_adjacency = resumed.adjacency.as_ref().unwrap();
         assert_eq!(uninterrupted_adjacency.offsets, resumed_adjacency.offsets);

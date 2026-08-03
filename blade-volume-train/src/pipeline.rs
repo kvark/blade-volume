@@ -1038,6 +1038,22 @@ pub fn train_colmap_appearance_split(
             model.points.len() - fitted,
         );
     }
+    if config.fit.surface_offset_lr_ratio > 0.0 && model.surface_offsets.is_none() {
+        assert!(
+            config.fit.resume_state_path.is_none(),
+            "cannot add oriented PowerFoam offsets while restoring an optimizer checkpoint; \
+             initialize a fresh offset model first"
+        );
+        assert!(
+            model.surface_normals.is_some(),
+            "surface-offset training requires --oriented-powerfoam or an oriented input PLY"
+        );
+        model.surface_offsets = Some(vec![0.0; model.points.len()]);
+        log::info!(
+            "initialized {} oriented PowerFoam surface offsets to zero",
+            model.points.len(),
+        );
+    }
 
     let training_start = std::time::Instant::now();
     let fit_outcome = diff_render::fit_appearance_multi_view_outcome(

@@ -331,13 +331,19 @@ struct Args {
     #[argh(option, default = "0.0")]
     surface_normal_lr_ratio: f32,
 
+    /// signed oriented-surface offset learning rate as a fraction of the main
+    /// learning rate (default 0 = no offset table). Under the radfoam-v1
+    /// schedule, 1 scales PowerFoam's absolute 0.005 to 0.0005 height rate.
+    #[argh(option, default = "0.0")]
+    surface_offset_lr_ratio: f32,
+
     /// initial weight on PowerFoam's view-facing normal loss (default 0 =
     /// off; reference value 0.1, decaying to 0.01).
     #[argh(option, default = "0.0")]
     surface_normal_weight: f32,
 
-    /// steps between adjacency/path rebuilds during position/radius/normal
-    /// optimisation (default 100). Ignored when both geometry rates are 0.
+    /// steps between adjacency/path rebuilds during geometry optimisation
+    /// (default 100). Ignored when all geometry rates are 0.
     #[argh(option, default = "100")]
     geometry_rebuild_every: usize,
 
@@ -516,6 +522,10 @@ fn main() {
         eprintln!("--surface-normal-lr-ratio must be finite and non-negative");
         std::process::exit(2);
     }
+    if !args.surface_offset_lr_ratio.is_finite() || args.surface_offset_lr_ratio < 0.0 {
+        eprintln!("--surface-offset-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
     if !args.surface_normal_weight.is_finite() || args.surface_normal_weight < 0.0 {
         eprintln!("--surface-normal-weight must be finite and non-negative");
         std::process::exit(2);
@@ -537,7 +547,8 @@ fn main() {
     }
     if (args.position_lr_ratio > 0.0
         || args.radius_lr_ratio > 0.0
-        || args.surface_normal_lr_ratio > 0.0)
+        || args.surface_normal_lr_ratio > 0.0
+        || args.surface_offset_lr_ratio > 0.0)
         && geometry_rebuild_schedule == diff_render::GeometryRebuildSchedule::Fixed
         && args.geometry_rebuild_every == 0
     {
@@ -557,12 +568,14 @@ fn main() {
         eprintln!("--oriented-powerfoam requires a weighted initializer or --init-ply");
         std::process::exit(2);
     }
-    if (args.surface_normal_lr_ratio > 0.0 || args.surface_normal_weight > 0.0)
+    if (args.surface_normal_lr_ratio > 0.0
+        || args.surface_offset_lr_ratio > 0.0
+        || args.surface_normal_weight > 0.0)
         && !args.oriented_powerfoam
         && args.init_ply.is_none()
     {
         eprintln!(
-            "surface-normal training requires --oriented-powerfoam or an oriented --init-ply"
+            "oriented-surface training requires --oriented-powerfoam or an oriented --init-ply"
         );
         std::process::exit(2);
     }
@@ -742,6 +755,7 @@ fn main() {
             position_lr_ratio: args.position_lr_ratio,
             radius_lr_ratio: args.radius_lr_ratio,
             surface_normal_lr_ratio: args.surface_normal_lr_ratio,
+            surface_offset_lr_ratio: args.surface_offset_lr_ratio,
             surface_normal_weight: args.surface_normal_weight,
             powerfoam_candidate_capacity: args.powerfoam_candidate_capacity,
             geometry_rebuild_every: args.geometry_rebuild_every,
