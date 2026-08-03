@@ -326,6 +326,32 @@ resize and live settings handling, is the remaining presentation step.
   remains below 6 GB with zero swap, pressure, OOM, candidate overflow, or GPU
   fault.
 
+#### M2m — Parallel Čech topology rebuilds (implemented and gated)
+
+- Čech rows are independent k-d-tree queries, so the builder now partitions
+  them across the standard library's available workers and assembles the
+  chunks back in point-index order. Each CSR row still takes the exact overlap
+  predicate and the existing sort/dedup path; there is no approximate
+  topology, new dependency, or output-order change. Work is enabled above
+  4,096 sites per worker and capped at 16 workers to bound stacks and allocator
+  pressure. A forced one-versus-four-worker test produces identical CSR arrays.
+- On the 100,569-site matched 100-step gate, the topology phase falls from
+  2.168 to 0.466 seconds (78.5%), training from 11.346 to 8.800 seconds (22.4%),
+  and the complete command from 16.75 to 12.89 seconds (23.0%). Initial and
+  final directed-edge counts, printed loss, and path telemetry remain exact.
+  Twelve logical workers take 0.47 seconds versus 0.59 seconds for six
+  physical-core workers on the gate machine; their one-step cgroup peaks are
+  580 and 512 MB respectively.
+- A complete 2,000-step resume reduces accumulated topology time from 33.347
+  to 7.427 seconds (77.7%), training from 123.026 to 96.246 seconds (21.8%),
+  and whole-command time from 127.76 to 100.52 seconds (21.3%). It crosses all
+  four growth/resource boundaries, reaches the same 100,569 sites, and records
+  zero truncation over 8,192,000 rays. Fresh-Ply quality is 14.66/14.36 dB
+  train/test versus 14.64/14.34 dB; the small positive delta accompanies a
+  0.2% atomically sampled topology difference. Host peak rises from 604 to
+  894 MB while sampled GPU memory remains 1,295 MiB. No scope records swap,
+  pressure, OOM, candidate overflow, or a GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

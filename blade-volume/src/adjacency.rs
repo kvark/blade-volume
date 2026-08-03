@@ -399,6 +399,9 @@ pub fn radii_from_powerfoam_reference(points: &[glam::Vec4], cameras: &[CameraPa
     radii
 }
 
+const CECH_POINTS_PER_WORKER: usize = 4_096;
+const CECH_MAX_WORKERS: usize = 16;
+
 /// Computes the Čech-complex adjacency for a set of weighted points (Power Foam).
 ///
 /// An edge `{i, j}` is emitted when the balls `B(p_i, r_i)` and `B(p_j, r_j)` overlap,
@@ -407,9 +410,24 @@ pub fn radii_from_powerfoam_reference(points: &[glam::Vec4], cameras: &[CameraPa
 ///
 /// `radii.len()` must equal `points.len()`. Negative radii are clamped to `0`.
 ///
-/// Implementation: builds a k-d tree of point positions, queries each point within
-/// `r_i + r_max` to bound candidates, then filters by the exact overlap predicate.
+/// Implementation: builds a shared immutable k-d tree, queries each point within
+/// `r_i + r_max` on a bounded set of workers, then filters by the exact overlap
+/// predicate.
 pub fn compute_cech(points: &[glam::Vec4], radii: &[f32], config: &AdjacencyConfig) -> Adjacency {
+    let available_workers = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let useful_workers = points.len().div_ceil(CECH_POINTS_PER_WORKER).max(1);
+    let worker_count = available_workers.min(useful_workers).min(CECH_MAX_WORKERS);
+    compute_cech_with_workers(points, radii, config, worker_count)
+}
+
+fn compute_cech_with_workers(
+    points: &[glam::Vec4],
+    radii: &[f32],
+    config: &AdjacencyConfig,
+    worker_count: usize,
+) -> Adjacency {
     let num_points = points.len();
     assert_eq!(
         radii.len(),
@@ -418,6 +436,10 @@ pub fn compute_cech(points: &[glam::Vec4], radii: &[f32], config: &AdjacencyConf
         radii.len(),
         num_points
     );
+    assert!(worker_count > 0, "compute_cech needs at least one worker");
+    if num_points == 0 {
+        return build_symmetric_csr(points, &mut [], config);
+    }
 
     let radii: Vec<f32> = radii.iter().map(|&r| r.max(0.0)).collect();
     let r_max = radii.iter().copied().fold(0.0_f32, f32::max);
@@ -430,24 +452,48 @@ pub fn compute_cech(points: &[glam::Vec4], radii: &[f32], config: &AdjacencyConf
         .collect::<Vec<_>>();
     let kd_tree = kiddo::ImmutableKdTree::new_from_slice(&positions);
 
-    let mut neighbor_sets: Vec<Vec<u32>> = vec![Vec::new(); num_points];
-
-    for (i, p) in points.iter().enumerate() {
-        let r_i = radii[i];
-        let bound = r_i + r_max;
-        let bound_sq = bound * bound;
-        let q = [p.x, p.y, p.z];
-        for hit in kd_tree.within_unsorted::<kiddo::SquaredEuclidean>(&q, bound_sq) {
-            let j = hit.item as usize;
-            if j == i {
-                continue;
+    let build_rows = |range: std::ops::Range<usize>| {
+        range
+            .map(|i| {
+                let p = points[i];
+                let r_i = radii[i];
+                let bound = r_i + r_max;
+                let bound_sq = bound * bound;
+                let q = [p.x, p.y, p.z];
+                let mut neighbors = Vec::new();
+                for hit in kd_tree.within_unsorted::<kiddo::SquaredEuclidean>(&q, bound_sq) {
+                    let j = hit.item as usize;
+                    if j == i {
+                        continue;
+                    }
+                    let sum = r_i + radii[j];
+                    if hit.distance <= sum * sum {
+                        neighbors.push(j as u32);
+                    }
+                }
+                neighbors
+            })
+            .collect::<Vec<_>>()
+    };
+    let worker_count = worker_count.min(num_points);
+    let mut neighbor_sets = if worker_count == 1 {
+        build_rows(0..num_points)
+    } else {
+        let chunk_size = num_points.div_ceil(worker_count);
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(worker_count);
+            for start in (0..num_points).step_by(chunk_size) {
+                let end = (start + chunk_size).min(num_points);
+                let build_rows = &build_rows;
+                handles.push(scope.spawn(move || build_rows(start..end)));
             }
-            let sum = r_i + radii[j];
-            if hit.distance <= sum * sum {
-                neighbor_sets[i].push(j as u32);
+            let mut rows = Vec::with_capacity(num_points);
+            for handle in handles {
+                rows.extend(handle.join().expect("compute_cech worker panicked"));
             }
-        }
-    }
+            rows
+        })
+    };
 
     build_symmetric_csr(points, &mut neighbor_sets, config)
 }
@@ -956,6 +1002,34 @@ mod tests {
             .offsets
             .windows(2)
             .all(|range| range[1] - range[0] == points.len() as u32 - 1));
+    }
+
+    #[test]
+    fn cech_worker_partition_preserves_exact_csr() {
+        let points = (0..1_152)
+            .map(|i| {
+                let x = i % 16;
+                let y = i / 16 % 12;
+                let z = i / (16 * 12);
+                let jitter = (i * 17 % 7) as f32 * 0.001;
+                glam::Vec4::new(
+                    x as f32 * 0.1 + jitter,
+                    y as f32 * 0.1 - jitter,
+                    z as f32 * 0.1 + jitter,
+                    1.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        let radii = (0..points.len())
+            .map(|i| 0.06 + (i % 5) as f32 * 0.005)
+            .collect::<Vec<_>>();
+        let config = AdjacencyConfig::default();
+
+        let serial = compute_cech_with_workers(&points, &radii, &config, 1);
+        let parallel = compute_cech_with_workers(&points, &radii, &config, 4);
+
+        assert_eq!(parallel.offsets, serial.offsets);
+        assert_eq!(parallel.neighbors, serial.neighbors);
     }
 
     #[test]

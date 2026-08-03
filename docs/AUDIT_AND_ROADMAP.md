@@ -1371,7 +1371,10 @@ material path.
    interval removes repeated adjacency clipping while retaining byte-identical
    held-out renders. The same segment falls again to 123.03 seconds, crosses
    all four resource rebuilds, and retains 14.34 dB held-out quality with zero
-   truncation or memory events.)
+   truncation or memory events. Parallel exact Čech-row queries then reduce
+   topology time by 77.7% and the segment to 96.25 seconds; held-out quality is
+   14.36 dB, all 8.2 million rays remain untruncated, and host peak stays below
+   0.9 GB.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 
