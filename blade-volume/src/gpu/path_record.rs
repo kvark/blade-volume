@@ -74,7 +74,9 @@ struct RecordParams {
     max_path_dt: f32,
     depth: f32,
     power_foam: u32,
-    _padding: [u32; 3],
+    num_points: u32,
+    candidate_capacity: u32,
+    write_jacobians: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -92,6 +94,8 @@ struct PathRecordData {
     g_dt_grad_previous_out: gpu::BufferPiece,
     g_dt_grad_current_out: gpu::BufferPiece,
     g_dt_grad_next_out: gpu::BufferPiece,
+    g_candidate_counts: gpu::BufferPiece,
+    g_candidates: gpu::BufferPiece,
     g_camera: CameraParams,
     g_params: RecordParams,
 }
@@ -101,7 +105,9 @@ struct PathRecordData {
 /// Build once per session (the WGSL parse / SPIR-V compile is the
 /// expensive part); dispatch many times per training step.
 pub struct PathRecorder {
-    pipeline: gpu::ComputePipeline,
+    walk_pipeline: gpu::ComputePipeline,
+    splat_gather_pipeline: gpu::ComputePipeline,
+    splat_record_pipeline: gpu::ComputePipeline,
 }
 
 impl PathRecorder {
@@ -113,16 +119,32 @@ impl PathRecorder {
             naga_module: None,
         });
         let layout = <PathRecordData as gpu::ShaderData>::layout();
-        let pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+        let walk_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
             name: "radfoam-record-paths",
             data_layouts: &[&layout],
             compute: shader.at("record_paths"),
         });
-        Self { pipeline }
+        let splat_gather_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+            name: "powerfoam-gather-path-candidates",
+            data_layouts: &[&layout],
+            compute: shader.at("gather_powerfoam_candidates"),
+        });
+        let splat_record_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+            name: "powerfoam-record-splat-paths",
+            data_layouts: &[&layout],
+            compute: shader.at("record_powerfoam_splats"),
+        });
+        Self {
+            walk_pipeline,
+            splat_gather_pipeline,
+            splat_record_pipeline,
+        }
     }
 
     pub fn destroy(&mut self, context: &gpu::Context) {
-        context.destroy_compute_pipeline(&mut self.pipeline);
+        context.destroy_compute_pipeline(&mut self.walk_pipeline);
+        context.destroy_compute_pipeline(&mut self.splat_gather_pipeline);
+        context.destroy_compute_pipeline(&mut self.splat_record_pipeline);
     }
 
     /// Record `args.num_pixels` paths into the caller-owned output buffers.
@@ -140,8 +162,8 @@ impl PathRecorder {
         args: RecordPathsArgs,
     ) {
         assert!(
-            !cloud.is_power_foam || buffers.has_jacobians,
-            "PowerFoam path recording requires full Jacobian buffers"
+            !cloud.is_power_foam || buffers.has_splat_scratch,
+            "PowerFoam path recording requires splat scratch buffers"
         );
         assert!(
             args.num_pixels <= buffers.num_pixels
@@ -162,31 +184,48 @@ impl PathRecorder {
             max_path_dt: args.max_path_dt,
             depth: args.depth,
             power_foam: cloud.is_power_foam as u32,
-            _padding: [0; 3],
+            num_points: cloud.num_points as u32,
+            candidate_capacity: buffers.splat_candidate_capacity,
+            write_jacobians: buffers.has_jacobians as u32,
         };
 
+        let data = PathRecordData {
+            g_points: cloud.points(),
+            g_adjacency: cloud.point_adjacency(),
+            g_adjacency_offsets: cloud.point_adjacency_offsets(),
+            g_pixel_indices: buffers.pixel_indices.into(),
+            g_previous_cells_out: buffers.previous_cells.into(),
+            g_cells_out: buffers.cells.into(),
+            g_next_cells_out: buffers.next_cells.into(),
+            g_dts_out: buffers.dts.into(),
+            g_mask_out: buffers.mask.into(),
+            g_dt_reference_tangents_out: buffers.dt_reference_tangents.into(),
+            g_dt_grad_previous_out: buffers.dt_grad_previous.into(),
+            g_dt_grad_current_out: buffers.dt_grad_current.into(),
+            g_dt_grad_next_out: buffers.dt_grad_next.into(),
+            g_candidate_counts: buffers.splat_candidate_counts.into(),
+            g_candidates: buffers.splat_candidates.into(),
+            g_camera: args.camera,
+            g_params: params,
+        };
+        if cloud.is_power_foam {
+            {
+                let mut pass = encoder.compute("powerfoam-gather-path-candidates");
+                let mut pc = pass.with(&self.splat_gather_pipeline);
+                pc.bind(0, &data);
+                pc.dispatch([args.num_pixels, 1, 1]);
+            }
+            let mut pass = encoder.compute("powerfoam-record-splat-paths");
+            let mut pc = pass.with(&self.splat_record_pipeline);
+            pc.bind(0, &data);
+            let groups = args.num_pixels.div_ceil(64);
+            pc.dispatch([groups, 1, 1]);
+            return;
+        }
+
         let mut pass = encoder.compute("radfoam-record-paths");
-        let mut pc = pass.with(&self.pipeline);
-        pc.bind(
-            0,
-            &PathRecordData {
-                g_points: cloud.points(),
-                g_adjacency: cloud.point_adjacency(),
-                g_adjacency_offsets: cloud.point_adjacency_offsets(),
-                g_pixel_indices: buffers.pixel_indices.into(),
-                g_previous_cells_out: buffers.previous_cells.into(),
-                g_cells_out: buffers.cells.into(),
-                g_next_cells_out: buffers.next_cells.into(),
-                g_dts_out: buffers.dts.into(),
-                g_mask_out: buffers.mask.into(),
-                g_dt_reference_tangents_out: buffers.dt_reference_tangents.into(),
-                g_dt_grad_previous_out: buffers.dt_grad_previous.into(),
-                g_dt_grad_current_out: buffers.dt_grad_current.into(),
-                g_dt_grad_next_out: buffers.dt_grad_next.into(),
-                g_camera: args.camera,
-                g_params: params,
-            },
-        );
+        let mut pc = pass.with(&self.walk_pipeline);
+        pc.bind(0, &data);
         let groups = args.num_pixels.div_ceil(64);
         pc.dispatch([groups, 1, 1]);
     }
@@ -210,6 +249,12 @@ pub struct PathRecordBuffers {
     pub dt_grad_previous: gpu::Buffer,
     pub dt_grad_current: gpu::Buffer,
     pub dt_grad_next: gpu::Buffer,
+    /// Host-visible number of intersected supports for every sampled ray.
+    /// Values larger than [`Self::splat_candidate_capacity`] signal that the
+    /// bounded scratch row overflowed and the dispatch must be rejected.
+    splat_candidate_counts: gpu::Buffer,
+    /// Device-only fixed-size candidate rows used by weighted compute splats.
+    splat_candidates: gpu::Buffer,
     /// Upload-side staging for `pixel_indices` (write from CPU, copy to
     /// device via a `transfer` pass before dispatching). Persistent
     /// `Memory::Upload` is much cheaper than allocating staging every
@@ -218,18 +263,30 @@ pub struct PathRecordBuffers {
     pub num_pixels: u32,
     pub max_steps: u32,
     has_jacobians: bool,
+    has_splat_scratch: bool,
+    splat_candidate_capacity: u32,
 }
 
 impl PathRecordBuffers {
     pub fn new(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, true)
+        Self::new_with(context, num_pixels, max_steps, false, true, true)
     }
 
     /// Allocate only the four always-written path streams. The derivative
     /// bindings are valid one-element dummies, so this is only safe to dispatch
     /// with an unweighted cloud (`RadFoamGpuCloud::is_power_foam == false`).
     pub fn new_recorded_only(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, false)
+        Self::new_with(context, num_pixels, max_steps, false, false, false)
+    }
+
+    /// Allocate compact base path streams plus PowerFoam candidate scratch,
+    /// without the geometry-derivative streams used only by training.
+    pub fn new_powerfoam_recorded_only(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+    ) -> Self {
+        Self::new_with(context, num_pixels, max_steps, false, false, true)
     }
 
     /// Allocate every output stream as `Memory::External(Fd(None))` so the
@@ -239,7 +296,7 @@ impl PathRecordBuffers {
     /// Vulkan; Metal/GLES backends `unimplemented!()` on the buffer
     /// allocation.
     pub fn new_external(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, true, true)
+        Self::new_with(context, num_pixels, max_steps, true, true, true)
     }
 
     /// Allocate exportable base streams and optionally full PowerFoam
@@ -250,7 +307,14 @@ impl PathRecordBuffers {
         max_steps: u32,
         with_jacobians: bool,
     ) -> Self {
-        Self::new_with(context, num_pixels, max_steps, true, with_jacobians)
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            true,
+            with_jacobians,
+            with_jacobians,
+        )
     }
 
     fn new_with(
@@ -259,6 +323,7 @@ impl PathRecordBuffers {
         max_steps: u32,
         external: bool,
         with_jacobians: bool,
+        with_splat_scratch: bool,
     ) -> Self {
         let pl = (num_pixels as u64) * (max_steps as u64);
         let cells_bytes = pl * mem::size_of::<u32>() as u64;
@@ -280,6 +345,21 @@ impl PathRecordBuffers {
             mem::size_of::<f32>() as u64
         };
         let pix_bytes = (num_pixels as u64) * mem::size_of::<u32>() as u64;
+        let splat_candidate_capacity = if with_splat_scratch {
+            max_steps.saturating_mul(4).max(256)
+        } else {
+            1
+        };
+        let candidate_count_bytes = if with_splat_scratch {
+            pix_bytes
+        } else {
+            mem::size_of::<u32>() as u64
+        };
+        let candidate_bytes = if with_splat_scratch {
+            (num_pixels as u64) * (splat_candidate_capacity as u64) * mem::size_of::<u32>() as u64
+        } else {
+            mem::size_of::<u32>() as u64
+        };
 
         let pixel_indices = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-pixels",
@@ -353,6 +433,16 @@ impl PathRecordBuffers {
             size: jacobian_bytes,
             memory: mem(external && with_jacobians),
         });
+        let splat_candidate_counts = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-path-candidate-counts",
+            size: candidate_count_bytes,
+            memory: gpu::Memory::Shared,
+        });
+        let splat_candidates = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-path-candidates",
+            size: candidate_bytes,
+            memory: gpu::Memory::Device,
+        });
 
         Self {
             pixel_indices,
@@ -365,10 +455,14 @@ impl PathRecordBuffers {
             dt_grad_previous,
             dt_grad_current,
             dt_grad_next,
+            splat_candidate_counts,
+            splat_candidates,
             pixel_indices_stage,
             num_pixels,
             max_steps,
             has_jacobians: with_jacobians,
+            has_splat_scratch: with_splat_scratch,
+            splat_candidate_capacity,
         }
     }
 
@@ -405,6 +499,32 @@ impl PathRecordBuffers {
         self.has_jacobians
     }
 
+    /// Maximum number of sphere hits observed in a synchronized output range.
+    ///
+    /// The caller must wait for the recording submission before reading this
+    /// host-visible counter buffer. Panics for compact unweighted buffers.
+    pub fn max_splat_candidate_count(&self, range: std::ops::Range<usize>) -> u32 {
+        assert!(
+            self.has_splat_scratch,
+            "splat counters require PowerFoam scratch buffers"
+        );
+        assert!(
+            range.start <= range.end && range.end <= self.num_pixels as usize,
+            "splat counter range exceeds buffer capacity",
+        );
+        let counts = unsafe {
+            slice::from_raw_parts(
+                self.splat_candidate_counts.data() as *const u32,
+                self.num_pixels as usize,
+            )
+        };
+        counts[range].iter().copied().max().unwrap_or(0)
+    }
+
+    pub fn splat_candidate_capacity(&self) -> u32 {
+        self.splat_candidate_capacity
+    }
+
     /// Total allocated bytes of all output streams (for sanity checks).
     pub fn out_bytes(&self) -> u64 {
         output_bytes(self.num_pixels, self.max_steps, self.has_jacobians)
@@ -422,6 +542,8 @@ impl PathRecordBuffers {
         context.destroy_buffer(self.dt_grad_previous);
         context.destroy_buffer(self.dt_grad_current);
         context.destroy_buffer(self.dt_grad_next);
+        context.destroy_buffer(self.splat_candidate_counts);
+        context.destroy_buffer(self.splat_candidates);
     }
 }
 

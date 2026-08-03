@@ -13,6 +13,7 @@ pub const SCENE_TRAVERSE: &str = include_str!("../shaders/scene_traverse.wgsl");
 pub const SCENE_RADFOAM: &str = include_str!("../shaders/scene_radfoam.wgsl");
 pub const RADFOAM_BLIT: &str = include_str!("../shaders/radfoam_blit.wgsl");
 pub const RADFOAM_RECORD_PATHS: &str = include_str!("../shaders/radfoam_record_paths.wgsl");
+pub const POWERFOAM_SPLAT: &str = include_str!("../shaders/powerfoam_splat.wgsl");
 
 /// Library of WGSL fragments referenced by `// #include "<name>"` directives.
 const INCLUDES: &[(&str, &str)] = &[

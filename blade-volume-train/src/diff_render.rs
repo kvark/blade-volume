@@ -2873,6 +2873,15 @@ fn collect_path_contributions(
                 .wait_for(&sync, !0)
                 .expect("contribution path readback failed");
             assert!(completed, "contribution path readback timed out");
+            if model.radii.is_some() {
+                let observed = buffers.max_splat_candidate_count(0..num_pixels);
+                assert!(
+                    observed <= buffers.splat_candidate_capacity(),
+                    "PowerFoam contribution path needs {observed} candidates for one ray, but \
+                     scratch capacity is {}",
+                    buffers.splat_candidate_capacity(),
+                );
+            }
             let cells =
                 unsafe { std::slice::from_raw_parts(cells_readback.data() as *const u32, pl) };
             let next_cells =
@@ -3964,6 +3973,16 @@ fn fit_appearance_pixel_batched(
             configure_optimizer(&mut session, &config, step, total_steps);
             session.step();
             session.wait();
+            if model.radii.is_some() {
+                let observed = path_bufs.max_splat_candidate_count(0..pixel_batch);
+                assert!(
+                    observed <= path_bufs.splat_candidate_capacity(),
+                    "PowerFoam training path needs {observed} candidates for one ray at step {}, \
+                     but scratch capacity is {}",
+                    step + 1,
+                    path_bufs.splat_candidate_capacity(),
+                );
+            }
             model_parameters_current = false;
             if profile_gpu {
                 session.dump_gpu_timings();

@@ -828,6 +828,210 @@ fn path_interval_jacobian(
     })
 }
 
+/// Clip one PowerFoam support against all of its Cech-neighbor radical planes.
+/// Returns the effective entry depth together with the exact local interval
+/// derivative. Non-overlapping supports cannot win power distance inside this
+/// support, so the Cech row contains every required clipping constraint.
+fn powerfoam_splat_interval(
+    model: &PointCloudModel,
+    ray_origin: glam::Vec3,
+    ray_dir: glam::Vec3,
+    depth: f32,
+    cell: u32,
+) -> Option<(f32, PathJacobianEntry)> {
+    let adjacency = model.adjacency.as_ref().unwrap();
+    let current = model.points[cell as usize].truncate();
+    let current_radius = read_radius(model, cell);
+    if (current - ray_origin).length() < 4.0 * current_radius {
+        return None;
+    }
+    let (sphere_near, sphere_far, _, _) =
+        sphere_intersection_jacobians(ray_origin, ray_dir, current, current_radius)?;
+    if sphere_far <= 0.0 || sphere_near >= depth {
+        return None;
+    }
+
+    let mut face_near = 0.0_f32;
+    let mut face_far = depth;
+    let mut previous = cell;
+    let mut next = cell;
+    let begin = adjacency.offsets[cell as usize] as usize;
+    let end = adjacency.offsets[cell as usize + 1] as usize;
+    for &adjacent in &adjacency.neighbors[begin..end] {
+        let adjacent_point = model.points[adjacent as usize].truncate();
+        let adjacent_radius = read_radius(model, adjacent);
+        let normal = adjacent_point - current;
+        let distance_squared = normal.length_squared().max(1.0e-20);
+        let shift = 0.5
+            + 0.5 * (current_radius * current_radius - adjacent_radius * adjacent_radius)
+                / distance_squared;
+        let face_origin = current + shift * normal;
+        let numerator = (face_origin - ray_origin).dot(normal);
+        let denominator = ray_dir.dot(normal);
+        if denominator > 1.0e-20 {
+            let t = numerator / denominator;
+            if t < face_far {
+                face_far = t;
+                next = adjacent;
+            }
+        } else if denominator < -1.0e-20 {
+            let t = numerator / denominator;
+            if t > face_near {
+                face_near = t;
+                previous = adjacent;
+            }
+        } else if numerator < 0.0 {
+            return None;
+        }
+    }
+
+    let effective_near = face_near.max(sphere_near);
+    let effective_far = face_far.min(sphere_far);
+    if effective_far <= effective_near || !effective_near.is_finite() || !effective_far.is_finite()
+    {
+        return None;
+    }
+    path_interval_jacobian(
+        model, ray_origin, ray_dir, true, previous, cell, next, face_near, face_far,
+    )
+    .map(|entry| (effective_near, entry))
+}
+
+fn sorted_powerfoam_splat_intervals(
+    model: &PointCloudModel,
+    ray_origin: glam::Vec3,
+    ray_dir: glam::Vec3,
+    depth: f32,
+    max_steps: u32,
+) -> Vec<(f32, u32, PathJacobianEntry)> {
+    let mut intervals = (0..model.points.len() as u32)
+        .filter_map(|cell| {
+            powerfoam_splat_interval(model, ray_origin, ray_dir, depth, cell)
+                .map(|(near, entry)| (near, cell, entry))
+        })
+        .collect::<Vec<_>>();
+    intervals.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    intervals.truncate(max_steps as usize);
+    intervals
+}
+
+/// Record PowerFoam cells by compute-splat semantics rather than a global walk.
+///
+/// Every support sphere hit by the ray is clipped independently against its
+/// Cech-neighbor radical planes, then the surviving disjoint intervals are
+/// sorted front-to-back. This remains correct when the overlapping-ball graph
+/// has multiple connected components; a camera-seeded adjacency walk cannot
+/// discover those components. This CPU implementation is the correctness
+/// oracle for the GPU training recorder.
+pub fn record_powerfoam_splats_jacobians(
+    model: &PointCloudModel,
+    ray: Ray,
+    settings: TraceSettings,
+) -> PathJacobianResult {
+    assert!(model.radii.is_some(), "PowerFoam splats require radii");
+    assert!(
+        model.adjacency.is_some(),
+        "PowerFoam splats require adjacency"
+    );
+    let mut ray_dir = ray.direction;
+    let direction_length = ray_dir.length();
+    if direction_length <= 0.0 || !direction_length.is_finite() {
+        return PathJacobianResult {
+            entries: Vec::new(),
+            ray_dir: glam::Vec3::ZERO,
+        };
+    }
+    ray_dir /= direction_length;
+
+    let intervals = sorted_powerfoam_splat_intervals(
+        model,
+        ray.origin,
+        ray_dir,
+        settings.depth,
+        settings.max_steps,
+    );
+    PathJacobianResult {
+        entries: intervals.into_iter().map(|(_, _, entry)| entry).collect(),
+        ray_dir,
+    }
+}
+
+/// Trace a PowerFoam ray with independent support splats and volumetric
+/// front-to-back integration.
+pub fn trace_powerfoam_splats(
+    model: &PointCloudModel,
+    ray: Ray,
+    settings: TraceSettings,
+) -> TraceResult {
+    assert!(model.radii.is_some(), "PowerFoam splats require radii");
+    assert!(
+        model.adjacency.is_some(),
+        "PowerFoam splats require adjacency"
+    );
+    let direction_length = ray.direction.length();
+    if direction_length <= 0.0 || !direction_length.is_finite() {
+        return TraceResult {
+            rgba: glam::Vec4::ZERO,
+            steps: 0,
+            last_point: settings.start_point,
+            t_end: 0.0,
+            depth_mode: 0.0,
+            peak_weight: 0.0,
+        };
+    }
+    let ray_dir = ray.direction / direction_length;
+    let intervals = sorted_powerfoam_splat_intervals(
+        model,
+        ray.origin,
+        ray_dir,
+        settings.depth,
+        settings.max_steps,
+    );
+    let mut transmittance = 1.0_f32;
+    let mut accum_rgb = glam::Vec3::ZERO;
+    let mut depth_mode = 0.0_f32;
+    let mut peak_weight = 0.0_f32;
+    let mut steps = 0_u32;
+    let mut last_point = settings.start_point;
+    let mut t_end = 0.0_f32;
+    for (near, cell, entry) in intervals {
+        if transmittance <= settings.weight_threshold {
+            break;
+        }
+        steps += 1;
+        last_point = cell;
+        t_end = near + entry.dt;
+        let density = read_density(model, cell);
+        if density <= 1.0e-6 {
+            continue;
+        }
+        let alpha = 1.0 - (-density * entry.dt).exp();
+        let weight = transmittance * alpha;
+        match settings.eval_mode {
+            EvalMode::Opacity => {}
+            EvalMode::ConstantRgb(color) => accum_rgb += weight * color,
+            EvalMode::Sh => accum_rgb += weight * eval_rgb_sh(model, cell, ray_dir),
+        }
+        if weight > peak_weight {
+            peak_weight = weight;
+            depth_mode = near + 0.5 * entry.dt;
+        }
+        transmittance *= 1.0 - alpha;
+    }
+    TraceResult {
+        rgba: accum_rgb.extend(1.0 - transmittance),
+        steps,
+        last_point,
+        t_end,
+        depth_mode,
+        peak_weight,
+    }
+}
+
 /// Trace a ray and record per-segment `(cell, dt)` pairs without integrating.
 /// Termination rules match [`trace_one_ray`] but the weight-threshold early-
 /// out is disabled — the consumer decides when transmittance has decayed
@@ -1268,6 +1472,48 @@ mod path_tests {
         let expected_alpha = 1.0 - (-4.0_f32).exp();
         assert!((traced.rgba.w - expected_alpha).abs() < 1e-6);
         assert_eq!(traced.t_end, 10.0);
+    }
+
+    #[test]
+    fn powerfoam_splats_discover_disconnected_supports_in_depth_order() {
+        let model = PointCloudModel {
+            points: vec![
+                glam::Vec4::new(0.0, 0.0, 3.0, 1.0),
+                glam::Vec4::new(0.0, 0.0, 6.0, 1.0),
+            ],
+            sh_coefficients: vec![0.0; 6],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0, 0],
+            }),
+            radii: Some(vec![0.5, 0.5]),
+        };
+        let ray = Ray {
+            origin: glam::Vec3::ZERO,
+            direction: glam::Vec3::Z,
+        };
+        let settings = TraceSettings {
+            depth: 10.0,
+            ..settings_for(0)
+        };
+
+        let walked = record_path_jacobians(&model, ray, settings);
+        assert_eq!(walked.entries.len(), 1);
+        let splatted = record_powerfoam_splats_jacobians(&model, ray, settings);
+        assert_eq!(
+            splatted
+                .entries
+                .iter()
+                .map(|entry| entry.cell)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert!(splatted
+            .entries
+            .iter()
+            .all(|entry| (entry.dt - 1.0).abs() < 1.0e-6));
     }
 
     #[test]

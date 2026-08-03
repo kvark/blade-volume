@@ -128,7 +128,11 @@ fn cpu_record(
     let mut dt_grad_current = vec![[0.0; 4]; p * max_steps];
     let mut dt_grad_next = vec![[0.0; 4]; p * max_steps];
     for (k, ray) in rays.iter().enumerate() {
-        let path = vol::trace::record_path_jacobians(model, *ray, settings);
+        let path = if model.radii.is_some() {
+            vol::trace::record_powerfoam_splats_jacobians(model, *ray, settings)
+        } else {
+            vol::trace::record_path_jacobians(model, *ray, settings)
+        };
         for (idx, e) in path.entries.iter().take(max_steps).enumerate() {
             let slot = k * max_steps + idx;
             previous_cells[slot] = e.previous_cell;
@@ -229,14 +233,13 @@ fn assert_gpu_path_record_matches_cpu(
         return;
     };
 
-    let n = 12usize;
     let max_steps = 16usize;
     let num_pixels = 8u32;
     let width = 64u32;
     let height = 64u32;
     let depth = 100.0f32;
 
-    assert_eq!(model.points.len(), n);
+    assert!(!model.points.is_empty());
     for point in &mut model.points {
         *point += world_translation.extend(0.0);
     }
@@ -379,6 +382,14 @@ fn assert_gpu_path_record_matches_cpu(
     }
     let sync = ctx.submit(&mut encoder);
     let _ = ctx.wait_for(&sync, !0);
+    if weighted {
+        let max_candidates = bufs.max_splat_candidate_count(0..num_pixels as usize);
+        assert!(
+            max_candidates <= bufs.splat_candidate_capacity(),
+            "PowerFoam candidate scratch overflow: {max_candidates} > {}",
+            bufs.splat_candidate_capacity(),
+        );
+    }
 
     let gpu_previous_cells: Vec<u32> = unsafe {
         std::slice::from_raw_parts(previous_cells_dl.data() as *const u32, pl as usize).to_vec()
@@ -437,7 +448,7 @@ fn assert_gpu_path_record_matches_cpu(
         // CPU and GPU normalize the ray independently, then evaluate a
         // square root at the support-sphere boundary. Near-tangent segments
         // amplify the backend rounding difference beyond a few ULPs.
-        if ddiff > 2e-4 {
+        if ddiff > 5e-4 {
             mismatches += 1;
             if mismatches <= 8 {
                 eprintln!(
@@ -580,4 +591,35 @@ fn gpu_weighted_linearization_is_translation_invariant() {
             .collect(),
     );
     assert_gpu_path_record_matches_cpu(model, glam::Vec3::new(8192.0, -4096.0, 2048.0));
+}
+
+#[test]
+fn gpu_powerfoam_splats_cross_disconnected_cech_components() {
+    let points = (0..12)
+        .map(|index| glam::Vec4::new(index as f32, 0.0, 0.0, 1.0))
+        .collect::<Vec<_>>();
+    let model = vol::PointCloudModel {
+        sh_coefficients: vec![0.0; points.len() * 3],
+        sh_degree: 0,
+        transforms: None,
+        adjacency: Some(vol::Adjacency {
+            neighbors: Vec::new(),
+            offsets: vec![0; points.len() + 1],
+        }),
+        radii: Some(vec![0.3; points.len()]),
+        points,
+    };
+
+    let camera = make_camera_looking_along_x(100.0);
+    let pixels = pixel_indices_for_rays(64, 64, 8);
+    let rays = rays_for_pixels(&camera, &pixels, 64, 64);
+    let cpu = cpu_record(&model, &rays, 0, 16, 100.0);
+    assert!(
+        cpu.mask
+            .chunks_exact(16)
+            .any(|row| row.iter().filter(|&&mask| mask > 0.0).count() > 1),
+        "fixture must require crossing disconnected supports",
+    );
+
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO);
 }

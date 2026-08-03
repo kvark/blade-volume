@@ -1,6 +1,7 @@
 mod gaussian;
 mod mesh_reference;
 mod path_record;
+mod powerfoam_splat;
 mod radfoam;
 mod radfoam_depth;
 mod radfoam_trace;
@@ -9,6 +10,7 @@ mod relight;
 pub use gaussian::{GaussianGpuCloud, InitParameters};
 pub use mesh_reference::{MeshReferenceSettings, MeshReferenceTracer, ReferenceMesh};
 pub use path_record::{PathRecordBuffers, PathRecorder, RecordPathsArgs};
+pub use powerfoam_splat::PowerFoamGpuSplatTracer;
 pub use radfoam::RadFoamGpuCloud;
 pub use radfoam_depth::{RadFoamDepthSettings, RadFoamGpuDepthTracer};
 pub use radfoam_trace::{RadFoamGpuTracer, RadFoamTraceSettings};

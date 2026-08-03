@@ -1337,19 +1337,25 @@ material path.
    memory: the matched CPU scoring phase is 468.9× faster and the complete
    densification command 4.15× faster at unchanged all-view quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
-   preserving the CPU implementation as the default oracle. (Done in
-   `77c19b7`: weighted/unweighted physical pixel parity passes, aggregate Room
-   PSNR is identical, and the 255+8-view pass is 4.58× faster.)
+   preserving the CPU implementation as the default oracle. (Done for
+   unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate
+   Room PSNR is identical, and the 255+8-view pass is 4.58× faster. Weighted
+   PowerFoam now uses its separate compute-splat evaluator; treating the Čech
+   graph as a global traversal graph was invalid.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 
 1. On the winning RadFoam configuration, compare fixed equal radii against
    trainable positive radii from identical seeds. Require a held-out improvement
    and stable cell/topology statistics before implementing the full quaternion
-   and spherical-Voronoi appearance model. (Done at the complete-dataset
-   50,000-cell diagnostic scale: +2.29 dB all-37; sampled interpenetration adds
-   another +0.11 dB while reducing edges 19.2%. Repeat on the selected
-   200,000-cell/20,400-step reconstruction before clearing the production gate.)
+   and spherical-Voronoi appearance model. (The earlier 50,000-cell ablation is
+   superseded: its camera-seeded weighted walk missed disconnected Čech
+   components and sat near the black baseline. The corrected compute-splat
+   trainer reaches 11.67 dB after 10 steps, 12.55 after 100, and 13.51 after
+   2,000 on all 37 Bonsai held-out views, versus 9.33 after 2,000 broken-walk
+   steps. It grows 50,000 → 57,500 sites without hard pruning and remains
+   topology-stable. Continue to the selected 200,000-cell/20,400-step endpoint
+   before clearing the production gate.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
@@ -1366,9 +1372,12 @@ material path.
 2. Implement a Metal-compatible per-cloud binding strategy and run the same
    transformed-pixel suite on Metal. Accelerate the exhaustive software-TLAS
    cursor only after pixel equivalence is locked down.
-3. Defer new SDF and compute-splat backends until the Stage 2 quality gate is
-   resolved; broadening the API before the core training result is understood
-   would increase surface area without reducing the primary project risk.
+3. PowerFoam compute splats are now required for correctness in training and
+   headless evaluation; their exhaustive gather is deliberately not wired into
+   the interactive viewer. Add deterministic projected-tile bins and validate
+   exact path/PSNR equivalence before promoting splats to window rendering.
+   Defer the unrelated SDF and Gaussian-compute backends until the Stage 2
+   quality gate is resolved.
 
 ## Benchmark and go/no-go policy
 

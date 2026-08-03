@@ -417,7 +417,8 @@ pub fn evaluate_views(
 pub struct GpuViewEvaluator {
     context: sync::Arc<gpu::Context>,
     encoder: gpu::CommandEncoder,
-    tracer: vol::RadFoamGpuTracer,
+    walk_tracer: Option<vol::RadFoamGpuTracer>,
+    splat_tracer: Option<vol::PowerFoamGpuSplatTracer>,
     output: gpu::Texture,
     output_view: gpu::TextureView,
     readback: gpu::Buffer,
@@ -440,16 +441,33 @@ impl GpuViewEvaluator {
             buffer_count: 1,
             manual_barriers: false,
         });
-        let tracer = vol::RadFoamGpuTracer::new(
-            model,
-            vol::RadFoamTraceSettings {
-                max_steps: config.max_steps as u32,
-                weight_threshold: 1e-4,
-                debug_cell_density: false,
-            },
-            &context,
-            &mut encoder,
-        );
+        let trace_settings = vol::RadFoamTraceSettings {
+            max_steps: config.max_steps as u32,
+            weight_threshold: 1e-4,
+            debug_cell_density: false,
+        };
+        let (walk_tracer, splat_tracer) = if model.radii.is_some() {
+            (
+                None,
+                Some(vol::PowerFoamGpuSplatTracer::new(
+                    model,
+                    trace_settings,
+                    resolution,
+                    &context,
+                    &mut encoder,
+                )),
+            )
+        } else {
+            (
+                Some(vol::RadFoamGpuTracer::new(
+                    model,
+                    trace_settings,
+                    &context,
+                    &mut encoder,
+                )),
+                None,
+            )
+        };
         let output = context.create_texture(gpu::TextureDesc {
             name: "radfoam-evaluate-output",
             format: gpu::TextureFormat::Rgba16Float,
@@ -482,7 +500,8 @@ impl GpuViewEvaluator {
         Self {
             context,
             encoder,
-            tracer,
+            walk_tracer,
+            splat_tracer,
             output,
             output_view,
             readback,
@@ -493,8 +512,13 @@ impl GpuViewEvaluator {
     pub fn render_rgba(&mut self, camera: vol::CameraParams) -> Result<Vec<f32>, String> {
         self.encoder.start();
         self.encoder.init_texture(self.output);
-        self.tracer
-            .dispatch(&mut self.encoder, self.output_view, camera, self.resolution);
+        if let Some(ref mut tracer) = self.walk_tracer {
+            tracer.dispatch(&mut self.encoder, self.output_view, camera, self.resolution);
+        } else if let Some(ref tracer) = self.splat_tracer {
+            tracer.dispatch(&mut self.encoder, self.output_view, camera);
+        } else {
+            unreachable!("GPU evaluator must own exactly one tracer");
+        }
         let bytes_per_row = self.resolution[0] * 8;
         let mut transfer = self.encoder.transfer("radfoam-evaluate-readback");
         transfer.copy_texture_to_buffer(
@@ -519,6 +543,9 @@ impl GpuViewEvaluator {
             Ok(true) => {}
             Ok(false) => return Err("GPU evaluation timed out".to_string()),
             Err(err) => return Err(format!("GPU evaluation wait failed: {err:?}")),
+        }
+        if let Some(ref tracer) = self.splat_tracer {
+            tracer.validate_candidate_counts()?;
         }
 
         let num_values = self.resolution[0] as usize * self.resolution[1] as usize * 4;
@@ -551,7 +578,12 @@ impl GpuViewEvaluator {
         self.context.destroy_buffer(self.readback);
         self.context.destroy_texture_view(self.output_view);
         self.context.destroy_texture(self.output);
-        self.tracer.deinit(&self.context);
+        if let Some(ref mut tracer) = self.walk_tracer {
+            tracer.deinit(&self.context);
+        }
+        if let Some(ref mut tracer) = self.splat_tracer {
+            tracer.deinit(&self.context);
+        }
         self.context.destroy_command_encoder(&mut self.encoder);
     }
 }
@@ -1050,10 +1082,10 @@ mod tests {
 
         for weighted in [false, true] {
             let mut model = tiny_model_far_apart();
-            model.compute_adjacency_default();
             if weighted {
-                model.radii = Some(vec![20.0; model.points.len()]);
+                model.radii = Some(vec![0.2; model.points.len()]);
             }
+            model.compute_adjacency_default();
             let cpu = render::render_cpu(
                 &model,
                 &camera,
@@ -1078,6 +1110,63 @@ mod tests {
                 max_delta <= 5e-3,
                 "weighted={weighted}: max GPU/CPU delta {max_delta}"
             );
+        }
+    }
+
+    #[test]
+    fn gpu_view_evaluator_splats_disconnected_powerfoam_supports() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping disconnected PowerFoam evaluator test: no GPU");
+            return;
+        };
+        let model = vol::PointCloudModel {
+            points: vec![
+                glam::Vec4::new(0.0, 0.0, 3.0, 1.0),
+                glam::Vec4::new(0.0, 0.0, 6.0, 1.0),
+            ],
+            sh_coefficients: vec![0.0; 6],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(vol::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0, 0],
+            }),
+            radii: Some(vec![0.5, 0.5]),
+        };
+        let camera = vol::CameraParams {
+            cam_position: [0.0; 3],
+            depth: 10.0,
+            cam_orientation: glam::Quat::IDENTITY.into(),
+            fov: [0.5; 2],
+            principal: [0.0; 2],
+        };
+        let config = PipelineConfig {
+            resolution: (1, 1),
+            max_steps: 8,
+            ..PipelineConfig::default()
+        };
+        let expected = render::render_cpu(
+            &model,
+            &camera,
+            render::RenderSettings {
+                width: 1,
+                height: 1,
+                start_point: 0,
+                max_steps: 8,
+                weight_threshold: 1.0e-4,
+            },
+        );
+        let mut evaluator = GpuViewEvaluator::new(&model, &config, gpu);
+        let actual = evaluator.render_rgba(camera).unwrap();
+        evaluator.deinit();
+
+        assert!(
+            actual[3] > 0.8,
+            "both disconnected supports must contribute"
+        );
+        for (gpu_value, cpu_value) in actual.iter().zip(expected) {
+            assert!((gpu_value - cpu_value).abs() <= 5.0e-3);
         }
     }
 

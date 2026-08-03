@@ -1,7 +1,8 @@
 //! CPU screen-space renderer used as the training forward pass.
 //!
 //! This is a thin wrapper that maps a `vol::CameraParams` + pixel grid into
-//! rays and delegates each ray to [`vol::trace::trace_one_ray`]. Output is a
+//! rays and delegates each ray to the matching unweighted walk or weighted
+//! compute-splat CPU oracle. Output is a
 //! flat `Vec<f32>` of RGBA pixels in row-major order, matching the format the
 //! photometric loss in M3c-2 will consume.
 //!
@@ -130,7 +131,11 @@ pub fn render_cpu_with_diagnostics(
                 origin,
                 direction: ray_dir,
             };
-            let res = vol::trace::trace_one_ray(model, ray, trace_settings);
+            let res = if model.radii.is_some() {
+                vol::trace::trace_powerfoam_splats(model, ray, trace_settings)
+            } else {
+                vol::trace::trace_one_ray(model, ray, trace_settings)
+            };
             traversal.total_steps += res.steps as u64;
             traversal.max_steps_used = traversal.max_steps_used.max(res.steps);
             let remaining_transmittance = 1.0 - res.rgba.w;

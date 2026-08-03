@@ -120,12 +120,11 @@ reader to a tool crate. No Python runtime becomes part of this project.
 #### M2e — Differentiable weighted geometry (implemented and device-validated)
 
 - The CPU path oracle records the exact active-branch derivative of every
-  sphere-clipped interval with respect to the previous, current, and next
-  site's position and radius. Central finite differences cover radical planes,
-  support spheres, and paths that skip non-emitting cells.
+  independently splatted, sphere-clipped interval with respect to its entry,
+  current, and exit site's position and radius. Central finite differences
+  cover radical planes and support spheres.
 - The GPU recorder writes the same three `vec4(position, radius)` Jacobians,
-  raw interval, ray-relative reference tangent, and actual previous traversed
-  cell. The graph evaluates the stable local form
+  raw interval, and ray-relative reference tangent. The graph evaluates the stable local form
   `dt_ref + tangent_actual - tangent_ref`; unweighted training keeps the
   compact path layout.
 - Weighted training optimizes a beta=100 softplus radius parameter and uses the
@@ -159,6 +158,41 @@ reader to a tool crate. No Python runtime becomes part of this project.
   more than the smaller topology saves. The paper's `1e-4` weight is only
   stable with its much smaller radius rate in this protocol; pairing it with
   the exploratory rate collapses support.
+
+#### M2g — Correct compute-splat path discovery (implemented for training/evaluation)
+
+The original weighted trainer reused RadFoam's camera-seeded adjacency walk.
+That is not a valid way to discover bounded PowerFoam supports: a Čech graph
+contains only overlapping balls and may have many disconnected components, so
+the walk can terminate before reaching any photographed surface. On Bonsai the
+failure appeared as zero mean segments and the black-background 9.33 dB score
+after 2,000 steps.
+
+- One GPU workgroup per sampled ray scans support spheres in parallel. A
+  second pass clips every hit against all radical planes in its Čech row and
+  deterministically selects the surviving intervals front-to-back. A ball
+  outside that row cannot win power distance inside the current ball, because
+  non-overlap makes its power distance positive wherever the current ball's is
+  non-positive.
+- A CPU oracle and physical GPU tests cover disconnected components, exact
+  interval/Jacobian parity, translated geometry, and compact evaluation paths.
+  Candidate rows are bounded to `max(4 * max_steps, 256)` entries; synchronized
+  training and evaluation reject overflow instead of silently truncating.
+- Headless weighted evaluation now uses the same compute-splat semantics. The
+  existing RadFoam walk remains unchanged for unweighted clouds and the
+  interactive PowerFoam viewer remains on the approximate walk until projected
+  tile binning makes splats practical at window resolutions.
+- Complete Bonsai gates at 128², 50,000 initial sites, 4,096 rays/update and 16
+  views/update move from 9.33 dB after 2,000 broken-walk steps to 11.67 dB after
+  10 splat steps, 12.55 dB after 100, and 13.51 dB after 2,000. The 2,000-step
+  run reaches loss 0.1507, grows to 57,500 sites without hard pruning, takes
+  150.9 seconds, peaks near 1.1 GB host memory under a 6 GB cgroup, and records
+  no memory or candidate-overflow event.
+
+The current gather is exhaustive `O(sampled_rays * sites)`. It is already
+usable for reconstruction batches and 128² checkpoint evaluation, but the next
+performance unit is a deterministic projected-tile candidate builder shared by
+training, evaluation, and the viewer.
 
 ### M3 — Training crate scaffolding
 
