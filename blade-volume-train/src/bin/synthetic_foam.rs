@@ -240,6 +240,7 @@ fn initial_model(
         transforms: None,
         adjacency: None,
         radii: None,
+        surface_normals: None,
         points,
     };
     model.compute_adjacency_default();

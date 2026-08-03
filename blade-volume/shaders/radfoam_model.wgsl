@@ -14,6 +14,7 @@ var<uniform> g_camera: Camera;
 var<uniform> g_params: Params;
 
 var<storage, read> g_points: array<vec4<f32>>;
+var<storage, read> g_surface_normals: array<vec4<f32>>;
 var<storage, read> g_attributes: array<f32>;
 var<storage, read> g_adjacency: array<u32>;
 var<storage, read> g_adjacency_offsets: array<u32>;
@@ -37,6 +38,14 @@ fn rf_get_radius(idx: u32) -> f32 {
 
 fn rf_is_bounded() -> bool {
     return g_params.pad.x != 0u;
+}
+
+fn rf_is_oriented() -> bool {
+    return g_params.pad.y != 0u;
+}
+
+fn rf_get_surface_normal(idx: u32) -> vec3<f32> {
+    return g_surface_normals[idx].xyz;
 }
 
 fn rf_get_density(idx: u32) -> f32 {

@@ -189,6 +189,7 @@ mod tests {
             transforms: None,
             adjacency: None,
             radii: None,
+            surface_normals: None,
         };
         model.compute_adjacency_default();
         model

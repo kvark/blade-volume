@@ -50,6 +50,7 @@ fn adversarial_model() -> vol::PointCloudModel {
         }),
         adjacency: None,
         radii: None,
+        surface_normals: None,
     }
 }
 

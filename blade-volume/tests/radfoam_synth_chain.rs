@@ -96,6 +96,7 @@ pub fn make_chain_model(
         transforms: None,
         adjacency: Some(vol::Adjacency { neighbors, offsets }),
         radii: None,
+        surface_normals: None,
     }
 }
 

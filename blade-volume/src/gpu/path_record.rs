@@ -16,7 +16,7 @@
 //!   - `mask_out[f32]`
 //!   - `path_status_out[u32]` (recorded count + truncation bit)
 //!   - `dt_reference_tangents_out[f32]` (PowerFoam only)
-//!   - three `dt_grad_*_out[vec4<f32>]` streams (PowerFoam only)
+//!   - four `dt_grad_*_out[vec4<f32>]` streams (PowerFoam only)
 //!
 //! The shader writes only the steps it actually takes; trailing slots
 //! keep their pre-dispatch value, which the caller zeroes before each
@@ -50,10 +50,10 @@ fn output_bytes(num_pixels: u32, max_steps: u32, with_jacobians: bool) -> u64 {
     path_status
         + if with_jacobians {
             base + pl
-                * (mem::size_of::<u32>() + mem::size_of::<f32>() + 3 * mem::size_of::<[f32; 4]>())
+                * (mem::size_of::<u32>() + mem::size_of::<f32>() + 4 * mem::size_of::<[f32; 4]>())
                     as u64
         } else {
-            base + (mem::size_of::<u32>() + mem::size_of::<f32>() + 3 * mem::size_of::<[f32; 4]>())
+            base + (mem::size_of::<u32>() + mem::size_of::<f32>() + 4 * mem::size_of::<[f32; 4]>())
                 as u64
         }
 }
@@ -100,12 +100,13 @@ struct RecordParams {
     tile_width: u32,
     tile_height: u32,
     tile_capacity: u32,
-    _padding: u32,
+    oriented: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
 struct PathRecordData {
     g_points: gpu::BufferPiece,
+    g_surface_normals: gpu::BufferPiece,
     g_adjacency: gpu::BufferPiece,
     g_adjacency_offsets: gpu::BufferPiece,
     g_pixel_indices: gpu::BufferPiece,
@@ -119,6 +120,7 @@ struct PathRecordData {
     g_dt_grad_previous_out: gpu::BufferPiece,
     g_dt_grad_current_out: gpu::BufferPiece,
     g_dt_grad_next_out: gpu::BufferPiece,
+    g_dt_grad_surface_normal_out: gpu::BufferPiece,
     g_candidate_counts: gpu::BufferPiece,
     g_candidates: gpu::BufferPiece,
     g_candidate_depths: gpu::BufferPiece,
@@ -247,11 +249,12 @@ impl PathRecorder {
             tile_width,
             tile_height,
             tile_capacity: buffers.splat_tile_capacity,
-            _padding: 0,
+            oriented: cloud.is_oriented as u32,
         };
 
         let data = PathRecordData {
             g_points: cloud.points(),
+            g_surface_normals: cloud.surface_normals(),
             g_adjacency: cloud.point_adjacency(),
             g_adjacency_offsets: cloud.point_adjacency_offsets(),
             g_pixel_indices: buffers.pixel_indices.into(),
@@ -265,6 +268,7 @@ impl PathRecorder {
             g_dt_grad_previous_out: buffers.dt_grad_previous.into(),
             g_dt_grad_current_out: buffers.dt_grad_current.into(),
             g_dt_grad_next_out: buffers.dt_grad_next.into(),
+            g_dt_grad_surface_normal_out: buffers.dt_grad_surface_normal.into(),
             g_candidate_counts: buffers.splat_candidate_counts.into(),
             g_candidates: buffers.splat_candidates.into(),
             g_candidate_depths: buffers.splat_candidate_depths.into(),
@@ -412,6 +416,7 @@ pub struct PathRecordBuffers {
     pub dt_grad_previous: gpu::Buffer,
     pub dt_grad_current: gpu::Buffer,
     pub dt_grad_next: gpu::Buffer,
+    pub dt_grad_surface_normal: gpu::Buffer,
     /// Host-visible number of intersected supports for every sampled ray.
     /// Values larger than [`Self::splat_candidate_capacity`] signal that the
     /// bounded scratch row overflowed and the dispatch must be rejected.
@@ -721,6 +726,11 @@ impl PathRecordBuffers {
             size: jacobian_bytes,
             memory: mem(external && with_jacobians),
         });
+        let dt_grad_surface_normal = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-dt-grad-surface-normal",
+            size: jacobian_bytes,
+            memory: mem(external && with_jacobians),
+        });
         let splat_candidate_counts = context.create_buffer(gpu::BufferDesc {
             name: "powerfoam-path-candidate-counts",
             size: candidate_count_bytes,
@@ -774,6 +784,7 @@ impl PathRecordBuffers {
             dt_grad_previous,
             dt_grad_current,
             dt_grad_next,
+            dt_grad_surface_normal,
             splat_candidate_counts,
             splat_candidates,
             splat_candidate_depths,
@@ -927,6 +938,7 @@ impl PathRecordBuffers {
         context.destroy_buffer(self.dt_grad_previous);
         context.destroy_buffer(self.dt_grad_current);
         context.destroy_buffer(self.dt_grad_next);
+        context.destroy_buffer(self.dt_grad_surface_normal);
         context.destroy_buffer(self.splat_candidate_counts);
         context.destroy_buffer(self.splat_candidates);
         context.destroy_buffer(self.splat_candidate_depths);
@@ -951,10 +963,10 @@ mod tests {
     fn compact_path_buffers_do_not_scale_jacobian_storage() {
         let slots = 4_096_u64 * 256;
         let path_status = 4_096_u64 * 4;
-        assert_eq!(output_bytes(4_096, 256, true), slots * 72 + path_status);
+        assert_eq!(output_bytes(4_096, 256, true), slots * 88 + path_status);
         assert_eq!(
             output_bytes(4_096, 256, false),
-            slots * 16 + 56 + path_status
+            slots * 16 + 72 + path_status
         );
     }
 

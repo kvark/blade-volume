@@ -6,6 +6,8 @@
 //   fn rf_get_point(idx: u32) -> vec3<f32>;
 //   fn rf_get_radius(idx: u32) -> f32;
 //   fn rf_is_bounded() -> bool;
+//   fn rf_is_oriented() -> bool;
+//   fn rf_get_surface_normal(idx: u32) -> vec3<f32>;
 //   fn rf_get_density(idx: u32) -> f32;
 //   fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32>;
 //   fn rf_adjacency_begin(idx: u32) -> u32;
@@ -38,6 +40,7 @@ struct RadFoamTraceResult {
 }
 
 fn rf_support_interval(
+    cell: u32,
     ray_origin: vec3<f32>,
     ray_dir: vec3<f32>,
     center: vec3<f32>,
@@ -45,22 +48,39 @@ fn rf_support_interval(
     t0: f32,
     t1: f32,
 ) -> vec2<f32> {
-    if (!rf_is_bounded()) {
-        return vec2<f32>(t0, t1);
+    var clipped = vec2<f32>(t0, t1);
+    if (rf_is_bounded()) {
+        let oc = ray_origin - center;
+        let a = dot(ray_dir, ray_dir);
+        if (a <= 0.0) {
+            return vec2<f32>(t0, t0);
+        }
+        let b = dot(oc, ray_dir);
+        let c = dot(oc, oc) - radius * radius;
+        let discriminant = b * b - a * c;
+        if (discriminant <= 0.0) {
+            return vec2<f32>(t0, t0);
+        }
+        let root = sqrt(discriminant);
+        clipped = vec2<f32>(max(t0, (-b - root) / a), min(t1, (-b + root) / a));
     }
-    let oc = ray_origin - center;
-    let a = dot(ray_dir, ray_dir);
-    if (a <= 0.0) {
-        return vec2<f32>(t0, t0);
+    if (rf_is_oriented()) {
+        let normal = rf_get_surface_normal(cell);
+        let denominator = dot(ray_dir, normal);
+        if (abs(denominator) <= 1e-20) {
+            if (dot(ray_origin - center, normal) > 0.0) {
+                return vec2<f32>(t0, t0);
+            }
+        } else {
+            let surface_t = dot(center - ray_origin, normal) / denominator;
+            if (denominator > 0.0) {
+                clipped.y = min(clipped.y, surface_t);
+            } else {
+                clipped.x = max(clipped.x, surface_t);
+            }
+        }
     }
-    let b = dot(oc, ray_dir);
-    let c = dot(oc, oc) - radius * radius;
-    let discriminant = b * b - a * c;
-    if (discriminant <= 0.0) {
-        return vec2<f32>(t0, t0);
-    }
-    let root = sqrt(discriminant);
-    return vec2<f32>(max(t0, (-b - root) / a), min(t1, (-b + root) / a));
+    return clipped;
 }
 
 // Core Voronoi cell traversal
@@ -117,7 +137,7 @@ fn radfoam_trace(
         }
 
         let support = rf_support_interval(
-            ray_origin, ray_dir, current_pos, current_radius, t0, t1,
+            current, ray_origin, ray_dir, current_pos, current_radius, t0, t1,
         );
         let integration_begin = max(support.x, params.integration_start);
         if (support.y > integration_begin) {

@@ -37,6 +37,7 @@ fn make_model_without_adjacency(points: Vec<glam::Vec4>, sh_degree: usize) -> vo
         transforms: None,
         adjacency: None, // No adjacency - will be computed
         radii: None,
+        surface_normals: None,
     }
 }
 
@@ -177,6 +178,7 @@ fn ensure_adjacency_preserves_existing() {
         transforms: None,
         adjacency: Some(custom_adj),
         radii: None,
+        surface_normals: None,
     };
 
     // ensure_adjacency should NOT recompute

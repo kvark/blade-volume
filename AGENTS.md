@@ -67,12 +67,13 @@ Concrete deltas vs current RadFoam path:
 - **Per-point data**: `PointCloudModel.radii: Option<Vec<f32>>` carries the weight (done, M2a). PowerFoam also carries a rotation quat and a texel/spherical-Voronoi colour model — defer until after geometry is stable.
 - **Adjacency builder**: `adjacency::compute_cech` emits an edge `{i,j}` when `|p_i - p_j| ≤ r_i + r_j` (done, M2b). `PointCloudModel::compute_adjacency*` dispatches Čech vs Delaunay based on `radii.is_some()`. CSR storage is unchanged.
 - **Traversal**: WGSL `radfoam_trace.wgsl` uses the radical plane `shift = 0.5 + 0.5·(r_i² - r_j²)/|p_j - p_i|²` (done, M2c). The radius lives in the `.w` channel of `g_points`; unweighted clouds upload 0 and the formula degenerates to the bisector — no new bind-group entry, no fork.
+- **Oriented dipoles**: `PointCloudModel.surface_normals` optionally clips each bounded power cell to its retained surface half. PLY IO, CPU/WGSL traversal, analytical training Jacobians, PCA initialization, normal loss, densification, and resume are implemented (done, M2t). The Bonsai gate selects learned normals as opt-in but not as the default; full spatial appearance is still needed.
 - **PLY format**: per-vertex `property float radius` added to the RadFoam PLY reader/writer (done, M2a). Round-trips both binary and ASCII.
 - **Don't pull Python in**: keep PowerFoam adoption to a clean re-implementation in Rust/WGSL. Use the paper + their Warp kernels as a reference, not a dependency.
 
 Remaining work to fully cover the PowerFoam paper:
 1. Cross-validate against a PowerFoam checkpoint scene (M2d).
-2. Extend to the full PowerFoam appearance model (quaternion + texel sites + spherical-Voronoi colours).
+2. Extend to the remaining PowerFoam appearance model (quaternion + height/detail texel sites + spherical-Voronoi colours).
 
 ## Style
 

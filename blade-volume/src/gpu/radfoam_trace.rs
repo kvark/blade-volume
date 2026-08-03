@@ -40,6 +40,7 @@ struct TraceData {
     g_camera: CameraParams,
     g_params: TraceParams,
     g_points: gpu::BufferPiece,
+    g_surface_normals: gpu::BufferPiece,
     g_attributes: gpu::BufferPiece,
     g_adjacency: gpu::BufferPiece,
     g_adjacency_offsets: gpu::BufferPiece,
@@ -84,7 +85,7 @@ impl RadFoamGpuTracer {
             debug_mode: settings.debug_cell_density as u32,
             align_pad: [0; 3],
             power_foam: cloud.is_power_foam as u32,
-            size_pad: [0; 3],
+            size_pad: [cloud.is_oriented as u32, 0, 0],
         };
         Self {
             cloud,
@@ -113,6 +114,7 @@ impl RadFoamGpuTracer {
                 g_camera: camera,
                 g_params: self.params,
                 g_points: self.cloud.points(),
+                g_surface_normals: self.cloud.surface_normals(),
                 g_attributes: self.cloud.attributes(),
                 g_adjacency: self.cloud.point_adjacency(),
                 g_adjacency_offsets: self.cloud.point_adjacency_offsets(),

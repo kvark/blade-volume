@@ -645,13 +645,16 @@ At the audited revision:
   14.95 dB held out with effectively identical edges and runtime. It is not
   landed; learned orientation plus spatial texel appearance, not split direction
   alone, is the remaining reference-semantic hypothesis.
-- Clipping each support with a fixed adjacency-derived surface plane is also
-  negative. The existing endpoint falls from 17.23/16.41 to 12.99/12.62 dB
-  train/all-37 zero-shot; a complete 2,040-step density/SH-only refit recovers
-  to 16.38/15.64 dB but remains 0.77 dB behind held out and visibly introduces
-  fine speckle. The prototype is not landed. The reference plane is coupled to
-  learned orientation, per-cell spatial texels, height offsets, and normal loss;
-  isolating a fixed PCA plane does not justify expanding the public model.
+- Fixed adjacency-derived surface planes are negative, but learnable dipoles
+  recover most of that loss. The exact implementation persists optional
+  per-site normals, clips CPU and every WGSL traversal path to the retained
+  half-cell, differentiates the active plane, and trains normalized normals
+  with the decaying view-facing loss. On a 2,040-step 200K-site Bonsai refit,
+  learned normals improve fixed planes from 16.4490/15.6958 to
+  17.0258/16.1830 dB train/all-37 and improve every held-out frame. The
+  unoriented endpoint remains ahead at 17.2334/16.4105 dB, and visible support
+  discs and speckle remain. The feature therefore lands opt-in; it does not
+  replace the default or establish the full appearance model.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -659,9 +662,10 @@ At the audited revision:
   geometry rates, and Adam epsilon, so it remains opt-in rather than a default.
 - No official pretrained checkpoint is published by the reference project, so
   cross-rendering and a matched training ablation remain outstanding.
-- The reference quaternion, texel-site, and spherical-Voronoi appearance model
-  remains intentionally deferred until weighted geometry is validated on a
-  real scene.
+- The reference quaternion, height/detail-site, and spherical-Voronoi colour
+  model remains outstanding. Learned dipole normals now pass a real-scene
+  causal gate, so spatial appearance is the next reference-semantic experiment
+  rather than another increase in identical site count or training duration.
 
 ### Adjacency and traversal
 
@@ -1260,9 +1264,11 @@ with no systematic streaking from stale topology.
 
 Items 1-5 are implemented at the CPU-oracle, production-WGSL, recorder, and
 training-graph levels and pass physical-GPU integration. Weighted densification
-uses the reference copied-radius split policy, and a real-scene radius-learning
-ablation is positive through step 6,000. Its full endpoint plus items 6-7
-remain.
+uses the reference copied-radius split policy, and the selected real-scene
+radius trajectory reaches its 200,000-site endpoint. The dipole-normal subset
+of item 7 is implemented across IO, traversal, training, densification, and
+resume and passes a positive fixed-versus-learned Bonsai gate. Item 6 and the
+quaternion/detail-site/spherical-Voronoi remainder of item 7 remain.
 
 Acceptance gate: CPU, GPU, and brute-force bounded traversal agree; a reference
 checkpoint renders within a defined image tolerance; trained radii improve a
@@ -1474,7 +1480,11 @@ material path.
    17.4151/16.5247 dB with 8,328,306 edges at step 20,000. The 256² comparisons
    still show large support discs, holes, blurred thin structure, and background
    floaters, so the production gate remains open. Revisit cloud support and
-   spatial appearance semantics rather than adding more identical steps.)
+   spatial appearance semantics rather than adding more identical steps. The
+   first oriented-dipole gate is now complete: learned normals add 0.4872 dB
+   over fixed PCA planes on all 37 held-out views, but remain 0.2275 dB below
+   the unoriented endpoint. Keep them opt-in and proceed to spatial texel
+   appearance rather than making dipole clipping the default.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and

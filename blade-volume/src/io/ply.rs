@@ -352,6 +352,7 @@ pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
         transforms: Some(crate::Transforms { rotations, scales }),
         adjacency: None,
         radii: None,
+        surface_normals: None,
     };
     model
         .validate()

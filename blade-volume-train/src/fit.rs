@@ -331,6 +331,7 @@ mod tests {
             transforms: None,
             adjacency: None,
             radii: None,
+            surface_normals: None,
         };
         let mut g = mn::Graph::new();
         let _node = sh_coefficients_as_parameter(&mut g, &model);

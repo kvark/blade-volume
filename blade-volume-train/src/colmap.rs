@@ -684,6 +684,7 @@ impl Reconstruction {
             transforms: None,
             adjacency: None,
             radii: None,
+            surface_normals: None,
         }
     }
 

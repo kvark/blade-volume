@@ -89,6 +89,12 @@ pub struct WeightedPathGraph {
     pub dt_grad_previous: mn::NodeId,
     pub dt_grad_current: mn::NodeId,
     pub dt_grad_next: mn::NodeId,
+    /// Raw per-site oriented surface normals, normalized in the graph.
+    pub surface_normals: Option<mn::NodeId>,
+    /// Recorder derivative with respect to the selected site's unit normal.
+    pub dt_grad_surface_normal: Option<mn::NodeId>,
+    /// Per-step scale for PowerFoam's view-facing normal regularizer.
+    pub surface_normal_loss_scale: Option<mn::NodeId>,
 }
 
 /// SH-component name suffix, e.g. `parameter_name("sh_r", 0)` → `"sh_r"`,
@@ -265,6 +271,7 @@ pub fn build_volumetric_graph(
     softplus_beta: f32,
     background_rgb: [f32; 3],
     use_recorded_dt: bool,
+    use_surface_normals: bool,
     collect_point_error: bool,
     color_loss_kind: ColorLoss,
 ) -> VolumetricGraph {
@@ -287,6 +294,10 @@ pub fn build_volumetric_graph(
         !collect_point_error || use_recorded_dt,
         "point-error collection is only defined for weighted splats",
     );
+    assert!(
+        !use_surface_normals || use_recorded_dt,
+        "oriented surfaces require weighted recorded paths",
+    );
     let p = n_pixels;
     let l = max_steps;
     let pl = p * l;
@@ -297,12 +308,19 @@ pub fn build_volumetric_graph(
     let recorded_dt = g.input("recorded_dt", &[pl]);
     let mask = g.input("mask", &[pl]);
     let weighted_inputs = use_recorded_dt.then(|| {
+        let surface_inputs = use_surface_normals.then(|| {
+            (
+                g.input("dt_grad_surface_normal", &[pl, 4]),
+                g.input("surface_normal_loss_scale", &[1, 1]),
+            )
+        });
         (
             g.input("dt_reference_tangent", &[pl]),
             g.input_u32("previous_cell_indices", &[pl]),
             g.input("dt_grad_previous", &[pl, 4]),
             g.input("dt_grad_current", &[pl, 4]),
             g.input("dt_grad_next", &[pl, 4]),
+            surface_inputs,
         )
     });
     // Target is fed as [1, P*3] to match meganeura's "batch × dim" convention
@@ -342,6 +360,13 @@ pub fn build_volumetric_graph(
     let log_density = g.parameter("log_density", &[n_cells, 1]);
     let positions = g.parameter("positions", &[n_cells, 3]);
     let log_radii = use_recorded_dt.then(|| g.parameter("log_radii", &[n_cells, 1]));
+    let surface_normals =
+        use_surface_normals.then(|| g.parameter("surface_normals", &[n_cells, 3]));
+    let normalized_surface_normals = surface_normals.map(|normals| {
+        let unit_scale = 1.0_f32 / 3.0_f32.sqrt();
+        let weight = g.constant(vec![unit_scale; 3], &[3]);
+        g.rms_norm(normals, weight, 1.0e-12)
+    });
     let weighted_path = weighted_inputs.map(
         |(
             dt_reference_tangent,
@@ -349,7 +374,12 @@ pub fn build_volumetric_graph(
             dt_grad_previous,
             dt_grad_current,
             dt_grad_next,
+            surface_inputs,
         )| {
+            let (dt_grad_surface_normal, surface_normal_loss_scale) = surface_inputs
+                .map_or((None, None), |(gradient, scale)| {
+                    (Some(gradient), Some(scale))
+                });
             WeightedPathGraph {
                 log_radii: log_radii.unwrap(),
                 dt_reference_tangent,
@@ -357,6 +387,9 @@ pub fn build_volumetric_graph(
                 dt_grad_previous,
                 dt_grad_current,
                 dt_grad_next,
+                surface_normals,
+                dt_grad_surface_normal,
+                surface_normal_loss_scale,
             }
         },
     );
@@ -527,6 +560,18 @@ pub fn build_volumetric_graph(
         );
         let entry_and_current = g.add(previous_term, current_term);
         let linear_terms = g.add(entry_and_current, next_term);
+        let linear_terms = match (normalized_surface_normals, weighted.dt_grad_surface_normal) {
+            (Some(normals), Some(recorded_gradient)) => {
+                let step_normals = g.embedding(cell_indices, normals);
+                let gradient_xyz_flat = g.split_a(recorded_gradient, pl as u32, 3, 1, 1);
+                let gradient_xyz = g.reshape(gradient_xyz_flat, &[pl, 3]);
+                let product = g.mul(step_normals, gradient_xyz);
+                let normal_term = g.sum_inner(product);
+                g.add(linear_terms, normal_term)
+            }
+            (None, None) => linear_terms,
+            _ => unreachable!("oriented path graph inputs must be declared together"),
+        };
         let reference_tangent = g.reshape(weighted.dt_reference_tangent, &[pl, 1]);
         let neg_reference_tangent = g.neg(reference_tangent);
         let tangent_delta = g.add(linear_terms, neg_reference_tangent);
@@ -572,6 +617,33 @@ pub fn build_volumetric_graph(
     // A padded step has masked `dt = 0`, hence `raw = 0`, `alpha = 0`, and
     // `weight = 0`; another path-mask multiplication here would be redundant.
     let weight = g.mul(t, alpha);
+
+    // PowerFoam dipoles should face the camera. Penalize the normal-facing
+    // half-cell when it points along the camera ray: mean over rays of
+    // `sum_segments(T * alpha * max(dot(normal, ray_dir), 0)^2)`.
+    let surface_normal_loss = match (
+        normalized_surface_normals,
+        weighted_path
+            .as_ref()
+            .and_then(|weighted| weighted.surface_normal_loss_scale),
+    ) {
+        (Some(normals), Some(scale)) => {
+            let step_normals = g.embedding(cell_indices, normals);
+            let normal_ray_product = g.mul(step_normals, ray_dir_pl);
+            let normal_ray_dot_flat = g.sum_inner(normal_ray_product);
+            let normal_ray_dot = g.reshape(normal_ray_dot_flat, &[p, l]);
+            let facing = g.relu(normal_ray_dot);
+            let facing_squared = g.mul(facing, facing);
+            let weighted_facing = g.mul(weight, facing_squared);
+            let sum = g.sum_all(weighted_facing);
+            let sum_2d = g.reshape(sum, &[1, 1]);
+            let mean_scale = g.constant(vec![1.0_f32 / p as f32], &[1, 1]);
+            let mean = g.mul(sum_2d, mean_scale);
+            Some(g.mul(mean, scale))
+        }
+        (None, None) => None,
+        _ => unreachable!("oriented normal parameter and loss scale must be declared together"),
+    };
 
     // Per-channel pixel: pixel_c = (weight * color_c) @ ones_L
     let ones_l1 = g.constant(vec![1.0; l], &[l, 1]);
@@ -808,6 +880,15 @@ pub fn build_volumetric_graph(
         g.reshape(total, &[1])
     } else {
         loss
+    };
+
+    let loss = match surface_normal_loss {
+        Some(normal_loss) => {
+            let base = g.reshape(loss, &[1, 1]);
+            let total = g.add(base, normal_loss);
+            g.reshape(total, &[1])
+        }
+        None => loss,
     };
 
     let (loss, point_error_probe) = match point_error {
@@ -1392,6 +1473,14 @@ pub struct AppearanceFitConfig {
     /// must remain zero for unweighted clouds. Like position optimization, a
     /// positive value requires periodic geometry rebuilds.
     pub radius_lr_ratio: f32,
+    /// Oriented PowerFoam surface-normal learning rate as a fraction of the
+    /// global rate. Under [`LrSchedule::RadFoamV1`] it instead scales the
+    /// official `0.1 → 0.01` orientation schedule. `0.0` freezes orientation.
+    pub surface_normal_lr_ratio: f32,
+    /// Initial weight of PowerFoam's view-facing normal regularizer. It
+    /// decays exponentially to one tenth of this value over training. `0.0`
+    /// disables the term; the reference uses `0.1`.
+    pub surface_normal_weight: f32,
     /// Minimum PowerFoam sphere-candidate row capacity. Zero selects the
     /// automatic `max(4 * max_steps, 1024)` budget. This remains independent
     /// of the shorter surviving path/Jacobian row.
@@ -1540,6 +1629,8 @@ impl Default for AppearanceFitConfig {
             background_rgb: [0.0; 3],
             position_lr_ratio: 0.0,
             radius_lr_ratio: 0.0,
+            surface_normal_lr_ratio: 0.0,
+            surface_normal_weight: 0.0,
             powerfoam_candidate_capacity: 0,
             geometry_rebuild_every: 0,
             geometry_rebuild_schedule: GeometryRebuildSchedule::Fixed,
@@ -1617,6 +1708,18 @@ fn interpenetration_weight_at_step(initial: f32, step: usize, total_steps: usize
         step.min(total_steps - 1) as f32 / (total_steps - 1) as f32
     };
     initial * 1.0e-3_f32.powf(phase)
+}
+
+fn surface_normal_weight_at_step(initial: f32, step: usize, total_steps: usize) -> f32 {
+    if initial == 0.0 {
+        return 0.0;
+    }
+    let phase = if total_steps <= 1 {
+        0.0
+    } else {
+        step.min(total_steps - 1) as f32 / (total_steps - 1) as f32
+    };
+    initial * 0.1_f32.powf(phase)
 }
 
 struct InterpenetrationBatch {
@@ -1814,6 +1917,7 @@ fn configure_optimizer(
                 config.adam_beta2,
                 config.adam_eps,
             );
+            session.set_lr_multiplier("surface_normals", config.surface_normal_lr_ratio);
         }
         LrSchedule::RadFoamV1 => {
             let rates = radfoam_v1_lrs(step, total_steps);
@@ -1823,6 +1927,11 @@ fn configure_optimizer(
             set_sh_lr_multipliers(session, config.sh_degree, rates.sh_dc, rates.sh_rest);
             session.set_lr_multiplier("exposure_", 0.0);
             session.set_lr_multiplier("log_radii", 0.0);
+            let surface_rate = radfoam_cosine_lr(step, total_steps, 0.1, 0.01, 0, total_steps);
+            session.set_lr_multiplier(
+                "surface_normals",
+                surface_rate * config.surface_normal_lr_ratio,
+            );
         }
     }
 }
@@ -2223,11 +2332,28 @@ pub(crate) fn fit_appearance_multi_view_outcome(
         "radius_lr_ratio must be finite and non-negative"
     );
     assert!(
+        config.surface_normal_lr_ratio.is_finite() && config.surface_normal_lr_ratio >= 0.0,
+        "surface_normal_lr_ratio must be finite and non-negative"
+    );
+    assert!(
+        config.surface_normal_weight.is_finite() && config.surface_normal_weight >= 0.0,
+        "surface_normal_weight must be finite and non-negative"
+    );
+    assert!(
         config.radius_lr_ratio == 0.0 || model.radii.is_some(),
         "radius optimisation requires a weighted cloud"
     );
+    assert!(
+        config.surface_normal_lr_ratio == 0.0 || model.surface_normals.is_some(),
+        "surface-normal optimisation requires an oriented PowerFoam cloud"
+    );
+    assert!(
+        config.surface_normal_weight == 0.0 || model.surface_normals.is_some(),
+        "surface-normal loss requires an oriented PowerFoam cloud"
+    );
     let geometry_requested = config.position_lr_ratio > 0.0
         || config.radius_lr_ratio > 0.0
+        || config.surface_normal_lr_ratio > 0.0
         || config.lr_groups == LrGroups::RadFoamV1Relative
         || config.lr_schedule == LrSchedule::RadFoamV1;
     assert!(
@@ -2357,6 +2483,13 @@ fn upload_model_parameters(
             .map(|&radius| inv_radius_activation(radius))
             .collect();
         session.set_parameter("log_radii", &init_radii);
+    }
+    if let Some(ref normals) = model.surface_normals {
+        let mut init_normals = Vec::with_capacity(n_cells * 3);
+        for &normal in normals {
+            init_normals.extend_from_slice(&normal.normalize().to_array());
+        }
+        session.set_parameter("surface_normals", &init_normals);
     }
 
     // `model.sh_coefficients` layout (lib.rs spec):
@@ -2676,6 +2809,16 @@ fn download_model_geometry(session: &mn::Session, model: &mut vol::PointCloudMod
             *radius = radius_activation(raw);
         }
     }
+    if let Some(ref mut normals) = model.surface_normals {
+        let mut out_normals = vec![0.0_f32; n_cells * 3];
+        session.read_param("surface_normals", &mut out_normals);
+        for (normal, values) in normals.iter_mut().zip(out_normals.chunks_exact(3)) {
+            *normal = glam::Vec3::from_slice(values).normalize_or_zero();
+            if *normal == glam::Vec3::ZERO {
+                *normal = glam::Vec3::Z;
+            }
+        }
+    }
 }
 
 fn download_model_parameters(
@@ -2953,6 +3096,13 @@ fn collect_path_contributions(
                     transfer.fill_buffer(buffers.dt_grad_previous.at(0), path_bytes * 4, 0);
                     transfer.fill_buffer(buffers.dt_grad_current.at(0), path_bytes * 4, 0);
                     transfer.fill_buffer(buffers.dt_grad_next.at(0), path_bytes * 4, 0);
+                    if model.surface_normals.is_some() {
+                        transfer.fill_buffer(
+                            buffers.dt_grad_surface_normal.at(0),
+                            path_bytes * 4,
+                            0,
+                        );
+                    }
                 }
             }
             recorder.dispatch(
@@ -3049,10 +3199,10 @@ fn collect_path_contributions(
 ///    RadFoam uses `position_gradient × cell_radius`; weighted PowerFoam uses
 ///    its per-site photometric-error EMA directly. Unweighted children sit
 ///    0.25× toward the parent's farthest neighbour plus a small random kick.
-///    Weighted parent and child sites each move by 0.05× the copied support
-///    radius, adapting PowerFoam's reference resampling to the current
-///    normal-free SH model.
-///    Density, appearance, radius, and optimizer ancestry are inherited.
+///    Both weighted duplicate siblings move by 0.05× the copied support
+///    radius; oriented siblings move tangent to the inherited normal,
+///    matching PowerFoam.
+///    Density, appearance, radius, normal, and optimizer ancestry are inherited.
 ///
 /// Returns `(new_to_old, pruned, added)`: `new_to_old[j]` is the OLD cell
 /// index whose Adam (m,v) the rebuilt cell `j` should inherit (survivor →
@@ -3168,12 +3318,30 @@ fn prune_and_densify(
             break value / length_squared.sqrt();
         }
     };
+    let split_offset = |oi: usize, next_unit: &mut dyn FnMut() -> f32| {
+        let random = random_unit(next_unit);
+        let direction = match model.surface_normals.as_ref() {
+            Some(normals) => {
+                let normal = normals[oi].normalize();
+                let tangent = random - random.dot(normal) * normal;
+                tangent
+                    .try_normalize()
+                    .unwrap_or_else(|| normal.any_orthonormal_vector())
+            }
+            None => random,
+        };
+        direction * (0.05 * cell_radius[oi].max(1.0e-5))
+    };
 
     // --- Rebuild model arrays: survivors compacted, then children ---
     let n_new = n_surv + added;
     let mut new_points = Vec::with_capacity(n_new);
     let mut new_sh = Vec::with_capacity(n_new * sh_block);
     let mut new_radii = model.radii.as_ref().map(|_| Vec::with_capacity(n_new));
+    let mut new_surface_normals = model
+        .surface_normals
+        .as_ref()
+        .map(|_| Vec::with_capacity(n_new));
     let mut new_transforms = model.transforms.as_ref().map(|_| vol::Transforms {
         rotations: Vec::with_capacity(n_new),
         scales: Vec::with_capacity(n_new),
@@ -3182,7 +3350,7 @@ fn prune_and_densify(
     for &oi in &survivors {
         let mut point = model.points[oi];
         if weighted && is_split_parent[oi] {
-            let offset = random_unit(&mut next_unit) * (0.05 * cell_radius[oi].max(1.0e-5));
+            let offset = split_offset(oi, &mut next_unit);
             point.x += offset.x;
             point.y += offset.y;
             point.z += offset.z;
@@ -3191,6 +3359,9 @@ fn prune_and_densify(
         new_sh.extend_from_slice(&model.sh_coefficients[oi * sh_block..(oi + 1) * sh_block]);
         if let Some(ref mut radii) = new_radii {
             radii.push(model.radii.as_ref().unwrap()[oi]);
+        }
+        if let Some(ref mut normals) = new_surface_normals {
+            normals.push(model.surface_normals.as_ref().unwrap()[oi]);
         }
         if let Some(ref mut transforms) = new_transforms {
             let old = model.transforms.as_ref().unwrap();
@@ -3203,7 +3374,7 @@ fn prune_and_densify(
         let oi = survivors[local];
         let p = model.points[oi];
         let off = if weighted {
-            random_unit(&mut next_unit) * (0.05 * cell_radius[oi].max(1.0e-5))
+            split_offset(oi, &mut next_unit)
         } else {
             let pf = model.points[farthest[oi]];
             let toward = glam::Vec3::new(pf.x - p.x, pf.y - p.y, pf.z - p.z) * 0.25;
@@ -3216,6 +3387,9 @@ fn prune_and_densify(
         if let Some(ref mut radii) = new_radii {
             radii.push(model.radii.as_ref().unwrap()[oi]);
         }
+        if let Some(ref mut normals) = new_surface_normals {
+            normals.push(model.surface_normals.as_ref().unwrap()[oi]);
+        }
         if let Some(ref mut transforms) = new_transforms {
             let old = model.transforms.as_ref().unwrap();
             transforms.rotations.push(old.rotations[oi]);
@@ -3226,6 +3400,7 @@ fn prune_and_densify(
     model.points = new_points;
     model.sh_coefficients = new_sh;
     model.radii = new_radii;
+    model.surface_normals = new_surface_normals;
     model.transforms = new_transforms;
     model.adjacency = None;
     (new_to_old, pruned, added)
@@ -3237,12 +3412,16 @@ fn prune_and_densify(
 fn per_cell_param_names_with_stride(
     sh_degree: usize,
     has_radii: bool,
+    has_surface_normals: bool,
     has_point_error: bool,
 ) -> Vec<(String, usize)> {
     let num_components = (1 + sh_degree) * (1 + sh_degree);
     let mut names = vec![("log_density".to_string(), 1), ("positions".to_string(), 3)];
     if has_radii {
         names.push(("log_radii".to_string(), 1));
+    }
+    if has_surface_normals {
+        names.push(("surface_normals".to_string(), 3));
     }
     if has_point_error {
         names.push((POINT_ERROR_PROBE.to_string(), 1));
@@ -3291,9 +3470,15 @@ fn save_adam_state(
     n_cells: usize,
     num_views: usize,
     has_radii: bool,
+    has_surface_normals: bool,
     has_point_error: bool,
 ) -> AdamSnapshot {
-    let names = per_cell_param_names_with_stride(sh_degree, has_radii, has_point_error);
+    let names = per_cell_param_names_with_stride(
+        sh_degree,
+        has_radii,
+        has_surface_normals,
+        has_point_error,
+    );
     let mut entries = Vec::with_capacity(names.len());
     for (name, stride) in names {
         let size = n_cells * stride;
@@ -3343,10 +3528,16 @@ fn restore_adam_state_remap(
     new_to_old: &[usize],
     sh_degree: usize,
     has_radii: bool,
+    has_surface_normals: bool,
     has_point_error: bool,
 ) {
     let n_new = new_to_old.len();
-    let names = per_cell_param_names_with_stride(sh_degree, has_radii, has_point_error);
+    let names = per_cell_param_names_with_stride(
+        sh_degree,
+        has_radii,
+        has_surface_normals,
+        has_point_error,
+    );
     debug_assert_eq!(names.len(), snap.entries.len());
     let n_old = snap
         .entries
@@ -3439,6 +3630,7 @@ fn build_train_session(
     lr_groups: LrGroups,
     position_lr_ratio: f32,
     radius_lr_ratio: f32,
+    surface_normal_lr_ratio: f32,
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
@@ -3458,6 +3650,7 @@ fn build_train_session(
         softplus_beta,
         background_rgb,
         model.radii.is_some(),
+        model.surface_normals.is_some(),
         collect_point_error,
         color_loss,
     );
@@ -3531,6 +3724,20 @@ fn build_train_session(
                 .bind_external_buffer(meganeura::ExternalSlot::Input(slot), source, size)
                 .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
         }
+        if model.surface_normals.is_some() {
+            let source = gpu
+                .get_external_buffer_source(path_bufs.dt_grad_surface_normal)
+                .expect("surface-normal path buffer must be exportable");
+            session
+                .bind_external_buffer(
+                    meganeura::ExternalSlot::Input("dt_grad_surface_normal"),
+                    source,
+                    pl_bytes * 4,
+                )
+                .unwrap_or_else(|err| {
+                    panic!("bind_external_buffer(dt_grad_surface_normal) failed: {err:?}")
+                });
+        }
     }
 
     session.set_adam(lr, betas.0, betas.1, betas.2);
@@ -3544,6 +3751,9 @@ fn build_train_session(
     session.set_lr_multiplier("positions", multipliers.position);
     if model.radii.is_some() {
         session.set_lr_multiplier("log_radii", radius_lr_ratio);
+    }
+    if model.surface_normals.is_some() {
+        session.set_lr_multiplier("surface_normals", surface_normal_lr_ratio);
     }
     if collect_point_error {
         session.set_parameter(POINT_ERROR_PROBE, &vec![0.0; n_cells]);
@@ -3793,10 +4003,11 @@ fn fit_appearance_pixel_batched(
     // preserved through the warmup → first-densify transition. They're
     // only torn down and rebuilt when a split actually changes the cell
     // count.
-    let geometry_trainable = config.position_lr_ratio > 0.0
+    let topology_trainable = config.position_lr_ratio > 0.0
         || config.radius_lr_ratio > 0.0
         || config.lr_groups == LrGroups::RadFoamV1Relative
         || config.lr_schedule == LrSchedule::RadFoamV1;
+    let geometry_trainable = topology_trainable || config.surface_normal_lr_ratio > 0.0;
     let mut topology_cadence = match config.geometry_rebuild_schedule {
         GeometryRebuildSchedule::Fixed => TopologyCadenceState::disabled(),
         GeometryRebuildSchedule::RadFoamV1 => match config.resume_training_state {
@@ -3904,6 +4115,7 @@ fn fit_appearance_pixel_batched(
         config.lr_groups,
         config.position_lr_ratio,
         config.radius_lr_ratio,
+        config.surface_normal_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
     );
     if let Some(ref state_path) = config.resume_state_path {
@@ -4118,6 +4330,9 @@ fn fit_appearance_pixel_batched(
                     tx.fill_buffer(path_bufs.dt_grad_previous.at(0), pl_bytes * 4, 0);
                     tx.fill_buffer(path_bufs.dt_grad_current.at(0), pl_bytes * 4, 0);
                     tx.fill_buffer(path_bufs.dt_grad_next.at(0), pl_bytes * 4, 0);
+                    if model.surface_normals.is_some() {
+                        tx.fill_buffer(path_bufs.dt_grad_surface_normal.at(0), pl_bytes * 4, 0);
+                    }
                 }
             }
             record_args.clear();
@@ -4167,6 +4382,11 @@ fn fit_appearance_pixel_batched(
                     total_steps,
                     config.interpenetration_weight,
                 );
+            }
+            if model.surface_normals.is_some() {
+                let normal_weight =
+                    surface_normal_weight_at_step(config.surface_normal_weight, step, total_steps);
+                session.set_input("surface_normal_loss_scale", &[normal_weight]);
             }
             // Reconfigure Adam and any parameter-specific multipliers for the
             // current global step. This is a cheap session-field update.
@@ -4284,23 +4504,32 @@ fn fit_appearance_pixel_batched(
                     n_old,
                     views.len(),
                     model.radii.is_some(),
+                    model.surface_normals.is_some(),
                     collect_powerfoam_point_error,
                 );
                 phase_timings.state_readback += state_readback_start.elapsed();
 
-                // The reference performs a scheduled topology refresh before
-                // collecting its densification statistics. Preserve that
-                // operation order when both boundaries coincide: the current
-                // positions must not be paired with the previous GPU cloud or
-                // previous farthest-neighbour relationships.
+                // Refresh trainable geometry before collecting densification
+                // statistics. Moving positions/radii also require exact
+                // adjacency; changing only orientation does not.
                 if topology_schedule_due {
-                    let topology_start = std::time::Instant::now();
-                    rebuild_training_adjacency(model, config.rebuild_with_qhull);
-                    phase_timings.topology += topology_start.elapsed();
+                    if topology_trainable {
+                        let topology_start = std::time::Instant::now();
+                        rebuild_training_adjacency(model, config.rebuild_with_qhull);
+                        phase_timings.topology += topology_start.elapsed();
+                    }
                     if d.prune {
                         let resource_rebuild_start = std::time::Instant::now();
-                        gpu_cloud.deinit(&gpu);
-                        gpu_cloud = build_training_gpu_cloud(model, &gpu);
+                        if topology_trainable {
+                            gpu_cloud.deinit(&gpu);
+                            gpu_cloud = build_training_gpu_cloud(model, &gpu);
+                        } else {
+                            gpu_cloud.update_surface_normals(
+                                model.surface_normals.as_deref().unwrap(),
+                                &gpu,
+                                &mut record_encoder,
+                            );
+                        }
                         phase_timings.resource_rebuild += resource_rebuild_start.elapsed();
                     }
                     log::info!(
@@ -4458,6 +4687,7 @@ fn fit_appearance_pixel_batched(
                     config.lr_groups,
                     config.position_lr_ratio,
                     config.radius_lr_ratio,
+                    config.surface_normal_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
                 );
                 session = rebuilt.0;
@@ -4476,6 +4706,7 @@ fn fit_appearance_pixel_batched(
                     &new_to_old,
                     sh_degree,
                     model.radii.is_some(),
+                    model.surface_normals.is_some(),
                     collect_powerfoam_point_error,
                 );
                 session.set_adam_step_count(adam_snap.t);
@@ -4487,11 +4718,12 @@ fn fit_appearance_pixel_batched(
             }
         }
 
-        // Weighted interval Jacobians and the unweighted discrete cell walk
-        // are local to the current geometry snapshot. At the configured
-        // cadence, download moved positions/radii, rebuild exact topology, and
-        // recreate traversal resources. The final cycle only needs the
-        // host-side refresh because no further optimizer step will run.
+        // Interval Jacobians and the discrete cell walk are local to the
+        // current geometry snapshot. At the configured cadence, download the
+        // trainable geometry and recreate traversal resources. Moving
+        // positions/radii additionally requires exact adjacency; changing
+        // only orientation does not. The final cycle only needs the host-side
+        // refresh because no further optimizer step will run.
         let geometry_due =
             geometry_trainable && (topology_schedule_due || steps_done == invocation_end);
         if geometry_due && !topology_rebuilt {
@@ -4501,7 +4733,7 @@ fn fit_appearance_pixel_batched(
             if continuing {
                 // The Meganeura graph and its external path buffers do not
                 // depend on adjacency. Only the path recorder needs current
-                // positions/radii for the next discrete walk, so keep the
+                // traversal geometry for the next discrete walk, so keep the
                 // live session and Adam state in place instead of copying all
                 // appearance parameters and moments through uncached shared
                 // memory just to recreate an identical graph.
@@ -4511,23 +4743,40 @@ fn fit_appearance_pixel_batched(
                 model_parameters_current = true;
             }
             phase_timings.state_readback += state_readback_start.elapsed();
-            let topology_start = std::time::Instant::now();
-            rebuild_training_adjacency(model, config.rebuild_with_qhull);
-            if let Some(ref mut batch) = interpenetration_batch {
-                batch.rebuild(model);
+            if topology_trainable {
+                let topology_start = std::time::Instant::now();
+                rebuild_training_adjacency(model, config.rebuild_with_qhull);
+                if let Some(ref mut batch) = interpenetration_batch {
+                    batch.rebuild(model);
+                }
+                phase_timings.topology += topology_start.elapsed();
+                log::info!(
+                    "geometry cycle {}: rebuilt adjacency for {} moved points at step {}",
+                    cycle,
+                    n_cells,
+                    steps_done,
+                );
+            } else {
+                log::info!(
+                    "geometry cycle {}: refreshed orientation for {} points at step {}",
+                    cycle,
+                    n_cells,
+                    steps_done,
+                );
             }
-            phase_timings.topology += topology_start.elapsed();
-            log::info!(
-                "geometry cycle {}: rebuilt adjacency for {} moved points at step {}",
-                cycle,
-                n_cells,
-                steps_done,
-            );
 
             if continuing {
                 let resource_rebuild_start = std::time::Instant::now();
-                gpu_cloud.deinit(&gpu);
-                gpu_cloud = build_training_gpu_cloud(model, &gpu);
+                if topology_trainable {
+                    gpu_cloud.deinit(&gpu);
+                    gpu_cloud = build_training_gpu_cloud(model, &gpu);
+                } else {
+                    gpu_cloud.update_surface_normals(
+                        model.surface_normals.as_deref().unwrap(),
+                        &gpu,
+                        &mut record_encoder,
+                    );
+                }
                 phase_timings.resource_rebuild += resource_rebuild_start.elapsed();
             }
         }
@@ -4983,6 +5232,7 @@ mod tests {
             transforms: None,
             adjacency: None,
             radii: None,
+            surface_normals: None,
             points,
         };
         m.compute_adjacency_default();
@@ -5061,7 +5311,7 @@ mod tests {
     }
 
     #[test]
-    fn weighted_densification_copies_radius_and_uses_small_support_scale_offsets() {
+    fn weighted_densification_perturbs_both_duplicate_siblings() {
         let mut model = tiny_model();
         model.radii = Some(vec![0.4, 0.3, 0.2, 0.1]);
         model.compute_adjacency_default();
@@ -5094,11 +5344,7 @@ mod tests {
         assert_eq!(radii, &[0.4, 0.3, 0.2, 0.1, 0.2]);
         for index in [parent, 4] {
             let point = model.points[index];
-            let offset = glam::Vec3::new(
-                point.x - parent_point.x,
-                point.y - parent_point.y,
-                point.z - parent_point.z,
-            );
+            let offset = (point - parent_point).truncate();
             assert!((offset.length() - 0.01).abs() < 1.0e-6);
             assert_eq!(point.w, parent_point.w);
             assert_eq!(
@@ -5108,6 +5354,43 @@ mod tests {
         }
         assert_ne!(model.points[parent], model.points[4]);
         assert!(model.adjacency.is_none());
+    }
+
+    #[test]
+    fn oriented_densification_offsets_both_siblings_in_the_surface_plane() {
+        let mut model = tiny_model();
+        model.radii = Some(vec![0.4, 0.3, 0.2, 0.1]);
+        let normal = glam::Vec3::new(0.2, -0.3, 1.0).normalize();
+        model.surface_normals = Some(vec![normal; model.points.len()]);
+        model.compute_adjacency_default();
+        let parent = 2;
+        let parent_point = model.points[parent];
+        let mut rng = 0x1234_5678_9ABC_DEF0;
+        let config = DensifyConfig {
+            fraction: 0.25,
+            target_points: 5,
+            prune: false,
+            ..DensifyConfig::default()
+        };
+
+        let (new_to_old, pruned, added) = prune_and_densify(
+            &mut model,
+            &[0.0, 0.0, 1.0e20, 0.0],
+            &[1.0; 4],
+            &config,
+            &mut rng,
+            0.0,
+        );
+
+        assert_eq!(new_to_old, [0, 1, 2, 3, 2]);
+        assert_eq!((pruned, added), (0, 1));
+        for index in [parent, 4] {
+            let offset = (model.points[index] - parent_point).truncate();
+            assert!((offset.length() - 0.01).abs() < 1.0e-6);
+            assert!(offset.dot(normal).abs() < 1.0e-6);
+        }
+        assert_eq!(model.surface_normals.as_ref().unwrap(), &vec![normal; 5]);
+        model.validate().unwrap();
     }
 
     #[test]
@@ -5189,6 +5472,7 @@ mod tests {
                 offsets: vec![0, 1, 3, 5, 6],
             }),
             radii: Some(vec![0.02; points.len()]),
+            surface_normals: None,
             points,
         };
         let config = DensifyConfig {
@@ -5236,6 +5520,7 @@ mod tests {
                 offsets: vec![0, 1, 3, 5, 6],
             }),
             radii: Some(vec![1.0; points.len()]),
+            surface_normals: None,
             points,
         };
         let config = DensifyConfig {
@@ -5259,17 +5544,20 @@ mod tests {
     #[test]
     fn per_cell_param_names_includes_positions_with_stride_3() {
         for sh_degree in 0..=3 {
-            let names = per_cell_param_names_with_stride(sh_degree, false, false);
+            let names = per_cell_param_names_with_stride(sh_degree, false, false, false);
             // Required entries:
             assert!(names.contains(&("log_density".to_string(), 1)));
             assert!(names.contains(&("positions".to_string(), 3)));
             // Total count: 1 (density) + 1 (positions) + 3 * (1+deg)² SH params.
             let num_components = (1 + sh_degree) * (1 + sh_degree);
             assert_eq!(names.len(), 2 + 3 * num_components);
-            let weighted_names = per_cell_param_names_with_stride(sh_degree, true, true);
+            let weighted_names = per_cell_param_names_with_stride(sh_degree, true, false, true);
             assert!(weighted_names.contains(&("log_radii".to_string(), 1)));
             assert!(weighted_names.contains(&(POINT_ERROR_PROBE.to_string(), 1)));
             assert_eq!(weighted_names.len(), names.len() + 2);
+            let oriented_names = per_cell_param_names_with_stride(sh_degree, true, true, true);
+            assert!(oriented_names.contains(&("surface_normals".to_string(), 3)));
+            assert_eq!(oriented_names.len(), names.len() + 3);
         }
     }
 
@@ -5298,6 +5586,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 ColorLoss::L1,
@@ -5338,9 +5627,35 @@ mod tests {
             [0.0; 3],
             true,
             false,
+            false,
             ColorLoss::L1,
         );
         assert!(vg.weighted_path.is_some());
+
+        let mut graph = mn::Graph::new();
+        let vg = build_volumetric_graph(
+            &mut graph,
+            16,
+            4,
+            3,
+            0,
+            2,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            true,
+            true,
+            false,
+            ColorLoss::L1,
+        );
+        let weighted = vg.weighted_path.unwrap();
+        assert!(weighted.surface_normals.is_some());
+        assert!(weighted.dt_grad_surface_normal.is_some());
+        assert!(weighted.surface_normal_loss_scale.is_some());
     }
 
     #[test]
@@ -5366,6 +5681,7 @@ mod tests {
             0.0,
             [0.0; 3],
             true,
+            false,
             true,
             ColorLoss::L1,
         );
@@ -5505,6 +5821,7 @@ mod tests {
             [0.0; 3],
             false,
             false,
+            false,
             ColorLoss::L1,
         );
         assert_eq!(vg.n_pixels, n_pixels);
@@ -5549,6 +5866,21 @@ mod tests {
     }
 
     #[test]
+    fn surface_normal_schedule_matches_reference_endpoints() {
+        let initial = 0.1;
+        assert_eq!(surface_normal_weight_at_step(0.0, 42, 100), 0.0);
+        assert_eq!(surface_normal_weight_at_step(initial, 0, 100), initial);
+        let final_weight = surface_normal_weight_at_step(initial, 99, 100);
+        assert!((final_weight - 0.01).abs() < 1.0e-7);
+        let midpoint = surface_normal_weight_at_step(initial, 50, 101);
+        assert!((midpoint - initial * 0.1_f32.sqrt()).abs() < 1.0e-7);
+        assert_eq!(
+            surface_normal_weight_at_step(initial, 1000, 100),
+            final_weight
+        );
+    }
+
+    #[test]
     fn interpenetration_sampling_is_stratified_and_resume_stable() {
         let points = (0..4)
             .map(|index| glam::Vec4::new(index as f32, 0.0, 0.0, 1.0))
@@ -5562,6 +5894,7 @@ mod tests {
                 offsets: vec![0, 1, 3, 5, 6],
             }),
             radii: Some(vec![1.0; points.len()]),
+            surface_normals: None,
             points,
         };
         let initial_weight = 1.0e-4;
@@ -6062,6 +6395,7 @@ mod tests {
             [0.0; 3],
             false,
             false,
+            false,
             ColorLoss::L1,
         );
 
@@ -6153,6 +6487,7 @@ mod tests {
             [0.0; 3],
             true,
             false,
+            false,
             ColorLoss::SmoothL1,
         );
         let (mut session, _) = mn::build(
@@ -6227,6 +6562,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            false,
             false,
             false,
             ColorLoss::L1,
@@ -6322,6 +6658,7 @@ mod tests {
         };
         let mut model = tiny_model();
         model.radii = Some(vec![1.0; model.points.len()]);
+        model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
         model.compute_adjacency_default();
         let n_cells = model.points.len();
         let mut g = mn::Graph::new();
@@ -6339,6 +6676,7 @@ mod tests {
             0.0,
             0.0,
             [0.0; 3],
+            true,
             true,
             false,
             ColorLoss::L1,
@@ -6362,8 +6700,11 @@ mod tests {
         session.set_input_u32("next_cell_indices", &[3]);
         session.set_input("dt_grad_previous", &[0.0; 4]);
         let current_jacobian = [0.25, -0.5, 0.75, 1.25];
+        let surface_normal_jacobian = [0.4, -0.2, 0.75, 0.0];
         session.set_input("dt_grad_current", &current_jacobian);
         session.set_input("dt_grad_next", &[0.0; 4]);
+        session.set_input("dt_grad_surface_normal", &surface_normal_jacobian);
+        session.set_input("surface_normal_loss_scale", &[0.0]);
         session.set_input("mask", &[1.0]);
         let ray_origin = [0.1, 0.1, -1.0];
         session.set_input("ray_origin", &ray_origin);
@@ -6377,16 +6718,23 @@ mod tests {
             .flat_map(|point| [point.x, point.y, point.z])
             .collect();
         let initial_radii = model.radii.as_deref().expect("fixture has radii");
-        let linear_term = |positions: &[f32], radii: &[f32]| {
+        let linear_term = |positions: &[f32], radii: &[f32], surface_normal: glam::Vec3| {
             current_jacobian[0] * (positions[0] - ray_origin[0])
                 + current_jacobian[1] * (positions[1] - ray_origin[1])
                 + current_jacobian[2] * (positions[2] - ray_origin[2])
                 + current_jacobian[3] * radii[0]
+                + surface_normal_jacobian[0] * surface_normal.x
+                + surface_normal_jacobian[1] * surface_normal.y
+                + surface_normal_jacobian[2] * surface_normal.z
         };
         session.set_input("recorded_dt", &[7.5]);
         session.set_input(
             "dt_reference_tangent",
-            &[linear_term(&initial_positions, initial_radii)],
+            &[linear_term(
+                &initial_positions,
+                initial_radii,
+                glam::Vec3::Z,
+            )],
         );
         session.set_adam(0.0, 0.9, 0.999, 1e-8);
         session.step();
@@ -6404,6 +6752,12 @@ mod tests {
         session.read_param_grad("log_radii", &mut radius_grad);
         assert!((radius_grad[0] - 1.25).abs() < 1.0e-4);
         assert!(radius_grad[1..].iter().all(|&value| value == 0.0));
+        let mut normal_grad = vec![0.0_f32; n_cells * 3];
+        session.read_param_grad("surface_normals", &mut normal_grad);
+        assert!((normal_grad[0] - 0.4).abs() < 1.0e-5);
+        assert!((normal_grad[1] + 0.2).abs() < 1.0e-5);
+        assert!(normal_grad[2].abs() < 1.0e-5);
+        assert!(normal_grad[3..].iter().all(|&value| value == 0.0));
 
         let mut moved_positions = initial_positions;
         moved_positions[0] += 2.0;
@@ -6413,22 +6767,117 @@ mod tests {
             .iter()
             .map(|&radius| inv_radius_activation(radius))
             .collect();
+        let moved_normal = glam::Vec3::new(0.3, 0.0, 1.0).normalize();
+        let mut moved_normals = vec![0.0_f32; n_cells * 3];
+        for values in moved_normals.chunks_exact_mut(3) {
+            values.copy_from_slice(glam::Vec3::Z.as_ref());
+        }
+        moved_normals[..3].copy_from_slice(moved_normal.as_ref());
         session.set_parameter("positions", &moved_positions);
         session.set_parameter("log_radii", &moved_log_radii);
+        session.set_parameter("surface_normals", &moved_normals);
         session.step();
         session.wait();
         let outputs = session.read_output(1);
-        assert!((outputs[0] - 8.5).abs() < 1.0e-5, "outputs={outputs:?}");
+        let expected = 8.5
+            + glam::Vec3::from_slice(&surface_normal_jacobian[..3])
+                .dot(moved_normal - glam::Vec3::Z);
+        assert!(
+            (outputs[0] - expected).abs() < 1.0e-5,
+            "outputs={outputs:?}, expected={expected}"
+        );
 
         session.set_input("recorded_dt", &[9.25]);
         session.set_input(
             "dt_reference_tangent",
-            &[linear_term(&moved_positions, &moved_radii)],
+            &[linear_term(&moved_positions, &moved_radii, moved_normal)],
         );
         session.step();
         session.wait();
         let outputs = session.read_output(1);
         assert!((outputs[0] - 9.25).abs() < 1.0e-5, "outputs={outputs:?}");
+    }
+
+    #[test]
+    fn surface_normal_loss_penalizes_normals_pointing_along_the_camera_ray() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping surface-normal loss test: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        model.radii = Some(vec![1.0; model.points.len()]);
+        model.surface_normals = Some(vec![-glam::Vec3::Z; model.points.len()]);
+        model.compute_adjacency_default();
+        let mut graph = mn::Graph::new();
+        build_volumetric_graph(
+            &mut graph,
+            model.points.len(),
+            1,
+            1,
+            0,
+            1,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            true,
+            true,
+            false,
+            ColorLoss::L1,
+        );
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        upload_model_parameters(&mut session, &model, 0.0);
+        for channel in ["exposure_r", "exposure_g", "exposure_b"] {
+            session.set_parameter(channel, &[1.0]);
+        }
+        session.set_input_u32("cell_indices", &[0]);
+        session.set_input_u32("previous_cell_indices", &[0]);
+        session.set_input_u32("next_cell_indices", &[0]);
+        session.set_input("recorded_dt", &[1.0]);
+        session.set_input("dt_reference_tangent", &[0.0]);
+        session.set_input("dt_grad_previous", &[0.0; 4]);
+        session.set_input("dt_grad_current", &[0.0; 4]);
+        session.set_input("dt_grad_next", &[0.0; 4]);
+        session.set_input("dt_grad_surface_normal", &[0.0; 4]);
+        session.set_input("mask", &[1.0]);
+        session.set_input("ray_origin", &[0.0, 0.0, -1.0]);
+        session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
+        session.set_input_u32("pixel_idx_per_step", &[0]);
+        session.set_input_u32("view_idx", &[0]);
+        session.set_input("labels", &[0.0; 3]);
+        let scale = 0.2;
+        session.set_input("surface_normal_loss_scale", &[scale]);
+        session.set_adam(0.0, 0.9, 0.999, 1.0e-8);
+
+        session.step();
+        session.wait();
+        let facing_camera = session.read_loss();
+
+        let mut normals = vec![0.0_f32; model.points.len() * 3];
+        for values in normals.chunks_exact_mut(3) {
+            values.copy_from_slice(&glam::Vec3::Z.to_array());
+        }
+        session.set_parameter("surface_normals", &normals);
+        session.step();
+        session.wait();
+        let pointing_along_ray = session.read_loss();
+
+        let expected_penalty = scale * (1.0 - (-model.points[0].w).exp());
+        assert!(
+            ((pointing_along_ray - facing_camera) - expected_penalty).abs() < 1.0e-5,
+            "facing={facing_camera}, along={pointing_along_ray}, expected={expected_penalty}"
+        );
     }
 
     #[test]
@@ -6459,6 +6908,7 @@ mod tests {
                 0.0,
                 0.0,
                 background_rgb,
+                false,
                 false,
                 false,
                 ColorLoss::L1,
@@ -6523,6 +6973,7 @@ mod tests {
                 0.0,
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 ColorLoss::L1,
@@ -6590,6 +7041,7 @@ mod tests {
                 if quantiles.is_some() { 1.0 } else { 0.0 },
                 0.0,
                 [0.0; 3],
+                false,
                 false,
                 false,
                 ColorLoss::L1,
@@ -6940,6 +7392,10 @@ mod tests {
         };
         let mut model = tiny_model();
         model.radii = Some(vec![0.2; model.points.len()]);
+        model.surface_normals = Some(vec![
+            glam::Vec3::new(0.1, 0.0, -1.0).normalize();
+            model.points.len()
+        ]);
         model.compute_adjacency_default();
         let view = ViewSupervision {
             camera: vol::CameraParams {
@@ -6965,6 +7421,8 @@ mod tests {
                 epochs: 3,
                 position_lr_ratio: 1.0,
                 radius_lr_ratio: 0.01,
+                surface_normal_lr_ratio: 0.1,
+                surface_normal_weight: 0.1,
                 geometry_rebuild_every: 1,
                 densify: Some(DensifyConfig {
                     every: 1,
@@ -6983,6 +7441,13 @@ mod tests {
         assert!(losses.iter().all(|loss| loss.is_finite()));
         assert_eq!(model.points.len(), 5);
         assert_eq!(model.radii.as_ref().unwrap().len(), 5);
+        assert_eq!(model.surface_normals.as_ref().unwrap().len(), 5);
+        assert!(model
+            .surface_normals
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|normal| (normal.length() - 1.0).abs() < 1.0e-5));
         model.validate().unwrap();
     }
 
@@ -7096,6 +7561,117 @@ mod tests {
             uninterrupted_adjacency.neighbors,
             resumed_adjacency.neighbors
         );
+
+        for path in [
+            checkpoint.clone(),
+            checkpoint.with_extension("safetensors"),
+            checkpoint.with_extension("trainstate"),
+            checkpoint.with_extension("ply.step"),
+        ] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn oriented_powerfoam_resume_matches_uninterrupted_training() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping oriented PowerFoam resume test: no GPU");
+            return;
+        };
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: glam::Quat::IDENTITY.to_array(),
+                fov: [0.5; 2],
+                principal: [0.0; 2],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
+            width: 1,
+            height: 1,
+        };
+        let make_model = || {
+            let mut model = tiny_model();
+            model.radii = Some(vec![1.0; model.points.len()]);
+            model.surface_normals = Some(vec![
+                glam::Vec3::new(0.2, 0.0, -1.0).normalize();
+                model.points.len()
+            ]);
+            model.compute_adjacency_default();
+            model
+        };
+        let base = AppearanceFitConfig {
+            learning_rate: 0.01,
+            pixel_batch: Some(1),
+            steps_per_view: 4,
+            surface_normal_lr_ratio: 0.1,
+            surface_normal_weight: 0.1,
+            geometry_rebuild_every: 1,
+            ..AppearanceFitConfig::default()
+        };
+        let checkpoint = std::env::temp_dir().join(format!(
+            "blade-volume-oriented-resume-{}.ply",
+            std::process::id()
+        ));
+
+        let mut uninterrupted = make_model();
+        fit_appearance_multi_view(
+            &mut uninterrupted,
+            std::slice::from_ref(&view),
+            1,
+            1,
+            16,
+            base.clone(),
+            gpu.clone(),
+        );
+
+        let mut first_segment = make_model();
+        fit_appearance_multi_view(
+            &mut first_segment,
+            std::slice::from_ref(&view),
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                checkpoint_path: Some(checkpoint.clone()),
+                stop_after_steps: Some(2),
+                ..base.clone()
+            },
+            gpu.clone(),
+        );
+        let training_state = load_training_state(&checkpoint).unwrap();
+        assert_eq!(training_state.step, 2);
+        let mut resumed = vol::io::try_load(checkpoint.to_str().unwrap()).unwrap();
+        fit_appearance_multi_view(
+            &mut resumed,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                checkpoint_path: Some(checkpoint.clone()),
+                resume_step: 2,
+                resume_state_path: Some(checkpoint.with_extension("safetensors")),
+                resume_training_state: Some(training_state),
+                ..base
+            },
+            gpu,
+        );
+
+        assert_eq!(uninterrupted.points, resumed.points);
+        assert_eq!(uninterrupted.sh_coefficients, resumed.sh_coefficients);
+        assert_eq!(uninterrupted.radii, resumed.radii);
+        assert_eq!(uninterrupted.surface_normals, resumed.surface_normals);
+        let uninterrupted_adjacency = uninterrupted.adjacency.as_ref().unwrap();
+        let resumed_adjacency = resumed.adjacency.as_ref().unwrap();
+        assert_eq!(uninterrupted_adjacency.offsets, resumed_adjacency.offsets);
+        assert_eq!(
+            uninterrupted_adjacency.neighbors,
+            resumed_adjacency.neighbors
+        );
+        resumed.validate().unwrap();
 
         for path in [
             checkpoint.clone(),

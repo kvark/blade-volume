@@ -386,6 +386,7 @@ mod tests {
             }),
             adjacency: None,
             radii: None,
+            surface_normals: None,
         };
         let original = model.clone();
         let rub_direction = glam::Vec3::new(0.3, -0.4, 0.8).normalize();

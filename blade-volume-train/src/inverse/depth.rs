@@ -582,6 +582,7 @@ mod tests {
             transforms: None,
             adjacency: None,
             radii: None,
+            surface_normals: None,
         };
         model.compute_adjacency_default();
         model
@@ -629,10 +630,13 @@ mod tests {
             eprintln!("skipping gpu_depth_tracing_matches_the_cpu_oracle: no GPU");
             return;
         };
-        for weighted in [false, true] {
+        for mode in 0..3 {
             let mut model = tiny_foam();
-            if weighted {
+            if mode != 0 {
                 model.radii = Some(vec![2.0, 1.8, 1.6, 1.4]);
+                if mode == 2 {
+                    model.surface_normals = Some(vec![-glam::Vec3::Z; model.points.len()]);
+                }
                 model.adjacency = None;
                 model.compute_adjacency_default();
             }
@@ -661,15 +665,15 @@ mod tests {
             }
             assert!(
                 max_distance_delta <= 0.02,
-                "weighted={weighted}: maximum depth-mode delta is {max_distance_delta}"
+                "mode={mode}: maximum depth-mode delta is {max_distance_delta}"
             );
             assert!(
                 max_alpha_delta <= 0.002,
-                "weighted={weighted}: maximum alpha delta is {max_alpha_delta}"
+                "mode={mode}: maximum alpha delta is {max_alpha_delta}"
             );
             assert!(
                 max_peak_delta <= 0.002,
-                "weighted={weighted}: maximum peak-weight delta is {max_peak_delta}"
+                "mode={mode}: maximum peak-weight delta is {max_peak_delta}"
             );
         }
     }

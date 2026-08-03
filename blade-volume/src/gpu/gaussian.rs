@@ -246,6 +246,7 @@ mod tests {
             }),
             adjacency: None,
             radii: None,
+            surface_normals: None,
             points,
         }
     }

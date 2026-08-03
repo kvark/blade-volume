@@ -7,6 +7,8 @@ use std::{mem, ptr, slice};
 /// This uploads the buffers required by the RadFoam tracing kernel:
 /// - `points`: `vec4<f32>[N]` where xyz is position and w is per-point radius
 ///   (Power Foam weight, or 0 for plain Voronoi)
+/// - `surface_normals`: `vec4<f32>[N]` containing unit dipole normals, or one
+///   zero dummy element for an unoriented cloud
 /// - `attributes`: packed `f32[N * attr_dim]`, where `attr_dim = 1 + 3 * (1 + sh_degree)^2`
 ///   and the last scalar in each row is density
 /// - `point_adjacency`: flattened neighbor list `u32[K]`
@@ -17,6 +19,7 @@ use std::{mem, ptr, slice};
 /// - This is intended for compute-only Voronoi traversal.
 pub struct RadFoamGpuCloud {
     points_buf: gpu::Buffer,
+    surface_normals_buf: gpu::Buffer,
     attributes_buf: gpu::Buffer,
     point_adjacency_buf: gpu::Buffer,
     point_adjacency_offsets_buf: gpu::Buffer,
@@ -27,6 +30,7 @@ pub struct RadFoamGpuCloud {
     pub num_points: usize,
     pub num_adjacency: usize,
     pub is_power_foam: bool,
+    pub is_oriented: bool,
 }
 
 struct PointIndex {
@@ -125,6 +129,12 @@ impl RadFoamGpuCloud {
 
         // Sizes
         let points_size = (num_points * mem::size_of::<[f32; 4]>()) as u64;
+        let surface_normal_count = if model.surface_normals.is_some() {
+            num_points.max(1)
+        } else {
+            1
+        };
+        let surface_normals_size = (surface_normal_count * mem::size_of::<[f32; 4]>()) as u64;
         let attrs_size = (num_points * attr_dim * mem::size_of::<f32>()) as u64;
         let adj_size = (num_adjacency * mem::size_of::<u32>()) as u64;
         // An isolated PowerFoam site has a valid empty neighbor array, but
@@ -142,6 +152,11 @@ impl RadFoamGpuCloud {
         let points_buf = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-points",
             size: points_size,
+            memory: gpu::Memory::Device,
+        });
+        let surface_normals_buf = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-surface-normals",
+            size: surface_normals_size,
             memory: gpu::Memory::Device,
         });
         let attributes_buf = context.create_buffer(gpu::BufferDesc {
@@ -164,6 +179,11 @@ impl RadFoamGpuCloud {
         let points_stage = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-points-upload",
             size: points_size,
+            memory: gpu::Memory::Upload,
+        });
+        let surface_normals_stage = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-surface-normals-upload",
+            size: surface_normals_size,
             memory: gpu::Memory::Upload,
         });
         let attributes_stage = context.create_buffer(gpu::BufferDesc {
@@ -196,6 +216,22 @@ impl RadFoamGpuCloud {
                 dst[1] = p.y;
                 dst[2] = p.z;
                 dst[3] = radii.map_or(0.0, |r| r[i]);
+            }
+
+            match model.surface_normals.as_deref() {
+                Some(normals) => {
+                    let dst_normals = slice::from_raw_parts_mut(
+                        surface_normals_stage.data() as *mut [f32; 4],
+                        surface_normal_count,
+                    );
+                    dst_normals.fill([0.0; 4]);
+                    for (dst, &normal) in dst_normals.iter_mut().zip(normals) {
+                        *dst = normal.normalize().extend(0.0).to_array();
+                    }
+                }
+                None => {
+                    *(surface_normals_stage.data() as *mut [f32; 4]) = [0.0; 4];
+                }
             }
 
             // Attributes: pack as [sh_coeffs..., density] per point
@@ -236,6 +272,13 @@ impl RadFoamGpuCloud {
             if points_size > 0 {
                 pass.copy_buffer_to_buffer(points_stage.at(0), points_buf.at(0), points_size);
             }
+            if surface_normals_size > 0 {
+                pass.copy_buffer_to_buffer(
+                    surface_normals_stage.at(0),
+                    surface_normals_buf.at(0),
+                    surface_normals_size,
+                );
+            }
             if attrs_size > 0 {
                 pass.copy_buffer_to_buffer(
                     attributes_stage.at(0),
@@ -264,12 +307,14 @@ impl RadFoamGpuCloud {
 
         // Free staging buffers
         context.destroy_buffer(points_stage);
+        context.destroy_buffer(surface_normals_stage);
         context.destroy_buffer(attributes_stage);
         context.destroy_buffer(adjacency_stage);
         context.destroy_buffer(adjacency_offsets_stage);
 
         Self {
             points_buf,
+            surface_normals_buf,
             attributes_buf,
             point_adjacency_buf,
             point_adjacency_offsets_buf,
@@ -279,19 +324,58 @@ impl RadFoamGpuCloud {
             num_points,
             num_adjacency,
             is_power_foam: model.radii.is_some(),
+            is_oriented: model.surface_normals.is_some(),
         }
     }
 
     pub fn deinit(&mut self, context: &gpu::Context) {
         context.destroy_buffer(self.points_buf);
+        context.destroy_buffer(self.surface_normals_buf);
         context.destroy_buffer(self.attributes_buf);
         context.destroy_buffer(self.point_adjacency_buf);
         context.destroy_buffer(self.point_adjacency_offsets_buf);
     }
 
+    /// Replaces oriented-surface normals without recreating unchanged point,
+    /// attribute, adjacency, or host-index data.
+    pub fn update_surface_normals(
+        &self,
+        normals: &[glam::Vec3],
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) {
+        assert!(self.is_oriented, "cloud has no surface-normal buffer");
+        assert_eq!(normals.len(), self.num_points);
+        let size = (normals.len() * mem::size_of::<[f32; 4]>()) as u64;
+        let stage = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-surface-normals-update",
+            size,
+            memory: gpu::Memory::Upload,
+        });
+        unsafe {
+            let dst = slice::from_raw_parts_mut(stage.data() as *mut [f32; 4], normals.len());
+            for (dst_normal, &normal) in dst.iter_mut().zip(normals) {
+                *dst_normal = normal.normalize().extend(0.0).to_array();
+            }
+        }
+
+        encoder.start();
+        if let mut pass = encoder.transfer("radfoam-surface-normals-update") {
+            pass.copy_buffer_to_buffer(stage.at(0), self.surface_normals_buf.at(0), size);
+        }
+        let sync_point = context.submit(encoder);
+        let _ = context.wait_for(&sync_point, !0);
+        context.destroy_buffer(stage);
+    }
+
     /// Storage buffer view for point positions.
     pub fn points(&self) -> gpu::BufferPiece {
         self.points_buf.into()
+    }
+
+    /// Storage buffer view for optional oriented-surface unit normals.
+    pub fn surface_normals(&self) -> gpu::BufferPiece {
+        self.surface_normals_buf.into()
     }
 
     /// Storage buffer view for packed attributes.

@@ -1,7 +1,7 @@
 //! Loader for RadFoam and weighted PowerFoam PLY point clouds.
 //!
 //! The vertex element carries position, density, CSR end offsets, SH data, and
-//! an optional radius. The adjacency element carries the flattened CSR
+//! an optional radius and oriented-surface normal. The adjacency element carries the flattened CSR
 //! neighbours. Binary little-endian and ASCII PLY 1.0 are supported.
 
 use super::LoadError;
@@ -104,6 +104,7 @@ struct Schema {
     sh_degree: usize,
     sh_stride: usize,
     radius: Option<usize>,
+    surface_normal: Option<[usize; 3]>,
     adjacency: usize,
 }
 
@@ -174,6 +175,12 @@ impl Schema {
             }
             None => None,
         };
+        let surface_normal = property_triplet(vertex, ["nx", "ny", "nz"], PlyScalarType::Float32)?;
+        if surface_normal.is_some() && radius.is_none() {
+            return Err(LoadError::invalid(
+                "RadFoam PLY surface normals require a radius property",
+            ));
+        }
 
         Ok(Self {
             point_count: vertex.count,
@@ -191,6 +198,7 @@ impl Schema {
             sh_degree,
             sh_stride,
             radius,
+            surface_normal,
             adjacency: adjacency
                 .require("adjacency", PlyScalarType::Uint32)?
                 .offset,
@@ -415,6 +423,14 @@ fn allocate_model(
         Some(_) => Some(allocate_vec(schema.point_count, 0.0, "radius")?),
         None => None,
     };
+    let surface_normals = match schema.surface_normal {
+        Some(_) => Some(allocate_vec(
+            schema.point_count,
+            glam::Vec3::ZERO,
+            "surface normal",
+        )?),
+        None => None,
+    };
     let model = crate::PointCloudModel {
         points: allocate_vec(schema.point_count, glam::Vec4::ZERO, "point")?,
         sh_coefficients: allocate_vec(sh_count, 0.0, "SH")?,
@@ -422,6 +438,7 @@ fn allocate_model(
         transforms: None,
         adjacency: None,
         radii,
+        surface_normals,
     };
     Ok((
         model,
@@ -483,6 +500,15 @@ fn decode_binary(
         }
         if let (Some(ref mut radii), Some(radius)) = (model.radii.as_mut(), schema.radius) {
             radii[index] = read_f32(&row, radius);
+        }
+        if let (Some(ref mut normals), Some(normal)) =
+            (model.surface_normals.as_mut(), schema.surface_normal)
+        {
+            normals[index] = glam::Vec3::new(
+                read_f32(&row, normal[0]),
+                read_f32(&row, normal[1]),
+                read_f32(&row, normal[2]),
+            );
         }
     }
 
@@ -560,6 +586,7 @@ fn decode_ascii(
         let mut exact_dc = [0.0; 3];
         let mut preview_dc = [0u8; 3];
         let mut radius = 0.0;
+        let mut surface_normal = glam::Vec3::ZERO;
         let coefficients =
             &mut model.sh_coefficients[index * schema.sh_stride..(index + 1) * schema.sh_stride];
         for property in &vertex.properties {
@@ -581,6 +608,9 @@ fn decode_ascii(
                 "green" => preview_dc[1] = parse_u8(token, "green")?,
                 "blue" => preview_dc[2] = parse_u8(token, "blue")?,
                 "radius" => radius = parse_f32(token, "radius")?,
+                "nx" => surface_normal.x = parse_f32(token, "nx")?,
+                "ny" => surface_normal.y = parse_f32(token, "ny")?,
+                "nz" => surface_normal.z = parse_f32(token, "nz")?,
                 name if name.starts_with("color_sh_") => {
                     let rest = name["color_sh_".len()..].parse::<usize>().unwrap();
                     coefficients[3 + rest] = parse_f32(token, name)?;
@@ -597,6 +627,9 @@ fn decode_ascii(
         }
         if let Some(ref mut radii) = model.radii {
             radii[index] = radius;
+        }
+        if let Some(ref mut normals) = model.surface_normals {
+            normals[index] = surface_normal;
         }
     }
 

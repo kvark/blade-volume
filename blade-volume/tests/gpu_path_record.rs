@@ -70,6 +70,7 @@ fn build_grid_model(n: usize) -> vol::PointCloudModel {
             offsets,
         }),
         radii: None,
+        surface_normals: None,
     }
 }
 
@@ -83,6 +84,7 @@ struct CpuRecord {
     dt_grad_previous: Vec<[f32; 4]>,
     dt_grad_current: Vec<[f32; 4]>,
     dt_grad_next: Vec<[f32; 4]>,
+    dt_grad_surface_normal: Vec<[f32; 4]>,
 }
 
 fn point_geometry_relative(
@@ -101,6 +103,12 @@ fn point_geometry_relative(
 
 fn dot4(left: &[f32; 4], right: &[f32; 4]) -> f32 {
     left.iter().zip(right).map(|(a, b)| a * b).sum()
+}
+
+fn surface_normal_geometry(model: &vol::PointCloudModel, index: u32) -> [f32; 4] {
+    model.surface_normals.as_ref().map_or([0.0; 4], |normals| {
+        normals[index as usize].normalize().extend(0.0).to_array()
+    })
 }
 
 fn cpu_record(
@@ -127,6 +135,7 @@ fn cpu_record(
     let mut dt_grad_previous = vec![[0.0; 4]; p * max_steps];
     let mut dt_grad_current = vec![[0.0; 4]; p * max_steps];
     let mut dt_grad_next = vec![[0.0; 4]; p * max_steps];
+    let mut dt_grad_surface_normal = vec![[0.0; 4]; p * max_steps];
     for (k, ray) in rays.iter().enumerate() {
         let path = if model.radii.is_some() {
             vol::trace::record_powerfoam_splats_jacobians(model, *ray, settings)
@@ -145,6 +154,7 @@ fn cpu_record(
                     dt_grad_previous[slot] = e.dt_d_previous.to_array();
                     dt_grad_current[slot] = e.dt_d_current.to_array();
                     dt_grad_next[slot] = e.dt_d_next.to_array();
+                    dt_grad_surface_normal[slot] = e.dt_d_surface_normal.extend(0.0).to_array();
                 }
                 if model.radii.is_some() {
                     dt_reference_tangents[slot] = dot4(
@@ -156,6 +166,9 @@ fn cpu_record(
                     ) + dot4(
                         &dt_grad_next[slot],
                         &point_geometry_relative(model, e.next_cell, ray.origin),
+                    ) + dot4(
+                        &dt_grad_surface_normal[slot],
+                        &surface_normal_geometry(model, e.cell),
                     );
                 }
             }
@@ -171,6 +184,7 @@ fn cpu_record(
         dt_grad_previous,
         dt_grad_current,
         dt_grad_next,
+        dt_grad_surface_normal,
     }
 }
 
@@ -342,6 +356,9 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         tx.fill_buffer(bufs.dt_grad_previous.at(0), pl * 16, 0);
         tx.fill_buffer(bufs.dt_grad_current.at(0), pl * 16, 0);
         tx.fill_buffer(bufs.dt_grad_next.at(0), pl * 16, 0);
+        if model.surface_normals.is_some() {
+            tx.fill_buffer(bufs.dt_grad_surface_normal.at(0), pl * 16, 0);
+        }
     }
     // Fill the batch in two slices. The exhaustive PowerFoam case binds two
     // distinct cameras within each shared compute pass, matching mixed-view
@@ -424,6 +441,11 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         size: pl * 16,
         memory: gpu::Memory::Shared,
     });
+    let dt_grad_surface_normal_dl = ctx.create_buffer(gpu::BufferDesc {
+        name: "dt-grad-surface-normal-download",
+        size: pl * 16,
+        memory: gpu::Memory::Shared,
+    });
     {
         let mut tx = encoder.transfer("download-outputs");
         tx.copy_buffer_to_buffer(bufs.previous_cells.at(0), previous_cells_dl.at(0), pl * 4);
@@ -447,6 +469,11 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
             pl * 16,
         );
         tx.copy_buffer_to_buffer(bufs.dt_grad_next.at(0), dt_grad_next_dl.at(0), pl * 16);
+        tx.copy_buffer_to_buffer(
+            bufs.dt_grad_surface_normal.at(0),
+            dt_grad_surface_normal_dl.at(0),
+            pl * 16,
+        );
     }
     let sync = ctx.submit(&mut encoder);
     let _ = ctx.wait_for(&sync, !0);
@@ -511,6 +538,13 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
     };
     let gpu_dt_grad_next: Vec<f32> = unsafe {
         std::slice::from_raw_parts(dt_grad_next_dl.data() as *const f32, pl as usize * 4).to_vec()
+    };
+    let gpu_dt_grad_surface_normal: Vec<f32> = unsafe {
+        std::slice::from_raw_parts(
+            dt_grad_surface_normal_dl.data() as *const f32,
+            pl as usize * 4,
+        )
+        .to_vec()
     };
 
     let mut mismatches = 0usize;
@@ -595,6 +629,23 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
                     }
                 }
             }
+            if model.surface_normals.is_some() {
+                for component in 0..3 {
+                    let expected = cpu.dt_grad_surface_normal[i][component];
+                    let actual = gpu_dt_grad_surface_normal[i * 4 + component];
+                    let absolute = (expected - actual).abs();
+                    let scale = expected.abs().max(actual.abs()).max(1.0e-4);
+                    if absolute > 5.0e-4 && absolute / scale > 5.0e-3 {
+                        mismatches += 1;
+                        if mismatches <= 8 {
+                            eprintln!(
+                                "slot {i}: surface-normal gradient[{component}] cpu={expected} \
+                                 gpu={actual} diff={absolute}",
+                            );
+                        }
+                    }
+                }
+            }
             let tangent_absolute =
                 (cpu.dt_reference_tangents[i] - gpu_dt_reference_tangents[i]).abs();
             let tangent_scale = cpu.dt_reference_tangents[i]
@@ -626,6 +677,13 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
                     .map(|(a, b)| a * b)
                     .sum::<f32>();
             }
+            if model.surface_normals.is_some() {
+                reconstructed_dt += gpu_dt_grad_surface_normal[i * 4..i * 4 + 4]
+                    .iter()
+                    .zip(surface_normal_geometry(&model, gpu_cells[i]))
+                    .map(|(a, b)| a * b)
+                    .sum::<f32>();
+            }
             let reconstruction_error = (gpu_dts[i] - reconstructed_dt).abs();
             if reconstruction_error > 5.0e-4 {
                 mismatches += 1;
@@ -654,6 +712,7 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
     ctx.destroy_buffer(dt_grad_previous_dl);
     ctx.destroy_buffer(dt_grad_current_dl);
     ctx.destroy_buffer(dt_grad_next_dl);
+    ctx.destroy_buffer(dt_grad_surface_normal_dl);
     bufs.destroy(&ctx);
     recorder.destroy(&ctx);
     cloud.deinit(&ctx);
@@ -698,6 +757,15 @@ fn gpu_batched_powerfoam_paths_match_multi_camera_cpu() {
 }
 
 #[test]
+fn gpu_oriented_powerfoam_paths_and_normal_jacobians_match_cpu() {
+    let mut model = build_disconnected_ray_model(12);
+    let camera = make_camera_looking_along_x(100.0);
+    let target_ray = rays_for_pixels(&camera, &[32 * 64 + 32], 64, 64)[0];
+    model.surface_normals = Some(vec![-target_ray.direction; model.points.len()]);
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false, false);
+}
+
+#[test]
 fn gpu_weighted_linearization_is_translation_invariant() {
     let mut model = build_grid_model(12);
     model.radii = Some(
@@ -727,6 +795,7 @@ fn gpu_powerfoam_splats_cross_disconnected_cech_components() {
             offsets: vec![0; points.len() + 1],
         }),
         radii: Some(vec![0.3; points.len()]),
+        surface_normals: None,
         points,
     };
 
@@ -763,6 +832,7 @@ fn build_disconnected_ray_model(point_count: usize) -> vol::PointCloudModel {
             offsets: vec![0; point_count + 1],
         }),
         radii: Some(vec![0.2; point_count]),
+        surface_normals: None,
     }
 }
 
@@ -807,6 +877,7 @@ fn gpu_projected_tile_overflow_falls_back_to_exhaustive_scan() {
             offsets: vec![0; POINT_COUNT + 1],
         }),
         radii: Some(radii),
+        surface_normals: None,
     };
 
     assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, true, false);

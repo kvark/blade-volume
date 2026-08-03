@@ -1127,6 +1127,7 @@ mod tests {
             transforms: None,
             adjacency: None,
             radii: Some(vec![1.0, 0.5, 0.5, 0.5]),
+            surface_normals: None,
             points,
         };
         model.compute_adjacency_default();
@@ -1176,6 +1177,7 @@ mod tests {
             transforms: None,
             adjacency: None,
             radii: None,
+            surface_normals: None,
         };
         spring_relax(&mut model, 8, 0.5);
         let after = min_pairwise(&model.points);

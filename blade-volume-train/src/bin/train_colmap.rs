@@ -132,6 +132,12 @@ struct Args {
     #[argh(switch)]
     powerfoam_reference_radii: bool,
 
+    /// split every weighted PowerFoam cell at its site with a learned,
+    /// camera-facing surface plane. Initial normals are estimated directly
+    /// from point-cloud neighbourhoods.
+    #[argh(switch)]
+    oriented_powerfoam: bool,
+
     /// pixels per Adam step (default 1024). Random pixel sampling keeps the
     /// graph small regardless of image resolution. Set 0 to use every pixel.
     #[argh(option, default = "1024")]
@@ -319,7 +325,18 @@ struct Args {
     #[argh(option, default = "0.0")]
     radius_lr_ratio: f32,
 
-    /// steps between adjacency/path rebuilds during position/radius
+    /// oriented PowerFoam normal learning rate as a fraction of the main
+    /// learning rate (default 0 = fixed normals). Under the radfoam-v1
+    /// schedule, 1 selects PowerFoam's absolute 0.1 to 0.01 schedule.
+    #[argh(option, default = "0.0")]
+    surface_normal_lr_ratio: f32,
+
+    /// initial weight on PowerFoam's view-facing normal loss (default 0 =
+    /// off; reference value 0.1, decaying to 0.01).
+    #[argh(option, default = "0.0")]
+    surface_normal_weight: f32,
+
+    /// steps between adjacency/path rebuilds during position/radius/normal
     /// optimisation (default 100). Ignored when both geometry rates are 0.
     #[argh(option, default = "100")]
     geometry_rebuild_every: usize,
@@ -495,6 +512,14 @@ fn main() {
         eprintln!("--radius-lr-ratio must be finite and non-negative");
         std::process::exit(2);
     }
+    if !args.surface_normal_lr_ratio.is_finite() || args.surface_normal_lr_ratio < 0.0 {
+        eprintln!("--surface-normal-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
+    if !args.surface_normal_weight.is_finite() || args.surface_normal_weight < 0.0 {
+        eprintln!("--surface-normal-weight must be finite and non-negative");
+        std::process::exit(2);
+    }
     if !args.interpenetration_weight.is_finite() || args.interpenetration_weight < 0.0 {
         eprintln!("--interpenetration-weight must be finite and non-negative");
         std::process::exit(2);
@@ -510,7 +535,9 @@ fn main() {
         eprintln!("--interpenetration-weight requires trainable positions or radii");
         std::process::exit(2);
     }
-    if (args.position_lr_ratio > 0.0 || args.radius_lr_ratio > 0.0)
+    if (args.position_lr_ratio > 0.0
+        || args.radius_lr_ratio > 0.0
+        || args.surface_normal_lr_ratio > 0.0)
         && geometry_rebuild_schedule == diff_render::GeometryRebuildSchedule::Fixed
         && args.geometry_rebuild_every == 0
     {
@@ -524,6 +551,19 @@ fn main() {
     }
     if args.interpenetration_weight > 0.0 && !fresh_weighted && args.init_ply.is_none() {
         eprintln!("--interpenetration-weight requires a weighted initializer or --init-ply");
+        std::process::exit(2);
+    }
+    if args.oriented_powerfoam && !fresh_weighted && args.init_ply.is_none() {
+        eprintln!("--oriented-powerfoam requires a weighted initializer or --init-ply");
+        std::process::exit(2);
+    }
+    if (args.surface_normal_lr_ratio > 0.0 || args.surface_normal_weight > 0.0)
+        && !args.oriented_powerfoam
+        && args.init_ply.is_none()
+    {
+        eprintln!(
+            "surface-normal training requires --oriented-powerfoam or an oriented --init-ply"
+        );
         std::process::exit(2);
     }
 
@@ -701,6 +741,8 @@ fn main() {
             },
             position_lr_ratio: args.position_lr_ratio,
             radius_lr_ratio: args.radius_lr_ratio,
+            surface_normal_lr_ratio: args.surface_normal_lr_ratio,
+            surface_normal_weight: args.surface_normal_weight,
             powerfoam_candidate_capacity: args.powerfoam_candidate_capacity,
             geometry_rebuild_every: args.geometry_rebuild_every,
             geometry_rebuild_schedule,
@@ -746,6 +788,7 @@ fn main() {
         far_plane: 100.0,
         initial_density: args.initial_density,
         adjacency,
+        oriented_powerfoam: args.oriented_powerfoam,
         init_ply,
         test_every: args.test_every,
     };

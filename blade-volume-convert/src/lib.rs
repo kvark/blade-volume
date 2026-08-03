@@ -851,6 +851,7 @@ pub fn convert_gltf(
         transforms: None,
         adjacency: None,
         radii: None,
+        surface_normals: None,
     };
 
     match options.output {
@@ -1730,6 +1731,11 @@ fn write_radfoam_ply_ascii(
     if model.radii.is_some() {
         writeln!(file, "property float radius")?;
     }
+    if model.surface_normals.is_some() {
+        writeln!(file, "property float nx")?;
+        writeln!(file, "property float ny")?;
+        writeln!(file, "property float nz")?;
+    }
     writeln!(file, "element adjacency {}", num_adjacency)?;
     writeln!(file, "property uint adjacency")?;
     writeln!(file, "end_header")?;
@@ -1765,6 +1771,10 @@ fn write_radfoam_ply_ascii(
         }
         if let Some(ref radii) = model.radii {
             write!(file, " {}", radii[i])?;
+        }
+        if let Some(ref normals) = model.surface_normals {
+            let normal = normals[i];
+            write!(file, " {} {} {}", normal.x, normal.y, normal.z)?;
         }
         writeln!(file)?;
     }
@@ -1815,6 +1825,11 @@ fn write_radfoam_ply_binary(
     if model.radii.is_some() {
         writeln!(file, "property float radius")?;
     }
+    if model.surface_normals.is_some() {
+        writeln!(file, "property float nx")?;
+        writeln!(file, "property float ny")?;
+        writeln!(file, "property float nz")?;
+    }
     writeln!(file, "element adjacency {}", num_adjacency)?;
     writeln!(file, "property uint adjacency")?;
     writeln!(file, "end_header")?;
@@ -1849,6 +1864,12 @@ fn write_radfoam_ply_binary(
         }
         if let Some(ref radii) = model.radii {
             file.write_all(&radii[i].to_le_bytes())?;
+        }
+        if let Some(ref normals) = model.surface_normals {
+            let normal = normals[i];
+            file.write_all(&normal.x.to_le_bytes())?;
+            file.write_all(&normal.y.to_le_bytes())?;
+            file.write_all(&normal.z.to_le_bytes())?;
         }
     }
 
@@ -2348,6 +2369,7 @@ mod tests {
             transforms: Some(transforms),
             adjacency: None,
             radii: None,
+            surface_normals: None,
         };
 
         let mut path = std::env::temp_dir();
@@ -2375,6 +2397,7 @@ mod tests {
             transforms: Some(transforms),
             adjacency: None,
             radii: None,
+            surface_normals: None,
         };
 
         let path = std::env::temp_dir().join("blade_volume_convert_roundtrip_sh3.ply");
@@ -2414,6 +2437,7 @@ mod tests {
                 offsets: vec![0, 1, 2],
             }),
             radii: None,
+            surface_normals: None,
         };
 
         let suffix = match format {
@@ -2459,6 +2483,7 @@ mod tests {
             transforms: None,
             adjacency: Some(adjacency),
             radii: None,
+            surface_normals: None,
         };
 
         let mut path = std::env::temp_dir();
@@ -2488,6 +2513,7 @@ mod tests {
                 offsets: vec![0, 1, 3, 4],
             }),
             radii: Some(radii),
+            surface_normals: None,
             transforms: None,
             sh_degree: 0,
             points,
@@ -2523,6 +2549,37 @@ mod tests {
     #[test]
     fn radfoam_ascii_roundtrip_preserves_radii() {
         assert_radii_roundtrip(PlyFormat::Ascii);
+    }
+
+    fn assert_surface_normals_roundtrip(format: PlyFormat) {
+        let mut model = make_radfoam_radii_model();
+        model.surface_normals = Some(vec![
+            glam::Vec3::new(1.0, 0.0, 0.0),
+            glam::Vec3::new(0.0, -1.0, 0.0),
+            glam::Vec3::new(0.2, 0.3, -0.9),
+        ]);
+        let suffix = match format {
+            PlyFormat::Ascii => "ascii",
+            PlyFormat::Binary => "binary",
+        };
+        let path = std::env::temp_dir().join(format!(
+            "blade_volume_convert_roundtrip_surface_normals_{suffix}.ply"
+        ));
+        save_ply_with_options(&path, &model, &SaveOptions { format }).expect("save ply");
+        let loaded = vol::io::load_radfoam(path.to_str().unwrap());
+        assert_eq!(loaded.radii, model.radii);
+        assert_eq!(loaded.surface_normals, model.surface_normals);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn radfoam_binary_roundtrip_preserves_surface_normals() {
+        assert_surface_normals_roundtrip(PlyFormat::Binary);
+    }
+
+    #[test]
+    fn radfoam_ascii_roundtrip_preserves_surface_normals() {
+        assert_surface_normals_roundtrip(PlyFormat::Ascii);
     }
 
     #[test]

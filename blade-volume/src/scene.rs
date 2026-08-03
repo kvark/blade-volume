@@ -74,7 +74,8 @@ pub struct ObjectBounds {
     pub sh_degree: u32,
     /// Per-point attribute stride, or zero for backends that do not use it.
     pub attribute_stride: u32,
-    /// Backend flags. Bit zero marks bounded PowerFoam support.
+    /// Backend flags. Bit zero marks bounded PowerFoam support; bit one marks
+    /// oriented dipole cells.
     pub flags: u32,
     /// Number of points in the object.
     pub point_count: u32,
@@ -347,7 +348,7 @@ impl Scene {
         let cloud = crate::RadFoamGpuCloud::new(model, context, encoder);
         let (local_center, local_radius) = Self::compute_radfoam_bounding_sphere(model);
         let attribute_stride = u32::try_from(cloud.attr_dim).expect("attribute stride overflow");
-        let flags = cloud.is_power_foam as u32;
+        let flags = cloud.is_power_foam as u32 | (cloud.is_oriented as u32) << 1;
         let point_count = u32::try_from(cloud.num_points).expect("too many RadFoam points");
 
         let data_index = self.radfoam_clouds.len() as u32;
@@ -671,6 +672,7 @@ mod tests {
             }),
             adjacency: None,
             radii: None,
+            surface_normals: None,
         };
         let (center, radius) = Scene::compute_gaussian_bounding_sphere(&model, 0.01);
         let expected = 2.0 * (2.0_f32 * 100.0_f32.ln()).sqrt();

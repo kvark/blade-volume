@@ -121,6 +121,7 @@ fn powerfoam_model(color: glam::Vec3) -> vol::PointCloudModel {
             offsets: vec![0, 0],
         }),
         radii: Some(vec![0.5]),
+        surface_normals: None,
     }
 }
 
@@ -135,6 +136,7 @@ fn gaussian_model(color: glam::Vec3, scale: glam::Vec3) -> vol::PointCloudModel 
         }),
         adjacency: None,
         radii: None,
+        surface_normals: None,
     }
 }
 
@@ -282,6 +284,46 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
     let translated_miss = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
     assert_close(translated_miss.truncate(), BACKGROUND, 2.0e-3);
 
+    target.destroy(&context);
+    renderer.destroy(&context);
+    context.destroy_command_encoder(&mut encoder);
+}
+
+#[test]
+fn oriented_powerfoam_scene_keeps_the_back_half() {
+    let _gpu_test_guard = gpu_test_guard();
+    let Some(context) = test_context(false) else {
+        eprintln!("skipping oriented PowerFoam scene readback: no binding-array GPU");
+        return;
+    };
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "oriented-powerfoam-scene-readback",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    let mut renderer = view::SceneRenderer::new(&context, gpu::TextureFormat::Rgba16Float, SIZE);
+    renderer.background_rgb = BACKGROUND.to_array();
+    let color = glam::Vec3::new(0.8, 0.25, 0.1);
+    let mut model = powerfoam_model(color);
+    model.surface_normals = Some(vec![-glam::Vec3::Z]);
+    let object = renderer.add_radfoam(&model, &context, &mut encoder);
+    renderer.scene.set_transform(
+        object,
+        vol::Transform {
+            position: glam::Vec3::new(0.0, 0.0, 3.0),
+            ..vol::Transform::identity()
+        },
+    );
+    let mut target = Target::new(&context);
+
+    let pixel = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
+
+    assert_close(
+        pixel.truncate(),
+        composite(color, 1.0 - (-0.5_f32).exp()),
+        3.0e-3,
+    );
+    assert!((pixel.w - 1.0).abs() <= 1.0e-3);
     target.destroy(&context);
     renderer.destroy(&context);
     context.destroy_command_encoder(&mut encoder);

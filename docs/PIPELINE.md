@@ -504,6 +504,44 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   seconds (84.0%). A 4/8/12/16-band sweep selects eight; all cgroups stay below
   1.05 GB with zero swap, pressure, OOM, or GPU faults.
 
+#### M2t — Oriented PowerFoam dipoles (implemented, opt-in)
+
+- `PointCloudModel.surface_normals` stores an optional per-site dipole normal
+  and is valid only alongside PowerFoam radii. Binary and ASCII RadFoam PLY
+  preserve `nx/ny/nz`; partial, non-finite, zero, or unweighted normal records
+  are rejected. Unoriented clouds retain their previous format and allocate
+  only one 16-byte dummy GPU normal.
+- CPU, standalone WGSL, depth, scene, and differentiable path traversal clip
+  each bounded power cell to `dot(x - center, normal) <= 0`. The recorder emits
+  the exact active-plane center and unit-normal Jacobians. Meganeura normalizes
+  the raw parameter in-graph and applies PowerFoam's view-facing
+  `relu(dot(normal, ray_direction))²` loss with a 10× exponential decay.
+- `train_colmap --oriented-powerfoam` initializes normals with the existing
+  Rust 12-neighbour local-PCA estimator, flips each toward its nearest training
+  camera, and uses a nearest-camera fallback for underconstrained sites. The
+  normal rate and loss are independently configurable. Densification shifts
+  both oriented duplicate siblings in the tangent plane and copies the normal;
+  checkpoint, Adam remapping, and exact segmented resume include normals.
+  Loss weighting, schedules, plane derivatives, and two-sibling resampling
+  were checked directly against PowerFoam commit `9639225`. RadFoam-v1 mode
+  exposes the reference 0.1→0.01 normal schedule; the Bonsai refit below keeps
+  the selected legacy cosine protocol, so its ratio-one normal rate follows
+  the global 0.1→0.001 curve instead.
+- A normal-only cadence neither changes nor rebuilds Čech adjacency. It reads
+  back the learned normals and uploads only their 3.2 MB GPU buffer. On the
+  200K-site Bonsai gate this lowers cadence resource work from 5.805 to 0.015
+  seconds, total training from 129.570 to 123.693 seconds, and peak host memory
+  from 802 to 554 MB. The final run records 8.36 million rays, at most 90/128
+  path entries and 661/1,024 candidates, with zero truncation, swap, pressure,
+  OOM, or GPU faults.
+- Starting from the selected step-20,400 endpoint and freezing positions and
+  radii, a 2,040-step learned-normal refit reaches 17.0258/16.1830 dB
+  train/all-37 held out. Fixed PCA planes reach 16.4490/15.6958 dB, so learning
+  recovers 0.4872 dB held out and improves every held-out frame. The original
+  unoriented cloud remains ahead at 17.2334/16.4105 dB. Oriented dipoles land
+  as an explicit experiment, not the default; the remaining 0.23 dB gap and
+  visible support discs make spatial texel appearance the next semantic gate.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

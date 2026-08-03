@@ -75,6 +75,7 @@ fn find_next_object_hit(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
 
 var<private> g_rf_obj: u32;
 var<private> g_rf_bounded: bool;
+var<private> g_rf_oriented: bool;
 var<private> g_rf_sh_degree: u32;
 var<private> g_rf_attribute_stride: u32;
 
@@ -88,6 +89,14 @@ fn rf_get_radius(idx: u32) -> f32 {
 
 fn rf_is_bounded() -> bool {
     return g_rf_bounded;
+}
+
+fn rf_is_oriented() -> bool {
+    return g_rf_oriented;
+}
+
+fn rf_get_surface_normal(idx: u32) -> vec3<f32> {
+    return g_radfoam_surface_normals[g_rf_obj].data[idx].xyz;
 }
 
 fn rf_get_density(idx: u32) -> f32 {
@@ -133,6 +142,7 @@ fn scene_trace_radfoam(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
                        bounds: ObjectBounds) -> vec4<f32> {
     g_rf_obj = bounds.data_index;
     g_rf_bounded = (bounds.flags & 1u) != 0u;
+    g_rf_oriented = (bounds.flags & 2u) != 0u;
     g_rf_sh_degree = bounds.sh_degree;
     g_rf_attribute_stride = bounds.attribute_stride;
 

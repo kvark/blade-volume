@@ -268,6 +268,7 @@ pub fn make_branching_model(params: BranchingParams) -> vol::PointCloudModel {
         transforms: None,
         adjacency: Some(vol::Adjacency { neighbors, offsets }),
         radii: None,
+        surface_normals: None,
     }
 }
 

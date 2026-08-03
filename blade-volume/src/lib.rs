@@ -80,6 +80,7 @@ pub struct Adjacency {
 /// - `transforms`: rotation + scale for Gaussian ellipsoids
 /// - `adjacency`: CSR adjacency for RadFoam Voronoi traversal
 /// - `radii`: per-point weight/radius for Power-Foam-style power diagrams
+/// - `surface_normals`: oriented PowerFoam faces; the normal-facing half is empty
 #[derive(Clone)]
 pub struct PointCloudModel {
     /// Position (xyz) + density/opacity (w) for each point.
@@ -107,6 +108,12 @@ pub struct PointCloudModel {
     /// the cloud as a power diagram (Power Foam) rather than a plain Voronoi diagram.
     /// Length must equal `points.len()`.
     pub radii: Option<Vec<f32>>,
+
+    /// Optional: per-point oriented surface normal for PowerFoam dipoles.
+    /// The half of the bounded power cell in front of this normal has zero
+    /// density; the opposite half retains the point's learned density.
+    /// Length must equal `points.len()`, and `radii` must also be present.
+    pub surface_normals: Option<Vec<glam::Vec3>>,
 }
 
 impl PointCloudModel {
@@ -174,6 +181,23 @@ impl PointCloudModel {
                 .any(|radius| !radius.is_finite() || *radius < 0.0)
             {
                 return Err("radii must be finite and non-negative".to_string());
+            }
+        }
+        if let Some(ref normals) = self.surface_normals {
+            if self.radii.is_none() {
+                return Err("surface normals require PowerFoam radii".to_string());
+            }
+            if normals.len() != count {
+                return Err(format!(
+                    "surface normal length is {}, expected {count}",
+                    normals.len()
+                ));
+            }
+            if normals
+                .iter()
+                .any(|normal| !normal.is_finite() || normal.length_squared() <= 1.0e-20)
+            {
+                return Err("surface normals must be finite and non-zero".to_string());
             }
         }
         if let Some(ref adjacency) = self.adjacency {
@@ -297,6 +321,7 @@ mod model_tests {
                 offsets: vec![0, 0],
             }),
             radii: Some(vec![1.0]),
+            surface_normals: None,
         }
     }
 
@@ -311,12 +336,30 @@ mod model_tests {
                 offsets: vec![0, 1, 2],
             }),
             radii: Some(vec![1.0; 2]),
+            surface_normals: None,
         }
     }
 
     #[test]
     fn model_validation_accepts_consistent_parallel_arrays() {
         assert!(valid_model().validate().is_ok());
+    }
+
+    #[test]
+    fn model_validation_checks_oriented_powerfoam_normals() {
+        let mut model = valid_model();
+        model.surface_normals = Some(vec![glam::Vec3::Z]);
+        assert!(model.validate().is_ok());
+
+        model.radii = None;
+        assert!(model.validate().unwrap_err().contains("require PowerFoam"));
+
+        model.radii = Some(vec![1.0]);
+        model.surface_normals = Some(vec![glam::Vec3::ZERO]);
+        assert!(model
+            .validate()
+            .unwrap_err()
+            .contains("finite and non-zero"));
     }
 
     #[test]

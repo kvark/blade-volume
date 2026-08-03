@@ -132,6 +132,11 @@ pub struct PipelineConfig {
     pub initial_density: f32,
     /// Adjacency choice for the initial point cloud.
     pub adjacency: AdjacencyKind,
+    /// Add an oriented surface plane to every weighted PowerFoam site when
+    /// the input model does not already carry one. Normals are fitted directly
+    /// from the point cloud and faced toward the training cameras; no polygonal
+    /// intermediate is constructed.
+    pub oriented_powerfoam: bool,
     /// Resume: when `Some(path)`, load the initial foam from this RadFoam
     /// PLY (a prior checkpoint) instead of building it from the COLMAP
     /// reconstruction. Cameras/views still come from `--sparse`/`--images`;
@@ -219,6 +224,7 @@ impl Default for PipelineConfig {
             far_plane: 100.0,
             initial_density: 1.0,
             adjacency: AdjacencyKind::Delaunay,
+            oriented_powerfoam: false,
             init_ply: None,
             test_every: 0,
         }
@@ -673,6 +679,7 @@ fn rebuild_adjacency(
                 model.points.len()
             );
             model.radii = None;
+            model.surface_normals = None;
             model.compute_adjacency_default();
         }
         AdjacencyKind::DelaunayQhull => {
@@ -681,6 +688,7 @@ fn rebuild_adjacency(
                 model.points.len()
             );
             model.radii = None;
+            model.surface_normals = None;
             #[cfg(feature = "qhull")]
             {
                 model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
@@ -694,6 +702,7 @@ fn rebuild_adjacency(
                 model.points.len()
             );
             model.radii = None;
+            model.surface_normals = None;
             model.adjacency = Some(vol::compute_knn(&model.points, k));
         }
         AdjacencyKind::Cech { radius_factor } => {
@@ -716,6 +725,53 @@ fn rebuild_adjacency(
             model.radii = Some(radii);
         }
     }
+}
+
+fn initialize_surface_normals(
+    model: &mut vol::PointCloudModel,
+    cameras: &[vol::CameraParams],
+) -> usize {
+    assert!(
+        model.radii.is_some(),
+        "oriented PowerFoam requires a weighted point cloud"
+    );
+    assert!(
+        !cameras.is_empty(),
+        "oriented PowerFoam initialization requires at least one training camera"
+    );
+    let positions: Vec<glam::Vec3> = model.points.iter().map(|point| point.truncate()).collect();
+    let camera_positions: Vec<glam::Vec3> = cameras
+        .iter()
+        .map(|camera| glam::Vec3::from_array(camera.cam_position))
+        .collect();
+    let estimates = crate::inverse::surface::estimate_surfaces(
+        &positions,
+        &camera_positions,
+        crate::inverse::surface::SurfaceOptions::default(),
+    );
+    let fitted = estimates
+        .iter()
+        .filter(|estimate| estimate.is_some())
+        .count();
+    let normals = positions
+        .iter()
+        .zip(estimates)
+        .map(|(&point, estimate)| {
+            estimate.map_or_else(
+                || {
+                    camera_positions
+                        .iter()
+                        .map(|&camera| camera - point)
+                        .filter(|direction| direction.length_squared() > 1.0e-20)
+                        .min_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))
+                        .map_or(glam::Vec3::Z, glam::Vec3::normalize)
+                },
+                |surface| surface.normal,
+            )
+        })
+        .collect();
+    model.surface_normals = Some(normals);
+    fitted
 }
 
 /// Convenience wrapper that calls [`train_colmap_appearance_split`] with no
@@ -814,6 +870,7 @@ fn radfoam_v1_initial_model(
         transforms: None,
         adjacency: None,
         radii: None,
+        surface_normals: None,
         points,
     }
 }
@@ -962,6 +1019,22 @@ pub fn train_colmap_appearance_split(
         };
     }
 
+    if config.oriented_powerfoam && model.surface_normals.is_none() {
+        assert!(
+            config.fit.resume_state_path.is_none(),
+            "cannot add oriented PowerFoam normals while restoring an optimizer checkpoint; \
+             initialize a fresh oriented model first"
+        );
+        let cameras: Vec<vol::CameraParams> = views.iter().map(|view| view.camera).collect();
+        let fitted = initialize_surface_normals(&mut model, &cameras);
+        log::info!(
+            "initialized oriented PowerFoam normals: {fitted}/{} local PCA fits, {} \
+             camera-facing fallbacks",
+            model.points.len(),
+            model.points.len() - fitted,
+        );
+    }
+
     let training_start = std::time::Instant::now();
     let fit_outcome = diff_render::fit_appearance_multi_view_outcome(
         &mut model,
@@ -1046,6 +1119,7 @@ mod tests {
             transforms: None,
             adjacency: None,
             radii: None,
+            surface_normals: None,
             points,
         }
     }
@@ -1059,8 +1133,66 @@ mod tests {
         assert!(radii.iter().all(|&r| (r - 6.0).abs() < 1e-6));
         model.validate().unwrap();
 
+        model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
         rebuild_adjacency(&mut model, AdjacencyKind::Delaunay, &[]);
         assert!(model.radii.is_none());
+        assert!(model.surface_normals.is_none());
+        model.validate().unwrap();
+    }
+
+    #[test]
+    fn oriented_powerfoam_initialization_fits_and_faces_cloud_normals() {
+        let points: Vec<glam::Vec4> = (0..4)
+            .flat_map(|y| (0..4).map(move |x| glam::Vec4::new(x as f32, y as f32, 0.0, 1.0)))
+            .collect();
+        let mut model = vol::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: None,
+            radii: Some(vec![1.0; points.len()]),
+            surface_normals: None,
+            points,
+        };
+        let camera = vol::CameraParams {
+            cam_position: [1.5, 1.5, 5.0],
+            depth: 10.0,
+            cam_orientation: glam::Quat::IDENTITY.into(),
+            fov: [1.0; 2],
+            principal: [0.0; 2],
+        };
+
+        let fitted = initialize_surface_normals(&mut model, &[camera]);
+
+        assert_eq!(fitted, model.points.len());
+        assert!(model
+            .surface_normals
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|normal| normal.z > 0.999));
+        model.validate().unwrap();
+    }
+
+    #[test]
+    fn oriented_powerfoam_initialization_keeps_underconstrained_sites() {
+        let mut model = tiny_model_far_apart();
+        model.radii = Some(vec![1.0; model.points.len()]);
+        let camera = vol::CameraParams {
+            cam_position: [0.0, 0.0, 20.0],
+            depth: 100.0,
+            cam_orientation: glam::Quat::IDENTITY.into(),
+            fov: [1.0; 2],
+            principal: [0.0; 2],
+        };
+
+        let fitted = initialize_surface_normals(&mut model, &[camera]);
+
+        assert_eq!(fitted, 0);
+        assert_eq!(
+            model.surface_normals.as_ref().unwrap().len(),
+            model.points.len()
+        );
         model.validate().unwrap();
     }
 
@@ -1181,6 +1313,7 @@ mod tests {
                 offsets: vec![0, 0, 0],
             }),
             radii: Some(vec![0.5, 0.5]),
+            surface_normals: None,
         };
         let camera = vol::CameraParams {
             cam_position: [0.0; 3],
@@ -1389,6 +1522,7 @@ mod tests {
             },
             far_plane: 50.0,
             adjacency: AdjacencyKind::Delaunay,
+            oriented_powerfoam: false,
             init_ply: None,
             test_every: 0,
         };

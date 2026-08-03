@@ -98,6 +98,9 @@ pub struct TrainerState {
     /// `inverse_softplus(radius)` per point, when this cloud is a Power-Foam
     /// model. `None` for plain Voronoi.
     pub log_radii: Option<Vec<f32>>,
+
+    /// Optional oriented PowerFoam surface normals.
+    pub surface_normals: Option<Vec<glam::Vec3>>,
 }
 
 impl TrainerState {
@@ -133,6 +136,7 @@ impl TrainerState {
             sh_coefficients: model.sh_coefficients.clone(),
             sh_degree: model.sh_degree,
             log_radii,
+            surface_normals: model.surface_normals.clone(),
         }
     }
 
@@ -167,6 +171,7 @@ impl TrainerState {
             transforms: None,
             adjacency: None,
             radii,
+            surface_normals: self.surface_normals.clone(),
         }
     }
 }
@@ -207,6 +212,7 @@ mod tests {
             } else {
                 None
             },
+            surface_normals: None,
             points,
         }
     }

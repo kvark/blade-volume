@@ -82,6 +82,7 @@ struct TraceData {
     g_camera: CameraParams,
     g_params: TraceParams,
     g_points: gpu::BufferPiece,
+    g_surface_normals: gpu::BufferPiece,
     g_attributes: gpu::BufferPiece,
     g_adjacency: gpu::BufferPiece,
     g_adjacency_offsets: gpu::BufferPiece,
@@ -202,7 +203,7 @@ fn decode_rgba16f(data: &[u16], pixel_idx: usize) -> glam::Vec4 {
 /// below — they only differ in the model that's passed in.
 fn assert_gpu_matches_cpu(
     context: gpu::Context,
-    model: vol::PointCloudModel,
+    mut model: vol::PointCloudModel,
     test_pixels: &[(u32, u32)],
 ) {
     // Create command encoder early so we can explicitly destroy it for validation cleanliness.
@@ -214,6 +215,10 @@ fn assert_gpu_matches_cpu(
 
     // Upload buffers using the existing helper.
     let mut radfoam_gpu = vol::RadFoamGpuCloud::new(&model, &context, &mut encoder);
+    if let Some(ref mut normals) = model.surface_normals {
+        normals.fill(glam::Vec3::new(0.15, -0.1, -1.0).normalize());
+        radfoam_gpu.update_surface_normals(normals, &context, &mut encoder);
+    }
 
     // Compile production shader and pipeline.
     let source = vol::shaders::compose(vol::shaders::RADFOAM);
@@ -251,7 +256,11 @@ fn assert_gpu_matches_cpu(
         start_point: 0,
         debug_mode: 0, // Normal rendering, not debug visualization
         _align_pad: [0, 0, 0],
-        pad: [model.radii.is_some() as u32, 0, 0],
+        pad: [
+            model.radii.is_some() as u32,
+            model.surface_normals.is_some() as u32,
+            0,
+        ],
         _size_pad: 0,
     };
 
@@ -268,6 +277,7 @@ fn assert_gpu_matches_cpu(
                 g_camera: cam,
                 g_params: params,
                 g_points: radfoam_gpu.points(),
+                g_surface_normals: radfoam_gpu.surface_normals(),
                 g_attributes: radfoam_gpu.attributes(),
                 g_adjacency: radfoam_gpu.point_adjacency(),
                 g_adjacency_offsets: radfoam_gpu.point_adjacency_offsets(),
@@ -430,5 +440,21 @@ fn powerfoam_gpu_matches_cpu_with_radii() {
         .collect();
     model.radii = Some(radii);
 
+    assert_gpu_matches_cpu(context, model, TEST_PIXELS);
+}
+
+#[test]
+fn oriented_powerfoam_gpu_matches_cpu() {
+    let _gpu_test_guard = gpu_test_guard();
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping oriented PowerFoam GPU-vs-CPU test: no supported GPU device found");
+        return;
+    };
+    let mut model = make_branching_test_model();
+    model.radii = Some(vec![0.08; model.points.len()]);
+    model.surface_normals = Some(vec![-glam::Vec3::Z; model.points.len()]);
+
+    // The shared oracle helper replaces these normals after creating the GPU
+    // cloud, exercising the lightweight training-cadence upload path.
     assert_gpu_matches_cpu(context, model, TEST_PIXELS);
 }
