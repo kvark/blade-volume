@@ -267,9 +267,13 @@ Halving that floor scores about 1,100–1,200 more particles but loses 0.02 dB o
 Bonsai, doubling it also loses 0.03 dB, and choosing textured views before the
 facing-ranked cap loses 0.02 dB on Room. A second sweep gains 0.03 dB on Room
 but loses Bonsai average quality and 0.1 percentage point of coverage, even
-with a stricter acceptance threshold. All four changes were removed. The next
-objective needs better geometric visibility or a different cue for unsupported
-particles, not a looser patch threshold or another identical local pass.
+with a stricter acceptance threshold. Lowering geometric support from four to
+three photographs nearly doubles the scored set and improves Bonsai held-out
+PSNR by 0.06 dB, but loses 0.01 dB mean and 0.03 dB worst held-out on Room and
+0.04 dB on the synthetic held-light tail; stronger acceptance gates do not
+recover that transfer. All five changes were removed. The next objective needs
+better geometric visibility or a different cue for unsupported particles, not
+a looser patch threshold, fewer views, or another identical local pass.
 
 An analytic textured sphere now makes that boundary a test rather than an
 inference. With curvature and self-occlusion, all 25 particles that retain four

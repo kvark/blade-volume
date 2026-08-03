@@ -814,6 +814,49 @@ bonsai_texture_supported = 5445
 room_view_supported = 9504
 room_texture_supported = 5407
 
+# Three photographs admit substantially more geometry, but do not transfer as
+# one objective. The exact synthetic foam artifact doubles its scored set and
+# slightly improves position error and coverage, while losing the held-light
+# tail. Bonsai improves, but Room loses mean and worst held-out PSNR. Raising
+# the global acceptance floor to 5%, or raising it only for three-view moves,
+# worsens the synthetic held-light result further. The four-view default stays.
+[surface_refinement.multi_view.rejected_three_view_support]
+date = "2026-08-03"
+parent_commit = "5c9f816"
+control_minimum_views = 4
+candidate_minimum_views = 3
+control_minimum_improvement = 0.02
+strict_minimum_improvement = 0.05
+synthetic_control_scored = 221
+synthetic_candidate_scored = 439
+synthetic_control_moved = 150
+synthetic_candidate_moved = 297
+synthetic_control_position_rmse = 0.6281
+synthetic_candidate_position_rmse = 0.6274
+synthetic_control_normal_rmse_degrees = 66.41
+synthetic_candidate_normal_rmse_degrees = 66.48
+synthetic_control_held_light_psnr = 18.44
+synthetic_candidate_held_light_psnr = 18.44
+synthetic_control_held_light_worst_psnr = 18.18
+synthetic_candidate_held_light_worst_psnr = 18.14
+synthetic_strict_held_light_psnr = 18.43
+synthetic_strict_held_light_worst_psnr = 18.13
+synthetic_selective_strict_held_light_psnr = 18.43
+synthetic_selective_strict_held_light_worst_psnr = 18.14
+bonsai_control_psnr = [15.81, 14.50, 11.68]
+bonsai_candidate_psnr = [15.85, 14.56, 11.82]
+bonsai_candidate_scored = 9322
+bonsai_candidate_moved = 5960
+room_control_psnr = [14.91, 14.37, 13.57]
+room_candidate_psnr = [14.90, 14.36, 13.54]
+room_candidate_scored = 8485
+room_candidate_moved = 5432
+synthetic_candidate_peak_memory_bytes = 221368320
+bonsai_candidate_peak_memory_bytes = 258674688
+room_candidate_peak_memory_bytes = 442064896
+memory_events = 0
+verdict = "reject: three-view support improves Bonsai but regresses the Room and synthetic tails; a stronger acceptance gate does not recover the cross-scene result"
+
 # An analytic textured sphere adds curvature and self-occlusion to the planar
 # displacement gate. With production defaults, every supported displaced
 # particle chooses the exact radial correction and exact geometry stays fixed.

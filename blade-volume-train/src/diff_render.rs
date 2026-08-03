@@ -12,7 +12,7 @@
 //! 4. Expresses `exp(-x)` via the identity
 //!    `exp(-x) = recip(sigmoid(x)) - 1` (valid for x >= 0), since meganeura
 //!    has `sigmoid` and `recip` but no raw `exp`.
-//! 5. Per-pixel-per-step `weight = T * alpha * mask`, then per-channel
+//! 5. Per-pixel-per-step `weight = T * alpha`, then per-channel
 //!    pixel colour `pixel_c = (weight * color_c) @ ones_L`.
 //! 6. L1 loss against ground-truth pixels.
 //!
