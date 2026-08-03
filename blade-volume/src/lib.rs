@@ -81,6 +81,7 @@ pub struct Adjacency {
 /// - `adjacency`: CSR adjacency for RadFoam Voronoi traversal
 /// - `radii`: per-point weight/radius for Power-Foam-style power diagrams
 /// - `surface_normals`: oriented PowerFoam faces; the normal-facing half is empty
+/// - `surface_offsets`: optional signed displacement of each oriented face
 #[derive(Clone)]
 pub struct PointCloudModel {
     /// Position (xyz) + density/opacity (w) for each point.
@@ -114,6 +115,13 @@ pub struct PointCloudModel {
     /// density; the opposite half retains the point's learned density.
     /// Length must equal `points.len()`, and `radii` must also be present.
     pub surface_normals: Option<Vec<glam::Vec3>>,
+
+    /// Optional: signed per-point displacement of the oriented surface plane
+    /// along its unit normal. The retained half-space is
+    /// `dot(position - point, normal) <= surface_offset`. Missing offsets are
+    /// exactly zero for backward-compatible oriented clouds. Length must equal
+    /// `points.len()`, and `surface_normals` must also be present.
+    pub surface_offsets: Option<Vec<f32>>,
 }
 
 impl PointCloudModel {
@@ -198,6 +206,20 @@ impl PointCloudModel {
                 .any(|normal| !normal.is_finite() || normal.length_squared() <= 1.0e-20)
             {
                 return Err("surface normals must be finite and non-zero".to_string());
+            }
+        }
+        if let Some(ref offsets) = self.surface_offsets {
+            if self.surface_normals.is_none() {
+                return Err("surface offsets require oriented surface normals".to_string());
+            }
+            if offsets.len() != count {
+                return Err(format!(
+                    "surface offset length is {}, expected {count}",
+                    offsets.len()
+                ));
+            }
+            if offsets.iter().any(|offset| !offset.is_finite()) {
+                return Err("surface offsets must be finite".to_string());
             }
         }
         if let Some(ref adjacency) = self.adjacency {
@@ -322,6 +344,7 @@ mod model_tests {
             }),
             radii: Some(vec![1.0]),
             surface_normals: None,
+            surface_offsets: None,
         }
     }
 
@@ -337,6 +360,7 @@ mod model_tests {
             }),
             radii: Some(vec![1.0; 2]),
             surface_normals: None,
+            surface_offsets: None,
         }
     }
 
@@ -360,6 +384,22 @@ mod model_tests {
             .validate()
             .unwrap_err()
             .contains("finite and non-zero"));
+    }
+
+    #[test]
+    fn model_validation_checks_oriented_surface_offsets() {
+        let mut model = valid_model();
+        model.surface_offsets = Some(vec![0.0]);
+        assert!(model.validate().unwrap_err().contains("require oriented"));
+
+        model.surface_normals = Some(vec![glam::Vec3::Z]);
+        assert!(model.validate().is_ok());
+
+        model.surface_offsets = Some(Vec::new());
+        assert!(model.validate().unwrap_err().contains("length"));
+
+        model.surface_offsets = Some(vec![f32::NAN]);
+        assert!(model.validate().unwrap_err().contains("must be finite"));
     }
 
     #[test]

@@ -353,6 +353,7 @@ pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
         adjacency: None,
         radii: None,
         surface_normals: None,
+        surface_offsets: None,
     };
     model
         .validate()

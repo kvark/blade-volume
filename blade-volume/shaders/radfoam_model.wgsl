@@ -48,6 +48,10 @@ fn rf_get_surface_normal(idx: u32) -> vec3<f32> {
     return g_surface_normals[idx].xyz;
 }
 
+fn rf_get_surface_offset(idx: u32) -> f32 {
+    return g_surface_normals[idx].w;
+}
+
 fn rf_get_density(idx: u32) -> f32 {
     let attr_dim = rf_compute_attr_dim();
     let comps = min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS);

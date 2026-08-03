@@ -4531,6 +4531,7 @@ fn fit_appearance_pixel_batched(
                         } else {
                             gpu_cloud.update_surface_normals(
                                 model.surface_normals.as_deref().unwrap(),
+                                model.surface_offsets.as_deref(),
                                 &gpu,
                                 &mut record_encoder,
                             );
@@ -4784,6 +4785,7 @@ fn fit_appearance_pixel_batched(
                 } else {
                     gpu_cloud.update_surface_normals(
                         model.surface_normals.as_deref().unwrap(),
+                        model.surface_offsets.as_deref(),
                         &gpu,
                         &mut record_encoder,
                     );
@@ -5285,6 +5287,7 @@ mod tests {
             adjacency: None,
             radii: None,
             surface_normals: None,
+            surface_offsets: None,
             points,
         };
         m.compute_adjacency_default();
@@ -5525,6 +5528,7 @@ mod tests {
             }),
             radii: Some(vec![0.02; points.len()]),
             surface_normals: None,
+            surface_offsets: None,
             points,
         };
         let config = DensifyConfig {
@@ -5573,6 +5577,7 @@ mod tests {
             }),
             radii: Some(vec![1.0; points.len()]),
             surface_normals: None,
+            surface_offsets: None,
             points,
         };
         let config = DensifyConfig {
@@ -5947,6 +5952,7 @@ mod tests {
             }),
             radii: Some(vec![1.0; points.len()]),
             surface_normals: None,
+            surface_offsets: None,
             points,
         };
         let initial_weight = 1.0e-4;

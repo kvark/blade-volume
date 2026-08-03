@@ -7,8 +7,9 @@ use std::{mem, ptr, slice};
 /// This uploads the buffers required by the RadFoam tracing kernel:
 /// - `points`: `vec4<f32>[N]` where xyz is position and w is per-point radius
 ///   (Power Foam weight, or 0 for plain Voronoi)
-/// - `surface_normals`: `vec4<f32>[N]` containing unit dipole normals, or one
-///   zero dummy element for an unoriented cloud
+/// - `surface_normals`: `vec4<f32>[N]` containing unit dipole normals in xyz
+///   and signed surface-plane offsets in w, or one zero dummy element for an
+///   unoriented cloud
 /// - `attributes`: packed `f32[N * attr_dim]`, where `attr_dim = 1 + 3 * (1 + sh_degree)^2`
 ///   and the last scalar in each row is density
 /// - `point_adjacency`: flattened neighbor list `u32[K]`
@@ -220,13 +221,17 @@ impl RadFoamGpuCloud {
 
             match model.surface_normals.as_deref() {
                 Some(normals) => {
+                    let offsets = model.surface_offsets.as_deref();
                     let dst_normals = slice::from_raw_parts_mut(
                         surface_normals_stage.data() as *mut [f32; 4],
                         surface_normal_count,
                     );
                     dst_normals.fill([0.0; 4]);
-                    for (dst, &normal) in dst_normals.iter_mut().zip(normals) {
-                        *dst = normal.normalize().extend(0.0).to_array();
+                    for (index, (dst, &normal)) in dst_normals.iter_mut().zip(normals).enumerate() {
+                        *dst = normal
+                            .normalize()
+                            .extend(offsets.map_or(0.0, |values| values[index]))
+                            .to_array();
                     }
                 }
                 None => {
@@ -336,16 +341,20 @@ impl RadFoamGpuCloud {
         context.destroy_buffer(self.point_adjacency_offsets_buf);
     }
 
-    /// Replaces oriented-surface normals without recreating unchanged point,
+    /// Replaces oriented-surface planes without recreating unchanged point,
     /// attribute, adjacency, or host-index data.
     pub fn update_surface_normals(
         &self,
         normals: &[glam::Vec3],
+        offsets: Option<&[f32]>,
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) {
         assert!(self.is_oriented, "cloud has no surface-normal buffer");
         assert_eq!(normals.len(), self.num_points);
+        if let Some(offsets) = offsets {
+            assert_eq!(offsets.len(), self.num_points);
+        }
         let size = (normals.len() * mem::size_of::<[f32; 4]>()) as u64;
         let stage = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-surface-normals-update",
@@ -354,8 +363,11 @@ impl RadFoamGpuCloud {
         });
         unsafe {
             let dst = slice::from_raw_parts_mut(stage.data() as *mut [f32; 4], normals.len());
-            for (dst_normal, &normal) in dst.iter_mut().zip(normals) {
-                *dst_normal = normal.normalize().extend(0.0).to_array();
+            for (index, (dst_normal, &normal)) in dst.iter_mut().zip(normals).enumerate() {
+                *dst_normal = normal
+                    .normalize()
+                    .extend(offsets.map_or(0.0, |values| values[index]))
+                    .to_array();
             }
         }
 

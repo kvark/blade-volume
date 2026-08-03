@@ -99,6 +99,10 @@ fn rf_get_surface_normal(idx: u32) -> vec3<f32> {
     return g_radfoam_surface_normals[g_rf_obj].data[idx].xyz;
 }
 
+fn rf_get_surface_offset(idx: u32) -> f32 {
+    return g_radfoam_surface_normals[g_rf_obj].data[idx].w;
+}
+
 fn rf_get_density(idx: u32) -> f32 {
     let attr_dim = g_rf_attribute_stride;
     let comps = min(sh_component_count(g_rf_sh_degree), MAX_SH_COMPONENTS);

@@ -101,6 +101,9 @@ pub struct TrainerState {
 
     /// Optional oriented PowerFoam surface normals.
     pub surface_normals: Option<Vec<glam::Vec3>>,
+
+    /// Optional signed offsets of the oriented PowerFoam surface planes.
+    pub surface_offsets: Option<Vec<f32>>,
 }
 
 impl TrainerState {
@@ -137,6 +140,7 @@ impl TrainerState {
             sh_degree: model.sh_degree,
             log_radii,
             surface_normals: model.surface_normals.clone(),
+            surface_offsets: model.surface_offsets.clone(),
         }
     }
 
@@ -150,6 +154,12 @@ impl TrainerState {
         assert_eq!(self.log_density.len(), n);
         if let Some(ref r) = self.log_radii {
             assert_eq!(r.len(), n);
+        }
+        if let Some(ref normals) = self.surface_normals {
+            assert_eq!(normals.len(), n);
+        }
+        if let Some(ref offsets) = self.surface_offsets {
+            assert_eq!(offsets.len(), n);
         }
         let mut points = Vec::with_capacity(n);
         for (i, p) in self.positions.iter().enumerate() {
@@ -172,6 +182,7 @@ impl TrainerState {
             adjacency: None,
             radii,
             surface_normals: self.surface_normals.clone(),
+            surface_offsets: self.surface_offsets.clone(),
         }
     }
 }
@@ -213,6 +224,7 @@ mod tests {
                 None
             },
             surface_normals: None,
+            surface_offsets: None,
             points,
         }
     }
@@ -250,6 +262,18 @@ mod tests {
         for (a, b) in actual.iter().zip(expected.iter()) {
             assert!((a - b).abs() / b < 1e-3, "{} vs {}", a, b);
         }
+    }
+
+    #[test]
+    fn trainer_state_round_trip_preserves_oriented_surface_planes() {
+        let mut model = tiny_model(true);
+        model.surface_normals = Some(vec![glam::Vec3::X, -glam::Vec3::Y, glam::Vec3::Z]);
+        model.surface_offsets = Some(vec![-0.01, 0.0, 0.025]);
+
+        let back = TrainerState::from_model(&model).to_model();
+
+        assert_eq!(back.surface_normals, model.surface_normals);
+        assert_eq!(back.surface_offsets, model.surface_offsets);
     }
 
     #[test]

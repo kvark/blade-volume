@@ -217,7 +217,12 @@ fn assert_gpu_matches_cpu(
     let mut radfoam_gpu = vol::RadFoamGpuCloud::new(&model, &context, &mut encoder);
     if let Some(ref mut normals) = model.surface_normals {
         normals.fill(glam::Vec3::new(0.15, -0.1, -1.0).normalize());
-        radfoam_gpu.update_surface_normals(normals, &context, &mut encoder);
+        radfoam_gpu.update_surface_normals(
+            normals,
+            model.surface_offsets.as_deref(),
+            &context,
+            &mut encoder,
+        );
     }
 
     // Compile production shader and pipeline.
@@ -453,6 +458,7 @@ fn oriented_powerfoam_gpu_matches_cpu() {
     let mut model = make_branching_test_model();
     model.radii = Some(vec![0.08; model.points.len()]);
     model.surface_normals = Some(vec![-glam::Vec3::Z; model.points.len()]);
+    model.surface_offsets = Some(vec![0.01; model.points.len()]);
 
     // The shared oracle helper replaces these normals after creating the GPU
     // cloud, exercising the lightweight training-cadence upload path.

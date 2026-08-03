@@ -673,6 +673,7 @@ mod tests {
             adjacency: None,
             radii: None,
             surface_normals: None,
+            surface_offsets: None,
         };
         let (center, radius) = Scene::compute_gaussian_bounding_sphere(&model, 0.01);
         let expected = 2.0 * (2.0_f32 * 100.0_f32.ln()).sqrt();

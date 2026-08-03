@@ -141,7 +141,7 @@ struct IntervalDifferential {
     dt_d_previous: vec4<f32>,
     dt_d_current: vec4<f32>,
     dt_d_next: vec4<f32>,
-    dt_d_surface_normal: vec3<f32>,
+    dt_d_surface_normal: vec4<f32>,
     valid: u32,
 };
 
@@ -218,7 +218,7 @@ fn interval_differential(
         return IntervalDifferential(
             min(t1 - t0, g_params.max_path_dt),
             vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-            vec3<f32>(0.0),
+            vec4<f32>(0.0),
             select(0u, 1u, t1 > t0),
         );
     }
@@ -228,7 +228,7 @@ fn interval_differential(
     if (sphere.valid == 0u) {
         return IntervalDifferential(
             0.0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-            vec3<f32>(0.0), 0u,
+            vec4<f32>(0.0), 0u,
         );
     }
 
@@ -239,7 +239,7 @@ fn interval_differential(
     var start_from_surface = false;
     var end_from_surface = false;
     var surface_center_jacobian = vec3<f32>(0.0);
-    var surface_normal_jacobian = vec3<f32>(0.0);
+    var surface_plane_jacobian = vec4<f32>(0.0);
     if (sphere.near_t > start) {
         start = sphere.near_t;
         start_from_sphere = true;
@@ -249,23 +249,27 @@ fn interval_differential(
         end_from_sphere = true;
     }
     if (g_params.oriented != 0u) {
-        let normal = g_surface_normals[current_idx].xyz;
+        let surface_data = g_surface_normals[current_idx];
+        let normal = surface_data.xyz;
+        let offset = surface_data.w;
         let denominator = dot(ray_dir, normal);
         if (abs(denominator) <= 1e-20) {
-            if (dot(ray_origin - current.xyz, normal) > 0.0) {
+            if (dot(ray_origin - current.xyz, normal) > offset) {
                 return IntervalDifferential(
                     0.0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-                    vec3<f32>(0.0), 0u,
+                    vec4<f32>(0.0), 0u,
                 );
             }
         } else {
             let relative_center = current.xyz - ray_origin;
-            let numerator = dot(relative_center, normal);
+            let numerator = dot(relative_center, normal) + offset;
             let surface_t = numerator / denominator;
             surface_center_jacobian = normal / denominator;
-            surface_normal_jacobian =
+            surface_plane_jacobian = vec4<f32>(
                 (relative_center * denominator - numerator * ray_dir) /
-                (denominator * denominator);
+                    (denominator * denominator),
+                1.0 / denominator,
+            );
             if (denominator > 0.0 && surface_t < end) {
                 end = surface_t;
                 end_from_surface = true;
@@ -278,17 +282,17 @@ fn interval_differential(
     if (end <= start) {
         return IntervalDifferential(
             0.0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-            vec3<f32>(0.0), 0u,
+            vec4<f32>(0.0), 0u,
         );
     }
 
     var dt_d_previous = vec4<f32>(0.0);
     var dt_d_current = vec4<f32>(0.0);
     var dt_d_next = vec4<f32>(0.0);
-    var dt_d_surface_normal = vec3<f32>(0.0);
+    var dt_d_surface_normal = vec4<f32>(0.0);
     if (start_from_surface) {
         dt_d_current -= vec4<f32>(surface_center_jacobian, 0.0);
-        dt_d_surface_normal -= surface_normal_jacobian;
+        dt_d_surface_normal -= surface_plane_jacobian;
     } else if (start_from_sphere) {
         dt_d_current -= sphere.near_jacobian;
     } else if (previous_idx != current_idx) {
@@ -300,7 +304,7 @@ fn interval_differential(
     }
     if (end_from_surface) {
         dt_d_current += vec4<f32>(surface_center_jacobian, 0.0);
-        dt_d_surface_normal += surface_normal_jacobian;
+        dt_d_surface_normal += surface_plane_jacobian;
     } else if (end_from_sphere) {
         dt_d_current += sphere.far_jacobian;
     } else if (next_idx != current_idx) {
@@ -318,7 +322,7 @@ fn interval_differential(
         dt_d_previous = vec4<f32>(0.0);
         dt_d_current = vec4<f32>(0.0);
         dt_d_next = vec4<f32>(0.0);
-        dt_d_surface_normal = vec3<f32>(0.0);
+        dt_d_surface_normal = vec4<f32>(0.0);
     }
     return IntervalDifferential(
         dt, dt_d_previous, dt_d_current, dt_d_next, dt_d_surface_normal, 1u,
@@ -380,14 +384,18 @@ fn power_interval(
     var effective_near = max(face_near, sphere.near_t);
     var effective_far = min(face_far, sphere.far_t);
     if (g_params.oriented != 0u) {
-        let surface_normal = g_surface_normals[cell].xyz;
+        let surface_data = g_surface_normals[cell];
+        let surface_normal = surface_data.xyz;
+        let surface_offset = surface_data.w;
         let denominator = dot(ray_dir, surface_normal);
         if (abs(denominator) <= 1e-20) {
-            if (dot(ray_origin - current.xyz, surface_normal) > 0.0) {
+            if (dot(ray_origin - current.xyz, surface_normal) > surface_offset) {
                 return PowerInterval(0.0, 0.0, 0.0, cell, cell, 0u);
             }
         } else {
-            let surface_t = dot(current.xyz - ray_origin, surface_normal) / denominator;
+            let surface_t =
+                (dot(current.xyz - ray_origin, surface_normal) + surface_offset) /
+                denominator;
             if (denominator > 0.0) {
                 effective_far = min(effective_far, surface_t);
             } else {
@@ -694,10 +702,10 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (g_params.oriented != 0u) {
                 reference_tangent += dot(
                     differential.dt_d_surface_normal,
-                    g_surface_normals[best_cell].xyz,
+                    g_surface_normals[best_cell],
                 );
                 g_dt_grad_surface_normal_out[output_slot] =
-                    vec4<f32>(differential.dt_d_surface_normal, 0.0);
+                    differential.dt_d_surface_normal;
             }
             g_dt_reference_tangents_out[output_slot] = reference_tangent;
             g_dt_grad_previous_out[output_slot] = differential.dt_d_previous;
@@ -816,10 +824,10 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (g_params.oriented != 0u) {
                     reference_tangent += dot(
                         interval.dt_d_surface_normal,
-                        g_surface_normals[current].xyz,
+                        g_surface_normals[current],
                     );
                     g_dt_grad_surface_normal_out[row_start + output_step] =
-                        vec4<f32>(interval.dt_d_surface_normal, 0.0);
+                        interval.dt_d_surface_normal;
                 }
                 g_dt_reference_tangents_out[row_start + output_step] = reference_tangent;
                 g_dt_grad_previous_out[row_start + output_step] = interval.dt_d_previous;

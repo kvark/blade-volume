@@ -122,6 +122,7 @@ fn powerfoam_model(color: glam::Vec3) -> vol::PointCloudModel {
         }),
         radii: Some(vec![0.5]),
         surface_normals: None,
+        surface_offsets: None,
     }
 }
 
@@ -137,6 +138,7 @@ fn gaussian_model(color: glam::Vec3, scale: glam::Vec3) -> vol::PointCloudModel 
         adjacency: None,
         radii: None,
         surface_normals: None,
+        surface_offsets: None,
     }
 }
 
@@ -290,7 +292,7 @@ fn transformed_powerfoam_scene_matches_analytic_pixels() {
 }
 
 #[test]
-fn oriented_powerfoam_scene_keeps_the_back_half() {
+fn oriented_powerfoam_scene_applies_the_surface_offset() {
     let _gpu_test_guard = gpu_test_guard();
     let Some(context) = test_context(false) else {
         eprintln!("skipping oriented PowerFoam scene readback: no binding-array GPU");
@@ -306,6 +308,7 @@ fn oriented_powerfoam_scene_keeps_the_back_half() {
     let color = glam::Vec3::new(0.8, 0.25, 0.1);
     let mut model = powerfoam_model(color);
     model.surface_normals = Some(vec![-glam::Vec3::Z]);
+    model.surface_offsets = Some(vec![0.125]);
     let object = renderer.add_radfoam(&model, &context, &mut encoder);
     renderer.scene.set_transform(
         object,
@@ -320,7 +323,7 @@ fn oriented_powerfoam_scene_keeps_the_back_half() {
 
     assert_close(
         pixel.truncate(),
-        composite(color, 1.0 - (-0.5_f32).exp()),
+        composite(color, 1.0 - (-0.625_f32).exp()),
         3.0e-3,
     );
     assert!((pixel.w - 1.0).abs() <= 1.0e-3);

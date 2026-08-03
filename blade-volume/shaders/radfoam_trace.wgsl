@@ -8,6 +8,7 @@
 //   fn rf_is_bounded() -> bool;
 //   fn rf_is_oriented() -> bool;
 //   fn rf_get_surface_normal(idx: u32) -> vec3<f32>;
+//   fn rf_get_surface_offset(idx: u32) -> f32;
 //   fn rf_get_density(idx: u32) -> f32;
 //   fn rf_get_color(idx: u32, dir: vec3<f32>) -> vec3<f32>;
 //   fn rf_adjacency_begin(idx: u32) -> u32;
@@ -66,13 +67,14 @@ fn rf_support_interval(
     }
     if (rf_is_oriented()) {
         let normal = rf_get_surface_normal(cell);
+        let offset = rf_get_surface_offset(cell);
         let denominator = dot(ray_dir, normal);
         if (abs(denominator) <= 1e-20) {
-            if (dot(ray_origin - center, normal) > 0.0) {
+            if (dot(ray_origin - center, normal) > offset) {
                 return vec2<f32>(t0, t0);
             }
         } else {
-            let surface_t = dot(center - ray_origin, normal) / denominator;
+            let surface_t = (dot(center - ray_origin, normal) + offset) / denominator;
             if (denominator > 0.0) {
                 clipped.y = min(clipped.y, surface_t);
             } else {

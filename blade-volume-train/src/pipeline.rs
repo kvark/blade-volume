@@ -680,6 +680,7 @@ fn rebuild_adjacency(
             );
             model.radii = None;
             model.surface_normals = None;
+            model.surface_offsets = None;
             model.compute_adjacency_default();
         }
         AdjacencyKind::DelaunayQhull => {
@@ -689,6 +690,7 @@ fn rebuild_adjacency(
             );
             model.radii = None;
             model.surface_normals = None;
+            model.surface_offsets = None;
             #[cfg(feature = "qhull")]
             {
                 model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
@@ -703,6 +705,7 @@ fn rebuild_adjacency(
             );
             model.radii = None;
             model.surface_normals = None;
+            model.surface_offsets = None;
             model.adjacency = Some(vol::compute_knn(&model.points, k));
         }
         AdjacencyKind::Cech { radius_factor } => {
@@ -871,6 +874,7 @@ fn radfoam_v1_initial_model(
         adjacency: None,
         radii: None,
         surface_normals: None,
+        surface_offsets: None,
         points,
     }
 }
@@ -1120,6 +1124,7 @@ mod tests {
             adjacency: None,
             radii: None,
             surface_normals: None,
+            surface_offsets: None,
             points,
         }
     }
@@ -1152,6 +1157,7 @@ mod tests {
             adjacency: None,
             radii: Some(vec![1.0; points.len()]),
             surface_normals: None,
+            surface_offsets: None,
             points,
         };
         let camera = vol::CameraParams {
@@ -1314,6 +1320,7 @@ mod tests {
             }),
             radii: Some(vec![0.5, 0.5]),
             surface_normals: None,
+            surface_offsets: None,
         };
         let camera = vol::CameraParams {
             cam_position: [0.0; 3],

@@ -213,6 +213,7 @@ fn allocate_model(header: &Header) -> Result<crate::PointCloudModel, LoadError> 
         adjacency: None,
         radii: None,
         surface_normals: None,
+        surface_offsets: None,
     })
 }
 

@@ -501,6 +501,7 @@ mod gaussian_tests {
             adjacency: None,
             radii: None,
             surface_normals: None,
+            surface_offsets: None,
         };
 
         let color = eval_rgb_sh(&model, 0, glam::Vec3::Z);
@@ -534,6 +535,7 @@ mod gaussian_tests {
             adjacency: None,
             radii: None,
             surface_normals: None,
+            surface_offsets: None,
         }
     }
 
@@ -645,8 +647,9 @@ pub struct PathEntry {
 ///
 /// The three `dt_d_*` vectors differentiate `dt` with respect to the selected
 /// site's `(x, y, z, radius)` and the two sites defining its entry and exit
-/// radical planes. `dt_d_surface_normal` differentiates an oriented
-/// PowerFoam interval with respect to the selected site's unit normal. A
+/// radical planes. `dt_d_surface_normal` differentiates an oriented PowerFoam
+/// interval with respect to the selected site's `(unit normal xyz, surface
+/// offset)`. A
 /// repeated index is a sentinel for a fixed boundary:
 /// `previous_cell == cell` means the ray starts at `t = 0`, while
 /// `next_cell == cell` means it terminates at the configured depth. The
@@ -661,7 +664,7 @@ pub struct PathJacobianEntry {
     pub dt_d_previous: glam::Vec4,
     pub dt_d_current: glam::Vec4,
     pub dt_d_next: glam::Vec4,
-    pub dt_d_surface_normal: glam::Vec3,
+    pub dt_d_surface_normal: glam::Vec4,
 }
 
 /// Record-only result of a ray trace: the sequence of `(cell, dt)` segments
@@ -747,24 +750,31 @@ fn sphere_intersection_jacobians(
     ))
 }
 
-/// Intersection with the oriented plane through `center` and its derivatives
-/// with respect to the center and unit surface normal.
+/// Intersection with an oriented plane and its derivatives with respect to
+/// the center, unit surface normal, and signed surface offset.
 fn surface_intersection_jacobians(
     ray_origin: glam::Vec3,
     ray_dir: glam::Vec3,
     center: glam::Vec3,
     normal: glam::Vec3,
-) -> Option<(f32, glam::Vec3, glam::Vec3)> {
+    offset: f32,
+) -> Option<(f32, glam::Vec3, glam::Vec3, f32)> {
     let denominator = ray_dir.dot(normal);
     if !denominator.is_finite() || denominator.abs() <= 1.0e-20 {
         return None;
     }
     let relative_center = center - ray_origin;
-    let numerator = relative_center.dot(normal);
+    let numerator = relative_center.dot(normal) + offset;
     let t = numerator / denominator;
     let dt_d_center = normal / denominator;
     let dt_d_normal = (relative_center * denominator - numerator * ray_dir) / denominator.powi(2);
-    (t.is_finite() && dt_d_normal.is_finite()).then_some((t, dt_d_center, dt_d_normal))
+    let dt_d_offset = denominator.recip();
+    (t.is_finite() && dt_d_normal.is_finite() && dt_d_offset.is_finite()).then_some((
+        t,
+        dt_d_center,
+        dt_d_normal,
+        dt_d_offset,
+    ))
 }
 
 fn normalized_surface_normal(model: &PointCloudModel, cell: u32) -> Option<glam::Vec3> {
@@ -774,8 +784,15 @@ fn normalized_surface_normal(model: &PointCloudModel, cell: u32) -> Option<glam:
         .map(|normals| normals[cell as usize].normalize())
 }
 
+fn surface_offset(model: &PointCloudModel, cell: u32) -> f32 {
+    model
+        .surface_offsets
+        .as_deref()
+        .map_or(0.0, |offsets| offsets[cell as usize])
+}
+
 /// Clip an interval to the dense half of an oriented PowerFoam cell. The
-/// retained side is `dot(position - center, normal) <= 0`.
+/// retained side is `dot(position - center, normal) <= surface_offset`.
 fn clip_surface_interval(
     model: &PointCloudModel,
     cell: u32,
@@ -788,12 +805,13 @@ fn clip_surface_interval(
         return (end > start).then_some((start, end));
     };
     let center = model.points[cell as usize].truncate();
+    let offset = surface_offset(model, cell);
     let denominator = ray_dir.dot(normal);
     if denominator.abs() <= 1.0e-20 {
-        let outside = (ray_origin - center).dot(normal) > 0.0;
+        let outside = (ray_origin - center).dot(normal) > offset;
         return (!outside && end > start).then_some((start, end));
     }
-    let t = (center - ray_origin).dot(normal) / denominator;
+    let t = ((center - ray_origin).dot(normal) + offset) / denominator;
     let (clipped_start, clipped_end) = if denominator > 0.0 {
         (start, end.min(t))
     } else {
@@ -837,20 +855,21 @@ fn path_interval_jacobian(
         }
     }
     if let Some(normal) = normalized_surface_normal(model, cell) {
+        let offset = surface_offset(model, cell);
         let denominator = ray_dir.dot(normal);
         if denominator.abs() <= 1.0e-20 {
-            if (ray_origin - current_pos).dot(normal) > 0.0 {
+            if (ray_origin - current_pos).dot(normal) > offset {
                 return None;
             }
-        } else if let Some((t, center_jacobian, normal_jacobian)) =
-            surface_intersection_jacobians(ray_origin, ray_dir, current_pos, normal)
+        } else if let Some((t, center_jacobian, normal_jacobian, offset_jacobian)) =
+            surface_intersection_jacobians(ray_origin, ray_dir, current_pos, normal, offset)
         {
             if denominator > 0.0 && t < end {
                 end = t;
-                end_surface_jacobian = Some((center_jacobian, normal_jacobian));
+                end_surface_jacobian = Some((center_jacobian, normal_jacobian, offset_jacobian));
             } else if denominator < 0.0 && t > start {
                 start = t;
-                start_surface_jacobian = Some((center_jacobian, normal_jacobian));
+                start_surface_jacobian = Some((center_jacobian, normal_jacobian, offset_jacobian));
             }
         }
     }
@@ -861,11 +880,11 @@ fn path_interval_jacobian(
     let mut dt_d_previous = glam::Vec4::ZERO;
     let mut dt_d_current = glam::Vec4::ZERO;
     let mut dt_d_next = glam::Vec4::ZERO;
-    let mut dt_d_surface_normal = glam::Vec3::ZERO;
+    let mut dt_d_surface_normal = glam::Vec4::ZERO;
 
-    if let Some((center_jacobian, normal_jacobian)) = start_surface_jacobian {
+    if let Some((center_jacobian, normal_jacobian, offset_jacobian)) = start_surface_jacobian {
         dt_d_current -= center_jacobian.extend(0.0);
-        dt_d_surface_normal -= normal_jacobian;
+        dt_d_surface_normal -= normal_jacobian.extend(offset_jacobian);
     } else if let Some(jacobian) = start_sphere_jacobian {
         dt_d_current -= jacobian;
     } else if previous_cell != cell {
@@ -884,9 +903,9 @@ fn path_interval_jacobian(
         dt_d_previous -= previous_jacobian;
     }
 
-    if let Some((center_jacobian, normal_jacobian)) = end_surface_jacobian {
+    if let Some((center_jacobian, normal_jacobian, offset_jacobian)) = end_surface_jacobian {
         dt_d_current += center_jacobian.extend(0.0);
-        dt_d_surface_normal += normal_jacobian;
+        dt_d_surface_normal += normal_jacobian.extend(offset_jacobian);
     } else if let Some(jacobian) = end_sphere_jacobian {
         dt_d_current += jacobian;
     } else if next_cell != cell {
@@ -1392,6 +1411,7 @@ mod path_tests {
             adjacency: None,
             radii: None,
             surface_normals: None,
+            surface_offsets: None,
         };
         m.compute_adjacency_default();
         m
@@ -1512,6 +1532,7 @@ mod path_tests {
             }),
             radii: None,
             surface_normals: None,
+            surface_offsets: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1545,6 +1566,7 @@ mod path_tests {
             }),
             radii: Some(vec![1.0]),
             surface_normals: None,
+            surface_offsets: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.0, 0.0, -2.0),
@@ -1577,6 +1599,7 @@ mod path_tests {
             }),
             radii: Some(vec![1.0]),
             surface_normals: Some(vec![-glam::Vec3::Z]),
+            surface_offsets: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1600,6 +1623,40 @@ mod path_tests {
     }
 
     #[test]
+    fn oriented_powerfoam_surface_offset_moves_the_clipping_plane() {
+        let model = PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 5.0, 2.0)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: Some(vec![1.0]),
+            surface_normals: Some(vec![-glam::Vec3::Z]),
+            surface_offsets: Some(vec![0.25]),
+        };
+        let ray = Ray {
+            origin: glam::Vec3::ZERO,
+            direction: glam::Vec3::Z,
+        };
+        let settings = TraceSettings {
+            depth: 10.0,
+            ..settings_for(0)
+        };
+
+        let walked = record_path_jacobians(&model, ray, settings);
+        let splatted = record_powerfoam_splats_jacobians(&model, ray, settings);
+        assert!((walked.entries[0].dt - 1.25).abs() < 1.0e-6);
+        assert!((splatted.entries[0].dt - 1.25).abs() < 1.0e-6);
+
+        let traced = trace_one_ray(&model, ray, settings);
+        let expected_alpha = 1.0 - (-2.5_f32).exp();
+        assert!((traced.rgba.w - expected_alpha).abs() < 1.0e-6);
+    }
+
+    #[test]
     fn oriented_powerfoam_rejects_parallel_rays_on_the_empty_side() {
         let mut model = PointCloudModel {
             points: vec![glam::Vec4::new(0.0, 0.0, 5.0, 1.0)],
@@ -1612,6 +1669,7 @@ mod path_tests {
             }),
             radii: Some(vec![2.0]),
             surface_normals: Some(vec![glam::Vec3::X]),
+            surface_offsets: None,
         };
         let settings = TraceSettings {
             depth: 10.0,
@@ -1650,6 +1708,7 @@ mod path_tests {
             }),
             radii: Some(vec![0.5, 0.5]),
             surface_normals: None,
+            surface_offsets: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1713,6 +1772,7 @@ mod path_tests {
             }),
             radii: Some(vec![1.4, 0.9, 1.6]),
             surface_normals: None,
+            surface_offsets: None,
             points,
         };
         let ray = Ray {
@@ -1850,6 +1910,7 @@ mod path_tests {
             }),
             radii: Some(vec![2.0, 2.0, 2.0]),
             surface_normals: None,
+            surface_offsets: None,
             points,
         };
         let ray = Ray {
@@ -1903,6 +1964,7 @@ mod path_tests {
             }),
             radii: Some(vec![1.0]),
             surface_normals: None,
+            surface_offsets: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.2, 0.1, -2.0),
@@ -1941,6 +2003,7 @@ mod path_tests {
             }),
             radii: Some(vec![2.0]),
             surface_normals: Some(vec![normal]),
+            surface_offsets: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.3, 0.1, 0.0),
@@ -1961,7 +2024,46 @@ mod path_tests {
         minus.surface_normals.as_mut().unwrap()[0] = (normal - EPSILON * tangent).normalize();
         let minus_dt = record_path_jacobians(&minus, ray, settings).entries[0].dt;
         let numerical = (plus_dt - minus_dt) / (2.0 * EPSILON);
-        let analytical = entry.dt_d_surface_normal.dot(tangent);
+        let analytical = entry.dt_d_surface_normal.truncate().dot(tangent);
+        assert!(
+            (analytical - numerical).abs() < 2.0e-3,
+            "analytical={analytical}, numerical={numerical}"
+        );
+    }
+
+    #[test]
+    fn powerfoam_surface_offset_jacobian_matches_central_finite_difference() {
+        let model = PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 5.0, 1.0)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: Some(vec![2.0]),
+            surface_normals: Some(vec![glam::Vec3::new(-0.2, 0.1, -1.0).normalize()]),
+            surface_offsets: Some(vec![0.15]),
+        };
+        let ray = Ray {
+            origin: glam::Vec3::new(0.3, 0.1, 0.0),
+            direction: glam::Vec3::new(0.05, 0.02, 1.0),
+        };
+        let settings = TraceSettings {
+            depth: 10.0,
+            ..settings_for(0)
+        };
+        let entry = record_path_jacobians(&model, ray, settings).entries[0];
+        const EPSILON: f32 = 1.0e-3;
+        let mut plus = model.clone();
+        plus.surface_offsets.as_mut().unwrap()[0] += EPSILON;
+        let plus_dt = record_path_jacobians(&plus, ray, settings).entries[0].dt;
+        let mut minus = model.clone();
+        minus.surface_offsets.as_mut().unwrap()[0] -= EPSILON;
+        let minus_dt = record_path_jacobians(&minus, ray, settings).entries[0].dt;
+        let numerical = (plus_dt - minus_dt) / (2.0 * EPSILON);
+        let analytical = entry.dt_d_surface_normal.w;
         assert!(
             (analytical - numerical).abs() < 2.0e-3,
             "analytical={analytical}, numerical={numerical}"
@@ -1985,6 +2087,7 @@ mod path_tests {
             }),
             radii: Some(vec![0.95, 0.1, 0.95]),
             surface_normals: None,
+            surface_offsets: None,
             points,
         };
         let ray = Ray {
