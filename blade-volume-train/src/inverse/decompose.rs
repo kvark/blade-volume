@@ -522,8 +522,23 @@ fn cluster_by_chromaticity(
     if clusters == 0 || clusters >= count {
         return ((0..count as u32).collect(), count);
     }
-    let chromaticity: Vec<[f32; 3]> = (0..count)
-        .map(|index| {
+    let active: Vec<usize> = (0..count)
+        .filter(|&index| !observations.of(index).is_empty())
+        .collect();
+    if active.is_empty() {
+        return (vec![0; count], 1);
+    }
+    let clusters = clusters.min(active.len());
+    if clusters == active.len() {
+        let mut assignment = vec![0; count];
+        for (cluster, &index) in active.iter().enumerate() {
+            assignment[index] = cluster as u32;
+        }
+        return (assignment, clusters);
+    }
+    let chromaticity: Vec<[f32; 3]> = active
+        .iter()
+        .map(|&index| {
             let rgb = observations.mean(index);
             let sum = rgb[0] + rgb[1] + rgb[2];
             if sum > 1.0e-6 {
@@ -537,18 +552,18 @@ fn cluster_by_chromaticity(
     // Seeded stride rather than random draws: the same cloud has to cluster
     // the same way twice or a sweep over cluster counts is measuring noise.
     let mut centres: Vec<[f32; 3]> = Vec::with_capacity(clusters);
-    let stride = (count / clusters).max(1);
-    let mut cursor = (seed as usize) % count;
+    let stride = (active.len() / clusters).max(1);
+    let mut cursor = (seed as usize) % active.len();
     for _ in 0..clusters {
         centres.push(chromaticity[cursor]);
-        cursor = (cursor + stride) % count;
+        cursor = (cursor + stride) % active.len();
     }
 
     let mut assignment = vec![0u32; count];
     for _ in 0..12 {
         let mut sums = vec![[0.0f64; 3]; clusters];
         let mut counts = vec![0u32; clusters];
-        for (index, colour) in chromaticity.iter().enumerate() {
+        for (&index, colour) in active.iter().zip(&chromaticity) {
             let mut best = 0usize;
             let mut best_distance = f32::INFINITY;
             for (slot, centre) in centres.iter().enumerate() {
@@ -1666,6 +1681,40 @@ mod tests {
             samples,
             offsets: (0..=mean.len() as u32).collect(),
         }
+    }
+
+    fn with_unseen_prefix(unseen: usize, mean: &[[f32; 3]]) -> Observations {
+        let mut samples = Vec::with_capacity(mean.len());
+        let mut offsets = vec![0; unseen + 1];
+        for &radiance in mean {
+            samples.push(Sample {
+                radiance,
+                towards: glam::Vec3::Y,
+                facing: 1.0,
+            });
+            offsets.push(samples.len() as u32);
+        }
+        Observations { samples, offsets }
+    }
+
+    #[test]
+    fn unseen_surfels_do_not_change_material_clusters() {
+        let mean = [
+            [0.8, 0.1, 0.1],
+            [0.7, 0.2, 0.1],
+            [0.75, 0.15, 0.1],
+            [0.1, 0.2, 0.7],
+            [0.1, 0.1, 0.8],
+            [0.15, 0.15, 0.7],
+        ];
+        let base = from_means(&mean);
+        let padded = with_unseen_prefix(100, &mean);
+        let (base_assignment, base_clusters) = cluster_by_chromaticity(&base, 2, 0x5EED);
+        let (padded_assignment, padded_clusters) = cluster_by_chromaticity(&padded, 2, 0x5EED);
+
+        assert_eq!(base_clusters, 2);
+        assert_eq!(padded_clusters, base_clusters);
+        assert_eq!(&padded_assignment[100..], base_assignment);
     }
 
     #[test]
