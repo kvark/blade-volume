@@ -4226,6 +4226,12 @@ fn fit_appearance_pixel_batched(
     // `model` reflects the current session so endpoint checkpoint/finalization
     // does not repeat the same full parameter readback.
     let mut model_parameters_current = false;
+    // Inactive rows are masked and use zeroed gather indices. Initialize their
+    // remaining payload once, then retain the previous finite payload instead
+    // of clearing tens of MiB of dt/Jacobian storage before every dispatch.
+    // `padded_weighted_steps_have_zero_loss_and_parameter_gradient` covers
+    // non-zero masked payload for every trainable weighted-path table.
+    let mut path_payload_initialized = false;
     phase_timings.setup += setup_start.elapsed();
 
     while steps_done < invocation_end {
@@ -4403,10 +4409,14 @@ fn fit_appearance_pixel_batched(
                 );
                 tx.fill_buffer(path_bufs.cells.at(0), pl_bytes, 0);
                 tx.fill_buffer(path_bufs.next_cells.at(0), pl_bytes, 0);
-                tx.fill_buffer(path_bufs.dts.at(0), pl_bytes, 0);
                 tx.fill_buffer(path_bufs.mask.at(0), pl_bytes, 0);
                 if path_bufs.has_jacobians() {
                     tx.fill_buffer(path_bufs.previous_cells.at(0), pl_bytes, 0);
+                }
+                if !path_payload_initialized {
+                    tx.fill_buffer(path_bufs.dts.at(0), pl_bytes, 0);
+                }
+                if path_bufs.has_jacobians() && !path_payload_initialized {
                     tx.fill_buffer(path_bufs.dt_reference_tangents.at(0), pl_bytes, 0);
                     tx.fill_buffer(path_bufs.dt_grad_previous.at(0), pl_bytes * 4, 0);
                     tx.fill_buffer(path_bufs.dt_grad_current.at(0), pl_bytes * 4, 0);
@@ -4435,6 +4445,7 @@ fn fit_appearance_pixel_batched(
             }
             recorder.dispatch_batch(&mut record_encoder, &gpu_cloud, &path_bufs, &record_args);
             let _ = gpu.submit(&mut record_encoder);
+            path_payload_initialized = true;
             phase_timings.path_submit += path_submit_start.elapsed();
 
             let gpu_step_start = std::time::Instant::now();
@@ -6707,6 +6718,8 @@ mod tests {
         };
         let mut model = tiny_model();
         model.radii = Some(vec![1.0; model.points.len()]);
+        model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
+        model.surface_offsets = Some(vec![0.0; model.points.len()]);
         let n_cells = model.points.len();
         let mut graph = mn::Graph::new();
         build_volumetric_graph(
@@ -6724,8 +6737,8 @@ mod tests {
             0.0,
             [0.0; 3],
             true,
-            false,
-            false,
+            true,
+            true,
             false,
             ColorLoss::SmoothL1,
         );
@@ -6749,6 +6762,8 @@ mod tests {
         session.set_input("dt_grad_previous", &[1.0; 8]);
         session.set_input("dt_grad_current", &[1.0; 8]);
         session.set_input("dt_grad_next", &[1.0; 8]);
+        session.set_input("dt_grad_surface_normal", &[1.0; 8]);
+        session.set_input("surface_normal_loss_scale", &[0.0]);
         session.set_input("mask", &[0.0; 2]);
         session.set_input("ray_origin", &[0.1, 0.1, -1.0]);
         session.set_input("ray_dir_per_pixel", &[0.0, 0.0, 1.0]);
@@ -6764,6 +6779,8 @@ mod tests {
             ("log_density", n_cells),
             ("positions", 3 * n_cells),
             ("log_radii", n_cells),
+            ("surface_normals", 3 * n_cells),
+            ("surface_offsets", n_cells),
             ("sh_r", n_cells),
             ("sh_g", n_cells),
             ("sh_b", n_cells),

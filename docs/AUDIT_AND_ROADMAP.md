@@ -671,6 +671,15 @@ At the audited revision:
   627 MB peak host memory, and no swap, pressure, OOM, or GPU fault. Offsets
   remain opt-in pending a second-scene gate; they are one value per site, not
   the reference detail-site/spherical-Voronoi appearance model.
+- Reusing finite masked path payload after a one-time initialization removes
+  36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
+  step, while still clearing every gather index and mask. The matched
+  2,040-step oriented replay is 3.46% faster in training and 3.27% end to end;
+  its fresh-Ply train/held-out score moves only +0.0004/-0.0002 dB. A physical
+  GPU test injects non-zero padding across positions, radii, normals, and
+  offsets and observes exactly zero loss and gradients. The complete serial
+  training suite and strict workspace lint pass; peak memory remains 563 MB
+  with no swap, pressure, OOM, or GPU fault.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but

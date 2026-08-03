@@ -593,6 +593,16 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   and records zero swap, pressure, OOM, or GPU faults. The feature passes one
   real-scene causal gate but remains opt-in until a second scene confirms the
   gain; full spatial texel appearance remains the next semantic experiment.
+- Weighted training no longer clears the inactive dt/Jacobian payload before
+  every path dispatch. It initializes that payload once and continues clearing
+  all gather indices and masks, so padded rows can reuse only finite masked
+  values. At 4,096 rays × 128 entries this reduces per-step buffer fills from
+  44 to 8 MiB. The matched 2,040-step ratio-0.01 replay cuts training
+  125.036→120.709 seconds (3.46%) and command time 129.763→125.521 seconds
+  (3.27%); fresh-Ply quality changes only 17.1232/16.2808→17.1236/16.2806 dB,
+  within separate-run GPU drift. Peak memory is flat at 563 MB and the full
+  serial training suite, strict workspace clippy, and zero-loss/zero-gradient
+  padded oriented-path test pass with no cgroup or GPU faults.
 
 ### M3 — Training crate scaffolding
 
