@@ -102,6 +102,27 @@ fn parameter_name(channel: &str, k: usize) -> String {
     }
 }
 
+fn set_sh_lr_multipliers(
+    session: &mut mn::Session,
+    sh_degree: usize,
+    dc_multiplier: f32,
+    rest_multiplier: f32,
+) {
+    let num_components = (1 + sh_degree) * (1 + sh_degree);
+    for channel in ["sh_r", "sh_g", "sh_b"] {
+        for component in 0..num_components {
+            session.set_lr_multiplier(
+                &parameter_name(channel, component),
+                if component == 0 {
+                    dc_multiplier
+                } else {
+                    rest_multiplier
+                },
+            );
+        }
+    }
+}
+
 const RADIUS_SOFTPLUS_BETA: f32 = 100.0;
 const POINT_ERROR_PROBE: &str = "point_error_probe";
 
@@ -1799,12 +1820,7 @@ fn configure_optimizer(
             session.set_adam(1.0, config.adam_beta1, config.adam_beta2, 1.0e-15);
             session.set_lr_multiplier("log_density", rates.density);
             session.set_lr_multiplier("positions", rates.position);
-            for channel in ["sh_r_", "sh_g_", "sh_b_"] {
-                session.set_lr_multiplier(channel, rates.sh_rest);
-            }
-            for channel in ["sh_r_0", "sh_g_0", "sh_b_0"] {
-                session.set_lr_multiplier(channel, rates.sh_dc);
-            }
+            set_sh_lr_multipliers(session, config.sh_degree, rates.sh_dc, rates.sh_rest);
             session.set_lr_multiplier("exposure_", 0.0);
             session.set_lr_multiplier("log_radii", 0.0);
         }
@@ -3519,12 +3535,12 @@ fn build_train_session(
 
     session.set_adam(lr, betas.0, betas.1, betas.2);
     let multipliers = relative_lr_multipliers(lr_groups, sh_degree, position_lr_ratio);
-    for channel in ["sh_r_", "sh_g_", "sh_b_"] {
-        session.set_lr_multiplier(channel, multipliers.sh_rest);
-    }
-    for channel in ["sh_r_0", "sh_g_0", "sh_b_0"] {
-        session.set_lr_multiplier(channel, multipliers.sh_dc);
-    }
+    set_sh_lr_multipliers(
+        &mut session,
+        sh_degree,
+        multipliers.sh_dc,
+        multipliers.sh_rest,
+    );
     session.set_lr_multiplier("positions", multipliers.position);
     if model.radii.is_some() {
         session.set_lr_multiplier("log_radii", radius_lr_ratio);
@@ -5653,6 +5669,45 @@ mod tests {
                 sh_rest: 0.005,
             }
         );
+    }
+
+    #[test]
+    fn sh_learning_rate_multipliers_reach_bare_dc_parameter_names() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!(
+                "skipping sh_learning_rate_multipliers_reach_bare_dc_parameter_names: no GPU"
+            );
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        let dc = graph.parameter("sh_r", &[1, 1]);
+        let rest = graph.parameter("sh_r_1", &[1, 1]);
+        let dc_loss = graph.mean_all(dc);
+        let rest_loss = graph.mean_all(rest);
+        let loss = graph.add(dc_loss, rest_loss);
+        graph.set_outputs(vec![loss]);
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        session.set_parameter("sh_r", &[0.0]);
+        session.set_parameter("sh_r_1", &[0.0]);
+        session.set_adam(0.1, 0.0, 0.0, 1.0e-8);
+        set_sh_lr_multipliers(&mut session, 1, 0.25, 0.5);
+        session.step();
+        session.wait();
+
+        let mut actual_dc = [0.0];
+        let mut actual_rest = [0.0];
+        session.read_param("sh_r", &mut actual_dc);
+        session.read_param("sh_r_1", &mut actual_rest);
+        assert!((actual_dc[0] + 0.025).abs() < 1.0e-5, "{actual_dc:?}");
+        assert!((actual_rest[0] + 0.05).abs() < 1.0e-5, "{actual_rest:?}");
     }
 
     #[test]
