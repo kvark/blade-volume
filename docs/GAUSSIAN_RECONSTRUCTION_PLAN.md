@@ -138,6 +138,16 @@ baseline artifacts are `target/audit-runs/synthetic-foam-zero-scatter-v1/model.p
 and `scene.rply`
 (SHA-256 `38221090e2f45f94bf8122015a8e2d195a5224f9d062b10b10e1ef66ffc198da`).
 
+The selected graph-packing rerun keeps every checkpoint parameter and the
+256-step path cap, but gathers the degree-2 RGB SH coefficients as one wide
+table. Three full repeats train in 16.00--16.05 seconds and reach 24.09--24.20 dB
+held-pose radiance, 0.624--0.627 position RMSE, and 18.39--18.65 dB under the
+unseen light. The latest selected reconstruction is
+`target/audit-runs/synthetic-coalesced-sh-packed-v3/model.ply` (SHA-256
+`b80ef068fe53404e4571d42c1d3e8774361d749d7242e178a5d7c3a6a904a39b`); its
+Gaussian PBR surface is `scene.rply` beside it (SHA-256
+`2698967e65b989a7c61194c641f68d3f6883e2e32566d2a7668a4fe6307338c4`).
+
 Higher camera-lattice position rates were not selected. A 0.08 ratio with a
 300-step warmup improves the first three repeats to 25.52--25.85 dB on held
 poses and 18.60--18.74 dB under the unseen light, but a fourth falls to 22.53
@@ -176,10 +186,29 @@ scalar embedding-gradient scatters (density plus degree-2 RGB SH) spent about
 skips exact-zero atomic sources, reducing that group to 5.1--6.5 ms and the
 120-update GPU wait from 8.291 to 2.804 seconds. The full 1,200-update gate is
 2.22x faster with stable quality. Ordinary gathers now lead the profile at
-about 13 ms per update. The next performance experiment is therefore compact
-active path storage or shared/fused coefficient gathers; it must preserve the
-256-step truncation safety and beat the current quality/memory gate before it
-is selected.
+about 13 ms per update.
+
+The follow-up coalesces the 27 individually named RGB/SH parameter tables only
+inside the graph, preserving checkpoint and learning-rate semantics. One wide
+gather/scatter replaces the scalar pairs: the graph falls from 391 to 348 GPU
+passes and 24.5--25.5 to 11.6--11.7 ms per update. Full training is 1.84x
+faster (29.51 to 16.00--16.05 seconds), with three quality repeats and a Bonsai
+SH-2 fresh-PLY smoke inside the acceptance gate. Peak synthetic memory is
+363.2 MB and the 3.37 GB full-workspace test scope records no memory events.
+At the current production shape (200K cells, SH-3, 4,096 rays), the fair
+current-Meganeura control falls from 506 to 421 timed passes and 62.34 to 26.62
+ms per step (2.34x); cgroup peak falls 1.510 to 1.436 GB. The packed graph does
+raise planned device-local memory from 495 to 962 MB. A per-channel layout
+reduces that to 849 MB, but one of two full quality repeats develops the same
+bad material/depth tail as a rejected traversal-cap arm, so RGB remains one
+atomic dispatch. A future native packed-parameter representation should remove
+the compatibility concat buffers before scaling far beyond 200K cells.
+Global path caps of 128 and 192 are rejected: 128 gives no meaningful speed
+advantage over packing at 256 and loses the held-view tail, while 192 produces
+6.80 world-unit training-depth RMSE and an unstable material fit. The next
+performance targets are native checkpoint-compatible packed parameters, dead
+input-gradient work, and compact active path storage, still gated at the
+unchanged safe traversal extent.
 
 A 32-neighbour fused-cloud covariance prior was also tested against the 66°
 normal failure. A sign-aligned 50% blend reduces synthetic normal RMSE to

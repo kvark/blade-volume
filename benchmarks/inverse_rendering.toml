@@ -1158,6 +1158,111 @@ held_light_held_pose_psnr = 18.38
 held_light_held_pose_worst_psnr = 18.09
 verdict = "An independent training run stays within 0.10 dB radiance and 0.07 dB fixed-roughness relighting of the selected run."
 
+# Keep the individually named scalar SH parameters so old checkpoints and
+# per-component learning rates remain valid, but concatenate them into one
+# row-major RGB/SH table inside the graph. One wide gather/scatter replaces 27
+# random scalar pairs; the camera basis is packed separately and frozen.
+[synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh]
+date = "2026-08-03"
+sh_degree = 2
+coefficient_tables = 27
+baseline_gpu_passes = 391
+optimized_gpu_passes = 348
+baseline_gpu_step_ms = "24.45..25.49"
+optimized_gpu_step_ms = "11.60..11.68"
+baseline_large_embedding_passes = 32
+optimized_large_embedding_passes = 7
+baseline_scalar_sh_scatter_passes = 27
+optimized_wide_sh_scatter_passes = 1
+baseline_sh_scatter_ms = "5.1..6.2"
+optimized_sh_scatter_ms = "0.23..0.24"
+baseline_training_seconds = 29.508
+optimized_training_seconds = [16.001, 16.041, 16.045]
+training_speedup = [1.844, 1.840, 1.839]
+baseline_gpu_wait_seconds = 27.970
+optimized_gpu_wait_seconds = [14.558, 14.584, 14.575]
+baseline_held_pose_psnr = [24.18, 24.27]
+optimized_held_pose_psnr = [24.09, 24.16, 24.20]
+baseline_held_pose_worst_psnr = [23.71, 23.90]
+optimized_held_pose_worst_psnr = [23.66, 23.67, 23.78]
+optimized_training_depth_rmse = [2.5314, 3.1016, 4.5818]
+optimized_position_rmse = [0.6264, 0.6245, 0.6274]
+optimized_normal_rmse_degrees = [66.19, 66.11, 66.18]
+optimized_material_residual = [0.04688, 0.04596, 0.05208]
+optimized_held_light_psnr = [18.40, 18.65, 18.39]
+optimized_held_light_worst_psnr = [18.14, 18.45, 18.13]
+optimized_peak_memory_bytes = [363159552, 363184128, 363159552]
+memory_events = 0
+selected_artifact = "target/audit-runs/synthetic-coalesced-sh-packed-v3/model.ply"
+selected_artifact_sha256 = "b80ef068fe53404e4571d42c1d3e8774361d749d7242e178a5d7c3a6a904a39b"
+selected_surface_artifact = "target/audit-runs/synthetic-coalesced-sh-packed-v3/scene.rply"
+selected_surface_sha256 = "2698967e65b989a7c61194c641f68d3f6883e2e32566d2a7668a4fe6307338c4"
+bonsai_smoke_sh_degree = 2
+bonsai_smoke_updates = 200
+bonsai_smoke_training_seconds = 0.647
+bonsai_smoke_fresh_ply_psnr = [16.30, 16.64]
+bonsai_smoke_peak_memory_bytes = 189972480
+production_cells = 200000
+production_sh_degree = 3
+production_pixel_batch = 4096
+production_max_steps = 256
+production_control_gpu_passes = 506
+production_optimized_gpu_passes = 421
+production_control_gpu_step_ms = 62.34
+production_optimized_gpu_step_ms = 26.62
+production_gpu_step_speedup = 2.342
+production_control_four_step_gpu_wait_seconds = 0.421
+production_optimized_four_step_gpu_wait_seconds = 0.169
+production_control_logical_buffers_mb = 2343.3
+production_optimized_logical_buffers_mb = 3236.7
+production_control_device_local_mb = 494.9
+production_optimized_device_local_mb = 962.2
+production_control_peak_memory_bytes = 1509838848
+production_optimized_peak_memory_bytes = 1435643904
+production_memory_events = 0
+full_workspace_test_peak_memory_bytes = 3370094592
+full_workspace_test_memory_events = 0
+selection = "accept: checkpoint-compatible graph packing is 1.84x faster at the unchanged 256-step path cap and stays inside the repeated radiance, geometry, PBR, and memory gates"
+
+# Packing one channel at a time lowers the 200K graph's device-local plan, but
+# independent RGB atomic dispatches reintroduce the unstable material tail.
+[synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.rejected_per_channel]
+synthetic_gpu_step_ms = "12.16..12.30"
+production_gpu_step_ms = 26.14
+production_device_local_mb = 848.8
+production_peak_memory_bytes = 990420992
+training_seconds = [16.839, 16.978]
+held_pose_psnr = [24.14, 24.24]
+training_depth_rmse = [3.2507, 6.1646]
+material_residual = [0.04754, 0.13731]
+held_light_psnr = [18.50, 18.32]
+verdict = "reject: the lower-memory layout is fast, but one of two full repeats reproduces the material/depth outlier; keep RGB coefficients in one atomic dispatch"
+
+# Halving the path extent happens to cost about the same as coalescing the SH
+# graph at the safe extent, while losing the held-view tail and geometry. The
+# 192-step arm keeps radiance but destabilizes training depth and materials.
+[synthetic_reconstruction.rgb_mask_foam.performance.rejected_path_caps]
+control_max_steps = 256
+control_training_seconds = 29.508
+control_held_pose_psnr = 24.18
+control_held_pose_worst_psnr = 23.71
+control_held_light_psnr = 18.56
+control_held_light_worst_psnr = 18.30
+max_steps_128_training_seconds = 15.823
+max_steps_128_held_pose_psnr = 24.07
+max_steps_128_held_pose_worst_psnr = 23.62
+max_steps_128_position_rmse = 0.6476
+max_steps_128_held_light_psnr = 18.51
+max_steps_128_held_light_worst_psnr = 18.16
+max_steps_192_training_seconds = 22.927
+max_steps_192_held_pose_psnr = 24.22
+max_steps_192_held_pose_worst_psnr = 23.83
+max_steps_192_training_depth_rmse = 6.8001
+max_steps_192_material_residual = 0.14105
+max_steps_192_held_light_psnr = 18.27
+max_steps_192_held_light_worst_psnr = 17.81
+verdict = "reject both global caps; retain 256 and remove coefficient gather/scatter overhead instead"
+
 # The camera lattice needs substantial motion, but higher position rates
 # amplify nondeterministic atomic summation into different discrete topology.
 # Means improve, yet the fourth matched 0.08 + warmup run loses the held-pose

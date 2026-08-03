@@ -2,15 +2,13 @@
 //!
 //! Given a stack of per-pixel paths recorded by
 //! [`vol::trace::record_path`], this module builds a meganeura `Graph` whose
-//! parameters are per-cell `density` and per-cell `sh_r`/`sh_g`/`sh_b` (SH
-//! degree 0). The forward pass:
+//! parameters are per-cell density and RGB spherical-harmonic coefficients.
+//! The forward pass:
 //!
-//! 1. Gathers per-step density and per-channel SH DC for each (pixel, step)
-//!    via `embedding(cell_index, table)`.
-//! 2. Computes per-step `raw = relu(density) * dt`. `relu` is the simplest
-//!    way to keep density non-negative without an `exp` op we don't have.
-//! 3. Per-pixel cumulative sum of `raw` via matmul with a fixed lower-
-//!    triangular ones matrix — that's the part that gives transmittance.
+//! 1. Packs the separately named RGB/SH parameters into one row-major table
+//!    and gathers all coefficients for each (pixel, step) with one embedding.
+//! 2. Applies a positive density activation and computes `raw = density * dt`.
+//! 3. Computes the exclusive per-pixel cumulative sum that gives transmittance.
 //! 4. Expresses `exp(-x)` via the identity
 //!    `exp(-x) = recip(sigmoid(x)) - 1` (valid for x >= 0), since meganeura
 //!    has `sigmoid` and `recip` but no raw `exp`.
@@ -51,10 +49,7 @@ pub struct VolumetricGraph {
     /// multipliers are 0 (default OFF for an apples-to-apples
     /// baseline). With LR > 0 Adam absorbs per-image brightness
     /// variation into these tables instead of the SH chain. Three
-    /// separate tables (rather than one `[num_views, 3]`) so the
-    /// gradient flows through `embedding` only — `SplitA`/`SplitB`
-    /// have an empty backward in meganeura and would silently zero
-    /// the gradient.
+    /// separate tables retain the established checkpoint layout.
     pub exposure_r: mn::NodeId,
     pub exposure_g: mn::NodeId,
     pub exposure_b: mn::NodeId,
@@ -520,36 +515,15 @@ pub fn build_volumetric_graph(
     // Accumulated opacity per pixel = Σ_L weight = 1 − T_final. Drives the
     // RadFoam opacity loss + white-background compositing.
     let opacity = g.matmul(weight, ones_l1); // [P, 1]
-    let pixel_r = channel_pixel_sh(
+    let [pixel_r, pixel_g, pixel_b] = pixel_sh(
         g,
         cell_indices,
-        &sh_coefficients[0],
+        &sh_coefficients,
         &basis_inputs,
+        pixel_idx_per_step,
         weight,
         ones_l1,
-        ones_1l,
-        p,
-        l,
-    );
-    let pixel_g = channel_pixel_sh(
-        g,
-        cell_indices,
-        &sh_coefficients[1],
-        &basis_inputs,
-        weight,
-        ones_l1,
-        ones_1l,
-        p,
-        l,
-    );
-    let pixel_b = channel_pixel_sh(
-        g,
-        cell_indices,
-        &sh_coefficients[2],
-        &basis_inputs,
-        weight,
-        ones_l1,
-        ones_1l,
+        n_cells,
         p,
         l,
     );
@@ -943,50 +917,107 @@ pub fn sh_basis(dir: glam::Vec3, num_components: usize) -> Vec<f32> {
     b
 }
 
+/// Concatenate scalar columns into a row-major matrix. A balanced tree keeps
+/// each value moving O(log K) times when many SH components are present.
+fn concat_columns(g: &mut mn::Graph, columns: &[mn::NodeId], rows: usize) -> mn::NodeId {
+    assert!(
+        !columns.is_empty(),
+        "concat_columns needs at least one column"
+    );
+    let mut parts: Vec<(mn::NodeId, u32)> =
+        columns.iter().copied().map(|column| (column, 1)).collect();
+    while parts.len() > 1 {
+        let mut next = Vec::with_capacity(parts.len().div_ceil(2));
+        let mut iter = parts.into_iter();
+        while let Some((a, channels_a)) = iter.next() {
+            if let Some((b, channels_b)) = iter.next() {
+                let merged = g.concat(a, b, rows as u32, channels_a, channels_b, 1);
+                next.push((merged, channels_a + channels_b));
+            } else {
+                next.push((a, channels_a));
+            }
+        }
+        parts = next;
+    }
+    let (flat, channels) = parts[0];
+    g.reshape(flat, &[rows, channels as usize])
+}
+
 #[allow(clippy::too_many_arguments)]
-fn channel_pixel_sh(
+fn pixel_sh(
     g: &mut mn::Graph,
     cell_indices: mn::NodeId,
-    sh_chans: &[mn::NodeId],     // K parameter tables [N, 1]
-    basis_inputs: &[mn::NodeId], // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
+    sh_coefficients: &[Vec<mn::NodeId>], // 3 × K parameter tables [N, 1]
+    basis_inputs: &[mn::NodeId],         // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
+    pixel_idx_per_step: mn::NodeId,
     weight: mn::NodeId,
     ones_l1: mn::NodeId, // [L, 1] for the final reduce
-    ones_1l: mn::NodeId, // [1, L] for broadcasting basis along the L axis
+    n_cells: usize,
     p: usize,
     l: usize,
-) -> mn::NodeId {
-    let k = sh_chans.len();
+) -> [mn::NodeId; 3] {
+    assert_eq!(sh_coefficients.len(), 3, "pixel_sh needs RGB tables");
+    let k = sh_coefficients[0].len();
+    assert!(
+        sh_coefficients.iter().all(|channel| channel.len() == k),
+        "pixel_sh channel widths differ"
+    );
     assert_eq!(
         basis_inputs.len(),
         k.saturating_sub(1),
-        "channel_pixel_sh: basis_inputs.len() ({}) must equal sh_chans.len() - 1 ({})",
+        "pixel_sh: basis_inputs.len() ({}) must equal coefficient count - 1 ({})",
         basis_inputs.len(),
         k.saturating_sub(1),
     );
 
-    // Component 0: per-cell colour scaled by the constant SH_C0.
-    let color_flat = g.embedding(cell_indices, sh_chans[0]);
-    let color_2d = g.reshape(color_flat, &[p, l]);
-    let scale = g.constant(vec![SH_C0; p * l], &[p, l]);
-    let mut color_total = g.mul(color_2d, scale);
+    let pl = p * l;
+    let coefficient_columns: Vec<mn::NodeId> = sh_coefficients
+        .iter()
+        .flat_map(|channel| channel.iter().copied())
+        .collect();
+    let coefficient_table = concat_columns(g, &coefficient_columns, n_cells); // [N, 3K]
+    let coefficients = g.embedding(cell_indices, coefficient_table); // [PL, 3K]
 
-    // Components 1..K: per-cell colour times per-pixel basis broadcast
-    // across the L axis via matmul with `ones_1l`.
-    for (idx, &sh_chan_k) in sh_chans.iter().enumerate().skip(1) {
-        let color_flat_k = g.embedding(cell_indices, sh_chan_k);
-        let color_k = g.reshape(color_flat_k, &[p, l]);
-        let basis_k_2d = g.matmul(basis_inputs[idx - 1], ones_1l); // [P, L]
-        let contrib = g.mul(color_k, basis_k_2d);
-        color_total = g.add(color_total, contrib);
-    }
+    let mut basis_columns = Vec::with_capacity(k);
+    basis_columns.push(g.constant(vec![SH_C0; p], &[p, 1]));
+    basis_columns.extend_from_slice(basis_inputs);
+    let basis_per_pixel = concat_columns(g, &basis_columns, p); // [P, K]
+    let basis = g.embedding(pixel_idx_per_step, basis_per_pixel);
+    // Camera directions are inputs, not learned values. Stop their backward
+    // branch after the packed broadcast so training only differentiates the
+    // coefficient operand of the SH product.
+    let basis_flat = g.reshape(basis, &[pl * k]);
+    let basis_rg = g.concat(basis_flat, basis_flat, pl as u32, k as u32, k as u32, 1);
+    let basis_rgb_flat = g.concat(basis_rg, basis_flat, pl as u32, (2 * k) as u32, k as u32, 1);
+    let basis_rgb = g.reshape(basis_rgb_flat, &[pl, 3 * k]);
+    let basis_rgb = g.stop_gradient(basis_rgb);
 
-    let bias = g.constant(vec![0.5; p * l], &[p, l]);
-    let biased = g.add(color_total, bias);
+    // Reshape each path row `[R_K, G_K, B_K]` into three K-wide rows, then
+    // reduce the SH axis with one matrix multiplication.
+    let terms = g.mul(coefficients, basis_rgb);
+    let terms_rgb = g.reshape(terms, &[pl * 3, k]);
+    let ones_k1 = g.constant(vec![1.0; k], &[k, 1]);
+    let color_flat = g.matmul(terms_rgb, ones_k1);
+    let color = g.reshape(color_flat, &[pl, 3]);
+
+    let bias = g.constant(vec![0.5; pl * 3], &[pl, 3]);
+    let biased = g.add(color, bias);
     // Match RadFoam's per-cell `max(rgb, 0)` before volumetric
     // compositing. Clamping only the accumulated pixel is not equivalent.
     let non_negative = g.relu(biased);
-    let weighted = g.mul(weight, non_negative); // [P, L]
-    g.matmul(weighted, ones_l1) // [P, L] @ [L, 1] = [P, 1]
+    // Split backward emits a flat concat; make the matching forward shape
+    // explicit so autodiff does not try to combine `[PL*3]` with `[PL, 3]`.
+    let non_negative_flat = g.reshape(non_negative, &[pl * 3]);
+    let red = g.split_a(non_negative_flat, pl as u32, 1, 2, 1);
+    let gb = g.split_b(non_negative_flat, pl as u32, 1, 2, 1);
+    let green = g.split_a(gb, pl as u32, 1, 1, 1);
+    let blue = g.split_b(gb, pl as u32, 1, 1, 1);
+
+    [red, green, blue].map(|channel| {
+        let color_2d = g.reshape(channel, &[p, l]);
+        let weighted = g.mul(weight, color_2d);
+        g.matmul(weighted, ones_l1)
+    })
 }
 
 /// Flatten per-pixel paths into the three tensors meganeura consumes.
@@ -4149,18 +4180,21 @@ mod tests {
         };
         let mut graph = mn::Graph::new();
         let cell_indices = graph.input_u32("cell_indices", &[1]);
+        let pixel_idx_per_step = graph.input_u32("pixel_idx_per_step", &[1]);
         let weight = graph.input("weight", &[1, 1]);
-        let sh = graph.parameter("sh", &[1, 1]);
+        let sh_r = graph.parameter("sh_r", &[1, 1]);
+        let sh_g = graph.parameter("sh_g", &[1, 1]);
+        let sh_b = graph.parameter("sh_b", &[1, 1]);
         let ones_l1 = graph.constant(vec![1.0], &[1, 1]);
-        let ones_1l = graph.constant(vec![1.0], &[1, 1]);
-        let pixel = channel_pixel_sh(
+        let [pixel, _, _] = pixel_sh(
             &mut graph,
             cell_indices,
-            &[sh],
+            &[vec![sh_r], vec![sh_g], vec![sh_b]],
             &[],
+            pixel_idx_per_step,
             weight,
             ones_l1,
-            ones_1l,
+            1,
             1,
             1,
         );
@@ -4173,14 +4207,133 @@ mod tests {
                 ..Default::default()
             },
         );
-        session.set_parameter("sh", &[-4.0]);
+        session.set_parameter("sh_r", &[-4.0]);
+        session.set_parameter("sh_g", &[-4.0]);
+        session.set_parameter("sh_b", &[-4.0]);
         session.set_input_u32("cell_indices", &[0]);
+        session.set_input_u32("pixel_idx_per_step", &[0]);
         session.set_input("weight", &[1.0]);
         session.step();
         session.wait();
 
         let actual = session.read_output(1)[0];
         assert!(actual.abs() < 1.0e-6, "clamped color was {actual}");
+    }
+
+    #[test]
+    fn packed_sh_graph_matches_scalar_reference_and_backpropagates() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!(
+                "skipping packed_sh_graph_matches_scalar_reference_and_backpropagates: no GPU"
+            );
+            return;
+        };
+        let (n_cells, p, l, k) = (3usize, 2usize, 2usize, 4usize);
+        let pl = p * l;
+        let mut graph = mn::Graph::new();
+        let cell_indices = graph.input_u32("cell_indices", &[pl]);
+        let pixel_idx_per_step = graph.input_u32("pixel_idx_per_step", &[pl]);
+        let weight = graph.input("weight", &[p, l]);
+        let basis_inputs: Vec<mn::NodeId> = (1..k)
+            .map(|component| graph.input(&format!("basis_{component}"), &[p, 1]))
+            .collect();
+        let mut sh_coefficients = Vec::with_capacity(3);
+        for channel in ["sh_r", "sh_g", "sh_b"] {
+            let columns = (0..k)
+                .map(|component| {
+                    graph.parameter(&parameter_name(channel, component), &[n_cells, 1])
+                })
+                .collect();
+            sh_coefficients.push(columns);
+        }
+        let ones_l1 = graph.constant(vec![1.0; l], &[l, 1]);
+        let pixels = pixel_sh(
+            &mut graph,
+            cell_indices,
+            &sh_coefficients,
+            &basis_inputs,
+            pixel_idx_per_step,
+            weight,
+            ones_l1,
+            n_cells,
+            p,
+            l,
+        );
+        let mean_r = graph.mean_all(pixels[0]);
+        let mean_g = graph.mean_all(pixels[1]);
+        let mean_b = graph.mean_all(pixels[2]);
+        let mean_rg = graph.add(mean_r, mean_g);
+        let loss = graph.add(mean_rg, mean_b);
+        graph.set_outputs(vec![loss, pixels[0], pixels[1], pixels[2]]);
+
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        let coefficient = |channel: usize, component: usize, cell: usize| {
+            0.01 * (1 + channel * k * n_cells + component * n_cells + cell) as f32
+        };
+        for (channel_index, channel) in ["sh_r", "sh_g", "sh_b"].iter().enumerate() {
+            for component in 0..k {
+                let values: Vec<f32> = (0..n_cells)
+                    .map(|cell| coefficient(channel_index, component, cell))
+                    .collect();
+                session.set_parameter(&parameter_name(channel, component), &values);
+            }
+        }
+        let cells = [0_u32, 1, 2, 0];
+        let pixel_indices = [0_u32, 0, 1, 1];
+        let weights = [0.2_f32, 0.3, 0.4, 0.1];
+        let basis = [[0.11_f32, 0.17], [0.23, 0.29], [0.31, 0.37]];
+        session.set_input_u32("cell_indices", &cells);
+        session.set_input_u32("pixel_idx_per_step", &pixel_indices);
+        session.set_input("weight", &weights);
+        for (component, values) in basis.iter().enumerate() {
+            session.set_input(&format!("basis_{}", component + 1), values);
+        }
+        session.set_adam(0.0, 0.9, 0.999, 1.0e-8);
+        session.step();
+        session.wait();
+
+        for channel in 0..3 {
+            let mut actual = vec![0.0_f32; p];
+            session.read_output_by_index(channel + 1, &mut actual);
+            let mut expected = vec![0.0_f32; p];
+            for pixel in 0..p {
+                for step in 0..l {
+                    let path_index = pixel * l + step;
+                    let cell = cells[path_index] as usize;
+                    let mut color = coefficient(channel, 0, cell) * SH_C0;
+                    for component in 1..k {
+                        color +=
+                            coefficient(channel, component, cell) * basis[component - 1][pixel];
+                    }
+                    expected[pixel] += weights[path_index] * (color + 0.5).max(0.0);
+                }
+            }
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert!((actual - expected).abs() < 2.0e-6, "{actual} != {expected}");
+            }
+        }
+
+        for channel in ["sh_r", "sh_g", "sh_b"] {
+            for component in 0..k {
+                let name = parameter_name(channel, component);
+                let mut gradient = vec![0.0_f32; n_cells];
+                session.read_param_grad(&name, &mut gradient);
+                assert!(
+                    gradient
+                        .iter()
+                        .all(|value| value.is_finite() && *value > 0.0),
+                    "missing packed gradient for {name}: {gradient:?}"
+                );
+            }
+        }
     }
 
     #[test]
