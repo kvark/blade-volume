@@ -585,6 +585,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         model.compute_adjacency_default();
         model
@@ -638,6 +639,21 @@ mod tests {
                 model.radii = Some(vec![2.0, 1.8, 1.6, 1.4]);
                 if mode == 2 {
                     model.surface_normals = Some(vec![-glam::Vec3::Z; model.points.len()]);
+                    model.surface_color_coefficients = Some(vec![
+                        0.0;
+                        model.points.len() * vol::SURFACE_COLOR_COMPONENTS
+                            * 3
+                    ]);
+                    model.spherical_voronoi = Some(vol::SphericalVoronoi {
+                        axes: vec![
+                            glam::Vec3::Z;
+                            model.points.len() * vol::SPHERICAL_VORONOI_SITES
+                        ],
+                        colors: vec![
+                            glam::Vec3::ZERO;
+                            model.points.len() * vol::SPHERICAL_VORONOI_SITES
+                        ],
+                    });
                 }
                 model.adjacency = None;
                 model.compute_adjacency_default();

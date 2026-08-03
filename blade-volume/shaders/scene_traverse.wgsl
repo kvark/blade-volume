@@ -10,6 +10,7 @@ enable wgpu_binding_array;
 // #include "common.wgsl"
 // #include "sh_eval.wgsl"
 // #include "surface_color.wgsl"
+// #include "spherical_voronoi.wgsl"
 // #include "scene_bindings.wgsl"
 
 struct Gaussian {

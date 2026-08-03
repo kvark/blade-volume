@@ -215,6 +215,7 @@ fn allocate_model(header: &Header) -> Result<crate::PointCloudModel, LoadError> 
         surface_normals: None,
         surface_offsets: None,
         surface_color_coefficients: None,
+        spherical_voronoi: None,
     })
 }
 

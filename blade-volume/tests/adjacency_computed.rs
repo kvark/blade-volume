@@ -40,6 +40,7 @@ fn make_model_without_adjacency(points: Vec<glam::Vec4>, sh_degree: usize) -> vo
         surface_normals: None,
         surface_offsets: None,
         surface_color_coefficients: None,
+        spherical_voronoi: None,
     }
 }
 
@@ -183,6 +184,7 @@ fn ensure_adjacency_preserves_existing() {
         surface_normals: None,
         surface_offsets: None,
         surface_color_coefficients: None,
+        spherical_voronoi: None,
     };
 
     // ensure_adjacency should NOT recompute

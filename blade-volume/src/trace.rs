@@ -423,7 +423,30 @@ pub fn surface_color_basis(
     q.extend(q.length_squared().min(1.0))
 }
 
-/// Evaluate SH plus the optional within-cell oriented-surface residual.
+/// Evaluate the published dot-product Spherical Voronoi residual.
+pub fn eval_spherical_voronoi(
+    spherical_voronoi: &crate::SphericalVoronoi,
+    point_idx: u32,
+    direction: glam::Vec3,
+) -> glam::Vec3 {
+    let base = point_idx as usize * crate::SPHERICAL_VORONOI_SITES;
+    let axes = &spherical_voronoi.axes[base..base + crate::SPHERICAL_VORONOI_SITES];
+    let colors = &spherical_voronoi.colors[base..base + crate::SPHERICAL_VORONOI_SITES];
+    let mut max_logit = f32::NEG_INFINITY;
+    for axis in axes {
+        max_logit = max_logit.max(axis.dot(direction));
+    }
+    let mut weight_sum = 0.0_f32;
+    let mut value_sum = glam::Vec3::ZERO;
+    for (&axis, &color) in axes.iter().zip(colors) {
+        let weight = (axis.dot(direction) - max_logit).exp();
+        weight_sum += weight;
+        value_sum += weight * color;
+    }
+    value_sum / weight_sum.max(1.0e-20)
+}
+
+/// Evaluate SH plus the optional spatial and directional surface residuals.
 pub fn eval_rgb_surface(
     model: &PointCloudModel,
     point_idx: u32,
@@ -440,6 +463,9 @@ pub fn eval_rgb_surface(
             );
             color += basis[component] * coefficient;
         }
+    }
+    if let Some(ref spherical_voronoi) = model.spherical_voronoi {
+        color += eval_spherical_voronoi(spherical_voronoi, point_idx, ray_direction);
     }
     color.max(glam::Vec3::ZERO)
 }
@@ -554,6 +580,7 @@ mod gaussian_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
 
         let color = eval_rgb_sh(&model, 0, glam::Vec3::Z);
@@ -580,6 +607,7 @@ mod gaussian_tests {
             surface_normals: Some(vec![glam::Vec3::Z]),
             surface_offsets: None,
             surface_color_coefficients: Some(coefficients),
+            spherical_voronoi: None,
         };
         let origin = glam::Vec3::new(1.0, 0.0, -1.0);
         let direction = glam::Vec3::Z;
@@ -589,6 +617,39 @@ mod gaussian_tests {
         assert!((basis.w - 0.25).abs() < 1.0e-6);
         let color = eval_rgb_surface(&model, 0, origin, direction);
         assert!((color - glam::Vec3::new(0.7, 0.4, 0.7)).abs().max_element() < 1.0e-6);
+    }
+
+    #[test]
+    fn spherical_voronoi_softmax_selects_matching_direction() {
+        let mut axes = vec![glam::Vec3::ZERO; crate::SPHERICAL_VORONOI_SITES];
+        let mut colors = (0..crate::SPHERICAL_VORONOI_SITES)
+            .map(|index| glam::Vec3::new(index as f32 * 0.1, 0.0, 0.0))
+            .collect::<Vec<_>>();
+        let uniform = eval_spherical_voronoi(
+            &crate::SphericalVoronoi {
+                axes: axes.clone(),
+                colors: colors.clone(),
+            },
+            0,
+            glam::Vec3::X,
+        );
+        assert!(
+            (uniform - glam::Vec3::new(0.35, 0.0, 0.0))
+                .abs()
+                .max_element()
+                < 1.0e-6
+        );
+
+        axes[0] = 20.0 * glam::Vec3::X;
+        colors[0] = glam::Vec3::new(0.5, -0.25, 0.1);
+        let selected =
+            eval_spherical_voronoi(&crate::SphericalVoronoi { axes, colors }, 0, glam::Vec3::X);
+        assert!(
+            (selected - glam::Vec3::new(0.5, -0.25, 0.1))
+                .abs()
+                .max_element()
+                < 1.0e-5
+        );
     }
 
     fn two_gaussians() -> PointCloudModel {
@@ -618,6 +679,7 @@ mod gaussian_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         }
     }
 
@@ -1499,6 +1561,7 @@ mod path_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         m.compute_adjacency_default();
         m
@@ -1621,6 +1684,7 @@ mod path_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1656,6 +1720,7 @@ mod path_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.0, 0.0, -2.0),
@@ -1690,6 +1755,7 @@ mod path_tests {
             surface_normals: Some(vec![-glam::Vec3::Z]),
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1727,6 +1793,7 @@ mod path_tests {
             surface_normals: Some(vec![-glam::Vec3::Z]),
             surface_offsets: Some(vec![0.25]),
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1762,6 +1829,7 @@ mod path_tests {
             surface_normals: Some(vec![glam::Vec3::X]),
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let settings = TraceSettings {
             depth: 10.0,
@@ -1802,6 +1870,7 @@ mod path_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let ray = Ray {
             origin: glam::Vec3::ZERO,
@@ -1867,6 +1936,7 @@ mod path_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         };
         let ray = Ray {
@@ -2006,6 +2076,7 @@ mod path_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         };
         let ray = Ray {
@@ -2061,6 +2132,7 @@ mod path_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.2, 0.1, -2.0),
@@ -2101,6 +2173,7 @@ mod path_tests {
             surface_normals: Some(vec![normal]),
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.3, 0.1, 0.0),
@@ -2143,6 +2216,7 @@ mod path_tests {
             surface_normals: Some(vec![glam::Vec3::new(-0.2, 0.1, -1.0).normalize()]),
             surface_offsets: Some(vec![0.15]),
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let ray = Ray {
             origin: glam::Vec3::new(0.3, 0.1, 0.0),
@@ -2187,6 +2261,7 @@ mod path_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         };
         let ray = Ray {

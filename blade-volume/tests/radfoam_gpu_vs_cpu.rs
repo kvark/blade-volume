@@ -264,7 +264,8 @@ fn assert_gpu_matches_cpu(
         pad: [
             model.radii.is_some() as u32,
             model.surface_normals.is_some() as u32,
-            model.surface_color_coefficients.is_some() as u32,
+            model.surface_color_coefficients.is_some() as u32
+                | (model.spherical_voronoi.is_some() as u32) << 1,
         ],
         _size_pad: 0,
     };
@@ -464,6 +465,20 @@ fn oriented_powerfoam_gpu_matches_cpu() {
             .map(|index| (index % 17) as f32 * 0.01 - 0.08)
             .collect(),
     );
+    model.spherical_voronoi = Some(vol::SphericalVoronoi {
+        axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
+            .map(|index| {
+                let x = (index % vol::SPHERICAL_VORONOI_SITES) as f32 - 3.5;
+                glam::Vec3::new(x * 0.4, 1.0 - x.abs() * 0.1, -0.5)
+            })
+            .collect(),
+        colors: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
+            .map(|index| {
+                let value = (index % 13) as f32 * 0.01 - 0.06;
+                glam::Vec3::new(value, -0.5 * value, 0.25 * value)
+            })
+            .collect(),
+    });
 
     // The shared oracle helper replaces these normals after creating the GPU
     // cloud, exercising the lightweight training-cadence upload path.

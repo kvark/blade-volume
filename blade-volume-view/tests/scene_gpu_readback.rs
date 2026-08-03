@@ -124,6 +124,7 @@ fn powerfoam_model(color: glam::Vec3) -> vol::PointCloudModel {
         surface_normals: None,
         surface_offsets: None,
         surface_color_coefficients: None,
+        spherical_voronoi: None,
     }
 }
 
@@ -141,6 +142,7 @@ fn gaussian_model(color: glam::Vec3, scale: glam::Vec3) -> vol::PointCloudModel 
         surface_normals: None,
         surface_offsets: None,
         surface_color_coefficients: None,
+        spherical_voronoi: None,
     }
 }
 
@@ -315,6 +317,11 @@ fn oriented_powerfoam_scene_applies_the_surface_offset() {
     surface_color[0..3].copy_from_slice(&[0.4, 0.0, 0.0]);
     surface_color[9..12].copy_from_slice(&[0.0, 0.3, 0.0]);
     model.surface_color_coefficients = Some(surface_color);
+    let mut axes = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
+    let mut colors = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
+    axes[0] = 20.0 * glam::Vec3::Z;
+    colors[0] = glam::Vec3::new(0.0, 0.0, 0.2);
+    model.spherical_voronoi = Some(vol::SphericalVoronoi { axes, colors });
     let object = renderer.add_radfoam(&model, &context, &mut encoder);
     let position = glam::Vec3::new(0.2, 0.0, 3.0);
     renderer.scene.set_transform(

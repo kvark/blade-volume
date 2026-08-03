@@ -682,6 +682,7 @@ fn rebuild_adjacency(
             model.surface_normals = None;
             model.surface_offsets = None;
             model.surface_color_coefficients = None;
+            model.spherical_voronoi = None;
             model.compute_adjacency_default();
         }
         AdjacencyKind::DelaunayQhull => {
@@ -693,6 +694,7 @@ fn rebuild_adjacency(
             model.surface_normals = None;
             model.surface_offsets = None;
             model.surface_color_coefficients = None;
+            model.spherical_voronoi = None;
             #[cfg(feature = "qhull")]
             {
                 model.adjacency = Some(vol::compute_adjacency_qhull_default(&model.points));
@@ -709,6 +711,7 @@ fn rebuild_adjacency(
             model.surface_normals = None;
             model.surface_offsets = None;
             model.surface_color_coefficients = None;
+            model.spherical_voronoi = None;
             model.adjacency = Some(vol::compute_knn(&model.points, k));
         }
         AdjacencyKind::Cech { radius_factor } => {
@@ -879,6 +882,7 @@ fn radfoam_v1_initial_model(
         surface_normals: None,
         surface_offsets: None,
         surface_color_coefficients: None,
+        spherical_voronoi: None,
         points,
     }
 }
@@ -1166,6 +1170,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         }
     }
@@ -1208,6 +1213,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         };
         let camera = vol::CameraParams {
@@ -1328,6 +1334,20 @@ mod tests {
                         .map(|index| (index % 13) as f32 * 0.01 - 0.06)
                         .collect(),
                 );
+                model.spherical_voronoi = Some(vol::SphericalVoronoi {
+                    axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
+                        .map(|index| {
+                            let x = (index % vol::SPHERICAL_VORONOI_SITES) as f32 - 3.5;
+                            glam::Vec3::new(0.25 * x, 0.1 * x, -1.0)
+                        })
+                        .collect(),
+                    colors: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
+                        .map(|index| {
+                            let value = (index % 11) as f32 * 0.01 - 0.05;
+                            glam::Vec3::new(value, -0.25 * value, 0.5 * value)
+                        })
+                        .collect(),
+                });
             }
             model.compute_adjacency_default();
             let cpu = render::render_cpu(
@@ -1380,6 +1400,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let camera = vol::CameraParams {
             cam_position: [0.0; 3],

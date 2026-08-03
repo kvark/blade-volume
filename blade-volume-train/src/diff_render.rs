@@ -5859,6 +5859,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         };
         m.compute_adjacency_default();
@@ -6117,6 +6118,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         };
         let config = DensifyConfig {
@@ -6167,6 +6169,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         };
         let config = DensifyConfig {
@@ -6562,6 +6565,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         };
         let initial_weight = 1.0e-4;

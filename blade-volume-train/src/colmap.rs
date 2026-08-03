@@ -687,6 +687,7 @@ impl Reconstruction {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         }
     }
 

@@ -53,6 +53,11 @@ pub const MAX_SH_COMPONENTS: usize = get_sh_component_count(MAX_SH_DEGREE);
 /// two-dimensional tangent plane without storing an arbitrary tangent frame;
 /// the last term captures a radial center-to-edge change.
 pub const SURFACE_COLOR_COMPONENTS: usize = 4;
+/// Directional sites in the compact Spherical Voronoi appearance model.
+///
+/// Eight matches the parameter-cardinality comparison in the Spherical
+/// Voronoi paper and the per-texel directional model released with PowerFoam.
+pub const SPHERICAL_VORONOI_SITES: usize = 8;
 
 // ============================================================================
 // Unified Point Cloud Model
@@ -76,6 +81,21 @@ pub struct Adjacency {
     pub offsets: Vec<u32>,
 }
 
+/// Optional directional residual represented by a soft partition of the sphere.
+///
+/// Each raw axis vector encodes both a direction and temperature: the site
+/// logit is `dot(axis, view_direction)`. Softmax over the eight logits blends
+/// the matching RGB residuals. This is the published dot-product Spherical
+/// Voronoi contract; it is deliberately distinct from PowerFoam's released
+/// chord-distance kernel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SphericalVoronoi {
+    /// Point-major raw axes, eight per point.
+    pub axes: Vec<glam::Vec3>,
+    /// Point-major RGB residual values, eight per point.
+    pub colors: Vec<glam::Vec3>,
+}
+
 /// Unified point cloud model.
 ///
 /// Core data common to all formats:
@@ -90,6 +110,7 @@ pub struct Adjacency {
 /// - `surface_normals`: oriented PowerFoam faces; the normal-facing half is empty
 /// - `surface_offsets`: optional signed displacement of each oriented face
 /// - `surface_color_coefficients`: optional within-cell surface appearance
+/// - `spherical_voronoi`: optional eight-site directional appearance residual
 #[derive(Clone)]
 pub struct PointCloudModel {
     /// Position (xyz) + density/opacity (w) for each point.
@@ -138,6 +159,14 @@ pub struct PointCloudModel {
     /// added to the view-dependent SH color before the non-negative clamp.
     /// This field requires both `radii` and `surface_normals`.
     pub surface_color_coefficients: Option<Vec<f32>>,
+
+    /// Optional eight-site dot-product Spherical Voronoi RGB residual.
+    ///
+    /// The residual is added to SH before the non-negative clamp. This field
+    /// currently requires an oriented PowerFoam model so every renderer which
+    /// accepts it shares the same semantics. Both tables have
+    /// `points.len() * SPHERICAL_VORONOI_SITES` entries in point-major order.
+    pub spherical_voronoi: Option<SphericalVoronoi>,
 }
 
 impl PointCloudModel {
@@ -256,6 +285,32 @@ impl PointCloudModel {
                 return Err("surface color coefficients must be finite".to_string());
             }
         }
+        if let Some(ref spherical_voronoi) = self.spherical_voronoi {
+            if self.surface_normals.is_none() || self.radii.is_none() {
+                return Err(
+                    "Spherical Voronoi appearance requires PowerFoam radii and surface normals"
+                        .to_string(),
+                );
+            }
+            let expected = count * SPHERICAL_VORONOI_SITES;
+            if spherical_voronoi.axes.len() != expected
+                || spherical_voronoi.colors.len() != expected
+            {
+                return Err(format!(
+                    "Spherical Voronoi lengths are axes={} colors={}, expected {expected}",
+                    spherical_voronoi.axes.len(),
+                    spherical_voronoi.colors.len(),
+                ));
+            }
+            if spherical_voronoi.axes.iter().any(|axis| !axis.is_finite())
+                || spherical_voronoi
+                    .colors
+                    .iter()
+                    .any(|color| !color.is_finite())
+            {
+                return Err("Spherical Voronoi parameters must be finite".to_string());
+            }
+        }
         if let Some(ref adjacency) = self.adjacency {
             adjacency::validate_csr_result(&adjacency.offsets, &adjacency.neighbors, count)?;
         }
@@ -270,6 +325,10 @@ impl PointCloudModel {
                 .surface_color_coefficients
                 .as_ref()
                 .map_or(0, |_| 3 * SURFACE_COLOR_COMPONENTS)
+            + self
+                .spherical_voronoi
+                .as_ref()
+                .map_or(0, |_| 6 * SPHERICAL_VORONOI_SITES)
     }
 
     /// Returns the number of points.
@@ -384,6 +443,7 @@ mod model_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         }
     }
 
@@ -401,6 +461,7 @@ mod model_tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         }
     }
 
@@ -455,6 +516,26 @@ mod model_tests {
         model.surface_color_coefficients = Some(Vec::new());
         assert!(model.validate().unwrap_err().contains("length"));
         model.surface_color_coefficients = Some(vec![f32::NAN; SURFACE_COLOR_COMPONENTS * 3]);
+        assert!(model.validate().unwrap_err().contains("must be finite"));
+    }
+
+    #[test]
+    fn model_validation_checks_spherical_voronoi() {
+        let mut model = valid_model();
+        model.spherical_voronoi = Some(SphericalVoronoi {
+            axes: vec![glam::Vec3::ZERO; SPHERICAL_VORONOI_SITES],
+            colors: vec![glam::Vec3::ZERO; SPHERICAL_VORONOI_SITES],
+        });
+        assert!(model.validate().unwrap_err().contains("requires PowerFoam"));
+
+        model.surface_normals = Some(vec![glam::Vec3::Z]);
+        assert!(model.validate().is_ok());
+        assert_eq!(model.attribute_dim(), 3 + 1 + SPHERICAL_VORONOI_SITES * 6);
+
+        model.spherical_voronoi.as_mut().unwrap().axes.pop();
+        assert!(model.validate().unwrap_err().contains("lengths"));
+        model.spherical_voronoi.as_mut().unwrap().axes =
+            vec![glam::Vec3::splat(f32::NAN); SPHERICAL_VORONOI_SITES];
         assert!(model.validate().unwrap_err().contains("must be finite"));
     }
 

@@ -271,6 +271,7 @@ pub fn make_branching_model(params: BranchingParams) -> vol::PointCloudModel {
         surface_normals: None,
         surface_offsets: None,
         surface_color_coefficients: None,
+        spherical_voronoi: None,
     }
 }
 

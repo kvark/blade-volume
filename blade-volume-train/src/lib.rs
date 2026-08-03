@@ -107,6 +107,9 @@ pub struct TrainerState {
 
     /// Optional within-cell oriented-surface RGB residuals.
     pub surface_color_coefficients: Option<Vec<f32>>,
+
+    /// Optional dot-product Spherical Voronoi directional residual.
+    pub spherical_voronoi: Option<vol::SphericalVoronoi>,
 }
 
 impl TrainerState {
@@ -145,6 +148,7 @@ impl TrainerState {
             surface_normals: model.surface_normals.clone(),
             surface_offsets: model.surface_offsets.clone(),
             surface_color_coefficients: model.surface_color_coefficients.clone(),
+            spherical_voronoi: model.spherical_voronoi.clone(),
         }
     }
 
@@ -167,6 +171,16 @@ impl TrainerState {
         }
         if let Some(ref coefficients) = self.surface_color_coefficients {
             assert_eq!(coefficients.len(), n * vol::SURFACE_COLOR_COMPONENTS * 3);
+        }
+        if let Some(ref spherical_voronoi) = self.spherical_voronoi {
+            assert_eq!(
+                spherical_voronoi.axes.len(),
+                n * vol::SPHERICAL_VORONOI_SITES
+            );
+            assert_eq!(
+                spherical_voronoi.colors.len(),
+                n * vol::SPHERICAL_VORONOI_SITES
+            );
         }
         let mut points = Vec::with_capacity(n);
         for (i, p) in self.positions.iter().enumerate() {
@@ -191,6 +205,7 @@ impl TrainerState {
             surface_normals: self.surface_normals.clone(),
             surface_offsets: self.surface_offsets.clone(),
             surface_color_coefficients: self.surface_color_coefficients.clone(),
+            spherical_voronoi: self.spherical_voronoi.clone(),
         }
     }
 }
@@ -234,6 +249,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         }
     }
@@ -283,6 +299,14 @@ mod tests {
                 .map(|index| index as f32 * 0.01)
                 .collect(),
         );
+        model.spherical_voronoi = Some(vol::SphericalVoronoi {
+            axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
+                .map(|index| glam::Vec3::new(index as f32, 1.0, -1.0))
+                .collect(),
+            colors: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
+                .map(|index| glam::Vec3::new(0.0, index as f32 * 0.01, 0.0))
+                .collect(),
+        });
 
         let back = TrainerState::from_model(&model).to_model();
 
@@ -292,6 +316,7 @@ mod tests {
             back.surface_color_coefficients,
             model.surface_color_coefficients
         );
+        assert_eq!(back.spherical_voronoi, model.spherical_voronoi);
     }
 
     #[test]

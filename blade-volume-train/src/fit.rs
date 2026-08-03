@@ -334,6 +334,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let mut g = mn::Graph::new();
         let _node = sh_coefficients_as_parameter(&mut g, &model);

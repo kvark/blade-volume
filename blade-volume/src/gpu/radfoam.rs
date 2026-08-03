@@ -11,7 +11,7 @@ use std::{mem, ptr, slice};
 ///   and signed surface-plane offsets in w, or one zero dummy element for an
 ///   unoriented cloud
 /// - `attributes`: packed `f32[N * attr_dim]`: SH, density, then optional
-///   oriented-surface color coefficients
+///   spatial and Spherical Voronoi appearance parameters
 /// - `point_adjacency`: flattened neighbor list `u32[K]`
 /// - `point_adjacency_offsets`: CSR offsets `u32[N+1]`
 ///
@@ -33,6 +33,7 @@ pub struct RadFoamGpuCloud {
     pub is_power_foam: bool,
     pub is_oriented: bool,
     pub has_surface_color: bool,
+    pub has_spherical_voronoi: bool,
 }
 
 struct PointIndex {
@@ -240,7 +241,7 @@ impl RadFoamGpuCloud {
                 }
             }
 
-            // Attributes: pack as [sh_coeffs..., density, surface coefficients...] per point
+            // Attributes: pack as [SH, density, spatial residual, SV axes, SV colors] per point.
             // This matches the shader's expected layout
             let dst_attrs = slice::from_raw_parts_mut(
                 attributes_stage.data() as *mut f32,
@@ -253,12 +254,32 @@ impl RadFoamGpuCloud {
                 dst_attrs[base..base + sh_len]
                     .copy_from_slice(&model.sh_coefficients[sh_base..sh_base + sh_len]);
                 dst_attrs[base + sh_len] = model.points[i].w;
+                let mut attribute_offset = base + sh_len + 1;
                 if let Some(ref coefficients) = model.surface_color_coefficients {
                     let surface_len = crate::SURFACE_COLOR_COMPONENTS * 3;
                     let surface_base = i * surface_len;
-                    dst_attrs[base + sh_len + 1..base + sh_len + 1 + surface_len]
+                    dst_attrs[attribute_offset..attribute_offset + surface_len]
                         .copy_from_slice(&coefficients[surface_base..surface_base + surface_len]);
+                    attribute_offset += surface_len;
                 }
+                if let Some(ref spherical_voronoi) = model.spherical_voronoi {
+                    let spherical_base = i * crate::SPHERICAL_VORONOI_SITES;
+                    for &axis in &spherical_voronoi.axes
+                        [spherical_base..spherical_base + crate::SPHERICAL_VORONOI_SITES]
+                    {
+                        dst_attrs[attribute_offset..attribute_offset + 3]
+                            .copy_from_slice(&axis.to_array());
+                        attribute_offset += 3;
+                    }
+                    for &color in &spherical_voronoi.colors
+                        [spherical_base..spherical_base + crate::SPHERICAL_VORONOI_SITES]
+                    {
+                        dst_attrs[attribute_offset..attribute_offset + 3]
+                            .copy_from_slice(&color.to_array());
+                        attribute_offset += 3;
+                    }
+                }
+                debug_assert_eq!(attribute_offset, base + attr_dim);
             }
 
             // Adjacency: contiguous u32 array
@@ -338,6 +359,7 @@ impl RadFoamGpuCloud {
             is_power_foam: model.radii.is_some(),
             is_oriented: model.surface_normals.is_some(),
             has_surface_color: model.surface_color_coefficients.is_some(),
+            has_spherical_voronoi: model.spherical_voronoi.is_some(),
         }
     }
 

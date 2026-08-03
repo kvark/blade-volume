@@ -9,7 +9,7 @@ struct SplatIntegrateParams {
     width: u32,
     height: u32,
     weight_threshold: f32,
-    surface_color: u32,
+    appearance_flags: u32,
     _padding: [u32; 2],
 }
 
@@ -112,7 +112,8 @@ impl PowerFoamGpuSplatTracer {
             width: resolution[0],
             height: resolution[1],
             weight_threshold: settings.weight_threshold,
-            surface_color: cloud.has_surface_color as u32,
+            appearance_flags: cloud.has_surface_color as u32
+                | (cloud.has_spherical_voronoi as u32) << 1,
             _padding: [0; 2],
         };
         Self {

@@ -77,6 +77,7 @@ var<private> g_rf_obj: u32;
 var<private> g_rf_bounded: bool;
 var<private> g_rf_oriented: bool;
 var<private> g_rf_surface_color: bool;
+var<private> g_rf_spherical_voronoi: bool;
 var<private> g_rf_sh_degree: u32;
 var<private> g_rf_attribute_stride: u32;
 
@@ -149,6 +150,31 @@ fn rf_get_color(
             );
         }
     }
+    if (g_rf_spherical_voronoi) {
+        let surface_length = select(
+            0u,
+            3u * SURFACE_COLOR_COMPONENTS,
+            g_rf_surface_color,
+        );
+        let spherical_base = base + 3u * comps + 1u + surface_length;
+        var axes: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
+        var colors: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
+        for (var site = 0u; site < SPHERICAL_VORONOI_SITES; site += 1u) {
+            let axis_offset = spherical_base + 3u * site;
+            axes[site] = vec3<f32>(
+                g_radfoam_attributes[g_rf_obj].data[axis_offset],
+                g_radfoam_attributes[g_rf_obj].data[axis_offset + 1u],
+                g_radfoam_attributes[g_rf_obj].data[axis_offset + 2u],
+            );
+            let color_offset = spherical_base + 3u * SPHERICAL_VORONOI_SITES + 3u * site;
+            colors[site] = vec3<f32>(
+                g_radfoam_attributes[g_rf_obj].data[color_offset],
+                g_radfoam_attributes[g_rf_obj].data[color_offset + 1u],
+                g_radfoam_attributes[g_rf_obj].data[color_offset + 2u],
+            );
+        }
+        color += spherical_voronoi_evaluate(axes, colors, dir);
+    }
     return max(vec3<f32>(0.0), color);
 }
 
@@ -173,6 +199,7 @@ fn scene_trace_radfoam(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
     g_rf_bounded = (bounds.flags & 1u) != 0u;
     g_rf_oriented = (bounds.flags & 2u) != 0u;
     g_rf_surface_color = (bounds.flags & 4u) != 0u;
+    g_rf_spherical_voronoi = (bounds.flags & 8u) != 0u;
     g_rf_sh_degree = bounds.sh_degree;
     g_rf_attribute_stride = bounds.attribute_stride;
 

@@ -854,6 +854,7 @@ pub fn convert_gltf(
         surface_normals: None,
         surface_offsets: None,
         surface_color_coefficients: None,
+        spherical_voronoi: None,
     };
 
     match options.output {
@@ -1746,6 +1747,20 @@ fn write_radfoam_ply_ascii(
             writeln!(file, "property float blade_surface_color_{component}")?;
         }
     }
+    if model.spherical_voronoi.is_some() {
+        for component in 0..vol::SPHERICAL_VORONOI_SITES * 3 {
+            writeln!(
+                file,
+                "property float blade_spherical_voronoi_axis_{component}"
+            )?;
+        }
+        for component in 0..vol::SPHERICAL_VORONOI_SITES * 3 {
+            writeln!(
+                file,
+                "property float blade_spherical_voronoi_color_{component}"
+            )?;
+        }
+    }
     writeln!(file, "element adjacency {}", num_adjacency)?;
     writeln!(file, "property uint adjacency")?;
     writeln!(file, "end_header")?;
@@ -1793,6 +1808,15 @@ fn write_radfoam_ply_ascii(
             let stride = vol::SURFACE_COLOR_COMPONENTS * 3;
             for value in &coefficients[i * stride..(i + 1) * stride] {
                 write!(file, " {value}")?;
+            }
+        }
+        if let Some(ref spherical_voronoi) = model.spherical_voronoi {
+            let base = i * vol::SPHERICAL_VORONOI_SITES;
+            for value in &spherical_voronoi.axes[base..base + vol::SPHERICAL_VORONOI_SITES] {
+                write!(file, " {} {} {}", value.x, value.y, value.z)?;
+            }
+            for value in &spherical_voronoi.colors[base..base + vol::SPHERICAL_VORONOI_SITES] {
+                write!(file, " {} {} {}", value.x, value.y, value.z)?;
             }
         }
         writeln!(file)?;
@@ -1857,6 +1881,20 @@ fn write_radfoam_ply_binary(
             writeln!(file, "property float blade_surface_color_{component}")?;
         }
     }
+    if model.spherical_voronoi.is_some() {
+        for component in 0..vol::SPHERICAL_VORONOI_SITES * 3 {
+            writeln!(
+                file,
+                "property float blade_spherical_voronoi_axis_{component}"
+            )?;
+        }
+        for component in 0..vol::SPHERICAL_VORONOI_SITES * 3 {
+            writeln!(
+                file,
+                "property float blade_spherical_voronoi_color_{component}"
+            )?;
+        }
+    }
     writeln!(file, "element adjacency {}", num_adjacency)?;
     writeln!(file, "property uint adjacency")?;
     writeln!(file, "end_header")?;
@@ -1905,6 +1943,19 @@ fn write_radfoam_ply_binary(
             let stride = vol::SURFACE_COLOR_COMPONENTS * 3;
             for value in &coefficients[i * stride..(i + 1) * stride] {
                 file.write_all(&value.to_le_bytes())?;
+            }
+        }
+        if let Some(ref spherical_voronoi) = model.spherical_voronoi {
+            let base = i * vol::SPHERICAL_VORONOI_SITES;
+            for value in &spherical_voronoi.axes[base..base + vol::SPHERICAL_VORONOI_SITES] {
+                file.write_all(&value.x.to_le_bytes())?;
+                file.write_all(&value.y.to_le_bytes())?;
+                file.write_all(&value.z.to_le_bytes())?;
+            }
+            for value in &spherical_voronoi.colors[base..base + vol::SPHERICAL_VORONOI_SITES] {
+                file.write_all(&value.x.to_le_bytes())?;
+                file.write_all(&value.y.to_le_bytes())?;
+                file.write_all(&value.z.to_le_bytes())?;
             }
         }
     }
@@ -2408,6 +2459,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
 
         let mut path = std::env::temp_dir();
@@ -2438,6 +2490,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
 
         let path = std::env::temp_dir().join("blade_volume_convert_roundtrip_sh3.ply");
@@ -2480,6 +2533,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
 
         let suffix = match format {
@@ -2528,6 +2582,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
 
         let mut path = std::env::temp_dir();
@@ -2560,6 +2615,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             transforms: None,
             sh_degree: 0,
             points,
@@ -2610,6 +2666,26 @@ mod tests {
                 .map(|index| index as f32 * 0.01 - 0.2)
                 .collect(),
         );
+        model.spherical_voronoi = Some(vol::SphericalVoronoi {
+            axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
+                .map(|index| {
+                    glam::Vec3::new(
+                        index as f32 * 0.01 - 0.4,
+                        index as f32 * -0.02 + 0.3,
+                        index as f32 * 0.03 - 0.2,
+                    )
+                })
+                .collect(),
+            colors: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
+                .map(|index| {
+                    glam::Vec3::new(
+                        index as f32 * -0.01,
+                        index as f32 * 0.005,
+                        index as f32 * 0.002 - 0.1,
+                    )
+                })
+                .collect(),
+        });
         let suffix = match format {
             PlyFormat::Ascii => "ascii",
             PlyFormat::Binary => "binary",
@@ -2626,6 +2702,7 @@ mod tests {
             loaded.surface_color_coefficients,
             model.surface_color_coefficients
         );
+        assert_eq!(loaded.spherical_voronoi, model.spherical_voronoi);
         std::fs::remove_file(path).unwrap();
     }
 

@@ -1130,6 +1130,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
             points,
         };
         model.compute_adjacency_default();
@@ -1182,6 +1183,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         spring_relax(&mut model, 8, 0.5);
         let after = min_pairwise(&model.points);

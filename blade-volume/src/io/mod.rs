@@ -389,6 +389,7 @@ mod tests {
             surface_normals: None,
             surface_offsets: None,
             surface_color_coefficients: None,
+            spherical_voronoi: None,
         };
         let original = model.clone();
         let rub_direction = glam::Vec3::new(0.3, -0.4, 0.8).normalize();

@@ -108,6 +108,8 @@ struct Schema {
     surface_normal: Option<[usize; 3]>,
     surface_offset: Option<usize>,
     surface_color: Vec<usize>,
+    spherical_voronoi_axes: Vec<usize>,
+    spherical_voronoi_colors: Vec<usize>,
     adjacency: usize,
 }
 
@@ -235,6 +237,33 @@ impl Schema {
             ));
         }
 
+        let spherical_voronoi_axes = indexed_float_properties(
+            vertex,
+            "blade_spherical_voronoi_axis_",
+            "Spherical Voronoi axis",
+        )?;
+        let spherical_voronoi_colors = indexed_float_properties(
+            vertex,
+            "blade_spherical_voronoi_color_",
+            "Spherical Voronoi color",
+        )?;
+        let expected_spherical = crate::SPHERICAL_VORONOI_SITES * 3;
+        if spherical_voronoi_axes.len() != spherical_voronoi_colors.len()
+            || (!spherical_voronoi_axes.is_empty()
+                && spherical_voronoi_axes.len() != expected_spherical)
+        {
+            return Err(LoadError::invalid(format!(
+                "RadFoam PLY Spherical Voronoi property counts are axes={} colors={}, expected either zero or {expected_spherical} each",
+                spherical_voronoi_axes.len(),
+                spherical_voronoi_colors.len(),
+            )));
+        }
+        if !spherical_voronoi_axes.is_empty() && surface_normal.is_none() {
+            return Err(LoadError::invalid(
+                "RadFoam PLY Spherical Voronoi appearance requires radius, nx, ny, and nz properties",
+            ));
+        }
+
         Ok(Self {
             point_count: vertex.count,
             adjacency_count: adjacency.count,
@@ -254,11 +283,44 @@ impl Schema {
             surface_normal,
             surface_offset,
             surface_color: surface_color.into_iter().map(|entry| entry.1).collect(),
+            spherical_voronoi_axes,
+            spherical_voronoi_colors,
             adjacency: adjacency
                 .require("adjacency", PlyScalarType::Uint32)?
                 .offset,
         })
     }
+}
+
+fn indexed_float_properties(
+    element: &Element,
+    prefix: &str,
+    label: &str,
+) -> Result<Vec<usize>, LoadError> {
+    let mut properties = Vec::new();
+    for property in &element.properties {
+        if let Some(suffix) = property.name.strip_prefix(prefix) {
+            if property.ty != PlyScalarType::Float32 {
+                return Err(LoadError::invalid(format!(
+                    "RadFoam PLY property '{}' must be float32",
+                    property.name
+                )));
+            }
+            let index = suffix.parse::<usize>().map_err(|_| {
+                LoadError::invalid(format!("invalid RadFoam PLY property '{}'", property.name))
+            })?;
+            properties.push((index, property.offset));
+        }
+    }
+    properties.sort_unstable_by_key(|entry| entry.0);
+    for (expected, &(actual, _)) in properties.iter().enumerate() {
+        if actual != expected {
+            return Err(LoadError::invalid(format!(
+                "RadFoam PLY {label} indices must be contiguous; expected {expected}, got {actual}"
+            )));
+        }
+    }
+    Ok(properties.into_iter().map(|entry| entry.1).collect())
 }
 
 fn property_triplet(
@@ -499,6 +561,20 @@ fn allocate_model(
             .ok_or_else(|| LoadError::invalid("RadFoam PLY surface-color allocation overflow"))?;
         Some(allocate_vec(count, 0.0, "surface color")?)
     };
+    let spherical_voronoi = if schema.spherical_voronoi_axes.is_empty() {
+        None
+    } else {
+        let count = schema
+            .point_count
+            .checked_mul(crate::SPHERICAL_VORONOI_SITES)
+            .ok_or_else(|| {
+                LoadError::invalid("RadFoam PLY Spherical Voronoi allocation overflow")
+            })?;
+        Some(crate::SphericalVoronoi {
+            axes: allocate_vec(count, glam::Vec3::ZERO, "Spherical Voronoi axes")?,
+            colors: allocate_vec(count, glam::Vec3::ZERO, "Spherical Voronoi colors")?,
+        })
+    };
     let model = crate::PointCloudModel {
         points: allocate_vec(schema.point_count, glam::Vec4::ZERO, "point")?,
         sh_coefficients: allocate_vec(sh_count, 0.0, "SH")?,
@@ -509,6 +585,7 @@ fn allocate_model(
         surface_normals,
         surface_offsets,
         surface_color_coefficients,
+        spherical_voronoi,
     };
     Ok((
         model,
@@ -591,6 +668,22 @@ fn decode_binary(
                 coefficients[index * stride + component] = read_f32(&row, offset);
             }
         }
+        if let Some(ref mut spherical_voronoi) = model.spherical_voronoi {
+            let base = index * crate::SPHERICAL_VORONOI_SITES;
+            for site in 0..crate::SPHERICAL_VORONOI_SITES {
+                let component = site * 3;
+                spherical_voronoi.axes[base + site] = glam::Vec3::new(
+                    read_f32(&row, schema.spherical_voronoi_axes[component]),
+                    read_f32(&row, schema.spherical_voronoi_axes[component + 1]),
+                    read_f32(&row, schema.spherical_voronoi_axes[component + 2]),
+                );
+                spherical_voronoi.colors[base + site] = glam::Vec3::new(
+                    read_f32(&row, schema.spherical_voronoi_colors[component]),
+                    read_f32(&row, schema.spherical_voronoi_colors[component + 1]),
+                    read_f32(&row, schema.spherical_voronoi_colors[component + 2]),
+                );
+            }
+        }
     }
 
     row = allocate_vec(adjacency.stride, 0u8, "adjacency row")?;
@@ -670,6 +763,8 @@ fn decode_ascii(
         let mut surface_normal = glam::Vec3::ZERO;
         let mut surface_offset = 0.0;
         let mut surface_color = [0.0_f32; crate::SURFACE_COLOR_COMPONENTS * 3];
+        let mut spherical_voronoi_axes = [0.0_f32; crate::SPHERICAL_VORONOI_SITES * 3];
+        let mut spherical_voronoi_colors = [0.0_f32; crate::SPHERICAL_VORONOI_SITES * 3];
         let coefficients =
             &mut model.sh_coefficients[index * schema.sh_stride..(index + 1) * schema.sh_stride];
         for property in &vertex.properties {
@@ -701,6 +796,18 @@ fn decode_ascii(
                         .unwrap();
                     surface_color[component] = parse_f32(token, name)?;
                 }
+                name if name.starts_with("blade_spherical_voronoi_axis_") => {
+                    let component = name["blade_spherical_voronoi_axis_".len()..]
+                        .parse::<usize>()
+                        .unwrap();
+                    spherical_voronoi_axes[component] = parse_f32(token, name)?;
+                }
+                name if name.starts_with("blade_spherical_voronoi_color_") => {
+                    let component = name["blade_spherical_voronoi_color_".len()..]
+                        .parse::<usize>()
+                        .unwrap();
+                    spherical_voronoi_colors[component] = parse_f32(token, name)?;
+                }
                 name if name.starts_with("color_sh_") => {
                     let rest = name["color_sh_".len()..].parse::<usize>().unwrap();
                     coefficients[3 + rest] = parse_f32(token, name)?;
@@ -727,6 +834,16 @@ fn decode_ascii(
         if let Some(ref mut coefficients) = model.surface_color_coefficients {
             let stride = crate::SURFACE_COLOR_COMPONENTS * 3;
             coefficients[index * stride..(index + 1) * stride].copy_from_slice(&surface_color);
+        }
+        if let Some(ref mut spherical_voronoi) = model.spherical_voronoi {
+            let base = index * crate::SPHERICAL_VORONOI_SITES;
+            for site in 0..crate::SPHERICAL_VORONOI_SITES {
+                let component = site * 3;
+                spherical_voronoi.axes[base + site] =
+                    glam::Vec3::from_slice(&spherical_voronoi_axes[component..component + 3]);
+                spherical_voronoi.colors[base + site] =
+                    glam::Vec3::from_slice(&spherical_voronoi_colors[component..component + 3]);
+            }
         }
     }
 
