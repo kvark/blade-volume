@@ -401,6 +401,7 @@ pub fn radii_from_powerfoam_reference(points: &[glam::Vec4], cameras: &[CameraPa
 
 const CECH_POINTS_PER_WORKER: usize = 4_096;
 const CECH_MAX_WORKERS: usize = 16;
+const CECH_RADIUS_BINS: usize = 8;
 
 /// Computes the Čech-complex adjacency for a set of weighted points (Power Foam).
 ///
@@ -410,9 +411,10 @@ const CECH_MAX_WORKERS: usize = 16;
 ///
 /// `radii.len()` must equal `points.len()`. Negative radii are clamped to `0`.
 ///
-/// Implementation: builds a shared immutable k-d tree, queries each point within
-/// `r_i + r_max` on a bounded set of workers, then filters by the exact overlap
-/// predicate.
+/// Implementation: partitions sites into logarithmic radius bands and builds
+/// one shared immutable k-d tree per band. Each point queries a band within
+/// `r_i + r_band_max`, then filters by the exact overlap predicate. Tighter
+/// band bounds avoid searching to the largest outlier radius for every site.
 pub fn compute_cech(points: &[glam::Vec4], radii: &[f32], config: &AdjacencyConfig) -> Adjacency {
     let available_workers = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
@@ -442,33 +444,72 @@ fn compute_cech_with_workers(
     }
 
     let radii: Vec<f32> = radii.iter().map(|&r| r.max(0.0)).collect();
-    let r_max = radii.iter().copied().fold(0.0_f32, f32::max);
-
     // Immutable construction handles quantized/coincident coordinates without
     // overflowing the mutable tree's fixed leaf buckets.
     let positions = points
         .iter()
         .map(|point| [point.x, point.y, point.z])
         .collect::<Vec<_>>();
-    let kd_tree = kiddo::ImmutableKdTree::new_from_slice(&positions);
+    let positive_min = radii
+        .iter()
+        .copied()
+        .filter(|&radius| radius > 0.0)
+        .fold(f32::INFINITY, f32::min);
+    let r_max = radii.iter().copied().fold(0.0_f32, f32::max);
+    let log_span = if positive_min.is_finite() && r_max > positive_min {
+        (r_max / positive_min).ln()
+    } else {
+        0.0
+    };
+    let mut bin_indices = vec![Vec::new(); CECH_RADIUS_BINS];
+    for (index, &radius) in radii.iter().enumerate() {
+        let bin = if radius == 0.0 || log_span == 0.0 {
+            0
+        } else {
+            (((radius / positive_min).ln() / log_span) * CECH_RADIUS_BINS as f32).floor() as usize
+        }
+        .min(CECH_RADIUS_BINS - 1);
+        bin_indices[bin].push(index);
+    }
+    let radius_bins = bin_indices
+        .into_iter()
+        .filter(|indices| !indices.is_empty())
+        .map(|indices| {
+            let bin_positions = indices
+                .iter()
+                .map(|&index| positions[index])
+                .collect::<Vec<_>>();
+            let bin_max = indices
+                .iter()
+                .map(|&index| radii[index])
+                .fold(0.0_f32, f32::max);
+            (
+                indices,
+                bin_max,
+                kiddo::ImmutableKdTree::new_from_slice(&bin_positions),
+            )
+        })
+        .collect::<Vec<_>>();
 
     let build_rows = |range: std::ops::Range<usize>| {
         range
             .map(|i| {
                 let p = points[i];
                 let r_i = radii[i];
-                let bound = r_i + r_max;
-                let bound_sq = bound * bound;
                 let q = [p.x, p.y, p.z];
                 let mut neighbors = Vec::new();
-                for hit in kd_tree.within_unsorted::<kiddo::SquaredEuclidean>(&q, bound_sq) {
-                    let j = hit.item as usize;
-                    if j == i {
-                        continue;
-                    }
-                    let sum = r_i + radii[j];
-                    if hit.distance <= sum * sum {
-                        neighbors.push(j as u32);
+                for &(ref indices, bin_max, ref kd_tree) in radius_bins.iter() {
+                    let bound = r_i + bin_max;
+                    let bound_sq = bound * bound;
+                    for hit in kd_tree.within_unsorted::<kiddo::SquaredEuclidean>(&q, bound_sq) {
+                        let j = indices[hit.item as usize];
+                        if j == i {
+                            continue;
+                        }
+                        let sum = r_i + radii[j];
+                        if hit.distance <= sum * sum {
+                            neighbors.push(j as u32);
+                        }
                     }
                 }
                 neighbors
@@ -1030,6 +1071,45 @@ mod tests {
 
         assert_eq!(parallel.offsets, serial.offsets);
         assert_eq!(parallel.neighbors, serial.neighbors);
+    }
+
+    #[test]
+    fn cech_radius_bins_match_exhaustive_overlap_graph() {
+        let points = (0..257)
+            .map(|i| {
+                glam::Vec4::new(
+                    ((i * 37) % 257) as f32 / 256.0,
+                    ((i * 73) % 251) as f32 / 250.0,
+                    ((i * 109) % 241) as f32 / 240.0,
+                    1.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        let radii = (0..points.len())
+            .map(|i| {
+                if i % 34 == 0 {
+                    -0.25
+                } else if i % 17 == 0 {
+                    0.0
+                } else {
+                    0.001 * 1.8_f32.powi((i % CECH_RADIUS_BINS) as i32)
+                }
+            })
+            .collect::<Vec<_>>();
+        let adjacency = compute_cech_with_workers(&points, &radii, &AdjacencyConfig::default(), 4);
+
+        for (i, point) in points.iter().enumerate() {
+            let mut expected = (0..points.len())
+                .filter(|&j| {
+                    j != i
+                        && point.truncate().distance_squared(points[j].truncate())
+                            <= (radii[i].max(0.0) + radii[j].max(0.0)).powi(2)
+                })
+                .map(|j| j as u32)
+                .collect::<Vec<_>>();
+            expected.sort_unstable();
+            assert_eq!(neighbors_of(&adjacency, i), expected, "row {i}");
+        }
     }
 
     #[test]
