@@ -13,8 +13,8 @@ pub mod io;
 
 pub use adjacency::{
     compute_adjacency, compute_adjacency_default, compute_cech, compute_cech_default, compute_knn,
-    radii_from_nearest_neighbour, spring_relax, try_compute_adjacency,
-    try_compute_adjacency_default, AdjacencyConfig, AdjacencyError,
+    radii_from_nearest_neighbour, radii_from_powerfoam_reference, spring_relax,
+    try_compute_adjacency, try_compute_adjacency_default, AdjacencyConfig, AdjacencyError,
 };
 #[cfg(feature = "qhull")]
 pub use adjacency::{compute_adjacency_qhull, compute_adjacency_qhull_default};

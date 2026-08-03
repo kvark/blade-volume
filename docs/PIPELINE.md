@@ -65,6 +65,11 @@ defer all of that and reuse our SH path. Adoption order:
 - `PointCloudModel::compute_adjacency_default` dispatches: Čech when
   `radii.is_some()`, Delaunay otherwise.
 - `kiddo` promoted from dev-dep to runtime dep on `blade-volume`.
+- `train_colmap --powerfoam-reference-radii` initializes each support with
+  PowerFoam's mean of the eight nearest-site distances (including self), caps
+  it to 10% of projected half-image height in every visible training camera,
+  and builds the resulting Čech graph. This is the faithful initializer;
+  `--cech-radius` remains the simpler nearest-neighbour-factor experiment.
 
 #### M2c — Power Foam WGSL (done)
 

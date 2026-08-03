@@ -182,6 +182,11 @@ pub enum AdjacencyKind {
     /// `radius_factor` ~ 1.0 keeps balls just-touching their nearest
     /// neighbour.
     Cech { radius_factor: f32 },
+    /// PowerFoam's reference initialization: mean of the eight nearest-site
+    /// distances (including self), capped to 10% of projected half-image
+    /// height in every visible training camera, followed by exact Čech
+    /// adjacency.
+    PowerFoamReference,
 }
 
 /// Initial foam-site distribution.
@@ -564,7 +569,11 @@ pub struct TrainOutcome {
     pub endpoint_checkpoint: Option<path::PathBuf>,
 }
 
-fn rebuild_adjacency(model: &mut vol::PointCloudModel, kind: AdjacencyKind) {
+fn rebuild_adjacency(
+    model: &mut vol::PointCloudModel,
+    kind: AdjacencyKind,
+    cameras: &[vol::CameraParams],
+) {
     match kind {
         AdjacencyKind::FromModel => {
             log::info!(
@@ -613,6 +622,16 @@ fn rebuild_adjacency(model: &mut vol::PointCloudModel, kind: AdjacencyKind) {
                 model.points.len()
             );
             let radii = vol::radii_from_nearest_neighbour(&model.points, radius_factor);
+            model.adjacency = Some(vol::compute_cech_default(&model.points, &radii));
+            model.radii = Some(radii);
+        }
+        AdjacencyKind::PowerFoamReference => {
+            log::info!(
+                "computing reference PowerFoam radii and Cech adjacency for {} points across {} cameras...",
+                model.points.len(),
+                cameras.len(),
+            );
+            let radii = vol::radii_from_powerfoam_reference(&model.points, cameras);
             model.adjacency = Some(vol::compute_cech_default(&model.points, &radii));
             model.radii = Some(radii);
         }
@@ -795,7 +814,22 @@ pub fn train_colmap_appearance_split(
     }
     let initialization_duration = initialization_start.elapsed();
     let t0 = std::time::Instant::now();
-    rebuild_adjacency(&mut model, config.adjacency);
+    let reference_cameras = if matches!(config.adjacency, AdjacencyKind::PowerFoamReference) {
+        let (images, _) =
+            split_train_test(&recon, images_dir, config.max_views, 0, config.test_every);
+        images
+            .into_iter()
+            .filter(|image| {
+                recon.cameras[&image.camera_id]
+                    .model
+                    .supports_pinhole_rectification()
+            })
+            .map(|image| recon.camera_params_for(image, config.far_plane))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    rebuild_adjacency(&mut model, config.adjacency, &reference_cameras);
     let adjacency_duration = t0.elapsed();
     log::info!(
         "adjacency done in {:.2}s ({} edges)",
@@ -939,13 +973,13 @@ mod tests {
     #[test]
     fn cech_selection_preserves_radii_and_other_modes_clear_them() {
         let mut model = tiny_model_far_apart();
-        rebuild_adjacency(&mut model, AdjacencyKind::Cech { radius_factor: 0.6 });
+        rebuild_adjacency(&mut model, AdjacencyKind::Cech { radius_factor: 0.6 }, &[]);
         let radii = model.radii.as_ref().expect("Cech model must keep weights");
         assert_eq!(radii.len(), model.points.len());
         assert!(radii.iter().all(|&r| (r - 6.0).abs() < 1e-6));
         model.validate().unwrap();
 
-        rebuild_adjacency(&mut model, AdjacencyKind::Delaunay);
+        rebuild_adjacency(&mut model, AdjacencyKind::Delaunay, &[]);
         assert!(model.radii.is_none());
         model.validate().unwrap();
     }
@@ -956,9 +990,25 @@ mod tests {
         let expected = vec![4.0, 5.0, 6.0, 7.0];
         model.radii = Some(expected.clone());
 
-        rebuild_adjacency(&mut model, AdjacencyKind::FromModel);
+        rebuild_adjacency(&mut model, AdjacencyKind::FromModel, &[]);
 
         assert_eq!(model.radii.as_deref(), Some(expected.as_slice()));
+        model.validate().unwrap();
+    }
+
+    #[test]
+    fn reference_powerfoam_selection_uses_training_camera_cap() {
+        let mut model = tiny_model_far_apart();
+        let camera = vol::CameraParams::looking_at(
+            glam::Vec3::new(0.0, 0.0, -10.0),
+            glam::Vec3::ZERO,
+            std::f32::consts::FRAC_PI_2,
+            1.0,
+            100.0,
+        );
+        rebuild_adjacency(&mut model, AdjacencyKind::PowerFoamReference, &[camera]);
+
+        assert!(model.radii.as_ref().unwrap()[0] <= 1.0 + 1.0e-6);
         model.validate().unwrap();
     }
 

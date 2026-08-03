@@ -121,6 +121,11 @@ struct Args {
     #[argh(option, default = "0.0")]
     cech_radius: f32,
 
+    /// initialize radii with PowerFoam's eight-sample mean and projected
+    /// camera cap, then build Cech adjacency
+    #[argh(switch)]
+    powerfoam_reference_radii: bool,
+
     /// pixels per Adam step (default 1024). Random pixel sampling keeps the
     /// graph small regardless of image resolution. Set 0 to use every pixel.
     #[argh(option, default = "1024")]
@@ -305,8 +310,8 @@ struct Args {
     position_lr_ratio: f32,
 
     /// radius learning rate for PowerFoam as a fraction of the main learning rate
-    /// (default 0 = fixed radii). Requires a weighted input (--cech-radius or a
-    /// weighted --init-ply) and periodic geometry rebuilds.
+    /// (default 0 = fixed radii). Requires a weighted initializer or
+    /// --init-ply and periodic geometry rebuilds.
     #[argh(option, default = "0.0")]
     radius_lr_ratio: f32,
 
@@ -379,7 +384,9 @@ fn resolve_views_per_batch(
 }
 
 fn select_adjacency(args: &Args) -> pipeline::AdjacencyKind {
-    if args.qhull {
+    if args.powerfoam_reference_radii {
+        pipeline::AdjacencyKind::PowerFoamReference
+    } else if args.qhull {
         pipeline::AdjacencyKind::DelaunayQhull
     } else if args.cech_radius > 0.0 {
         pipeline::AdjacencyKind::Cech {
@@ -457,6 +464,20 @@ fn main() {
         eprintln!("--qhull requires building blade-volume-train with --features qhull");
         std::process::exit(2);
     }
+    if !args.cech_radius.is_finite() || args.cech_radius < 0.0 {
+        eprintln!("--cech-radius must be finite and non-negative");
+        std::process::exit(2);
+    }
+    let topology_overrides = usize::from(args.qhull)
+        + usize::from(args.knn > 0)
+        + usize::from(args.cech_radius > 0.0)
+        + usize::from(args.powerfoam_reference_radii);
+    if topology_overrides > 1 {
+        eprintln!(
+            "--qhull, --knn, --cech-radius, and --powerfoam-reference-radii are mutually exclusive"
+        );
+        std::process::exit(2);
+    }
 
     if args.stop_after_steps > 0 && args.checkpoint.as_deref() == Some("none") {
         eprintln!("--stop-after-steps requires checkpoints; remove --checkpoint none");
@@ -492,12 +513,13 @@ fn main() {
         eprintln!("fixed geometry optimization requires --geometry-rebuild-every > 0");
         std::process::exit(2);
     }
-    if args.radius_lr_ratio > 0.0 && args.cech_radius <= 0.0 && args.init_ply.is_none() {
-        eprintln!("--radius-lr-ratio requires --cech-radius or a weighted --init-ply");
+    let fresh_weighted = args.cech_radius > 0.0 || args.powerfoam_reference_radii;
+    if args.radius_lr_ratio > 0.0 && !fresh_weighted && args.init_ply.is_none() {
+        eprintln!("--radius-lr-ratio requires a weighted initializer or --init-ply");
         std::process::exit(2);
     }
-    if args.interpenetration_weight > 0.0 && args.cech_radius <= 0.0 && args.init_ply.is_none() {
-        eprintln!("--interpenetration-weight requires --cech-radius or a weighted --init-ply");
+    if args.interpenetration_weight > 0.0 && !fresh_weighted && args.init_ply.is_none() {
+        eprintln!("--interpenetration-weight requires a weighted initializer or --init-ply");
         std::process::exit(2);
     }
 
@@ -1080,5 +1102,23 @@ mod tests {
             panic!("explicit Cech override was not selected");
         };
         assert_eq!(radius_factor, 1.7);
+
+        let reference = <Args as argh::FromArgs>::from_args(
+            &["train_colmap"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--output",
+                "model.ply",
+                "--powerfoam-reference-radii",
+            ],
+        )
+        .unwrap();
+        assert!(matches!(
+            select_adjacency(&reference),
+            pipeline::AdjacencyKind::PowerFoamReference
+        ));
     }
 }

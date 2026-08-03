@@ -3,7 +3,7 @@
 //! Computes Voronoi neighbors from point positions using 3D Delaunay tetrahedralization.
 //! Delaunay edges correspond to Voronoi neighbor pairs.
 
-use crate::Adjacency;
+use crate::{Adjacency, CameraParams};
 use simple_delaunay_lib::delaunay_3d::{
     delaunay_struct_3d::DelaunayStructure3D, simplicial_struct_3d::Node,
 };
@@ -345,6 +345,58 @@ pub fn radii_from_nearest_neighbour(points: &[glam::Vec4], factor: f32) -> Vec<f
             (nearest_distinct * factor).max(0.0)
         })
         .collect()
+}
+
+/// Initialize support radii with the PowerFoam reference policy.
+///
+/// The raw radius is the mean of the eight closest site distances, including
+/// the zero self-distance. For sites visible inside a training camera, it is
+/// capped to 10% of the projected half-image height at that depth. The cap
+/// prevents sparse outliers from creating very large balls and dense Čech
+/// neighborhoods while preserving the reference's local spacing estimate.
+pub fn radii_from_powerfoam_reference(points: &[glam::Vec4], cameras: &[CameraParams]) -> Vec<f32> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+
+    let positions = points
+        .iter()
+        .map(|point| [point.x, point.y, point.z])
+        .collect::<Vec<_>>();
+    let tree = kiddo::ImmutableKdTree::new_from_slice(&positions);
+    let sample_count = points.len().min(8);
+    let sample_count_nonzero = std::num::NonZero::new(sample_count).unwrap();
+    let mut radii = points
+        .iter()
+        .map(|point| {
+            let query = [point.x, point.y, point.z];
+            tree.nearest_n::<kiddo::SquaredEuclidean>(&query, sample_count_nonzero)
+                .iter()
+                .map(|hit| hit.distance.sqrt())
+                .sum::<f32>()
+                / sample_count as f32
+        })
+        .collect::<Vec<_>>();
+
+    for camera in cameras {
+        let eye = glam::Vec3::from_array(camera.cam_position);
+        let orientation = glam::Quat::from_array(camera.cam_orientation);
+        let tan_half = glam::Vec2::new((0.5 * camera.fov[0]).tan(), (0.5 * camera.fov[1]).tan());
+        let principal = glam::Vec2::from_array(camera.principal);
+        let lower_extent = (glam::Vec2::NEG_ONE - principal) * tan_half;
+        let upper_extent = (glam::Vec2::ONE - principal) * tan_half;
+        for (point, radius) in points.iter().zip(radii.iter_mut()) {
+            let camera_point = orientation.inverse() * (point.truncate() - eye);
+            if camera_point.z <= 0.0 {
+                continue;
+            }
+            let projected = camera_point.truncate() / camera_point.z;
+            if projected.cmpgt(lower_extent).all() && projected.cmplt(upper_extent).all() {
+                *radius = radius.min(0.1 * camera_point.z * tan_half.y);
+            }
+        }
+    }
+    radii
 }
 
 /// Computes the Čech-complex adjacency for a set of weighted points (Power Foam).
@@ -1011,6 +1063,40 @@ mod tests {
         let radii = radii_from_nearest_neighbour(&points, 0.5);
         assert_eq!(radii.len(), points.len());
         assert!(radii.iter().all(|&radius| (radius - 0.5).abs() < 1.0e-6));
+    }
+
+    #[test]
+    fn powerfoam_reference_radii_average_eight_samples_including_self() {
+        let points = (0..10)
+            .map(|index| glam::Vec4::new(index as f32, 0.0, 0.0, 1.0))
+            .collect::<Vec<_>>();
+        let radii = radii_from_powerfoam_reference(&points, &[]);
+        assert!((radii[0] - 3.5).abs() < 1.0e-6);
+        assert!((radii[4] - 2.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn powerfoam_reference_radii_apply_visible_camera_cap() {
+        let points = vec![
+            glam::Vec4::new(0.0, 0.0, 10.0, 1.0),
+            glam::Vec4::new(10.0, 0.0, 10.0, 1.0),
+            glam::Vec4::new(-10.0, 0.0, 10.0, 1.0),
+            glam::Vec4::new(0.0, 10.0, 10.0, 1.0),
+            glam::Vec4::new(0.0, -10.0, 10.0, 1.0),
+            glam::Vec4::new(10.0, 10.0, 10.0, 1.0),
+            glam::Vec4::new(-10.0, 10.0, 10.0, 1.0),
+            glam::Vec4::new(100.0, 0.0, 10.0, 1.0),
+        ];
+        let camera = CameraParams::looking_at(
+            glam::Vec3::ZERO,
+            glam::Vec3::Z,
+            std::f32::consts::FRAC_PI_2,
+            1.0,
+            100.0,
+        );
+        let radii = radii_from_powerfoam_reference(&points, &[camera]);
+        assert!((radii[0] - 1.0).abs() < 1.0e-6);
+        assert!(radii[7] > 1.0, "off-camera support should not be capped");
     }
 
     #[test]
