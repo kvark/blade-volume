@@ -222,10 +222,40 @@ fn rays_for_pixels(
 }
 
 fn assert_gpu_path_record_matches_cpu(
+    model: vol::PointCloudModel,
+    world_translation: glam::Vec3,
+    expect_tile_overflow: bool,
+    expect_path_truncation: bool,
+) {
+    assert_gpu_path_record_matches_cpu_with_mode(
+        model,
+        world_translation,
+        expect_tile_overflow,
+        expect_path_truncation,
+        false,
+    );
+}
+
+fn assert_gpu_batched_path_record_matches_cpu(
+    model: vol::PointCloudModel,
+    world_translation: glam::Vec3,
+    expect_path_truncation: bool,
+) {
+    assert_gpu_path_record_matches_cpu_with_mode(
+        model,
+        world_translation,
+        false,
+        expect_path_truncation,
+        true,
+    );
+}
+
+fn assert_gpu_path_record_matches_cpu_with_mode(
     mut model: vol::PointCloudModel,
     world_translation: glam::Vec3,
     expect_tile_overflow: bool,
     expect_path_truncation: bool,
+    batched_exhaustive: bool,
 ) {
     let _gpu_test_guard = GPU_TEST_LOCK
         .lock()
@@ -248,8 +278,20 @@ fn assert_gpu_path_record_matches_cpu(
     let mut camera = make_camera_looking_along_x(depth);
     camera.cam_position =
         (glam::Vec3::from_array(camera.cam_position) + world_translation).to_array();
+    let mut cameras = [camera; 2];
+    if batched_exhaustive {
+        cameras[1].principal[0] -= 0.025;
+        cameras[1].principal[1] += 0.015;
+    }
     let pixels = pixel_indices_for_rays(width, height, num_pixels);
-    let rays = rays_for_pixels(&camera, &pixels, width, height);
+    let pixel_split = pixels.len() / 2;
+    let mut rays = rays_for_pixels(&cameras[0], &pixels[..pixel_split], width, height);
+    rays.extend(rays_for_pixels(
+        &cameras[1],
+        &pixels[pixel_split..],
+        width,
+        height,
+    ));
 
     let weighted = model.radii.is_some();
     let cpu = cpu_record(&model, &rays, 0, max_steps, depth);
@@ -265,7 +307,7 @@ fn assert_gpu_path_record_matches_cpu(
     });
     let mut cloud = RadFoamGpuCloud::new(&model, &ctx, &mut encoder);
     let mut recorder = PathRecorder::new(&ctx);
-    let mut bufs = if weighted {
+    let mut bufs = if weighted && !batched_exhaustive {
         PathRecordBuffers::new_projected(
             &ctx,
             num_pixels,
@@ -300,26 +342,39 @@ fn assert_gpu_path_record_matches_cpu(
         tx.fill_buffer(bufs.dt_grad_current.at(0), pl * 16, 0);
         tx.fill_buffer(bufs.dt_grad_next.at(0), pl * 16, 0);
     }
-    // Fill the batch in two slices. This exercises the same output-offset
-    // path used by mixed-view training while retaining one camera here so the
-    // complete result can be compared directly with the CPU oracle.
-    for pixel_offset in [0, num_pixels / 2] {
-        recorder.dispatch(
-            &mut encoder,
-            &cloud,
-            &bufs,
-            RecordPathsArgs {
-                camera,
-                start_point: 0,
-                pixel_offset,
-                max_steps: max_steps as u32,
-                image_width: width,
-                image_height: height,
-                max_path_dt: 50.0,
-                depth,
-                num_pixels: num_pixels / 2,
-            },
-        );
+    // Fill the batch in two slices. The exhaustive PowerFoam case binds two
+    // distinct cameras within each shared compute pass, matching mixed-view
+    // training. Other cases retain the ordinary per-slice dispatch path.
+    let dispatch_args = [
+        RecordPathsArgs {
+            camera: cameras[0],
+            start_point: 0,
+            pixel_offset: 0,
+            max_steps: max_steps as u32,
+            image_width: width,
+            image_height: height,
+            max_path_dt: 50.0,
+            depth,
+            num_pixels: num_pixels / 2,
+        },
+        RecordPathsArgs {
+            camera: cameras[1],
+            start_point: 0,
+            pixel_offset: num_pixels / 2,
+            max_steps: max_steps as u32,
+            image_width: width,
+            image_height: height,
+            max_path_dt: 50.0,
+            depth,
+            num_pixels: num_pixels / 2,
+        },
+    ];
+    if batched_exhaustive {
+        recorder.dispatch_batch(&mut encoder, &cloud, &bufs, &dispatch_args);
+    } else {
+        for arg in dispatch_args {
+            recorder.dispatch(&mut encoder, &cloud, &bufs, arg);
+        }
     }
     // Read back via download staging buffers.
     let pl = (num_pixels as u64) * (max_steps as u64);
@@ -414,17 +469,19 @@ fn assert_gpu_path_record_matches_cpu(
             "PowerFoam candidate scratch overflow: {max_candidates} > {}",
             bufs.splat_candidate_capacity(),
         );
-        let max_tile_candidates = bufs.max_splat_tile_candidate_count([width, height]);
-        assert!(
-            max_tile_candidates > 0,
-            "weighted fixture did not populate projected candidate tiles",
-        );
-        assert_eq!(
-            max_tile_candidates > bufs.splat_tile_capacity(),
-            expect_tile_overflow,
-            "unexpected projected-tile overflow state: {max_tile_candidates} candidates, {} capacity",
-            bufs.splat_tile_capacity(),
-        );
+        if bufs.has_projected_splat_tiles() {
+            let max_tile_candidates = bufs.max_splat_tile_candidate_count([width, height]);
+            assert!(
+                max_tile_candidates > 0,
+                "weighted fixture did not populate projected candidate tiles",
+            );
+            assert_eq!(
+                max_tile_candidates > bufs.splat_tile_capacity(),
+                expect_tile_overflow,
+                "unexpected projected-tile overflow state: {max_tile_candidates} candidates, {} capacity",
+                bufs.splat_tile_capacity(),
+            );
+        }
     }
 
     let gpu_previous_cells: Vec<u32> = unsafe {
@@ -626,6 +683,17 @@ fn gpu_path_record_matches_bounded_powerfoam() {
             .collect(),
     );
     assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false, false);
+}
+
+#[test]
+fn gpu_batched_powerfoam_paths_match_multi_camera_cpu() {
+    let mut model = build_grid_model(12);
+    model.radii = Some(
+        (0..model.points.len())
+            .map(|i| 0.2 + 0.03 * (i % 3) as f32)
+            .collect(),
+    );
+    assert_gpu_batched_path_record_matches_cpu(model, glam::Vec3::ZERO, false);
 }
 
 #[test]

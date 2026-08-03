@@ -352,6 +352,39 @@ resize and live settings handling, is the remaining presentation step.
   894 MB while sampled GPU memory remains 1,295 MiB. No scope records swap,
   pressure, OOM, candidate overflow, or a GPU fault.
 
+#### M2n — Batched multi-view path recording (implemented and gated)
+
+- Sparse mixed-view PowerFoam training now records all disjoint camera slices
+  through one exhaustive-candidate gather pass and one front-to-back record
+  pass. Each dispatch retains its own camera constants, pixel offset, and ray
+  count; the only removed work is the compute barrier between independent
+  camera slices. Projected-tile batches and unweighted adjacency walks keep
+  the existing sequential path because their scratch or traversal semantics
+  differ. The public batch entry point validates ordered, disjoint output
+  ranges and falls back automatically.
+- A physical-GPU oracle binds two distinct cameras inside both shared passes
+  and matches CPU cells, previous/next roles, intervals, path status, and all
+  weighted geometry Jacobians. The complete ten-case path suite also covers
+  disconnected supports, exact-cap and truncated rows, projected overflow,
+  and translated geometry. In a matched 100-step gate, GPU wait falls from
+  7.203 to 2.709 seconds (62.4%), training from 8.800 to 4.418 seconds (49.8%),
+  and whole-command time from 12.89 to 8.64 seconds (33.0%). A repeat records
+  2.718 seconds of GPU wait and 8.39 seconds whole-command time.
+- The 100-step baseline-to-batched numerical delta is smaller than ordinary
+  batched repeat variation: maximum position/SH differences are
+  3.8e-6/7.9e-6 versus 1.4e-5/1.4e-5 between two batched runs. CSR topology is
+  byte-identical, as is the sampling/trainer-state sidecar. This is consistent
+  with the existing floating-point atomic accumulation order rather than a
+  path-semantic change.
+- A complete 2,000-step resume crosses the same four growth boundaries and
+  reaches exactly 57,500 → 66,125 → 76,044 → 87,451 → 100,569 sites. Training
+  falls from 96.246 to 67.071 seconds (30.3%), GPU wait from 76.927 to 47.745
+  seconds (37.9%), and whole-command time from 100.52 to 71.13 seconds (29.2%).
+  All 8,192,000 rays remain untruncated. Fresh-Ply train/test quality is
+  14.64/14.34 dB versus 14.66/14.36 dB, within the established stochastic
+  gate. Host peak is 652 MB, with zero swap, pressure, OOM, candidate overflow,
+  or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

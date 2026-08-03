@@ -182,20 +182,12 @@ impl PathRecorder {
         context.destroy_compute_pipeline(&mut self.splat_record_pipeline);
     }
 
-    /// Record `args.num_pixels` paths into the caller-owned output buffers.
-    ///
-    /// The caller is responsible for:
-    ///   - zeroing every active output buffer before this call (the shader
-    ///     only writes the steps that were actually taken);
-    ///   - making sure every binding is valid for the right number of bytes;
-    ///   - submitting the encoder afterwards.
-    pub fn dispatch(
+    fn prepare_dispatch(
         &self,
-        encoder: &mut gpu::CommandEncoder,
         cloud: &crate::gpu::RadFoamGpuCloud,
         buffers: &PathRecordBuffers,
         args: RecordPathsArgs,
-    ) {
+    ) -> (PathRecordData, u32) {
         assert!(
             !cloud.is_power_foam || buffers.has_splat_scratch,
             "PowerFoam path recording requires splat scratch buffers"
@@ -272,6 +264,24 @@ impl PathRecorder {
             g_camera: args.camera,
             g_params: params,
         };
+        (data, tile_count)
+    }
+
+    /// Record `args.num_pixels` paths into the caller-owned output buffers.
+    ///
+    /// The caller is responsible for:
+    ///   - zeroing every active output buffer before this call (the shader
+    ///     only writes the steps that were actually taken);
+    ///   - making sure every binding is valid for the right number of bytes;
+    ///   - submitting the encoder afterwards.
+    pub fn dispatch(
+        &self,
+        encoder: &mut gpu::CommandEncoder,
+        cloud: &crate::gpu::RadFoamGpuCloud,
+        buffers: &PathRecordBuffers,
+        args: RecordPathsArgs,
+    ) {
+        let (data, tile_count) = self.prepare_dispatch(cloud, buffers, args);
         if cloud.is_power_foam {
             if buffers.has_projected_splat_tiles() {
                 {
@@ -304,6 +314,59 @@ impl PathRecorder {
         pc.bind(0, &data);
         let groups = args.num_pixels.div_ceil(64);
         pc.dispatch([groups, 1, 1]);
+    }
+
+    /// Record multiple disjoint camera slices into one output batch.
+    ///
+    /// Exhaustive PowerFoam slices share one gather pass and one record pass,
+    /// while retaining a separate camera and pixel range per dispatch. Other
+    /// modes use the ordinary dispatch sequence. Arguments must be ordered by
+    /// non-overlapping `pixel_offset` ranges.
+    pub fn dispatch_batch(
+        &self,
+        encoder: &mut gpu::CommandEncoder,
+        cloud: &crate::gpu::RadFoamGpuCloud,
+        buffers: &PathRecordBuffers,
+        args: &[RecordPathsArgs],
+    ) {
+        if args.is_empty() {
+            return;
+        }
+        for pair in args.windows(2) {
+            let first_end = pair[0]
+                .pixel_offset
+                .checked_add(pair[0].num_pixels)
+                .expect("path dispatch pixel range overflow");
+            assert!(
+                first_end <= pair[1].pixel_offset,
+                "batched path dispatch ranges must be ordered and disjoint"
+            );
+        }
+        if !cloud.is_power_foam || buffers.has_projected_splat_tiles() {
+            for &arg in args {
+                self.dispatch(encoder, cloud, buffers, arg);
+            }
+            return;
+        }
+
+        let data = args
+            .iter()
+            .map(|&arg| self.prepare_dispatch(cloud, buffers, arg).0)
+            .collect::<Vec<_>>();
+        {
+            let mut pass = encoder.compute("powerfoam-gather-path-candidate-batch");
+            let mut pc = pass.with(&self.splat_gather_pipeline);
+            for (datum, arg) in data.iter().zip(args) {
+                pc.bind(0, datum);
+                pc.dispatch([arg.num_pixels, 1, 1]);
+            }
+        }
+        let mut pass = encoder.compute("powerfoam-record-splat-path-batch");
+        let mut pc = pass.with(&self.splat_record_pipeline);
+        for (datum, arg) in data.iter().zip(args) {
+            pc.bind(0, datum);
+            pc.dispatch([arg.num_pixels.div_ceil(64), 1, 1]);
+        }
     }
 }
 

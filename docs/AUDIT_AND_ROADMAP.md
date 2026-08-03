@@ -1374,7 +1374,12 @@ material path.
    truncation or memory events. Parallel exact Čech-row queries then reduce
    topology time by 77.7% and the segment to 96.25 seconds; held-out quality is
    14.36 dB, all 8.2 million rays remain untruncated, and host peak stays below
-   0.9 GB.)
+   0.9 GB. Finally, sharing the gather and record compute passes across
+   disjoint mixed-view slices removes redundant per-camera barriers without
+   changing ray or Jacobian semantics. The segment falls to 67.07 seconds
+   (71.13 seconds end to end), keeps all four densification counts exact,
+   retains 14.34 dB held-out quality, and peaks at 652 MB with no memory or GPU
+   fault events.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 

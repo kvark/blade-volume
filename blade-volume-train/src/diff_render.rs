@@ -3755,6 +3755,7 @@ fn fit_appearance_pixel_batched(
     let mut ray_origin_buf = vec![0.0_f32; pixel_batch * 3];
     let mut ray_dir_per_pixel_buf = vec![0.0_f32; pixel_batch * 3];
     let mut view_idx_buf = vec![0_u32; pixel_batch];
+    let mut record_args = Vec::with_capacity(views_per_batch);
     let pixel_idx_per_step: Vec<u32> = (0..(pixel_batch * max_steps))
         .map(|i| (i / max_steps) as u32)
         .collect();
@@ -4099,27 +4100,24 @@ fn fit_appearance_pixel_batched(
                     tx.fill_buffer(path_bufs.dt_grad_next.at(0), pl_bytes * 4, 0);
                 }
             }
+            record_args.clear();
             for (slot, &vi) in selected_views.iter().enumerate() {
                 let v = &views[vi];
                 let range = batch_view_range(slot, views_per_batch, pixel_batch);
-                recorder.dispatch(
-                    &mut record_encoder,
-                    &gpu_cloud,
-                    &path_bufs,
-                    vol::gpu::RecordPathsArgs {
-                        camera: v.camera,
-                        start_point: gpu_cloud
-                            .containing_point(glam::Vec3::from_array(v.camera.cam_position)),
-                        pixel_offset: range.start as u32,
-                        max_steps: max_steps as u32,
-                        image_width: v.width,
-                        image_height: v.height,
-                        max_path_dt: MAX_PATH_DT,
-                        depth: v.camera.depth,
-                        num_pixels: range.len() as u32,
-                    },
-                );
+                record_args.push(vol::gpu::RecordPathsArgs {
+                    camera: v.camera,
+                    start_point: gpu_cloud
+                        .containing_point(glam::Vec3::from_array(v.camera.cam_position)),
+                    pixel_offset: range.start as u32,
+                    max_steps: max_steps as u32,
+                    image_width: v.width,
+                    image_height: v.height,
+                    max_path_dt: MAX_PATH_DT,
+                    depth: v.camera.depth,
+                    num_pixels: range.len() as u32,
+                });
             }
+            recorder.dispatch_batch(&mut record_encoder, &gpu_cloud, &path_bufs, &record_args);
             let _ = gpu.submit(&mut record_encoder);
             phase_timings.path_submit += path_submit_start.elapsed();
 
