@@ -294,8 +294,18 @@ fi
 WATCH_PID=""
 if [ "$WATCH_XID" -eq 1 ] && [ "$CPU_ONLY" -eq 0 ]; then
   PARENT_PID=$$
+  XID_STREAM=$(mktemp /tmp/blade-volume-kernel-XXXXXX)
+  TEMP_FILES+=("$XID_STREAM")
+  rm -f "$XID_STREAM"
+  mkfifo "$XID_STREAM"
+
+  # Keep the producer and consumer as direct children. A background pipeline
+  # leaves both sides orphaned after the wrapper exits because killing the
+  # pipeline subshell does not propagate to journalctl.
+  journalctl -k -f -o cat --since=now >"$XID_STREAM" 2>/dev/null &
+  CHILD_PIDS+=("$!")
   (
-    journalctl -k -f -o cat --since=now 2>/dev/null | while IFS= read -r line; do
+    while IFS= read -r line; do
       if echo "$line" | grep -qiE \
           "NVRM:.*Xid|amdgpu.*(fault|reset|timeout|hang|ring .*stalled)"; then
         {
@@ -307,7 +317,7 @@ if [ "$WATCH_XID" -eq 1 ] && [ "$CPU_ONLY" -eq 0 ]; then
         kill -TERM "$PARENT_PID" 2>/dev/null || true
         break
       fi
-    done
+    done <"$XID_STREAM"
   ) &
   WATCH_PID="$!"
   CHILD_PIDS+=("$WATCH_PID")
