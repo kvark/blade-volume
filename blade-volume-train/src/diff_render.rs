@@ -136,12 +136,11 @@ fn weighted_role_linear_term(
     geometry: mn::NodeId,
     neg_ray_origin_geometry: mn::NodeId,
     recorded_jacobian: mn::NodeId,
-    ones_4_1: mn::NodeId,
 ) -> mn::NodeId {
     let role_geometry = g.embedding(indices, geometry);
     let relative_geometry = g.add(role_geometry, neg_ray_origin_geometry);
     let product = g.mul(relative_geometry, recorded_jacobian);
-    g.matmul(product, ones_4_1)
+    g.sum_inner(product)
 }
 
 /// Add a sampled PowerFoam interpenetration penalty to a scalar loss.
@@ -484,14 +483,12 @@ pub fn build_volumetric_graph(
         let ray_origin_geometry = g.reshape(ray_origin_geometry_flat, &[p, 4]);
         let ray_origin_geometry_pl = g.embedding(pixel_idx_per_step, ray_origin_geometry);
         let neg_ray_origin_geometry = g.neg(ray_origin_geometry_pl);
-        let ones_4_1 = g.constant(vec![1.0_f32; 4], &[4, 1]);
         let previous_term = weighted_role_linear_term(
             g,
             weighted.previous_cell_indices,
             geometry,
             neg_ray_origin_geometry,
             weighted.dt_grad_previous,
-            ones_4_1,
         );
         let current_term = weighted_role_linear_term(
             g,
@@ -499,7 +496,6 @@ pub fn build_volumetric_graph(
             geometry,
             neg_ray_origin_geometry,
             weighted.dt_grad_current,
-            ones_4_1,
         );
         let next_term = weighted_role_linear_term(
             g,
@@ -507,7 +503,6 @@ pub fn build_volumetric_graph(
             geometry,
             neg_ray_origin_geometry,
             weighted.dt_grad_next,
-            ones_4_1,
         );
         let entry_and_current = g.add(previous_term, current_term);
         let linear_terms = g.add(entry_and_current, next_term);
@@ -1083,11 +1078,10 @@ fn pixel_sh(
     let basis_rgb = g.stop_gradient(basis_rgb);
 
     // Reshape each path row `[R_K, G_K, B_K]` into three K-wide rows, then
-    // reduce the SH axis with one matrix multiplication.
+    // reduce the SH axis.
     let terms = g.mul(coefficients, basis_rgb);
     let terms_rgb = g.reshape(terms, &[pl * 3, k]);
-    let ones_k1 = g.constant(vec![1.0; k], &[k, 1]);
-    let color_flat = g.matmul(terms_rgb, ones_k1);
+    let color_flat = g.sum_inner(terms_rgb);
     let color = g.reshape(color_flat, &[pl, 3]);
 
     let bias = g.constant(vec![0.5; pl * 3], &[pl, 3]);

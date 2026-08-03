@@ -385,6 +385,30 @@ resize and live settings handling, is the remaining presentation step.
   gate. Host peak is 652 MB, with zero swap, pressure, OOM, candidate overflow,
   or GPU fault.
 
+#### M2o — Packed differentiable reductions (implemented and gated)
+
+- The weighted path linearization and SH evaluation now express their
+  four- and sixteen-component dot products as `meganeura::Graph::sum_inner`
+  instead of multiplying by constant columns of ones. Meganeura commit
+  `7717181` packs narrow rows into workgroups, folds single-use pointwise and
+  gather producers into the reduction, and uses a runtime-one rounding step
+  to prevent driver FMA contraction. Adversarial tests remain bit-identical to
+  the materialized scalar column order, including a partial final workgroup.
+- At 100,569 sites, the profiled differentiable graph falls from 414 passes
+  and 16.44 ms to 408 passes and 14.99 ms (8.8%). Two matched 100-step runs
+  record 2.487--2.495 seconds of GPU wait versus 2.709--2.718 seconds before
+  the change. Loss, site and edge counts, path telemetry, and the trainer-state
+  sidecar agree; parameter deltas stay below ordinary repeated-run atomic
+  accumulation variation.
+- A complete 2,000-step resume reduces GPU wait from 47.745 to 42.939 seconds
+  (10.1%), training from 67.071 to 62.082 seconds (7.4%), and whole-command
+  phase time from 71.054 to 66.389 seconds (6.6%). It reproduces the exact
+  57,500 → 66,125 → 76,044 → 87,451 → 100,569 growth schedule with zero
+  truncation over 8,192,000 rays. Fresh-Ply train/test quality is
+  14.65/14.35 dB versus 14.64/14.34 dB. Host peak rises from 652 MB to
+  1.01 GB because the fused schedule changes buffer lifetimes, but the 6 GB
+  cgroup records no swap, limit, or OOM event.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -437,18 +461,13 @@ Broken into sub-steps:
   exercises the full Graph → autodiff → Adam loop on a toy: optimise a
   `[1, 3]` parameter to match a target RGB via MSE. Test converges to within
   0.02 on hosts that have a GPU; skips gracefully otherwise via
-  `try_init_gpu()`. Meganeura is pinned at `378f0e5`, the newest verified
-  compatible revision: the following `3d24850` e-graph extraction change and
-  current upstream head erase the custom RadFoam position gradient in both the
-  one-step and finite-difference integration tests. Published 0.2.0 does not
-  expose `build`/`SessionConfig`/`Mode`.
-  blade-graphics is unified at `ba0fb5a` (the rev meganeura pins) so we
-  share one GPU context across our renderer and the meganeura session.
-  Notes on meganeura's op set captured in the module doc — biggest gap for
-  the real renderer is no `where`/scan/while primitive, so M3c-4 will
-  likely need a custom op (recorded-path-then-integrate, à la PowerFoam's
-  raytrace mode) rather than expressing the cell-walk as a composition of
-  existing ops.
+  `try_init_gpu()`. Meganeura is pinned at `7717181`, including the scalable
+  training, zero-sparse scatter, and packed-reduction work required by the
+  production graph. blade-graphics is unified at `bd74bdc` (the revision
+  meganeura pins) so the renderer and meganeura session share one GPU context.
+  The discrete cell walk remains outside autograd: the GPU path recorder emits
+  stable cell roles, intervals, and geometry Jacobians, then meganeura
+  differentiates the continuous integration graph.
 - **M3c-3 — Image-shaped L1 loss + Adam (done, SSIM deferred).**
   `fit::fit_constant_image(target, w, h, ...)` trains a `[1, w*h*3]`
   parameter to match a target image via L1 loss. Test converges an 8×8
