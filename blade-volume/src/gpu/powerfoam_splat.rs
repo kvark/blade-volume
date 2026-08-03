@@ -173,7 +173,7 @@ impl PowerFoamGpuSplatTracer {
     }
 
     /// Reject a completed render if its bounded candidate scratch overflowed.
-    pub fn validate_candidate_counts(&self) -> Result<(), String> {
+    pub fn validate_candidate_counts(&self) -> Result<u32, String> {
         let num_pixels = (self.resolution[0] * self.resolution[1]) as usize;
         let observed = self.buffers.max_splat_candidate_count(0..num_pixels);
         let capacity = self.buffers.splat_candidate_capacity();
@@ -187,8 +187,13 @@ impl PowerFoamGpuSplatTracer {
                 "PowerFoam render needs {observed} candidates for one ray, but scratch capacity is {capacity}"
             ))
         } else {
-            Ok(())
+            Ok(observed)
         }
+    }
+
+    /// Fixed sphere-candidate row capacity used by this tracer.
+    pub fn candidate_capacity(&self) -> u32 {
+        self.buffers.splat_candidate_capacity()
     }
 
     /// Summarize recorded paths after the render submission has completed.

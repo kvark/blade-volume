@@ -29,7 +29,18 @@ use blade_graphics as gpu;
 
 const SPLAT_TILE_SIZE: u32 = 16;
 const SPLAT_TILE_INDEX_BUDGET: u64 = 4 * 1024 * 1024;
+// Sphere-hit count and surviving path depth are different budgets. Real
+// learned-radius clouds can intersect many supports before radical-plane
+// clipping leaves a much shorter disjoint path, so keep a useful candidate
+// floor without inflating every path/Jacobian row.
+const MIN_SPLAT_CANDIDATE_CAPACITY: u32 = 1024;
 const PATH_TRUNCATED_BIT: u32 = 1 << 31;
+
+fn splat_candidate_capacity(max_steps: u32) -> u32 {
+    max_steps
+        .saturating_mul(4)
+        .max(MIN_SPLAT_CANDIDATE_CAPACITY)
+}
 
 fn output_bytes(num_pixels: u32, max_steps: u32, with_jacobians: bool) -> u64 {
     let pl = num_pixels as u64 * max_steps as u64;
@@ -580,7 +591,7 @@ impl PathRecordBuffers {
         };
         let pix_bytes = (num_pixels as u64) * mem::size_of::<u32>() as u64;
         let splat_candidate_capacity = if with_splat_scratch {
-            max_steps.saturating_mul(4).max(256)
+            splat_candidate_capacity(max_steps)
         } else {
             1
         };
@@ -935,5 +946,13 @@ mod tests {
             output_bytes(4_096, 256, false),
             slots * 16 + 56 + path_status
         );
+    }
+
+    #[test]
+    fn powerfoam_candidate_floor_is_independent_of_short_path_rows() {
+        assert_eq!(splat_candidate_capacity(64), 1024);
+        assert_eq!(splat_candidate_capacity(128), 1024);
+        assert_eq!(splat_candidate_capacity(256), 1024);
+        assert_eq!(splat_candidate_capacity(512), 2048);
     }
 }

@@ -426,6 +426,7 @@ pub struct GpuViewEvaluator {
     path_rays: usize,
     path_truncated_rays: usize,
     path_max_steps_used: u32,
+    candidate_max_used: u32,
 }
 
 impl GpuViewEvaluator {
@@ -512,6 +513,7 @@ impl GpuViewEvaluator {
             path_rays: 0,
             path_truncated_rays: 0,
             path_max_steps_used: 0,
+            candidate_max_used: 0,
         }
     }
 
@@ -551,7 +553,8 @@ impl GpuViewEvaluator {
             Err(err) => return Err(format!("GPU evaluation wait failed: {err:?}")),
         }
         if let Some(ref tracer) = self.splat_tracer {
-            tracer.validate_candidate_counts()?;
+            let candidate_count = tracer.validate_candidate_counts()?;
+            self.candidate_max_used = self.candidate_max_used.max(candidate_count);
             let path = tracer.path_stats();
             log::debug!(
                 "PowerFoam evaluation paths: max={}/{}, truncated={}",
@@ -581,6 +584,7 @@ impl GpuViewEvaluator {
         self.path_rays = 0;
         self.path_truncated_rays = 0;
         self.path_max_steps_used = 0;
+        self.candidate_max_used = 0;
         let mut out = Vec::with_capacity(views.len());
         for view in views {
             let rgba = self.render_rgba(view.camera)?;
@@ -598,12 +602,14 @@ impl GpuViewEvaluator {
             };
             log::info!(
                 "PowerFoam evaluation path telemetry: {} rays, max {}/{}, {} truncated \
-                 ({:.6}%)",
+                 ({:.6}%); candidates max {}/{}",
                 self.path_rays,
                 self.path_max_steps_used,
                 tracer.max_steps(),
                 self.path_truncated_rays,
                 truncated_percent,
+                self.candidate_max_used,
+                tracer.candidate_capacity(),
             );
             if self.path_truncated_rays > 0 {
                 log::warn!(
