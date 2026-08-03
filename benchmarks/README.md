@@ -88,7 +88,18 @@ checkpoint also separates the real candidate and path budgets: evaluation
 needs 647 sphere hits but only 127 surviving intervals. Commit `7d5bf5a` keeps
 1,024 candidate slots while retaining 128-step path rows; all 37 held-out PNGs
 are byte-identical to the 256-step control, and a matched 100-step segment is
-16.4% faster. The run does not yet clear the full PowerFoam production gate.
+16.4% faster.
+
+The selected arm now has a complete, explicitly adaptive endpoint. After it
+reaches 200,000 sites at step 6,500, a `1e-6` initial interpenetration weight
+reduces the step-8,000 graph by 9.9% while improving train/all-37 quality by
+0.02/0.03 dB. A 160-step path row cuts graph allocation 14%, and exact topology
+cadence 200 cuts the matched step-10K→12K training phase 12.8% with unchanged
+15.89 dB held-out quality. The step-20,400 endpoint reaches 17.25/16.37 dB and
+8,696,580 directed edges; step 20,000 is the practical validation winner at
+17.24/16.38 dB. The tracked manifest records these small gates, while raw
+checkpoints and 256² comparisons remain ignored under `target`. Visible support
+discs, holes, and background floaters still fail the PowerFoam production gate.
 
 The first full-dataset attempt, from commit `93c996f`, deliberately stopped at
 step 10,000 of 20,400 after

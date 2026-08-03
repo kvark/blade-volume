@@ -87,8 +87,63 @@ max256_gpu_wait_seconds = 6.103
 max128_host_memory_peak_bytes = 762011648
 max256_host_memory_peak_bytes = 935661568
 
+[adaptive_continuation]
+source_commit = "b838fe8"
+scope = "selected trainable arm; adaptive post-cap optimization, not part of the fixed-versus-learned causal gate"
+interpenetration_start_step = 6500
+interpenetration_initial_weight = 1e-6
+interpenetration_samples = 4096
+path_steps_from_step = 8000
+path_steps = 160
+geometry_rebuild_every_from_step = 10000
+geometry_rebuild_every = 200
+artifact_path = "target/audit-runs/powerfoam-radius-ablation"
+endpoint_comparisons_256 = "postcap-interpenetration1e-6-cadence200-step20400/comparisons-256"
+
+[adaptive_continuation.postcap_weight_gate]
+checkpoint_step = 8000
+control_edges = 11156536
+control_train_psnr = 15.70
+control_test_psnr = 15.20
+control_training_seconds = 92.371
+selected_edges = 10053794
+selected_train_psnr = 15.72
+selected_test_psnr = 15.23
+selected_training_seconds = 89.189
+selected_weight = 1e-6
+
+[adaptive_continuation.path_gate]
+checkpoint_step = 8000
+control_steps = 192
+selected_steps = 160
+max_path_used = 120
+max_candidates_used = 690
+control_physical_allocation_mb = 1494.4
+selected_physical_allocation_mb = 1281.5
+control_device_allocation_mb = 685.9
+selected_device_allocation_mb = 589.0
+control_gpu_wait_seconds = 6.211
+selected_gpu_wait_seconds = 5.991
+control_train_psnr = 15.75
+control_test_psnr = 15.24
+selected_train_psnr = 15.75
+selected_test_psnr = 15.24
+
+[adaptive_continuation.cadence_gate]
+checkpoint_step = 12000
+control_every = 100
+selected_every = 200
+control_training_seconds = 160.484
+selected_training_seconds = 139.896
+control_edges = 9003926
+selected_edges = 9012534
+control_train_psnr = 16.56
+selected_train_psnr = 16.53
+control_test_psnr = 15.89
+selected_test_psnr = 15.89
+
 [result]
-status = "completed-through-step-6000"
+status = "adaptive-endpoint-complete"
 fresh_ply_reload = true
 fixed_step2000_cells = 57500
 fixed_step2000_edges = 369216
@@ -119,6 +174,39 @@ step6000_training_max_steps_used = 109
 step6000_eval_train_max_steps_used = 126
 step6000_eval_test_max_steps_used = 127
 step6000_training_memory_peak_bytes = 846729216
+trainable_step6500_cells = 200000
+trainable_step6500_edges = 11181670
+trainable_step6500_train_psnr = 15.33
+trainable_step6500_test_psnr = 14.91
+adaptive_step8000_edges = 10053794
+adaptive_step8000_train_psnr = 15.72
+adaptive_step8000_test_psnr = 15.23
+adaptive_step10000_edges = 9368194
+adaptive_step10000_train_psnr = 16.16
+adaptive_step10000_test_psnr = 15.60
+adaptive_step12000_edges = 9012534
+adaptive_step12000_train_psnr = 16.53
+adaptive_step12000_test_psnr = 15.89
+adaptive_step14000_edges = 8825276
+adaptive_step14000_train_psnr = 16.83
+adaptive_step14000_test_psnr = 16.12
+adaptive_step16000_edges = 8738016
+adaptive_step16000_train_psnr = 17.06
+adaptive_step16000_test_psnr = 16.26
+adaptive_step18000_edges = 8706088
+adaptive_step18000_train_psnr = 17.19
+adaptive_step18000_test_psnr = 16.35
+adaptive_step20000_edges = 8697454
+adaptive_step20000_train_psnr = 17.24
+adaptive_step20000_test_psnr = 16.38
+adaptive_step20400_edges = 8696580
+adaptive_step20400_train_psnr = 17.25
+adaptive_step20400_test_psnr = 16.37
+adaptive_endpoint_eval_train_max_steps_used = 121
+adaptive_endpoint_eval_test_max_steps_used = 119
+adaptive_endpoint_eval_train_max_candidates_used = 664
+adaptive_endpoint_eval_test_max_candidates_used = 604
+adaptive_endpoint_max_memory_peak_bytes = 1417326592
 truncated_rays = 0
 memory_swap_bytes = 0
 oom_events = 0
@@ -141,4 +229,11 @@ required = [
     "candidate_budget.fix_commit",
     "candidate_budget.observed_candidates",
     "candidate_budget.new_candidate_capacity",
+    "adaptive_continuation.source_commit",
+    "adaptive_continuation.interpenetration_initial_weight",
+    "adaptive_continuation.path_steps",
+    "adaptive_continuation.geometry_rebuild_every",
+    "adaptive_step20400_edges",
+    "adaptive_step20400_train_psnr",
+    "adaptive_step20400_test_psnr",
 ]

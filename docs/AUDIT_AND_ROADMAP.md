@@ -593,8 +593,9 @@ At the audited revision:
   statistic, and 5%-support-scale split. The corrected compute-splat path reaches
   13.52 dB all-37 after the first 2,000-step/57,500-site gate. The selected
   learned-radius arm reaches 15.22/14.81 dB train/all-37 at step 6,000 and
-  175,895 sites; the matched 200,000-cell/20,400-step endpoint remains
-  outstanding.
+  175,895 sites. An adaptive continuation reaches the exact
+  200,000-cell/20,400-step endpoint at 17.25/16.37 dB and 8,696,580 directed
+  edges; step 20,000 is the practical validation winner at 17.24/16.38 dB.
 - The real checkpoint/resume path reaches 100,569 sites at step 4,000 and
   improves Bonsai train/all-37 PSNR to 14.65/14.35 dB. Conservative projected
   candidates preserve those pixels exactly and make the complete weighted
@@ -613,6 +614,13 @@ At the audited revision:
   every path/Jacobian row. All 37 held-out renders are byte-identical between
   128- and 256-step paths. The smaller path graph cuts physical/device-local
   allocation by 45.4%/45.6% and matched training time by 16.4%.
+- Weak post-cap overlap control improves both stability and cost. An initial
+  `1e-6` interpenetration weight gives 9.9% fewer step-8,000 edges and
+  +0.02/+0.03 dB train/all-37 versus the matched control. At fixed 200K
+  capacity, 160-step paths cut graph allocation about 14%, and topology cadence
+  200 cuts a matched 2,000-step phase 12.8% without held-out loss. These are
+  adaptive continuation choices, not part of the earlier fixed-radius causal
+  comparison.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -1412,8 +1420,12 @@ material path.
    candidate/path capacities; 128-step output stays byte-identical to the
    256-step control and makes matched training 16.4% faster. Continue to the
    200,000-cell boundary only after checking that topology and radius growth
-   remain bounded, then finish the 20,400-step endpoint before clearing the
-   production gate.)
+   remain bounded. That adaptive endpoint is now complete at 17.25/16.37 dB,
+   with a weak post-cap overlap loss, 160-step paths, and cadence-200 exact
+   rebuilds selected by matched gates. The 256² comparisons still show large
+   support discs, holes, blurred thin structure, and background floaters, so
+   the production gate remains open. Apply overlap control during growth and
+   revisit split/support formation before adding the full appearance model.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and

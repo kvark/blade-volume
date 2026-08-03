@@ -433,8 +433,9 @@ resize and live settings handling, is the remaining presentation step.
   109/128 intervals and none truncate. The sharp edge-count growth is now an
   explicit stability signal to inspect at the 200,000-site boundary.
 
-The trainable arm advances toward the 200,000-site/20,400-step endpoint. The
-larger appearance model remains gated on that completed quality curve.
+The fixed-versus-learned causal gate ends at step 4,000. Its selected arm now
+also has an adaptive 200,000-site/20,400-step continuation, documented in M2r;
+that endpoint is not misrepresented as a single-hyperparameter ablation.
 
 #### M2q — Independent PowerFoam candidate and path budgets (implemented and gated)
 
@@ -457,6 +458,34 @@ larger appearance model remains gated on that completed quality curve.
   Training falls from 9.733 to 8.141 seconds (16.4%) and GPU wait from 6.103
   to 4.699 seconds (23.0%); host peak falls from 936 to 762 MB. This retains
   the smaller path budget without silently constraining support discovery.
+
+#### M2r — Stable post-cap PowerFoam continuation (completed, quality gate still open)
+
+- The learned arm reaches its 200,000-site cap at step 6,500 with 11,181,670
+  directed edges and 15.33/14.91 dB train/all-37. Radius-copy densification
+  raises mean Čech degree from 8.3 at step 2,000 to 55.9 at the cap. A matched
+  post-cap gate rejects initial interpenetration weights `1e-4` and `1e-5`
+  because their topology savings cost 0.27 and 0.11 dB held out. `1e-6` is the
+  first Pareto setting: by step 8,000 it has 9.9% fewer edges, trains 3.4%
+  faster, and improves train/all-37 by 0.02/0.03 dB versus no penalty.
+- With candidate capacity independent, a 160-step path row retains the same
+  120-step/690-candidate maximum and 15.75/15.24 dB result as 192 steps. It
+  lowers physical/device-local graph allocation by about 14% and GPU wait by
+  3.5%. At step 12,000, exact topology cadence 200 then lowers the matched
+  training phase from 160.484 to 139.896 seconds (12.8%) while preserving
+  15.89 dB held-out quality; cadence 200 is selected only after the 200K cap.
+- The adaptive endpoint reaches 17.25/16.37 dB and 8,696,580 directed edges at
+  step 20,400. All 4.78 million evaluation rays fit within 121/160 intervals
+  and 664/1,024 candidates. Step 20,000 is the practical early stop at
+  17.24/16.38 dB: the final 400 updates add 0.01 dB train and lose 0.01 dB
+  held out. Across 35 training/evaluation/profile scopes the largest host peak
+  is 1,417,326,592 bytes, with zero swap, pressure, OOM, or GPU-fault events.
+- The completed curve does not clear the visual gate. At 256² the scene is
+  recognizable, but large circular supports obscure foreground detail, thin
+  geometry is blurred, and black holes/background floaters remain severe. The
+  next gate must change geometry formation during growth; extending this
+  saturated tail or adding the full appearance model would not address those
+  failures.
 
 ### M3 — Training crate scaffolding
 
