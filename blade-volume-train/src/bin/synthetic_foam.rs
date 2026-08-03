@@ -1,0 +1,813 @@
+//! Train and score a RadFoam density field on Blade's synthetic capture.
+//!
+//! This developer benchmark deliberately starts without G-buffer positions or
+//! normals. Its initial sites fill a camera-derived volume, while selected
+//! training-view radiance and foreground masks provide all supervision.
+
+use blade_volume as vol;
+use blade_volume_convert as convert;
+use blade_volume_train as train;
+use std::path;
+
+#[derive(argh::FromArgs)]
+/// Train a camera-initialized RadFoam on a Blade relighting dataset.
+struct Args {
+    /// directory written by Blade's relight_data test
+    #[argh(option)]
+    dataset: String,
+
+    /// output RadFoam PLY
+    #[argh(option)]
+    output: String,
+
+    /// evaluate and extract an existing trained foam instead of training
+    #[argh(option)]
+    input: Option<String>,
+
+    /// environment used as RGB supervision (default: sun-east)
+    #[argh(option, default = "String::from(\"sun-east\")")]
+    environment: String,
+
+    /// environment reserved for relighting evaluation (default: studio)
+    #[argh(option, default = "String::from(\"studio\")")]
+    held_out_environment: String,
+
+    /// reserve every nth camera for novel-pose evaluation
+    #[argh(option, default = "4")]
+    held_out_stride: usize,
+
+    /// residue within the stride to reserve
+    #[argh(option, default = "1")]
+    held_out_offset: usize,
+
+    /// training and evaluation width
+    #[argh(option, default = "100")]
+    width: u32,
+
+    /// training and evaluation height
+    #[argh(option, default = "75")]
+    height: u32,
+
+    /// camera-derived initial foam sites
+    #[argh(option, default = "2048")]
+    points: usize,
+
+    /// initial volume radius divided by median camera distance to its focus
+    #[argh(option, default = "0.7")]
+    volume_radius: f32,
+
+    /// initial activated density
+    #[argh(option, default = "0.1")]
+    initial_density: f32,
+
+    /// spherical-harmonic appearance degree
+    #[argh(option, default = "2")]
+    sh_degree: usize,
+
+    /// random pixels per Adam update
+    #[argh(option, default = "2048")]
+    pixel_batch: usize,
+
+    /// cameras represented in every Adam update
+    #[argh(option, default = "6")]
+    views_per_batch: usize,
+
+    /// adam updates per training camera
+    #[argh(option, default = "200")]
+    steps_per_view: usize,
+
+    /// base Adam learning rate
+    #[argh(option, default = "0.1")]
+    learning_rate: f32,
+
+    /// position learning rate divided by the base rate
+    #[argh(option, default = "0.01")]
+    position_lr_ratio: f32,
+
+    /// updates between topology rebuilds when positions move
+    #[argh(option, default = "100")]
+    geometry_rebuild_every: usize,
+
+    /// maximum cells traversed by one training ray
+    #[argh(option, default = "256")]
+    max_steps: usize,
+
+    /// minimum total ray absorption used for surface extraction
+    #[argh(option, default = "0.7")]
+    min_alpha: f32,
+
+    /// minimum single-segment ray weight used for surface extraction
+    #[argh(option, default = "0.05")]
+    min_peak: f32,
+
+    /// fused surface cell size in pixel-footprint units
+    #[argh(option, default = "5.0")]
+    voxel_factor: f32,
+
+    /// gaussian support radius divided by fused cell size
+    #[argh(option, default = "1.4")]
+    disc_radius: f32,
+
+    /// distinct training depth maps required per fused surface cell
+    #[argh(option, default = "2")]
+    min_views: usize,
+
+    /// shared PBR materials in the reconstructed surface cloud
+    #[argh(option, default = "2")]
+    materials: usize,
+
+    /// retain fused depth centers instead of multi-view photo refinement
+    #[argh(switch)]
+    no_refine: bool,
+
+    /// optional relightable Gaussian surface output
+    #[argh(option)]
+    surface_output: Option<String>,
+}
+
+fn fail(message: impl std::fmt::Display) -> ! {
+    eprintln!("{message}");
+    std::process::exit(1);
+}
+
+fn split_views(count: usize, stride: usize, offset: usize) -> (Vec<usize>, Vec<usize>) {
+    if stride < 2 {
+        fail("held-out stride must be at least two");
+    }
+    let residue = offset % stride;
+    let mut training = Vec::new();
+    let mut held_out = Vec::new();
+    for index in 0..count {
+        if index % stride == residue {
+            held_out.push(index);
+        } else {
+            training.push(index);
+        }
+    }
+    if training.is_empty() || held_out.is_empty() {
+        fail("the requested view split needs both training and held-out cameras");
+    }
+    (training, held_out)
+}
+
+fn camera_focus(cameras: &[vol::CameraParams]) -> glam::Vec3 {
+    let mut system = glam::Mat3::ZERO;
+    let mut right = glam::Vec3::ZERO;
+    for camera in cameras {
+        let origin = glam::Vec3::from(camera.cam_position);
+        let direction = glam::Quat::from_array(camera.cam_orientation) * glam::Vec3::Z;
+        let projector = glam::Mat3::IDENTITY
+            - glam::Mat3::from_cols(
+                direction * direction.x,
+                direction * direction.y,
+                direction * direction.z,
+            );
+        system += projector;
+        right += projector * origin;
+    }
+    if system.determinant().abs() <= 1.0e-6 {
+        cameras
+            .iter()
+            .map(|camera| glam::Vec3::from(camera.cam_position))
+            .sum::<glam::Vec3>()
+            / cameras.len().max(1) as f32
+    } else {
+        system.inverse() * right
+    }
+}
+
+fn hash(mut value: u32) -> u32 {
+    value ^= value >> 16;
+    value = value.wrapping_mul(0x7feb_352d);
+    value ^= value >> 15;
+    value = value.wrapping_mul(0x846c_a68b);
+    value ^ (value >> 16)
+}
+
+/// Fill a jittered lattice from the back of the capture volume towards the
+/// cameras. A non-cubic count leaves the camera-facing outer layer sparse,
+/// avoiding an initial wall of absorbing sites directly in front of every
+/// training ray.
+fn layered_positions(count: usize, radius: f32, camera_side: glam::Vec3) -> Vec<glam::Vec3> {
+    let side = (count as f64).cbrt().ceil() as usize;
+    let orientation = glam::Quat::from_rotation_arc(glam::Vec3::Z, camera_side);
+    (0..count)
+        .map(|index| {
+            let indices = [index % side, (index / side) % side, index / (side * side)];
+            let local = glam::Vec3::from_array(std::array::from_fn(|axis| {
+                let jitter = hash((3 * index + axis) as u32) as f64 / u32::MAX as f64 - 0.5;
+                ((((indices[axis] as f64 + 0.5 + 0.6 * jitter) / side as f64) * 2.0 - 1.0)
+                    * radius as f64) as f32
+            }));
+            orientation * local
+        })
+        .collect()
+}
+
+fn initial_model(
+    cameras: &[vol::CameraParams],
+    count: usize,
+    radius_factor: f32,
+    density: f32,
+) -> vol::PointCloudModel {
+    if count < 4 {
+        fail("the initial cloud needs at least four sites");
+    }
+    let focus = camera_focus(cameras);
+    let mut distances: Vec<f32> = cameras
+        .iter()
+        .map(|camera| (glam::Vec3::from(camera.cam_position) - focus).length())
+        .collect();
+    distances.sort_by(f32::total_cmp);
+    let radius = distances[distances.len() / 2] * radius_factor;
+    let camera_side = cameras
+        .iter()
+        .filter_map(|camera| (glam::Vec3::from(camera.cam_position) - focus).try_normalize())
+        .sum::<glam::Vec3>()
+        .try_normalize()
+        .unwrap_or(glam::Vec3::Z);
+    let points = layered_positions(count, radius, camera_side)
+        .into_iter()
+        .map(|position| (focus + position).extend(density))
+        .collect();
+    println!(
+        "camera bundle focus ({:.3}, {:.3}, {:.3}), initial radius {:.3}",
+        focus.x, focus.y, focus.z, radius
+    );
+    let mut model = vol::PointCloudModel {
+        sh_coefficients: vec![0.0; count * 3],
+        sh_degree: 0,
+        transforms: None,
+        adjacency: None,
+        radii: None,
+        points,
+    };
+    model.compute_adjacency_default();
+    model
+}
+
+fn supervision(
+    dataset: &train::relight::Dataset,
+    environment: usize,
+    indices: &[usize],
+    width: u32,
+    height: u32,
+) -> Result<Vec<train::diff_render::ViewSupervision>, String> {
+    let mut result = Vec::with_capacity(indices.len());
+    for &index in indices {
+        let view = dataset
+            .views
+            .get(index)
+            .ok_or_else(|| format!("no view {index}"))?;
+        let radiance = dataset.read_plane(&view.radiance[environment])?;
+        let geometry = dataset.read_plane(&view.geometry)?;
+        let source =
+            image::Rgb32FImage::from_fn(dataset.width as u32, dataset.height as u32, |x, y| {
+                let pixel = y as usize * dataset.width + x as usize;
+                if geometry[pixel][3] <= 0.0 {
+                    image::Rgb([0.0; 3])
+                } else {
+                    image::Rgb([
+                        train::inverse::capture::linear_to_srgb(radiance[pixel][0]),
+                        train::inverse::capture::linear_to_srgb(radiance[pixel][1]),
+                        train::inverse::capture::linear_to_srgb(radiance[pixel][2]),
+                    ])
+                }
+            });
+        let source_alpha =
+            image::ImageBuffer::from_fn(dataset.width as u32, dataset.height as u32, |x, y| {
+                let pixel = y as usize * dataset.width + x as usize;
+                image::Luma([(geometry[pixel][3] > 0.0) as u8 as f32])
+            });
+        let resized = image::imageops::resize(
+            &source,
+            width,
+            height,
+            image::imageops::FilterType::Triangle,
+        );
+        let resized_alpha = image::imageops::resize(
+            &source_alpha,
+            width,
+            height,
+            image::imageops::FilterType::Triangle,
+        );
+        result.push(train::diff_render::ViewSupervision {
+            camera: train::relight::camera_params(view, width as usize, height as usize),
+            target_rgb: resized.pixels().flat_map(|pixel| pixel.0).collect(),
+            target_alpha: Some(resized_alpha.pixels().map(|pixel| pixel[0]).collect()),
+            width,
+            height,
+        });
+    }
+    Ok(result)
+}
+
+fn describe_scores(name: &str, scores: &[f32]) {
+    let mean = scores.iter().sum::<f32>() / scores.len().max(1) as f32;
+    let worst = scores.iter().copied().fold(f32::INFINITY, f32::min);
+    println!("{name}: {mean:.2} dB mean, {worst:.2} dB worst {scores:?}");
+}
+
+fn describe_relight_score(name: &str, summary: train::inverse::score::Summary) {
+    println!(
+        "{name}: {:.2} dB, {:.2} worst, {:.1}% coverage, {:.2} where hit, {:.2} ms/frame",
+        summary.srgb_psnr,
+        summary.worst_srgb_psnr,
+        100.0 * summary.coverage,
+        summary.covered_srgb_psnr,
+        summary.render_ms,
+    );
+}
+
+fn describe_depths(
+    name: &str,
+    dataset: &train::relight::Dataset,
+    indices: &[usize],
+    maps: &[train::inverse::depth::DepthMap],
+    options: train::inverse::depth::DepthOptions,
+) -> Result<(), String> {
+    let mut truth_hits = 0usize;
+    let mut predicted_hits = 0usize;
+    let mut shared_hits = 0usize;
+    let mut squared_error = 0.0f64;
+    for (&index, map) in indices.iter().zip(maps) {
+        let geometry = dataset.read_plane(&dataset.views[index].geometry)?;
+        for (pixel, truth) in geometry.iter().enumerate() {
+            let truth_hit = truth[3] > 0.0;
+            let predicted_hit =
+                map.alpha[pixel] >= options.min_alpha && map.peak[pixel] >= options.min_peak;
+            truth_hits += truth_hit as usize;
+            predicted_hits += predicted_hit as usize;
+            if truth_hit && predicted_hit {
+                shared_hits += 1;
+                squared_error += (map.distance[pixel] - truth[3]).powi(2) as f64;
+            }
+        }
+    }
+    let precision = shared_hits as f64 / predicted_hits.max(1) as f64;
+    let recall = shared_hits as f64 / truth_hits.max(1) as f64;
+    let rmse = (squared_error / shared_hits.max(1) as f64).sqrt();
+    println!(
+        "{name} depth: {:.1}% precision, {:.1}% recall, {rmse:.4} world-unit RMSE",
+        100.0 * precision,
+        100.0 * recall,
+    );
+    Ok(())
+}
+
+fn describe_surface_error(
+    name: &str,
+    surfels: &[vol::relight::Surfel],
+    dataset: &train::relight::Dataset,
+    training_indices: &[usize],
+) -> Result<(), String> {
+    let truth = train::relight::gather_samples_for_views(dataset, training_indices)?;
+    let positions: Vec<[f32; 3]> = truth
+        .iter()
+        .map(|sample| sample.position.to_array())
+        .collect();
+    let tree = kiddo::ImmutableKdTree::new_from_slice(&positions);
+    let mut position_squared = 0.0f64;
+    let mut normal_squared = 0.0f64;
+    for surfel in surfels {
+        let center = glam::Vec3::from(surfel.center);
+        let hit = tree.nearest_one::<kiddo::SquaredEuclidean>(&surfel.center);
+        let sample = &truth[hit.item as usize];
+        position_squared += (center - sample.position).length_squared() as f64;
+        let angle = glam::Vec3::from(surfel.normal)
+            .dot(sample.normal)
+            .clamp(-1.0, 1.0)
+            .acos()
+            .to_degrees();
+        normal_squared += angle.powi(2) as f64;
+    }
+    println!(
+        "{name} nearest-truth error: position {:.4} world-unit RMSE, normal {:.2} degree RMSE",
+        (position_squared / surfels.len().max(1) as f64).sqrt(),
+        (normal_squared / surfels.len().max(1) as f64).sqrt(),
+    );
+    Ok(())
+}
+
+fn main() {
+    env_logger::init();
+    let args: Args = argh::from_env();
+    let dataset = train::relight::Dataset::load(path::Path::new(&args.dataset))
+        .unwrap_or_else(|error| fail(error));
+    let environment = dataset
+        .environments
+        .iter()
+        .position(|name| name == &args.environment)
+        .unwrap_or_else(|| fail(format!("no environment named '{}'", args.environment)));
+    let (training_indices, held_out_indices) = split_views(
+        dataset.views.len(),
+        args.held_out_stride,
+        args.held_out_offset,
+    );
+    let training = supervision(
+        &dataset,
+        environment,
+        &training_indices,
+        args.width,
+        args.height,
+    )
+    .unwrap_or_else(|error| fail(error));
+    let held_out = supervision(
+        &dataset,
+        environment,
+        &held_out_indices,
+        args.width,
+        args.height,
+    )
+    .unwrap_or_else(|error| fail(error));
+    println!(
+        "{} training and {} held-out views at {}x{}",
+        training.len(),
+        held_out.len(),
+        args.width,
+        args.height
+    );
+
+    let Some(gpu) = train::fit::try_init_gpu() else {
+        fail("no supported GPU device");
+    };
+    let config = train::diff_render::AppearanceFitConfig {
+        learning_rate: args.learning_rate,
+        pixel_batch: Some(args.pixel_batch),
+        views_per_batch: args.views_per_batch.min(training.len()),
+        steps_per_view: args.steps_per_view,
+        sh_degree: args.sh_degree,
+        color_loss: train::diff_render::ColorLoss::SmoothL1,
+        opacity_weight: 1.0,
+        quantile_weight: 1.0e-4,
+        softplus_beta: 10.0,
+        position_lr_ratio: args.position_lr_ratio,
+        geometry_rebuild_every: args.geometry_rebuild_every,
+        ..train::diff_render::AppearanceFitConfig::default()
+    };
+    let model = match args.input {
+        Some(ref input) => vol::io::try_load(input)
+            .unwrap_or_else(|error| fail(format!("cannot read {input}: {error}"))),
+        None => {
+            let adjacency_started = std::time::Instant::now();
+            let mut model = initial_model(
+                &training.iter().map(|view| view.camera).collect::<Vec<_>>(),
+                args.points,
+                args.volume_radius,
+                args.initial_density,
+            );
+            println!(
+                "{} initial sites, {} directed edges in {:.3} s",
+                model.points.len(),
+                model.adjacency.as_ref().unwrap().neighbors.len(),
+                adjacency_started.elapsed().as_secs_f64()
+            );
+            let train_started = std::time::Instant::now();
+            let losses = train::diff_render::fit_appearance_multi_view(
+                &mut model,
+                &training,
+                args.width,
+                args.height,
+                args.max_steps,
+                config.clone(),
+                gpu.clone(),
+            );
+            println!(
+                "trained {} updates in {:.3} s, loss {:.6} -> {:.6}",
+                losses.len(),
+                train_started.elapsed().as_secs_f64(),
+                losses.first().copied().unwrap_or(f32::NAN),
+                losses.last().copied().unwrap_or(f32::NAN)
+            );
+            model
+        }
+    };
+    model.validate().unwrap_or_else(|error| fail(error));
+    let mut densities: Vec<f32> = model.points.iter().map(|point| point.w).collect();
+    densities.sort_by(f32::total_cmp);
+    let density_at =
+        |fraction: f32| densities[((densities.len() - 1) as f32 * fraction).round() as usize];
+    println!(
+        "density: min {:.4}, p50 {:.4}, p90 {:.4}, p95 {:.4}, p99 {:.4}, max {:.4}",
+        densities[0],
+        density_at(0.5),
+        density_at(0.9),
+        density_at(0.95),
+        density_at(0.99),
+        densities[densities.len() - 1],
+    );
+    println!(
+        "density support: >.01 {} >.1 {} >.5 {} >1 {}",
+        densities.iter().filter(|&&density| density > 0.01).count(),
+        densities.iter().filter(|&&density| density > 0.1).count(),
+        densities.iter().filter(|&&density| density > 0.5).count(),
+        densities.iter().filter(|&&density| density > 1.0).count(),
+    );
+
+    let evaluator_config = train::pipeline::PipelineConfig {
+        resolution: (args.width, args.height),
+        max_steps: args.max_steps,
+        fit: config,
+        ..train::pipeline::PipelineConfig::default()
+    };
+    let mut evaluator =
+        train::pipeline::GpuViewEvaluator::new(&model, &evaluator_config, gpu.clone());
+    let training_scores = evaluator
+        .evaluate(&training, [0.0; 3])
+        .unwrap_or_else(|error| fail(error));
+    let held_out_scores = evaluator
+        .evaluate(&held_out, [0.0; 3])
+        .unwrap_or_else(|error| fail(error));
+    evaluator.deinit();
+    describe_scores("training", &training_scores);
+    describe_scores("held-out", &held_out_scores);
+
+    let depth_options = train::inverse::depth::DepthOptions {
+        min_alpha: args.min_alpha,
+        min_peak: args.min_peak,
+        max_steps: args.max_steps as u32,
+        voxel_factor: args.voxel_factor,
+        disc_radius: args.disc_radius,
+        min_views: args.min_views,
+        ..train::inverse::depth::DepthOptions::default()
+    };
+    let cameras: Vec<_> = dataset
+        .views
+        .iter()
+        .map(|view| train::relight::camera_params(view, dataset.width, dataset.height))
+        .collect();
+    let requests = |indices: &[usize]| {
+        indices
+            .iter()
+            .map(|&index| {
+                let camera = cameras[index];
+                let start =
+                    train::pipeline::pick_start_cell(&model, glam::Vec3::from(camera.cam_position));
+                (camera, start)
+            })
+            .collect::<Vec<_>>()
+    };
+    let depth_started = std::time::Instant::now();
+    let training_requests = requests(&training_indices);
+    let training_maps = train::inverse::depth::trace_depths_gpu(
+        &model,
+        &training_requests,
+        dataset.width,
+        dataset.height,
+        depth_options.max_steps,
+        gpu.clone(),
+    )
+    .unwrap_or_else(|error| fail(error));
+    let held_out_requests = requests(&held_out_indices);
+    let held_out_maps = train::inverse::depth::trace_depths_gpu(
+        &model,
+        &held_out_requests,
+        dataset.width,
+        dataset.height,
+        depth_options.max_steps,
+        gpu,
+    )
+    .unwrap_or_else(|error| fail(error));
+    println!(
+        "traced {} depth maps at {}x{} in {:.3} s",
+        training_maps.len() + held_out_maps.len(),
+        dataset.width,
+        dataset.height,
+        depth_started.elapsed().as_secs_f64(),
+    );
+    describe_depths(
+        "training",
+        &dataset,
+        &training_indices,
+        &training_maps,
+        depth_options,
+    )
+    .unwrap_or_else(|error| fail(error));
+    describe_depths(
+        "held-out",
+        &dataset,
+        &held_out_indices,
+        &held_out_maps,
+        depth_options,
+    )
+    .unwrap_or_else(|error| fail(error));
+    let maps: Vec<_> = training_requests
+        .into_iter()
+        .zip(training_maps)
+        .map(|((camera, _), map)| (camera, map))
+        .collect();
+    let fusion_started = std::time::Instant::now();
+    let (mut surfels, voxel) = train::inverse::depth::surfels_from_depth(&maps, depth_options);
+    println!(
+        "fused {} Gaussian surface particles at voxel {:.4} in {:.3} s",
+        surfels.len(),
+        voxel,
+        fusion_started.elapsed().as_secs_f64(),
+    );
+
+    let training_capture =
+        train::inverse::capture::Capture::from_relight_dataset(&dataset, environment, true)
+            .unwrap_or_else(|error| fail(error));
+    if !args.no_refine {
+        let refine_started = std::time::Instant::now();
+        let refinement_views: Vec<_> = training_indices
+            .iter()
+            .zip(&maps)
+            .map(
+                |(&capture_index, entry)| train::inverse::refine::RefinementView {
+                    capture_index,
+                    depth: Some(&entry.1),
+                },
+            )
+            .collect();
+        let stats = train::inverse::refine::refine(
+            &mut surfels,
+            &training_capture,
+            &refinement_views,
+            train::inverse::refine::RefineOptions::default(),
+        );
+        println!(
+            "refined {} of {} scored particles by {:.3} cells ({:.1}% lower cost) in {:.3} s",
+            stats.moved,
+            stats.scored,
+            stats.mean_absolute_offset / voxel,
+            100.0 * stats.mean_relative_improvement,
+            refine_started.elapsed().as_secs_f64(),
+        );
+    }
+    for surfel in surfels.iter_mut() {
+        surfel.material = 0;
+    }
+    let geometry = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Gaussian,
+        surfels,
+        materials: vec![vol::relight::Material::default()],
+    };
+    describe_surface_error(
+        "extracted surface",
+        &geometry.surfels,
+        &dataset,
+        &training_indices,
+    )
+    .unwrap_or_else(|error| fail(error));
+    let observe_started = std::time::Instant::now();
+    let observations = train::inverse::decompose::observe(
+        &geometry,
+        &training_capture,
+        &training_indices,
+        train::inverse::decompose::FitOptions::default().min_facing,
+    );
+    println!(
+        "observed {} of {} particles in {:.3} s",
+        observations.seen(),
+        geometry.surfels.len(),
+        observe_started.elapsed().as_secs_f64(),
+    );
+    let training_light = vol::io::try_load_environment(&dataset.environment_files[environment])
+        .unwrap_or_else(|error| fail(error));
+    let decompose_started = std::time::Instant::now();
+    let fitted = train::inverse::decompose::fit(
+        &geometry,
+        &observations,
+        train::inverse::decompose::FitOptions {
+            materials: args.materials,
+            // Reconstructed normals are not yet accurate enough to identify a
+            // specular lobe from one light. A false mirror fits that light and
+            // fails catastrophically under the held-out one.
+            specular_rounds: 0,
+            ..train::inverse::decompose::FitOptions::default()
+        },
+        train::inverse::decompose::Given {
+            visibility: None,
+            light: Some(&training_light),
+        },
+    );
+    println!(
+        "fitted {} materials with {:.5} residual ({} unseen) in {:.3} s",
+        fitted.scene.model.materials.len(),
+        fitted.residual,
+        fitted.unseen,
+        decompose_started.elapsed().as_secs_f64(),
+    );
+    if let Some(ref surface_output) = args.surface_output {
+        let surface_path = path::Path::new(surface_output);
+        if let Some(parent) = surface_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).unwrap_or_else(|error| fail(error));
+        }
+        vol::io::try_save_relight(surface_path, &fitted.scene.model)
+            .unwrap_or_else(|error| fail(format!("cannot write {surface_output}: {error}")));
+        println!("wrote {surface_output}");
+    }
+    let held_out_environment = dataset
+        .environments
+        .iter()
+        .position(|name| name == &args.held_out_environment)
+        .unwrap_or_else(|| {
+            fail(format!(
+                "no environment named '{}'",
+                args.held_out_environment
+            ))
+        });
+    let held_out_light =
+        vol::io::try_load_environment(&dataset.environment_files[held_out_environment])
+            .unwrap_or_else(|error| fail(error));
+    let held_out_capture = train::inverse::capture::Capture::from_relight_dataset(
+        &dataset,
+        held_out_environment,
+        true,
+    )
+    .unwrap_or_else(|error| fail(error));
+    let mut renderer = train::inverse::score::Renderer::new(dataset.width, dataset.height)
+        .unwrap_or_else(|error| fail(error));
+    let training_summary = renderer.score_splits(
+        &train::inverse::score::Scene {
+            model: fitted.scene.model.clone(),
+            environment: training_light,
+        },
+        &training_capture,
+        &[(&held_out_indices, None)],
+        0,
+    )[0];
+    let relight_summary = renderer.score_splits(
+        &train::inverse::score::Scene {
+            model: fitted.scene.model,
+            environment: held_out_light,
+        },
+        &held_out_capture,
+        &[(&held_out_indices, None)],
+        0,
+    )[0];
+    renderer.destroy();
+    describe_relight_score("PBR training light / held-out poses", training_summary);
+    describe_relight_score("PBR held-out light / held-out poses", relight_summary);
+
+    let output = path::Path::new(&args.output);
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).unwrap_or_else(|error| fail(error));
+    }
+    convert::save_ply_with_options(
+        output,
+        &model,
+        &convert::SaveOptions {
+            format: convert::PlyFormat::Binary,
+        },
+    )
+    .unwrap_or_else(|error| fail(format!("cannot write {}: {error:?}", output.display())));
+    println!("wrote {}", output.display());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn camera(position: glam::Vec3, target: glam::Vec3) -> vol::CameraParams {
+        vol::CameraParams {
+            cam_position: position.to_array(),
+            cam_orientation: glam::Quat::from_rotation_arc(
+                glam::Vec3::Z,
+                (target - position).normalize(),
+            )
+            .to_array(),
+            fov: [1.0; 2],
+            principal: [0.0; 2],
+            depth: 100.0,
+        }
+    }
+
+    #[test]
+    fn view_split_reserves_only_the_requested_residue() {
+        let (training, held_out) = split_views(8, 4, 1);
+        assert_eq!(training, [0, 2, 3, 4, 6, 7]);
+        assert_eq!(held_out, [1, 5]);
+    }
+
+    #[test]
+    fn camera_focus_meets_converging_view_axes() {
+        let target = glam::Vec3::new(0.2, -0.3, 0.7);
+        let cameras = [
+            camera(glam::Vec3::new(-3.0, 0.0, 1.0), target),
+            camera(glam::Vec3::new(2.0, -2.0, 2.0), target),
+            camera(glam::Vec3::new(1.0, 3.0, -1.0), target),
+        ];
+        let actual = camera_focus(&cameras);
+        assert!((actual - target).length() < 1.0e-4, "focus {actual:?}");
+    }
+
+    #[test]
+    fn partial_lattice_layer_faces_the_cameras() {
+        let camera_side = glam::Vec3::new(0.4, -0.2, 0.9).normalize();
+        let positions = layered_positions(2048, 1.0, camera_side);
+        assert_eq!(positions.len(), 2048);
+        let front = positions
+            .iter()
+            .filter(|position| position.dot(camera_side) > 0.85)
+            .count();
+        assert_eq!(front, 20, "the sparse outer layer moved off camera-side");
+    }
+}

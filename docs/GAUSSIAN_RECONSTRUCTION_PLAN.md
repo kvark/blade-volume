@@ -89,14 +89,15 @@ artifact is
 `target/audit-runs/synthetic-reconstruct-final-v3/scene.rply`, SHA-256
 `a4ec939a45d6ab5bdef3f774dcb3d81a375ac7130e04a72b722dacf16c54e886`.
 
-The default now retains depth truth only. It estimates each particle normal by
+The depth-only upper bound estimates each particle normal by
 centroided local covariance over the fused positions and resolves its sign from
 the cameras that actually contributed that particle. Seven neighbours give
 1.97-degree normal RMSE. The fitted held-out relight score is 26.45 dB versus
 26.57 dB with truth normals; the matched material oracle is 27.18 versus 27.33
 dB. This closes the normal-truth ablation to 0.12--0.15 dB without adding any
-polygonal geometry. `--truth-normals` retains the old control. The next honest
-ablation is to replace truth depth with the image-trained foam surface.
+polygonal geometry. `--truth-normals` retains the old control. Section D
+performs the next honest ablation by replacing truth depth with the
+image-trained foam surface.
 
 ## D. Remove truth geometry
 
@@ -112,6 +113,30 @@ ablation is to replace truth depth with the image-trained foam surface.
 4. Move the validated Gaussian PBR fields into `PointCloudModel`, add a native
    checkpoint with optimizer state, and make the viewer consume that model
    directly.
+
+Current result (2026-08-02): `synthetic_foam` is the first end-to-end image-side
+gate. It initializes 2,048 RadFoam sites from cameras alone and trains them from
+six views of RGB plus foreground alpha; G-buffer positions and normals are read
+only after training for diagnostics. Cameras 1 and 5 are excluded from
+training, surface fusion, refinement, observations, and material fitting.
+
+Aligning the deliberately sparse outer lattice layer with the mean camera side
+raises held-pose radiance from the 20.13 dB world-axis baseline to 24.17 dB
+(23.72 worst) without increasing the site budget. The trained foam yields 2,152
+Gaussian surface particles, 53.3% held-pose coverage, and 18.31 dB under the
+unseen light (17.94 worst). A second independent training run reaches 24.27 dB
+radiance and 18.38 dB relighting, so the result is not a selected lucky
+checkpoint.
+
+This is progress, not completion. The surface still has 0.629 world-unit
+position RMSE and 66.45-degree normal RMSE. Specular fitting is therefore
+disabled for this gate: with two shared materials it can mistake a noisy
+cluster for a perfect mirror and move held-light quality from 18.50 to 14.70
+dB across otherwise similar runs. The fixed rough-dielectric fit is stable
+within 0.07 dB and is about 5.8x faster. The next geometry milestone is a
+differentiable shared Gaussian surface objective with refreshed visibility,
+followed by normal/covariance optimization. Specular parameters stay gated until the
+normal error and multi-light control show that they are identifiable.
 
 ## E. Performance and production gates
 
