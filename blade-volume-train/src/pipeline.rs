@@ -423,6 +423,9 @@ pub struct GpuViewEvaluator {
     output_view: gpu::TextureView,
     readback: gpu::Buffer,
     resolution: [u32; 2],
+    path_rays: usize,
+    path_truncated_rays: usize,
+    path_max_steps_used: u32,
 }
 
 impl GpuViewEvaluator {
@@ -506,6 +509,9 @@ impl GpuViewEvaluator {
             output_view,
             readback,
             resolution,
+            path_rays: 0,
+            path_truncated_rays: 0,
+            path_max_steps_used: 0,
         }
     }
 
@@ -546,6 +552,16 @@ impl GpuViewEvaluator {
         }
         if let Some(ref tracer) = self.splat_tracer {
             tracer.validate_candidate_counts()?;
+            let path = tracer.path_stats();
+            log::debug!(
+                "PowerFoam evaluation paths: max={}/{}, truncated={}",
+                path.max_steps_used,
+                tracer.max_steps(),
+                path.truncated_rays,
+            );
+            self.path_rays += self.resolution[0] as usize * self.resolution[1] as usize;
+            self.path_truncated_rays += path.truncated_rays;
+            self.path_max_steps_used = self.path_max_steps_used.max(path.max_steps_used);
         }
 
         let num_values = self.resolution[0] as usize * self.resolution[1] as usize * 4;
@@ -562,6 +578,9 @@ impl GpuViewEvaluator {
         views: &[diff_render::ViewSupervision],
         background_rgb: [f32; 3],
     ) -> Result<Vec<f32>, String> {
+        self.path_rays = 0;
+        self.path_truncated_rays = 0;
+        self.path_max_steps_used = 0;
         let mut out = Vec::with_capacity(views.len());
         for view in views {
             let rgba = self.render_rgba(view.camera)?;
@@ -570,6 +589,28 @@ impl GpuViewEvaluator {
                 *value = value.clamp(0.0, 1.0);
             }
             out.push(metrics::psnr(&pred, &view.target_rgb));
+        }
+        if let Some(ref tracer) = self.splat_tracer {
+            let truncated_percent = if self.path_rays == 0 {
+                0.0
+            } else {
+                100.0 * self.path_truncated_rays as f32 / self.path_rays as f32
+            };
+            log::info!(
+                "PowerFoam evaluation path telemetry: {} rays, max {}/{}, {} truncated \
+                 ({:.6}%)",
+                self.path_rays,
+                self.path_max_steps_used,
+                tracer.max_steps(),
+                self.path_truncated_rays,
+                truncated_percent,
+            );
+            if self.path_truncated_rays > 0 {
+                log::warn!(
+                    "PowerFoam evaluation hit the configured path cap; increase max_steps for \
+                     an exact render",
+                );
+            }
         }
         Ok(out)
     }

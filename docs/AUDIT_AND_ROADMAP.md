@@ -600,6 +600,11 @@ At the audited revision:
   exhaustive gather because its matched indexed arm was neutral. Packing the
   differentiable `(position,radius)` roles then lowers the 2,000-step training
   memory peak by 33.4% and wall time by 1.6%, with quality within 0.02 dB.
+  Exact per-ray GPU status then selects a 128-step budget: all 4.78 million
+  evaluation rays and 8.19 million optimizer rays complete without
+  truncation, reducing the matched training run by another 7.4% and its peak
+  by 32.9%. A 64-step render silently clipped 0.0762% of full-view rays and is
+  retained only as an approximate setting.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -1359,7 +1364,10 @@ material path.
    100,569-site all-view pass 4.4% faster with identical pixels and an exact
    overflow fallback. Packing weighted geometry/Jacobians reduces the matched
    2,000-step training peak from 1.287 GB to 0.857 GB and time from 326.71 to
-   321.50 seconds while held-out quality stays within 0.02 dB.)
+   321.50 seconds while held-out quality stays within 0.02 dB. Exact path-cap
+   telemetry then proves 128 steps sufficient for the 100,569-site gate and
+   cuts the same segment to 297.85 seconds and 0.575 GB, with 14.35 dB held-out
+   quality and zero truncation.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 

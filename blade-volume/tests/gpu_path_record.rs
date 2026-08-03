@@ -225,6 +225,7 @@ fn assert_gpu_path_record_matches_cpu(
     mut model: vol::PointCloudModel,
     world_translation: glam::Vec3,
     expect_tile_overflow: bool,
+    expect_path_truncation: bool,
 ) {
     let _gpu_test_guard = GPU_TEST_LOCK
         .lock()
@@ -393,6 +394,19 @@ fn assert_gpu_path_record_matches_cpu(
     }
     let sync = ctx.submit(&mut encoder);
     let _ = ctx.wait_for(&sync, !0);
+    let path_stats = bufs.path_stats(0..num_pixels as usize);
+    let expected_max_steps = cpu
+        .mask
+        .chunks_exact(max_steps)
+        .map(|row| row.iter().filter(|&&value| value > 0.0).count() as u32)
+        .max()
+        .unwrap_or(0);
+    assert_eq!(path_stats.max_steps_used, expected_max_steps);
+    assert_eq!(
+        path_stats.truncated_rays > 0,
+        expect_path_truncation,
+        "unexpected path truncation stats: {path_stats:?}",
+    );
     if weighted {
         let max_candidates = bufs.max_splat_candidate_count(0..num_pixels as usize);
         assert!(
@@ -590,7 +604,17 @@ fn assert_gpu_path_record_matches_cpu(
 
 #[test]
 fn gpu_path_record_matches_cpu_on_grid() {
-    assert_gpu_path_record_matches_cpu(build_grid_model(12), glam::Vec3::ZERO, false);
+    assert_gpu_path_record_matches_cpu(build_grid_model(12), glam::Vec3::ZERO, false, false);
+}
+
+#[test]
+fn gpu_path_record_full_walk_row_is_not_truncated() {
+    assert_gpu_path_record_matches_cpu(build_grid_model(16), glam::Vec3::ZERO, false, false);
+}
+
+#[test]
+fn gpu_path_record_reports_walk_truncation() {
+    assert_gpu_path_record_matches_cpu(build_grid_model(24), glam::Vec3::ZERO, false, true);
 }
 
 #[test]
@@ -601,7 +625,7 @@ fn gpu_path_record_matches_bounded_powerfoam() {
             .map(|i| 0.2 + 0.03 * (i % 3) as f32)
             .collect(),
     );
-    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false);
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false, false);
 }
 
 #[test]
@@ -612,7 +636,12 @@ fn gpu_weighted_linearization_is_translation_invariant() {
             .map(|i| 0.2 + 0.03 * (i % 3) as f32)
             .collect(),
     );
-    assert_gpu_path_record_matches_cpu(model, glam::Vec3::new(8192.0, -4096.0, 2048.0), false);
+    assert_gpu_path_record_matches_cpu(
+        model,
+        glam::Vec3::new(8192.0, -4096.0, 2048.0),
+        false,
+        false,
+    );
 }
 
 #[test]
@@ -643,7 +672,49 @@ fn gpu_powerfoam_splats_cross_disconnected_cech_components() {
         "fixture must require crossing disconnected supports",
     );
 
-    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false);
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false, false);
+}
+
+fn build_disconnected_ray_model(point_count: usize) -> vol::PointCloudModel {
+    let camera = make_camera_looking_along_x(100.0);
+    let target_ray = rays_for_pixels(&camera, &[32 * 64 + 32], 64, 64)[0];
+    let points = (0..point_count)
+        .map(|index| {
+            let center = target_ray.origin + (5.0 + 0.5 * index as f32) * target_ray.direction;
+            center.extend(1.0)
+        })
+        .collect::<Vec<_>>();
+    vol::PointCloudModel {
+        points,
+        sh_coefficients: vec![0.0; point_count * 3],
+        sh_degree: 0,
+        transforms: None,
+        adjacency: Some(vol::Adjacency {
+            neighbors: Vec::new(),
+            offsets: vec![0; point_count + 1],
+        }),
+        radii: Some(vec![0.2; point_count]),
+    }
+}
+
+#[test]
+fn gpu_powerfoam_full_row_without_remainder_is_not_truncated() {
+    assert_gpu_path_record_matches_cpu(
+        build_disconnected_ray_model(16),
+        glam::Vec3::ZERO,
+        false,
+        false,
+    );
+}
+
+#[test]
+fn gpu_powerfoam_reports_path_truncation() {
+    assert_gpu_path_record_matches_cpu(
+        build_disconnected_ray_model(24),
+        glam::Vec3::ZERO,
+        false,
+        true,
+    );
 }
 
 #[test]
@@ -669,5 +740,5 @@ fn gpu_projected_tile_overflow_falls_back_to_exhaustive_scan() {
         radii: Some(radii),
     };
 
-    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, true);
+    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, true, false);
 }

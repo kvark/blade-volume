@@ -58,7 +58,7 @@ struct Args {
     far_plane: f32,
 
     /// max ray steps for the path-tracer
-    #[argh(option, default = "96")]
+    #[argh(option, default = "128")]
     max_steps: usize,
 
     /// rebuild adjacency from the loaded points (ignore any adjacency
@@ -302,6 +302,7 @@ mod tests {
         ];
         let default = <Args as argh::FromArgs>::from_args(&["eval_psnr"], &base).unwrap();
         assert!(!default.gpu);
+        assert_eq!(default.max_steps, 128);
 
         let mut explicit = base.to_vec();
         explicit.push("--gpu");

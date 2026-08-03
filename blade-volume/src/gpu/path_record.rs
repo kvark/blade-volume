@@ -11,8 +11,10 @@
 //! Layout (row-major `[num_pixels, max_steps]`):
 //!   - `previous_cells_out[u32]` (PowerFoam only)
 //!   - `cells_out[u32]`
+//!   - `next_cells_out[u32]`
 //!   - `dts_out[f32]`
 //!   - `mask_out[f32]`
+//!   - `path_status_out[u32]` (recorded count + truncation bit)
 //!   - `dt_reference_tangents_out[f32]` (PowerFoam only)
 //!   - three `dt_grad_*_out[vec4<f32>]` streams (PowerFoam only)
 //!
@@ -27,18 +29,21 @@ use blade_graphics as gpu;
 
 const SPLAT_TILE_SIZE: u32 = 16;
 const SPLAT_TILE_INDEX_BUDGET: u64 = 4 * 1024 * 1024;
+const PATH_TRUNCATED_BIT: u32 = 1 << 31;
 
 fn output_bytes(num_pixels: u32, max_steps: u32, with_jacobians: bool) -> u64 {
     let pl = num_pixels as u64 * max_steps as u64;
     let base = pl * (2 * mem::size_of::<u32>() + 2 * mem::size_of::<f32>()) as u64;
-    if with_jacobians {
-        base + pl
-            * (mem::size_of::<u32>() + mem::size_of::<f32>() + 3 * mem::size_of::<[f32; 4]>())
+    let path_status = num_pixels as u64 * mem::size_of::<u32>() as u64;
+    path_status
+        + if with_jacobians {
+            base + pl
+                * (mem::size_of::<u32>() + mem::size_of::<f32>() + 3 * mem::size_of::<[f32; 4]>())
+                    as u64
+        } else {
+            base + (mem::size_of::<u32>() + mem::size_of::<f32>() + 3 * mem::size_of::<[f32; 4]>())
                 as u64
-    } else {
-        base + (mem::size_of::<u32>() + mem::size_of::<f32>() + 3 * mem::size_of::<[f32; 4]>())
-            as u64
-    }
+        }
 }
 
 /// Inputs to one path-record dispatch.
@@ -97,6 +102,7 @@ struct PathRecordData {
     g_next_cells_out: gpu::BufferPiece,
     g_dts_out: gpu::BufferPiece,
     g_mask_out: gpu::BufferPiece,
+    g_path_status_out: gpu::BufferPiece,
     g_dt_reference_tangents_out: gpu::BufferPiece,
     g_dt_grad_previous_out: gpu::BufferPiece,
     g_dt_grad_current_out: gpu::BufferPiece,
@@ -247,6 +253,7 @@ impl PathRecorder {
             g_next_cells_out: buffers.next_cells.into(),
             g_dts_out: buffers.dts.into(),
             g_mask_out: buffers.mask.into(),
+            g_path_status_out: buffers.path_status.into(),
             g_dt_reference_tangents_out: buffers.dt_reference_tangents.into(),
             g_dt_grad_previous_out: buffers.dt_grad_previous.into(),
             g_dt_grad_current_out: buffers.dt_grad_current.into(),
@@ -294,11 +301,21 @@ impl PathRecorder {
     }
 }
 
-/// Allocate flat path outputs plus the pixel-index input buffer with the right
-/// sizes for `(num_pixels, max_steps)`.
+/// Summary of synchronized GPU path-record output.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PathRecordStats {
+    /// Largest number of active entries written for one ray.
+    pub max_steps_used: u32,
+    /// Rays which exhausted the path budget while another valid segment
+    /// remained.
+    pub truncated_rays: usize,
+}
+
+/// Flat path outputs plus the pixel-index input buffer with the right sizes
+/// for `(num_pixels, max_steps)`.
 ///
 /// Caller owns lifetime and is responsible for destroying via
-/// [`gpu::Context::destroy_buffer`].
+/// [`Self::destroy`].
 pub struct PathRecordBuffers {
     pub pixel_indices: gpu::Buffer,
     pub previous_cells: gpu::Buffer,
@@ -306,6 +323,8 @@ pub struct PathRecordBuffers {
     pub next_cells: gpu::Buffer,
     pub dts: gpu::Buffer,
     pub mask: gpu::Buffer,
+    /// Host-visible recorded-entry count and truncation flag per ray.
+    path_status: gpu::Buffer,
     /// Weighted-path tangent `J * (geometry_ref - ray_origin)`.
     /// Raw recorded intervals remain available in [`Self::dts`].
     pub dt_reference_tangents: gpu::Buffer,
@@ -460,6 +479,11 @@ impl PathRecordBuffers {
         with_splat_scratch: bool,
         projected: Option<([u32; 2], u32)>,
     ) -> Self {
+        assert!(max_steps > 0, "path-record max_steps must be non-zero");
+        assert!(
+            max_steps < PATH_TRUNCATED_BIT,
+            "path-record max_steps exceeds status encoding"
+        );
         let pl = (num_pixels as u64) * (max_steps as u64);
         let cells_bytes = pl * mem::size_of::<u32>() as u64;
         let dts_bytes = pl * mem::size_of::<f32>() as u64;
@@ -576,6 +600,11 @@ impl PathRecordBuffers {
             size: mask_bytes,
             memory: mem(external),
         });
+        let path_status = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-status",
+            size: pix_bytes,
+            memory: gpu::Memory::Shared,
+        });
         let dt_reference_tangents = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-dt-reference-tangents",
             size: reference_tangent_bytes,
@@ -629,6 +658,7 @@ impl PathRecordBuffers {
             next_cells,
             dts,
             mask,
+            path_status,
             dt_reference_tangents,
             dt_grad_previous,
             dt_grad_current,
@@ -681,6 +711,29 @@ impl PathRecordBuffers {
 
     pub fn has_jacobians(&self) -> bool {
         self.has_jacobians
+    }
+
+    /// Summarize a synchronized path-record output range.
+    ///
+    /// The caller must wait for the recording submission before reading this
+    /// host-visible status buffer.
+    pub fn path_stats(&self, range: std::ops::Range<usize>) -> PathRecordStats {
+        assert!(
+            range.start <= range.end && range.end <= self.num_pixels as usize,
+            "path status range exceeds buffer capacity",
+        );
+        let status = unsafe {
+            slice::from_raw_parts(
+                self.path_status.data() as *const u32,
+                self.num_pixels as usize,
+            )
+        };
+        let mut stats = PathRecordStats::default();
+        for &value in &status[range] {
+            stats.max_steps_used = stats.max_steps_used.max(value & !PATH_TRUNCATED_BIT);
+            stats.truncated_rays += usize::from(value & PATH_TRUNCATED_BIT != 0);
+        }
+        stats
     }
 
     /// Maximum number of sphere hits observed in a synchronized output range.
@@ -755,6 +808,7 @@ impl PathRecordBuffers {
         context.destroy_buffer(self.next_cells);
         context.destroy_buffer(self.dts);
         context.destroy_buffer(self.mask);
+        context.destroy_buffer(self.path_status);
         context.destroy_buffer(self.dt_reference_tangents);
         context.destroy_buffer(self.dt_grad_previous);
         context.destroy_buffer(self.dt_grad_current);
@@ -779,7 +833,11 @@ mod tests {
     #[test]
     fn compact_path_buffers_do_not_scale_jacobian_storage() {
         let slots = 4_096_u64 * 256;
-        assert_eq!(output_bytes(4_096, 256, true), slots * 72);
-        assert_eq!(output_bytes(4_096, 256, false), slots * 16 + 56);
+        let path_status = 4_096_u64 * 4;
+        assert_eq!(output_bytes(4_096, 256, true), slots * 72 + path_status);
+        assert_eq!(
+            output_bytes(4_096, 256, false),
+            slots * 16 + 56 + path_status
+        );
     }
 }

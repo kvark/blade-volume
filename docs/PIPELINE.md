@@ -273,6 +273,29 @@ resize and live settings handling, is the remaining presentation step.
   atomically sampled topology and is below the precision of this stochastic
   gate.
 
+#### M2k — Exact path-budget telemetry (implemented and gated)
+
+- Every GPU-recorded ray now writes one host-visible status word containing
+  its active segment count and a hard-truncation bit. Both the adjacency walk
+  and the disconnected-support PowerFoam splat path distinguish a row that
+  ended exactly at `max_steps` from one that still had a valid segment. Tests
+  force both cases on a physical GPU. Training reports one aggregate and the
+  evaluator reports one aggregate per view set instead of silently clipping.
+- On the 100,569-site Bonsai checkpoint, a 64-step all-view render truncates
+  3,646 of 4,784,128 rays (0.0762%, across 187 of 292 views), although the
+  aggregate PSNR happens to round to the same two decimals. At 128 steps the
+  observed maxima are 100 for training views and 96 for held-out views, with
+  zero truncation. The standalone evaluator default is therefore 128 rather
+  than 96; 64 remains an explicitly approximate option for this scene scale.
+- A matched 2,000-step resume at 128 steps records 8,192,000 optimizer rays,
+  reaches a maximum of 83, and truncates none while crossing four
+  densification boundaries. Training falls from 321.50 to 297.85 seconds
+  (7.4%) and the cgroup peak from 0.857 to 0.575 GB (32.9%) relative to the
+  exact 256-step run. Train/test PSNR is 14.66/14.35 dB versus 14.64/14.33 dB;
+  both runs reach 100,569 sites and the small positive delta is within their
+  atomically sampled topology variation. No run used swap or recorded
+  memory-pressure, OOM, or GPU-fault events.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

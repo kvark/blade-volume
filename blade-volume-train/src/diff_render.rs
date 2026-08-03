@@ -2974,6 +2974,7 @@ fn collect_path_contributions(
                 .wait_for(&sync, !0)
                 .expect("contribution path readback failed");
             assert!(completed, "contribution path readback timed out");
+            let recorded_path = buffers.path_stats(0..num_pixels);
             if model.radii.is_some() {
                 let observed = buffers.max_splat_candidate_count(0..num_pixels);
                 assert!(
@@ -2990,6 +2991,7 @@ fn collect_path_contributions(
             let dts = unsafe { std::slice::from_raw_parts(dts_readback.data() as *const f32, pl) };
             let mask =
                 unsafe { std::slice::from_raw_parts(mask_readback.data() as *const f32, pl) };
+            let previous_truncated_rays = stats.truncated_rays;
             accumulate_path_contributions(
                 cells,
                 next_cells,
@@ -3000,6 +3002,10 @@ fn collect_path_contributions(
                 &mut view_contribution,
                 &mut stats,
             );
+            stats.truncated_rays = previous_truncated_rays + recorded_path.truncated_rays;
+            stats.max_steps_used = stats
+                .max_steps_used
+                .max(recorded_path.max_steps_used as usize);
         }
         for (maximum, contribution) in stats.per_cell.iter_mut().zip(view_contribution) {
             *maximum = maximum.max(contribution);
@@ -3755,6 +3761,9 @@ fn fit_appearance_pixel_batched(
 
     let mut losses = Vec::with_capacity(invocation_end.saturating_sub(steps_done));
     let mut endpoint_checkpoint = None;
+    let mut training_path_rays = 0usize;
+    let mut training_path_truncated_rays = 0usize;
+    let mut training_path_max_steps_used = 0u32;
     // Frequent loss readouts (every ~2000 steps) so long multi-hour runs
     // surface their trajectory instead of only ~10 lines total.
     let log_every = 2000.min(total_steps).max(1);
@@ -4146,6 +4155,23 @@ fn fit_appearance_pixel_batched(
             configure_optimizer(&mut session, &config, step, total_steps);
             session.step();
             session.wait();
+            let recorded_path = path_bufs.path_stats(0..pixel_batch);
+            let first_path_truncation =
+                training_path_truncated_rays == 0 && recorded_path.truncated_rays > 0;
+            training_path_rays += pixel_batch;
+            training_path_truncated_rays += recorded_path.truncated_rays;
+            training_path_max_steps_used =
+                training_path_max_steps_used.max(recorded_path.max_steps_used);
+            if first_path_truncation {
+                log::warn!(
+                    "training paths first truncated at step {}: {} / {} rays reached \
+                     max_steps={}",
+                    step + 1,
+                    recorded_path.truncated_rays,
+                    pixel_batch,
+                    max_steps,
+                );
+            }
             if model.radii.is_some() {
                 let observed = path_bufs.max_splat_candidate_count(0..pixel_batch);
                 assert!(
@@ -4185,12 +4211,16 @@ fn fit_appearance_pixel_batched(
                 let recent_avg: f32 =
                     losses.iter().rev().take(window).copied().sum::<f32>() / window as f32;
                 log::info!(
-                    "step {}/{}: avg loss {:.4} (window {}) cells={}",
+                    "step {}/{}: avg loss {:.4} (window {}) cells={} paths=max {}/{}, \
+                     truncated={}",
                     step + 1,
                     total_steps,
                     recent_avg,
                     window,
                     model.points.len(),
+                    recorded_path.max_steps_used,
+                    max_steps,
+                    recorded_path.truncated_rays,
                 );
             }
         }
@@ -4557,6 +4587,19 @@ fn fit_appearance_pixel_batched(
             total_steps,
         );
     }
+    let training_path_truncated_percent = if training_path_rays == 0 {
+        0.0
+    } else {
+        100.0 * training_path_truncated_rays as f32 / training_path_rays as f32
+    };
+    log::info!(
+        "training path telemetry: {} rays, max {}/{}, {} truncated ({:.6}%)",
+        training_path_rays,
+        training_path_max_steps_used,
+        max_steps,
+        training_path_truncated_rays,
+        training_path_truncated_percent,
+    );
 
     let finalize_start = std::time::Instant::now();
     debug_dump_exposure(&session, views.len());

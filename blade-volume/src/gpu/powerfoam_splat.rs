@@ -191,6 +191,17 @@ impl PowerFoamGpuSplatTracer {
         }
     }
 
+    /// Summarize recorded paths after the render submission has completed.
+    pub fn path_stats(&self) -> super::PathRecordStats {
+        let num_pixels = (self.resolution[0] * self.resolution[1]) as usize;
+        self.buffers.path_stats(0..num_pixels)
+    }
+
+    /// Fixed path-row capacity used by this tracer.
+    pub fn max_steps(&self) -> u32 {
+        self.params.max_steps
+    }
+
     pub fn deinit(&mut self, context: &gpu::Context) {
         context.destroy_compute_pipeline(&mut self.integrate_pipeline);
         self.buffers.destroy(context);

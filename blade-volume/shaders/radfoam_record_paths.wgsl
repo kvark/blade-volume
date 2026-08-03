@@ -77,6 +77,9 @@ var<storage, read_write> g_cells_out: array<u32>;
 var<storage, read_write> g_next_cells_out: array<u32>;
 var<storage, read_write> g_dts_out: array<f32>;
 var<storage, read_write> g_mask_out: array<f32>;
+// Low 31 bits: recorded entries. High bit: another valid segment remained
+// after the fixed path row filled.
+var<storage, read_write> g_path_status_out: array<u32>;
 var<storage, read_write> g_dt_reference_tangents_out: array<f32>;
 var<storage, read_write> g_dt_grad_previous_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_current_out: array<vec4<f32>>;
@@ -603,6 +606,35 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         output_step += 1u;
     }
+
+    var truncated = false;
+    if (output_step == g_params.max_steps) {
+        for (var slot = 0u; slot < candidate_count; slot += 1u) {
+            let candidate_slot = candidate_begin + slot;
+            let cell = g_candidates[candidate_slot];
+            if (cell == 0xffffffffu) {
+                continue;
+            }
+            let interval = power_interval(ray_origin, ray_dir, cell);
+            if (interval.valid == 0u) {
+                continue;
+            }
+            let differential = interval_differential(
+                ray_origin,
+                ray_dir,
+                interval.previous,
+                cell,
+                interval.next,
+                interval.face_near,
+                interval.face_far,
+            );
+            if (differential.valid != 0u) {
+                truncated = true;
+                break;
+            }
+        }
+    }
+    g_path_status_out[output_pixel] = output_step | select(0u, 0x80000000u, truncated);
 }
 
 @compute @workgroup_size(64)
@@ -625,6 +657,7 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let row_start = output_pixel * g_params.max_steps;
     var output_step: u32 = 0u;
+    var truncated = false;
 
     // The CPU `record_path` walks until t1 >= depth, no more faces,
     // or it has emitted `max_steps` entries. Mirror that here.
@@ -705,10 +738,15 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
             break;
         }
 
+        if (step + 1u == g_params.max_steps) {
+            truncated = true;
+        }
+
         t0 = t1;
         previous = current;
         current = next_idx;
         current_pos = g_points[next_idx].xyz;
         current_radius = g_points[next_idx].w;
     }
+    g_path_status_out[output_pixel] = output_step | select(0u, 0x80000000u, truncated);
 }
