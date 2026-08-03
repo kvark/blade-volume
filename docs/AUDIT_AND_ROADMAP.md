@@ -50,9 +50,9 @@ behind these gates:
 
 1. Match reference RadFoam training within the Stage 2 quality tolerance on a
    complete, reproducible scene. Checkpoint renderer parity is done.
-2. Confirm the oriented PowerFoam normal/offset gain on a second scene, then
-   gate the full spatial texel appearance model. Learned radii already pass
-   the fixed held-out Bonsai ablation.
+2. Gate the full spatial texel appearance model against the two-scene oriented
+   baseline. Learned radii and learned normal/offset planes already pass fixed
+   held-out ablations.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.
@@ -668,9 +668,13 @@ At the audited revision:
   17.4614/16.4583 dB train/all-37 held out and improves 32/37 test views; the
   16,320-step ceiling is 17.6039/16.4773 but adds only 0.0190 dB for 2× time.
   The selected run records 33.42M rays, max 106/128 paths, zero truncation,
-  627 MB peak host memory, and no swap, pressure, OOM, or GPU fault. Offsets
-  remain opt-in pending a second-scene gate; they are one value per site, not
-  the reference detail-site/spherical-Voronoi appearance model.
+  627 MB peak host memory, and no swap, pressure, OOM, or GPU fault. The
+  independent 200K-site Room gate is stronger: ratio 0.005 raises
+  25.0824/23.0112 to 25.3393/23.2402 dB and improves 37/39 held-out views,
+  while only 0.45% of planes leave their support. Ratio 0.01 reaches 23.2607
+  dB held out but raises that tail to 2.92%, so 0.005 is the safer cross-scene
+  choice. Offsets remain opt-in because they are one value per site, not the
+  reference detail-site/spherical-Voronoi appearance model.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
@@ -1513,8 +1517,11 @@ material path.
    dB. A per-site signed surface offset then raises the 8,160-step endpoint to
    16.4583 dB held out (+0.0678 over normal-only and +0.0478 over the original
    unoriented cloud); the 16,320-step ceiling is 16.4773 dB and adds only
-   0.0190 dB for 2× time. Keep both fields opt-in pending a second scene and
-   proceed to spatial texel appearance rather than another duration increase.)
+   0.0190 dB for 2× time. The independent Room gate raises normal-only held-out
+   quality from 23.0112 to 23.2402 dB at the safer 0.005 offset ratio and
+   improves 37/39 frames. Keep both fields explicit because this is still one
+   plane per site, and proceed to spatial texel appearance rather than another
+   duration increase.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and

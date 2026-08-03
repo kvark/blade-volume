@@ -590,9 +590,19 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
 - The selected and ceiling runs process 33.42M and 66.85M rays with maxima
   106/128 and 109/128 path entries, 661/1,024 candidates, and zero truncation.
   Training takes 497.7 and 993.4 seconds, peaks at 627 and 562 MB host memory,
-  and records zero swap, pressure, OOM, or GPU faults. The feature passes one
-  real-scene causal gate but remains opt-in until a second scene confirms the
-  gain; full spatial texel appearance remains the next semantic experiment.
+  and records zero swap, pressure, OOM, or GPU faults.
+- An independent Room gate converts the selected 200K-site RadFoam endpoint to
+  reference PowerFoam radii/Čech adjacency without changing its points,
+  density, or SH. The 3.01M-edge source has median radius 0.068 versus 0.073
+  on Bonsai and starts at 18.6818/18.1646 dB. After the same 2,040-step
+  loss-free oriented refit, normal-only reaches 25.0824/23.0112 dB. Offset
+  ratios 0.005 and 0.01 reach 25.3393/23.2402 and 25.3000/23.2607: held-out
+  gains of +0.2290 and +0.2495 dB, with 37/39 views improving in either arm.
+  Ratio 0.005 is the safer cross-scene selection because only 0.45% of planes
+  leave their support, versus 2.92% at 0.01, for just 0.0205 dB less held-out
+  quality. The two-scene causal gate therefore passes. Offsets remain explicit
+  because they are not the full texel appearance model, not because their
+  value is unconfirmed.
 - Weighted training no longer clears the inactive dt/Jacobian payload before
   every path dispatch. It initializes that payload once and continues clearing
   all gather indices and masks, so padded rows can reuse only finite masked
