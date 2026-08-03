@@ -528,19 +528,24 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   the selected legacy cosine protocol, so its ratio-one normal rate follows
   the global 0.1→0.001 curve instead.
 - A normal-only cadence neither changes nor rebuilds Čech adjacency. It reads
-  back the learned normals and uploads only their 3.2 MB GPU buffer. On the
-  200K-site Bonsai gate this lowers cadence resource work from 5.805 to 0.015
-  seconds, total training from 129.570 to 123.693 seconds, and peak host memory
-  from 802 to 554 MB. The final run records 8.36 million rays, at most 90/128
-  path entries and 661/1,024 candidates, with zero truncation, swap, pressure,
-  OOM, or GPU faults.
+  back and uploads only the learned-normal parameter, leaving frozen positions,
+  radii, attributes, adjacency, and host index untouched. On the matched
+  2,040-step 200K-site gate, specializing both directions cuts state readback
+  from 2.740 to 1.959 seconds (28.5%), training from 123.416 to 122.699 seconds,
+  command time from 128.653 to 127.628 seconds, and peak host memory from 969
+  to 762 MB. The run records 8.36 million rays with zero truncation, swap,
+  pressure, OOM, or GPU faults.
 - Starting from the selected step-20,400 endpoint and freezing positions and
-  radii, a 2,040-step learned-normal refit reaches 17.0258/16.1830 dB
-  train/all-37 held out. Fixed PCA planes reach 16.4490/15.6958 dB, so learning
-  recovers 0.4872 dB held out and improves every held-out frame. The original
-  unoriented cloud remains ahead at 17.2334/16.4105 dB. Oriented dipoles land
-  as an explicit experiment, not the default; the remaining 0.23 dB gap and
-  visible support discs make spatial texel appearance the next semantic gate.
+  radii, the reference normal loss is slightly counterproductive on Bonsai:
+  disabling it improves the 2,040-step refit from 17.0258/16.1830 to
+  17.0939/16.2340 dB train/all-37 held out. Convergence, rather than dipole
+  geometry, explains the remaining short-run gap. Loss-free refits reach
+  17.2791/16.3264 at 4,080 steps, 17.4388/16.3905 at 8,160, and
+  17.5798/16.4097 at 16,320. The original unoriented cloud is
+  17.2334/16.4105, so 8,160 steps is the practical point (within 0.020 dB held
+  out) and 16,320 establishes parity within 0.001 dB. Oriented dipoles remain
+  explicit rather than default; spatial texel appearance is still the next
+  semantic gate for improving beyond parity and removing visible support discs.
 
 ### M3 — Training crate scaffolding
 

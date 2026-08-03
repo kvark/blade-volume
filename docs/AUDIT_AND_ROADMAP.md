@@ -646,15 +646,18 @@ At the audited revision:
   landed; learned orientation plus spatial texel appearance, not split direction
   alone, is the remaining reference-semantic hypothesis.
 - Fixed adjacency-derived surface planes are negative, but learnable dipoles
-  recover most of that loss. The exact implementation persists optional
-  per-site normals, clips CPU and every WGSL traversal path to the retained
-  half-cell, differentiates the active plane, and trains normalized normals
-  with the decaying view-facing loss. On a 2,040-step 200K-site Bonsai refit,
-  learned normals improve fixed planes from 16.4490/15.6958 to
-  17.0258/16.1830 dB train/all-37 and improve every held-out frame. The
-  unoriented endpoint remains ahead at 17.2334/16.4105 dB, and visible support
-  discs and speckle remain. The feature therefore lands opt-in; it does not
-  replace the default or establish the full appearance model.
+  recover that loss with sufficient convergence. The exact implementation
+  persists optional per-site normals, clips CPU and every WGSL traversal path
+  to the retained half-cell, differentiates the active plane, and trains
+  normalized normals with an optional decaying view-facing loss. That reference
+  loss costs 0.0510 dB held out in the matched 2,040-step 200K-site Bonsai
+  refit, so the selected arm disables it. Loss-free normals reach
+  17.4388/16.3905 dB train/all-37 at
+  8,160 steps and 17.5798/16.4097 at 16,320, versus 17.2334/16.4105 for the
+  unoriented endpoint. The practical endpoint is within 0.020 dB and the long
+  endpoint within 0.001 dB held out. The feature therefore lands opt-in; it
+  establishes geometry parity but visible support discs and speckle still keep
+  it from replacing the default or establishing the full appearance model.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -1481,10 +1484,11 @@ material path.
    still show large support discs, holes, blurred thin structure, and background
    floaters, so the production gate remains open. Revisit cloud support and
    spatial appearance semantics rather than adding more identical steps. The
-   first oriented-dipole gate is now complete: learned normals add 0.4872 dB
-   over fixed PCA planes on all 37 held-out views, but remain 0.2275 dB below
-   the unoriented endpoint. Keep them opt-in and proceed to spatial texel
-   appearance rather than making dipole clipping the default.)
+   first oriented-dipole gate is now complete: learned normals add 0.5382 dB
+   over fixed PCA planes at 2,040 loss-free steps; 8,160 steps come within
+   0.020 dB of the unoriented held-out endpoint, and 16,320 come within 0.001
+   dB. Keep them opt-in and proceed to spatial texel appearance rather than
+   spending another 2x training time for only 0.019 dB.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and

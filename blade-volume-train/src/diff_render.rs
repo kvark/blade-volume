@@ -2792,6 +2792,20 @@ fn inv_radius_activation(radius: f32) -> f32 {
     inv_density_activation(radius, RADIUS_SOFTPLUS_BETA)
 }
 
+fn download_model_surface_normals(session: &mn::Session, model: &mut vol::PointCloudModel) {
+    let Some(ref mut normals) = model.surface_normals else {
+        return;
+    };
+    let mut out_normals = vec![0.0_f32; normals.len() * 3];
+    session.read_param("surface_normals", &mut out_normals);
+    for (normal, values) in normals.iter_mut().zip(out_normals.chunks_exact(3)) {
+        *normal = glam::Vec3::from_slice(values).normalize_or_zero();
+        if *normal == glam::Vec3::ZERO {
+            *normal = glam::Vec3::Z;
+        }
+    }
+}
+
 fn download_model_geometry(session: &mn::Session, model: &mut vol::PointCloudModel) {
     let n_cells = model.points.len();
     let mut out_positions = vec![0.0_f32; n_cells * 3];
@@ -2809,16 +2823,7 @@ fn download_model_geometry(session: &mn::Session, model: &mut vol::PointCloudMod
             *radius = radius_activation(raw);
         }
     }
-    if let Some(ref mut normals) = model.surface_normals {
-        let mut out_normals = vec![0.0_f32; n_cells * 3];
-        session.read_param("surface_normals", &mut out_normals);
-        for (normal, values) in normals.iter_mut().zip(out_normals.chunks_exact(3)) {
-            *normal = glam::Vec3::from_slice(values).normalize_or_zero();
-            if *normal == glam::Vec3::ZERO {
-                *normal = glam::Vec3::Z;
-            }
-        }
-    }
+    download_model_surface_normals(session, model);
 }
 
 fn download_model_parameters(
@@ -4736,8 +4741,14 @@ fn fit_appearance_pixel_batched(
                 // traversal geometry for the next discrete walk, so keep the
                 // live session and Adam state in place instead of copying all
                 // appearance parameters and moments through uncached shared
-                // memory just to recreate an identical graph.
-                download_model_geometry(&session, model);
+                // memory just to recreate an identical graph. When topology
+                // is frozen, positions and radii are already current on the
+                // host, so read back only the moving orientation table.
+                if topology_trainable {
+                    download_model_geometry(&session, model);
+                } else {
+                    download_model_surface_normals(&session, model);
+                }
             } else {
                 download_model_parameters(&session, model, config.softplus_beta);
                 model_parameters_current = true;
@@ -4943,6 +4954,47 @@ mod tests {
         let actual = session.read_output(1)[0];
         let expected = (0.0 + 0.125 + 1.5 + 1.5) / 4.0;
         assert!((actual - expected).abs() < 1.0e-6, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn surface_normal_readback_leaves_frozen_topology_unchanged() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping surface-normal readback test: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        model.radii = Some(vec![0.25; model.points.len()]);
+        model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
+        let points_before = model.points.clone();
+        let radii_before = model.radii.clone();
+
+        let mut graph = mn::Graph::new();
+        let normals = graph.parameter("surface_normals", &[model.points.len(), 3]);
+        let output = graph.reshape(normals, &[model.points.len() * 3]);
+        graph.set_outputs(vec![output]);
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Inference,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        let raw_normal = glam::Vec3::new(3.0, -4.0, 0.0);
+        let raw_normals = (0..model.points.len())
+            .flat_map(|_| raw_normal.to_array())
+            .collect::<Vec<_>>();
+        session.set_parameter("surface_normals", &raw_normals);
+
+        download_model_surface_normals(&session, &mut model);
+
+        assert_eq!(model.points, points_before);
+        assert_eq!(model.radii, radii_before);
+        assert_eq!(
+            model.surface_normals.as_ref().unwrap(),
+            &vec![raw_normal.normalize(); model.points.len()]
+        );
     }
 
     #[test]

@@ -238,7 +238,7 @@ refit_oom_events = 0
 selection = "do not land: fixed adjacency-derived surface planes lose 0.77 dB held out after a complete density/SH refit and visibly add speckle"
 
 [oriented_surface_gate]
-status = "selected-opt-in"
+status = "selected-opt-in-parity"
 reference_source_commit = "96392252ebd0059fe6ca98881b62e12295d9242f"
 source_step = 20400
 source_points = 200000
@@ -276,10 +276,34 @@ learned_vs_fixed_test_db = 0.4872
 learned_vs_unoriented_test_db = -0.2275
 held_out_views_improved_vs_fixed = 37
 held_out_views_total = 37
+loss_free_steps = 2040
+loss_free_train_psnr = 17.0939
+loss_free_test_psnr = 16.2340
+loss_free_vs_reference_loss_test_db = 0.0510
+loss_free_training_seconds = 122.699
+loss_free_command_seconds = 127.628
+loss_free_state_readback_seconds = 1.959
+loss_free_max_host_bytes = 761733120
+pre_readback_optimization_training_seconds = 123.416
+pre_readback_optimization_command_seconds = 128.653
+pre_readback_optimization_state_readback_seconds = 2.740
+pre_readback_optimization_max_host_bytes = 969490432
+practical_steps = 8160
+practical_train_psnr = 17.4388
+practical_test_psnr = 16.3905
+practical_vs_unoriented_test_db = -0.0200
+parity_steps = 16320
+parity_train_psnr = 17.5798
+parity_test_psnr = 16.4097
+parity_vs_unoriented_test_db = -0.0008
+parity_training_seconds = 979.424
+parity_training_rays = 66846720
+parity_max_path = 100
+parity_truncated_rays = 0
 memory_swap_bytes = 0
 oom_events = 0
 artifact_path = "target/audit-runs/oriented-powerfoam"
-selection = "land as opt-in: learned dipoles recover 0.49 dB over fixed planes on every held-out view at 2.1% training overhead, but remain 0.23 dB behind the unoriented endpoint"
+selection = "keep opt-in; use no normal loss and 8160 steps for practical refits (within 0.02 dB held out), while 16320 steps proves held-out parity within 0.001 dB; spatial appearance remains the next quality feature"
 
 [endpoint_path_capacity_gate]
 status = "selected-for-200k-bonsai"
