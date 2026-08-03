@@ -684,6 +684,60 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   it must not claim official-checkpoint parity until this discrepancy is
   resolved against a published checkpoint.
 
+#### M2x — Compact Spherical Voronoi colour (implemented, opt-in, rejected as a baseline)
+
+- `PointCloudModel.spherical_voronoi` stores eight raw directional axes and
+  eight RGB values per point: 48 floats, point-major on disk. Axis length is
+  the softmax temperature and evaluation follows the published dot-product
+  contract. This is a compact additive residual, not the released
+  PowerFoam checkpoint layout with eight detail sites and eight directional
+  functions per detail site.
+- Binary/ASCII PLY, validation, the CPU oracle, standalone/depth/scene/splat
+  WGSL, Meganeura training, densification ancestry, Adam remapping, and exact
+  segmented resume share the same representation. Fresh training starts from
+  deterministic cube-corner axes and zero RGB values, preserving the prior
+  model exactly before the first update. Both axis and colour rates default
+  to zero.
+- A matched 2,040-step Room gate with learned axes/colours reaches
+  25.4019/23.2477 dB train/all-39 held out versus the selected spatial-only
+  control's 25.4133/23.2645 dB. Training rises 148.774→181.549 seconds
+  (+22.0%), and the 200K-point PLY grows 66→103 MiB. Removing only the learned
+  residual from that endpoint gives 25.2077/23.1679 dB, proving that the new
+  term carries signal but also displaces the shared SH/spatial solution.
+- Freezing the eight axes recovers 25.4116 dB training quality but still gives
+  only 23.2508 dB held out, 0.0137 dB below control, with effectively the same
+  181.928-second cost. The first scene therefore fails before a costly Bonsai
+  replay. Keep the end-to-end implementation as explicit experimental
+  infrastructure; do not enable it by default or describe it as a quality
+  improvement.
+
+#### M2y — Remove no-op training work (implemented and gated)
+
+- A zero `surface_normal_weight` now omits the view-facing normal-loss branch
+  when the production training graph is built. The surface normal/offset
+  traversal Jacobian remains present, so oriented geometry continues to
+  train. A positive weight retains the previous graph and public low-level
+  graph construction retains its established input contract.
+- The GPU cloud used only by `PathRecorder` now uploads geometry, oriented
+  planes, and adjacency without an unread appearance buffer. On the selected
+  200K-point SH-3 + spatial-colour model this avoids 48,800,000 bytes of
+  persistent device attributes and the same-size transient staging upload.
+  Full render/depth/scene clouds retain their complete attributes.
+- The representative 4,096-ray × 160-row graph falls from 460 to 443 GPU
+  passes and 30.62→29.54 ms. A matched 2,040-step Room replay reduces training
+  148.774→146.390 seconds (-1.6%), GPU wait 96.320→94.796 seconds, and complete
+  command time 153.394→150.587 seconds (-1.8%). Quality is preserved at
+  25.4129/23.2680 dB, a -0.0004/+0.0035 dB train/held-out change; 19/39 held-out
+  frames improve, 15 regress, and five tie at two-decimal precision. The 6 GiB
+  scope peaks at 640,094,208 bytes with zero swap, pressure, OOM, kill, or GPU
+  fault events.
+- A more aggressive 160→128 training-row reduction is rejected even though
+  every one of 8.36M training rays fits within 110 rows and all 4.82M
+  evaluation rays fit within 109. It cuts training to 136.130 seconds, but the
+  changed padded reduction shape reaches only 25.4098/23.2487 dB. Path budgets
+  therefore remain telemetry-selected without silently treating exact
+  traversal as an identical optimizer trajectory.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -883,9 +937,9 @@ manifest accidentally.
 
 ## Out-of-scope (for now)
 
-- Full eight-detail-site displacement and spherical-Voronoi appearance from
-  PowerFoam. M2v is only a compact spatial residual; M2w records the exact
-  remaining semantics and their storage cost.
+- Full eight-detail-site displacement and per-detail-site directional
+  appearance from PowerFoam. M2v and M2x are compact spatial and directional
+  residuals; M2w records the exact remaining semantics and their storage cost.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.

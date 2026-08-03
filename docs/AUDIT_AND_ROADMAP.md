@@ -716,6 +716,33 @@ At the audited revision:
   Spherical Voronoi definition is dot-product softmax while the PowerFoam
   kernel uses temperature-scaled chordal distance. Those alternatives need
   explicit versioned semantics rather than being silently conflated.
+- The bounded directional slice is now complete end to end. It stores eight
+  raw axes plus eight RGB values (48 floats per point), follows the published
+  dot-product-softmax contract, initializes to an exact zero residual, and has
+  CPU/WGSL/Meganeura, PLY, densification, and exact-resume coverage. It is an
+  additive directional residual, not a claim of released-checkpoint parity.
+  On the matched 2,040-step Room gate, learned axes/colours reach
+  25.4019/23.2477 dB train/all-39 held out, below the 25.4133/23.2645 dB
+  spatial-only control, while training rises 148.774→181.549 seconds and the
+  PLY grows 66→103 MiB. Fixed cube-corner axes recover 25.4116 dB train but
+  only 23.2508 dB held out at the same cost. The feature remains opt-in and a
+  second-scene run is rejected until a spatial detail-site formulation gives
+  it a stronger reason to exist.
+- Profiling after that negative gate removes two pieces of no-op training
+  work. Zero-weight view-facing normal regularization is absent from the
+  production graph, reducing a representative step from 460 to 443 GPU passes
+  and 30.62→29.54 ms. Path recording uses geometry-only GPU storage, avoiding
+  48,800,000 bytes of persistent attributes plus the same transient upload on
+  the selected 200K-point model. A full matched Room replay preserves
+  25.4129/23.2680 dB while reducing training 148.774→146.390 seconds and total
+  command time 153.394→150.587 seconds. All 8.36M rays remain untruncated and
+  the 6 GiB scope reports no swap, pressure, OOM, kill, or GPU fault.
+- A 128-row training graph is not selected despite exact traversal: training
+  uses at most 110 rows and evaluation at most 109, but the different padded
+  reduction shape changes the optimizer trajectory. It is 8.5% faster and
+  reaches 25.4098/23.2487 dB, losing 0.0158 dB held out versus 160 rows.
+  Exact paths are necessary but not sufficient evidence for a training
+  configuration change.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
@@ -733,11 +760,12 @@ At the audited revision:
 - No official pretrained checkpoint is published by the reference project, so
   cross-rendering and a matched training ablation remain outstanding.
 - The reference quaternion, eight detail sites, per-site displacement, and
-  eight-axis spherical-Voronoi colour model remain outstanding. The exact
-  released layout, initialization, schedules, evaluation order, and
-  paper/source discrepancies are now documented; the next implementation is
-  a bounded directional or spatial slice with an explicit storage/performance
-  gate, not another increase in identical site count or training duration.
+  per-detail-site eight-axis colour model remain outstanding. The exact
+  released layout, initialization, schedules, evaluation order, paper/source
+  discrepancies, and failure of a compact additive directional slice are now
+  documented. The next appearance implementation should begin with the
+  spatial detail-site/height semantics and retain an explicit storage and
+  held-out-performance gate.
 
 ### Adjacency and traversal
 
@@ -1332,15 +1360,17 @@ with no systematic streaking from stale topology.
 5. Compare traversal against a brute-force bounded-power oracle.
 6. Cross-render a reference PowerFoam checkpoint.
 7. After geometry passes, add quaternion, dipole, detail-site, and
-   spherical-Voronoi appearance semantics.
+   per-detail-site directional appearance semantics.
 
 Items 1-5 are implemented at the CPU-oracle, production-WGSL, recorder, and
 training-graph levels and pass physical-GPU integration. Weighted densification
 uses the reference copied-radius split policy, and the selected real-scene
 radius trajectory reaches its 200,000-site endpoint. The dipole-normal subset
 of item 7 is implemented across IO, traversal, training, densification, and
-resume and passes a positive fixed-versus-learned Bonsai gate. Item 6 and the
-quaternion/detail-site/spherical-Voronoi remainder of item 7 remain.
+resume and passes a positive fixed-versus-learned Bonsai gate. A compact
+additive directional residual is implemented but fails its first quality gate.
+Item 6 and the quaternion/detail-site/per-detail-directional remainder of item
+7 remain.
 
 Acceptance gate: CPU, GPU, and brute-force bounded traversal agree; a reference
 checkpoint renders within a defined image tolerance; trained radii improve a
@@ -1529,8 +1559,9 @@ material path.
 
 1. On the winning RadFoam configuration, compare fixed initialized radii against
    trainable positive radii from identical seeds. Require a held-out improvement
-   and stable cell/topology statistics before implementing the full quaternion
-   and spherical-Voronoi appearance model. (The earlier 50,000-cell ablation is
+   and stable cell/topology statistics before implementing the full quaternion,
+   detail-site, and per-detail-directional appearance model. (The earlier
+   50,000-cell ablation is
    superseded: its camera-seeded weighted walk missed disconnected Čech
    components and sat near the black baseline. The corrected compute-splat
    trainer reaches 11.67 dB after 10 steps, 12.55 after 100, and 13.52 after
@@ -1565,12 +1596,16 @@ material path.
    plane per site. The first minimal spatial-color arm now passes the two-scene
    mean gate at ratio 0.02: +0.0176 dB all-37 on Bonsai and +0.0149 dB all-39
    on Room, for +4.8% and +14.6% training time at their measured graph sizes.
-   Keep it opt-in while implementing the reference detail-site and
-   spherical-Voronoi appearance semantics and checking the regressed tail
-   views. On Room, a 160-entry path budget is exact on all 294 views; the full
+   Keep it opt-in while implementing the reference detail-site semantics and
+   checking the regressed tail views. A compact 48-float additive Spherical
+   Voronoi residual is now implemented but rejected: learned and fixed axes
+   lose 0.0168 and 0.0137 dB held out on Room while adding about 22% training
+   time. On Room, a 160-entry path budget is exact on all 294 views; the full
    learned spatial-colour replay cuts training by 19.2% and peak host memory by
    19.2% versus 256 while slightly improving held-out PSNR. Retain the larger
-   candidate floor and select path budgets from telemetry. The official
+   candidate floor and select path budgets from telemetry. A 128-row replay is
+   exact but loses 0.0158 dB through a changed optimizer reduction shape, so
+   160 remains selected. The official
    appearance audit at commit `9639225` counts 412 extra floats per point and
    identifies spatial-norm and directional-kernel differences between paper
    and source, so each staged increment must name its exact contract.)

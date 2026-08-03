@@ -64,7 +64,7 @@ The library boundary stays at `PointCloudModel` — the training crate produces 
 PowerFoam (theialab/powerfoam, arXiv 2604.24994) generalises RadFoam: Voronoi → **power diagram** (weighted Voronoi), each site carries an extra **radius/weight** parameter, and adjacency is a **Čech complex** built from overlapping balls rather than a Delaunay tetrahedralisation. The same primitives serve both a rasterizer and a ray-tracer with adjacency-walk traversal.
 
 Concrete deltas vs current RadFoam path:
-- **Per-point data**: `PointCloudModel.radii: Option<Vec<f32>>` carries the weight (done, M2a). PowerFoam also carries a rotation quat and a texel/spherical-Voronoi colour model — defer until after geometry is stable.
+- **Per-point data**: `PointCloudModel.radii: Option<Vec<f32>>` carries the weight (done, M2a). A compact additive eight-axis Spherical Voronoi residual is implemented and tested (M2x), but its first held-out gate is negative; it is not the full per-detail-site PowerFoam appearance model.
 - **Adjacency builder**: `adjacency::compute_cech` emits an edge `{i,j}` when `|p_i - p_j| ≤ r_i + r_j` (done, M2b). `PointCloudModel::compute_adjacency*` dispatches Čech vs Delaunay based on `radii.is_some()`. CSR storage is unchanged.
 - **Traversal**: WGSL `radfoam_trace.wgsl` uses the radical plane `shift = 0.5 + 0.5·(r_i² - r_j²)/|p_j - p_i|²` (done, M2c). The radius lives in the `.w` channel of `g_points`; unweighted clouds upload 0 and the formula degenerates to the bisector — no new bind-group entry, no fork.
 - **Oriented dipoles**: `PointCloudModel.surface_normals` optionally clips each bounded power cell to its retained surface half. PLY IO, CPU/WGSL traversal, analytical training Jacobians, PCA initialization, normal loss, densification, and resume are implemented (done, M2t). The Bonsai gate selects learned normals as opt-in but not as the default; full spatial appearance is still needed.
@@ -73,7 +73,7 @@ Concrete deltas vs current RadFoam path:
 
 Remaining work to fully cover the PowerFoam paper:
 1. Cross-validate against a PowerFoam checkpoint scene (M2d).
-2. Extend to the remaining PowerFoam appearance model (quaternion + height/detail texel sites + spherical-Voronoi colours).
+2. Extend to the remaining PowerFoam appearance model (quaternion + height/detail texel sites + a directional colour function per detail site).
 
 ## Style
 
