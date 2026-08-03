@@ -170,3 +170,11 @@ about 13 ms per update. The next performance experiment is therefore compact
 active path storage or shared/fused coefficient gathers; it must preserve the
 256-step truncation safety and beat the current quality/memory gate before it
 is selected.
+
+A 32-neighbour fused-cloud covariance prior was also tested against the 66°
+normal failure. A sign-aligned 50% blend reduces synthetic normal RMSE to
+62.08° and raises unseen-light PSNR by 0.09 dB without losing coverage. It does
+not transfer: the worst held-out view falls by 0.24 dB on Bonsai and 0.31 dB on
+Room as Euclidean neighbourhoods cross thin surfaces and depth layers. The
+implementation is removed. Normal updates need shared-view correspondence or
+surface-aware neighbourhoods, not another local point-cloud smoother.

@@ -1211,6 +1211,38 @@ room_control_coverage = 0.936
 room_candidate_coverage = 0.981
 verdict = "reject: extra coverage comes from changed occlusion and loses the Room mean and tail by about one decibel"
 
+# A wider fused-cloud plane can denoise the image-trained synthetic surface,
+# but Euclidean neighbours cross thin surfaces and depth layers in real
+# captures. The selected synthetic arm sign-aligns a 32-neighbour covariance
+# normal with the depth-gradient normal and blends them equally. It improves
+# every synthetic metric shown, yet damages the worst held-out view on both
+# real scenes; the implementation and temporary sweep controls were removed.
+[surface_particles.rejected_fused_normal_prior]
+date = "2026-08-03"
+neighbours = 32
+blend = 0.5
+synthetic_control_normal_rmse_degrees = 66.42
+synthetic_candidate_normal_rmse_degrees = 62.08
+synthetic_control_psnr = [18.84, 18.56, 18.30]
+synthetic_candidate_psnr = [18.92, 18.65, 18.50]
+synthetic_control_coverage = 0.539
+synthetic_candidate_coverage = 0.540
+bonsai_control_psnr = [15.81, 14.50, 11.68]
+bonsai_candidate_psnr = [15.95, 14.59, 11.44]
+bonsai_control_coverage = 0.922
+bonsai_candidate_coverage = 0.917
+bonsai_candidate_artifact = "target/audit-runs/fused-normal-prior-bonsai-v1/scene.rply"
+bonsai_candidate_sha256 = "902f2731e0d531cb8257854c043e77a9839245f499bbb7a1909162b22b3d0515"
+room_control_psnr = [14.91, 14.37, 13.57]
+room_candidate_psnr = [14.87, 14.38, 13.26]
+room_control_coverage = 0.936
+room_candidate_coverage = 0.933
+room_candidate_artifact = "target/audit-runs/fused-normal-prior-room-v1/scene.rply"
+room_candidate_sha256 = "3428041dc75329cde80a6be67ebe5192741144478a05c52c6ef6f76aeda38968"
+peak_memory_bytes = 308563968
+memory_events = 0
+verdict = "reject: synthetic normal denoising crosses real thin surfaces; worst held-out PSNR loses 0.24 dB on Bonsai and 0.31 dB on Room"
+
 [[bonsai.geometry_consensus.rejected]]
 min_views = 3
 surfels = 23047
