@@ -1224,6 +1224,34 @@ full_workspace_test_peak_memory_bytes = 3370094592
 full_workspace_test_memory_events = 0
 selection = "accept: checkpoint-compatible graph packing is 1.84x faster at the unchanged 256-step path cap and stays inside the repeated radiance, geometry, PBR, and memory gates"
 
+# Replacing the SH dot-product's ones-matmul with SumInner exposes a generic
+# reduction inefficiency. Meganeura 66e1664 packs 256 narrow rows into one
+# workgroup while retaining scalar column order; the raw output is bit-exact
+# to the old matmul. It is an independent engine win, but the Blade uprev is
+# held: one of three end-to-end repeats still develops the known stochastic
+# material/depth tail after atomic position updates and topology extraction.
+[synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.rejected_packed_sum_inner]
+date = "2026-08-03"
+candidate_meganeura_commit = "66e1664"
+candidate_meganeura_branch = "perf/packed-narrow-reduction"
+baseline_gpu_step_ms = "11.60..11.68"
+candidate_gpu_step_ms = "10.92..11.02"
+candidate_training_seconds = [15.291, 15.292, 15.399]
+candidate_gpu_wait_seconds = [13.831, 13.856, 13.928]
+candidate_held_pose_psnr = [24.23, 24.14, 24.01]
+candidate_held_pose_worst_psnr = [23.79, 23.64, 23.42]
+candidate_training_depth_rmse = [7.5282, 4.1299, 2.4826]
+candidate_held_depth_rmse = [4.6992, 2.1100, 2.1086]
+candidate_position_rmse = [0.6217, 0.6301, 0.6287]
+candidate_normal_rmse_degrees = [65.93, 66.20, 66.51]
+candidate_material_residual = [0.04507, 0.04507, 0.15690]
+candidate_held_light_psnr = [18.47, 18.43, 18.30]
+candidate_held_light_worst_psnr = [18.17, 18.11, 18.03]
+candidate_peak_memory_bytes = [363421696, 362897408, 363159552]
+memory_events = 0
+rejected_tree_sum_material_residual = [0.19879, 0.13821, 0.04507]
+verdict = "hold Blade uprev: the ordered engine kernel is correct and about 5% faster, but one of three full reconstructions misses the unchanged material/depth tail gate"
+
 # Packing one channel at a time lowers the 200K graph's device-local plan, but
 # independent RGB atomic dispatches reintroduce the unstable material tail.
 [synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.rejected_per_channel]

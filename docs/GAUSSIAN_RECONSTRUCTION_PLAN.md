@@ -206,9 +206,17 @@ the compatibility concat buffers before scaling far beyond 200K cells.
 Global path caps of 128 and 192 are rejected: 128 gives no meaningful speed
 advantage over packing at 256 and loses the held-view tail, while 192 produces
 6.80 world-unit training-depth RMSE and an unstable material fit. The next
-performance targets are native checkpoint-compatible packed parameters, dead
-input-gradient work, and compact active path storage, still gated at the
-unchanged safe traversal extent.
+reduction prototype replaces the SH ones-matmul with a generic packed
+`SumInner`. Meganeura `66e1664` preserves scalar column order and is bit-exact
+at the reduction output while lowering the synthetic step from 11.60--11.68 to
+10.92--11.02 ms. Three complete runs train in 15.29--15.40 seconds, but one
+still develops the known material/depth tail (material residual 0.1569), so
+Blade remains on its previous Meganeura revision. The engine optimization is
+published independently on `perf/packed-narrow-reduction`; it should be
+uprevved only after the reconstruction gate is made robust to the atomic
+position/topology instability. Other performance targets remain native
+checkpoint-compatible packed parameters, dead input-gradient work, and compact
+active path storage, still at the unchanged safe traversal extent.
 
 A 32-neighbour fused-cloud covariance prior was also tested against the 66°
 normal failure. A sign-aligned 50% blend reduces synthetic normal RMSE to
