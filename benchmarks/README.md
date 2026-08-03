@@ -111,6 +111,23 @@ adjacency-derived tangent-plane split ties isotropic splitting at 14.95 dB.
 Neither branch is selected. Their raw artifacts remain ignored; the compact
 measurements and paths are recorded in the manifest.
 
+Commit `2a0fd73` subsequently fixed the bare SH-DC learning-rate selector, so
+the absolute endpoint above is historical even though its same-seed causal
+gates remain useful. The fresh intended-schedule growth-overlap run reaches
+17.4151/16.5247 dB train/all-37 at the practical step-20,000 endpoint with
+8,328,306 directed edges. The corrected post-cap-only control reaches
+17.4077/16.5243 dB with 9,150,448 edges. The selected model is
+`target/audit-runs/powerfoam-dc-fixed/growth-overlap1e-6-cadence200-step20000/model.ply`;
+its 256² comparisons remain visibly limited by large support discs, holes,
+thin-structure loss, and floaters.
+
+Commit `b061b76` keeps exact Čech topology but partitions radius queries across
+eight logarithmic bands. On the 200K replay it reduces the rebuild
+1.877→0.481 seconds and the whole command 21.134→18.510 seconds; a forced 100K
+rebuild falls 0.530→0.085 seconds. Saved-model CSR is identical, and every
+matched 200-step replay arm remains below 1.05 GB with zero swap, pressure,
+OOM, or GPU faults.
+
 A follow-up surface-plane prototype clips every weighted cell against a fixed
 normal estimated from its local adjacency. Re-fitting density and SH for a
 complete 2,040-step schedule recovers the zero-shot collapse, but still reaches

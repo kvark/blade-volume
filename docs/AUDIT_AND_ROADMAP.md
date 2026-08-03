@@ -590,12 +590,11 @@ At the audited revision:
   multi-view/novel-pose cases.
 - Weighted-cloud densification follows the reference resampler's photometric
   responsibility signal, 99th-percentile cap, copied radius, conserved sibling
-  statistic, and 5%-support-scale split. The corrected compute-splat path reaches
-  13.52 dB all-37 after the first 2,000-step/57,500-site gate. The selected
-  learned-radius arm reaches 15.22/14.81 dB train/all-37 at step 6,000 and
-  175,895 sites. An adaptive continuation reaches the exact
-  200,000-cell/20,400-step endpoint at 17.25/16.37 dB and 8,696,580 directed
-  edges; step 20,000 is the practical validation winner at 17.24/16.38 dB.
+  statistic, and 5%-support-scale split. The original learned-radius causal
+  gate remains valid, but commit `2a0fd73` showed that its absolute trajectory
+  used the wrong SH-DC multiplier. The fresh intended-schedule run reaches
+  15.72/15.28 dB at 175,895 sites and finishes the selected 200,000-site
+  step-20,000 trajectory at 17.4151/16.5247 dB with 8,328,306 directed edges.
 - The real checkpoint/resume path reaches 100,569 sites at step 4,000 and
   improves Bonsai train/all-37 PSNR to 14.65/14.35 dB. Conservative projected
   candidates preserve those pixels exactly and make the complete weighted
@@ -614,18 +613,17 @@ At the audited revision:
   every path/Jacobian row. All 37 held-out renders are byte-identical between
   128- and 256-step paths. The smaller path graph cuts physical/device-local
   allocation by 45.4%/45.6% and matched training time by 16.4%.
-- Weak post-cap overlap control improves both stability and cost. An initial
-  `1e-6` interpenetration weight gives 9.9% fewer step-8,000 edges and
-  +0.02/+0.03 dB train/all-37 versus the matched control. At fixed 200K
-  capacity, 160-step paths cut graph allocation about 14%, and topology cadence
-  200 cuts a matched 2,000-step phase 12.8% without held-out loss. These are
-  adaptive continuation choices, not part of the earlier fixed-radius causal
-  comparison.
-- Starting the same `1e-6` overlap control at step 4,000, while growth is still
-  active, reduces the matched step-6,500 graph 11,191,518→10,143,250 edges and
-  changes train/all-37 quality 15.34/14.92→15.36/14.95 dB. Continuing that arm
-  through step 20,400 reaches 17.23/16.41 dB with 8,340,572 edges. Its sampled
-  support overlap is modestly lower, but 256² renders retain the same discs,
+- On the corrected trajectory, adding `1e-6` overlap control only after step
+  8,000 reduces the matched step-10,000 graph 11,117,102→9,974,452 edges,
+  changes held-out PSNR 15.88→15.89 dB, and cuts training time 4.2%. Exact
+  160-step rows and cadence-200 topology remain selected after the 200K cap.
+- Starting that loss at step 4,000 is the better complete trajectory. At the
+  exact step-6,500 cap it changes train/all-37 quality
+  15.8363/15.3752→15.8389/15.3845 dB and graph size
+  11,145,224→10,083,298. At step 20,000 it reaches
+  17.4151/16.5247 dB and 8,328,306 edges versus post-cap-only
+  17.4077/16.5243 dB and 9,150,448 edges. Sampled fractional overlap falls to
+  median/p90/p99 0.224/0.626/0.887, but 256² renders retain the same discs,
   holes, blurred thin structure, and background floaters.
 - Raw density is not the missing quality mechanism. A bounded 400,000-site
   branch reaches 16.21/15.62 dB at step 10,000 versus 16.15/15.61 for the
@@ -680,6 +678,11 @@ At the audited revision:
 - Čech construction uses an immutable k-d tree that tolerates coincident and
   quantized sites. Mesh conversion now rebuilds Čech adjacency after assigning
   radii instead of retaining the preceding unweighted Delaunay graph.
+- Exact Čech queries are split across eight logarithmic radius bands, avoiding
+  the global `r_max` bound for every site. A 200K topology phase falls
+  1.877→0.481 seconds with identical CSR; a forced 100K rebuild falls
+  0.530→0.085 seconds. The full replay stays below 1.05 GB with zero swap,
+  pressure, OOM, or GPU faults.
 - Traversal now integrates the terminal cell up to the requested end depth
   when no later face is found.
 - Official v1 instead caches neighbor offsets in half precision and does not
@@ -1460,18 +1463,18 @@ material path.
    13.70/13.51 dB. At step 4,000, after four topology-changing growth rounds,
    it improves 14.32/14.05 to 14.66/14.36 dB at the identical 100,569-site
    capacity. Both arms record zero truncation, swap, OOM, or GPU faults; the
-   learned arm remains selected. At step 6,000 it reaches 175,895 sites and
-   15.22/14.81 dB, while the graph expands to 8,120,582 directed edges. Its
-   647 candidate hits versus 127 surviving path intervals prompted independent
-   candidate/path capacities; 128-step output stays byte-identical to the
-   256-step control and makes matched training 16.4% faster. Continue to the
-   200,000-cell boundary only after checking that topology and radius growth
-   remain bounded. That adaptive endpoint is now complete at 17.25/16.37 dB,
-   with a weak post-cap overlap loss, 160-step paths, and cadence-200 exact
-   rebuilds selected by matched gates. The 256² comparisons still show large
-   support discs, holes, blurred thin structure, and background floaters, so
-   the production gate remains open. Apply overlap control during growth and
-   revisit split/support formation before adding the full appearance model.)
+   learned arm remains selected. Those causal numbers predate the SH-DC group
+   fix; the intended schedule reaches 175,895 sites and 15.72/15.28 dB at step
+   6,000. Its 647 candidate hits versus 127 surviving path intervals prompted
+   independent candidate/path capacities; 128-step output stays byte-identical
+   to the 256-step control and makes matched training 16.4% faster. Continue
+   to the 200,000-cell boundary only after checking that topology and radius
+   growth remain bounded. The corrected selected endpoint applies weak overlap
+   during growth, uses 160-step paths and cadence-200 exact rebuilds, and reaches
+   17.4151/16.5247 dB with 8,328,306 edges at step 20,000. The 256² comparisons
+   still show large support discs, holes, blurred thin structure, and background
+   floaters, so the production gate remains open. Revisit cloud support and
+   spatial appearance semantics rather than adding more identical steps.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and

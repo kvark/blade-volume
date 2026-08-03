@@ -263,6 +263,64 @@ nonidentical_max_channel_delta = 1
 nonidentical_changed_channels_per_image = 1
 selection = "use 128 path rows for this 200K trajectory; candidate scratch remains independently sized at 1024"
 
+[corrected_dc_growth_overlap]
+status = "selected-practical-endpoint"
+source_commit = "32a0218"
+source_step = 4000
+path_capacity_through_step6000 = 128
+path_capacity_after_step6000 = 160
+geometry_rebuild_every_after_cap = 200
+interpenetration_start_step = 4000
+interpenetration_weight = 1e-6
+interpenetration_samples = 4096
+step6500_control_edges = 11145224
+step6500_control_train_psnr = 15.8363
+step6500_control_test_psnr = 15.3752
+step6500_selected_edges = 10083298
+step6500_selected_train_psnr = 15.8389
+step6500_selected_test_psnr = 15.3845
+step8000_selected_edges = 9398758
+step8000_selected_train_psnr = 16.1697
+step8000_selected_test_psnr = 15.6274
+step16000_selected_edges = 8359188
+step16000_selected_train_psnr = 17.2475
+step16000_selected_test_psnr = 16.4321
+step20000_control_edges = 9150448
+step20000_control_train_psnr = 17.4077
+step20000_control_test_psnr = 16.5243
+step20000_selected_edges = 8328306
+step20000_selected_train_psnr = 17.4151
+step20000_selected_test_psnr = 16.5247
+step20000_selected_test_psnr_256 = 16.5190
+step20000_eval_max_path_128 = 130
+step20000_eval_max_path_256 = 132
+step20000_eval_max_candidates_128 = 616
+step20000_eval_max_candidates_256 = 641
+step20000_fractional_overlap_median = 0.2243427
+step20000_fractional_overlap_p90 = 0.6262325
+step20000_fractional_overlap_p99 = 0.8870776
+artifact = "target/audit-runs/powerfoam-dc-fixed/growth-overlap1e-6-cadence200-step20000/model.ply"
+comparisons_256 = "target/audit-runs/powerfoam-dc-fixed/growth-overlap1e-6-cadence200-step20000/comparisons-256"
+selection = "apply weak overlap during growth; endpoint quality ties/slightly improves post-cap-only control while exact graph size falls 9.0%"
+
+[radius_banded_cech]
+status = "selected-exact-optimization"
+commit = "b061b76"
+radius_bands = 8
+step20000_control_topology_seconds = 1.877
+step20000_selected_topology_seconds = 0.481
+step20000_control_command_seconds = 21.134
+step20000_selected_command_seconds = 18.510
+step4000_control_topology_seconds = 0.530
+step4000_selected_topology_seconds = 0.085
+replay_edges = 9158040
+replay_adjacency_equal = true
+replay_max_host_bytes = 1040404480
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+
 [result]
 status = "adaptive-endpoint-complete"
 fresh_ply_reload = true

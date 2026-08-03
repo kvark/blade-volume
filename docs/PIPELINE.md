@@ -60,8 +60,9 @@ defer all of that and reuse our SH path. Adoption order:
 
 - `adjacency::compute_cech(points, radii, config)` emits an edge `{i,j}` when
   `|p_i - p_j| ≤ r_i + r_j`; returns the existing CSR `Adjacency`.
-- Candidates are pruned with a `kiddo` k-d tree range query (radius
-  `r_i + r_max`), then the exact overlap predicate filters them.
+- Candidates are pruned with eight logarithmic radius bands, each backed by an
+  immutable `kiddo` k-d tree. A site queries each band to `r_i + r_band_max`,
+  then the exact overlap predicate filters the results.
 - `PointCloudModel::compute_adjacency_default` dispatches: Čech when
   `radii.is_some()`, Delaunay otherwise.
 - `kiddo` promoted from dev-dep to runtime dep on `blade-volume`.
@@ -461,31 +462,47 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
 
 #### M2r — Stable post-cap PowerFoam continuation (completed, quality gate still open)
 
-- The learned arm reaches its 200,000-site cap at step 6,500 with 11,181,670
-  directed edges and 15.33/14.91 dB train/all-37. Radius-copy densification
-  raises mean Čech degree from 8.3 at step 2,000 to 55.9 at the cap. A matched
-  post-cap gate rejects initial interpenetration weights `1e-4` and `1e-5`
-  because their topology savings cost 0.27 and 0.11 dB held out. `1e-6` is the
-  first Pareto setting: by step 8,000 it has 9.9% fewer edges, trains 3.4%
-  faster, and improves train/all-37 by 0.02/0.03 dB versus no penalty.
-- With candidate capacity independent, a 160-step path row retains the same
-  120-step/690-candidate maximum and 15.75/15.24 dB result as 192 steps. It
-  lowers physical/device-local graph allocation by about 14% and GPU wait by
-  3.5%. At step 12,000, exact topology cadence 200 then lowers the matched
-  training phase from 160.484 to 139.896 seconds (12.8%) while preserving
-  15.89 dB held-out quality; cadence 200 is selected only after the 200K cap.
-- The adaptive endpoint reaches 17.25/16.37 dB and 8,696,580 directed edges at
-  step 20,400. All 4.78 million evaluation rays fit within 121/160 intervals
-  and 664/1,024 candidates. Step 20,000 is the practical early stop at
-  17.24/16.38 dB: the final 400 updates add 0.01 dB train and lose 0.01 dB
-  held out. Across 35 training/evaluation/profile scopes the largest host peak
-  is 1,417,326,592 bytes, with zero swap, pressure, OOM, or GPU-fault events.
+- Commit `2a0fd73` fixed the bare SH-DC learning-rate selector, so a fresh
+  intended-schedule trajectory supersedes the old absolute endpoint numbers.
+  At the 200,000-site step-6,500 boundary, starting a `1e-6` overlap loss at
+  step 4,000 changes exact train/all-37 quality from 15.8363/15.3752 to
+  15.8389/15.3845 dB and reduces the graph 11,145,224→10,083,298 edges. Both
+  arms use 128-step rows through step 6,000 and 160 thereafter; neither
+  truncates a ray.
+- The selected growth-overlap arm reaches 16.1697/15.6274 dB and 9,398,758
+  edges at step 8,000. Exact topology cadence 200 is retained after the cap.
+  At step 16,000 it reaches 17.2475/16.4321 dB and 8,359,188 edges versus the
+  post-cap-only arm's 17.2406/16.4301 dB and 9,196,930 edges.
+- Step 20,000 is the corrected practical endpoint at 17.4151/16.5247 dB and
+  8,328,306 directed edges. The post-cap-only control reaches
+  17.4077/16.5243 dB and 9,150,448 edges, so growth-time overlap is
+  quality-neutral/slightly positive while removing 9.0% of the graph. The
+  256² all-37 evaluation is exact at 16.5190 dB, using at most 132/160 path
+  entries and 641/1,024 candidates. Raw checkpoints and comparisons live under
+  `target/audit-runs/powerfoam-dc-fixed/`.
 - The completed curve does not clear the visual gate. At 256² the scene is
   recognizable, but large circular supports obscure foreground detail, thin
   geometry is blurred, and black holes/background floaters remain severe. The
-  next gate must change geometry formation during growth; extending this
-  saturated tail or adding the full appearance model would not address those
-  failures.
+  next gate must change cloud support/appearance semantics rather than extend
+  this saturated tail.
+
+#### M2s — Radius-banded exact Čech queries (implemented and gated)
+
+- PowerFoam radii span roughly three orders of magnitude, so querying every
+  site to `r_i + r_max` makes a single large support inflate nearly every
+  k-d-tree search. The exact builder now partitions sites into eight
+  logarithmic radius bands and queries each immutable tree only to
+  `r_i + r_band_max`. The original overlap predicate, sorted CSR rows, and
+  public model remain unchanged; no approximation or dependency is added.
+- A brute-force oracle covers varied positive radii, zeros, and clamped
+  negatives. Saved 100,569- and 200,000-site clouds produce identical CSR, and
+  a 200-step physical-GPU replay ends with the same 9,158,040 directed edges.
+  Its only parameter differences are ordinary separate-run sub-ULP GPU drift.
+- On the 200K replay, the topology phase falls 1.877→0.481 seconds (74.4%),
+  training 15.714→13.953 seconds (11.2%), and the whole command
+  21.134→18.510 seconds (12.4%). A forced 100K rebuild falls 0.530→0.085
+  seconds (84.0%). A 4/8/12/16-band sweep selects eight; all cgroups stay below
+  1.05 GB with zero swap, pressure, OOM, or GPU faults.
 
 ### M3 — Training crate scaffolding
 
