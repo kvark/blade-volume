@@ -547,6 +547,53 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   explicit rather than default; spatial texel appearance is still the next
   semantic gate for improving beyond parity and removing visible support discs.
 
+#### M2u — Signed oriented-surface offsets (implemented, opt-in, selected)
+
+- `PointCloudModel.surface_offsets` stores one optional world-space signed
+  plane displacement per oriented site. It requires `surface_normals`, is
+  preserved as `surface_offset` by binary and ASCII RadFoam PLY, and shares
+  the normal buffer's `.w` lane on the GPU. Missing offsets are exactly zero,
+  so every pre-M2u oriented model retains byte-for-byte traversal semantics
+  after loading. Validation rejects partial and non-finite tables.
+- CPU tracing, standalone rendering, depth, scene rendering, and
+  differentiable recording use
+  `dot(position - point, normal) <= surface_offset`. The recorder emits the
+  exact scalar derivative `1 / dot(ray_direction, normal)` beside the existing
+  normal derivative. CPU finite differences, physical-GPU CPU/WGSL parity,
+  exact recorder/Jacobian parity, transformed-scene readback, PLY round trips,
+  checkpoint/resume, and densification ancestry cover the new field.
+- `--surface-offset-lr-ratio` is zero by default and requires an oriented
+  model. Enabling it initializes zero offsets and trains them through
+  Meganeura. Offset-only cycles read back and upload just normals/offsets;
+  positions, radii, CSR, and the host index remain frozen, and no Čech rebuild
+  occurs. The stored value is a single per-site world displacement. It is the
+  minimal geometric subset of PowerFoam's radius-scaled per-texel height, not
+  a claim to implement detail sites or spherical-Voronoi appearance.
+- A matched 2,040-step, 200K-site Bonsai sweep uses the same source model,
+  255/37 split, 128² images, 4,096 rays over 16 views, loss-free learned
+  normals, and frozen positions/radii. The zero-offset control is
+  17.0939/16.2340 dB train/all-37 held out. Ratios 0.002, 0.005, 0.01, 0.02,
+  and 0.04 reach 16.2560, 16.2740, 16.2808, 16.2856, and 16.2285 dB held out.
+  The apparent 0.02 edge is not selected: 6.63% of its planes move beyond
+  their support radius, versus 1.93% at 0.01, and 0.04 both regresses and
+  raises that fraction to 17.00%. Ratio 0.01 improves 29/37 held-out views and
+  adds only 2.3 seconds to the 122.7-second control.
+- Duration-adjusted rates keep `ratio × total_steps = 40.8` after the short
+  sweep. At 4,080/8,160/16,320 steps, ratios 0.01/0.005/0.0025 reach
+  17.2908/16.3896, 17.4614/16.4583, and 17.6039/16.4773 dB. Their matched
+  normal-only controls are 17.2791/16.3264, 17.4388/16.3905, and
+  17.5798/16.4097, so offsets add +0.0632, +0.0678, and +0.0676 dB held out.
+  The selected 8,160-step arm beats the original unoriented endpoint by
+  0.0478 dB; the 16,320-step arm adds only another 0.0190 dB for twice the
+  time. The practical recipe is therefore 8,160 steps at ratio 0.005, while
+  16,320/0.0025 is the measured quality ceiling.
+- The selected and ceiling runs process 33.42M and 66.85M rays with maxima
+  106/128 and 109/128 path entries, 661/1,024 candidates, and zero truncation.
+  Training takes 497.7 and 993.4 seconds, peaks at 627 and 562 MB host memory,
+  and records zero swap, pressure, OOM, or GPU faults. The feature passes one
+  real-scene causal gate but remains opt-in until a second scene confirms the
+  gain; full spatial texel appearance remains the next semantic experiment.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

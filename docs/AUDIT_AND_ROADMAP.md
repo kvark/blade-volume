@@ -50,7 +50,9 @@ behind these gates:
 
 1. Match reference RadFoam training within the Stage 2 quality tolerance on a
    complete, reproducible scene. Checkpoint renderer parity is done.
-2. Demonstrate that learned PowerFoam radii improve a fixed held-out ablation.
+2. Confirm the oriented PowerFoam normal/offset gain on a second scene, then
+   gate the full spatial texel appearance model. Learned radii already pass
+   the fixed held-out Bonsai ablation.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.
@@ -658,6 +660,17 @@ At the audited revision:
   endpoint within 0.001 dB held out. The feature therefore lands opt-in; it
   establishes geometry parity but visible support discs and speckle still keep
   it from replacing the default or establishing the full appearance model.
+- A learned signed offset for each oriented surface plane now moves that
+  geometry beyond parity without adding polygonal state or rebuilding Čech
+  topology. On the matched 200K-site Bonsai gate, duration-adjusted offset
+  rates improve normal-only held-out PSNR by +0.0632 dB at 4,080 steps,
+  +0.0678 at 8,160, and +0.0676 at 16,320. The selected 8,160-step model is
+  17.4614/16.4583 dB train/all-37 held out and improves 32/37 test views; the
+  16,320-step ceiling is 17.6039/16.4773 but adds only 0.0190 dB for 2× time.
+  The selected run records 33.42M rays, max 106/128 paths, zero truncation,
+  627 MB peak host memory, and no swap, pressure, OOM, or GPU fault. Offsets
+  remain opt-in pending a second-scene gate; they are one value per site, not
+  the reference detail-site/spherical-Voronoi appearance model.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -665,10 +678,11 @@ At the audited revision:
   geometry rates, and Adam epsilon, so it remains opt-in rather than a default.
 - No official pretrained checkpoint is published by the reference project, so
   cross-rendering and a matched training ablation remain outstanding.
-- The reference quaternion, height/detail-site, and spherical-Voronoi colour
-  model remains outstanding. Learned dipole normals now pass a real-scene
-  causal gate, so spatial appearance is the next reference-semantic experiment
-  rather than another increase in identical site count or training duration.
+- The reference quaternion, detail-site, and spherical-Voronoi colour model
+  remains outstanding. Learned dipole normals plus a per-site height subset
+  now pass a real-scene causal gate, so spatial appearance is the next
+  reference-semantic experiment rather than another increase in identical site
+  count or training duration.
 
 ### Adjacency and traversal
 
@@ -1487,8 +1501,11 @@ material path.
    first oriented-dipole gate is now complete: learned normals add 0.5382 dB
    over fixed PCA planes at 2,040 loss-free steps; 8,160 steps come within
    0.020 dB of the unoriented held-out endpoint, and 16,320 come within 0.001
-   dB. Keep them opt-in and proceed to spatial texel appearance rather than
-   spending another 2x training time for only 0.019 dB.)
+   dB. A per-site signed surface offset then raises the 8,160-step endpoint to
+   16.4583 dB held out (+0.0678 over normal-only and +0.0478 over the original
+   unoriented cloud); the 16,320-step ceiling is 16.4773 dB and adds only
+   0.0190 dB for 2× time. Keep both fields opt-in pending a second scene and
+   proceed to spatial texel appearance rather than another duration increase.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
