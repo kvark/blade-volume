@@ -147,6 +147,47 @@ fn weighted_role_linear_term(
     g.add(position_tangent, radius_tangent)
 }
 
+/// Add a sampled PowerFoam interpenetration penalty to a scalar loss.
+///
+/// `edge_direction` is the unit vector from endpoint B to endpoint A at the
+/// most recent topology rebuild. Its dot product with the live endpoint
+/// delta is the first-order distance used by the reference loss
+/// `max(r_a + r_b - distance, 0)^2`. The host supplies per-sample scales that
+/// include both the scheduled loss weight and each sampled edge stratum's
+/// size. Zero scales safely pad graphs with fewer edges than samples.
+fn add_interpenetration_loss(
+    g: &mut mn::Graph,
+    base_loss: mn::NodeId,
+    positions: mn::NodeId,
+    log_radii: mn::NodeId,
+    sample_count: usize,
+) -> mn::NodeId {
+    let edge_a = g.input_u32("interpenetration_edge_a", &[sample_count]);
+    let edge_b = g.input_u32("interpenetration_edge_b", &[sample_count]);
+    let edge_direction = g.input("interpenetration_edge_direction", &[sample_count, 3]);
+    let edge_scale = g.input("interpenetration_edge_scale", &[sample_count, 1]);
+
+    let position_a = g.embedding(edge_a, positions);
+    let position_b = g.embedding(edge_b, positions);
+    let neg_position_b = g.neg(position_b);
+    let edge_delta = g.add(position_a, neg_position_b);
+    let projected_delta = g.mul(edge_delta, edge_direction);
+    let distance = g.sum_inner(projected_delta);
+
+    let raw_radius_a = g.embedding(edge_a, log_radii);
+    let raw_radius_b = g.embedding(edge_b, log_radii);
+    let radius_a = positive_activation(g, raw_radius_a, sample_count, RADIUS_SOFTPLUS_BETA);
+    let radius_b = positive_activation(g, raw_radius_b, sample_count, RADIUS_SOFTPLUS_BETA);
+    let radius_sum = g.add(radius_a, radius_b);
+    let neg_distance = g.neg(distance);
+    let overlap_raw = g.add(radius_sum, neg_distance);
+    let overlap = g.relu(overlap_raw);
+    let overlap_squared = g.mul(overlap, overlap);
+    let scaled_overlap = g.mul(overlap_squared, edge_scale);
+    let interpenetration_loss = g.sum_all(scaled_overlap);
+    g.add(base_loss, interpenetration_loss)
+}
+
 /// Supervised RGB loss used by the volumetric training graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorLoss {
@@ -1134,6 +1175,7 @@ pub enum DensifySchedule {
 const SAMPLING_RNG_SEED: u64 = 0xDEAD_BEEF_F00D_CAFE;
 const QUANTILE_RNG_SEED: u64 = 0x51A7_E5D0_9B3C_2468;
 const DENSIFY_RNG_SEED: u64 = 0xCAFE_F00D_DEAD_BEEF;
+const INTERPENETRATION_RNG_SEED: u64 = 0xC0DE_C7ED_6E0F_AA5A;
 const LCG_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 const LCG_INCREMENT: u64 = 1_442_695_040_888_963_407;
 const TRAINING_STATE_HEADER: &str = "blade-volume-training-state-v3";
@@ -1241,6 +1283,15 @@ pub struct AppearanceFitConfig {
     /// to this value over the first half of training. The reference uses
     /// `1e-4`. `0.0` (default) disables it.
     pub quantile_weight: f32,
+    /// Initial weight on PowerFoam's interpenetration loss. It penalizes
+    /// squared radial overlap across the current directed Čech graph and
+    /// decays exponentially to one-thousandth of this value by the final
+    /// step. `0.0` (default) disables it; the reference starts at `1e-4`.
+    pub interpenetration_weight: f32,
+    /// Directed Čech edges sampled per optimizer step for the interpenetration
+    /// loss. The sampled sum is scaled to estimate the complete graph. This
+    /// bounds graph size independently of point count.
+    pub interpenetration_samples: usize,
     /// Softplus β for the density activation. `0.0` (default) uses legacy
     /// ReLU; `> 0` (RadFoam uses 10) uses `(1/β)·softplus(βx)` so cells
     /// that dip to negative log-density keep a gradient and recover
@@ -1398,6 +1449,8 @@ impl Default for AppearanceFitConfig {
             opacity_weight: 0.0,
             distortion_weight: 0.0,
             quantile_weight: 0.0,
+            interpenetration_weight: 0.0,
+            interpenetration_samples: 4096,
             softplus_beta: 0.0,
             background_rgb: [0.0; 3],
             position_lr_ratio: 0.0,
@@ -1466,6 +1519,126 @@ fn advance_lcg(state: u64, mut delta: u64) -> u64 {
     accumulated_multiplier
         .wrapping_mul(state)
         .wrapping_add(accumulated_increment)
+}
+
+fn interpenetration_weight_at_step(initial: f32, step: usize, total_steps: usize) -> f32 {
+    if initial == 0.0 {
+        return 0.0;
+    }
+    let phase = if total_steps <= 1 {
+        0.0
+    } else {
+        step.min(total_steps - 1) as f32 / (total_steps - 1) as f32
+    };
+    initial * 1.0e-3_f32.powf(phase)
+}
+
+struct InterpenetrationBatch {
+    edge_sources: Vec<u32>,
+    edge_a: Vec<u32>,
+    edge_b: Vec<u32>,
+    edge_direction: Vec<f32>,
+    edge_scale: Vec<f32>,
+}
+
+impl InterpenetrationBatch {
+    fn new(model: &vol::PointCloudModel, sample_count: usize) -> Self {
+        let mut batch = Self {
+            edge_sources: Vec::new(),
+            edge_a: vec![0; sample_count],
+            edge_b: vec![0; sample_count],
+            edge_direction: vec![0.0; sample_count * 3],
+            edge_scale: vec![0.0; sample_count],
+        };
+        batch.rebuild(model);
+        batch
+    }
+
+    fn rebuild(&mut self, model: &vol::PointCloudModel) {
+        let adjacency = model
+            .adjacency
+            .as_ref()
+            .expect("interpenetration loss requires adjacency");
+        self.edge_sources.clear();
+        self.edge_sources.reserve(adjacency.neighbors.len());
+        for (cell, offsets) in adjacency.offsets.windows(2).enumerate() {
+            self.edge_sources.resize(offsets[1] as usize, cell as u32);
+        }
+        assert_eq!(self.edge_sources.len(), adjacency.neighbors.len());
+    }
+
+    fn upload(
+        &mut self,
+        session: &mut mn::Session,
+        model: &vol::PointCloudModel,
+        step: usize,
+        total_steps: usize,
+        initial_weight: f32,
+    ) {
+        self.prepare(model, step, total_steps, initial_weight);
+        session.set_input_u32("interpenetration_edge_a", &self.edge_a);
+        session.set_input_u32("interpenetration_edge_b", &self.edge_b);
+        session.set_input("interpenetration_edge_direction", &self.edge_direction);
+        session.set_input("interpenetration_edge_scale", &self.edge_scale);
+    }
+
+    fn prepare(
+        &mut self,
+        model: &vol::PointCloudModel,
+        step: usize,
+        total_steps: usize,
+        initial_weight: f32,
+    ) {
+        let adjacency = model
+            .adjacency
+            .as_ref()
+            .expect("interpenetration loss requires adjacency");
+        let edge_count = adjacency.neighbors.len();
+        let sample_count = self.edge_a.len();
+        let scheduled_weight = interpenetration_weight_at_step(initial_weight, step, total_steps);
+        self.edge_scale.fill(0.0);
+
+        if edge_count <= sample_count {
+            self.edge_a[edge_count..].fill(0);
+            self.edge_b[edge_count..].fill(0);
+            self.edge_direction[edge_count * 3..].fill(0.0);
+            for edge in 0..edge_count {
+                self.fill_sample(model, adjacency, edge, edge, scheduled_weight);
+            }
+        } else {
+            let mut rng = advance_lcg(
+                INTERPENETRATION_RNG_SEED,
+                (step as u64).wrapping_mul(sample_count as u64),
+            );
+            for sample in 0..sample_count {
+                let begin = sample * edge_count / sample_count;
+                let end = (sample + 1) * edge_count / sample_count;
+                let edge = begin + next_lcg_u32(&mut rng) as usize % (end - begin);
+                let sample_scale = scheduled_weight * (end - begin) as f32;
+                self.fill_sample(model, adjacency, sample, edge, sample_scale);
+            }
+        }
+    }
+
+    fn fill_sample(
+        &mut self,
+        model: &vol::PointCloudModel,
+        adjacency: &vol::Adjacency,
+        sample: usize,
+        edge: usize,
+        scale: f32,
+    ) {
+        let a = self.edge_sources[edge];
+        let b = adjacency.neighbors[edge];
+        self.edge_a[sample] = a;
+        self.edge_b[sample] = b;
+        let delta = model.points[a as usize].truncate() - model.points[b as usize].truncate();
+        let direction = delta.try_normalize().unwrap_or(glam::Vec3::ZERO);
+        self.edge_direction[sample * 3] = direction.x;
+        self.edge_direction[sample * 3 + 1] = direction.y;
+        self.edge_direction[sample * 3 + 2] = direction.z;
+        self.edge_scale[sample] = scale;
+    }
 }
 
 /// Effective learning rate at Adam step `t` (1-indexed) given `total`
@@ -1934,6 +2107,24 @@ pub(crate) fn fit_appearance_multi_view_outcome(
     assert!(
         config.quantile_weight.is_finite() && config.quantile_weight >= 0.0,
         "quantile_weight must be finite and non-negative"
+    );
+    assert!(
+        config.interpenetration_weight.is_finite() && config.interpenetration_weight >= 0.0,
+        "interpenetration_weight must be finite and non-negative"
+    );
+    assert!(
+        config.interpenetration_weight == 0.0 || config.interpenetration_samples > 0,
+        "interpenetration loss requires at least one sampled edge"
+    );
+    assert!(
+        config.interpenetration_weight == 0.0 || model.radii.is_some(),
+        "interpenetration loss requires a weighted cloud"
+    );
+    assert!(
+        config.interpenetration_weight == 0.0
+            || config.position_lr_ratio > 0.0
+            || config.radius_lr_ratio > 0.0,
+        "interpenetration loss requires trainable positions or radii"
     );
     assert!(
         config
@@ -3072,6 +3263,7 @@ fn build_train_session(
     opacity_weight: f32,
     distortion_weight: f32,
     quantile_weight: f32,
+    interpenetration_samples: usize,
     softplus_beta: f32,
     background_rgb: [f32; 3],
     gpu: &std::sync::Arc<blade_graphics::Context>,
@@ -3084,7 +3276,7 @@ fn build_train_session(
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
     let mut g = mn::Graph::new();
-    let _vg = build_volumetric_graph(
+    let mut vg = build_volumetric_graph(
         &mut g,
         n_cells,
         pixel_batch,
@@ -3101,6 +3293,21 @@ fn build_train_session(
         model.radii.is_some(),
         color_loss,
     );
+    if interpenetration_samples > 0 {
+        let log_radii = vg
+            .weighted_path
+            .as_ref()
+            .expect("interpenetration loss requires a weighted cloud")
+            .log_radii;
+        vg.loss = add_interpenetration_loss(
+            &mut g,
+            vg.loss,
+            vg.positions,
+            log_radii,
+            interpenetration_samples,
+        );
+        g.set_outputs(vec![vg.loss, vg.dt_from_positions]);
+    }
     let (mut session, _report) = mn::build(
         &g,
         mn::SessionConfig {
@@ -3457,6 +3664,13 @@ fn fit_appearance_pixel_batched(
     );
     let patch_size = config.patch_size;
     let grad_loss_weight = config.grad_loss_weight;
+    let interpenetration_sample_count = if config.interpenetration_weight > 0.0 {
+        config.interpenetration_samples
+    } else {
+        0
+    };
+    let mut interpenetration_batch = (interpenetration_sample_count > 0)
+        .then(|| InterpenetrationBatch::new(model, interpenetration_sample_count));
     let (mut session, mut gpu_cloud) = build_train_session(
         model,
         pixel_batch,
@@ -3469,6 +3683,7 @@ fn fit_appearance_pixel_batched(
         config.opacity_weight,
         config.distortion_weight,
         config.quantile_weight,
+        interpenetration_sample_count,
         config.softplus_beta,
         config.background_rgb,
         &gpu,
@@ -3735,6 +3950,15 @@ fn fit_appearance_pixel_batched(
                 session.set_input("quantile_far", &quantile_far);
                 session.set_input("quantile_scale", &[config.quantile_weight * ramp]);
             }
+            if let Some(ref mut batch) = interpenetration_batch {
+                batch.upload(
+                    &mut session,
+                    model,
+                    step,
+                    total_steps,
+                    config.interpenetration_weight,
+                );
+            }
             // Reconfigure Adam and any parameter-specific multipliers for the
             // current global step. This is a cheap session-field update.
             configure_optimizer(&mut session, &config, step, total_steps);
@@ -3923,6 +4147,9 @@ fn fit_appearance_pixel_batched(
                 // GPU path-record sees real neighbours of the new cells.
                 let topology_start = std::time::Instant::now();
                 rebuild_training_adjacency(model, config.rebuild_with_qhull);
+                if let Some(ref mut batch) = interpenetration_batch {
+                    batch.rebuild(model);
+                }
                 phase_timings.topology += topology_start.elapsed();
                 position_grad_accum = vec![0.0f32; model.points.len()];
                 position_grad_scratch = vec![0.0f32; model.points.len() * 3];
@@ -3952,6 +4179,7 @@ fn fit_appearance_pixel_batched(
                     config.opacity_weight,
                     config.distortion_weight,
                     config.quantile_weight,
+                    interpenetration_sample_count,
                     config.softplus_beta,
                     config.background_rgb,
                     &gpu,
@@ -4014,6 +4242,9 @@ fn fit_appearance_pixel_batched(
             phase_timings.state_readback += state_readback_start.elapsed();
             let topology_start = std::time::Instant::now();
             rebuild_training_adjacency(model, config.rebuild_with_qhull);
+            if let Some(ref mut batch) = interpenetration_batch {
+                batch.rebuild(model);
+            }
             phase_timings.topology += topology_start.elapsed();
             log::info!(
                 "geometry cycle {}: rebuilt adjacency for {} moved points at step {}",
@@ -4819,6 +5050,52 @@ mod tests {
     }
 
     #[test]
+    fn interpenetration_loss_matches_overlap_value_and_gradients() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping interpenetration loss test: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        let positions = graph.parameter("positions", &[2, 3]);
+        let log_radii = graph.parameter("log_radii", &[2, 1]);
+        let base_loss = graph.constant(vec![0.0], &[1]);
+        let loss = add_interpenetration_loss(&mut graph, base_loss, positions, log_radii, 1);
+        graph.set_outputs(vec![loss]);
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        session.set_parameter("positions", &[0.0, 0.0, 0.0, 2.0, 0.0, 0.0]);
+        let raw_radius = inv_radius_activation(1.5);
+        session.set_parameter("log_radii", &[raw_radius, raw_radius]);
+        session.set_input_u32("interpenetration_edge_a", &[0]);
+        session.set_input_u32("interpenetration_edge_b", &[1]);
+        session.set_input("interpenetration_edge_direction", &[-1.0, 0.0, 0.0]);
+        session.set_input("interpenetration_edge_scale", &[0.25]);
+        session.set_adam(0.0, 0.9, 0.999, 1.0e-8);
+        session.step();
+        session.wait();
+
+        let value = session.read_output(1)[0];
+        assert!((value - 0.25).abs() < 1.0e-6, "value={value}");
+        let mut position_grad = [0.0_f32; 6];
+        session.read_param_grad("positions", &mut position_grad);
+        assert!((position_grad[0] - 0.5).abs() < 1.0e-5);
+        assert!((position_grad[3] + 0.5).abs() < 1.0e-5);
+        assert!(position_grad[1..3].iter().all(|&value| value == 0.0));
+        assert!(position_grad[4..].iter().all(|&value| value == 0.0));
+        let mut radius_grad = [0.0_f32; 2];
+        session.read_param_grad("log_radii", &mut radius_grad);
+        assert!((radius_grad[0] - 0.5).abs() < 1.0e-5);
+        assert!((radius_grad[1] - 0.5).abs() < 1.0e-5);
+    }
+
+    #[test]
     fn build_volumetric_graph_constructs_in_patch_mode() {
         // Patch mode: `n_pixels == patch_size²`, gradient L1 added to
         // the loss. Catches shape mismatches inside `patch_grad_l1`.
@@ -4866,6 +5143,71 @@ mod tests {
 
         let ranges: Vec<_> = (0..4).map(|slot| batch_view_range(slot, 4, 10)).collect();
         assert_eq!(ranges, [0..2, 2..5, 5..7, 7..10]);
+    }
+
+    #[test]
+    fn interpenetration_schedule_matches_reference_endpoints() {
+        let initial = 1.0e-4;
+        assert_eq!(interpenetration_weight_at_step(0.0, 42, 100), 0.0);
+        assert_eq!(interpenetration_weight_at_step(initial, 0, 100), initial);
+        let final_weight = interpenetration_weight_at_step(initial, 99, 100);
+        assert!((final_weight - 1.0e-7).abs() < 1.0e-13);
+        let midpoint = interpenetration_weight_at_step(initial, 50, 101);
+        assert!((midpoint - initial * 1.0e-3_f32.sqrt()).abs() < 1.0e-10);
+        assert_eq!(
+            interpenetration_weight_at_step(initial, 1000, 100),
+            final_weight
+        );
+    }
+
+    #[test]
+    fn interpenetration_sampling_is_stratified_and_resume_stable() {
+        let points = (0..4)
+            .map(|index| glam::Vec4::new(index as f32, 0.0, 0.0, 1.0))
+            .collect::<Vec<_>>();
+        let model = vol::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(vol::Adjacency {
+                neighbors: vec![1, 0, 2, 1, 3, 2],
+                offsets: vec![0, 1, 3, 5, 6],
+            }),
+            radii: Some(vec![1.0; points.len()]),
+            points,
+        };
+        let initial_weight = 1.0e-4;
+        let step = 7;
+        let total_steps = 100;
+        let mut first = InterpenetrationBatch::new(&model, 4);
+        first.prepare(&model, step, total_steps, initial_weight);
+        let mut resumed = InterpenetrationBatch::new(&model, 4);
+        resumed.prepare(&model, step, total_steps, initial_weight);
+
+        assert_eq!(first.edge_a, resumed.edge_a);
+        assert_eq!(first.edge_b, resumed.edge_b);
+        assert_eq!(first.edge_direction, resumed.edge_direction);
+        assert_eq!(first.edge_scale, resumed.edge_scale);
+
+        let weight = interpenetration_weight_at_step(initial_weight, step, total_steps);
+        let relative_scales = first
+            .edge_scale
+            .iter()
+            .map(|&scale| (scale / weight).round() as usize)
+            .collect::<Vec<_>>();
+        assert_eq!(relative_scales, [1, 2, 1, 2]);
+        assert!((first.edge_scale.iter().sum::<f32>() - 6.0 * weight).abs() < 1.0e-10);
+        for ((&a, &b), direction) in first
+            .edge_a
+            .iter()
+            .zip(first.edge_b.iter())
+            .zip(first.edge_direction.chunks_exact(3))
+        {
+            let expected = (model.points[a as usize] - model.points[b as usize])
+                .truncate()
+                .normalize();
+            assert_eq!(direction, expected.to_array());
+        }
     }
 
     #[test]

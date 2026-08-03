@@ -294,9 +294,10 @@ pub fn spring_relax(model: &mut crate::PointCloudModel, iterations: usize, step:
 }
 
 /// Estimate per-point radii from the nearest-neighbour distance, scaled by
-/// `factor`. This is the simplest "local feature size" estimator and matches
-/// what RadFoam/Power Foam use for an initial radius when starting from a
-/// raw point cloud or a sampled mesh.
+/// `factor`. This is the simplest local-feature-size estimator for a raw point
+/// cloud or sampled mesh. It is intentionally not the PowerFoam reference
+/// initializer, which averages several nearest-neighbour distances and also
+/// applies a camera-projected support cap.
 ///
 /// Given a point cloud `points`, the radius assigned to site `i` is
 /// `factor * min_{j != i} |p_i - p_j|`. A `factor` near `0.5` keeps the

@@ -1515,6 +1515,112 @@ resumed_artifact = "target/audit-runs/weighted-resume-v1/segmented/model.ply"
 resumed_artifact_sha256 = "54905ea6e8078f95f363862d7554fe09071acd950318804887328ec2e7d21113"
 selection = "accept: default resume preserves learned PowerFoam geometry and topology; cross-process appearance remains within one ULP"
 
+# The first complete 292-image/37-held-view PowerFoam radius gate separates
+# support coverage from graph cost at the production initial density. Fixed
+# support under-covers the capture. Faster radius learning recovers quality but
+# grows the Čech graph almost linearly with runtime. The reference
+# interpenetration loss is implemented as a deterministic stratified estimate
+# of the complete directed squared-overlap sum; it remains opt-in because its
+# useful scale is coupled to scene units, geometry LR, and Adam epsilon.
+[training.powerfoam_interpenetration]
+date = "2026-08-03"
+scene = "MipNeRF-360 Bonsai (complete 292-image capture)"
+image_size_training = "32x32"
+image_size_evaluation = "128x128"
+points = 50000
+training_views = 255
+test_views = 37
+test_every = 8
+steps = 1275
+pixel_batch = 2048
+views_per_batch = 16
+sh_degree = 2
+initial_radius_factor = 1.7
+position_lr_ratio = 0.01
+geometry_rebuild_every = 100
+memory_limit_bytes = 6442450944
+maximum_observed_training_peak_bytes = 760303616
+memory_events = 0
+
+[training.powerfoam_interpenetration.fixed_support]
+radius_lr_ratio = 0.0
+interpenetration_weight = 0.0
+training_seconds = 62.860
+directed_edges = 550256
+train_psnr = 9.33
+test_psnr = 9.33
+artifact = "target/audit-runs/powerfoam-radius-fullscale-v1/fixed/model.ply"
+artifact_sha256 = "c90b3c131e0de5849f139f2ea3cee5e1456675271b2c1bd8a2a7dbee13f043ba"
+
+[training.powerfoam_interpenetration.radius_002]
+radius_lr_ratio = 0.02
+interpenetration_weight = 0.0
+training_seconds = 92.648
+directed_edges = 814180
+train_psnr = 10.67
+test_psnr = 10.53
+artifact = "target/audit-runs/powerfoam-radius-fullscale-v1/r0200/model.ply"
+artifact_sha256 = "f27d26ea7826720c6eda118557fe8c97745cb8aea8231f52be8caea766388b8d"
+
+[training.powerfoam_interpenetration.radius_004]
+radius_lr_ratio = 0.04
+interpenetration_weight = 0.0
+training_seconds = 125.009
+directed_edges = 1089252
+train_psnr = 11.71
+test_psnr = 11.62
+artifact = "target/audit-runs/powerfoam-radius-fullscale-v1/r0400/model.ply"
+artifact_sha256 = "bff16636dc2243568ff53b0eb31d7d459a2ea61f6cfbf338ea4e54fac5d2a29b"
+
+[training.powerfoam_interpenetration.selected]
+radius_lr_ratio = 0.04
+interpenetration_weight = 1e-10
+interpenetration_samples = 4096
+training_seconds = 132.643
+directed_edges = 880212
+edge_reduction = 0.192
+training_time_increase = 0.061
+train_psnr = 11.77
+test_psnr = 11.73
+artifact = "target/audit-runs/powerfoam-interpenetration-v1/w1e-10/model.ply"
+artifact_sha256 = "774fca0d904690a5902d5a4723f358aff2c554b0a75031e999cb8531e5814bbc"
+selection = "accept as opt-in: +0.11 dB held out and 19.2% fewer edges; do not generalize the weight or claim a training speedup"
+
+[training.powerfoam_interpenetration.rejected_reference_weight_high_rate]
+radius_lr_ratio = 0.04
+interpenetration_weight = 1e-4
+interpenetration_samples = 4096
+step = 100
+control_directed_edges = 604618
+candidate_directed_edges = 60206
+control_final_loss = 1.0536
+candidate_final_loss = 1.1255
+verdict = "reject pairing: the exploratory radius rate is 80x the PowerFoam reference and collapses support"
+
+[training.powerfoam_interpenetration.rejected_reference_rate]
+radius_lr_ratio = 5e-4
+interpenetration_weight = 1e-4
+interpenetration_samples = 4096
+training_seconds = 62.343
+directed_edges = 350940
+train_psnr = 9.34
+test_psnr = 9.34
+artifact = "target/audit-runs/powerfoam-interpenetration-v1/reference-lr/model.ply"
+artifact_sha256 = "4ba3b6f9238de0c9f528146d1f48f26e19b14897d622f063680297a2849c20fd"
+verdict = "hold: topology is controlled, but fixed-count sparse support cannot recover coverage on this 1275-step horizon"
+
+[training.powerfoam_interpenetration.rejected_1024_samples]
+radius_lr_ratio = 0.04
+interpenetration_weight = 1e-10
+interpenetration_samples = 1024
+training_seconds = 130.028
+directed_edges = 904062
+train_psnr = 11.57
+test_psnr = 11.55
+artifact = "target/audit-runs/powerfoam-interpenetration-v1/w1e-10-s1024/model.ply"
+artifact_sha256 = "daa94c3153c5e5aa00e8470f8fc722306dec1297f997b71925d4f6005f39672d"
+verdict = "reject: 2.0% training-time saving does not justify -0.18 dB and a larger graph"
+
 # Replacing the SH dot-product's ones-matmul with SumInner exposes a generic
 # reduction inefficiency. Meganeura 66e1664 packs 256 narrow rows into one
 # workgroup while retaining scalar column order; the raw output is bit-exact

@@ -133,6 +133,28 @@ reader to a tool crate. No Python runtime becomes part of this project.
   Jacobian/meganeura integration pass. A translated-world oracle also rejects
   numerically unstable absolute affine intercepts.
 
+#### M2f — PowerFoam interpenetration loss (implemented, opt-in)
+
+- `--interpenetration-weight` adds the reference squared-overlap objective
+  `sum(max(r_i + r_j - |p_i - p_j|, 0)^2)` over directed Čech edges. Its
+  weight decays exponentially to one-thousandth of the initial value over the
+  global training horizon, including across checkpoint resumes.
+- The graph uses an exact local first-order distance at each topology snapshot
+  and differentiates both live positions and positive radii. A deterministic,
+  stratified edge sample estimates the complete directed sum; the default
+  `--interpenetration-samples 4096` bounds graph size independently of cloud
+  size and needs no extra dependency or persistent RNG state.
+- A physical two-site test checks the scalar loss and both position/radius
+  gradients. Complete Mip-NeRF-360 Bonsai gates show that the term controls
+  graph growth, but its useful scale depends strongly on scene units, radius
+  learning rate, and Adam epsilon. It therefore remains off by default.
+- At the exploratory high radius rate, `1e-10` improves all-37 held-out PSNR
+  from 11.62 to 11.73 dB while reducing directed edges from 1,089,252 to
+  880,212. Training is 6.1% slower because the sampled backward pass costs
+  more than the smaller topology saves. The paper's `1e-4` weight is only
+  stable with its much smaller radius rate in this protocol; pairing it with
+  the exploratory rate collapses support.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

@@ -276,6 +276,17 @@ struct Args {
     #[argh(option, default = "0.0")]
     quantile_weight: f32,
 
+    /// initial weight on PowerFoam's radial-overlap interpenetration loss
+    /// (default 0 = off; reference value 0.0001). Decays 1000x by the final
+    /// step and requires trainable weighted geometry.
+    #[argh(option, default = "0.0")]
+    interpenetration_weight: f32,
+
+    /// directed Cech edges sampled per interpenetration-loss update. The sampled
+    /// sum is scaled to estimate the complete graph (default 4096).
+    #[argh(option, default = "4096")]
+    interpenetration_samples: usize,
+
     /// composite training, held-out evaluation, and novel renders on white
     /// instead of the default black background
     #[argh(switch)]
@@ -459,6 +470,21 @@ fn main() {
         eprintln!("--radius-lr-ratio must be finite and non-negative");
         std::process::exit(2);
     }
+    if !args.interpenetration_weight.is_finite() || args.interpenetration_weight < 0.0 {
+        eprintln!("--interpenetration-weight must be finite and non-negative");
+        std::process::exit(2);
+    }
+    if args.interpenetration_weight > 0.0 && args.interpenetration_samples == 0 {
+        eprintln!("--interpenetration-weight requires --interpenetration-samples > 0");
+        std::process::exit(2);
+    }
+    if args.interpenetration_weight > 0.0
+        && args.position_lr_ratio == 0.0
+        && args.radius_lr_ratio == 0.0
+    {
+        eprintln!("--interpenetration-weight requires trainable positions or radii");
+        std::process::exit(2);
+    }
     if (args.position_lr_ratio > 0.0 || args.radius_lr_ratio > 0.0)
         && geometry_rebuild_schedule == diff_render::GeometryRebuildSchedule::Fixed
         && args.geometry_rebuild_every == 0
@@ -468,6 +494,10 @@ fn main() {
     }
     if args.radius_lr_ratio > 0.0 && args.cech_radius <= 0.0 && args.init_ply.is_none() {
         eprintln!("--radius-lr-ratio requires --cech-radius or a weighted --init-ply");
+        std::process::exit(2);
+    }
+    if args.interpenetration_weight > 0.0 && args.cech_radius <= 0.0 && args.init_ply.is_none() {
+        eprintln!("--interpenetration-weight requires --cech-radius or a weighted --init-ply");
         std::process::exit(2);
     }
 
@@ -635,6 +665,8 @@ fn main() {
             opacity_weight: args.opacity_weight,
             distortion_weight: args.distortion_weight,
             quantile_weight: args.quantile_weight,
+            interpenetration_weight: args.interpenetration_weight,
+            interpenetration_samples: args.interpenetration_samples,
             softplus_beta: args.softplus_beta,
             background_rgb: if args.white_background {
                 [1.0; 3]

@@ -588,7 +588,14 @@ At the audited revision:
   differences, weighted intervals, topology rebuilds, densification, and
   multi-view/novel-pose cases.
 - Weighted-cloud densification follows the reference resampler's copied-radius,
-  5%-support-scale split; a real-scene ablation remains outstanding.
+  5%-support-scale split; the complete Bonsai fixed-count ablation now selects
+  trainable radii (+2.29 dB all-37 over fixed support), but the matched
+  200,000-cell/20,400-step densification gate remains outstanding.
+- The reference squared-overlap interpenetration loss is available as a
+  deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
+  the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
+  increases training time by 6.1%. Its scale is coupled to scene units,
+  geometry rates, and Adam epsilon, so it remains opt-in rather than a default.
 - No official pretrained checkpoint is published by the reference project, so
   cross-rendering and a matched training ablation remain outstanding.
 - The reference quaternion, texel-site, and spherical-Voronoi appearance model
@@ -1339,7 +1346,10 @@ material path.
 1. On the winning RadFoam configuration, compare fixed equal radii against
    trainable positive radii from identical seeds. Require a held-out improvement
    and stable cell/topology statistics before implementing the full quaternion
-   and spherical-Voronoi appearance model.
+   and spherical-Voronoi appearance model. (Done at the complete-dataset
+   50,000-cell diagnostic scale: +2.29 dB all-37; sampled interpenetration adds
+   another +0.11 dB while reducing edges 19.2%. Repeat on the selected
+   200,000-cell/20,400-step reconstruction before clearing the production gate.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
