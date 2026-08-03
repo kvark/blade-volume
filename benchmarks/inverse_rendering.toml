@@ -1158,6 +1158,52 @@ held_light_held_pose_psnr = 18.38
 held_light_held_pose_worst_psnr = 18.09
 verdict = "An independent training run stays within 0.10 dB radiance and 0.07 dB fixed-roughness relighting of the selected run."
 
+# The camera lattice needs substantial motion, but higher position rates
+# amplify nondeterministic atomic summation into different discrete topology.
+# Means improve, yet the fourth matched 0.08 + warmup run loses the held-pose
+# tail, and one earlier repeat creates large training-depth outliers. Neither
+# topology cadence, a longer warmup, nor 10x quantile regularization repairs
+# this reliably. The temporary warmup API and CLI controls were removed.
+[synthetic_reconstruction.rgb_mask_foam.rejected_position_rate]
+control_position_lr_ratio = 0.01
+control_held_pose_psnr = [24.18, 24.27]
+control_held_pose_worst_psnr = [23.71, 23.90]
+control_held_light_psnr = [18.56, 18.38]
+control_held_light_worst_psnr = [18.30, 18.09]
+candidate_position_lr_ratio = 0.08
+candidate_warmup_steps = 300
+candidate_held_pose_psnr = [25.52, 25.66, 25.85, 24.50]
+candidate_held_pose_worst_psnr = [24.62, 24.80, 25.39, 22.53]
+candidate_held_light_psnr = [18.60, 18.65, 18.74, 18.53]
+candidate_held_light_worst_psnr = [18.36, 18.45, 18.64, 18.39]
+candidate_training_depth_rmse = [3.2518, 1.8909, 12.5847, 1.9207]
+candidate_held_depth_rmse = [2.1844, 1.7486, 1.7108, 1.7052]
+candidate_position_rmse = [0.5867, 0.5720, 0.5604, 0.6031]
+candidate_normal_rmse_degrees = [66.15, 66.79, 65.35, 66.54]
+candidate_peak_memory_bytes = 373190656
+memory_events = 0
+rejected_unwarmed_position_lr_ratio = [0.06, 0.08, 0.10]
+rejected_unstable_position_lr_ratio = [0.15, 0.30]
+rejected_rebuild_every = [25, 250]
+rejected_quantile_weight = 0.001
+diagnostic_artifact = "target/audit-runs/synthetic-position-lr08-warmup300-v2/model.ply"
+verdict = "reject: better means do not survive the repeated held-pose tail and depth gates; retain the 0.01 default"
+
+[synthetic_reconstruction.rgb_mask_foam.rejected_position_rate.bonsai]
+candidate_position_lr_ratio = 0.08
+control_position_lr_ratio = 0.01
+step_2000_control = [16.43, 16.01, 16.29]
+step_2000_candidate = [16.24, 16.08, 16.35]
+step_2000_control_cells = 57485
+step_2000_candidate_cells = 55432
+step_4000_control = [20.29, 18.86, 20.13]
+step_4000_candidate = [19.80, 18.95, 19.73]
+step_4000_control_cells = 100183
+step_4000_candidate_cells = 90035
+candidate_peak_memory_bytes = 1093459968
+memory_events = 0
+verdict = "reject for COLMAP initialization: the selected-eight gain is 0.09 dB, but all 37 held views lose 0.40 dB at step 4000"
+
 # Filling a non-cubic world-axis lattice sequentially accidentally left most of
 # one outer layer absent. Rotating that sparse layer towards the camera bundle
 # turns the accident into an explicit camera-only initialization rule. Full and

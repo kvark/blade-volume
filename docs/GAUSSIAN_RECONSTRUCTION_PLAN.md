@@ -133,13 +133,23 @@ contention from its exact-zero padded gradients in Meganeura. Full training
 falls from 65.60 to 29.51 seconds, while held-pose radiance remains 24.18 dB
 and unseen-light relighting reaches 18.56 dB (18.30 worst). It extracts 2,167
 Gaussian particles at 53.9% coverage with 0.6201 position RMSE. The latest
-artifacts are `target/audit-runs/synthetic-foam-zero-scatter-v1/model.ply`
+baseline artifacts are `target/audit-runs/synthetic-foam-zero-scatter-v1/model.ply`
 (SHA-256 `90e32fe1ed1bf6021204f8d9a3e8aa3bd7e2dd381adaf618b48e0e4a007f8374`)
 and `scene.rply`
 (SHA-256 `38221090e2f45f94bf8122015a8e2d195a5224f9d062b10b10e1ef66ffc198da`).
 
-This is progress, not completion. The surface still has 0.620 world-unit
-position RMSE and 66.42-degree normal RMSE. Specular fitting is therefore
+Higher camera-lattice position rates were not selected. A 0.08 ratio with a
+300-step warmup improves the first three repeats to 25.52--25.85 dB on held
+poses and 18.60--18.74 dB under the unseen light, but a fourth falls to 22.53
+dB on the worst held pose. One repeat also has 12.58 world-unit training-depth
+RMSE. Tiny atomic-order differences are being amplified by discrete topology;
+neither more frequent rebuilds, a longer warmup, nor stronger quantile loss
+stabilizes it. A matched Bonsai continuation also loses 0.40 dB over all 37
+held views. The temporary warmup implementation is removed and both training
+paths retain their previous position-rate defaults.
+
+This is progress, not completion. The selected surface still has 0.620
+world-unit position RMSE and 66.42-degree normal RMSE. Specular fitting is therefore
 disabled for this gate: with two shared materials it can mistake a noisy
 cluster for a perfect mirror and move held-light quality from 18.50 to 14.70
 dB across otherwise similar runs. The fixed rough-dielectric fit is stable
