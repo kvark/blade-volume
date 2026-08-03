@@ -233,3 +233,11 @@ particle set and improve synthetic normal RMSE from 66.42° to 66.04°, but lose
 slightly positive. Pixel-count heuristics therefore are not a reliable normal
 objective either; the next experiment should improve the shared positions and
 derive orientation from geometry that is consistent across views.
+
+A direct photometric tangent-plane search was rejected as well. Two rings of
+normal candidates repair a 25° error on an analytic textured plane, but rotate
+4,723 of 5,445 scorable Bonsai particles by 24° on average and reduce held-out
+PSNR from 14.50 to 14.42 dB (11.68 to 11.51 worst). Room falls from 14.37 to
+14.34 dB. Normalized training-patch agreement therefore confounds orientation
+with local depth layers and occlusion; normal/covariance work remains gated on
+a shared surface objective with refreshed visibility.

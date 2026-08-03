@@ -873,6 +873,32 @@ room_0_25_test_psnr = 14.17
 room_0_25_worst_test_psnr = 13.06
 verdict = "a 25% local-plane blend helps Bonsai averages but loses the Room tail; 10% loses both Bonsai tails, so moved neighborhoods do not supply reliable normals"
 
+# A two-ring tangent-plane search can repair a 25-degree normal error on an
+# analytic textured plane, but its training-photo objective is not a safe
+# orientation signal on reconstructed surfaces. It rotates nearly every
+# scorable real surfel and loses both held-out scenes, so the implementation
+# and its extra per-candidate work were removed.
+[surface_refinement.multi_view.rejected_photometric_normals]
+date = "2026-08-03"
+method = "8 tangent directions at 15 and 30 degrees; normalized 3x3 patches; 2% improvement gate"
+synthetic_initial_normal_error_degrees = 25.0
+synthetic_final_normal_error_max_degrees = 8.0
+bonsai_normals_updated = 4723
+bonsai_mean_rotation_degrees = 24.0
+bonsai_control_psnr = [15.81, 14.50, 11.68]
+bonsai_candidate_psnr = [15.81, 14.42, 11.51]
+bonsai_control_test_coverage = 0.922
+bonsai_candidate_test_coverage = 0.920
+room_normals_updated = 4725
+room_mean_rotation_degrees = 23.4
+room_control_psnr = [14.91, 14.37, 13.57]
+room_candidate_psnr = [14.89, 14.34, 13.56]
+room_control_test_coverage = 0.936
+room_candidate_test_coverage = 0.935
+peak_memory_bytes = 291565568
+memory_events = 0
+verdict = "reject: patch agreement overfits training views and does not identify transferable surface orientation"
+
 [surface_refinement.multi_view.rejected_second_pass]
 minimum_improvements = [0.02, 0.05]
 bonsai_second_pass_moved = [1220, 1153]
