@@ -152,6 +152,10 @@ pub struct PipelineConfig {
 /// Adjacency algorithm to use when building the initial foam.
 #[derive(Clone, Copy, Debug)]
 pub enum AdjacencyKind {
+    /// Rebuild using the representation already carried by the model:
+    /// Čech for stored radii, Delaunay otherwise. Used for checkpoint resume
+    /// so learned PowerFoam radii are not silently replaced or discarded.
+    FromModel,
     /// Exact Delaunay tetrahedralisation via `simple_delaunay_lib`.
     /// Memory is O(N^1.5); breaks past ~7 K points on a 24 GB machine.
     Delaunay,
@@ -562,6 +566,18 @@ pub struct TrainOutcome {
 
 fn rebuild_adjacency(model: &mut vol::PointCloudModel, kind: AdjacencyKind) {
     match kind {
+        AdjacencyKind::FromModel => {
+            log::info!(
+                "computing {} adjacency from stored model semantics for {} points...",
+                if model.radii.is_some() {
+                    "Cech"
+                } else {
+                    "Delaunay"
+                },
+                model.points.len(),
+            );
+            model.compute_adjacency_default();
+        }
         AdjacencyKind::Delaunay => {
             log::info!(
                 "computing Delaunay adjacency for {} points...",
@@ -931,6 +947,18 @@ mod tests {
 
         rebuild_adjacency(&mut model, AdjacencyKind::Delaunay);
         assert!(model.radii.is_none());
+        model.validate().unwrap();
+    }
+
+    #[test]
+    fn model_adjacency_preserves_checkpoint_radii() {
+        let mut model = tiny_model_far_apart();
+        let expected = vec![4.0, 5.0, 6.0, 7.0];
+        model.radii = Some(expected.clone());
+
+        rebuild_adjacency(&mut model, AdjacencyKind::FromModel);
+
+        assert_eq!(model.radii.as_deref(), Some(expected.as_slice()));
         model.validate().unwrap();
     }
 

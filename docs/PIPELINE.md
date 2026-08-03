@@ -112,24 +112,26 @@ When a real PowerFoam scene shows up, conversion must remain Rust-only: either
 consume an upstream interchange export or add the smallest required checkpoint
 reader to a tool crate. No Python runtime becomes part of this project.
 
-#### M2e — Differentiable weighted geometry (implemented, device recheck pending)
+#### M2e — Differentiable weighted geometry (implemented and device-validated)
 
 - The CPU path oracle records the exact active-branch derivative of every
   sphere-clipped interval with respect to the previous, current, and next
   site's position and radius. Central finite differences cover radical planes,
   support spheres, and paths that skip non-emitting cells.
-- The GPU recorder writes the same three `vec4(position, radius)` Jacobians and
-  the actual previous traversed cell. Unweighted training keeps the compact
-  path layout.
+- The GPU recorder writes the same three `vec4(position, radius)` Jacobians,
+  raw interval, ray-relative reference tangent, and actual previous traversed
+  cell. The graph evaluates the stable local form
+  `dt_ref + tangent_actual - tangent_ref`; unweighted training keeps the
+  compact path layout.
 - Weighted training optimizes a beta=100 softplus radius parameter and uses the
   recorder value plus its local geometry tangent between periodic Čech/path
   rebuilds. Radius and position learning rates are independent. Weighted
   densification copies the parent radius and optimizer ancestry and perturbs
   both sites at 5% of the support radius, matching the reference resampler's
   geometry policy without introducing its deferred normal semantics.
-- Static WGSL validation and CPU-isolated workspace tests pass. The physical-
-  GPU Jacobian/meganeura integration test is compiled but must be rerun after
-  the currently wedged NVIDIA driver is recovered.
+- Static WGSL validation, CPU-isolated workspace tests, and physical-GPU
+  Jacobian/meganeura integration pass. A translated-world oracle also rejects
+  numerically unstable absolute affine intercepts.
 
 ### M3 — Training crate scaffolding
 
@@ -232,7 +234,9 @@ Broken into sub-steps:
     phases, and a legacy `.ply.step` marker. The v3 reader remains compatible
     with v1/v2 fixed-densification sidecars. A resume validates that the
     optimizer, trainer state, and absolute schedule step agree before taking
-    another update.
+    another update. With no explicit topology override, the CLI rebuilds from
+    the serialized model semantics: stored PowerFoam radii select Čech
+    adjacency and remain learned parameters instead of being reinitialized.
 
   A historical whole-image graph exposed a meganeura matmul shape bug for P×L
   with P≥784 and L≥16. The maintained trainer is pixel-batched and uses the

@@ -1466,6 +1466,55 @@ candidate_artifact = "target/audit-runs/stable-tangent-weighted-long-v1/model.pl
 candidate_artifact_sha256 = "f9e176101d3abc55c94d0aa28207900a60735600e77461a25f3ba38187adffe6"
 selection = "accept: stable weighted linearization preserves the matched held-view result and reduces profiled GPU step time by 12.4%"
 
+# A weighted `--init-ply` used to fall through to the fresh-run Delaunay
+# default, which discarded stored radii. Passing `--cech-radius` avoided that
+# path but reinitialized every learned radius from nearest-neighbour spacing.
+# Resume now selects adjacency from serialized model semantics unless the user
+# supplies an explicit topology override. The physical gate compares one
+# 16-step process with an 8+8-step checkpoint split. Geometry and CSR topology
+# are byte-exact; separate Vulkan processes differ only in the expected final
+# atomic-add rounding of a few appearance values.
+[training.weighted_checkpoint_resume]
+date = "2026-08-03"
+parent_commit = "2e90757"
+scene = "MipNeRF-360 Bonsai"
+image_size = "32x32"
+points = 2000
+training_views = 8
+test_views = 2
+steps = 16
+split_steps = [8, 8]
+geometry_rebuild_every = 4
+initial_radius_factor = 1.7
+position_lr_ratio = 0.01
+radius_lr_ratio = 0.01
+initial_adjacency_edges = 24556
+checkpoint_adjacency_edges = 24618
+uninterrupted_final_adjacency_edges = 24646
+resumed_final_adjacency_edges = 24646
+uninterrupted_final_loss = 0.9135
+resumed_final_loss = 0.9135
+positions_byte_exact = true
+radii_byte_exact = true
+adjacency_offsets_byte_exact = true
+adjacency_indices_byte_exact = true
+rgb_byte_exact = true
+density_differing_values = 1
+density_max_abs_delta = 1.1920928955078125e-7
+density_max_ulp = 1
+sh_differing_values = 50
+sh_max_abs_delta = 5.960464477539063e-8
+sh_max_ulp = 1
+uninterrupted_peak_memory_bytes = 590131200
+checkpoint_segment_peak_memory_bytes = 488878080
+resume_segment_peak_memory_bytes = 489304064
+memory_events = 0
+uninterrupted_artifact = "target/audit-runs/weighted-resume-v1/uninterrupted/model.ply"
+uninterrupted_artifact_sha256 = "c034339d325f2509b05f1f25fe97aa593fa42c5022a947788dcccea7afd5cec0"
+resumed_artifact = "target/audit-runs/weighted-resume-v1/segmented/model.ply"
+resumed_artifact_sha256 = "54905ea6e8078f95f363862d7554fe09071acd950318804887328ec2e7d21113"
+selection = "accept: default resume preserves learned PowerFoam geometry and topology; cross-process appearance remains within one ULP"
+
 # Replacing the SH dot-product's ones-matmul with SumInner exposes a generic
 # reduction inefficiency. Meganeura 66e1664 packs 256 narrow rows into one
 # workgroup while retaining scalar column order; the raw output is bit-exact

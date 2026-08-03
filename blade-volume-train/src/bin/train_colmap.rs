@@ -320,7 +320,8 @@ struct Args {
 
     /// resume from a checkpoint PLY. Sibling `.safetensors` and `.trainstate`
     /// files are loaded automatically when present to restore parameters,
-    /// Adam state, and deterministic RNG streams.
+    /// Adam state, and deterministic RNG streams. Stored PowerFoam radii are
+    /// preserved unless an explicit topology option replaces them.
     #[argh(option)]
     init_ply: Option<String>,
 
@@ -364,6 +365,22 @@ fn resolve_views_per_batch(
         return Err("--views-per-batch > 1 requires random-pixel sampling");
     }
     Ok(selected)
+}
+
+fn select_adjacency(args: &Args) -> pipeline::AdjacencyKind {
+    if args.qhull {
+        pipeline::AdjacencyKind::DelaunayQhull
+    } else if args.cech_radius > 0.0 {
+        pipeline::AdjacencyKind::Cech {
+            radius_factor: args.cech_radius,
+        }
+    } else if args.knn > 0 {
+        pipeline::AdjacencyKind::Knn(args.knn)
+    } else if args.init_ply.is_some() {
+        pipeline::AdjacencyKind::FromModel
+    } else {
+        pipeline::AdjacencyKind::Delaunay
+    }
 }
 
 fn copy_endpoint_checkpoint(source: &path::Path, output: &path::Path) -> Result<(), String> {
@@ -466,17 +483,7 @@ fn main() {
                 std::process::exit(2);
             },
         );
-    let adjacency = if args.qhull {
-        pipeline::AdjacencyKind::DelaunayQhull
-    } else if args.cech_radius > 0.0 {
-        pipeline::AdjacencyKind::Cech {
-            radius_factor: args.cech_radius,
-        }
-    } else if args.knn > 0 {
-        pipeline::AdjacencyKind::Knn(args.knn)
-    } else {
-        pipeline::AdjacencyKind::Delaunay
-    };
+    let adjacency = select_adjacency(&args);
     let initialization = match args.initialization.as_str() {
         "top-track" => pipeline::InitialPointPolicy::TopTrackLength,
         "radfoam-v1" => pipeline::InitialPointPolicy::RadFoamV1,
@@ -997,5 +1004,49 @@ mod tests {
             resolve_views_per_batch(16, Some(1024), 16),
             Err("--views-per-batch > 1 requires random-pixel sampling")
         );
+    }
+
+    #[test]
+    fn checkpoint_adjacency_preserves_model_semantics_without_an_override() {
+        let resumed = <Args as argh::FromArgs>::from_args(
+            &["train_colmap"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--output",
+                "model.ply",
+                "--init-ply",
+                "checkpoint.ply",
+            ],
+        )
+        .unwrap();
+        assert!(matches!(
+            select_adjacency(&resumed),
+            pipeline::AdjacencyKind::FromModel
+        ));
+
+        let reinitialized = <Args as argh::FromArgs>::from_args(
+            &["train_colmap"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--output",
+                "model.ply",
+                "--init-ply",
+                "checkpoint.ply",
+                "--cech-radius",
+                "1.7",
+            ],
+        )
+        .unwrap();
+        let pipeline::AdjacencyKind::Cech { radius_factor } = select_adjacency(&reinitialized)
+        else {
+            panic!("explicit Cech override was not selected");
+        };
+        assert_eq!(radius_factor, 1.7);
     }
 }

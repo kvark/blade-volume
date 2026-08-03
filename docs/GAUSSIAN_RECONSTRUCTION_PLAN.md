@@ -161,6 +161,13 @@ A physical-GPU regression demonstrates both the stale offset and exact rebased
 identity. This physical test, rather than the unweighted synthetic repeats, is
 the correctness gate for the weighted fix.
 
+Checkpoint resume now preserves that weighted representation as well. With no
+explicit topology option, `train_colmap --init-ply` rebuilds Čech adjacency
+from the radii stored in a PowerFoam PLY rather than dropping or reinitializing
+them. A physical 8+8-step split matches an uninterrupted 16-step run exactly
+for positions, radii, and CSR adjacency; density and SH differ by at most one
+ULP across the separate GPU processes.
+
 Higher camera-lattice position rates were not selected. A 0.08 ratio with a
 300-step warmup improves the first three repeats to 25.52--25.85 dB on held
 poses and 18.60--18.74 dB under the unseen light, but a fourth falls to 22.53
