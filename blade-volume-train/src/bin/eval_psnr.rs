@@ -61,6 +61,11 @@ struct Args {
     #[argh(option, default = "128")]
     max_steps: usize,
 
+    /// minimum PowerFoam sphere candidates per ray (default 0 = automatic:
+    /// max of four times --max-steps and 1024)
+    #[argh(option, default = "0")]
+    powerfoam_candidate_capacity: u32,
+
     /// rebuild adjacency from the loaded points (ignore any adjacency
     /// stored in the PLY). Useful for PLYs where positions were
     /// optimised after the saved adjacency was computed.
@@ -185,6 +190,7 @@ fn main() {
         max_initial_points: Some(model.points.len()),
         far_plane: args.far_plane,
         fit: diff_render::AppearanceFitConfig {
+            powerfoam_candidate_capacity: args.powerfoam_candidate_capacity,
             background_rgb: if args.white_background {
                 [1.0; 3]
             } else {

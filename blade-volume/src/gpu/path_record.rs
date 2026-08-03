@@ -36,10 +36,11 @@ const SPLAT_TILE_INDEX_BUDGET: u64 = 4 * 1024 * 1024;
 const MIN_SPLAT_CANDIDATE_CAPACITY: u32 = 1024;
 const PATH_TRUNCATED_BIT: u32 = 1 << 31;
 
-fn splat_candidate_capacity(max_steps: u32) -> u32 {
+fn splat_candidate_capacity(max_steps: u32, minimum: u32) -> u32 {
     max_steps
         .saturating_mul(4)
         .max(MIN_SPLAT_CANDIDATE_CAPACITY)
+        .max(minimum)
 }
 
 fn output_bytes(num_pixels: u32, max_steps: u32, with_jacobians: bool) -> u64 {
@@ -447,7 +448,7 @@ pub struct PathRecordBuffers {
 
 impl PathRecordBuffers {
     pub fn new(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, true, true, None)
+        Self::new_with(context, num_pixels, max_steps, false, true, true, 0, None)
     }
 
     /// Allocate full path/Jacobian streams plus a conservative projected-tile
@@ -458,6 +459,7 @@ impl PathRecordBuffers {
         max_steps: u32,
         max_points: u32,
         image_resolution: [u32; 2],
+        min_candidate_capacity: u32,
     ) -> Self {
         Self::new_with(
             context,
@@ -466,6 +468,7 @@ impl PathRecordBuffers {
             false,
             true,
             true,
+            min_candidate_capacity,
             Some((image_resolution, max_points)),
         )
     }
@@ -474,7 +477,7 @@ impl PathRecordBuffers {
     /// bindings are valid one-element dummies, so this is only safe to dispatch
     /// with an unweighted cloud (`RadFoamGpuCloud::is_power_foam == false`).
     pub fn new_recorded_only(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, false, false, None)
+        Self::new_with(context, num_pixels, max_steps, false, false, false, 0, None)
     }
 
     /// Allocate compact base path streams plus PowerFoam candidate scratch,
@@ -484,7 +487,7 @@ impl PathRecordBuffers {
         num_pixels: u32,
         max_steps: u32,
     ) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, false, true, None)
+        Self::new_with(context, num_pixels, max_steps, false, false, true, 0, None)
     }
 
     /// Compact PowerFoam rendering streams with projected candidate tiles.
@@ -494,6 +497,7 @@ impl PathRecordBuffers {
         max_steps: u32,
         max_points: u32,
         image_resolution: [u32; 2],
+        min_candidate_capacity: u32,
     ) -> Self {
         Self::new_with(
             context,
@@ -502,6 +506,7 @@ impl PathRecordBuffers {
             false,
             false,
             true,
+            min_candidate_capacity,
             Some((image_resolution, max_points)),
         )
     }
@@ -513,7 +518,7 @@ impl PathRecordBuffers {
     /// Vulkan; Metal/GLES backends `unimplemented!()` on the buffer
     /// allocation.
     pub fn new_external(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, true, true, true, None)
+        Self::new_with(context, num_pixels, max_steps, true, true, true, 0, None)
     }
 
     /// Allocate exportable base streams and optionally full PowerFoam
@@ -523,6 +528,7 @@ impl PathRecordBuffers {
         num_pixels: u32,
         max_steps: u32,
         with_jacobians: bool,
+        min_candidate_capacity: u32,
     ) -> Self {
         Self::new_with(
             context,
@@ -531,6 +537,7 @@ impl PathRecordBuffers {
             true,
             with_jacobians,
             with_jacobians,
+            min_candidate_capacity,
             None,
         )
     }
@@ -544,6 +551,7 @@ impl PathRecordBuffers {
         with_jacobians: bool,
         max_points: u32,
         image_resolution: [u32; 2],
+        min_candidate_capacity: u32,
     ) -> Self {
         Self::new_with(
             context,
@@ -552,6 +560,7 @@ impl PathRecordBuffers {
             true,
             with_jacobians,
             with_jacobians,
+            min_candidate_capacity,
             Some((image_resolution, max_points)),
         )
     }
@@ -563,6 +572,7 @@ impl PathRecordBuffers {
         external: bool,
         with_jacobians: bool,
         with_splat_scratch: bool,
+        min_splat_candidate_capacity: u32,
         projected: Option<([u32; 2], u32)>,
     ) -> Self {
         assert!(max_steps > 0, "path-record max_steps must be non-zero");
@@ -591,7 +601,7 @@ impl PathRecordBuffers {
         };
         let pix_bytes = (num_pixels as u64) * mem::size_of::<u32>() as u64;
         let splat_candidate_capacity = if with_splat_scratch {
-            splat_candidate_capacity(max_steps)
+            splat_candidate_capacity(max_steps, min_splat_candidate_capacity)
         } else {
             1
         };
@@ -950,9 +960,11 @@ mod tests {
 
     #[test]
     fn powerfoam_candidate_floor_is_independent_of_short_path_rows() {
-        assert_eq!(splat_candidate_capacity(64), 1024);
-        assert_eq!(splat_candidate_capacity(128), 1024);
-        assert_eq!(splat_candidate_capacity(256), 1024);
-        assert_eq!(splat_candidate_capacity(512), 2048);
+        assert_eq!(splat_candidate_capacity(64, 0), 1024);
+        assert_eq!(splat_candidate_capacity(128, 0), 1024);
+        assert_eq!(splat_candidate_capacity(256, 0), 1024);
+        assert_eq!(splat_candidate_capacity(512, 0), 2048);
+        assert_eq!(splat_candidate_capacity(128, 2048), 2048);
+        assert_eq!(splat_candidate_capacity(128, 512), 1024);
     }
 }

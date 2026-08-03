@@ -276,6 +276,7 @@ impl RadFoamBackend {
             model,
             vol::RadFoamTraceSettings {
                 max_steps: settings.max_steps,
+                powerfoam_candidate_capacity: 0,
                 weight_threshold: settings.weight_threshold,
                 debug_cell_density: settings.debug_mode != DebugMode::Off,
             },

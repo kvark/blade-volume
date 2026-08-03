@@ -1371,6 +1371,10 @@ pub struct AppearanceFitConfig {
     /// must remain zero for unweighted clouds. Like position optimization, a
     /// positive value requires periodic geometry rebuilds.
     pub radius_lr_ratio: f32,
+    /// Minimum PowerFoam sphere-candidate row capacity. Zero selects the
+    /// automatic `max(4 * max_steps, 1024)` budget. This remains independent
+    /// of the shorter surviving path/Jacobian row.
+    pub powerfoam_candidate_capacity: u32,
     /// Number of Adam steps between adjacency, GPU-cloud, and path-buffer
     /// rebuilds while positions or radii are trainable under the fixed
     /// schedule. Ignored by [`GeometryRebuildSchedule::RadFoamV1`] and when
@@ -1515,6 +1519,7 @@ impl Default for AppearanceFitConfig {
             background_rgb: [0.0; 3],
             position_lr_ratio: 0.0,
             radius_lr_ratio: 0.0,
+            powerfoam_candidate_capacity: 0,
             geometry_rebuild_every: 0,
             geometry_rebuild_schedule: GeometryRebuildSchedule::Fixed,
             rebuild_with_qhull: false,
@@ -2810,6 +2815,7 @@ fn collect_path_contributions(
     model: &vol::PointCloudModel,
     views: &[ViewSupervision],
     max_steps: usize,
+    powerfoam_candidate_capacity: u32,
     round: usize,
     view_limit: usize,
 ) -> PathContributionStats {
@@ -2844,6 +2850,7 @@ fn collect_path_contributions(
             max_steps as u32,
             model.points.len() as u32,
             max_image_resolution,
+            powerfoam_candidate_capacity,
         )
     } else {
         vol::gpu::PathRecordBuffers::new_recorded_only(context, capacity as u32, max_steps as u32)
@@ -3839,6 +3846,7 @@ fn fit_appearance_pixel_batched(
             true,
             model.points.len() as u32,
             max_image_resolution,
+            config.powerfoam_candidate_capacity,
         )
     } else {
         vol::gpu::PathRecordBuffers::new_external_with_jacobians(
@@ -3846,6 +3854,7 @@ fn fit_appearance_pixel_batched(
             pixel_batch as u32,
             max_steps as u32,
             model.radii.is_some(),
+            config.powerfoam_candidate_capacity,
         )
     };
     let patch_size = config.patch_size;
@@ -4293,6 +4302,7 @@ fn fit_appearance_pixel_batched(
                         model,
                         views,
                         max_steps,
+                        config.powerfoam_candidate_capacity,
                         densification_round,
                         d.contribution_views,
                     );
@@ -4399,6 +4409,7 @@ fn fit_appearance_pixel_batched(
                         true,
                         model.points.len() as u32,
                         max_image_resolution,
+                        config.powerfoam_candidate_capacity,
                     )
                 } else {
                     vol::gpu::PathRecordBuffers::new_external_with_jacobians(
@@ -4406,6 +4417,7 @@ fn fit_appearance_pixel_batched(
                         pixel_batch as u32,
                         max_steps as u32,
                         model.radii.is_some(),
+                        config.powerfoam_candidate_capacity,
                     )
                 };
                 let rebuilt = build_train_session(

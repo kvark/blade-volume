@@ -73,6 +73,7 @@ impl PowerFoamGpuSplatTracer {
             settings.max_steps,
             model.points.len() as u32,
             resolution,
+            settings.powerfoam_candidate_capacity,
         );
         let pixel_indices = (0..num_pixels).collect::<Vec<_>>();
         buffers.write_pixel_indices(&pixel_indices);

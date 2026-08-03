@@ -447,6 +447,7 @@ impl GpuViewEvaluator {
         });
         let trace_settings = vol::RadFoamTraceSettings {
             max_steps: config.max_steps as u32,
+            powerfoam_candidate_capacity: config.fit.powerfoam_candidate_capacity,
             weight_threshold: 1e-4,
             debug_cell_density: false,
         };

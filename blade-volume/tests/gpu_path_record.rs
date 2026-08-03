@@ -314,6 +314,7 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
             max_steps as u32,
             model.points.len() as u32,
             [width, height],
+            0,
         )
     } else {
         PathRecordBuffers::new(&ctx, num_pixels, max_steps as u32)

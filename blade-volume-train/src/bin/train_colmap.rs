@@ -88,6 +88,12 @@ struct Args {
     #[argh(option, default = "128")]
     max_steps: usize,
 
+    /// minimum PowerFoam sphere candidates per ray (default 0 = automatic:
+    /// max of four times --max-steps and 1024). Increase independently when
+    /// many supports overlap before radical-plane clipping.
+    #[argh(option, default = "0")]
+    powerfoam_candidate_capacity: u32,
+
     /// adam learning rate (default 0.1)
     #[argh(option, default = "0.1")]
     learning_rate: f32,
@@ -695,6 +701,7 @@ fn main() {
             },
             position_lr_ratio: args.position_lr_ratio,
             radius_lr_ratio: args.radius_lr_ratio,
+            powerfoam_candidate_capacity: args.powerfoam_candidate_capacity,
             geometry_rebuild_every: args.geometry_rebuild_every,
             geometry_rebuild_schedule,
             rebuild_with_qhull: args.qhull,

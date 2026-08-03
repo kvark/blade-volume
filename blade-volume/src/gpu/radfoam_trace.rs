@@ -4,6 +4,9 @@ use blade_graphics as gpu;
 #[derive(Clone, Copy, Debug)]
 pub struct RadFoamTraceSettings {
     pub max_steps: u32,
+    /// Minimum PowerFoam sphere-candidate row capacity. Zero selects the
+    /// automatic `max(4 * max_steps, 1024)` budget.
+    pub powerfoam_candidate_capacity: u32,
     pub weight_threshold: f32,
     pub debug_cell_density: bool,
 }
@@ -12,6 +15,7 @@ impl Default for RadFoamTraceSettings {
     fn default() -> Self {
         Self {
             max_steps: 1024,
+            powerfoam_candidate_capacity: 0,
             weight_threshold: 0.001,
             debug_cell_density: false,
         }
