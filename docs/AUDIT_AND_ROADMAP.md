@@ -647,6 +647,13 @@ At the audited revision:
   14.95 dB held out with effectively identical edges and runtime. It is not
   landed; learned orientation plus spatial texel appearance, not split direction
   alone, is the remaining reference-semantic hypothesis.
+- Clipping each support with a fixed adjacency-derived surface plane is also
+  negative. The existing endpoint falls from 17.23/16.41 to 12.99/12.62 dB
+  train/all-37 zero-shot; a complete 2,040-step density/SH-only refit recovers
+  to 16.38/15.64 dB but remains 0.77 dB behind held out and visibly introduces
+  fine speckle. The prototype is not landed. The reference plane is coupled to
+  learned orientation, per-cell spatial texels, height offsets, and normal loss;
+  isolating a fixed PCA plane does not justify expanding the public model.
 - The reference squared-overlap interpenetration loss is available as a
   deterministic sampled objective. On the 50,000-cell Bonsai gate it trims
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
@@ -1422,7 +1429,12 @@ material path.
    changing ray or Jacobian semantics. The segment falls to 67.07 seconds
    (71.13 seconds end to end), keeps all four densification counts exact,
    retains 14.34 dB held-out quality, and peaks at 652 MB with no memory or GPU
-   fault events.)
+   fault events. At the 200K endpoint, replaying the final 400 updates with 128
+   rather than 160 path entries cuts graph/device allocation 16.6%/16.4% and
+   training time 4.6%. Training uses at most 123 entries and the full 256²
+   evaluation at most 127, with zero truncation and identical rounded PSNR;
+   32/37 comparison PNGs are byte-identical and the rest differ by one channel
+   count in one pixel.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 

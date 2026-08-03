@@ -217,6 +217,52 @@ control_training_seconds = 142.265
 candidate_training_seconds = 142.933
 selection = "do not land: local tangent projection ties held-out quality, graph size, and runtime"
 
+[surface_plane_gate]
+status = "rejected-prototype"
+source_step = 20400
+source_points = 200000
+estimated_oriented_sites = 199546
+zero_shot_train_psnr = 12.99
+zero_shot_test_psnr = 12.62
+refit_steps = 2040
+refit_position_lr_ratio = 0.0
+refit_radius_lr_ratio = 0.0
+refit_train_psnr = 16.38
+refit_test_psnr = 15.64
+control_train_psnr = 17.23
+control_test_psnr = 16.41
+refit_training_seconds = 114.990
+refit_max_host_bytes = 506920960
+refit_memory_swap_bytes = 0
+refit_oom_events = 0
+selection = "do not land: fixed adjacency-derived surface planes lose 0.77 dB held out after a complete density/SH refit and visibly add speckle"
+
+[endpoint_path_capacity_gate]
+status = "selected-for-200k-bonsai"
+source_step = 20000
+endpoint_step = 20400
+control_path_capacity = 160
+candidate_path_capacity = 128
+candidate_max_training_path = 123
+candidate_max_eval_path_128 = 125
+candidate_max_eval_path_256 = 127
+candidate_truncated_rays = 0
+control_graph_allocation_mb = 1281.5
+candidate_graph_allocation_mb = 1069.3
+control_device_allocation_mb = 589.0
+candidate_device_allocation_mb = 492.6
+control_training_seconds = 28.433
+candidate_training_seconds = 27.139
+control_test_psnr_128 = 16.41
+candidate_test_psnr_128 = 16.41
+control_test_psnr_256 = 16.41
+candidate_test_psnr_256 = 16.41
+byte_identical_comparisons_256 = 32
+comparison_count_256 = 37
+nonidentical_max_channel_delta = 1
+nonidentical_changed_channels_per_image = 1
+selection = "use 128 path rows for this 200K trajectory; candidate scratch remains independently sized at 1024"
+
 [result]
 status = "adaptive-endpoint-complete"
 fresh_ply_reload = true

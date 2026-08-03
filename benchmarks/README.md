@@ -111,12 +111,28 @@ adjacency-derived tangent-plane split ties isotropic splitting at 14.95 dB.
 Neither branch is selected. Their raw artifacts remain ignored; the compact
 measurements and paths are recorded in the manifest.
 
+A follow-up surface-plane prototype clips every weighted cell against a fixed
+normal estimated from its local adjacency. Re-fitting density and SH for a
+complete 2,040-step schedule recovers the zero-shot collapse, but still reaches
+only 16.38/15.64 dB train/all-37 versus the sphere-only control's
+17.23/16.41 dB. The images add fine speckle without removing holes or floaters,
+so fixed estimated planes are rejected; a future reference-semantic arm must
+learn orientation together with its spatial texel appearance.
+
 The 400K gate also exposed a real capacity issue rather than a memory failure:
 at 264,500 sites one ray needed 1,050 sphere candidates while its surviving
 path remained much shorter. Commit `6184551` exposes a candidate budget that is
 independent of path length through the library, trainer, evaluator, and CLI.
 The resumed 304,175-site training/evaluation passes with a 2,048-entry budget,
 zero truncation, and zero cgroup memory or GPU-fault events.
+
+At the selected 200K endpoint, the independent path row can return to 128
+entries. Replaying steps 20,000→20,400 uses at most 123 entries in training and
+127 across the full 256² evaluation, with zero truncation and unchanged rounded
+PSNR. Graph allocation falls 1,281.5→1,069.3 MB, device-local allocation falls
+589.0→492.6 MB, and training time falls 28.433→27.139 seconds. Of 37 comparison
+PNGs, 32 are byte-identical; each other image changes exactly one channel by
+one 8-bit count from sub-ULP endpoint-model drift.
 
 The first full-dataset attempt, from commit `93c996f`, deliberately stopped at
 step 10,000 of 20,400 after
