@@ -109,6 +109,9 @@ struct PathRecordData {
     g_dt_grad_next_out: gpu::BufferPiece,
     g_candidate_counts: gpu::BufferPiece,
     g_candidates: gpu::BufferPiece,
+    g_candidate_depths: gpu::BufferPiece,
+    g_candidate_faces: gpu::BufferPiece,
+    g_candidate_neighbors: gpu::BufferPiece,
     g_projected_bounds: gpu::BufferPiece,
     g_tile_counts: gpu::BufferPiece,
     g_tile_candidates: gpu::BufferPiece,
@@ -260,6 +263,9 @@ impl PathRecorder {
             g_dt_grad_next_out: buffers.dt_grad_next.into(),
             g_candidate_counts: buffers.splat_candidate_counts.into(),
             g_candidates: buffers.splat_candidates.into(),
+            g_candidate_depths: buffers.splat_candidate_depths.into(),
+            g_candidate_faces: buffers.splat_candidate_faces.into(),
+            g_candidate_neighbors: buffers.splat_candidate_neighbors.into(),
             g_projected_bounds: buffers.splat_projected_bounds.into(),
             g_tile_counts: buffers.splat_tile_counts.into(),
             g_tile_candidates: buffers.splat_tile_candidates.into(),
@@ -337,6 +343,12 @@ pub struct PathRecordBuffers {
     splat_candidate_counts: gpu::Buffer,
     /// Device-only fixed-size candidate rows used by weighted compute splats.
     splat_candidates: gpu::Buffer,
+    /// Cached clipped entry depth parallel to [`Self::splat_candidates`].
+    splat_candidate_depths: gpu::Buffer,
+    /// Cached radical-plane entry/exit depths.
+    splat_candidate_faces: gpu::Buffer,
+    /// Cached radical-plane entry/exit neighbors.
+    splat_candidate_neighbors: gpu::Buffer,
     /// Camera-specific conservative tile bounds, one `vec4<u32>` per site.
     splat_projected_bounds: gpu::Buffer,
     /// Per-camera projected tile occupancy. Counts may exceed the bounded row
@@ -635,6 +647,21 @@ impl PathRecordBuffers {
             size: candidate_bytes,
             memory: gpu::Memory::Device,
         });
+        let splat_candidate_depths = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-path-candidate-depths",
+            size: candidate_bytes,
+            memory: gpu::Memory::Device,
+        });
+        let splat_candidate_faces = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-path-candidate-faces",
+            size: candidate_bytes * 2,
+            memory: gpu::Memory::Device,
+        });
+        let splat_candidate_neighbors = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-path-candidate-neighbors",
+            size: candidate_bytes * 2,
+            memory: gpu::Memory::Device,
+        });
         let splat_projected_bounds = context.create_buffer(gpu::BufferDesc {
             name: "powerfoam-path-projected-bounds",
             size: projected_bounds_bytes,
@@ -665,6 +692,9 @@ impl PathRecordBuffers {
             dt_grad_next,
             splat_candidate_counts,
             splat_candidates,
+            splat_candidate_depths,
+            splat_candidate_faces,
+            splat_candidate_neighbors,
             splat_projected_bounds,
             splat_tile_counts,
             splat_tile_candidates,
@@ -815,6 +845,9 @@ impl PathRecordBuffers {
         context.destroy_buffer(self.dt_grad_next);
         context.destroy_buffer(self.splat_candidate_counts);
         context.destroy_buffer(self.splat_candidates);
+        context.destroy_buffer(self.splat_candidate_depths);
+        context.destroy_buffer(self.splat_candidate_faces);
+        context.destroy_buffer(self.splat_candidate_neighbors);
         context.destroy_buffer(self.splat_projected_bounds);
         context.destroy_buffer(self.splat_tile_counts);
         context.destroy_buffer(self.splat_tile_candidates);

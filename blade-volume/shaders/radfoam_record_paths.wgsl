@@ -86,6 +86,9 @@ var<storage, read_write> g_dt_grad_current_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_next_out: array<vec4<f32>>;
 var<storage, read_write> g_candidate_counts: array<u32>;
 var<storage, read_write> g_candidates: array<u32>;
+var<storage, read_write> g_candidate_depths: array<f32>;
+var<storage, read_write> g_candidate_faces: array<vec2<f32>>;
+var<storage, read_write> g_candidate_neighbors: array<vec2<u32>>;
 var<storage, read_write> g_projected_bounds: array<vec4<u32>>;
 var<storage, read_write> g_tile_counts: array<u32>;
 var<storage, read_write> g_tile_candidates: array<u32>;
@@ -546,24 +549,50 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (cell == 0xffffffffu) {
                 continue;
             }
-            let interval = power_interval(ray_origin, ray_dir, cell);
-            if (interval.valid == 0u) {
-                g_candidates[candidate_slot] = 0xffffffffu;
-                continue;
+            var interval = PowerInterval(0.0, 0.0, 0.0, 0u, 0u, 0u);
+            var effective_near = g_candidate_depths[candidate_slot];
+            if (output_step == 0u) {
+                // Radical-plane clipping is the expensive part of candidate
+                // ordering. Execute the original first selection scan, cache
+                // its complete interval, then keep later scans to two loads
+                // and the exact historical depth/index comparison.
+                interval = power_interval(ray_origin, ray_dir, cell);
+                if (interval.valid == 0u) {
+                    g_candidates[candidate_slot] = 0xffffffffu;
+                    continue;
+                }
+                effective_near = interval.effective_near;
+                g_candidate_depths[candidate_slot] = effective_near;
+                g_candidate_faces[candidate_slot] = vec2<f32>(
+                    interval.face_near, interval.face_far,
+                );
+                g_candidate_neighbors[candidate_slot] = vec2<u32>(
+                    interval.previous, interval.next,
+                );
             }
-            if (interval.effective_near < best_near ||
-                (interval.effective_near == best_near && cell < best_cell)) {
+            if (effective_near < best_near ||
+                (effective_near == best_near && cell < best_cell)) {
                 best_slot = slot;
                 best_cell = cell;
-                best_near = interval.effective_near;
-                best_interval = interval;
+                best_near = effective_near;
+                if (output_step == 0u) {
+                    best_interval = interval;
+                }
             }
         }
 
         if (best_slot == 0xffffffffu) {
             break;
         }
-        g_candidates[candidate_begin + best_slot] = 0xffffffffu;
+        let best_candidate_slot = candidate_begin + best_slot;
+        g_candidates[best_candidate_slot] = 0xffffffffu;
+        if (output_step != 0u) {
+            let faces = g_candidate_faces[best_candidate_slot];
+            let neighbors = g_candidate_neighbors[best_candidate_slot];
+            best_interval = PowerInterval(
+                faces.x, faces.y, best_near, neighbors.x, neighbors.y, 1u,
+            );
+        }
         let differential = interval_differential(
             ray_origin,
             ray_dir,
@@ -609,29 +638,16 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var truncated = false;
     if (output_step == g_params.max_steps) {
+        // The first selection scan rejected every invalid interval. Any
+        // remaining candidate therefore represents another non-empty segment.
         for (var slot = 0u; slot < candidate_count; slot += 1u) {
             let candidate_slot = candidate_begin + slot;
             let cell = g_candidates[candidate_slot];
             if (cell == 0xffffffffu) {
                 continue;
             }
-            let interval = power_interval(ray_origin, ray_dir, cell);
-            if (interval.valid == 0u) {
-                continue;
-            }
-            let differential = interval_differential(
-                ray_origin,
-                ray_dir,
-                interval.previous,
-                cell,
-                interval.next,
-                interval.face_near,
-                interval.face_far,
-            );
-            if (differential.valid != 0u) {
-                truncated = true;
-                break;
-            }
+            truncated = true;
+            break;
         }
     }
     g_path_status_out[output_pixel] = output_step | select(0u, 0x80000000u, truncated);

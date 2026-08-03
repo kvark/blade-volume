@@ -1367,7 +1367,11 @@ material path.
    321.50 seconds while held-out quality stays within 0.02 dB. Exact path-cap
    telemetry then proves 128 steps sufficient for the 100,569-site gate and
    cuts the same segment to 297.85 seconds and 0.575 GB, with 14.35 dB held-out
-   quality and zero truncation.)
+   quality and zero truncation. Caching each candidate's radical-plane
+   interval removes repeated adjacency clipping while retaining byte-identical
+   held-out renders. The same segment falls again to 123.03 seconds, crosses
+   all four resource rebuilds, and retains 14.34 dB held-out quality with zero
+   truncation or memory events.)
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 

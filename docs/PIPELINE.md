@@ -296,6 +296,36 @@ resize and live settings handling, is the remaining presentation step.
   atomically sampled topology variation. No run used swap or recorded
   memory-pressure, OOM, or GPU-fault events.
 
+#### M2l — Cached PowerFoam path intervals (implemented and gated)
+
+- The compute-splat recorder now clips every sphere candidate against its
+  radical planes once, during the unchanged first selection scan. It caches
+  the effective entry depth, two limiting face depths, and their neighboring
+  site indices for the later front-to-back scans. Candidate discovery,
+  ordering, tie-breaking, interval differentials, and bounded-row rejection
+  remain unchanged; only repeated adjacency clipping is removed.
+- The cache costs five device-only scalar words per candidate. At the selected
+  4,096-ray/128-step training shape this adds 40 MiB of scratch; a dense 128²
+  evaluation adds 160 MiB. Physical CPU/GPU path tests cover disconnected
+  supports, exact-cap and truncated rows, projected overflow, and weighted
+  Jacobians. Rendering the same 100,569-site checkpoint with the parent and
+  cached recorders produces byte-identical PNGs for all eight selected
+  held-out views.
+- On a matched 100-step segment, GPU step wait falls from 36.338 to 7.222
+  seconds (80.1%), training from 40.011 to 11.346 seconds (71.6%), and the
+  complete command from 45.91 to 16.75 seconds (63.5%). Printed loss, final
+  adjacency, and all 409,600 path statuses are identical.
+- A complete 2,000-step resume crosses four densification/resource rebuilds,
+  reaches the same 100,569-site target, and records zero truncation over
+  8,192,000 rays. Training falls from 297.847 to 123.026 seconds (58.7%) and
+  GPU wait from 252.257 to 77.617 seconds (69.2%). The cgroup peak rises from
+  575 to 604 MB and sampled GPU memory from 1,263 to 1,295 MiB. Fresh-Ply
+  train/test PSNR is 14.64/14.34 dB versus 14.66/14.35 dB; the 0.01–0.02 dB
+  change accompanies a 0.3% atomically sampled topology difference. The
+  complete all-view evaluation falls from 34.73 to 19.47 seconds. Every scope
+  remains below 6 GB with zero swap, pressure, OOM, candidate overflow, or GPU
+  fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
