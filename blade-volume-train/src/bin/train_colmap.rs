@@ -850,11 +850,11 @@ fn main() {
                 train_psnrs.iter().copied().sum::<f32>() / train_psnrs.len() as f32;
             let avg_test: f32 = psnrs.iter().copied().sum::<f32>() / psnrs.len() as f32;
             println!(
-                "PSNR train (avg over {} views): {avg_train:.2} dB",
+                "PSNR train (avg over {} views): {avg_train:.4} dB",
                 train_psnrs.len()
             );
             println!(
-                "PSNR test  (avg over {} views): {avg_test:.2} dB",
+                "PSNR test  (avg over {} views): {avg_test:.4} dB",
                 psnrs.len()
             );
             for (img, p) in test_images.iter().zip(psnrs.iter()) {
