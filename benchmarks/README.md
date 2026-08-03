@@ -78,6 +78,13 @@ or the ignored `benchmarks/results` directory. Accepted conclusions are
 summarized here with their source commit; the protocol manifests remain the
 tracked machine-readable inputs.
 
+`bonsai_powerfoam_radius_learning.toml` is the first valid learned-radius gate:
+both arms use the corrected disconnected-support compute splat and start from
+identical reference-initialized radii. Through step 4,000, learned radii improve
+fresh-Ply train/all-37 held-out PSNR from 14.32/14.05 to 14.66/14.36 dB at the
+same 100,569-site capacity. This selects radius learning for the endpoint run;
+it does not yet clear the full PowerFoam production gate.
+
 The first full-dataset attempt, from commit `93c996f`, deliberately stopped at
 step 10,000 of 20,400 after
 held-out PSNR stayed flat through three evaluations. Its final metrics do come

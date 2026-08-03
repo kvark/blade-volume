@@ -1383,7 +1383,7 @@ material path.
 
 ### P1: validate PowerFoam and Gaussian semantics on real assets
 
-1. On the winning RadFoam configuration, compare fixed equal radii against
+1. On the winning RadFoam configuration, compare fixed initialized radii against
    trainable positive radii from identical seeds. Require a held-out improvement
    and stable cell/topology statistics before implementing the full quaternion
    and spherical-Voronoi appearance model. (The earlier 50,000-cell ablation is
@@ -1391,9 +1391,14 @@ material path.
    components and sat near the black baseline. The corrected compute-splat
    trainer reaches 11.67 dB after 10 steps, 12.55 after 100, and 13.52 after
    2,000 on all 37 Bonsai held-out views, versus 9.33 after 2,000 broken-walk
-   steps. It grows 50,000 → 57,500 sites without hard pruning and remains
-   topology-stable. Continue to the selected 200,000-cell/20,400-step endpoint
-   before clearing the production gate.)
+   steps. A corrected same-seed ablation now freezes or trains the identical
+   reference-initialized radii while retaining position optimization. At step
+   2,000, radius learning improves train/held-out PSNR from 13.41/13.22 to
+   13.70/13.51 dB. At step 4,000, after four topology-changing growth rounds,
+   it improves 14.32/14.05 to 14.66/14.36 dB at the identical 100,569-site
+   capacity. Both arms record zero truncation, swap, OOM, or GPU faults; the
+   learned arm remains selected. Continue it to the 200,000-cell/20,400-step
+   endpoint before clearing the production gate.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and

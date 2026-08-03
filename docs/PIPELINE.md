@@ -409,6 +409,28 @@ resize and live settings handling, is the remaining presentation step.
   1.01 GB because the fused schedule changes buffer lifetimes, but the 6 GB
   cgroup records no swap, limit, or OOM event.
 
+#### M2p — Real-scene PowerFoam radius-learning gate (selected through step 4,000)
+
+- The first fixed-versus-trainable radius experiments used the invalid
+  camera-seeded walk and cannot judge bounded supports. The corrected gate
+  initializes both arms from the same PowerFoam eight-sample projected radii,
+  keeps the same position updates, 4,096 rays across 16 views, fixed growth
+  schedule, and site counts, and changes only the radius learning-rate ratio
+  from zero to `0.0005`.
+- At step 2,000, the 57,500-site fixed arm reaches 13.41/13.22 dB train/all-37
+  held out, while learned radii reach 13.70/13.51 dB. At step 4,000, after four
+  topology-changing growth rounds, the identical 100,569-site arms reach
+  14.32/14.05 and 14.66/14.36 dB respectively. Radius learning therefore adds
+  +0.34/+0.31 dB at the stronger boundary instead of merely changing capacity.
+- Learned radii retain 1,927,808 directed Čech edges at step 4,000 versus
+  1,493,974 when frozen. The maximum observed training path is 85/128 steps;
+  both arms record zero truncation, swap, memory-pressure, OOM, or GPU-fault
+  events under a 6 GB cgroup. The full protocol and ignored artifacts are
+  recorded by `benchmarks/bonsai_powerfoam_radius_learning.toml`.
+
+The trainable arm advances toward the 200,000-site/20,400-step endpoint. The
+larger appearance model remains gated on that completed quality curve.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

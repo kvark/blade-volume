@@ -1,0 +1,109 @@
+schema = 1
+name = "bonsai-powerfoam-radius-learning-v1"
+purpose = "Isolate learned PowerFoam radii after correcting disconnected-support path discovery"
+dataset = "Mip-NeRF 360 / bonsai"
+dataset_path = "etc/data/bonsai-full"
+dataset_source = "https://huggingface.co/datasets/nvs-bench/mipnerf360"
+dataset_revision = "2e0758f7f5d2bf82d5a29c795d3cbfb64af35474"
+dataset_image_files = 292
+colmap_registered_images = 292
+comparison_scope = "same initialization, sites, sampled rays, views, position updates, growth decisions, and fresh-Ply evaluation; only the radius learning rate differs"
+
+[split]
+protocol = "existence-filtered COLMAP order, every eighth held out"
+test_every = 8
+max_train_views = 255
+max_test_views = 37
+
+[model]
+backend = "powerfoam"
+initial_points = 50000
+initialization = "top-track with PowerFoam eight-sample projected radii"
+target_points = 200000
+adjacency = "exact Cech complex"
+sh_degree = 3
+position_lr_ratio = 0.01
+geometry_rebuild_every = 100
+densify_every = 500
+densify_warmup = 2000
+densify_until = 11000
+densify_fraction = 0.15
+prune = false
+
+[training]
+width = 128
+height = 128
+pixel_batch = 4096
+views_per_batch = 16
+steps_per_view = 80
+total_steps = 20400
+learning_rate = 0.1
+lr_schedule = "cosine"
+lr_min_ratio = 0.01
+lr_groups = "legacy"
+color_loss = "smooth-l1-beta-1"
+max_steps = 128
+far_plane = 100.0
+background = "black"
+opacity_weight = 1.0
+distortion_weight = 0.0
+quantile_weight = 0.0001
+softplus_beta = 10.0
+sampling_seed = "0xDEAD_BEEF_F00D_CAFE"
+densification_seed = "0xCAFE_F00D_DEAD_BEEF"
+
+[fixed]
+radius_lr_ratio = 0.0
+
+[trainable]
+radius_lr_ratio = 0.0005
+
+[execution]
+git_commit = "e061d12"
+gpu = "NVIDIA GeForce RTX 5070 12GB"
+driver = "595.71.05"
+release_binary_prebuilt = true
+memory_max_bytes = 6442450944
+memory_swap_max_bytes = 0
+artifact_path = "target/audit-runs/powerfoam-radius-ablation"
+
+[result]
+status = "completed-through-step-4000"
+fresh_ply_reload = true
+fixed_step2000_cells = 57500
+fixed_step2000_edges = 369216
+fixed_step2000_train_psnr = 13.41
+fixed_step2000_test_psnr = 13.22
+trainable_step2000_cells = 57500
+trainable_step2000_edges = 478224
+trainable_step2000_train_psnr = 13.70
+trainable_step2000_test_psnr = 13.51
+fixed_step4000_cells = 100569
+fixed_step4000_edges = 1493974
+fixed_step4000_train_psnr = 14.32
+fixed_step4000_test_psnr = 14.05
+trainable_step4000_cells = 100569
+trainable_step4000_edges = 1927808
+trainable_step4000_train_psnr = 14.66
+trainable_step4000_test_psnr = 14.36
+step4000_train_delta = 0.34
+step4000_test_delta = 0.31
+fixed_training_memory_peak_bytes = 792092672
+trainable_training_memory_peak_bytes = 592551936
+max_steps_used = 85
+truncated_rays = 0
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+required = [
+    "execution.git_commit",
+    "execution.gpu",
+    "execution.driver",
+    "fresh_ply_reload",
+    "fixed_step4000_cells",
+    "fixed_step4000_train_psnr",
+    "fixed_step4000_test_psnr",
+    "trainable_step4000_cells",
+    "trainable_step4000_train_psnr",
+    "trainable_step4000_test_psnr",
+]
