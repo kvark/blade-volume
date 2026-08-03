@@ -1521,7 +1521,9 @@ material path.
    quality from 23.0112 to 23.2402 dB at the safer 0.005 offset ratio and
    improves 37/39 frames. Keep both fields explicit because this is still one
    plane per site, and proceed to spatial texel appearance rather than another
-   duration increase.)
+   duration increase. On Room, a 160-entry path budget is exact on all 294
+   views and cuts a matched zero-rate training replay by 14.6% versus 256;
+   retain the larger candidate floor and select path budgets from telemetry.)
 2. Obtain or train a reference PowerFoam asset and cross-render it against the
    bounded-power CPU oracle and production WGSL.
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and

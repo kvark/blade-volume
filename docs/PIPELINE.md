@@ -613,6 +613,17 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   within separate-run GPU drift. Peak memory is flat at 563 MB and the full
   serial training suite, strict workspace clippy, and zero-loss/zero-gradient
   padded oriented-path test pass with no cgroup or GPU faults.
+- The selected 200K-site Room model needs at most 111 recorded entries over all
+  294 train/held-out views at 128². Re-evaluating it with 160 rather than 256
+  entries is pixel- and PSNR-identical. A matched 255-step, zero-learning-rate
+  replay reduces training time from 20.510 to 17.510 seconds (14.6%) and GPU
+  wait from 12.475 to 10.165 seconds (18.5%), with a 152/160 observed maximum
+  and no truncation. This is a measured Room recipe, not a lower global
+  default: the 400K-site stress scene still needs more than 1,024 sphere
+  candidates, and other scenes must retain their own telemetry gate. Lowering
+  the projected-index crossover from 1,024 to 256 rays is also rejected: on
+  the same sparse mixed-view replay it increases training time by 36% because
+  index construction costs more than the exhaustive gather saves.
 
 ### M3 — Training crate scaffolding
 
