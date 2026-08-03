@@ -2096,8 +2096,7 @@ fn upload_model_parameters(
             .map(|&radius| inv_radius_activation(radius))
             .collect();
         session.set_parameter("log_radii", &init_radii);
-        session.set_input("reference_positions", &init_positions);
-        session.set_input("reference_radii", radii);
+        set_weighted_path_reference(session, &init_positions, radii);
     }
 
     // `model.sh_coefficients` layout (lib.rs spec):
@@ -2116,6 +2115,12 @@ fn upload_model_parameters(
             session.set_parameter(&parameter_name(chan, k), &scratch);
         }
     }
+}
+
+fn set_weighted_path_reference(session: &mut mn::Session, positions: &[f32], radii: &[f32]) {
+    assert_eq!(positions.len(), 3 * radii.len());
+    session.set_input("reference_positions", positions);
+    session.set_input("reference_radii", radii);
 }
 
 /// Bake the mean per-view exposure into the SH-DC coefficients so the
@@ -4031,6 +4036,19 @@ fn fit_appearance_pixel_batched(
                 let resource_rebuild_start = std::time::Instant::now();
                 gpu_cloud.deinit(&gpu);
                 gpu_cloud = build_training_gpu_cloud(model, &gpu);
+                if let Some(ref radii) = model.radii {
+                    // The recorder's fresh intervals and Jacobians are
+                    // linearized at this downloaded geometry. Rebase the
+                    // graph at the same point; retaining the session's
+                    // original reference would count all earlier motion a
+                    // second time in `dt_ref + J * (x - x_ref)`.
+                    let reference_positions: Vec<f32> = model
+                        .points
+                        .iter()
+                        .flat_map(|point| [point.x, point.y, point.z])
+                        .collect();
+                    set_weighted_path_reference(&mut session, &reference_positions, radii);
+                }
                 phase_timings.resource_rebuild += resource_rebuild_start.elapsed();
             }
         }
@@ -5617,6 +5635,32 @@ mod tests {
         session.read_param_grad("log_radii", &mut radius_grad);
         assert!((radius_grad[0] - 1.25).abs() < 1.0e-4);
         assert!(radius_grad[1..].iter().all(|&value| value == 0.0));
+
+        let mut moved_positions: Vec<f32> = model
+            .points
+            .iter()
+            .flat_map(|point| [point.x, point.y, point.z])
+            .collect();
+        moved_positions[0] += 2.0;
+        let mut moved_radii = model.radii.clone().expect("fixture has radii");
+        moved_radii[0] += 0.4;
+        let moved_log_radii: Vec<f32> = moved_radii
+            .iter()
+            .map(|&radius| inv_radius_activation(radius))
+            .collect();
+        session.set_parameter("positions", &moved_positions);
+        session.set_parameter("log_radii", &moved_log_radii);
+        session.step();
+        session.wait();
+        let outputs = session.read_output(1);
+        assert!((outputs[0] - 8.5).abs() < 1.0e-5, "outputs={outputs:?}");
+
+        session.set_input("recorded_dt", &[9.25]);
+        set_weighted_path_reference(&mut session, &moved_positions, &moved_radii);
+        session.step();
+        session.wait();
+        let outputs = session.read_output(1);
+        assert!((outputs[0] - 9.25).abs() < 1.0e-5, "outputs={outputs:?}");
     }
 
     #[test]

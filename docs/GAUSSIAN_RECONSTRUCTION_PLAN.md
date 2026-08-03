@@ -142,12 +142,21 @@ The selected graph-packing rerun keeps every checkpoint parameter and the
 256-step path cap, but gathers the degree-2 RGB SH coefficients as one wide
 table. Three full repeats train in 16.00--16.05 seconds and reach 24.09--24.20 dB
 held-pose radiance, 0.624--0.627 position RMSE, and 18.39--18.65 dB under the
-unseen light. The latest selected reconstruction, including the follow-up path
-mask cleanup, is
-`target/audit-runs/mask-elision-v1/model.ply` (SHA-256
-`700e645c9aa2b34e91d655cf941b9c9729c10ed68c2fff6bd2959daa536b8fea`); its
+unseen light. The latest selected reconstruction, including the follow-up
+path-mask cleanup and weighted-reference correction, is
+`target/audit-runs/weighted-reference-rebase-v3/model.ply` (SHA-256
+`cbdf65d844d7749806fa8227a49990d978bb9ee2bc6226013404cfcc3955fbe8`); its
 Gaussian PBR surface is `scene.rply` beside it (SHA-256
-`47e7342a37ba09096d9a4d4254fa7a08e1c18da9d28569206f3af387b0b2797c`).
+`8bf8e6b3b9dd86040906ab65250b0d82329d169c24e0ab4b4e630d4d869758ae`).
+
+The correction closes a weighted-training error at geometry rebuilds. Fresh
+recorder intervals and Jacobians were based on the newly downloaded cloud, but
+the differentiable graph still measured position/radius deltas from the
+session-initial cloud. The graph now rebases those inputs whenever the recorder
+cloud is rebuilt, so `dt_ref + J * (x - x_ref)` uses one consistent snapshot.
+A physical-GPU regression demonstrates both the stale offset and exact rebased
+identity. Three complete corrected repeats take 15.41--15.46 seconds and stay
+within the existing radiance, geometry, and held-light variation.
 
 Higher camera-lattice position rates were not selected. A 0.08 ratio with a
 300-step warmup improves the first three repeats to 25.52--25.85 dB on held
@@ -214,6 +223,14 @@ passes and ten profiled steps improve from a median 11.60 to 11.10 ms. Three
 matched full runs improve median training time from 15.907 to 15.434 seconds
 (3.1%), with overlapping held-pose, geometry, and held-light ranges. The full
 workspace GPU test scope peaks at 3.08 GB and records no memory event.
+
+Re-tuning after the weighted-reference correction does not justify a default
+change. A 0.02 position-rate ratio improves all four synthetic held-pose means
+and reduces held-depth RMSE, but its material/depth tail still varies; 0.03 and
+0.04 lose the worst held pose immediately. On full Bonsai, 0.02 leads 0.01 at
+step 2,000 by 0.90 dB on the selected eight and 0.24 dB over all 37 views. At
+the losslessly continued step-4,000 checkpoint, it is only +0.06 dB selected
+and is -0.23/-0.14 dB train/all-37. The shared default remains 0.01.
 
 Global path caps of 128 and 192 are rejected: 128 gives no meaningful speed
 advantage over packing at 256 and loses the held-view tail, while 192 produces
