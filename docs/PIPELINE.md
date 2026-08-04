@@ -915,6 +915,29 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   evaluation rays remain untruncated. The paired scope peaks at 897 MiB and
   records no swap, pressure, OOM, kill, or GPU fault.
 
+#### M2ag — Tighten embedding dispatch (implemented and gated)
+
+- Meganeura revision `09d0873` dispatches embedding work over the flattened
+  output size, `ceil(seq × hidden / 256)`, for both f32 and f16 tables. The
+  previous `seq × ceil(hidden / 256)` expression over-dispatched narrow tables
+  by as much as 256×; reconstruction's one- to sixteen-component tables sent
+  almost all invocations through the shader's bounds check.
+- Compiler coverage exercises a narrow partial workgroup and the one-element
+  f16 boundary beyond 515 complete workgroups. Direct f32/f16 GPU checks,
+  exact oriented resume, strict lint, the complete Blade workspace suite, and
+  the Meganeura all-target suite under its established four order-sensitive
+  exclusions pass.
+- Three matched 200K-site profiles keep the graph at 283 passes while reducing
+  the ten embedding passes from 4.98 to 1.55 ms and median GPU time from 16.67
+  to 13.55 ms (-18.7%). The three-step loss trajectories are unchanged.
+- On a back-to-back matched 2,040-step Room pair, training falls
+  102.918→90.827 seconds (-11.7%), GPU wait 59.915→52.443 seconds (-12.5%),
+  command submission 38.443→33.288 seconds (-13.4%), and complete command time
+  107.495→95.070 seconds (-11.6%). Fresh-Ply quality is preserved at
+  25.4099/23.2624 dB versus 25.4095/23.2647 dB. All training and evaluation
+  rays remain untruncated. The paired 6 GiB scope peaks at 897 MiB and records
+  no swap, pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

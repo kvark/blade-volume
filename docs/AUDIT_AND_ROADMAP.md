@@ -811,6 +811,17 @@ At the audited revision:
   109.103→107.490 seconds (-1.5%), while preserving 25.4125/23.2703 dB versus
   25.4096/23.2625 dB and zero truncation. The paired 6 GiB scope peaks at
   897 MiB without memory or GPU faults.
+- Meganeura `09d0873` computes f32/f16 embedding dispatches from the flattened
+  output size instead of rounding each narrow row independently. This removes
+  up to 256× excess workgroups without changing the shader or graph. Compiler
+  boundary coverage, direct GPU checks, exact resume, and both repositories'
+  practical suites pass. Three profiles keep 283 passes while reducing the ten
+  embeddings 4.98→1.55 ms and median GPU time 16.67→13.55 ms (-18.7%). The
+  matched Room replay reduces training 102.918→90.827 seconds (-11.7%), GPU
+  wait 59.915→52.443 seconds (-12.5%), and complete time 107.495→95.070
+  seconds (-11.6%), while preserving 25.4099/23.2624 dB versus
+  25.4095/23.2647 dB and zero truncation. The paired 6 GiB scope peaks at
+  897 MiB without swap, pressure, OOM, kill, or GPU fault.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
