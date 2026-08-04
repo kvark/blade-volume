@@ -1064,6 +1064,31 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   at 648 MiB and the serialized workspace gate at 4.5 GiB, with no swap, OOM,
   kill, or GPU fault.
 
+#### M2am — Initialize weighted path rows in gather (implemented and gated)
+
+- Each PowerFoam gather workgroup already assigns 64 lanes to one sampled ray.
+  Those lanes now initialize that ray's cell, next-cell, mask, and optional
+  previous-cell row before gathering supports. Weighted training and
+  contribution collection no longer encode four redundant transfer fills per
+  dispatch; payload/Jacobian initialization is unchanged.
+- On the 200K-site, 4,096-ray, 16-view Room shape, the recurring transfer pass
+  falls from 0.32 to 0.01 ms. The added stores raise gather from 3.31 to
+  3.54 ms, leaving recorder GPU time at 10.24 to 10.18 ms. The one-time
+  payload-initialization step regresses by 0.29 ms and is amortized over the
+  session.
+- Two order-balanced 510-step pairs reduce combined path submission/GPU wait
+  from 17.914 to 17.456 seconds (-2.6%) and training from 20.518 to 20.165
+  seconds (-1.7%). Two 2,040-step pairs confirm 69.460 to 68.648 seconds
+  (-1.2%) and 74.004 to 73.166 seconds (-1.1%), respectively.
+- Average fresh-Ply quality is preserved at 25.4137/23.2738 dB versus
+  25.4105/23.2644 dB. All 33.42M long-gate training rays and 19.27M evaluation
+  rays complete without truncation.
+- The physical path oracle deliberately poisons weighted index/mask rows before
+  dispatch and all 12 cases pass. Exact oriented resume, formatting, strict
+  all-target lint, and the locked workspace suite also pass. The long gate
+  peaks at 778 MiB and the serialized workspace gate at 5.28 GiB under the
+  6 GiB cgroup limit, with no swap, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
