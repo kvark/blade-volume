@@ -819,6 +819,7 @@ fn build_volumetric_graph_with_options(
             geometry_terms,
         ) {
             (Some(step_normals), offsets, Some(recorded_gradient), geometry_terms) => {
+                let recorded_gradient = g.materialize(recorded_gradient);
                 let gradient_xyz_flat = g.split_a(recorded_gradient, pl as u32, 3, 1, 1);
                 let gradient_xyz = g.reshape(gradient_xyz_flat, &[pl, 3]);
                 let product = g.mul(step_normals, gradient_xyz);
@@ -7147,6 +7148,10 @@ mod tests {
             ColorLoss::L1,
         );
         let weighted = vg.weighted_path.unwrap();
+        let surface_jacobian = weighted.dt_grad_surface_normal.unwrap();
+        assert!(
+            matches!(graph.node(surface_jacobian).op, mn::graph::Op::Input { ref name } if name == "dt_grad_surface_normal")
+        );
         let surface_normals = weighted.surface_normals.unwrap();
         let normalized_normals = graph
             .nodes()
@@ -7170,6 +7175,28 @@ mod tests {
         };
         assert_eq!(embedding_count(normalized_normals), 1);
         assert_eq!(embedding_count(surface_offsets), 1);
+        let materializes: Vec<&mn::graph::Node> = graph
+            .nodes()
+            .iter()
+            .filter(|node| {
+                matches!(node.op, mn::graph::Op::Materialize)
+                    && node.inputs.first() == Some(&surface_jacobian)
+            })
+            .collect();
+        assert_eq!(materializes.len(), 1);
+        let staged = materializes[0].id;
+
+        let split_count = graph
+            .nodes()
+            .iter()
+            .filter(|node| {
+                matches!(
+                    node.op,
+                    mn::graph::Op::SplitA { .. } | mn::graph::Op::SplitB { .. }
+                ) && node.inputs.first() == Some(&staged)
+            })
+            .count();
+        assert_eq!(split_count, 2);
     }
 
     #[test]
