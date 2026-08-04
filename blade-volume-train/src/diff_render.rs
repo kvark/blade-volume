@@ -3764,10 +3764,46 @@ fn inv_radius_activation(radius: f32) -> f32 {
     inv_density_activation(radius, RADIUS_SOFTPLUS_BETA)
 }
 
-fn download_model_surface_planes(session: &mn::Session, model: &mut vol::PointCloudModel) {
+type ParameterReadback = std::iter::Zip<std::vec::IntoIter<String>, std::vec::IntoIter<Vec<f32>>>;
+
+fn append_surface_plane_parameter_names(model: &vol::PointCloudModel, names: &mut Vec<String>) {
+    if model.surface_normals.is_some() {
+        names.push("surface_normals".to_string());
+    }
+    if model.surface_offsets.is_some() {
+        names.push("surface_offsets".to_string());
+    }
+    if model.surface_detail.is_some() {
+        names.push("surface_detail_offsets".to_string());
+        names.push("surface_detail_heights".to_string());
+    }
+}
+
+fn append_geometry_parameter_names(model: &vol::PointCloudModel, names: &mut Vec<String>) {
+    names.push("positions".to_string());
+    if model.radii.is_some() {
+        names.push("log_radii".to_string());
+    }
+    append_surface_plane_parameter_names(model, names);
+}
+
+fn read_model_parameters(session: &mn::Session, names: Vec<String>) -> ParameterReadback {
+    let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let values = session.read_params(&name_refs);
+    names.into_iter().zip(values)
+}
+
+fn next_parameter(readback: &mut ParameterReadback, expected: &str) -> Vec<f32> {
+    let (name, values) = readback
+        .next()
+        .unwrap_or_else(|| panic!("missing parameter readback for {expected}"));
+    assert_eq!(name, expected);
+    values
+}
+
+fn apply_model_surface_planes(model: &mut vol::PointCloudModel, readback: &mut ParameterReadback) {
     if let Some(ref mut normals) = model.surface_normals {
-        let mut out_normals = vec![0.0_f32; normals.len() * 3];
-        session.read_param("surface_normals", &mut out_normals);
+        let out_normals = next_parameter(readback, "surface_normals");
         for (normal, values) in normals.iter_mut().zip(out_normals.chunks_exact(3)) {
             *normal = glam::Vec3::from_slice(values).normalize_or_zero();
             if *normal == glam::Vec3::ZERO {
@@ -3776,22 +3812,20 @@ fn download_model_surface_planes(session: &mn::Session, model: &mut vol::PointCl
         }
     }
     if let Some(ref mut offsets) = model.surface_offsets {
-        session.read_param("surface_offsets", offsets);
+        *offsets = next_parameter(readback, "surface_offsets");
     }
     if let Some(ref mut detail) = model.surface_detail {
-        let mut offsets = vec![0.0_f32; detail.offsets.len() * 3];
-        session.read_param("surface_detail_offsets", &mut offsets);
-        session.read_param("surface_detail_heights", &mut detail.heights);
+        let offsets = next_parameter(readback, "surface_detail_offsets");
+        detail.heights = next_parameter(readback, "surface_detail_heights");
         for (offset, values) in detail.offsets.iter_mut().zip(offsets.chunks_exact(3)) {
             *offset = glam::Vec3::from_slice(values);
         }
     }
 }
 
-fn download_model_geometry(session: &mn::Session, model: &mut vol::PointCloudModel) {
+fn apply_model_geometry(model: &mut vol::PointCloudModel, readback: &mut ParameterReadback) {
     let n_cells = model.points.len();
-    let mut out_positions = vec![0.0_f32; n_cells * 3];
-    session.read_param("positions", &mut out_positions);
+    let out_positions = next_parameter(readback, "positions");
     for i in 0..n_cells {
         model.points[i].x = out_positions[i * 3];
         model.points[i].y = out_positions[i * 3 + 1];
@@ -3799,13 +3833,28 @@ fn download_model_geometry(session: &mn::Session, model: &mut vol::PointCloudMod
     }
 
     if let Some(ref mut radii) = model.radii {
-        let mut out_radii = vec![0.0_f32; n_cells];
-        session.read_param("log_radii", &mut out_radii);
+        let out_radii = next_parameter(readback, "log_radii");
         for (radius, &raw) in radii.iter_mut().zip(out_radii.iter()) {
             *radius = radius_activation(raw);
         }
     }
-    download_model_surface_planes(session, model);
+    apply_model_surface_planes(model, readback);
+}
+
+fn download_model_surface_planes(session: &mn::Session, model: &mut vol::PointCloudModel) {
+    let mut names = Vec::new();
+    append_surface_plane_parameter_names(model, &mut names);
+    let mut readback = read_model_parameters(session, names);
+    apply_model_surface_planes(model, &mut readback);
+    assert!(readback.next().is_none());
+}
+
+fn download_model_geometry(session: &mn::Session, model: &mut vol::PointCloudModel) {
+    let mut names = Vec::new();
+    append_geometry_parameter_names(model, &mut names);
+    let mut readback = read_model_parameters(session, names);
+    apply_model_geometry(model, &mut readback);
+    assert!(readback.next().is_none());
 }
 
 fn download_model_parameters(
@@ -3814,25 +3863,44 @@ fn download_model_parameters(
     softplus_beta: f32,
 ) {
     let n_cells = model.points.len();
-    download_model_geometry(session, model);
+    let num_components = model.sh_component_count();
+    let mut names = Vec::new();
+    append_geometry_parameter_names(model, &mut names);
+    names.push("log_density".to_string());
+    for chan in ["sh_r", "sh_g", "sh_b"] {
+        names.push(chan.to_string());
+        if num_components > 1 {
+            names.push(sh_rest_parameter_name(chan));
+        }
+    }
+    if model.surface_color_coefficients.is_some() {
+        names.push("surface_color_coefficients".to_string());
+    }
+    if model.surface_detail.is_some() {
+        names.push("surface_detail_colors".to_string());
+    }
+    if model.spherical_voronoi.is_some() {
+        names.push("spherical_voronoi_axes".to_string());
+        names.push("spherical_voronoi_colors".to_string());
+    }
 
-    let mut out_density = vec![0.0f32; n_cells];
-    session.read_param("log_density", &mut out_density);
+    let mut readback = read_model_parameters(session, names);
+    apply_model_geometry(model, &mut readback);
+
+    let out_density = next_parameter(&mut readback, "log_density");
     for (i, d) in out_density.iter().enumerate() {
         model.points[i].w = density_activation(*d, softplus_beta);
     }
 
-    let num_components = model.sh_component_count();
     let row_stride = num_components * 3;
     for (chan_idx, chan) in ["sh_r", "sh_g", "sh_b"].iter().enumerate() {
-        let mut dc = vec![0.0_f32; n_cells];
-        session.read_param(chan, &mut dc);
+        let dc = next_parameter(&mut readback, chan);
         for (i, &value) in dc.iter().enumerate() {
             model.sh_coefficients[i * row_stride + chan_idx] = value;
         }
         if num_components > 1 {
-            let mut rest = vec![0.0_f32; n_cells * (num_components - 1)];
-            session.read_param(&sh_rest_parameter_name(chan), &mut rest);
+            let rest_name = sh_rest_parameter_name(chan);
+            let rest = next_parameter(&mut readback, &rest_name);
             for i in 0..n_cells {
                 for k in 1..num_components {
                     model.sh_coefficients[i * row_stride + k * 3 + chan_idx] =
@@ -3843,8 +3911,7 @@ fn download_model_parameters(
     }
     if let Some(ref mut coefficients) = model.surface_color_coefficients {
         let components = vol::SURFACE_COLOR_COMPONENTS;
-        let mut packed = vec![0.0_f32; n_cells * components * 3];
-        session.read_param("surface_color_coefficients", &mut packed);
+        let packed = next_parameter(&mut readback, "surface_color_coefficients");
         for point in 0..n_cells {
             for basis in 0..components {
                 for channel in 0..3 {
@@ -3856,8 +3923,7 @@ fn download_model_parameters(
     }
     if let Some(ref mut detail) = model.surface_detail {
         let sites = vol::SURFACE_DETAIL_SITES;
-        let mut colors = vec![0.0_f32; n_cells * sites * 3];
-        session.read_param("surface_detail_colors", &mut colors);
+        let colors = next_parameter(&mut readback, "surface_detail_colors");
         for point in 0..n_cells {
             let base = point * sites * 3;
             for site in 0..sites {
@@ -3871,10 +3937,8 @@ fn download_model_parameters(
     }
     if let Some(ref mut spherical_voronoi) = model.spherical_voronoi {
         let sites = vol::SPHERICAL_VORONOI_SITES;
-        let mut axes = vec![0.0_f32; n_cells * sites * 3];
-        let mut colors = vec![0.0_f32; n_cells * sites * 3];
-        session.read_param("spherical_voronoi_axes", &mut axes);
-        session.read_param("spherical_voronoi_colors", &mut colors);
+        let axes = next_parameter(&mut readback, "spherical_voronoi_axes");
+        let colors = next_parameter(&mut readback, "spherical_voronoi_colors");
         for point in 0..n_cells {
             for site in 0..sites {
                 let base = point * sites * 3;
@@ -3888,6 +3952,7 @@ fn download_model_parameters(
             }
         }
     }
+    assert!(readback.next().is_none());
 }
 
 /// Per-cell farthest-neighbour distance (`cell_radius`) and the index of

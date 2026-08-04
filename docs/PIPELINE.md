@@ -1118,7 +1118,7 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   serialized workspace gate at 5.49 GiB under the 6 GiB cgroup limit, with no
   swap, OOM, kill, or GPU fault.
 
-#### M2ao — Eight-site spatial surface detail (implemented, quality gate pending)
+#### M2ao — Eight-site spatial surface detail (implemented and Room-gated)
 
 - Oriented PowerFoam models can now carry eight radius-normalized tangent
   sites, eight signed heights, and eight RGB residuals per point. The compact
@@ -1147,9 +1147,34 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   are supported.
 - Physical gates cover CPU parity and nonzero gradients for every table,
   external query-buffer binding, repeated geometry refresh, table/Adam remap
-  through densification, and exact interrupted/resumed training. The next gate
-  is a matched Room spatial-detail run against the selected compact-color
-  checkpoint, followed by Bonsai only if Room improves held-out PSNR.
+  through densification, and exact interrupted/resumed training.
+- The matched 200K-site Room gate uses 255 training and 39 every-eighth
+  held-out views at 128², 4,096 rays, 16 views per batch, and 2,040 updates.
+  Two control replicas average 25.4147/23.2643 dB train/held out. Site,
+  height, and colour ratios `0.1/0.05/0.05` average 25.6484/23.4155 dB,
+  gains of +0.2337/+0.1513 dB. Detail improves 37/39 held-out frames; the two
+  regressions are -0.115 and -0.070 dB, so the representation and rates are
+  selected for the experimental spatial arm but remain opt-in until they
+  transfer to Bonsai.
+- The selected long models remain geometrically bounded: tangent-site radius
+  p99 is about 0.507 support radii, absolute normalized height p99 is about
+  0.267, and fewer than 0.003% of sites exceed one support radius. The PLY
+  grows from 68.65 to 113.45 MB. Full GPU evaluation is effectively neutral
+  (22.43 versus 23.03 seconds across order-balanced runs); do not claim an
+  intrinsic renderer speedup from that noise.
+- Projecting all detail sites once before path gathering saves 6.0% training
+  wall time, but is rejected: its four-replica mean is within aggregate noise
+  while 17/39 averaged held-out frames regress and the worst loses 0.09 dB.
+  The production graph keeps the path-local projection until a quality-neutral
+  formulation is demonstrated.
+- Meganeura revision `7967ca2` instead batches final and geometry-refresh
+  parameter reads through cached download memory. This does not alter a graph
+  operation or optimizer value. Against four pre-change detail replicas,
+  state readback falls from 15.051 to 0.864 seconds (-94.3%) and two new
+  training replicas average 126.293 versus 141.018 seconds (-10.4%). Their
+  25.6383/23.4041 and 25.6443/23.4022 dB results stay inside the prior replica
+  spread. The 6 GiB scope peaks at 1,658,667,008 bytes with zero swap,
+  pressure, OOM, kill, or GPU fault. Bonsai transfer is the next quality gate.
 
 ### M3 — Training crate scaffolding
 

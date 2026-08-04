@@ -736,9 +736,23 @@ At the audited revision:
   initialization, PLY, one-submit GPU geometry refresh, densification/Adam
   inheritance, and exact resume are covered. Position/radius learning is
   deliberately blocked until the support-entry query has a topology Jacobian;
-  frozen-topology detail and densification remain supported. A matched Room
-  held-out gate is the next decision point before this becomes a recommended
-  reconstruction stage.
+  frozen-topology detail and densification remain supported. The matched
+  200K-site Room gate selects site/height/colour ratios `0.1/0.05/0.05`:
+  two replicas improve the control mean by +0.2337/+0.1513 dB train/held out
+  and improve 37/39 held-out views. Two tail views lose 0.115 and 0.070 dB,
+  so the arm remains opt-in pending Bonsai transfer. Its PLY grows
+  68.65→113.45 MB and its initial training graph is about 1.96× the control;
+  full GPU evaluation time is neutral within order noise. A pre-gather site
+  projection optimization is rejected despite a 6.0% wall-time win because
+  17/39 averaged views regress. Quality remains the selection boundary.
+- Meganeura `7967ca2` adds one-transfer F32 parameter readback through cached
+  download memory, and Blade uses it for every model/geometry snapshot. It
+  leaves the training graph and values unchanged while reducing four-replica
+  mean detail state readback from 15.051 to 0.864 seconds (-94.3%). Two fresh
+  2,040-step replicas average 126.293 seconds versus 141.018 seconds before
+  (-10.4%) and land inside the previous PSNR spread at 23.4041 and 23.4022 dB
+  held out. Peak scoped memory is 1,658,667,008 bytes with no swap, pressure,
+  OOM, kill, or GPU fault.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
@@ -1716,8 +1730,11 @@ material path.
    plane per site. The first minimal spatial-color arm now passes the two-scene
    mean gate at ratio 0.02: +0.0176 dB all-37 on Bonsai and +0.0149 dB all-39
    on Room, for +4.8% and +14.6% training time at their measured graph sizes.
-   Keep it opt-in while implementing the reference detail-site semantics and
-   checking the regressed tail views. A compact 48-float additive Spherical
+   Keep it opt-in while checking the regressed tail views. The subsequent
+   compact eight-site detail arm passes its Room gate at site/height/colour
+   ratios `0.1/0.05/0.05`, adding 0.1513 dB held out and improving 37/39
+   views; its next decision point is a matched Bonsai transfer rather than
+   more Room continuation. A compact 48-float additive Spherical
    Voronoi residual is now implemented but rejected: learned and fixed axes
    lose 0.0168 and 0.0137 dB held out on Room while adding about 22% training
    time. On Room, a 160-entry path budget is exact on all 294 views; the full
