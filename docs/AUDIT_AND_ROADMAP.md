@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -743,6 +743,19 @@ At the audited revision:
   reaches 25.4098/23.2487 dB, losing 0.0158 dB held out versus 160 rows.
   Exact paths are necessary but not sufficient evidence for a training
   configuration change.
+- Zero-rate fixed-topology positions and radii are now detached from the
+  production graph instead of accumulating unused gradients and Adam moments.
+  Densification and reference schedules keep their required geometry paths,
+  and the public low-level graph remains fully differentiable. This required a
+  focused Meganeura compiler correction (`ad08f97`) so scalar placeholders for
+  detached parameters are not registered as optimizer gradients. Structural
+  gradient coverage and exact mixed-view/oriented/densifying resume tests pass.
+  On the matched 2,040-step Room gate, the graph drops 443→419 passes and
+  training falls 146.390→139.111 seconds (-5.0%) while held-out quality moves
+  only 23.2680→23.2625 dB. GPU wait falls 6.3%; all training/evaluation rays are
+  untruncated, and the 6 GiB scopes report no swap, pressure, OOM, kill, or GPU
+  fault. Frozen checkpoints omit only unused moments; a later explicit
+  geometry unfreeze starts those moments from zero.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched

@@ -738,6 +738,38 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   therefore remain telemetry-selected without silently treating exact
   traversal as an identical optimizer trajectory.
 
+#### M2z — Freeze zero-rate geometry in the graph (implemented and gated)
+
+- Fixed-topology training now detaches positions and radii when their effective
+  learning rates are zero. Densification deliberately retains the established
+  full-gradient graph because its statistics and topology rebuilds remap all
+  geometry moments. The RadFoam-v1 schedule and relative parameter groups also
+  retain position gradients when their policy supplies a non-zero rate. Public
+  low-level graph construction keeps its full-gradient contract.
+- Meganeura is pinned to `ad08f97`, which excludes detached scalar-gradient
+  sentinels from optimizer state. Without that compiler fix, dead parameters
+  still appeared trainable and Adam could read beyond the one-element sentinel.
+  A structural GPU test requires frozen weighted positions/radii to have no
+  gradient while density, normals, offsets, and spatial colour remain trainable.
+- Frozen checkpoints contain their exact parameter values but omit unused Adam
+  moments. Resuming the same configuration is exact; deliberately enabling
+  geometry later starts the previously absent moments at zero. Mixed-view,
+  oriented-PowerFoam, and topology-changing RadFoam segmented resumes all match
+  their uninterrupted controls.
+- The representative 4,096-ray × 160-row graph falls from 443 to 419 GPU passes
+  and 29.73→26.25 ms. This removes 800,000 gradient elements and 1.6 million
+  Adam-moment elements (9.6 MB total) for the selected 200K-point position and
+  radius tables. The matched 2,040-step Room replay reduces training
+  146.390→139.111 seconds (-5.0%), GPU wait 94.796→88.849 seconds (-6.3%), and
+  complete command time 150.587→143.588 seconds (-4.6%). Fresh-Ply quality is
+  preserved at 25.4113/23.2625 dB versus 25.4129/23.2680 dB. All 8.36M training
+  and 4.82M evaluation rays remain untruncated; the 6 GiB scopes record no swap,
+  pressure, OOM, kill, or GPU fault.
+- The remaining profile is dominated by live path-table embeddings, nonlinear
+  activation, and appearance projection. Further optimization must preserve
+  the 160-row training shape or pass another matched quality gate; exact path
+  telemetry alone did not justify the faster 128-row trajectory.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
