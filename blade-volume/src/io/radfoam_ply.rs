@@ -107,6 +107,9 @@ struct Schema {
     radius: Option<usize>,
     surface_normal: Option<[usize; 3]>,
     surface_offset: Option<usize>,
+    surface_detail_offsets: Vec<usize>,
+    surface_detail_heights: Vec<usize>,
+    surface_detail_colors: Vec<usize>,
     surface_color: Vec<usize>,
     spherical_voronoi_axes: Vec<usize>,
     spherical_voronoi_colors: Vec<usize>,
@@ -201,6 +204,45 @@ impl Schema {
             ));
         }
 
+        let surface_detail_offsets = indexed_float_properties(
+            vertex,
+            "blade_surface_detail_offset_",
+            "surface-detail offset",
+        )?;
+        let surface_detail_heights = indexed_float_properties(
+            vertex,
+            "blade_surface_detail_height_",
+            "surface-detail height",
+        )?;
+        let surface_detail_colors = indexed_float_properties(
+            vertex,
+            "blade_surface_detail_color_",
+            "surface-detail color",
+        )?;
+        let expected_detail_offsets = crate::SURFACE_DETAIL_SITES * 3;
+        let expected_detail_heights = crate::SURFACE_DETAIL_SITES;
+        let expected_detail_colors = crate::SURFACE_DETAIL_SITES * 3;
+        let has_surface_detail = !surface_detail_offsets.is_empty()
+            || !surface_detail_heights.is_empty()
+            || !surface_detail_colors.is_empty();
+        if has_surface_detail
+            && (surface_detail_offsets.len() != expected_detail_offsets
+                || surface_detail_heights.len() != expected_detail_heights
+                || surface_detail_colors.len() != expected_detail_colors)
+        {
+            return Err(LoadError::invalid(format!(
+                "RadFoam PLY surface-detail property counts are offsets={} heights={} colors={}, expected {expected_detail_offsets}, {expected_detail_heights}, and {expected_detail_colors}",
+                surface_detail_offsets.len(),
+                surface_detail_heights.len(),
+                surface_detail_colors.len(),
+            )));
+        }
+        if has_surface_detail && surface_normal.is_none() {
+            return Err(LoadError::invalid(
+                "RadFoam PLY surface detail requires radius, nx, ny, and nz properties",
+            ));
+        }
+
         let mut surface_color = Vec::new();
         for property in &vertex.properties {
             if let Some(suffix) = property.name.strip_prefix("blade_surface_color_") {
@@ -282,6 +324,9 @@ impl Schema {
             radius,
             surface_normal,
             surface_offset,
+            surface_detail_offsets,
+            surface_detail_heights,
+            surface_detail_colors,
             surface_color: surface_color.into_iter().map(|entry| entry.1).collect(),
             spherical_voronoi_axes,
             spherical_voronoi_colors,
@@ -552,6 +597,19 @@ fn allocate_model(
         Some(_) => Some(allocate_vec(schema.point_count, 0.0, "surface offset")?),
         None => None,
     };
+    let surface_detail = if schema.surface_detail_offsets.is_empty() {
+        None
+    } else {
+        let count = schema
+            .point_count
+            .checked_mul(crate::SURFACE_DETAIL_SITES)
+            .ok_or_else(|| LoadError::invalid("RadFoam PLY surface-detail allocation overflow"))?;
+        Some(crate::SurfaceDetail {
+            offsets: allocate_vec(count, glam::Vec3::ZERO, "surface-detail offset")?,
+            heights: allocate_vec(count, 0.0, "surface-detail height")?,
+            colors: allocate_vec(count, glam::Vec3::ZERO, "surface-detail color")?,
+        })
+    };
     let surface_color_coefficients = if schema.surface_color.is_empty() {
         None
     } else {
@@ -584,6 +642,7 @@ fn allocate_model(
         radii,
         surface_normals,
         surface_offsets,
+        surface_detail,
         surface_color_coefficients,
         spherical_voronoi,
     };
@@ -661,6 +720,23 @@ fn decode_binary(
             (model.surface_offsets.as_mut(), schema.surface_offset)
         {
             offsets[index] = read_f32(&row, offset);
+        }
+        if let Some(ref mut detail) = model.surface_detail {
+            let base = index * crate::SURFACE_DETAIL_SITES;
+            for site in 0..crate::SURFACE_DETAIL_SITES {
+                let component = site * 3;
+                detail.offsets[base + site] = glam::Vec3::new(
+                    read_f32(&row, schema.surface_detail_offsets[component]),
+                    read_f32(&row, schema.surface_detail_offsets[component + 1]),
+                    read_f32(&row, schema.surface_detail_offsets[component + 2]),
+                );
+                detail.heights[base + site] = read_f32(&row, schema.surface_detail_heights[site]);
+                detail.colors[base + site] = glam::Vec3::new(
+                    read_f32(&row, schema.surface_detail_colors[component]),
+                    read_f32(&row, schema.surface_detail_colors[component + 1]),
+                    read_f32(&row, schema.surface_detail_colors[component + 2]),
+                );
+            }
         }
         if let Some(ref mut coefficients) = model.surface_color_coefficients {
             let stride = crate::SURFACE_COLOR_COMPONENTS * 3;
@@ -762,6 +838,9 @@ fn decode_ascii(
         let mut radius = 0.0;
         let mut surface_normal = glam::Vec3::ZERO;
         let mut surface_offset = 0.0;
+        let mut surface_detail_offsets = [0.0_f32; crate::SURFACE_DETAIL_SITES * 3];
+        let mut surface_detail_heights = [0.0_f32; crate::SURFACE_DETAIL_SITES];
+        let mut surface_detail_colors = [0.0_f32; crate::SURFACE_DETAIL_SITES * 3];
         let mut surface_color = [0.0_f32; crate::SURFACE_COLOR_COMPONENTS * 3];
         let mut spherical_voronoi_axes = [0.0_f32; crate::SPHERICAL_VORONOI_SITES * 3];
         let mut spherical_voronoi_colors = [0.0_f32; crate::SPHERICAL_VORONOI_SITES * 3];
@@ -790,6 +869,24 @@ fn decode_ascii(
                 "ny" => surface_normal.y = parse_f32(token, "ny")?,
                 "nz" => surface_normal.z = parse_f32(token, "nz")?,
                 "surface_offset" => surface_offset = parse_f32(token, "surface_offset")?,
+                name if name.starts_with("blade_surface_detail_offset_") => {
+                    let component = name["blade_surface_detail_offset_".len()..]
+                        .parse::<usize>()
+                        .unwrap();
+                    surface_detail_offsets[component] = parse_f32(token, name)?;
+                }
+                name if name.starts_with("blade_surface_detail_height_") => {
+                    let component = name["blade_surface_detail_height_".len()..]
+                        .parse::<usize>()
+                        .unwrap();
+                    surface_detail_heights[component] = parse_f32(token, name)?;
+                }
+                name if name.starts_with("blade_surface_detail_color_") => {
+                    let component = name["blade_surface_detail_color_".len()..]
+                        .parse::<usize>()
+                        .unwrap();
+                    surface_detail_colors[component] = parse_f32(token, name)?;
+                }
                 name if name.starts_with("blade_surface_color_") => {
                     let component = name["blade_surface_color_".len()..]
                         .parse::<usize>()
@@ -830,6 +927,17 @@ fn decode_ascii(
         }
         if let Some(ref mut offsets) = model.surface_offsets {
             offsets[index] = surface_offset;
+        }
+        if let Some(ref mut detail) = model.surface_detail {
+            let base = index * crate::SURFACE_DETAIL_SITES;
+            for (site, &height) in surface_detail_heights.iter().enumerate() {
+                let component = site * 3;
+                detail.offsets[base + site] =
+                    glam::Vec3::from_slice(&surface_detail_offsets[component..component + 3]);
+                detail.heights[base + site] = height;
+                detail.colors[base + site] =
+                    glam::Vec3::from_slice(&surface_detail_colors[component..component + 3]);
+            }
         }
         if let Some(ref mut coefficients) = model.surface_color_coefficients {
             let stride = crate::SURFACE_COLOR_COMPONENTS * 3;

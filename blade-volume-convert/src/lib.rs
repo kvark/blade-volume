@@ -853,6 +853,7 @@ pub fn convert_gltf(
         radii: None,
         surface_normals: None,
         surface_offsets: None,
+        surface_detail: None,
         surface_color_coefficients: None,
         spherical_voronoi: None,
     };
@@ -1742,6 +1743,23 @@ fn write_radfoam_ply_ascii(
     if model.surface_offsets.is_some() {
         writeln!(file, "property float surface_offset")?;
     }
+    if model.surface_detail.is_some() {
+        for component in 0..vol::SURFACE_DETAIL_SITES * 3 {
+            writeln!(
+                file,
+                "property float blade_surface_detail_offset_{component}"
+            )?;
+        }
+        for site in 0..vol::SURFACE_DETAIL_SITES {
+            writeln!(file, "property float blade_surface_detail_height_{site}")?;
+        }
+        for component in 0..vol::SURFACE_DETAIL_SITES * 3 {
+            writeln!(
+                file,
+                "property float blade_surface_detail_color_{component}"
+            )?;
+        }
+    }
     if model.surface_color_coefficients.is_some() {
         for component in 0..vol::SURFACE_COLOR_COMPONENTS * 3 {
             writeln!(file, "property float blade_surface_color_{component}")?;
@@ -1803,6 +1821,18 @@ fn write_radfoam_ply_ascii(
         }
         if let Some(ref offsets) = model.surface_offsets {
             write!(file, " {}", offsets[i])?;
+        }
+        if let Some(ref detail) = model.surface_detail {
+            let base = i * vol::SURFACE_DETAIL_SITES;
+            for value in &detail.offsets[base..base + vol::SURFACE_DETAIL_SITES] {
+                write!(file, " {} {} {}", value.x, value.y, value.z)?;
+            }
+            for value in &detail.heights[base..base + vol::SURFACE_DETAIL_SITES] {
+                write!(file, " {value}")?;
+            }
+            for value in &detail.colors[base..base + vol::SURFACE_DETAIL_SITES] {
+                write!(file, " {} {} {}", value.x, value.y, value.z)?;
+            }
         }
         if let Some(ref coefficients) = model.surface_color_coefficients {
             let stride = vol::SURFACE_COLOR_COMPONENTS * 3;
@@ -1876,6 +1906,23 @@ fn write_radfoam_ply_binary(
     if model.surface_offsets.is_some() {
         writeln!(file, "property float surface_offset")?;
     }
+    if model.surface_detail.is_some() {
+        for component in 0..vol::SURFACE_DETAIL_SITES * 3 {
+            writeln!(
+                file,
+                "property float blade_surface_detail_offset_{component}"
+            )?;
+        }
+        for site in 0..vol::SURFACE_DETAIL_SITES {
+            writeln!(file, "property float blade_surface_detail_height_{site}")?;
+        }
+        for component in 0..vol::SURFACE_DETAIL_SITES * 3 {
+            writeln!(
+                file,
+                "property float blade_surface_detail_color_{component}"
+            )?;
+        }
+    }
     if model.surface_color_coefficients.is_some() {
         for component in 0..vol::SURFACE_COLOR_COMPONENTS * 3 {
             writeln!(file, "property float blade_surface_color_{component}")?;
@@ -1938,6 +1985,22 @@ fn write_radfoam_ply_binary(
         }
         if let Some(ref offsets) = model.surface_offsets {
             file.write_all(&offsets[i].to_le_bytes())?;
+        }
+        if let Some(ref detail) = model.surface_detail {
+            let base = i * vol::SURFACE_DETAIL_SITES;
+            for value in &detail.offsets[base..base + vol::SURFACE_DETAIL_SITES] {
+                file.write_all(&value.x.to_le_bytes())?;
+                file.write_all(&value.y.to_le_bytes())?;
+                file.write_all(&value.z.to_le_bytes())?;
+            }
+            for value in &detail.heights[base..base + vol::SURFACE_DETAIL_SITES] {
+                file.write_all(&value.to_le_bytes())?;
+            }
+            for value in &detail.colors[base..base + vol::SURFACE_DETAIL_SITES] {
+                file.write_all(&value.x.to_le_bytes())?;
+                file.write_all(&value.y.to_le_bytes())?;
+                file.write_all(&value.z.to_le_bytes())?;
+            }
         }
         if let Some(ref coefficients) = model.surface_color_coefficients {
             let stride = vol::SURFACE_COLOR_COMPONENTS * 3;
@@ -2458,6 +2521,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -2489,6 +2553,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -2532,6 +2597,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -2581,6 +2647,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -2614,6 +2681,7 @@ mod tests {
             radii: Some(radii),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             transforms: None,
@@ -2661,6 +2729,29 @@ mod tests {
             glam::Vec3::new(0.2, 0.3, -0.9),
         ]);
         model.surface_offsets = Some(vec![-0.01, 0.0, 0.025]);
+        model.surface_detail = Some(vol::SurfaceDetail {
+            offsets: (0..model.points.len() * vol::SURFACE_DETAIL_SITES)
+                .map(|index| {
+                    glam::Vec3::new(
+                        index as f32 * 0.01 - 0.2,
+                        index as f32 * -0.02 + 0.1,
+                        index as f32 * 0.005,
+                    )
+                })
+                .collect(),
+            heights: (0..model.points.len() * vol::SURFACE_DETAIL_SITES)
+                .map(|index| index as f32 * 0.002 - 0.01)
+                .collect(),
+            colors: (0..model.points.len() * vol::SURFACE_DETAIL_SITES)
+                .map(|index| {
+                    glam::Vec3::new(
+                        index as f32 * 0.003,
+                        index as f32 * -0.004,
+                        index as f32 * 0.002 - 0.05,
+                    )
+                })
+                .collect(),
+        });
         model.surface_color_coefficients = Some(
             (0..model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3)
                 .map(|index| index as f32 * 0.01 - 0.2)
@@ -2698,6 +2789,7 @@ mod tests {
         assert_eq!(loaded.radii, model.radii);
         assert_eq!(loaded.surface_normals, model.surface_normals);
         assert_eq!(loaded.surface_offsets, model.surface_offsets);
+        assert_eq!(loaded.surface_detail, model.surface_detail);
         assert_eq!(
             loaded.surface_color_coefficients,
             model.surface_color_coefficients

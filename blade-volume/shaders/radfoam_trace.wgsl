@@ -8,9 +8,11 @@
 //   fn rf_is_bounded() -> bool;
 //   fn rf_is_oriented() -> bool;
 //   fn rf_get_surface_normal(idx: u32) -> vec3<f32>;
-//   fn rf_get_surface_offset(idx: u32) -> f32;
+//   fn rf_get_surface_offset(idx: u32, ray_origin: vec3<f32>,
+//       ray_direction: vec3<f32>, query_near: f32) -> f32;
 //   fn rf_get_density(idx: u32) -> f32;
-//   fn rf_get_color(idx: u32, ray_origin: vec3<f32>, dir: vec3<f32>) -> vec3<f32>;
+//   fn rf_get_color(idx: u32, ray_origin: vec3<f32>, dir: vec3<f32>,
+//       query_near: f32, surface_offset: f32) -> vec3<f32>;
 //   fn rf_adjacency_begin(idx: u32) -> u32;
 //   fn rf_adjacency_end(idx: u32) -> u32;
 //   fn rf_get_neighbor(adj_idx: u32) -> u32;
@@ -40,6 +42,12 @@ struct RadFoamTraceResult {
     peak_weight: f32,
 }
 
+struct RadFoamSupportInterval {
+    range: vec2<f32>,
+    query_near: f32,
+    surface_offset: f32,
+}
+
 fn rf_support_interval(
     cell: u32,
     ray_origin: vec3<f32>,
@@ -48,30 +56,35 @@ fn rf_support_interval(
     radius: f32,
     t0: f32,
     t1: f32,
-) -> vec2<f32> {
+) -> RadFoamSupportInterval {
     var clipped = vec2<f32>(t0, t1);
     if (rf_is_bounded()) {
         let oc = ray_origin - center;
         let a = dot(ray_dir, ray_dir);
         if (a <= 0.0) {
-            return vec2<f32>(t0, t0);
+            return RadFoamSupportInterval(vec2<f32>(t0, t0), t0, 0.0);
         }
         let b = dot(oc, ray_dir);
         let c = dot(oc, oc) - radius * radius;
         let discriminant = b * b - a * c;
         if (discriminant <= 0.0) {
-            return vec2<f32>(t0, t0);
+            return RadFoamSupportInterval(vec2<f32>(t0, t0), t0, 0.0);
         }
         let root = sqrt(discriminant);
         clipped = vec2<f32>(max(t0, (-b - root) / a), min(t1, (-b + root) / a));
     }
+    let query_near = clipped.x;
+    var surface_offset = 0.0;
     if (rf_is_oriented()) {
         let normal = rf_get_surface_normal(cell);
-        let offset = rf_get_surface_offset(cell);
+        let offset = rf_get_surface_offset(cell, ray_origin, ray_dir, query_near);
+        surface_offset = offset;
         let denominator = dot(ray_dir, normal);
         if (abs(denominator) <= 1e-20) {
             if (dot(ray_origin - center, normal) > offset) {
-                return vec2<f32>(t0, t0);
+                return RadFoamSupportInterval(
+                    vec2<f32>(t0, t0), query_near, surface_offset,
+                );
             }
         } else {
             let surface_t = (dot(center - ray_origin, normal) + offset) / denominator;
@@ -82,7 +95,7 @@ fn rf_support_interval(
             }
         }
     }
-    return clipped;
+    return RadFoamSupportInterval(clipped, query_near, surface_offset);
 }
 
 // Core Voronoi cell traversal
@@ -141,21 +154,27 @@ fn radfoam_trace(
         let support = rf_support_interval(
             current, ray_origin, ray_dir, current_pos, current_radius, t0, t1,
         );
-        let integration_begin = max(support.x, params.integration_start);
-        if (support.y > integration_begin) {
+        let integration_begin = max(support.range.x, params.integration_start);
+        if (support.range.y > integration_begin) {
             cells_visited += 1u;
             let s = rf_get_density(current);
             if (s > 1e-6) {
-                let dt = support.y - integration_begin;
+                let dt = support.range.y - integration_begin;
                 let alpha = 1.0 - exp(-s * dt);
                 let w = transmittance * alpha;
                 if (params.record_depth) {
                     if (w > peak_weight) {
                         peak_weight = w;
-                        depth_mode = 0.5 * (integration_begin + support.y);
+                        depth_mode = 0.5 * (integration_begin + support.range.y);
                     }
                 } else {
-                    let rgb = rf_get_color(current, ray_origin, normalize(ray_dir));
+                    let rgb = rf_get_color(
+                        current,
+                        ray_origin,
+                        normalize(ray_dir),
+                        support.query_near,
+                        support.surface_offset,
+                    );
                     accum_rgb += w * rgb;
                 }
                 transmittance *= (1.0 - alpha);

@@ -43,6 +43,9 @@ struct RadFoamAttributesBuffer {
 struct RadFoamSurfaceNormalsBuffer {
     data: array<vec4<f32>>,
 }
+struct RadFoamSurfaceDetailsBuffer {
+    data: array<vec4<f32>>,
+}
 struct RadFoamAdjacencyBuffer {
     data: array<u32>,
 }
@@ -52,6 +55,7 @@ struct RadFoamAdjacencyOffsetsBuffer {
 
 var<storage, read> g_radfoam_points: binding_array<RadFoamPointsBuffer>;
 var<storage, read> g_radfoam_surface_normals: binding_array<RadFoamSurfaceNormalsBuffer>;
+var<storage, read> g_radfoam_surface_details: binding_array<RadFoamSurfaceDetailsBuffer>;
 var<storage, read> g_radfoam_attributes: binding_array<RadFoamAttributesBuffer>;
 var<storage, read> g_radfoam_adjacency: binding_array<RadFoamAdjacencyBuffer>;
 var<storage, read> g_radfoam_adjacency_offsets: binding_array<RadFoamAdjacencyOffsetsBuffer>;

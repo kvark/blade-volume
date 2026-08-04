@@ -19,10 +19,12 @@ struct SplatIntegrateData {
     g_params: SplatIntegrateParams,
     g_points: gpu::BufferPiece,
     g_surface_normals: gpu::BufferPiece,
+    g_surface_details: gpu::BufferPiece,
     g_attributes: gpu::BufferPiece,
     g_cells: gpu::BufferPiece,
     g_dts: gpu::BufferPiece,
     g_mask: gpu::BufferPiece,
+    g_surface_queries: gpu::BufferPiece,
     g_out: gpu::TextureView,
 }
 
@@ -77,6 +79,7 @@ impl PowerFoamGpuSplatTracer {
             model.points.len() as u32,
             resolution,
             settings.powerfoam_candidate_capacity,
+            model.surface_detail.is_some(),
         );
         let pixel_indices = (0..num_pixels).collect::<Vec<_>>();
         buffers.write_pixel_indices(&pixel_indices);
@@ -113,7 +116,8 @@ impl PowerFoamGpuSplatTracer {
             height: resolution[1],
             weight_threshold: settings.weight_threshold,
             appearance_flags: cloud.has_surface_color as u32
-                | (cloud.has_spherical_voronoi as u32) << 1,
+                | (cloud.has_spherical_voronoi as u32) << 1
+                | (cloud.has_surface_detail as u32) << 2,
             _padding: [0; 2],
         };
         Self {
@@ -166,10 +170,12 @@ impl PowerFoamGpuSplatTracer {
                 g_params: self.params,
                 g_points: self.cloud.points(),
                 g_surface_normals: self.cloud.surface_normals(),
+                g_surface_details: self.cloud.surface_details(),
                 g_attributes: self.cloud.attributes(),
                 g_cells: self.buffers.cells.into(),
                 g_dts: self.buffers.dts.into(),
                 g_mask: self.buffers.mask.into(),
+                g_surface_queries: self.buffers.surface_queries.into(),
                 g_out: output,
             },
         );

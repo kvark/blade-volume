@@ -10,8 +10,10 @@ use std::{mem, ptr, slice};
 /// - `surface_normals`: `vec4<f32>[N]` containing unit dipole normals in xyz
 ///   and signed surface-plane offsets in w, or one zero dummy element for an
 ///   unoriented cloud
+/// - `surface_details`: `vec4<f32>[N * 8]` containing radius-normalized site
+///   offsets in xyz and radius-normalized heights in w, or one zero dummy
 /// - `attributes`: packed `f32[N * attr_dim]`: SH, density, then optional
-///   spatial and Spherical Voronoi appearance parameters
+///   compact surface, detail-site RGB, and Spherical Voronoi parameters
 /// - `point_adjacency`: flattened neighbor list `u32[K]`
 /// - `point_adjacency_offsets`: CSR offsets `u32[N+1]`
 ///
@@ -21,6 +23,7 @@ use std::{mem, ptr, slice};
 pub struct RadFoamGpuCloud {
     points_buf: gpu::Buffer,
     surface_normals_buf: gpu::Buffer,
+    surface_details_buf: gpu::Buffer,
     attributes_buf: gpu::Buffer,
     point_adjacency_buf: gpu::Buffer,
     point_adjacency_offsets_buf: gpu::Buffer,
@@ -33,6 +36,7 @@ pub struct RadFoamGpuCloud {
     pub num_adjacency: usize,
     pub is_power_foam: bool,
     pub is_oriented: bool,
+    pub has_surface_detail: bool,
     pub has_surface_color: bool,
     pub has_spherical_voronoi: bool,
 }
@@ -160,6 +164,12 @@ impl RadFoamGpuCloud {
             1
         };
         let surface_normals_size = (surface_normal_count * mem::size_of::<[f32; 4]>()) as u64;
+        let surface_detail_count = if model.surface_detail.is_some() {
+            num_points * crate::SURFACE_DETAIL_SITES
+        } else {
+            1
+        };
+        let surface_details_size = (surface_detail_count * mem::size_of::<[f32; 4]>()) as u64;
         let attrs_size = if upload_attributes {
             (num_points * attr_dim * mem::size_of::<f32>()) as u64
         } else {
@@ -188,6 +198,11 @@ impl RadFoamGpuCloud {
             size: surface_normals_size,
             memory: gpu::Memory::Device,
         });
+        let surface_details_buf = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-surface-details",
+            size: surface_details_size,
+            memory: gpu::Memory::Device,
+        });
         let attributes_buf = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-attributes",
             size: attrs_size,
@@ -213,6 +228,11 @@ impl RadFoamGpuCloud {
         let surface_normals_stage = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-surface-normals-upload",
             size: surface_normals_size,
+            memory: gpu::Memory::Upload,
+        });
+        let surface_details_stage = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-surface-details-upload",
+            size: surface_details_size,
             memory: gpu::Memory::Upload,
         });
         let attributes_stage = context.create_buffer(gpu::BufferDesc {
@@ -267,8 +287,25 @@ impl RadFoamGpuCloud {
                 }
             }
 
-            // Attributes: pack as [SH, density, spatial residual, SV axes, SV colors] per point.
-            // This matches the shader's expected layout
+            match model.surface_detail.as_ref() {
+                Some(detail) => {
+                    let dst_details = slice::from_raw_parts_mut(
+                        surface_details_stage.data() as *mut [f32; 4],
+                        surface_detail_count,
+                    );
+                    for (index, dst) in dst_details.iter_mut().enumerate() {
+                        *dst = detail.offsets[index]
+                            .extend(detail.heights[index])
+                            .to_array();
+                    }
+                }
+                None => {
+                    *(surface_details_stage.data() as *mut [f32; 4]) = [0.0; 4];
+                }
+            }
+
+            // Attributes: [SH, density, compact surface residual, detail RGB,
+            // SV axes, SV colors] per point. This matches the shader layout.
             if upload_attributes {
                 let dst_attrs = slice::from_raw_parts_mut(
                     attributes_stage.data() as *mut f32,
@@ -290,6 +327,16 @@ impl RadFoamGpuCloud {
                                 &coefficients[surface_base..surface_base + surface_len],
                             );
                         attribute_offset += surface_len;
+                    }
+                    if let Some(ref detail) = model.surface_detail {
+                        let detail_base = i * crate::SURFACE_DETAIL_SITES;
+                        for &color in
+                            &detail.colors[detail_base..detail_base + crate::SURFACE_DETAIL_SITES]
+                        {
+                            dst_attrs[attribute_offset..attribute_offset + 3]
+                                .copy_from_slice(&color.to_array());
+                            attribute_offset += 3;
+                        }
                     }
                     if let Some(ref spherical_voronoi) = model.spherical_voronoi {
                         let spherical_base = i * crate::SPHERICAL_VORONOI_SITES;
@@ -344,6 +391,13 @@ impl RadFoamGpuCloud {
                     surface_normals_size,
                 );
             }
+            if surface_details_size > 0 {
+                pass.copy_buffer_to_buffer(
+                    surface_details_stage.at(0),
+                    surface_details_buf.at(0),
+                    surface_details_size,
+                );
+            }
             if attrs_size > 0 {
                 pass.copy_buffer_to_buffer(
                     attributes_stage.at(0),
@@ -373,6 +427,7 @@ impl RadFoamGpuCloud {
         // Free staging buffers
         context.destroy_buffer(points_stage);
         context.destroy_buffer(surface_normals_stage);
+        context.destroy_buffer(surface_details_stage);
         context.destroy_buffer(attributes_stage);
         context.destroy_buffer(adjacency_stage);
         context.destroy_buffer(adjacency_offsets_stage);
@@ -380,6 +435,7 @@ impl RadFoamGpuCloud {
         Self {
             points_buf,
             surface_normals_buf,
+            surface_details_buf,
             attributes_buf,
             point_adjacency_buf,
             point_adjacency_offsets_buf,
@@ -391,6 +447,7 @@ impl RadFoamGpuCloud {
             num_adjacency,
             is_power_foam: model.radii.is_some(),
             is_oriented: model.surface_normals.is_some(),
+            has_surface_detail: model.surface_detail.is_some(),
             has_surface_color: model.surface_color_coefficients.is_some(),
             has_spherical_voronoi: model.spherical_voronoi.is_some(),
         }
@@ -399,6 +456,7 @@ impl RadFoamGpuCloud {
     pub fn deinit(&mut self, context: &gpu::Context) {
         context.destroy_buffer(self.points_buf);
         context.destroy_buffer(self.surface_normals_buf);
+        context.destroy_buffer(self.surface_details_buf);
         context.destroy_buffer(self.attributes_buf);
         context.destroy_buffer(self.point_adjacency_buf);
         context.destroy_buffer(self.point_adjacency_offsets_buf);
@@ -451,6 +509,11 @@ impl RadFoamGpuCloud {
     /// Storage buffer view for optional oriented-surface unit normals.
     pub fn surface_normals(&self) -> gpu::BufferPiece {
         self.surface_normals_buf.into()
+    }
+
+    /// Storage buffer view for optional spatial detail geometry.
+    pub fn surface_details(&self) -> gpu::BufferPiece {
+        self.surface_details_buf.into()
     }
 
     /// Storage buffer view for packed attributes.

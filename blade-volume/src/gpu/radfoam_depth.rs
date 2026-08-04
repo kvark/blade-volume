@@ -24,6 +24,7 @@ struct TraceData {
     g_params: TraceParams,
     g_points: gpu::BufferPiece,
     g_surface_normals: gpu::BufferPiece,
+    g_surface_details: gpu::BufferPiece,
     g_attributes: gpu::BufferPiece,
     g_adjacency: gpu::BufferPiece,
     g_adjacency_offsets: gpu::BufferPiece,
@@ -70,7 +71,9 @@ impl RadFoamGpuDepthTracer {
             power_foam: cloud.is_power_foam as u32,
             size_pad: [
                 cloud.is_oriented as u32,
-                cloud.has_surface_color as u32 | (cloud.has_spherical_voronoi as u32) << 1,
+                cloud.has_surface_color as u32
+                    | (cloud.has_spherical_voronoi as u32) << 1
+                    | (cloud.has_surface_detail as u32) << 2,
                 0,
             ],
         };
@@ -102,6 +105,7 @@ impl RadFoamGpuDepthTracer {
                 g_params: self.params,
                 g_points: self.cloud.points(),
                 g_surface_normals: self.cloud.surface_normals(),
+                g_surface_details: self.cloud.surface_details(),
                 g_attributes: self.cloud.attributes(),
                 g_adjacency: self.cloud.point_adjacency(),
                 g_adjacency_offsets: self.cloud.point_adjacency_offsets(),

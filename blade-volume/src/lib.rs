@@ -53,6 +53,12 @@ pub const MAX_SH_COMPONENTS: usize = get_sh_component_count(MAX_SH_DEGREE);
 /// two-dimensional tangent plane without storing an arbitrary tangent frame;
 /// the last term captures a radial center-to-edge change.
 pub const SURFACE_COLOR_COMPONENTS: usize = 4;
+/// Spatial detail sites stored for each oriented PowerFoam cell.
+///
+/// Eight matches the released PowerFoam implementation. Geometry stores one
+/// radius-normalized tangent offset and height per site; appearance stores one
+/// view-independent RGB residual per site.
+pub const SURFACE_DETAIL_SITES: usize = 8;
 /// Directional sites in the compact Spherical Voronoi appearance model.
 ///
 /// Eight matches the parameter-cardinality comparison in the Spherical
@@ -96,6 +102,23 @@ pub struct SphericalVoronoi {
     pub colors: Vec<glam::Vec3>,
 }
 
+/// Radius-normalized spatial detail for oriented PowerFoam cells.
+///
+/// `offsets` are object-space vectors projected onto the current surface
+/// tangent plane before use. Keeping them in three components avoids a
+/// discontinuous, implicit tangent-frame convention while retaining two
+/// effective degrees of freedom. `heights` displace the surface along its
+/// normal, and `colors` are RGB residuals added to the SH appearance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SurfaceDetail {
+    /// Point-major radius-normalized site offsets, eight per point.
+    pub offsets: Vec<glam::Vec3>,
+    /// Point-major radius-normalized signed heights, eight per point.
+    pub heights: Vec<f32>,
+    /// Point-major RGB residuals, eight per point.
+    pub colors: Vec<glam::Vec3>,
+}
+
 /// Unified point cloud model.
 ///
 /// Core data common to all formats:
@@ -109,6 +132,7 @@ pub struct SphericalVoronoi {
 /// - `radii`: per-point weight/radius for Power-Foam-style power diagrams
 /// - `surface_normals`: oriented PowerFoam faces; the normal-facing half is empty
 /// - `surface_offsets`: optional signed displacement of each oriented face
+/// - `surface_detail`: optional eight-site spatial height and RGB detail
 /// - `surface_color_coefficients`: optional within-cell surface appearance
 /// - `spherical_voronoi`: optional eight-site directional appearance residual
 #[derive(Clone)]
@@ -151,6 +175,16 @@ pub struct PointCloudModel {
     /// exactly zero for backward-compatible oriented clouds. Length must equal
     /// `points.len()`, and `surface_normals` must also be present.
     pub surface_offsets: Option<Vec<f32>>,
+
+    /// Optional eight-site spatial detail for oriented PowerFoam surfaces.
+    ///
+    /// A soft partition with weight `exp(-10 * distance_squared / radius^2)`
+    /// first blends a radius-scaled height at the base-plane query. The ray is
+    /// then intersected with that displaced plane and the weights are
+    /// re-evaluated to blend RGB residuals. Missing detail is exactly
+    /// equivalent to zero height and color. All three tables contain
+    /// `points.len() * SURFACE_DETAIL_SITES` entries.
+    pub surface_detail: Option<SurfaceDetail>,
 
     /// Optional spatial RGB residuals for oriented PowerFoam surfaces.
     ///
@@ -267,6 +301,31 @@ impl PointCloudModel {
                 return Err("surface offsets must be finite".to_string());
             }
         }
+        if let Some(ref detail) = self.surface_detail {
+            if self.surface_normals.is_none() || self.radii.is_none() {
+                return Err(
+                    "surface detail requires PowerFoam radii and surface normals".to_string(),
+                );
+            }
+            let expected = count * SURFACE_DETAIL_SITES;
+            if detail.offsets.len() != expected
+                || detail.heights.len() != expected
+                || detail.colors.len() != expected
+            {
+                return Err(format!(
+                    "surface detail lengths are offsets={} heights={} colors={}, expected {expected}",
+                    detail.offsets.len(),
+                    detail.heights.len(),
+                    detail.colors.len(),
+                ));
+            }
+            if detail.offsets.iter().any(|offset| !offset.is_finite())
+                || detail.heights.iter().any(|height| !height.is_finite())
+                || detail.colors.iter().any(|color| !color.is_finite())
+            {
+                return Err("surface detail parameters must be finite".to_string());
+            }
+        }
         if let Some(ref coefficients) = self.surface_color_coefficients {
             if self.surface_normals.is_none() || self.radii.is_none() {
                 return Err(
@@ -325,6 +384,10 @@ impl PointCloudModel {
                 .surface_color_coefficients
                 .as_ref()
                 .map_or(0, |_| 3 * SURFACE_COLOR_COMPONENTS)
+            + self
+                .surface_detail
+                .as_ref()
+                .map_or(0, |_| 3 * SURFACE_DETAIL_SITES)
             + self
                 .spherical_voronoi
                 .as_ref()
@@ -442,6 +505,7 @@ mod model_tests {
             radii: Some(vec![1.0]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         }
@@ -460,6 +524,7 @@ mod model_tests {
             radii: Some(vec![1.0; 2]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         }
@@ -516,6 +581,26 @@ mod model_tests {
         model.surface_color_coefficients = Some(Vec::new());
         assert!(model.validate().unwrap_err().contains("length"));
         model.surface_color_coefficients = Some(vec![f32::NAN; SURFACE_COLOR_COMPONENTS * 3]);
+        assert!(model.validate().unwrap_err().contains("must be finite"));
+    }
+
+    #[test]
+    fn model_validation_checks_surface_detail() {
+        let mut model = valid_model();
+        model.surface_detail = Some(SurfaceDetail {
+            offsets: vec![glam::Vec3::ZERO; SURFACE_DETAIL_SITES],
+            heights: vec![0.0; SURFACE_DETAIL_SITES],
+            colors: vec![glam::Vec3::ZERO; SURFACE_DETAIL_SITES],
+        });
+        assert!(model.validate().unwrap_err().contains("requires PowerFoam"));
+
+        model.surface_normals = Some(vec![glam::Vec3::Z]);
+        assert!(model.validate().is_ok());
+        assert_eq!(model.attribute_dim(), 3 + 1 + SURFACE_DETAIL_SITES * 3);
+
+        model.surface_detail.as_mut().unwrap().heights.pop();
+        assert!(model.validate().unwrap_err().contains("lengths"));
+        model.surface_detail.as_mut().unwrap().heights = vec![f32::NAN; SURFACE_DETAIL_SITES];
         assert!(model.validate().unwrap_err().contains("must be finite"));
     }
 

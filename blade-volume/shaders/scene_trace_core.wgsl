@@ -78,6 +78,7 @@ var<private> g_rf_bounded: bool;
 var<private> g_rf_oriented: bool;
 var<private> g_rf_surface_color: bool;
 var<private> g_rf_spherical_voronoi: bool;
+var<private> g_rf_surface_detail: bool;
 var<private> g_rf_sh_degree: u32;
 var<private> g_rf_attribute_stride: u32;
 
@@ -101,8 +102,32 @@ fn rf_get_surface_normal(idx: u32) -> vec3<f32> {
     return g_radfoam_surface_normals[g_rf_obj].data[idx].xyz;
 }
 
-fn rf_get_surface_offset(idx: u32) -> f32 {
-    return g_radfoam_surface_normals[g_rf_obj].data[idx].w;
+fn rf_get_surface_offset(
+    idx: u32,
+    ray_origin: vec3<f32>,
+    ray_direction: vec3<f32>,
+    query_near: f32,
+) -> f32 {
+    let surface = g_radfoam_surface_normals[g_rf_obj].data[idx];
+    if (!g_rf_surface_detail) {
+        return surface.w;
+    }
+    var sites: array<vec4<f32>, SURFACE_DETAIL_SITES>;
+    for (var site = 0u; site < SURFACE_DETAIL_SITES; site += 1u) {
+        sites[site] = g_radfoam_surface_details[g_rf_obj].data[
+            idx * SURFACE_DETAIL_SITES + site
+        ];
+    }
+    return surface_detail_height(
+        rf_get_point(idx),
+        rf_get_radius(idx),
+        surface.xyz,
+        surface.w,
+        ray_origin,
+        ray_direction,
+        query_near,
+        sites,
+    );
 }
 
 fn rf_get_density(idx: u32) -> f32 {
@@ -116,6 +141,8 @@ fn rf_get_color(
     idx: u32,
     ray_origin: vec3<f32>,
     dir: vec3<f32>,
+    query_near: f32,
+    surface_offset: f32,
 ) -> vec3<f32> {
     let attr_dim = g_rf_attribute_stride;
     let comps = min(sh_component_count(g_rf_sh_degree), MAX_SH_COMPONENTS);
@@ -137,7 +164,7 @@ fn rf_get_color(
             rf_get_point(idx),
             rf_get_radius(idx),
             rf_get_surface_normal(idx),
-            rf_get_surface_offset(idx),
+            surface_offset,
             ray_origin,
             dir,
         );
@@ -150,13 +177,47 @@ fn rf_get_color(
             );
         }
     }
-    if (g_rf_spherical_voronoi) {
-        let surface_length = select(
-            0u,
-            3u * SURFACE_COLOR_COMPONENTS,
-            g_rf_surface_color,
+    let compact_length = select(
+        0u,
+        3u * SURFACE_COLOR_COMPONENTS,
+        g_rf_surface_color,
+    );
+    if (g_rf_surface_detail) {
+        let detail_base = base + 3u * comps + 1u + compact_length;
+        var sites: array<vec4<f32>, SURFACE_DETAIL_SITES>;
+        var colors: array<vec3<f32>, SURFACE_DETAIL_SITES>;
+        for (var site = 0u; site < SURFACE_DETAIL_SITES; site += 1u) {
+            sites[site] = g_radfoam_surface_details[g_rf_obj].data[
+                idx * SURFACE_DETAIL_SITES + site
+            ];
+            let color_offset = detail_base + 3u * site;
+            colors[site] = vec3<f32>(
+                g_radfoam_attributes[g_rf_obj].data[color_offset],
+                g_radfoam_attributes[g_rf_obj].data[color_offset + 1u],
+                g_radfoam_attributes[g_rf_obj].data[color_offset + 2u],
+            );
+        }
+        let surface = g_radfoam_surface_normals[g_rf_obj].data[idx];
+        color += surface_detail_color(
+            rf_get_point(idx),
+            rf_get_radius(idx),
+            surface.xyz,
+            surface.w,
+            surface_offset,
+            ray_origin,
+            dir,
+            query_near,
+            sites,
+            colors,
         );
-        let spherical_base = base + 3u * comps + 1u + surface_length;
+    }
+    if (g_rf_spherical_voronoi) {
+        let detail_length = select(
+            0u,
+            3u * SURFACE_DETAIL_SITES,
+            g_rf_surface_detail,
+        );
+        let spherical_base = base + 3u * comps + 1u + compact_length + detail_length;
         var axes: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         var colors: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         for (var site = 0u; site < SPHERICAL_VORONOI_SITES; site += 1u) {
@@ -200,6 +261,7 @@ fn scene_trace_radfoam(ray_origin: vec3<f32>, ray_dir: vec3<f32>,
     g_rf_oriented = (bounds.flags & 2u) != 0u;
     g_rf_surface_color = (bounds.flags & 4u) != 0u;
     g_rf_spherical_voronoi = (bounds.flags & 8u) != 0u;
+    g_rf_surface_detail = (bounds.flags & 16u) != 0u;
     g_rf_sh_degree = bounds.sh_degree;
     g_rf_attribute_stride = bounds.attribute_stride;
 

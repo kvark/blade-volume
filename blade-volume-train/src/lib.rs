@@ -105,6 +105,9 @@ pub struct TrainerState {
     /// Optional signed offsets of the oriented PowerFoam surface planes.
     pub surface_offsets: Option<Vec<f32>>,
 
+    /// Optional reference-style spatial surface detail.
+    pub surface_detail: Option<vol::SurfaceDetail>,
+
     /// Optional within-cell oriented-surface RGB residuals.
     pub surface_color_coefficients: Option<Vec<f32>>,
 
@@ -147,6 +150,7 @@ impl TrainerState {
             log_radii,
             surface_normals: model.surface_normals.clone(),
             surface_offsets: model.surface_offsets.clone(),
+            surface_detail: model.surface_detail.clone(),
             surface_color_coefficients: model.surface_color_coefficients.clone(),
             spherical_voronoi: model.spherical_voronoi.clone(),
         }
@@ -168,6 +172,11 @@ impl TrainerState {
         }
         if let Some(ref offsets) = self.surface_offsets {
             assert_eq!(offsets.len(), n);
+        }
+        if let Some(ref detail) = self.surface_detail {
+            assert_eq!(detail.offsets.len(), n * vol::SURFACE_DETAIL_SITES);
+            assert_eq!(detail.heights.len(), n * vol::SURFACE_DETAIL_SITES);
+            assert_eq!(detail.colors.len(), n * vol::SURFACE_DETAIL_SITES);
         }
         if let Some(ref coefficients) = self.surface_color_coefficients {
             assert_eq!(coefficients.len(), n * vol::SURFACE_COLOR_COMPONENTS * 3);
@@ -204,6 +213,7 @@ impl TrainerState {
             radii,
             surface_normals: self.surface_normals.clone(),
             surface_offsets: self.surface_offsets.clone(),
+            surface_detail: self.surface_detail.clone(),
             surface_color_coefficients: self.surface_color_coefficients.clone(),
             spherical_voronoi: self.spherical_voronoi.clone(),
         }
@@ -248,6 +258,7 @@ mod tests {
             },
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             points,

@@ -76,6 +76,8 @@ pub struct SceneTraverseData<'a> {
     pub g_radfoam_points: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     /// RadFoam oriented-surface normal buffers (binding array).
     pub g_radfoam_surface_normals: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
+    /// RadFoam spatial-detail geometry buffers (binding array).
+    pub g_radfoam_surface_details: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     /// RadFoam attributes buffers (binding array).
     pub g_radfoam_attributes: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     /// RadFoam adjacency buffers (binding array).
@@ -99,6 +101,7 @@ pub struct RadFoamSceneTraverseData<'a> {
     pub g_transforms: gpu::BufferPiece,
     pub g_radfoam_points: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     pub g_radfoam_surface_normals: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
+    pub g_radfoam_surface_details: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     pub g_radfoam_attributes: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     pub g_radfoam_adjacency: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
     pub g_radfoam_adjacency_offsets: &'a gpu::BufferArray<MAX_CLOUD_OBJECTS>,
@@ -358,6 +361,8 @@ impl SceneRenderer {
         let mut radfoam_points: gpu::BufferArray<MAX_CLOUD_OBJECTS> = gpu::BufferArray::new();
         let mut radfoam_surface_normals: gpu::BufferArray<MAX_CLOUD_OBJECTS> =
             gpu::BufferArray::new();
+        let mut radfoam_surface_details: gpu::BufferArray<MAX_CLOUD_OBJECTS> =
+            gpu::BufferArray::new();
         let mut radfoam_attributes: gpu::BufferArray<MAX_CLOUD_OBJECTS> = gpu::BufferArray::new();
         let mut radfoam_adjacency: gpu::BufferArray<MAX_CLOUD_OBJECTS> = gpu::BufferArray::new();
         let mut radfoam_adjacency_offsets: gpu::BufferArray<MAX_CLOUD_OBJECTS> =
@@ -366,6 +371,7 @@ impl SceneRenderer {
         for cloud in render_data.radfoam_clouds {
             radfoam_points.alloc(cloud.points());
             radfoam_surface_normals.alloc(cloud.surface_normals());
+            radfoam_surface_details.alloc(cloud.surface_details());
             radfoam_attributes.alloc(cloud.attributes());
             radfoam_adjacency.alloc(cloud.point_adjacency());
             radfoam_adjacency_offsets.alloc(cloud.point_adjacency_offsets());
@@ -395,6 +401,7 @@ impl SceneRenderer {
                 let fallback = first_gaussian.gauss_buf.into();
                 radfoam_points.alloc(fallback);
                 radfoam_surface_normals.alloc(fallback);
+                radfoam_surface_details.alloc(fallback);
                 radfoam_attributes.alloc(fallback);
                 radfoam_adjacency.alloc(fallback);
                 radfoam_adjacency_offsets.alloc(fallback);
@@ -411,6 +418,7 @@ impl SceneRenderer {
                         g_transforms: render_data.transforms,
                         g_radfoam_points: &radfoam_points,
                         g_radfoam_surface_normals: &radfoam_surface_normals,
+                        g_radfoam_surface_details: &radfoam_surface_details,
                         g_radfoam_attributes: &radfoam_attributes,
                         g_radfoam_adjacency: &radfoam_adjacency,
                         g_radfoam_adjacency_offsets: &radfoam_adjacency_offsets,
@@ -432,6 +440,7 @@ impl SceneRenderer {
                     g_transforms: render_data.transforms,
                     g_radfoam_points: &radfoam_points,
                     g_radfoam_surface_normals: &radfoam_surface_normals,
+                    g_radfoam_surface_details: &radfoam_surface_details,
                     g_radfoam_attributes: &radfoam_attributes,
                     g_radfoam_adjacency: &radfoam_adjacency,
                     g_radfoam_adjacency_offsets: &radfoam_adjacency_offsets,

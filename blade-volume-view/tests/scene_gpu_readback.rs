@@ -123,6 +123,7 @@ fn powerfoam_model(color: glam::Vec3) -> vol::PointCloudModel {
         radii: Some(vec![0.5]),
         surface_normals: None,
         surface_offsets: None,
+        surface_detail: None,
         surface_color_coefficients: None,
         spherical_voronoi: None,
     }
@@ -141,6 +142,7 @@ fn gaussian_model(color: glam::Vec3, scale: glam::Vec3) -> vol::PointCloudModel 
         radii: None,
         surface_normals: None,
         surface_offsets: None,
+        surface_detail: None,
         surface_color_coefficients: None,
         spherical_voronoi: None,
     }
@@ -317,6 +319,23 @@ fn oriented_powerfoam_scene_applies_the_surface_offset() {
     surface_color[0..3].copy_from_slice(&[0.4, 0.0, 0.0]);
     surface_color[9..12].copy_from_slice(&[0.0, 0.3, 0.0]);
     model.surface_color_coefficients = Some(surface_color);
+    model.surface_detail = Some(vol::SurfaceDetail {
+        offsets: (0..vol::SURFACE_DETAIL_SITES)
+            .map(|index| {
+                let angle = index as f32 * std::f32::consts::TAU / vol::SURFACE_DETAIL_SITES as f32;
+                glam::Vec3::new(0.35 * angle.cos(), 0.35 * angle.sin(), 0.1)
+            })
+            .collect(),
+        heights: (0..vol::SURFACE_DETAIL_SITES)
+            .map(|index| 0.03 * (index as f32 - 3.5))
+            .collect(),
+        colors: (0..vol::SURFACE_DETAIL_SITES)
+            .map(|index| {
+                let value = 0.015 * (index as f32 - 3.5);
+                glam::Vec3::new(value, -0.5 * value, 0.25 * value)
+            })
+            .collect(),
+    });
     let mut axes = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
     let mut colors = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
     axes[0] = 20.0 * glam::Vec3::Z;

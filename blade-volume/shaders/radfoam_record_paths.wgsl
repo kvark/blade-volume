@@ -23,6 +23,7 @@
 // slots at their pre-dispatch value.
 
 // #include "common.wgsl" — required for `qrot`
+// #include "surface_detail.wgsl"
 // #include "radfoam.wgsl" partial: we redeclare accessors below so this
 //   file is self-contained for codegen.
 
@@ -71,6 +72,7 @@ struct Camera {
 
 var<storage, read> g_points: array<vec4<f32>>;
 var<storage, read> g_surface_normals: array<vec4<f32>>;
+var<storage, read> g_surface_details: array<vec4<f32>>;
 var<storage, read> g_adjacency: array<u32>;
 var<storage, read> g_adjacency_offsets: array<u32>;
 var<storage, read> g_pixel_indices: array<u32>;
@@ -87,6 +89,7 @@ var<storage, read_write> g_dt_grad_previous_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_current_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_next_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_surface_normal_out: array<vec4<f32>>;
+var<storage, read_write> g_surface_queries_out: array<vec2<f32>>;
 var<storage, read_write> g_candidate_counts: array<u32>;
 var<storage, read_write> g_candidates: array<u32>;
 var<storage, read_write> g_candidate_depths: array<f32>;
@@ -142,6 +145,8 @@ struct IntervalDifferential {
     dt_d_current: vec4<f32>,
     dt_d_next: vec4<f32>,
     dt_d_surface_normal: vec4<f32>,
+    surface_query: vec2<f32>,
+    surface_offset: f32,
     valid: u32,
 };
 
@@ -153,6 +158,37 @@ struct PowerInterval {
     next: u32,
     valid: u32,
 };
+
+fn has_surface_detail() -> bool {
+    return (g_params.oriented & 2u) != 0u;
+}
+
+fn effective_surface_offset(
+    cell: u32,
+    ray_origin: vec3<f32>,
+    ray_dir: vec3<f32>,
+    query_near: f32,
+) -> f32 {
+    let surface = g_surface_normals[cell];
+    if (!has_surface_detail()) {
+        return surface.w;
+    }
+    var sites: array<vec4<f32>, SURFACE_DETAIL_SITES>;
+    for (var site = 0u; site < SURFACE_DETAIL_SITES; site += 1u) {
+        sites[site] = g_surface_details[cell * SURFACE_DETAIL_SITES + site];
+    }
+    let point = g_points[cell];
+    return surface_detail_height(
+        point.xyz,
+        point.w,
+        surface.xyz,
+        surface.w,
+        ray_origin,
+        ray_dir,
+        query_near,
+        sites,
+    );
+}
 
 struct ProjectedTileBounds {
     min_tile: vec2<u32>,
@@ -223,7 +259,7 @@ fn interval_differential(
         return IntervalDifferential(
             min(t1 - t0, g_params.max_path_dt),
             vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-            vec4<f32>(0.0),
+            vec4<f32>(0.0), vec2<f32>(t0, 0.0), 0.0,
             select(0u, 1u, t1 > t0),
         );
     }
@@ -233,7 +269,7 @@ fn interval_differential(
     if (sphere.valid == 0u) {
         return IntervalDifferential(
             0.0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-            vec4<f32>(0.0), 0u,
+            vec4<f32>(0.0), vec2<f32>(t0, 0.0), 0.0, 0u,
         );
     }
 
@@ -243,6 +279,8 @@ fn interval_differential(
     var end_from_sphere = false;
     var start_from_surface = false;
     var end_from_surface = false;
+    var surface_query = vec2<f32>(start, 0.0);
+    var effective_offset = 0.0;
     var surface_center_jacobian = vec3<f32>(0.0);
     var surface_plane_jacobian = vec4<f32>(0.0);
     if (sphere.near_t > start) {
@@ -253,16 +291,18 @@ fn interval_differential(
         end = sphere.far_t;
         end_from_sphere = true;
     }
-    if (g_params.oriented != 0u) {
+    if ((g_params.oriented & 1u) != 0u) {
         let surface_data = g_surface_normals[current_idx];
         let normal = surface_data.xyz;
-        let offset = surface_data.w;
+        let offset = effective_surface_offset(current_idx, ray_origin, ray_dir, start);
+        effective_offset = offset;
         let denominator = dot(ray_dir, normal);
+        surface_query = vec2<f32>(start, select(0.0, 1.0, denominator < -1e-20));
         if (abs(denominator) <= 1e-20) {
             if (dot(ray_origin - current.xyz, normal) > offset) {
                 return IntervalDifferential(
                     0.0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-                    vec4<f32>(0.0), 0u,
+                    vec4<f32>(0.0), surface_query, effective_offset, 0u,
                 );
             }
         } else {
@@ -287,7 +327,7 @@ fn interval_differential(
     if (end <= start) {
         return IntervalDifferential(
             0.0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-            vec4<f32>(0.0), 0u,
+            vec4<f32>(0.0), surface_query, effective_offset, 0u,
         );
     }
 
@@ -330,7 +370,8 @@ fn interval_differential(
         dt_d_surface_normal = vec4<f32>(0.0);
     }
     return IntervalDifferential(
-        dt, dt_d_previous, dt_d_current, dt_d_next, dt_d_surface_normal, 1u,
+        dt, dt_d_previous, dt_d_current, dt_d_next, dt_d_surface_normal,
+        surface_query, effective_offset, 1u,
     );
 }
 
@@ -388,10 +429,11 @@ fn power_interval(
 
     var effective_near = max(face_near, sphere.near_t);
     var effective_far = min(face_far, sphere.far_t);
-    if (g_params.oriented != 0u) {
+    let query_near = effective_near;
+    if ((g_params.oriented & 1u) != 0u) {
         let surface_data = g_surface_normals[cell];
         let surface_normal = surface_data.xyz;
-        let surface_offset = surface_data.w;
+        let surface_offset = effective_surface_offset(cell, ray_origin, ray_dir, query_near);
         let denominator = dot(ray_dir, surface_normal);
         if (abs(denominator) <= 1e-20) {
             if (dot(ray_origin - current.xyz, surface_normal) > surface_offset) {
@@ -729,6 +771,9 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
         g_next_cells_out[output_slot] = neighbors.y;
         g_dts_out[output_slot] = differential.dt;
         g_mask_out[output_slot] = 1.0;
+        if (has_surface_detail()) {
+            g_surface_queries_out[output_slot] = differential.surface_query;
+        }
         if (g_params.jacobian_mode != 0u) {
             var reference_tangent = 0.0;
             if (g_params.jacobian_mode == 1u) {
@@ -753,11 +798,12 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
                 g_dt_grad_current_out[output_slot] = differential.dt_d_current;
                 g_dt_grad_next_out[output_slot] = differential.dt_d_next;
             }
-            if (g_params.oriented != 0u) {
+            if ((g_params.oriented & 1u) != 0u) {
+                let surface = g_surface_normals[cell];
                 reference_tangent += dot(
-                    differential.dt_d_surface_normal,
-                    g_surface_normals[cell],
-                );
+                    differential.dt_d_surface_normal.xyz,
+                    surface.xyz,
+                ) + differential.dt_d_surface_normal.w * differential.surface_offset;
                 g_dt_grad_surface_normal_out[output_slot] =
                     differential.dt_d_surface_normal;
             }
@@ -841,6 +887,9 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
             g_next_cells_out[row_start + output_step] = next_idx;
             g_dts_out[row_start + output_step] = interval.dt;
             g_mask_out[row_start + output_step] = 1.0;
+            if (has_surface_detail()) {
+                g_surface_queries_out[row_start + output_step] = interval.surface_query;
+            }
             if (g_params.power_foam != 0u && g_params.jacobian_mode != 0u) {
                 var reference_tangent = 0.0;
                 if (g_params.jacobian_mode == 1u) {
@@ -867,11 +916,12 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
                         interval.dt_d_current;
                     g_dt_grad_next_out[row_start + output_step] = interval.dt_d_next;
                 }
-                if (g_params.oriented != 0u) {
+                if ((g_params.oriented & 1u) != 0u) {
+                    let surface = g_surface_normals[current];
                     reference_tangent += dot(
-                        interval.dt_d_surface_normal,
-                        g_surface_normals[current],
-                    );
+                        interval.dt_d_surface_normal.xyz,
+                        surface.xyz,
+                    ) + interval.dt_d_surface_normal.w * interval.surface_offset;
                     g_dt_grad_surface_normal_out[row_start + output_step] =
                         interval.dt_d_surface_normal;
                 }

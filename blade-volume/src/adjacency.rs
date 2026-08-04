@@ -1129,6 +1129,7 @@ mod tests {
             radii: Some(vec![1.0, 0.5, 0.5, 0.5]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             points,
@@ -1182,6 +1183,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };

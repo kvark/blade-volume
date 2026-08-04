@@ -354,6 +354,7 @@ pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
         radii: None,
         surface_normals: None,
         surface_offsets: None,
+        surface_detail: None,
         surface_color_coefficients: None,
         spherical_voronoi: None,
     };

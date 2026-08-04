@@ -83,6 +83,7 @@ struct TraceData {
     g_params: TraceParams,
     g_points: gpu::BufferPiece,
     g_surface_normals: gpu::BufferPiece,
+    g_surface_details: gpu::BufferPiece,
     g_attributes: gpu::BufferPiece,
     g_adjacency: gpu::BufferPiece,
     g_adjacency_offsets: gpu::BufferPiece,
@@ -265,7 +266,8 @@ fn assert_gpu_matches_cpu(
             model.radii.is_some() as u32,
             model.surface_normals.is_some() as u32,
             model.surface_color_coefficients.is_some() as u32
-                | (model.spherical_voronoi.is_some() as u32) << 1,
+                | (model.spherical_voronoi.is_some() as u32) << 1
+                | (model.surface_detail.is_some() as u32) << 2,
         ],
         _size_pad: 0,
     };
@@ -284,6 +286,7 @@ fn assert_gpu_matches_cpu(
                 g_params: params,
                 g_points: radfoam_gpu.points(),
                 g_surface_normals: radfoam_gpu.surface_normals(),
+                g_surface_details: radfoam_gpu.surface_details(),
                 g_attributes: radfoam_gpu.attributes(),
                 g_adjacency: radfoam_gpu.point_adjacency(),
                 g_adjacency_offsets: radfoam_gpu.point_adjacency_offsets(),
@@ -465,6 +468,24 @@ fn oriented_powerfoam_gpu_matches_cpu() {
             .map(|index| (index % 17) as f32 * 0.01 - 0.08)
             .collect(),
     );
+    model.surface_detail = Some(vol::SurfaceDetail {
+        offsets: (0..model.points.len() * vol::SURFACE_DETAIL_SITES)
+            .map(|index| {
+                let site = (index % vol::SURFACE_DETAIL_SITES) as f32;
+                let angle = site * std::f32::consts::TAU / vol::SURFACE_DETAIL_SITES as f32;
+                glam::Vec3::new(0.35 * angle.cos(), 0.35 * angle.sin(), 0.1)
+            })
+            .collect(),
+        heights: (0..model.points.len() * vol::SURFACE_DETAIL_SITES)
+            .map(|index| 0.015 * ((index % 5) as f32 - 2.0))
+            .collect(),
+        colors: (0..model.points.len() * vol::SURFACE_DETAIL_SITES)
+            .map(|index| {
+                let value = 0.01 * ((index % 7) as f32 - 3.0);
+                glam::Vec3::new(value, -0.25 * value, 0.5 * value)
+            })
+            .collect(),
+    });
     model.spherical_voronoi = Some(vol::SphericalVoronoi {
         axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
             .map(|index| {
@@ -483,4 +504,116 @@ fn oriented_powerfoam_gpu_matches_cpu() {
     // The shared oracle helper replaces these normals after creating the GPU
     // cloud, exercising the lightweight training-cadence upload path.
     assert_gpu_matches_cpu(context, model, TEST_PIXELS);
+}
+
+#[test]
+fn surface_detail_powerfoam_splat_gpu_matches_cpu() {
+    let _gpu_test_guard = gpu_test_guard();
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping PowerFoam splat GPU-vs-CPU test: no supported GPU device found");
+        return;
+    };
+    let mut offsets = vec![0.5 * glam::Vec3::X; vol::SURFACE_DETAIL_SITES];
+    offsets[0] = glam::Vec3::ZERO;
+    let mut heights = vec![0.0; vol::SURFACE_DETAIL_SITES];
+    heights[0] = 0.1;
+    let mut colors = vec![glam::Vec3::ZERO; vol::SURFACE_DETAIL_SITES];
+    colors[0] = glam::Vec3::new(0.1, -0.03, 0.05);
+    let model = vol::PointCloudModel {
+        points: vec![glam::Vec4::new(0.0, 0.0, 5.0, 1.2)],
+        sh_coefficients: vec![0.0; 3],
+        sh_degree: 0,
+        transforms: None,
+        adjacency: Some(vol::Adjacency {
+            neighbors: Vec::new(),
+            offsets: vec![0, 0],
+        }),
+        radii: Some(vec![0.5]),
+        surface_normals: Some(vec![-glam::Vec3::Z]),
+        surface_offsets: Some(vec![0.02]),
+        surface_detail: Some(vol::SurfaceDetail {
+            offsets,
+            heights,
+            colors,
+        }),
+        surface_color_coefficients: None,
+        spherical_voronoi: None,
+    };
+    let settings = vol::RadFoamTraceSettings {
+        max_steps: 8,
+        weight_threshold: 1.0e-4,
+        ..vol::RadFoamTraceSettings::default()
+    };
+    let camera = vol::CameraParams {
+        cam_position: [0.0; 3],
+        depth: 10.0,
+        cam_orientation: glam::Quat::IDENTITY.into(),
+        fov: [0.5; 2],
+        principal: [0.0; 2],
+    };
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "powerfoam-splat-detail-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    let mut tracer =
+        vol::PowerFoamGpuSplatTracer::new(&model, settings, [1, 1], &context, &mut encoder);
+    let (out_tex, out_view) = create_output_rgba16(&context, 1, 1);
+    let readback = create_readback_buffer(&context, 8);
+    encoder.start();
+    encoder.init_texture(out_tex);
+    tracer.dispatch(&mut encoder, out_view, camera);
+    let mut transfer = encoder.transfer("powerfoam-splat-detail-readback");
+    transfer.copy_texture_to_buffer(
+        gpu::TexturePiece {
+            texture: out_tex,
+            mip_level: 0,
+            array_layer: 0,
+            origin: [0; 3],
+        },
+        readback.at(0),
+        8,
+        gpu::Extent {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+    );
+    drop(transfer);
+    let sync = context.submit(&mut encoder);
+    assert!(context.wait_for(&sync, !0).unwrap_or(false));
+    tracer.validate_candidate_counts().unwrap();
+
+    let raw = unsafe { std::slice::from_raw_parts(readback.data() as *const u16, 4) };
+    let actual = glam::Vec4::new(
+        f16::from_bits(raw[0]).to_f32(),
+        f16::from_bits(raw[1]).to_f32(),
+        f16::from_bits(raw[2]).to_f32(),
+        f16::from_bits(raw[3]).to_f32(),
+    );
+    let expected = vol::trace::trace_powerfoam_splats(
+        &model,
+        vol::trace::Ray {
+            origin: glam::Vec3::ZERO,
+            direction: glam::Vec3::Z,
+        },
+        vol::trace::TraceSettings {
+            start_point: 0,
+            max_steps: settings.max_steps,
+            weight_threshold: settings.weight_threshold,
+            depth: camera.depth,
+            eval_mode: vol::trace::EvalMode::Sh,
+        },
+    )
+    .rgba;
+    assert!(
+        (actual - expected).abs().max_element() < 5.0e-3,
+        "GPU: {actual:?}, CPU: {expected:?}",
+    );
+
+    context.destroy_buffer(readback);
+    context.destroy_texture_view(out_view);
+    context.destroy_texture(out_tex);
+    tracer.deinit(&context);
+    context.destroy_command_encoder(&mut encoder);
 }

@@ -4923,6 +4923,7 @@ fn fit_appearance_pixel_batched(
             model.points.len() as u32,
             max_image_resolution,
             config.powerfoam_candidate_capacity,
+            model.surface_detail.is_some(),
         )
     } else if model.radii.is_some() {
         vol::gpu::PathRecordBuffers::new_external_powerfoam(
@@ -4931,6 +4932,7 @@ fn fit_appearance_pixel_batched(
             max_steps as u32,
             path_jacobian_mode,
             config.powerfoam_candidate_capacity,
+            model.surface_detail.is_some(),
         )
     } else {
         vol::gpu::PathRecordBuffers::new_external_with_jacobians(
@@ -5548,6 +5550,7 @@ fn fit_appearance_pixel_batched(
                         model.points.len() as u32,
                         max_image_resolution,
                         config.powerfoam_candidate_capacity,
+                        model.surface_detail.is_some(),
                     )
                 } else if model.radii.is_some() {
                     vol::gpu::PathRecordBuffers::new_external_powerfoam(
@@ -5556,6 +5559,7 @@ fn fit_appearance_pixel_batched(
                         max_steps as u32,
                         path_jacobian_mode,
                         config.powerfoam_candidate_capacity,
+                        model.surface_detail.is_some(),
                     )
                 } else {
                     vol::gpu::PathRecordBuffers::new_external_with_jacobians(
@@ -6603,6 +6607,7 @@ mod tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             points,
@@ -6862,6 +6867,7 @@ mod tests {
             radii: Some(vec![0.02; points.len()]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             points,
@@ -6913,6 +6919,7 @@ mod tests {
             radii: Some(vec![1.0; points.len()]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             points,
@@ -7502,6 +7509,7 @@ mod tests {
             radii: Some(vec![1.0; points.len()]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             points,

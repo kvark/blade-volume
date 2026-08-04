@@ -405,14 +405,26 @@ pub fn surface_color_basis(
     ray_origin: glam::Vec3,
     ray_direction: glam::Vec3,
 ) -> glam::Vec4 {
+    surface_color_basis_at_offset(
+        model,
+        point_idx,
+        ray_origin,
+        ray_direction,
+        surface_offset(model, point_idx),
+    )
+}
+
+fn surface_color_basis_at_offset(
+    model: &PointCloudModel,
+    point_idx: u32,
+    ray_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+    offset: f32,
+) -> glam::Vec4 {
     let index = point_idx as usize;
     let center = model.points[index].truncate();
     let radius = model.radii.as_ref().unwrap()[index].max(1.0e-6);
     let normal = model.surface_normals.as_ref().unwrap()[index].normalize();
-    let offset = model
-        .surface_offsets
-        .as_deref()
-        .map_or(0.0, |offsets| offsets[index]);
     let denominator = ray_direction.dot(normal);
     let numerator = (center - ray_origin).dot(normal) + offset;
     let t = numerator * denominator / (denominator * denominator + 1.0e-12);
@@ -421,6 +433,90 @@ pub fn surface_color_basis(
     let tangent = relative - relative.dot(normal) * normal;
     let q = (tangent / radius).clamp(glam::Vec3::splat(-1.0), glam::Vec3::ONE);
     q.extend(q.length_squared().min(1.0))
+}
+
+fn surface_detail_query_t(
+    center: glam::Vec3,
+    normal: glam::Vec3,
+    offset: f32,
+    ray_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+    query_near: f32,
+) -> f32 {
+    let denominator = ray_direction.dot(normal);
+    if denominator >= -1.0e-20 {
+        query_near
+    } else {
+        let plane_t = ((center - ray_origin).dot(normal) + offset) / denominator;
+        query_near.max(plane_t)
+    }
+}
+
+fn projected_detail_site(offset: glam::Vec3, normal: glam::Vec3) -> glam::Vec3 {
+    offset - offset.dot(normal) * normal
+}
+
+/// Evaluate one oriented cell's reference-style spatial height and RGB detail.
+///
+/// `query_near` is the sphere/power-cell entry before oriented-surface
+/// clipping. The returned offset includes the optional uniform
+/// [`PointCloudModel::surface_offsets`] value.
+pub fn eval_surface_detail(
+    model: &PointCloudModel,
+    point_idx: u32,
+    ray_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+    query_near: f32,
+) -> (f32, glam::Vec3) {
+    let base_offset = surface_offset(model, point_idx);
+    let Some(ref detail) = model.surface_detail else {
+        return (base_offset, glam::Vec3::ZERO);
+    };
+    let index = point_idx as usize;
+    let center = model.points[index].truncate();
+    let radius = model.radii.as_ref().unwrap()[index].max(1.0e-6);
+    let normal = model.surface_normals.as_ref().unwrap()[index].normalize();
+    let base = index * crate::SURFACE_DETAIL_SITES;
+    let sites = &detail.offsets[base..base + crate::SURFACE_DETAIL_SITES];
+    let heights = &detail.heights[base..base + crate::SURFACE_DETAIL_SITES];
+    let colors = &detail.colors[base..base + crate::SURFACE_DETAIL_SITES];
+    let base_t = surface_detail_query_t(
+        center,
+        normal,
+        base_offset,
+        ray_origin,
+        ray_direction,
+        query_near,
+    );
+    let base_query = (ray_origin + base_t * ray_direction - center) / radius;
+    let mut height_sum = 0.0_f32;
+    let mut height_weight_sum = 0.0_f32;
+    for (&site, &height) in sites.iter().zip(heights) {
+        let delta = base_query - projected_detail_site(site, normal);
+        let weight = (-10.0 * delta.length_squared()).exp();
+        height_sum += weight * height;
+        height_weight_sum += weight;
+    }
+    let offset = base_offset + radius * height_sum / height_weight_sum.max(1.0e-20);
+
+    let displaced_t = surface_detail_query_t(
+        center,
+        normal,
+        offset,
+        ray_origin,
+        ray_direction,
+        query_near,
+    );
+    let displaced_query = (ray_origin + displaced_t * ray_direction - center) / radius;
+    let mut color_sum = glam::Vec3::ZERO;
+    let mut color_weight_sum = 0.0_f32;
+    for (&site, &color) in sites.iter().zip(colors) {
+        let delta = displaced_query - projected_detail_site(site, normal);
+        let weight = (-10.0 * delta.length_squared()).exp();
+        color_sum += weight * color;
+        color_weight_sum += weight;
+    }
+    (offset, color_sum / color_weight_sum.max(1.0e-20))
 }
 
 /// Evaluate the published dot-product Spherical Voronoi residual.
@@ -453,9 +549,27 @@ pub fn eval_rgb_surface(
     ray_origin: glam::Vec3,
     ray_direction: glam::Vec3,
 ) -> glam::Vec3 {
+    let (offset, _) = eval_surface_detail(model, point_idx, ray_origin, ray_direction, 0.0);
+    eval_rgb_surface_at(model, point_idx, ray_origin, ray_direction, 0.0, offset)
+}
+
+fn eval_rgb_surface_at(
+    model: &PointCloudModel,
+    point_idx: u32,
+    ray_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+    query_near: f32,
+    effective_offset: f32,
+) -> glam::Vec3 {
     let mut color = eval_rgb_sh_unclamped(model, point_idx, ray_direction);
     if let Some(ref coefficients) = model.surface_color_coefficients {
-        let basis = surface_color_basis(model, point_idx, ray_origin, ray_direction);
+        let basis = surface_color_basis_at_offset(
+            model,
+            point_idx,
+            ray_origin,
+            ray_direction,
+            effective_offset,
+        );
         let base = point_idx as usize * crate::SURFACE_COLOR_COMPONENTS * 3;
         for component in 0..crate::SURFACE_COLOR_COMPONENTS {
             let coefficient = glam::Vec3::from_slice(
@@ -463,6 +577,9 @@ pub fn eval_rgb_surface(
             );
             color += basis[component] * coefficient;
         }
+    }
+    if model.surface_detail.is_some() {
+        color += eval_surface_detail(model, point_idx, ray_origin, ray_direction, query_near).1;
     }
     if let Some(ref spherical_voronoi) = model.spherical_voronoi {
         color += eval_spherical_voronoi(spherical_voronoi, point_idx, ray_direction);
@@ -579,6 +696,7 @@ mod gaussian_tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -606,6 +724,7 @@ mod gaussian_tests {
             radii: Some(vec![2.0]),
             surface_normals: Some(vec![glam::Vec3::Z]),
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: Some(coefficients),
             spherical_voronoi: None,
         };
@@ -678,6 +797,7 @@ mod gaussian_tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         }
@@ -809,6 +929,10 @@ pub struct PathJacobianEntry {
     pub dt_d_current: glam::Vec4,
     pub dt_d_next: glam::Vec4,
     pub dt_d_surface_normal: glam::Vec4,
+    /// Sphere/power-cell entry before oriented-surface clipping.
+    pub surface_query_near: f32,
+    /// Effective uniform-plus-detail surface offset used by the forward pass.
+    pub surface_offset: f32,
 }
 
 /// Record-only result of a ray trace: the sequence of `(cell, dt)` segments
@@ -944,16 +1068,17 @@ fn clip_surface_interval(
     ray_dir: glam::Vec3,
     start: f32,
     end: f32,
-) -> Option<(f32, f32)> {
+) -> Option<(f32, f32, f32, f32)> {
     let Some(normal) = normalized_surface_normal(model, cell) else {
-        return (end > start).then_some((start, end));
+        return (end > start).then_some((start, end, start, 0.0));
     };
     let center = model.points[cell as usize].truncate();
-    let offset = surface_offset(model, cell);
+    let query_near = start;
+    let offset = eval_surface_detail(model, cell, ray_origin, ray_dir, query_near).0;
     let denominator = ray_dir.dot(normal);
     if denominator.abs() <= 1.0e-20 {
         let outside = (ray_origin - center).dot(normal) > offset;
-        return (!outside && end > start).then_some((start, end));
+        return (!outside && end > start).then_some((start, end, query_near, offset));
     }
     let t = ((center - ray_origin).dot(normal) + offset) / denominator;
     let (clipped_start, clipped_end) = if denominator > 0.0 {
@@ -962,7 +1087,7 @@ fn clip_surface_interval(
         (start.max(t), end)
     };
     (clipped_start.is_finite() && clipped_end.is_finite() && clipped_end > clipped_start)
-        .then_some((clipped_start, clipped_end))
+        .then_some((clipped_start, clipped_end, query_near, offset))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -985,6 +1110,8 @@ fn path_interval_jacobian(
     let mut end_sphere_jacobian = None;
     let mut start_surface_jacobian = None;
     let mut end_surface_jacobian = None;
+    let mut surface_query_near = start;
+    let mut effective_surface_offset = 0.0;
 
     if bounded {
         let (sphere_near, sphere_far, near_jacobian, far_jacobian) =
@@ -999,7 +1126,9 @@ fn path_interval_jacobian(
         }
     }
     if let Some(normal) = normalized_surface_normal(model, cell) {
-        let offset = surface_offset(model, cell);
+        surface_query_near = start;
+        let offset = eval_surface_detail(model, cell, ray_origin, ray_dir, surface_query_near).0;
+        effective_surface_offset = offset;
         let denominator = ray_dir.dot(normal);
         if denominator.abs() <= 1.0e-20 {
             if (ray_origin - current_pos).dot(normal) > offset {
@@ -1079,6 +1208,8 @@ fn path_interval_jacobian(
             dt_d_current,
             dt_d_next,
             dt_d_surface_normal,
+            surface_query_near,
+            surface_offset: effective_surface_offset,
         },
     ))
 }
@@ -1265,7 +1396,15 @@ pub fn trace_powerfoam_splats(
             EvalMode::Opacity => {}
             EvalMode::ConstantRgb(color) => accum_rgb += weight * color,
             EvalMode::Sh => {
-                accum_rgb += weight * eval_rgb_surface(model, cell, ray.origin, ray_dir)
+                accum_rgb += weight
+                    * eval_rgb_surface_at(
+                        model,
+                        cell,
+                        ray.origin,
+                        ray_dir,
+                        entry.surface_query_near,
+                        entry.surface_offset,
+                    )
             }
         }
         if weight > peak_weight {
@@ -1479,7 +1618,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
             None => find_exit_face::<false>(&model.points, &[], neighbours, &exit_query),
         };
 
-        if let Some((segment_start, segment_end)) = support_interval(
+        if let Some((segment_start, segment_end, query_near, surface_offset)) = support_interval(
             bounded,
             ray.origin,
             dir,
@@ -1499,7 +1638,14 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
                     EvalMode::Opacity => {}
                     EvalMode::ConstantRgb(c) => accum_rgb += w * c,
                     EvalMode::Sh => {
-                        accum_rgb += w * eval_rgb_surface(model, current, ray.origin, dir)
+                        accum_rgb += w * eval_rgb_surface_at(
+                            model,
+                            current,
+                            ray.origin,
+                            dir,
+                            query_near,
+                            surface_offset,
+                        )
                     }
                 }
                 if w > peak_weight {
@@ -1562,6 +1708,7 @@ mod path_tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -1577,6 +1724,103 @@ mod path_tests {
             depth: 100.0,
             eval_mode: EvalMode::ConstantRgb(glam::Vec3::ONE),
         }
+    }
+
+    fn single_oriented_detail_model(detail: Option<crate::SurfaceDetail>) -> PointCloudModel {
+        PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 10.0, 2.0)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(crate::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: Some(vec![2.0]),
+            surface_normals: Some(vec![-glam::Vec3::Z]),
+            surface_offsets: Some(vec![0.0]),
+            surface_detail: detail,
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+        }
+    }
+
+    #[test]
+    fn surface_detail_matches_two_stage_soft_partition() {
+        let mut offsets = vec![-0.5 * glam::Vec3::X; crate::SURFACE_DETAIL_SITES];
+        offsets[0] = 0.5 * glam::Vec3::X;
+        let mut heights = vec![0.0; crate::SURFACE_DETAIL_SITES];
+        heights[0] = 0.25;
+        let selected_color = glam::Vec3::new(0.2, -0.1, 0.05);
+        let mut colors = vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES];
+        colors[0] = selected_color;
+        let model = single_oriented_detail_model(Some(crate::SurfaceDetail {
+            offsets,
+            heights,
+            colors,
+        }));
+        let ray = Ray {
+            origin: glam::Vec3::new(1.0, 0.0, 0.0),
+            direction: glam::Vec3::Z,
+        };
+
+        let sphere_half = 3.0_f32.sqrt();
+        let query_near = 10.0 - sphere_half;
+        let (surface_offset, color) =
+            eval_surface_detail(&model, 0, ray.origin, ray.direction, query_near);
+        let selected_weight = 1.0 / (1.0 + 7.0 * (-10.0_f32).exp());
+        let expected_offset = 2.0 * 0.25 * selected_weight;
+        assert!((surface_offset - expected_offset).abs() < 1.0e-6);
+        assert!((color - selected_weight * selected_color).length() < 1.0e-6);
+
+        let path = record_powerfoam_splats_jacobians(
+            &model,
+            ray,
+            TraceSettings {
+                depth: 20.0,
+                ..settings_for(0)
+            },
+        );
+        assert_eq!(path.entries.len(), 1);
+        assert!((path.entries[0].surface_query_near - query_near).abs() < 1.0e-6);
+        assert!((path.entries[0].surface_offset - expected_offset).abs() < 1.0e-6);
+        assert!((path.entries[0].dt - (sphere_half + expected_offset)).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn zero_surface_detail_is_forward_identity() {
+        let mut plain = single_oriented_detail_model(None);
+        plain.surface_offsets = Some(vec![0.13]);
+        let mut detailed = plain.clone();
+        detailed.surface_detail = Some(crate::SurfaceDetail {
+            offsets: (0..crate::SURFACE_DETAIL_SITES)
+                .map(|index| {
+                    let angle =
+                        index as f32 * std::f32::consts::TAU / crate::SURFACE_DETAIL_SITES as f32;
+                    0.4 * glam::Vec3::new(angle.cos(), angle.sin(), 0.5)
+                })
+                .collect(),
+            heights: vec![0.0; crate::SURFACE_DETAIL_SITES],
+            colors: vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES],
+        });
+        let ray = Ray {
+            origin: glam::Vec3::new(0.3, -0.2, 0.0),
+            direction: glam::Vec3::new(0.02, 0.03, 1.0),
+        };
+        let settings = TraceSettings {
+            depth: 20.0,
+            eval_mode: EvalMode::Sh,
+            ..settings_for(0)
+        };
+
+        let plain_path = record_powerfoam_splats_jacobians(&plain, ray, settings);
+        let detailed_path = record_powerfoam_splats_jacobians(&detailed, ray, settings);
+        assert_eq!(plain_path.entries.len(), detailed_path.entries.len());
+        assert!((plain_path.entries[0].dt - detailed_path.entries[0].dt).abs() < 1.0e-6);
+        assert_eq!(
+            trace_powerfoam_splats(&plain, ray, settings).rgba,
+            trace_powerfoam_splats(&detailed, ray, settings).rgba
+        );
     }
 
     #[test]
@@ -1685,6 +1929,7 @@ mod path_tests {
             radii: None,
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -1721,6 +1966,7 @@ mod path_tests {
             radii: Some(vec![1.0]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -1756,6 +2002,7 @@ mod path_tests {
             radii: Some(vec![1.0]),
             surface_normals: Some(vec![-glam::Vec3::Z]),
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -1794,6 +2041,7 @@ mod path_tests {
             radii: Some(vec![1.0]),
             surface_normals: Some(vec![-glam::Vec3::Z]),
             surface_offsets: Some(vec![0.25]),
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -1830,6 +2078,7 @@ mod path_tests {
             radii: Some(vec![2.0]),
             surface_normals: Some(vec![glam::Vec3::X]),
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -1871,6 +2120,7 @@ mod path_tests {
             radii: Some(vec![0.5, 0.5]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -1937,6 +2187,7 @@ mod path_tests {
             radii: Some(vec![1.4, 0.9, 1.6]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             points,
@@ -2077,6 +2328,7 @@ mod path_tests {
             radii: Some(vec![2.0, 2.0, 2.0]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             points,
@@ -2133,6 +2385,7 @@ mod path_tests {
             radii: Some(vec![1.0]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -2174,6 +2427,7 @@ mod path_tests {
             radii: Some(vec![2.0]),
             surface_normals: Some(vec![normal]),
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -2217,6 +2471,7 @@ mod path_tests {
             radii: Some(vec![2.0]),
             surface_normals: Some(vec![glam::Vec3::new(-0.2, 0.1, -1.0).normalize()]),
             surface_offsets: Some(vec![0.15]),
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
         };
@@ -2262,6 +2517,7 @@ mod path_tests {
             radii: Some(vec![0.95, 0.1, 0.95]),
             surface_normals: None,
             surface_offsets: None,
+            surface_detail: None,
             surface_color_coefficients: None,
             spherical_voronoi: None,
             points,
