@@ -1203,6 +1203,21 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   held-out PSNR changes 16.3152→16.3140 dB; per-view extrema are symmetric at
   ±0.04 dB. Physical forward/gradient tests, cross-scene gates, and exact
   resume therefore select the simpler broadcast path.
+- Meganeura revision `048c8be` adds a differentiable inner tiling operation,
+  replacing the remaining three-level concat tree used to repeat each detail
+  site's RGB vector. The Bonsai detail profile falls from 491 to 461 passes
+  and from 19.63 to 17.98 ms of steady GPU time; the 284-pass, approximately
+  7.1 ms control graph is unchanged. Two full Room replicas reduce training
+  from 122.261 to 115.639 seconds (-5.4%) and GPU wait by 6.9%, while changing
+  train/held-out PSNR from 25.6427/23.4061 to 25.6517/23.4138 dB. Averaged
+  held-out views split 20 improvements, five ties, and 14 regressions, with a
+  +0.0075 dB mean. Two Bonsai replicas reduce training from 114.856 to 111.409
+  seconds (-3.0%) and GPU wait by 3.3%; train/held-out PSNR changes only
+  17.1983/16.3140→17.1987/16.3137 dB. Exact 513×3×8 forward/gradient
+  coverage, exact reconstruction resume, strict lint, shader validation, and
+  the practical full Meganeura suite pass. The full gates peak at 1.60 GB on
+  Room and 1.52 GB on Bonsai under a 6 GiB scope, with zero swap, pressure,
+  OOM, kill, or GPU fault.
 
 ### M3 — Training crate scaffolding
 

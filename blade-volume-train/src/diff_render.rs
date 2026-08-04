@@ -317,11 +317,9 @@ fn surface_color_basis_graph(
 
 fn repeat_surface_detail_vec3(g: &mut mn::Graph, values: mn::NodeId, rows: usize) -> mn::NodeId {
     debug_assert_eq!(vol::SURFACE_DETAIL_SITES, 8);
-    let flat = g.reshape(values, &[rows * 3]);
-    let twice = g.concat(flat, flat, rows as u32, 3, 3, 1);
-    let four = g.concat(twice, twice, rows as u32, 6, 6, 1);
-    let eight = g.concat(four, four, rows as u32, 12, 12, 1);
-    g.reshape(eight, &[rows * vol::SURFACE_DETAIL_SITES, 3])
+    debug_assert_eq!(g.node(values).ty.shape, [rows, 3]);
+    let tiled = g.tile_inner(values, vol::SURFACE_DETAIL_SITES);
+    g.reshape(tiled, &[rows * vol::SURFACE_DETAIL_SITES, 3])
 }
 
 fn negative_exponential(g: &mut mn::Graph, input: mn::NodeId, count: usize) -> mn::NodeId {

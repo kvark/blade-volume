@@ -774,6 +774,17 @@ At the audited revision:
   22/39 averaged views with a 0.0575 dB worst regression; Bonsai's worst and
   best deltas are -0.04/+0.04 dB. Physical value/gradient coverage and exact
   resume pass, so the cross-scene gate selects the direct broadcast.
+- Meganeura `048c8be` then replaces the last three-level detail-vector concat
+  tree with one differentiable inner tile. The Bonsai profile drops 491→461
+  passes and 19.63→17.98 ms. Full 2,040-step Room replicas improve training
+  122.261→115.639 seconds (-5.4%) and held-out PSNR
+  23.4061→23.4138 dB; Bonsai improves training 114.856→111.409 seconds
+  (-3.0%) while held-out PSNR is neutral at 16.3140→16.3137 dB. Room's
+  averaged per-view mean is +0.0075 dB; Bonsai's is -0.0004 dB, with balanced
+  extrema inside replica noise. Exact physical forward/backward coverage,
+  exact resume, shader validation, strict lint, and the practical full
+  Meganeura suite pass. Scoped Room/Bonsai peaks are 1.60/1.52 GB with no
+  swap, pressure, OOM, kill, or GPU fault.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
@@ -1672,9 +1683,10 @@ material path.
    `226041c` batches Adam moments: the latter cuts a real 200K-site Bonsai
    detail boundary's state readback 62.8× and whole-command time 3.09× without
    increasing peak memory. Meganeura `760bb29` then replaces Blade's repeated
-   concat/split broadcasts: the detail graph loses 46 passes and matched
-   Room/Bonsai training becomes 3.5%/2.0% faster at neutral cross-scene
-   quality.)
+   scalar concat/split broadcasts, and `048c8be` removes the remaining
+   detail-vector concat tree: the detail graph falls from 537 to 461 passes
+   and matched Room/Bonsai training becomes a further 5.4%/3.0% faster at
+   neutral cross-scene quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done for
    unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate
