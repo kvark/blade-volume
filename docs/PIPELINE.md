@@ -1320,6 +1320,37 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   and two-scene scopes peak at 2.5/2.1/1.7 GB, with zero swap, pressure, OOM,
   kill, or GPU fault.
 
+#### M2as — Direct detail-weight exponential (implemented and two-scene-gated)
+
+- Meganeura revision `22bb539` exposes the pointwise IR's existing `exp`
+  primitive through the public graph, autodiff, fallback WGSL, compiler, and
+  runtime. The gradient is `grad * exp(x)`, and the existing pointwise pass
+  fuses single-use chains on both sides of the derivative.
+- Surface-detail weights now evaluate `exp(-x)` directly instead of the
+  algebraic identity `recip(sigmoid(x)) - 1`. The two are mathematically
+  equal, but the direct form avoids the identity's expanded autodiff graph.
+  The 4,096-ray, 128-step detail graph falls 446→438 passes; four large
+  multiplies, two adds, two reciprocals, and both sigmoids disappear. Warmed
+  GPU time falls from 15.05–15.12 to 14.56–14.68 ms (about -3.2%), while the
+  two direct exponentials together take about 0.12 ms.
+- Two 2,040-step Room replicas take 102.885 and 102.927 seconds, averaging
+  102.906 seconds versus 104.906 seconds (-1.9%). Mean GPU wait falls
+  62.521→61.006 seconds (-2.4%). Train/held-out quality changes
+  25.6442/23.4108→25.6480/23.4202 dB; averaged held-out views improve 19,
+  tie one, and regress 19, with a +0.0099 dB mean.
+- Two Bonsai replicas take 59.300 and 58.979 seconds, averaging 59.140 seconds
+  versus 61.479 seconds (-3.8%); mean GPU wait falls 51.540→49.840 seconds
+  (-3.3%). Train/held-out quality changes 17.1986/16.3120→17.2006/16.3139
+  dB. Averaged held-out views improve 17, tie six, and regress 14, with a
+  +0.0014 dB mean.
+- A physical 513-element Meganeura oracle covers forward values and gradients,
+  and handwritten/scheduled shader parity is explicit. All 177 library tests,
+  all 17 pointwise schedule tests, shader-module/SPIR-V/runtime-binding
+  validation, and strict lint pass. The profile and both long gates peak below
+  1.9 GB under 6 GiB. Blade's focused detail/resume tests, strict lint, and
+  complete locked workspace suite also pass; the latter peaks at 2.4 GB. All
+  scopes record zero swap, pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

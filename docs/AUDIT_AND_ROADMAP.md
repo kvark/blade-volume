@@ -820,6 +820,19 @@ At the audited revision:
   SPIR-V validation, strict lint, pinned Blade detail/resume tests, and the
   complete locked Blade workspace suite pass; all measured scopes record zero
   OOM or GPU faults, and the full suite peaks at 2.5 GB.
+- Meganeura `22bb539` exposes its existing pointwise exponential through the
+  graph and autodiff, so detail weights use `exp(-x)` rather than
+  `recip(sigmoid(x)) - 1`. The direct mathematical form removes eight passes:
+  the detail graph falls 446→438 and warmed GPU time falls about 3.2%, from
+  15.05–15.12 to 14.56–14.68 ms. Two Room replicas reduce mean training
+  104.906→102.906 seconds (-1.9%) and GPU wait 62.521→61.006 seconds (-2.4%);
+  held-out PSNR rises 23.4108→23.4202 dB. Two Bonsai replicas reduce mean
+  training 61.479→59.140 seconds (-3.8%) and GPU wait 51.540→49.840 seconds
+  (-3.3%); held-out PSNR changes 16.3120→16.3139 dB. Physical exponential
+  forward/gradient and shader-path parity, the Meganeura library/pointwise
+  suites, strict lint, Blade's focused and complete locked workspace suites,
+  and cross-scene gates pass without memory or GPU faults. The full Blade
+  suite peaks at 2.4 GB.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
@@ -1729,7 +1742,9 @@ material path.
    chains; Room/Bonsai improve another 3.6%/3.7% at neutral held-out quality.
    Meganeura `f31ef08` removes the remaining 48 MiB normal tile and explicit
    tangent-projection chains; Room/Bonsai improve another 6.4%/4.8% at neutral
-   held-out quality.)
+   held-out quality. Meganeura `22bb539` then replaces the expanded
+   sigmoid/reciprocal exponential identity; Room/Bonsai improve another
+   1.9%/3.8% at neutral held-out quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done for
    unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate

@@ -315,11 +315,9 @@ fn surface_color_basis_graph(
     g.stop_gradient(basis)
 }
 
-fn negative_exponential(g: &mut mn::Graph, input: mn::NodeId, count: usize) -> mn::NodeId {
-    let sigmoid = g.sigmoid(input);
-    let reciprocal = g.recip(sigmoid);
-    let negative_ones = g.constant(vec![-1.0_f32; count], &[count, 1]);
-    g.add(reciprocal, negative_ones)
+fn negative_exponential(g: &mut mn::Graph, input: mn::NodeId) -> mn::NodeId {
+    let negative = g.neg(input);
+    g.exp(negative)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -374,7 +372,7 @@ fn surface_detail_weights(
     let distance_squared = g.reshape(distance_squared, &[count, 1]);
     let temperature = g.constant(vec![10.0_f32; count], &[count, 1]);
     let exponent = g.mul(distance_squared, temperature);
-    let weights = negative_exponential(g, exponent, count);
+    let weights = negative_exponential(g, exponent);
     g.reshape(weights, &[rows, vol::SURFACE_DETAIL_SITES])
 }
 
