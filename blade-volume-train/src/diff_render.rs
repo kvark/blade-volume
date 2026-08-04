@@ -5,9 +5,9 @@
 //! parameters are per-cell density and RGB spherical-harmonic coefficients.
 //! The forward pass:
 //!
-//! 1. Packs the RGB/SH DC and higher-order parameter tables into one row-major
-//!    table and gathers all coefficients for each (pixel, step) with one
-//!    embedding.
+//! 1. Packs each RGB channel's SH DC and higher-order parameters into a
+//!    row-major table, then gathers and reduces each channel without an
+//!    intermediate RGB copy.
 //! 2. Applies a positive density activation and computes `raw = density * dt`.
 //! 3. Computes the exclusive per-pixel cumulative sum that gives transmittance.
 //! 4. Expresses `exp(-x)` via the identity
@@ -1397,6 +1397,43 @@ fn concat_columns(g: &mut mn::Graph, columns: &[mn::NodeId], rows: usize) -> mn:
     g.reshape(flat, &[rows, channels as usize])
 }
 
+fn split_rgb_table(
+    g: &mut mn::Graph,
+    table: mn::NodeId,
+    rows: usize,
+    channel_width: usize,
+) -> [mn::NodeId; 3] {
+    let rg = g.split_a(
+        table,
+        rows as u32,
+        (2 * channel_width) as u32,
+        channel_width as u32,
+        1,
+    );
+    let blue = g.split_b(
+        table,
+        rows as u32,
+        (2 * channel_width) as u32,
+        channel_width as u32,
+        1,
+    );
+    let red = g.split_a(
+        rg,
+        rows as u32,
+        channel_width as u32,
+        channel_width as u32,
+        1,
+    );
+    let green = g.split_b(
+        rg,
+        rows as u32,
+        channel_width as u32,
+        channel_width as u32,
+        1,
+    );
+    [red, green, blue].map(|channel| g.reshape(channel, &[rows, channel_width]))
+}
+
 struct PixelSh {
     pixels: [mn::NodeId; 3],
     step_colors: [mn::NodeId; 3],
@@ -1436,83 +1473,50 @@ fn pixel_sh(
     );
 
     let pl = p * l;
-    let coefficient_channels: Vec<mn::NodeId> = sh_coefficients
+    let coefficient_tables: Vec<mn::NodeId> = sh_coefficients
         .iter()
         .map(|channel| match channel.rest {
-            Some(rest) => g.concat(channel.dc, rest, n_cells as u32, 1, (k - 1) as u32, 1),
+            Some(rest) => {
+                let table = g.concat(channel.dc, rest, n_cells as u32, 1, (k - 1) as u32, 1);
+                g.reshape(table, &[n_cells, k])
+            }
             None => channel.dc,
         })
         .collect();
-    let coefficient_rg = g.concat(
-        coefficient_channels[0],
-        coefficient_channels[1],
-        n_cells as u32,
-        k as u32,
-        k as u32,
-        1,
-    );
-    let coefficient_table = g.concat(
-        coefficient_rg,
-        coefficient_channels[2],
-        n_cells as u32,
-        (2 * k) as u32,
-        k as u32,
-        1,
-    );
-    let coefficient_table = g.reshape(coefficient_table, &[n_cells, 3 * k]);
-    let coefficients = g.embedding(cell_indices, coefficient_table); // [PL, 3K]
 
     let mut basis_columns = Vec::with_capacity(k);
     basis_columns.push(g.constant(vec![SH_C0; p], &[p, 1]));
     basis_columns.extend_from_slice(basis_inputs);
     let basis_per_pixel = concat_columns(g, &basis_columns, p); // [P, K]
     let basis = g.embedding(pixel_idx_per_step, basis_per_pixel);
-    // Camera directions are inputs, not learned values. Stop their backward
-    // branch after the packed broadcast so training only differentiates the
-    // coefficient operand of the SH product.
-    let basis_flat = g.reshape(basis, &[pl * k]);
-    let basis_rg = g.concat(basis_flat, basis_flat, pl as u32, k as u32, k as u32, 1);
-    let basis_rgb_flat = g.concat(basis_rg, basis_flat, pl as u32, (2 * k) as u32, k as u32, 1);
-    let basis_rgb = g.reshape(basis_rgb_flat, &[pl, 3 * k]);
-    let basis_rgb = g.stop_gradient(basis_rgb);
+    // Camera directions are inputs, not learned values. Keeping RGB as three
+    // reductions lets meganeura fold each coefficient embedding and multiply
+    // into the reduction without copying a repeated `[PL, 3*K]` basis.
+    let basis = g.stop_gradient(basis);
+    let mut colors: Vec<mn::NodeId> = coefficient_tables
+        .into_iter()
+        .map(|table| {
+            let coefficients = g.embedding(cell_indices, table);
+            let terms = g.mul(coefficients, basis);
+            g.sum_inner(terms)
+        })
+        .collect();
 
-    // Reshape each path row `[R_K, G_K, B_K]` into three K-wide rows, then
-    // reduce the SH axis.
-    let terms = g.mul(coefficients, basis_rgb);
-    let terms_rgb = g.reshape(terms, &[pl * 3, k]);
-    let color_flat = g.sum_inner(terms_rgb);
-    let color = g.reshape(color_flat, &[pl, 3]);
-    let color = match (surface_color_coefficients, surface_basis) {
+    match (surface_color_coefficients, surface_basis) {
         (Some(coefficient_table), Some(basis)) => {
-            let coefficients = g.embedding(cell_indices, coefficient_table); // [PL, 12]
-            let basis_flat = g.reshape(basis, &[pl * vol::SURFACE_COLOR_COMPONENTS]);
-            let basis_rg = g.concat(
-                basis_flat,
-                basis_flat,
-                pl as u32,
-                vol::SURFACE_COLOR_COMPONENTS as u32,
-                vol::SURFACE_COLOR_COMPONENTS as u32,
-                1,
-            );
-            let basis_rgb_flat = g.concat(
-                basis_rg,
-                basis_flat,
-                pl as u32,
-                (2 * vol::SURFACE_COLOR_COMPONENTS) as u32,
-                vol::SURFACE_COLOR_COMPONENTS as u32,
-                1,
-            );
-            let basis_rgb = g.reshape(basis_rgb_flat, &[pl, 3 * vol::SURFACE_COLOR_COMPONENTS]);
-            let terms = g.mul(coefficients, basis_rgb);
-            let terms_rgb = g.reshape(terms, &[pl * 3, vol::SURFACE_COLOR_COMPONENTS]);
-            let residual_flat = g.sum_inner(terms_rgb);
-            let residual = g.reshape(residual_flat, &[pl, 3]);
-            g.add(color, residual)
+            let tables =
+                split_rgb_table(g, coefficient_table, n_cells, vol::SURFACE_COLOR_COMPONENTS);
+            for (color, table) in colors.iter_mut().zip(tables) {
+                let coefficients = g.embedding(cell_indices, table);
+                let terms = g.mul(coefficients, basis);
+                let residual = g.sum_inner(terms);
+                *color = g.add(*color, residual);
+            }
         }
-        (None, None) => color,
+        (None, None) => {}
         _ => unreachable!("surface color parameter and basis must be declared together"),
-    };
-    let color = match spherical_voronoi {
+    }
+    match spherical_voronoi {
         Some((parameters, ray_dir_pl)) => {
             let axes = g.embedding(cell_indices, parameters.axes);
             let axes = g.reshape(axes, &[pl * vol::SPHERICAL_VORONOI_SITES, 3]);
@@ -1528,48 +1532,31 @@ fn pixel_sh(
             let logits = g.reshape(logits_flat, &[pl, vol::SPHERICAL_VORONOI_SITES]);
             let weights = g.softmax(logits);
 
-            let colors = g.embedding(cell_indices, parameters.colors);
-            let weights_flat = g.reshape(weights, &[pl * vol::SPHERICAL_VORONOI_SITES]);
-            let weights_rg = g.concat(
-                weights_flat,
-                weights_flat,
-                pl as u32,
-                vol::SPHERICAL_VORONOI_SITES as u32,
-                vol::SPHERICAL_VORONOI_SITES as u32,
-                1,
-            );
-            let weights_rgb_flat = g.concat(
-                weights_rg,
-                weights_flat,
-                pl as u32,
-                (2 * vol::SPHERICAL_VORONOI_SITES) as u32,
-                vol::SPHERICAL_VORONOI_SITES as u32,
-                1,
-            );
-            let weights_rgb = g.reshape(weights_rgb_flat, &[pl, 3 * vol::SPHERICAL_VORONOI_SITES]);
-            let terms = g.mul(colors, weights_rgb);
-            let terms_rgb = g.reshape(terms, &[pl * 3, vol::SPHERICAL_VORONOI_SITES]);
-            let residual_flat = g.sum_inner(terms_rgb);
-            let residual = g.reshape(residual_flat, &[pl, 3]);
-            g.add(color, residual)
+            let tables =
+                split_rgb_table(g, parameters.colors, n_cells, vol::SPHERICAL_VORONOI_SITES);
+            for (color, table) in colors.iter_mut().zip(tables) {
+                let coefficients = g.embedding(cell_indices, table);
+                let terms = g.mul(coefficients, weights);
+                let residual = g.sum_inner(terms);
+                *color = g.add(*color, residual);
+            }
         }
-        None => color,
-    };
+        None => {}
+    }
 
-    let bias = g.constant(vec![0.5; pl * 3], &[pl, 3]);
-    let biased = g.add(color, bias);
-    // Match RadFoam's per-cell `max(rgb, 0)` before volumetric
-    // compositing. Clamping only the accumulated pixel is not equivalent.
-    let non_negative = g.relu(biased);
-    // Split backward emits a flat concat; make the matching forward shape
-    // explicit so autodiff does not try to combine `[PL*3]` with `[PL, 3]`.
-    let non_negative_flat = g.reshape(non_negative, &[pl * 3]);
-    let red = g.split_a(non_negative_flat, pl as u32, 1, 2, 1);
-    let gb = g.split_b(non_negative_flat, pl as u32, 1, 2, 1);
-    let green = g.split_a(gb, pl as u32, 1, 1, 1);
-    let blue = g.split_b(gb, pl as u32, 1, 1, 1);
-
-    let step_colors = [red, green, blue].map(|channel| g.reshape(channel, &[p, l]));
+    let bias = g.constant(vec![0.5; pl], &[pl, 1]);
+    let step_colors: [mn::NodeId; 3] = colors
+        .into_iter()
+        .map(|color| {
+            let biased = g.add(color, bias);
+            // Match RadFoam's per-cell `max(rgb, 0)` before volumetric
+            // compositing. Clamping only the accumulated pixel is not equivalent.
+            let non_negative = g.relu(biased);
+            g.reshape(non_negative, &[p, l])
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("pixel_sh needs exactly three channels");
     let pixels = step_colors.map(|color_2d| {
         let weighted = g.mul(weight, color_2d);
         g.sum_inner(weighted)
