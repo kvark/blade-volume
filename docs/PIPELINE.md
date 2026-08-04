@@ -865,6 +865,33 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   evaluation rays remain untruncated. The paired scope peaks at 881 MiB and
   records no swap, pressure, OOM, kill, or GPU fault.
 
+#### M2ae — Pack narrow RMSNorm rows (implemented and gated)
+
+- Meganeura revision `fc20c16` packs independent 2–32-column RMSNorm rows
+  into one 256-lane workgroup for both the forward reduction and the input
+  gradient. Three-column reconstruction rows use four lanes each, so 64 rows
+  share a workgroup instead of leaving 253 lanes idle. Wider rows and the
+  weight-gradient path are unchanged, and the power-of-two lane group keeps
+  the previous reduction order.
+- A 513×3 physical-GPU test compares the forward result and every input
+  gradient against a CPU oracle while exercising a partial final workgroup.
+  Compiler coverage checks the packed dispatch and the 32/33-column boundary.
+  Exact oriented resume, strict lint, the complete Blade workspace suite, and
+  the Meganeura all-target suite pass. Four pre-existing Meganeura tests that
+  interfere only when sharing one long-lived GPU test process were reproduced
+  identically on the untouched dependency and pass individually on both
+  revisions.
+- Three matched 200K-site profiles keep the graph at 284 passes while reducing
+  median GPU time from 19.89 to 17.54 ms (-11.8%). RMSNorm forward falls from
+  0.68 to 0.02–0.03 ms and its input gradient from 1.62 to 0.02 ms.
+- On the matched 2,040-step Room replay, training falls 111.590→104.632 seconds
+  (-6.2%), GPU wait 66.601→61.230 seconds (-8.1%), command submission
+  39.388→38.224 seconds (-3.0%), and complete command time 116.142→108.892
+  seconds (-6.2%). Fresh-Ply quality is preserved at 25.4103/23.2724 dB versus
+  25.4110/23.2709 dB. All 8.36M training and 4.82M evaluation rays remain
+  untruncated. The paired scope peaks at 885 MiB and records no swap, pressure,
+  OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

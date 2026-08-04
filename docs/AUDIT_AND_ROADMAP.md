@@ -792,6 +792,16 @@ At the audited revision:
   115.862→111.844 seconds (-3.5%) and GPU wait 69.291→65.990 seconds (-4.8%)
   while preserving 25.4159/23.2685 dB versus 25.4115/23.2642 dB and zero
   truncation. The 6 GiB scope peaks at 881 MiB without memory or GPU faults.
+- Meganeura `fc20c16` packs 2–32-column RMSNorm rows into otherwise idle
+  workgroup lanes while retaining the previous power-of-two reduction order.
+  A 513×3 CPU/GPU forward-and-gradient oracle covers the partial final group,
+  and the wide path remains unchanged. Three 200K-site profiles improve median
+  GPU time 19.89→17.54 ms (-11.8%) at the same 284 passes. The matched Room
+  replay reduces training 111.590→104.632 seconds (-6.2%), GPU wait
+  66.601→61.230 seconds (-8.1%), and complete time 116.142→108.892 seconds
+  (-6.2%), while preserving 25.4103/23.2724 dB versus 25.4110/23.2709 dB and
+  zero truncation. The paired 6 GiB scope peaks at 885 MiB without swap,
+  pressure, OOM, kill, or GPU fault.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
