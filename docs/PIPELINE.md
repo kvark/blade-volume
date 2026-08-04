@@ -845,6 +845,26 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   evaluation rays remain untruncated, and the 6 GiB scopes report no swap,
   pressure, OOM, kill, or GPU fault.
 
+#### M2ad — Avoid matrix multiplication for XYZ scalar repeats (implemented and gated)
+
+- The oriented spatial-colour basis needs four per-path scalars repeated over
+  XYZ. It now performs that exact row-wise copy with two concatenations instead
+  of treating each copy as a `[P·L, 1] × [1, 3]` tiled matrix multiplication.
+  A distinct-value row-order test and the existing CPU surface-basis oracle
+  cover the replacement directly; exact segmented resumes and the complete
+  physical-GPU workspace suite pass.
+- Three alternating 200K-site profiles replace four of five
+  `MatMul[655360x3x1]` passes. The graph grows from 280 to 284 cheaper passes,
+  while median GPU time falls 20.81→19.94 ms (-4.2%). Logged loss trajectories
+  are unchanged.
+- On a back-to-back matched 2,040-step Room pair, training falls
+  115.862→111.844 seconds (-3.5%), GPU wait 69.291→65.990 seconds (-4.8%),
+  command submission 41.254→40.184 seconds (-2.6%), and complete command time
+  120.389→116.054 seconds (-3.6%). Fresh-Ply quality is preserved at
+  25.4159/23.2685 dB versus 25.4115/23.2642 dB. All 8.36M training and 4.82M
+  evaluation rays remain untruncated. The paired scope peaks at 881 MiB and
+  records no swap, pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

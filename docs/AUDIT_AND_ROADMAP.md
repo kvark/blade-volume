@@ -784,6 +784,14 @@ At the audited revision:
   Room replay reduces training 137.618→114.757 seconds (-16.6%) and GPU wait
   86.908→68.631 seconds (-21.0%), while preserving 25.4170/23.2647 dB and
   zero truncation. Peak memory is 719 MiB with no cgroup or GPU faults.
+- Four scalar-to-XYZ copies in the oriented spatial-colour basis now use exact
+  row-wise concatenation instead of tiled matrix multiplication. Direct
+  row-order and CPU-oracle tests, exact resumes, and the full workspace GPU
+  suite pass. Three alternating profiles improve median GPU time
+  20.81→19.94 ms (-4.2%). A back-to-back Room pair reduces training
+  115.862→111.844 seconds (-3.5%) and GPU wait 69.291→65.990 seconds (-4.8%)
+  while preserving 25.4159/23.2685 dB versus 25.4115/23.2642 dB and zero
+  truncation. The 6 GiB scope peaks at 881 MiB without memory or GPU faults.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
