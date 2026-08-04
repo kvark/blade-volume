@@ -232,14 +232,21 @@ fn repeat_xyz(g: &mut mn::Graph, column: mn::NodeId, rows: usize) -> mn::NodeId 
     g.broadcast_inner(column, 3)
 }
 
+fn floor_surface_radii(g: &mut mn::Graph, radii: mn::NodeId, rows: usize) -> mn::NodeId {
+    let negative_radius_floor = g.constant(vec![-1.0e-6_f32; rows], &[rows, 1]);
+    let radius_above_floor = g.add(radii, negative_radius_floor);
+    let radius_above_floor = g.relu(radius_above_floor);
+    let radius_floor = g.constant(vec![1.0e-6_f32; rows], &[rows, 1]);
+    g.add(radius_above_floor, radius_floor)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn surface_color_basis_graph(
     g: &mut mn::Graph,
-    cell_indices: mn::NodeId,
     centers: mn::NodeId,
     step_normals: mn::NodeId,
     step_offsets: Option<mn::NodeId>,
-    actual_radii: mn::NodeId,
+    radii: mn::NodeId,
     ray_origin_pl: mn::NodeId,
     ray_dir_pl: mn::NodeId,
     pl: usize,
@@ -279,12 +286,6 @@ fn surface_color_basis_graph(
     let neg_normal_component = g.neg(normal_component);
     let tangent = g.add(relative, neg_normal_component);
 
-    let radii = g.embedding(cell_indices, actual_radii);
-    let negative_radius_floor = g.constant(vec![-1.0e-6_f32; pl], &[pl, 1]);
-    let radius_above_floor = g.add(radii, negative_radius_floor);
-    let radius_above_floor = g.relu(radius_above_floor);
-    let radius_floor = g.constant(vec![1.0e-6_f32; pl], &[pl, 1]);
-    let radii = g.add(radius_above_floor, radius_floor);
     let radius_xyz = repeat_xyz(g, radii, pl);
     let q = g.div(tangent, radius_xyz);
 
@@ -860,15 +861,14 @@ fn build_volumetric_graph_with_options(
     let step_surface_normals =
         normalized_surface_normals.map(|normals| g.embedding(cell_indices, normals));
     let step_surface_offsets = surface_offsets.map(|offsets| g.embedding(cell_indices, offsets));
+    let step_surface_radii = (surface_detail.is_some() || surface_color_coefficients.is_some())
+        .then(|| {
+            let radii = g.embedding(cell_indices, differentiable_radii.unwrap());
+            floor_surface_radii(g, radii, pl)
+        });
     let surface_detail_evaluation = surface_detail.as_ref().map(|parameters| {
         let base_offsets =
             step_surface_offsets.unwrap_or_else(|| g.constant(vec![0.0_f32; pl], &[pl, 1]));
-        let radii = g.embedding(cell_indices, differentiable_radii.unwrap());
-        let negative_radius_floor = g.constant(vec![-1.0e-6_f32; pl], &[pl, 1]);
-        let radius_above_floor = g.add(radii, negative_radius_floor);
-        let radius_above_floor = g.relu(radius_above_floor);
-        let radius_floor = g.constant(vec![1.0e-6_f32; pl], &[pl, 1]);
-        let radii = g.add(radius_above_floor, radius_floor);
         evaluate_surface_detail_graph(
             g,
             cell_indices,
@@ -876,7 +876,7 @@ fn build_volumetric_graph_with_options(
             pos_cell,
             step_surface_normals.unwrap(),
             base_offsets,
-            radii,
+            step_surface_radii.unwrap(),
             ray_origin_pl,
             ray_dir_pl,
             pl,
@@ -889,11 +889,10 @@ fn build_volumetric_graph_with_options(
     let surface_basis = surface_color_coefficients.map(|_| {
         surface_color_basis_graph(
             g,
-            cell_indices,
             pos_cell,
             step_surface_normals.unwrap(),
             effective_surface_offsets,
-            actual_radii.unwrap(),
+            step_surface_radii.unwrap(),
             ray_origin_pl,
             ray_dir_pl,
             pl,
@@ -6954,6 +6953,8 @@ mod tests {
         let normals = graph.parameter("surface_normals", &[1, 3]);
         let base_offsets = graph.parameter("surface_offsets", &[1, 1]);
         let radii = graph.parameter("radii", &[1, 1]);
+        let radii = graph.embedding(cell_indices, radii);
+        let radii = floor_surface_radii(&mut graph, radii, 1);
         let ray_origin = graph.input("ray_origin", &[1, 3]);
         let ray_direction = graph.input("ray_direction", &[1, 3]);
         let evaluation = evaluate_surface_detail_graph(
@@ -7050,6 +7051,31 @@ mod tests {
         session.read_output_by_index(2, &mut actual_red);
         assert!((actual_offset[0] - expected_offset).abs() < 2.0e-5);
         assert!((actual_red[0] - expected_color.x).abs() < 2.0e-5);
+
+        const RADIUS_EPSILON: f32 = 1.0e-3;
+        let radius_loss = |radius| {
+            let mut perturbed = model.clone();
+            perturbed.radii = Some(vec![radius]);
+            let (offset, color) = vol::trace::eval_surface_detail(
+                &perturbed,
+                0,
+                glam::Vec3::new(1.0, 0.0, 0.0),
+                glam::Vec3::Z,
+                query_near,
+            );
+            offset + color.x
+        };
+        let expected_radius_gradient = (radius_loss(2.0 + RADIUS_EPSILON)
+            - radius_loss(2.0 - RADIUS_EPSILON))
+            / (2.0 * RADIUS_EPSILON);
+        let mut radius_gradient = [0.0_f32];
+        session.read_param_grad("radii", &mut radius_gradient);
+        assert!(expected_radius_gradient.abs() > 1.0e-4);
+        assert!(
+            (radius_gradient[0] - expected_radius_gradient).abs() < 2.0e-3,
+            "radius gradient {} != CPU finite difference {expected_radius_gradient}",
+            radius_gradient[0],
+        );
 
         for (name, size) in [
             ("surface_detail_offsets", sites * 3),
@@ -7199,9 +7225,10 @@ mod tests {
         let ray_origin = graph.input("ray_origin", &[1, 3]);
         let ray_direction = graph.input("ray_direction", &[1, 3]);
         let centers = graph.embedding(cells, positions);
+        let radii = graph.embedding(cells, radii);
+        let radii = floor_surface_radii(&mut graph, radii, 1);
         let basis = surface_color_basis_graph(
             &mut graph,
-            cells,
             centers,
             normals,
             Some(offsets),
@@ -8073,6 +8100,28 @@ mod tests {
         assert_eq!(frozen_position_gathers, 2);
         assert!(!graph.nodes().iter().any(|node| {
             matches!(node.op, mn::graph::Op::Embedding) && node.inputs.get(1) == Some(&vg.positions)
+        }));
+        let frozen_radii = graph
+            .nodes()
+            .iter()
+            .filter(|node| {
+                matches!(node.op, mn::graph::Op::StopGradient) && node.ty.shape == [4, 1]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(frozen_radii.len(), 1);
+        let raw_radii = frozen_radii[0].inputs[0];
+        let frozen_radii = frozen_radii[0].id;
+        let frozen_radius_gathers = graph
+            .nodes()
+            .iter()
+            .filter(|node| {
+                matches!(node.op, mn::graph::Op::Embedding)
+                    && node.inputs.get(1) == Some(&frozen_radii)
+            })
+            .count();
+        assert_eq!(frozen_radius_gathers, 1);
+        assert!(!graph.nodes().iter().any(|node| {
+            matches!(node.op, mn::graph::Op::Embedding) && node.inputs.get(1) == Some(&raw_radii)
         }));
         let (session, _) = mn::build(
             &graph,

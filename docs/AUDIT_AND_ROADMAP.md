@@ -875,6 +875,20 @@ At the audited revision:
   0.58%, but recorder time rises 8.4% and combined GPU time regresses 2.65%.
   Strict all-target lint and the complete locked workspace suite pass; the
   latter peaks at 6.10 GB under 6 GiB with no memory or GPU fault event.
+- Those same appearance branches now also share the gathered, positively
+  floored surface radius. This removes another two dispatches (416→414) and
+  one of 14 large embeddings. Balanced last-20 GPU timestamps improve
+  13.756→13.599 ms (-1.14%). In two-replica ABBA gates, Room training improves
+  99.839→98.754 seconds (-1.09%) and GPU wait improves 58.516→57.870 seconds;
+  train/held-out PSNR changes by only -0.0026/-0.0009 dB. Bonsai training
+  improves 57.375→56.633 seconds (-1.29%) and GPU wait improves
+  48.294→47.538 seconds; train/held-out PSNR changes by -0.0001/+0.0010 dB.
+  Both gates remain untruncated with unchanged candidate ceilings. Their
+  6 GiB scopes peak at 1.72/1.37 GB with zero swap, pressure, OOM, kill, or GPU
+  fault. A train-mode physical test covers the production gather/floor path
+  and matches the independent CPU finite-difference radius gradient. Strict
+  all-target lint and the complete serialized workspace suite pass; the latter
+  peaks at 2.68 GB under its 6 GiB cgroup with no memory or GPU fault event.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
