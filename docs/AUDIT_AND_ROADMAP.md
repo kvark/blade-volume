@@ -889,6 +889,21 @@ At the audited revision:
   and matches the independent CPU finite-difference radius gradient. Strict
   all-target lint and the complete serialized workspace suite pass; the latter
   peaks at 2.68 GB under its 6 GiB cgroup with no memory or GPU fault event.
+- Exhaustive PowerFoam candidate gathering now assigns the WebGPU-guaranteed
+  maximum of 256 lanes, rather than 64, to each exact 200K-site ray scan.
+  Balanced 64/128/256-lane profiles measure 3.455/3.055/2.843 ms for the gather
+  (-17.7% at 256), with the downstream record pass and 414-pass graph neutral.
+  Two-replica Room training improves 99.699→96.906 seconds (-2.80%) and GPU
+  wait improves 58.207→56.907 seconds; held-out PSNR changes by -0.0074 dB.
+  Bonsai improves 57.288→56.034 seconds (-2.19%) and 48.106→46.876 seconds,
+  with held-out PSNR changing by +0.0002 dB. Across all ABBA arms, 66.85
+  million training and 38.40 million evaluation rays remain untruncated;
+  candidate maxima stay below capacity, and the 6 GiB scopes peak at
+  1.69/1.35 GB without a memory or GPU fault event. Removing interval sorting
+  entirely saves at most a noisy 0.15 ms and immediately changes loss, so
+  parallel-sort complexity is rejected. All 14 physical path tests, strict
+  all-target lint, and the complete serialized workspace suite pass; the
+  latter peaks at 5.69 GB under 6 GiB with no event.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes

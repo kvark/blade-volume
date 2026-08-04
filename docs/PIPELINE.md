@@ -1463,6 +1463,49 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   6.10 GB (5.68 GiB) under the 6 GiB cgroup. No selected scope records swap,
   pressure, OOM, kill, or GPU fault.
 
+#### M2aw — Reuse gathered surface radii (implemented and two-scene-gated)
+
+- Spatial detail and the spatial surface-colour basis now consume one shared
+  gathered, positively floored surface-radius node. This preserves the exact
+  floor arithmetic while removing two graph passes and one large embedding:
+  the detail graph falls 416→414 passes and 14→13 embeddings.
+- Balanced last-20 timestamps improve 13.756→13.599 ms (-1.14%). Two 2,040-step
+  Room replicas reduce mean training 99.839→98.754 seconds (-1.09%); two
+  Bonsai replicas reduce it 57.375→56.633 seconds (-1.29%). Mean held-out
+  quality changes by -0.0009/+0.0010 dB, respectively.
+- A train-mode physical test gathers and floors the radius through the
+  production path, then matches its gradient to an independent CPU central
+  finite difference. Strict lint and the serialized workspace suite pass with
+  zero memory or GPU fault events.
+
+#### M2ax — Widen exhaustive PowerFoam gathering (implemented and two-scene-gated)
+
+- One workgroup still owns one sampled ray and scans the same exact support
+  set, but 256 lanes now divide the scan instead of 64. Candidate storage,
+  intersection arithmetic, overflow handling, and the deterministic
+  `(effective depth, cell index)` ordering are unchanged. 256 is the maximum
+  workgroup size guaranteed across WebGPU adapters.
+- In order-balanced profiles, 64/128/256 lanes take 3.455/3.055/2.843 ms for
+  the 200K-site, 4,096-ray exhaustive gather. The selected size is 17.7%
+  faster than 64 lanes while the following record and 414-pass training graph
+  remain neutral. Removing interval sorting entirely provided only a noisy
+  0.15 ms lower bound and immediately changed loss, so a parallel sort was not
+  pursued.
+- Two 2,040-step Room replicas reduce mean training 99.699→96.906 seconds
+  (-2.80%), path submission 36.851→35.485 seconds (-3.71%), and GPU wait
+  58.207→56.907 seconds (-2.23%). Train/held-out PSNR changes
+  25.6486/23.4196→25.6457/23.4122 dB.
+- Two Bonsai replicas reduce mean training 57.288→56.034 seconds (-2.19%) and
+  GPU wait 48.106→46.876 seconds (-2.56%). Train/held-out PSNR changes
+  17.1994/16.3180→17.1982/16.3182 dB. Across all ABBA arms, 66.85 million
+  training rays and 38.40 million evaluation rays remain untruncated;
+  candidate maxima are 231/1,024 on Room and 661/1,024 on Bonsai. The scene
+  scopes peak at 1.69/1.35 GB under 6 GiB with zero swap, pressure, OOM, kill,
+  or GPU fault.
+  All 14 physical path tests, strict all-target lint, and the complete
+  serialized workspace suite pass; the latter peaks at 5.69 GB (5.30 GiB)
+  under the same limit with no event.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

@@ -586,8 +586,9 @@ fn bin_powerfoam_candidates(
 // projected tile row replaces the exhaustive scan when available; overflowing
 // rows take the exhaustive path. Candidate order is intentionally irrelevant:
 // `record_powerfoam_splats` selects the next interval by exact clipped entry
-// depth with an index tie-break.
-@compute @workgroup_size(64)
+// depth with an index tie-break. 256 lanes is guaranteed across WebGPU
+// adapters and minimizes the measured exhaustive production scan.
+@compute @workgroup_size(256)
 fn gather_powerfoam_candidates(
     @builtin(workgroup_id) workgroup_id: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
@@ -598,7 +599,7 @@ fn gather_powerfoam_candidates(
     }
     let output_pixel = g_params.pixel_offset + p_id;
     let row_start = output_pixel * g_params.max_steps;
-    for (var step = local_id.x; step < g_params.max_steps; step += 64u) {
+    for (var step = local_id.x; step < g_params.max_steps; step += 256u) {
         let slot = row_start + step;
         g_cells_out[slot] = 0u;
         g_next_cells_out[slot] = 0u;
@@ -628,7 +629,7 @@ fn gather_powerfoam_candidates(
             scan_count = tile_count;
         }
     }
-    for (var scan_index = local_id.x; scan_index < scan_count; scan_index += 64u) {
+    for (var scan_index = local_id.x; scan_index < scan_count; scan_index += 256u) {
         var cell = scan_index;
         if (use_tile) {
             cell = g_tile_candidates[tile * g_params.tile_capacity + scan_index];
