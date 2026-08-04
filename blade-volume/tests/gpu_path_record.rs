@@ -8,7 +8,9 @@
 
 use blade_graphics as gpu;
 use blade_volume as vol;
-use vol::gpu::{PathRecordBuffers, PathRecorder, RadFoamGpuCloud, RecordPathsArgs};
+use vol::gpu::{
+    PathJacobianMode, PathRecordBuffers, PathRecorder, RadFoamGpuCloud, RecordPathsArgs,
+};
 
 // Some physical GPU drivers can busy-wait when two contexts are initialized
 // concurrently in one test process. Keep these hardware tests independent
@@ -257,6 +259,7 @@ fn assert_gpu_path_record_matches_cpu(
         expect_tile_overflow,
         expect_path_truncation,
         false,
+        PathJacobianMode::Full,
     );
 }
 
@@ -271,6 +274,7 @@ fn assert_gpu_batched_path_record_matches_cpu(
         false,
         expect_path_truncation,
         true,
+        PathJacobianMode::Full,
     );
 }
 
@@ -280,6 +284,7 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
     expect_tile_overflow: bool,
     expect_path_truncation: bool,
     batched_exhaustive: bool,
+    jacobian_mode: PathJacobianMode,
 ) {
     let _gpu_test_guard = GPU_TEST_LOCK
         .lock()
@@ -332,14 +337,29 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
     let mut cloud = RadFoamGpuCloud::new_path_recording(&model, &ctx, &mut encoder);
     let mut recorder = PathRecorder::new(&ctx);
     let mut bufs = if weighted && !batched_exhaustive {
-        PathRecordBuffers::new_projected(
-            &ctx,
-            num_pixels,
-            max_steps as u32,
-            model.points.len() as u32,
-            [width, height],
-            0,
-        )
+        if jacobian_mode == PathJacobianMode::Full {
+            PathRecordBuffers::new_projected(
+                &ctx,
+                num_pixels,
+                max_steps as u32,
+                model.points.len() as u32,
+                [width, height],
+                0,
+            )
+        } else {
+            PathRecordBuffers::new_external_powerfoam_projected(
+                &ctx,
+                num_pixels,
+                max_steps as u32,
+                jacobian_mode,
+                model.points.len() as u32,
+                [width, height],
+                0,
+            )
+        }
+    } else if weighted {
+        assert_eq!(jacobian_mode, PathJacobianMode::Full);
+        PathRecordBuffers::new(&ctx, num_pixels, max_steps as u32)
     } else {
         PathRecordBuffers::new(&ctx, num_pixels, max_steps as u32)
     };
@@ -357,16 +377,22 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         // Zero the outputs (shader only writes the steps it actually
         // takes; leftover slots must be zero).
         let pl = (num_pixels as u64) * (max_steps as u64);
-        tx.fill_buffer(bufs.previous_cells.at(0), pl * 4, 0);
+        if bufs.has_geometry_jacobians() {
+            tx.fill_buffer(bufs.previous_cells.at(0), pl * 4, 0);
+        }
         tx.fill_buffer(bufs.cells.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.next_cells.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.dts.at(0), pl * 4, 0);
         tx.fill_buffer(bufs.mask.at(0), pl * 4, 0);
-        tx.fill_buffer(bufs.dt_reference_tangents.at(0), pl * 4, 0);
-        tx.fill_buffer(bufs.dt_grad_previous.at(0), pl * 16, 0);
-        tx.fill_buffer(bufs.dt_grad_current.at(0), pl * 16, 0);
-        tx.fill_buffer(bufs.dt_grad_next.at(0), pl * 16, 0);
-        if model.surface_normals.is_some() {
+        if bufs.has_jacobians() {
+            tx.fill_buffer(bufs.dt_reference_tangents.at(0), pl * 4, 0);
+        }
+        if bufs.has_geometry_jacobians() {
+            tx.fill_buffer(bufs.dt_grad_previous.at(0), pl * 16, 0);
+            tx.fill_buffer(bufs.dt_grad_current.at(0), pl * 16, 0);
+            tx.fill_buffer(bufs.dt_grad_next.at(0), pl * 16, 0);
+        }
+        if bufs.has_surface_jacobians() {
             tx.fill_buffer(bufs.dt_grad_surface_normal.at(0), pl * 16, 0);
         }
     }
@@ -458,32 +484,40 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
     });
     {
         let mut tx = encoder.transfer("download-outputs");
-        tx.copy_buffer_to_buffer(bufs.previous_cells.at(0), previous_cells_dl.at(0), pl * 4);
+        if bufs.has_geometry_jacobians() {
+            tx.copy_buffer_to_buffer(bufs.previous_cells.at(0), previous_cells_dl.at(0), pl * 4);
+        }
         tx.copy_buffer_to_buffer(bufs.cells.at(0), cells_dl.at(0), pl * 4);
         tx.copy_buffer_to_buffer(bufs.next_cells.at(0), next_cells_dl.at(0), pl * 4);
         tx.copy_buffer_to_buffer(bufs.dts.at(0), dts_dl.at(0), pl * 4);
         tx.copy_buffer_to_buffer(bufs.mask.at(0), mask_dl.at(0), pl * 4);
-        tx.copy_buffer_to_buffer(
-            bufs.dt_reference_tangents.at(0),
-            dt_reference_tangents_dl.at(0),
-            pl * 4,
-        );
-        tx.copy_buffer_to_buffer(
-            bufs.dt_grad_previous.at(0),
-            dt_grad_previous_dl.at(0),
-            pl * 16,
-        );
-        tx.copy_buffer_to_buffer(
-            bufs.dt_grad_current.at(0),
-            dt_grad_current_dl.at(0),
-            pl * 16,
-        );
-        tx.copy_buffer_to_buffer(bufs.dt_grad_next.at(0), dt_grad_next_dl.at(0), pl * 16);
-        tx.copy_buffer_to_buffer(
-            bufs.dt_grad_surface_normal.at(0),
-            dt_grad_surface_normal_dl.at(0),
-            pl * 16,
-        );
+        if bufs.has_jacobians() {
+            tx.copy_buffer_to_buffer(
+                bufs.dt_reference_tangents.at(0),
+                dt_reference_tangents_dl.at(0),
+                pl * 4,
+            );
+        }
+        if bufs.has_geometry_jacobians() {
+            tx.copy_buffer_to_buffer(
+                bufs.dt_grad_previous.at(0),
+                dt_grad_previous_dl.at(0),
+                pl * 16,
+            );
+            tx.copy_buffer_to_buffer(
+                bufs.dt_grad_current.at(0),
+                dt_grad_current_dl.at(0),
+                pl * 16,
+            );
+            tx.copy_buffer_to_buffer(bufs.dt_grad_next.at(0), dt_grad_next_dl.at(0), pl * 16);
+        }
+        if bufs.has_surface_jacobians() {
+            tx.copy_buffer_to_buffer(
+                bufs.dt_grad_surface_normal.at(0),
+                dt_grad_surface_normal_dl.at(0),
+                pl * 16,
+            );
+        }
     }
     let sync = ctx.submit(&mut encoder);
     let _ = ctx.wait_for(&sync, !0);
@@ -522,8 +556,12 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         }
     }
 
-    let gpu_previous_cells: Vec<u32> = unsafe {
-        std::slice::from_raw_parts(previous_cells_dl.data() as *const u32, pl as usize).to_vec()
+    let gpu_previous_cells: Vec<u32> = if bufs.has_geometry_jacobians() {
+        unsafe {
+            std::slice::from_raw_parts(previous_cells_dl.data() as *const u32, pl as usize).to_vec()
+        }
+    } else {
+        vec![0; pl as usize]
     };
     let gpu_cells: Vec<u32> =
         unsafe { std::slice::from_raw_parts(cells_dl.data() as *const u32, pl as usize).to_vec() };
@@ -534,27 +572,48 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         unsafe { std::slice::from_raw_parts(dts_dl.data() as *const f32, pl as usize).to_vec() };
     let gpu_mask: Vec<f32> =
         unsafe { std::slice::from_raw_parts(mask_dl.data() as *const f32, pl as usize).to_vec() };
-    let gpu_dt_reference_tangents: Vec<f32> = unsafe {
-        std::slice::from_raw_parts(dt_reference_tangents_dl.data() as *const f32, pl as usize)
+    let gpu_dt_reference_tangents: Vec<f32> = if bufs.has_jacobians() {
+        unsafe {
+            std::slice::from_raw_parts(dt_reference_tangents_dl.data() as *const f32, pl as usize)
+                .to_vec()
+        }
+    } else {
+        vec![0.0; pl as usize]
+    };
+    let gpu_dt_grad_previous: Vec<f32> = if bufs.has_geometry_jacobians() {
+        unsafe {
+            std::slice::from_raw_parts(dt_grad_previous_dl.data() as *const f32, pl as usize * 4)
+                .to_vec()
+        }
+    } else {
+        vec![0.0; pl as usize * 4]
+    };
+    let gpu_dt_grad_current: Vec<f32> = if bufs.has_geometry_jacobians() {
+        unsafe {
+            std::slice::from_raw_parts(dt_grad_current_dl.data() as *const f32, pl as usize * 4)
+                .to_vec()
+        }
+    } else {
+        vec![0.0; pl as usize * 4]
+    };
+    let gpu_dt_grad_next: Vec<f32> = if bufs.has_geometry_jacobians() {
+        unsafe {
+            std::slice::from_raw_parts(dt_grad_next_dl.data() as *const f32, pl as usize * 4)
+                .to_vec()
+        }
+    } else {
+        vec![0.0; pl as usize * 4]
+    };
+    let gpu_dt_grad_surface_normal: Vec<f32> = if bufs.has_surface_jacobians() {
+        unsafe {
+            std::slice::from_raw_parts(
+                dt_grad_surface_normal_dl.data() as *const f32,
+                pl as usize * 4,
+            )
             .to_vec()
-    };
-    let gpu_dt_grad_previous: Vec<f32> = unsafe {
-        std::slice::from_raw_parts(dt_grad_previous_dl.data() as *const f32, pl as usize * 4)
-            .to_vec()
-    };
-    let gpu_dt_grad_current: Vec<f32> = unsafe {
-        std::slice::from_raw_parts(dt_grad_current_dl.data() as *const f32, pl as usize * 4)
-            .to_vec()
-    };
-    let gpu_dt_grad_next: Vec<f32> = unsafe {
-        std::slice::from_raw_parts(dt_grad_next_dl.data() as *const f32, pl as usize * 4).to_vec()
-    };
-    let gpu_dt_grad_surface_normal: Vec<f32> = unsafe {
-        std::slice::from_raw_parts(
-            dt_grad_surface_normal_dl.data() as *const f32,
-            pl as usize * 4,
-        )
-        .to_vec()
+        }
+    } else {
+        vec![0.0; pl as usize * 4]
     };
 
     let mut mismatches = 0usize;
@@ -596,50 +655,52 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
             }
         }
         if weighted {
-            if cpu.previous_cells[i] != gpu_previous_cells[i] {
-                mismatches += 1;
-                if mismatches <= 8 {
-                    eprintln!(
-                        "slot {i}: previous cell cpu={} gpu={}",
-                        cpu.previous_cells[i], gpu_previous_cells[i],
-                    );
+            if jacobian_mode == PathJacobianMode::Full {
+                if cpu.previous_cells[i] != gpu_previous_cells[i] {
+                    mismatches += 1;
+                    if mismatches <= 8 {
+                        eprintln!(
+                            "slot {i}: previous cell cpu={} gpu={}",
+                            cpu.previous_cells[i], gpu_previous_cells[i],
+                        );
+                    }
+                    continue;
                 }
-                continue;
-            }
-            for (name, cpu_gradient, gpu_gradient) in [
-                (
-                    "previous",
-                    cpu.dt_grad_previous[i],
-                    &gpu_dt_grad_previous[i * 4..i * 4 + 4],
-                ),
-                (
-                    "current",
-                    cpu.dt_grad_current[i],
-                    &gpu_dt_grad_current[i * 4..i * 4 + 4],
-                ),
-                (
-                    "next",
-                    cpu.dt_grad_next[i],
-                    &gpu_dt_grad_next[i * 4..i * 4 + 4],
-                ),
-            ] {
-                for component in 0..4 {
-                    let expected = cpu_gradient[component];
-                    let actual = gpu_gradient[component];
-                    let absolute = (expected - actual).abs();
-                    let scale = expected.abs().max(actual.abs()).max(1.0e-4);
-                    if absolute > 5.0e-4 && absolute / scale > 5.0e-3 {
-                        mismatches += 1;
-                        if mismatches <= 8 {
-                            eprintln!(
-                                "slot {i}: {name} gradient[{component}] cpu={expected} \
-                                 gpu={actual} diff={absolute}",
-                            );
+                for (name, cpu_gradient, gpu_gradient) in [
+                    (
+                        "previous",
+                        cpu.dt_grad_previous[i],
+                        &gpu_dt_grad_previous[i * 4..i * 4 + 4],
+                    ),
+                    (
+                        "current",
+                        cpu.dt_grad_current[i],
+                        &gpu_dt_grad_current[i * 4..i * 4 + 4],
+                    ),
+                    (
+                        "next",
+                        cpu.dt_grad_next[i],
+                        &gpu_dt_grad_next[i * 4..i * 4 + 4],
+                    ),
+                ] {
+                    for component in 0..4 {
+                        let expected = cpu_gradient[component];
+                        let actual = gpu_gradient[component];
+                        let absolute = (expected - actual).abs();
+                        let scale = expected.abs().max(actual.abs()).max(1.0e-4);
+                        if absolute > 5.0e-4 && absolute / scale > 5.0e-3 {
+                            mismatches += 1;
+                            if mismatches <= 8 {
+                                eprintln!(
+                                    "slot {i}: {name} gradient[{component}] cpu={expected} \
+                                     gpu={actual} diff={absolute}",
+                                );
+                            }
                         }
                     }
                 }
             }
-            if model.surface_normals.is_some() {
+            if model.surface_normals.is_some() && jacobian_mode != PathJacobianMode::None {
                 for component in 0..4 {
                     let expected = cpu.dt_grad_surface_normal[i][component];
                     let actual = gpu_dt_grad_surface_normal[i * 4 + component];
@@ -656,9 +717,17 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
                     }
                 }
             }
+            let expected_reference_tangent = match jacobian_mode {
+                PathJacobianMode::Full => cpu.dt_reference_tangents[i],
+                PathJacobianMode::Surface => dot4(
+                    &cpu.dt_grad_surface_normal[i],
+                    &surface_normal_geometry(&model, cpu.cells[i]),
+                ),
+                PathJacobianMode::None => 0.0,
+            };
             let tangent_absolute =
-                (cpu.dt_reference_tangents[i] - gpu_dt_reference_tangents[i]).abs();
-            let tangent_scale = cpu.dt_reference_tangents[i]
+                (expected_reference_tangent - gpu_dt_reference_tangents[i]).abs();
+            let tangent_scale = expected_reference_tangent
                 .abs()
                 .max(gpu_dt_reference_tangents[i].abs())
                 .max(1.0e-4);
@@ -667,27 +736,29 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
                 if mismatches <= 8 {
                     eprintln!(
                         "slot {i}: reference tangent cpu={} gpu={} diff={tangent_absolute}",
-                        cpu.dt_reference_tangents[i], gpu_dt_reference_tangents[i],
+                        expected_reference_tangent, gpu_dt_reference_tangents[i],
                     );
                 }
             }
             let mut reconstructed_dt = gpu_dts[i] - gpu_dt_reference_tangents[i];
-            let ray_origin = rays[i / max_steps].origin;
-            for (cell, gradient) in [
-                (
-                    gpu_previous_cells[i],
-                    &gpu_dt_grad_previous[i * 4..i * 4 + 4],
-                ),
-                (gpu_cells[i], &gpu_dt_grad_current[i * 4..i * 4 + 4]),
-                (gpu_next_cells[i], &gpu_dt_grad_next[i * 4..i * 4 + 4]),
-            ] {
-                reconstructed_dt += gradient
-                    .iter()
-                    .zip(point_geometry_relative(&model, cell, ray_origin))
-                    .map(|(a, b)| a * b)
-                    .sum::<f32>();
+            if jacobian_mode == PathJacobianMode::Full {
+                let ray_origin = rays[i / max_steps].origin;
+                for (cell, gradient) in [
+                    (
+                        gpu_previous_cells[i],
+                        &gpu_dt_grad_previous[i * 4..i * 4 + 4],
+                    ),
+                    (gpu_cells[i], &gpu_dt_grad_current[i * 4..i * 4 + 4]),
+                    (gpu_next_cells[i], &gpu_dt_grad_next[i * 4..i * 4 + 4]),
+                ] {
+                    reconstructed_dt += gradient
+                        .iter()
+                        .zip(point_geometry_relative(&model, cell, ray_origin))
+                        .map(|(a, b)| a * b)
+                        .sum::<f32>();
+                }
             }
-            if model.surface_normals.is_some() {
+            if model.surface_normals.is_some() && jacobian_mode != PathJacobianMode::None {
                 reconstructed_dt += gpu_dt_grad_surface_normal[i * 4..i * 4 + 4]
                     .iter()
                     .zip(surface_normal_geometry(&model, gpu_cells[i]))
@@ -778,6 +849,27 @@ fn gpu_oriented_powerfoam_paths_and_normal_jacobians_match_cpu() {
             .collect(),
     );
     assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false, false);
+}
+
+#[test]
+fn gpu_surface_only_tangent_matches_oriented_cpu_reference() {
+    let mut model = build_disconnected_ray_model(12);
+    let camera = make_camera_looking_along_x(100.0);
+    let target_ray = rays_for_pixels(&camera, &[32 * 64 + 32], 64, 64)[0];
+    model.surface_normals = Some(vec![-target_ray.direction; model.points.len()]);
+    model.surface_offsets = Some(
+        (0..model.points.len())
+            .map(|index| 0.002 * (index % 5) as f32 - 0.004)
+            .collect(),
+    );
+    assert_gpu_path_record_matches_cpu_with_mode(
+        model,
+        glam::Vec3::ZERO,
+        false,
+        false,
+        false,
+        PathJacobianMode::Surface,
+    );
 }
 
 #[test]

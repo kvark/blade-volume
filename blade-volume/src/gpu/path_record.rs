@@ -15,8 +15,8 @@
 //!   - `dts_out[f32]`
 //!   - `mask_out[f32]`
 //!   - `path_status_out[u32]` (recorded count + truncation bit)
-//!   - `dt_reference_tangents_out[f32]` (PowerFoam only)
-//!   - four `dt_grad_*_out[vec4<f32>]` streams (PowerFoam only)
+//!   - `dt_reference_tangents_out[f32]` (selected PowerFoam differential)
+//!   - up to four `dt_grad_*_out[vec4<f32>]` streams (PowerFoam only)
 //!
 //! The shader writes only the steps it actually takes; trailing slots
 //! keep their pre-dispatch value, which the caller zeroes before each
@@ -36,6 +36,21 @@ const SPLAT_TILE_INDEX_BUDGET: u64 = 4 * 1024 * 1024;
 const MIN_SPLAT_CANDIDATE_CAPACITY: u32 = 1024;
 const PATH_TRUNCATED_BIT: u32 = 1 << 31;
 
+/// Differential streams emitted beside a weighted path.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(u32)]
+pub enum PathJacobianMode {
+    /// Record exact intervals without local derivatives.
+    #[default]
+    None = 0,
+    /// Record position/radius derivatives and, for oriented clouds, surface
+    /// plane derivatives.
+    Full = 1,
+    /// Record only oriented surface-plane derivatives. The reference tangent
+    /// contains only the normal and offset contribution.
+    Surface = 2,
+}
+
 fn splat_candidate_capacity(max_steps: u32, minimum: u32) -> u32 {
     max_steps
         .saturating_mul(4)
@@ -43,19 +58,33 @@ fn splat_candidate_capacity(max_steps: u32, minimum: u32) -> u32 {
         .max(minimum)
 }
 
-fn output_bytes(num_pixels: u32, max_steps: u32, with_jacobians: bool) -> u64 {
+fn output_bytes(num_pixels: u32, max_steps: u32, jacobian_mode: PathJacobianMode) -> u64 {
     let pl = num_pixels as u64 * max_steps as u64;
     let base = pl * (2 * mem::size_of::<u32>() + 2 * mem::size_of::<f32>()) as u64;
     let path_status = num_pixels as u64 * mem::size_of::<u32>() as u64;
-    path_status
-        + if with_jacobians {
-            base + pl
-                * (mem::size_of::<u32>() + mem::size_of::<f32>() + 4 * mem::size_of::<[f32; 4]>())
-                    as u64
-        } else {
-            base + (mem::size_of::<u32>() + mem::size_of::<f32>() + 4 * mem::size_of::<[f32; 4]>())
-                as u64
+    let previous_cells = match jacobian_mode {
+        PathJacobianMode::Full => pl * mem::size_of::<u32>() as u64,
+        PathJacobianMode::None | PathJacobianMode::Surface => mem::size_of::<u32>() as u64,
+    };
+    let reference_tangents = match jacobian_mode {
+        PathJacobianMode::None => mem::size_of::<f32>() as u64,
+        PathJacobianMode::Full | PathJacobianMode::Surface => pl * mem::size_of::<f32>() as u64,
+    };
+    let geometry_jacobians = match jacobian_mode {
+        PathJacobianMode::Full => 3 * pl * mem::size_of::<[f32; 4]>() as u64,
+        PathJacobianMode::None | PathJacobianMode::Surface => 3 * mem::size_of::<[f32; 4]>() as u64,
+    };
+    let surface_jacobians = match jacobian_mode {
+        PathJacobianMode::None => mem::size_of::<[f32; 4]>() as u64,
+        PathJacobianMode::Full | PathJacobianMode::Surface => {
+            pl * mem::size_of::<[f32; 4]>() as u64
         }
+    };
+    base + path_status
+        + previous_cells
+        + reference_tangents
+        + geometry_jacobians
+        + surface_jacobians
 }
 
 /// Inputs to one path-record dispatch.
@@ -96,7 +125,7 @@ struct RecordParams {
     power_foam: u32,
     num_points: u32,
     candidate_capacity: u32,
-    write_jacobians: u32,
+    jacobian_mode: u32,
     tile_width: u32,
     tile_height: u32,
     tile_capacity: u32,
@@ -215,6 +244,10 @@ impl PathRecorder {
             args.max_steps, buffers.max_steps,
             "path dispatch max_steps must match buffer layout"
         );
+        assert!(
+            buffers.jacobian_mode != PathJacobianMode::Surface || cloud.is_oriented,
+            "surface-only path Jacobians require an oriented cloud"
+        );
         let tile_width = args.image_width.div_ceil(SPLAT_TILE_SIZE);
         let tile_height = args.image_height.div_ceil(SPLAT_TILE_SIZE);
         let tile_count = tile_width
@@ -245,7 +278,7 @@ impl PathRecorder {
             power_foam: cloud.is_power_foam as u32,
             num_points: cloud.num_points as u32,
             candidate_capacity: buffers.splat_candidate_capacity,
-            write_jacobians: buffers.has_jacobians as u32,
+            jacobian_mode: buffers.jacobian_mode as u32,
             tile_width,
             tile_height,
             tile_capacity: buffers.splat_tile_capacity,
@@ -410,7 +443,7 @@ pub struct PathRecordBuffers {
     pub mask: gpu::Buffer,
     /// Host-visible recorded-entry count and truncation flag per ray.
     path_status: gpu::Buffer,
-    /// Weighted-path tangent `J * (geometry_ref - ray_origin)`.
+    /// Reference tangent for the streams selected by [`PathJacobianMode`].
     /// Raw recorded intervals remain available in [`Self::dts`].
     pub dt_reference_tangents: gpu::Buffer,
     pub dt_grad_previous: gpu::Buffer,
@@ -443,7 +476,7 @@ pub struct PathRecordBuffers {
     pub pixel_indices_stage: gpu::Buffer,
     pub num_pixels: u32,
     pub max_steps: u32,
-    has_jacobians: bool,
+    jacobian_mode: PathJacobianMode,
     has_splat_scratch: bool,
     splat_candidate_capacity: u32,
     splat_tile_count: u32,
@@ -453,7 +486,16 @@ pub struct PathRecordBuffers {
 
 impl PathRecordBuffers {
     pub fn new(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, true, true, 0, None)
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            false,
+            PathJacobianMode::Full,
+            true,
+            0,
+            None,
+        )
     }
 
     /// Allocate full path/Jacobian streams plus a conservative projected-tile
@@ -471,7 +513,7 @@ impl PathRecordBuffers {
             num_pixels,
             max_steps,
             false,
-            true,
+            PathJacobianMode::Full,
             true,
             min_candidate_capacity,
             Some((image_resolution, max_points)),
@@ -482,7 +524,16 @@ impl PathRecordBuffers {
     /// bindings are valid one-element dummies, so this is only safe to dispatch
     /// with an unweighted cloud (`RadFoamGpuCloud::is_power_foam == false`).
     pub fn new_recorded_only(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, false, false, 0, None)
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            false,
+            PathJacobianMode::None,
+            false,
+            0,
+            None,
+        )
     }
 
     /// Allocate compact base path streams plus PowerFoam candidate scratch,
@@ -492,7 +543,16 @@ impl PathRecordBuffers {
         num_pixels: u32,
         max_steps: u32,
     ) -> Self {
-        Self::new_with(context, num_pixels, max_steps, false, false, true, 0, None)
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            false,
+            PathJacobianMode::None,
+            true,
+            0,
+            None,
+        )
     }
 
     /// Compact PowerFoam rendering streams with projected candidate tiles.
@@ -509,7 +569,7 @@ impl PathRecordBuffers {
             num_pixels,
             max_steps,
             false,
-            false,
+            PathJacobianMode::None,
             true,
             min_candidate_capacity,
             Some((image_resolution, max_points)),
@@ -523,7 +583,16 @@ impl PathRecordBuffers {
     /// Vulkan; Metal/GLES backends `unimplemented!()` on the buffer
     /// allocation.
     pub fn new_external(context: &gpu::Context, num_pixels: u32, max_steps: u32) -> Self {
-        Self::new_with(context, num_pixels, max_steps, true, true, true, 0, None)
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            true,
+            PathJacobianMode::Full,
+            true,
+            0,
+            None,
+        )
     }
 
     /// Allocate exportable base streams and optionally full PowerFoam
@@ -540,7 +609,11 @@ impl PathRecordBuffers {
             num_pixels,
             max_steps,
             true,
-            with_jacobians,
+            if with_jacobians {
+                PathJacobianMode::Full
+            } else {
+                PathJacobianMode::None
+            },
             with_jacobians,
             min_candidate_capacity,
             None,
@@ -563,8 +636,56 @@ impl PathRecordBuffers {
             num_pixels,
             max_steps,
             true,
+            if with_jacobians {
+                PathJacobianMode::Full
+            } else {
+                PathJacobianMode::None
+            },
             with_jacobians,
-            with_jacobians,
+            min_candidate_capacity,
+            Some((image_resolution, max_points)),
+        )
+    }
+
+    /// Exportable PowerFoam streams with the selected differential payload.
+    pub fn new_external_powerfoam(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+        jacobian_mode: PathJacobianMode,
+        min_candidate_capacity: u32,
+    ) -> Self {
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            true,
+            jacobian_mode,
+            true,
+            min_candidate_capacity,
+            None,
+        )
+    }
+
+    /// Exportable PowerFoam streams with projected candidates and the
+    /// selected differential payload.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_external_powerfoam_projected(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+        jacobian_mode: PathJacobianMode,
+        max_points: u32,
+        image_resolution: [u32; 2],
+        min_candidate_capacity: u32,
+    ) -> Self {
+        Self::new_with(
+            context,
+            num_pixels,
+            max_steps,
+            true,
+            jacobian_mode,
+            true,
             min_candidate_capacity,
             Some((image_resolution, max_points)),
         )
@@ -575,7 +696,7 @@ impl PathRecordBuffers {
         num_pixels: u32,
         max_steps: u32,
         external: bool,
-        with_jacobians: bool,
+        jacobian_mode: PathJacobianMode,
         with_splat_scratch: bool,
         min_splat_candidate_capacity: u32,
         projected: Option<([u32; 2], u32)>,
@@ -589,17 +710,22 @@ impl PathRecordBuffers {
         let cells_bytes = pl * mem::size_of::<u32>() as u64;
         let dts_bytes = pl * mem::size_of::<f32>() as u64;
         let mask_bytes = pl * mem::size_of::<f32>() as u64;
-        let role_bytes = if with_jacobians {
+        let role_bytes = if jacobian_mode == PathJacobianMode::Full {
             cells_bytes
         } else {
             mem::size_of::<u32>() as u64
         };
-        let jacobian_bytes = if with_jacobians {
+        let geometry_jacobian_bytes = if jacobian_mode == PathJacobianMode::Full {
             pl * mem::size_of::<[f32; 4]>() as u64
         } else {
             mem::size_of::<[f32; 4]>() as u64
         };
-        let reference_tangent_bytes = if with_jacobians {
+        let surface_jacobian_bytes = if jacobian_mode != PathJacobianMode::None {
+            pl * mem::size_of::<[f32; 4]>() as u64
+        } else {
+            mem::size_of::<[f32; 4]>() as u64
+        };
+        let reference_tangent_bytes = if jacobian_mode != PathJacobianMode::None {
             dts_bytes
         } else {
             mem::size_of::<f32>() as u64
@@ -684,7 +810,7 @@ impl PathRecordBuffers {
         let previous_cells = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-previous-cells",
             size: role_bytes,
-            memory: mem(external && with_jacobians),
+            memory: mem(external && jacobian_mode == PathJacobianMode::Full),
         });
         let next_cells = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-next-cells",
@@ -709,27 +835,27 @@ impl PathRecordBuffers {
         let dt_reference_tangents = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-dt-reference-tangents",
             size: reference_tangent_bytes,
-            memory: mem(external && with_jacobians),
+            memory: mem(external && jacobian_mode != PathJacobianMode::None),
         });
         let dt_grad_previous = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-dt-grad-previous",
-            size: jacobian_bytes,
-            memory: mem(external && with_jacobians),
+            size: geometry_jacobian_bytes,
+            memory: mem(external && jacobian_mode == PathJacobianMode::Full),
         });
         let dt_grad_current = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-dt-grad-current",
-            size: jacobian_bytes,
-            memory: mem(external && with_jacobians),
+            size: geometry_jacobian_bytes,
+            memory: mem(external && jacobian_mode == PathJacobianMode::Full),
         });
         let dt_grad_next = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-dt-grad-next",
-            size: jacobian_bytes,
-            memory: mem(external && with_jacobians),
+            size: geometry_jacobian_bytes,
+            memory: mem(external && jacobian_mode == PathJacobianMode::Full),
         });
         let dt_grad_surface_normal = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-path-record-dt-grad-surface-normal",
-            size: jacobian_bytes,
-            memory: mem(external && with_jacobians),
+            size: surface_jacobian_bytes,
+            memory: mem(external && jacobian_mode != PathJacobianMode::None),
         });
         let splat_candidate_counts = context.create_buffer(gpu::BufferDesc {
             name: "powerfoam-path-candidate-counts",
@@ -796,7 +922,7 @@ impl PathRecordBuffers {
             pixel_indices_stage,
             num_pixels,
             max_steps,
-            has_jacobians: with_jacobians,
+            jacobian_mode,
             has_splat_scratch: with_splat_scratch,
             splat_candidate_capacity,
             splat_tile_count,
@@ -835,7 +961,19 @@ impl PathRecordBuffers {
     }
 
     pub fn has_jacobians(&self) -> bool {
-        self.has_jacobians
+        self.jacobian_mode != PathJacobianMode::None
+    }
+
+    pub fn has_geometry_jacobians(&self) -> bool {
+        self.jacobian_mode == PathJacobianMode::Full
+    }
+
+    pub fn has_surface_jacobians(&self) -> bool {
+        self.jacobian_mode != PathJacobianMode::None
+    }
+
+    pub fn jacobian_mode(&self) -> PathJacobianMode {
+        self.jacobian_mode
     }
 
     /// Summarize a synchronized path-record output range.
@@ -922,7 +1060,7 @@ impl PathRecordBuffers {
 
     /// Total allocated bytes of all output streams (for sanity checks).
     pub fn out_bytes(&self) -> u64 {
-        output_bytes(self.num_pixels, self.max_steps, self.has_jacobians)
+        output_bytes(self.num_pixels, self.max_steps, self.jacobian_mode)
     }
 
     pub fn destroy(&mut self, context: &gpu::Context) {
@@ -963,9 +1101,16 @@ mod tests {
     fn compact_path_buffers_do_not_scale_jacobian_storage() {
         let slots = 4_096_u64 * 256;
         let path_status = 4_096_u64 * 4;
-        assert_eq!(output_bytes(4_096, 256, true), slots * 88 + path_status);
         assert_eq!(
-            output_bytes(4_096, 256, false),
+            output_bytes(4_096, 256, PathJacobianMode::Full),
+            slots * 88 + path_status
+        );
+        assert_eq!(
+            output_bytes(4_096, 256, PathJacobianMode::Surface),
+            slots * 36 + 52 + path_status
+        );
+        assert_eq!(
+            output_bytes(4_096, 256, PathJacobianMode::None),
             slots * 16 + 72 + path_status
         );
     }

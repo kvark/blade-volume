@@ -50,8 +50,8 @@ struct RecordParams {
     num_points: u32,
     /// Scratch slots reserved per sampled ray for sphere candidates.
     candidate_capacity: u32,
-    /// Non-zero when the consumer needs local geometry derivatives.
-    write_jacobians: u32,
+    /// 0 = intervals only, 1 = complete geometry, 2 = oriented surface only.
+    jacobian_mode: u32,
     /// Projected 16x16 screen-tile layout. `tile_capacity == 0` selects the
     /// exhaustive point scan.
     tile_width: u32,
@@ -681,24 +681,30 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
         g_next_cells_out[output_slot] = best_interval.next;
         g_dts_out[output_slot] = differential.dt;
         g_mask_out[output_slot] = 1.0;
-        if (g_params.write_jacobians != 0u) {
-            g_previous_cells_out[output_slot] = best_interval.previous;
-            let previous_geometry = vec4<f32>(
-                g_points[best_interval.previous].xyz - ray_origin,
-                g_points[best_interval.previous].w,
-            );
-            let current_geometry = vec4<f32>(
-                g_points[best_cell].xyz - ray_origin,
-                g_points[best_cell].w,
-            );
-            let next_geometry = vec4<f32>(
-                g_points[best_interval.next].xyz - ray_origin,
-                g_points[best_interval.next].w,
-            );
-            var reference_tangent =
-                dot(differential.dt_d_previous, previous_geometry) +
-                dot(differential.dt_d_current, current_geometry) +
-                dot(differential.dt_d_next, next_geometry);
+        if (g_params.jacobian_mode != 0u) {
+            var reference_tangent = 0.0;
+            if (g_params.jacobian_mode == 1u) {
+                g_previous_cells_out[output_slot] = best_interval.previous;
+                let previous_geometry = vec4<f32>(
+                    g_points[best_interval.previous].xyz - ray_origin,
+                    g_points[best_interval.previous].w,
+                );
+                let current_geometry = vec4<f32>(
+                    g_points[best_cell].xyz - ray_origin,
+                    g_points[best_cell].w,
+                );
+                let next_geometry = vec4<f32>(
+                    g_points[best_interval.next].xyz - ray_origin,
+                    g_points[best_interval.next].w,
+                );
+                reference_tangent =
+                    dot(differential.dt_d_previous, previous_geometry) +
+                    dot(differential.dt_d_current, current_geometry) +
+                    dot(differential.dt_d_next, next_geometry);
+                g_dt_grad_previous_out[output_slot] = differential.dt_d_previous;
+                g_dt_grad_current_out[output_slot] = differential.dt_d_current;
+                g_dt_grad_next_out[output_slot] = differential.dt_d_next;
+            }
             if (g_params.oriented != 0u) {
                 reference_tangent += dot(
                     differential.dt_d_surface_normal,
@@ -708,9 +714,6 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
                     differential.dt_d_surface_normal;
             }
             g_dt_reference_tangents_out[output_slot] = reference_tangent;
-            g_dt_grad_previous_out[output_slot] = differential.dt_d_previous;
-            g_dt_grad_current_out[output_slot] = differential.dt_d_current;
-            g_dt_grad_next_out[output_slot] = differential.dt_d_next;
         }
         output_step += 1u;
     }
@@ -803,24 +806,32 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
             g_next_cells_out[row_start + output_step] = next_idx;
             g_dts_out[row_start + output_step] = interval.dt;
             g_mask_out[row_start + output_step] = 1.0;
-            if (g_params.power_foam != 0u) {
-                g_previous_cells_out[row_start + output_step] = previous;
-                let previous_geometry = vec4<f32>(
-                    g_points[previous].xyz - ray_origin,
-                    g_points[previous].w,
-                );
-                let current_geometry = vec4<f32>(
-                    g_points[current].xyz - ray_origin,
-                    g_points[current].w,
-                );
-                let next_geometry = vec4<f32>(
-                    g_points[next_idx].xyz - ray_origin,
-                    g_points[next_idx].w,
-                );
-                var reference_tangent =
-                    dot(interval.dt_d_previous, previous_geometry) +
-                    dot(interval.dt_d_current, current_geometry) +
-                    dot(interval.dt_d_next, next_geometry);
+            if (g_params.power_foam != 0u && g_params.jacobian_mode != 0u) {
+                var reference_tangent = 0.0;
+                if (g_params.jacobian_mode == 1u) {
+                    g_previous_cells_out[row_start + output_step] = previous;
+                    let previous_geometry = vec4<f32>(
+                        g_points[previous].xyz - ray_origin,
+                        g_points[previous].w,
+                    );
+                    let current_geometry = vec4<f32>(
+                        g_points[current].xyz - ray_origin,
+                        g_points[current].w,
+                    );
+                    let next_geometry = vec4<f32>(
+                        g_points[next_idx].xyz - ray_origin,
+                        g_points[next_idx].w,
+                    );
+                    reference_tangent =
+                        dot(interval.dt_d_previous, previous_geometry) +
+                        dot(interval.dt_d_current, current_geometry) +
+                        dot(interval.dt_d_next, next_geometry);
+                    g_dt_grad_previous_out[row_start + output_step] =
+                        interval.dt_d_previous;
+                    g_dt_grad_current_out[row_start + output_step] =
+                        interval.dt_d_current;
+                    g_dt_grad_next_out[row_start + output_step] = interval.dt_d_next;
+                }
                 if (g_params.oriented != 0u) {
                     reference_tangent += dot(
                         interval.dt_d_surface_normal,
@@ -830,9 +841,6 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
                         interval.dt_d_surface_normal;
                 }
                 g_dt_reference_tangents_out[row_start + output_step] = reference_tangent;
-                g_dt_grad_previous_out[row_start + output_step] = interval.dt_d_previous;
-                g_dt_grad_current_out[row_start + output_step] = interval.dt_d_current;
-                g_dt_grad_next_out[row_start + output_step] = interval.dt_d_next;
             }
             output_step += 1u;
         }

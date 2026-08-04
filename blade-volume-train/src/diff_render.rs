@@ -103,12 +103,13 @@ pub struct ShChannelGraph {
 pub struct WeightedPathGraph {
     /// Softplus pre-image of each rendered support radius.
     pub log_radii: mn::NodeId,
-    /// Ray-relative tangent `J * (geometry_ref - ray_origin)`.
-    pub dt_reference_tangent: mn::NodeId,
-    pub previous_cell_indices: mn::NodeId,
-    pub dt_grad_previous: mn::NodeId,
-    pub dt_grad_current: mn::NodeId,
-    pub dt_grad_next: mn::NodeId,
+    /// Reference tangent for the differential streams retained by this graph.
+    /// Geometry-frozen oriented training contains only the surface-plane term.
+    pub dt_reference_tangent: Option<mn::NodeId>,
+    pub previous_cell_indices: Option<mn::NodeId>,
+    pub dt_grad_previous: Option<mn::NodeId>,
+    pub dt_grad_current: Option<mn::NodeId>,
+    pub dt_grad_next: Option<mn::NodeId>,
     /// Raw per-site oriented surface normals, normalized in the graph.
     pub surface_normals: Option<mn::NodeId>,
     /// Signed displacement of each oriented surface plane.
@@ -512,22 +513,21 @@ fn build_volumetric_graph_with_options(
     let next_cell_indices = g.input_u32("next_cell_indices", &[pl]);
     let recorded_dt = g.input("recorded_dt", &[pl]);
     let mask = g.input("mask", &[pl]);
-    let weighted_inputs = use_recorded_dt.then(|| {
-        let dt_grad_surface_normal =
-            use_surface_normals.then(|| g.input("dt_grad_surface_normal", &[pl, 4]));
-        let surface_normal_loss_scale = options
-            .use_surface_normal_loss
-            .then(|| g.input("surface_normal_loss_scale", &[1, 1]));
-        (
-            g.input("dt_reference_tangent", &[pl]),
-            g.input_u32("previous_cell_indices", &[pl]),
-            g.input("dt_grad_previous", &[pl, 4]),
-            g.input("dt_grad_current", &[pl, 4]),
-            g.input("dt_grad_next", &[pl, 4]),
-            dt_grad_surface_normal,
-            surface_normal_loss_scale,
-        )
-    });
+    let use_geometry_jacobians =
+        use_recorded_dt && (options.train_positions || options.train_radii);
+    let use_surface_jacobians = use_recorded_dt && use_surface_normals;
+    let use_any_jacobians = use_geometry_jacobians || use_surface_jacobians;
+    let dt_reference_tangent = use_any_jacobians.then(|| g.input("dt_reference_tangent", &[pl]));
+    let previous_cell_indices =
+        use_geometry_jacobians.then(|| g.input_u32("previous_cell_indices", &[pl]));
+    let dt_grad_previous = use_geometry_jacobians.then(|| g.input("dt_grad_previous", &[pl, 4]));
+    let dt_grad_current = use_geometry_jacobians.then(|| g.input("dt_grad_current", &[pl, 4]));
+    let dt_grad_next = use_geometry_jacobians.then(|| g.input("dt_grad_next", &[pl, 4]));
+    let dt_grad_surface_normal =
+        use_surface_jacobians.then(|| g.input("dt_grad_surface_normal", &[pl, 4]));
+    let surface_normal_loss_scale = options
+        .use_surface_normal_loss
+        .then(|| g.input("surface_normal_loss_scale", &[1, 1]));
     // Target is fed as [1, P*3] to match meganeura's "batch × dim" convention
     // for L1 loss; we reshape rather than introduce a batch dimension upstream.
     let target = g.input("labels", &[1, p * 3]);
@@ -590,30 +590,18 @@ fn build_volumetric_graph_with_options(
         let weight = g.constant(vec![unit_scale; 3], &[3]);
         g.rms_norm(normals, weight, 1.0e-12)
     });
-    let weighted_path = weighted_inputs.map(
-        |(
-            dt_reference_tangent,
-            previous_cell_indices,
-            dt_grad_previous,
-            dt_grad_current,
-            dt_grad_next,
-            dt_grad_surface_normal,
-            surface_normal_loss_scale,
-        )| {
-            WeightedPathGraph {
-                log_radii: log_radii.unwrap(),
-                dt_reference_tangent,
-                previous_cell_indices,
-                dt_grad_previous,
-                dt_grad_current,
-                dt_grad_next,
-                surface_normals,
-                surface_offsets,
-                dt_grad_surface_normal,
-                surface_normal_loss_scale,
-            }
-        },
-    );
+    let weighted_path = use_recorded_dt.then(|| WeightedPathGraph {
+        log_radii: log_radii.unwrap(),
+        dt_reference_tangent,
+        previous_cell_indices,
+        dt_grad_previous,
+        dt_grad_current,
+        dt_grad_next,
+        surface_normals,
+        surface_offsets,
+        dt_grad_surface_normal,
+        surface_normal_loss_scale,
+    });
     let actual_radii = weighted_path
         .as_ref()
         .map(|weighted| positive_activation(g, weighted.log_radii, n_cells, RADIUS_SOFTPLUS_BETA));
@@ -754,58 +742,71 @@ fn build_volumetric_graph_with_options(
         // The recorder evaluates the exact weighted, sphere-clipped interval
         // and its active-branch Jacobian. Evaluate its local linearization as
         // `dt_ref + tangent_actual - tangent_ref`; keeping `dt_ref` separate
-        // avoids losing its low bits when the tangent is much larger. Positions
-        // and positive radii still affect the forward value between rebuilds.
+        // avoids losing its low bits when the tangent is much larger. Omit the
+        // position/radius tangent entirely when both tables are frozen; an
+        // oriented graph then carries only its trainable surface-plane term.
         let weighted = weighted_path.as_ref().unwrap();
-        // Activate radii once at the parameter table, then pack `(x,y,z,r)`.
-        // Gathering this table for each path role is equivalent to gathering
-        // positions/radii separately, but avoids repeating the radius
-        // activation over every padded path slot and keeps each vec4
-        // Jacobian intact instead of copying it through split kernels.
-        // Concat uses flat NCHW operands. Keep explicit views here so its
-        // backward pass recovers the right batch and reshapes gradients back
-        // to the original parameter tables.
-        let positions_flat = g.reshape(differentiable_positions, &[n_cells * 3]);
-        let actual_radii_flat = g.reshape(differentiable_radii.unwrap(), &[n_cells]);
-        let geometry_flat = g.concat(positions_flat, actual_radii_flat, n_cells as u32, 3, 1, 1);
-        let geometry = g.reshape(geometry_flat, &[n_cells, 4]);
-        let zero_radius = g.constant(vec![0.0_f32; p], &[p, 1]);
-        let ray_origin_flat = g.reshape(ray_origin, &[p * 3]);
-        let zero_radius_flat = g.reshape(zero_radius, &[p]);
-        let ray_origin_geometry_flat =
-            g.concat(ray_origin_flat, zero_radius_flat, p as u32, 3, 1, 1);
-        let ray_origin_geometry = g.reshape(ray_origin_geometry_flat, &[p, 4]);
-        let ray_origin_geometry_pl = g.embedding(pixel_idx_per_step, ray_origin_geometry);
-        let neg_ray_origin_geometry = g.neg(ray_origin_geometry_pl);
-        let previous_term = weighted_role_linear_term(
-            g,
+        let geometry_terms = match (
             weighted.previous_cell_indices,
-            geometry,
-            neg_ray_origin_geometry,
             weighted.dt_grad_previous,
-        );
-        let current_term = weighted_role_linear_term(
-            g,
-            cell_indices,
-            geometry,
-            neg_ray_origin_geometry,
             weighted.dt_grad_current,
-        );
-        let next_term = weighted_role_linear_term(
-            g,
-            next_cell_indices,
-            geometry,
-            neg_ray_origin_geometry,
             weighted.dt_grad_next,
-        );
-        let entry_and_current = g.add(previous_term, current_term);
-        let linear_terms = g.add(entry_and_current, next_term);
+        ) {
+            (
+                Some(previous_indices),
+                Some(previous_gradient),
+                Some(current_gradient),
+                Some(next_gradient),
+            ) => {
+                // Activate radii once at the parameter table, then pack
+                // `(x,y,z,r)`. Each path role gathers the same vec4 table.
+                let positions_flat = g.reshape(differentiable_positions, &[n_cells * 3]);
+                let actual_radii_flat = g.reshape(differentiable_radii.unwrap(), &[n_cells]);
+                let geometry_flat =
+                    g.concat(positions_flat, actual_radii_flat, n_cells as u32, 3, 1, 1);
+                let geometry = g.reshape(geometry_flat, &[n_cells, 4]);
+                let zero_radius = g.constant(vec![0.0_f32; p], &[p, 1]);
+                let ray_origin_flat = g.reshape(ray_origin, &[p * 3]);
+                let zero_radius_flat = g.reshape(zero_radius, &[p]);
+                let ray_origin_geometry_flat =
+                    g.concat(ray_origin_flat, zero_radius_flat, p as u32, 3, 1, 1);
+                let ray_origin_geometry = g.reshape(ray_origin_geometry_flat, &[p, 4]);
+                let ray_origin_geometry_pl = g.embedding(pixel_idx_per_step, ray_origin_geometry);
+                let neg_ray_origin_geometry = g.neg(ray_origin_geometry_pl);
+                let previous_term = weighted_role_linear_term(
+                    g,
+                    previous_indices,
+                    geometry,
+                    neg_ray_origin_geometry,
+                    previous_gradient,
+                );
+                let current_term = weighted_role_linear_term(
+                    g,
+                    cell_indices,
+                    geometry,
+                    neg_ray_origin_geometry,
+                    current_gradient,
+                );
+                let next_term = weighted_role_linear_term(
+                    g,
+                    next_cell_indices,
+                    geometry,
+                    neg_ray_origin_geometry,
+                    next_gradient,
+                );
+                let entry_and_current = g.add(previous_term, current_term);
+                Some(g.add(entry_and_current, next_term))
+            }
+            (None, None, None, None) => None,
+            _ => unreachable!("geometry path inputs must be declared together"),
+        };
         let linear_terms = match (
             normalized_surface_normals,
             surface_offsets,
             weighted.dt_grad_surface_normal,
+            geometry_terms,
         ) {
-            (Some(normals), offsets, Some(recorded_gradient)) => {
+            (Some(normals), offsets, Some(recorded_gradient), geometry_terms) => {
                 let step_normals = g.embedding(cell_indices, normals);
                 let gradient_xyz_flat = g.split_a(recorded_gradient, pl as u32, 3, 1, 1);
                 let gradient_xyz = g.reshape(gradient_xyz_flat, &[pl, 3]);
@@ -818,23 +819,32 @@ fn build_volumetric_graph_with_options(
                     let offset_term = g.mul(step_offsets, gradient_w);
                     surface_term = g.add(surface_term, offset_term);
                 }
-                g.add(linear_terms, surface_term)
+                Some(match geometry_terms {
+                    Some(geometry_terms) => g.add(geometry_terms, surface_term),
+                    None => surface_term,
+                })
             }
-            (None, None, None) => linear_terms,
+            (None, None, None, geometry_terms) => geometry_terms,
             _ => unreachable!("oriented path graph inputs must be declared together"),
         };
-        let reference_tangent = g.reshape(weighted.dt_reference_tangent, &[pl, 1]);
-        let neg_reference_tangent = g.neg(reference_tangent);
-        let tangent_delta = g.add(linear_terms, neg_reference_tangent);
-        let recorded_dt_flat = g.reshape(recorded_dt, &[pl, 1]);
-        let linear_dt_flat = g.add(recorded_dt_flat, tangent_delta);
-        let linear_dt = g.reshape(linear_dt_flat, &[p, l]);
-        let positive_dt = g.relu(linear_dt);
-        let neg_positive_dt = g.neg(positive_dt);
-        let remaining = g.add(max_dt_pl, neg_positive_dt);
-        let within_cap = g.relu(remaining);
-        let neg_within_cap = g.neg(within_cap);
-        g.add(max_dt_pl, neg_within_cap)
+        match (linear_terms, weighted.dt_reference_tangent) {
+            (Some(linear_terms), Some(reference_tangent)) => {
+                let reference_tangent = g.reshape(reference_tangent, &[pl, 1]);
+                let neg_reference_tangent = g.neg(reference_tangent);
+                let tangent_delta = g.add(linear_terms, neg_reference_tangent);
+                let recorded_dt_flat = g.reshape(recorded_dt, &[pl, 1]);
+                let linear_dt_flat = g.add(recorded_dt_flat, tangent_delta);
+                let linear_dt = g.reshape(linear_dt_flat, &[p, l]);
+                let positive_dt = g.relu(linear_dt);
+                let neg_positive_dt = g.neg(positive_dt);
+                let remaining = g.add(max_dt_pl, neg_positive_dt);
+                let within_cap = g.relu(remaining);
+                let neg_within_cap = g.neg(within_cap);
+                g.add(max_dt_pl, neg_within_cap)
+            }
+            (None, None) => g.reshape(recorded_dt, &[p, l]),
+            _ => unreachable!("path tangent and reference must be declared together"),
+        }
     } else {
         let face_dt = g.mul(dt_clamped, normal_gate);
         let recorded_dt_2d = g.reshape(recorded_dt, &[p, l]);
@@ -4475,29 +4485,48 @@ fn build_train_session(
             .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
     }
     if model.radii.is_some() {
-        assert!(
-            path_bufs.has_jacobians(),
-            "weighted training requires Jacobian path buffers"
+        let expected_jacobians = if train_positions || train_radii {
+            vol::gpu::PathJacobianMode::Full
+        } else if model.surface_normals.is_some() {
+            vol::gpu::PathJacobianMode::Surface
+        } else {
+            vol::gpu::PathJacobianMode::None
+        };
+        assert_eq!(
+            path_bufs.jacobian_mode(),
+            expected_jacobians,
+            "weighted graph and path-buffer Jacobian modes disagree"
         );
-        for (slot, buf, size) in [
-            (
-                "dt_reference_tangent",
-                path_bufs.dt_reference_tangents,
-                pl_bytes,
-            ),
-            ("previous_cell_indices", path_bufs.previous_cells, pl_bytes),
-            ("dt_grad_previous", path_bufs.dt_grad_previous, pl_bytes * 4),
-            ("dt_grad_current", path_bufs.dt_grad_current, pl_bytes * 4),
-            ("dt_grad_next", path_bufs.dt_grad_next, pl_bytes * 4),
-        ] {
+        if path_bufs.has_jacobians() {
             let source = gpu
-                .get_external_buffer_source(buf)
+                .get_external_buffer_source(path_bufs.dt_reference_tangents)
                 .expect("weighted path buffer must be exportable");
             session
-                .bind_external_buffer(meganeura::ExternalSlot::Input(slot), source, size)
-                .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
+                .bind_external_buffer(
+                    meganeura::ExternalSlot::Input("dt_reference_tangent"),
+                    source,
+                    pl_bytes,
+                )
+                .unwrap_or_else(|err| {
+                    panic!("bind_external_buffer(dt_reference_tangent) failed: {err:?}")
+                });
         }
-        if model.surface_normals.is_some() {
+        if path_bufs.has_geometry_jacobians() {
+            for (slot, buf, size) in [
+                ("previous_cell_indices", path_bufs.previous_cells, pl_bytes),
+                ("dt_grad_previous", path_bufs.dt_grad_previous, pl_bytes * 4),
+                ("dt_grad_current", path_bufs.dt_grad_current, pl_bytes * 4),
+                ("dt_grad_next", path_bufs.dt_grad_next, pl_bytes * 4),
+            ] {
+                let source = gpu
+                    .get_external_buffer_source(buf)
+                    .expect("weighted geometry path buffer must be exportable");
+                session
+                    .bind_external_buffer(meganeura::ExternalSlot::Input(slot), source, size)
+                    .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
+            }
+        }
+        if path_bufs.has_surface_jacobians() {
             let source = gpu
                 .get_external_buffer_source(path_bufs.dt_grad_surface_normal)
                 .expect("surface-normal path buffer must be exportable");
@@ -4840,6 +4869,13 @@ fn fit_appearance_pixel_batched(
         || config.lr_schedule == LrSchedule::RadFoamV1;
     let train_radii = densify.is_some()
         || (config.radius_lr_ratio > 0.0 && config.lr_schedule != LrSchedule::RadFoamV1);
+    let path_jacobian_mode = if train_positions || train_radii {
+        vol::gpu::PathJacobianMode::Full
+    } else if model.surface_normals.is_some() {
+        vol::gpu::PathJacobianMode::Surface
+    } else {
+        vol::gpu::PathJacobianMode::None
+    };
     let _ = n_cells;
     // Building a complete per-camera screen index does not pay for sparse
     // mixed-view batches. Keep their already parallel exhaustive gather, but
@@ -4862,13 +4898,21 @@ fn fit_appearance_pixel_batched(
         views.iter().map(|view| view.height).max().unwrap_or(1),
     ];
     let mut path_bufs = if use_projected_candidates {
-        vol::gpu::PathRecordBuffers::new_external_with_jacobians_projected(
+        vol::gpu::PathRecordBuffers::new_external_powerfoam_projected(
             &gpu,
             pixel_batch as u32,
             max_steps as u32,
-            true,
+            path_jacobian_mode,
             model.points.len() as u32,
             max_image_resolution,
+            config.powerfoam_candidate_capacity,
+        )
+    } else if model.radii.is_some() {
+        vol::gpu::PathRecordBuffers::new_external_powerfoam(
+            &gpu,
+            pixel_batch as u32,
+            max_steps as u32,
+            path_jacobian_mode,
             config.powerfoam_candidate_capacity,
         )
     } else {
@@ -4876,7 +4920,7 @@ fn fit_appearance_pixel_batched(
             &gpu,
             pixel_batch as u32,
             max_steps as u32,
-            model.radii.is_some(),
+            false,
             config.powerfoam_candidate_capacity,
         )
     };
@@ -5139,7 +5183,7 @@ fn fit_appearance_pixel_batched(
                 tx.fill_buffer(path_bufs.cells.at(0), pl_bytes, 0);
                 tx.fill_buffer(path_bufs.next_cells.at(0), pl_bytes, 0);
                 tx.fill_buffer(path_bufs.mask.at(0), pl_bytes, 0);
-                if path_bufs.has_jacobians() {
+                if path_bufs.has_geometry_jacobians() {
                     tx.fill_buffer(path_bufs.previous_cells.at(0), pl_bytes, 0);
                 }
                 if !path_payload_initialized {
@@ -5147,12 +5191,14 @@ fn fit_appearance_pixel_batched(
                 }
                 if path_bufs.has_jacobians() && !path_payload_initialized {
                     tx.fill_buffer(path_bufs.dt_reference_tangents.at(0), pl_bytes, 0);
+                }
+                if path_bufs.has_geometry_jacobians() && !path_payload_initialized {
                     tx.fill_buffer(path_bufs.dt_grad_previous.at(0), pl_bytes * 4, 0);
                     tx.fill_buffer(path_bufs.dt_grad_current.at(0), pl_bytes * 4, 0);
                     tx.fill_buffer(path_bufs.dt_grad_next.at(0), pl_bytes * 4, 0);
-                    if model.surface_normals.is_some() {
-                        tx.fill_buffer(path_bufs.dt_grad_surface_normal.at(0), pl_bytes * 4, 0);
-                    }
+                }
+                if path_bufs.has_surface_jacobians() && !path_payload_initialized {
+                    tx.fill_buffer(path_bufs.dt_grad_surface_normal.at(0), pl_bytes * 4, 0);
                 }
             }
             record_args.clear();
@@ -5472,13 +5518,21 @@ fn fit_appearance_pixel_batched(
                 gpu_cloud.deinit(&gpu);
                 path_bufs.destroy(&gpu);
                 path_bufs = if use_projected_candidates {
-                    vol::gpu::PathRecordBuffers::new_external_with_jacobians_projected(
+                    vol::gpu::PathRecordBuffers::new_external_powerfoam_projected(
                         &gpu,
                         pixel_batch as u32,
                         max_steps as u32,
-                        true,
+                        path_jacobian_mode,
                         model.points.len() as u32,
                         max_image_resolution,
+                        config.powerfoam_candidate_capacity,
+                    )
+                } else if model.radii.is_some() {
+                    vol::gpu::PathRecordBuffers::new_external_powerfoam(
+                        &gpu,
+                        pixel_batch as u32,
+                        max_steps as u32,
+                        path_jacobian_mode,
                         config.powerfoam_candidate_capacity,
                     )
                 } else {
@@ -5486,7 +5540,7 @@ fn fit_appearance_pixel_batched(
                         &gpu,
                         pixel_batch as u32,
                         max_steps as u32,
-                        model.radii.is_some(),
+                        false,
                         config.powerfoam_candidate_capacity,
                     )
                 };
@@ -7021,7 +7075,7 @@ mod tests {
             return;
         };
         let mut graph = mn::Graph::new();
-        build_volumetric_graph_with_options(
+        let vg = build_volumetric_graph_with_options(
             &mut graph,
             4,
             1,
@@ -7048,6 +7102,13 @@ mod tests {
             false,
             ColorLoss::SmoothL1,
         );
+        let weighted = vg.weighted_path.unwrap();
+        assert!(weighted.dt_reference_tangent.is_some());
+        assert!(weighted.previous_cell_indices.is_none());
+        assert!(weighted.dt_grad_previous.is_none());
+        assert!(weighted.dt_grad_current.is_none());
+        assert!(weighted.dt_grad_next.is_none());
+        assert!(weighted.dt_grad_surface_normal.is_some());
         let (session, _) = mn::build(
             &graph,
             mn::SessionConfig {
@@ -8395,6 +8456,102 @@ mod tests {
         session.wait();
         let outputs = session.read_output(1);
         assert!((outputs[0] - 9.25).abs() < 1.0e-5, "outputs={outputs:?}");
+    }
+
+    #[test]
+    fn surface_only_graph_uses_surface_reference_tangent() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping surface-only graph Jacobian test: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        model.radii = Some(vec![1.0; model.points.len()]);
+        model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
+        model.surface_offsets = Some(vec![0.15; model.points.len()]);
+        let mut graph = mn::Graph::new();
+        let vg = build_volumetric_graph_with_options(
+            &mut graph,
+            model.points.len(),
+            1,
+            1,
+            0,
+            1,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            true,
+            true,
+            VolumetricGraphOptions {
+                use_surface_normal_loss: false,
+                train_positions: false,
+                train_radii: false,
+            },
+            true,
+            false,
+            false,
+            false,
+            ColorLoss::L1,
+        );
+        let dt_output = graph.reshape(vg.dt_from_positions, &[1]);
+        graph.set_outputs(vec![dt_output]);
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        upload_model_parameters(&mut session, &model, 0.0);
+        let gradient = [0.4_f32, -0.2, 0.75, -0.6];
+        let reference = gradient[2] + gradient[3] * 0.15;
+        session.set_input_u32("cell_indices", &[0]);
+        session.set_input("recorded_dt", &[7.5]);
+        session.set_input("dt_reference_tangent", &[reference]);
+        session.set_input("dt_grad_surface_normal", &gradient);
+        session.set_input("mask", &[1.0]);
+        session.set_adam(0.0, 0.9, 0.999, 1e-8);
+        session.step();
+        session.wait();
+
+        let output = session.read_output(1)[0];
+        assert!((output - 7.5).abs() < 1.0e-5, "output={output}");
+        assert!(!session.has_param_grad("positions"));
+        assert!(!session.has_param_grad("log_radii"));
+        let mut normal_gradient = vec![0.0_f32; model.points.len() * 3];
+        session.read_param_grad("surface_normals", &mut normal_gradient);
+        assert!((normal_gradient[0] - gradient[0]).abs() < 1.0e-5);
+        assert!((normal_gradient[1] - gradient[1]).abs() < 1.0e-5);
+        assert!(normal_gradient[2].abs() < 1.0e-5);
+        let mut offset_gradient = vec![0.0_f32; model.points.len()];
+        session.read_param_grad("surface_offsets", &mut offset_gradient);
+        assert!((offset_gradient[0] - gradient[3]).abs() < 1.0e-5);
+
+        let moved_normal = glam::Vec3::new(0.3, 0.0, 1.0).normalize();
+        let mut moved_normals = vec![0.0_f32; model.points.len() * 3];
+        for normal in moved_normals.chunks_exact_mut(3) {
+            normal.copy_from_slice(glam::Vec3::Z.as_ref());
+        }
+        moved_normals[..3].copy_from_slice(moved_normal.as_ref());
+        let mut moved_offsets = model.surface_offsets.clone().unwrap();
+        moved_offsets[0] += 0.2;
+        session.set_parameter("surface_normals", &moved_normals);
+        session.set_parameter("surface_offsets", &moved_offsets);
+        session.step();
+        session.wait();
+        let expected = 7.5
+            + glam::Vec3::from_slice(&gradient[..3]).dot(moved_normal - glam::Vec3::Z)
+            + gradient[3] * 0.2;
+        let output = session.read_output(1)[0];
+        assert!(
+            (output - expected).abs() < 1.0e-5,
+            "output={output}, expected={expected}"
+        );
     }
 
     #[test]
