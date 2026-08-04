@@ -863,6 +863,18 @@ At the audited revision:
   pass; the latter peaks at 5.75 GB under its 6 GiB cgroup with no event.
   Broader row tiling, workgroup ray sharing, and vec2 sphere-face caching were
   measured and rejected as neutral or slower.
+- Spatial detail and the spatial surface-colour basis now share the current
+  site's already-gathered center. This removes two redundant graph dispatches
+  (418→416) and one of 15 large embeddings without changing forward arithmetic.
+  Balanced last-20 GPU timestamps improve 13.952→13.766 ms. Two-replica Room
+  training improves 100.296→99.663 seconds with held-out PSNR
+  23.4075→23.4109 dB; Bonsai is timing-neutral at 57.682→57.630 seconds while
+  held-out changes 16.3125→16.3176 dB. Both gates remain untruncated and peak
+  below 1.73 GB with no memory or GPU fault event. Splitting the recorder's
+  interleaved detail query into scalar buffers was rejected: graph time falls
+  0.58%, but recorder time rises 8.4% and combined GPU time regresses 2.65%.
+  Strict all-target lint and the complete locked workspace suite pass; the
+  latter peaks at 6.10 GB under 6 GiB with no memory or GPU fault event.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes

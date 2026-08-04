@@ -1430,6 +1430,39 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   sphere faces rather than only the root is neutral at 7.809→7.813 ms total
   recorder time. These results favor the narrow scalar reuse.
 
+#### M2av — Reuse gathered surface centers (implemented and two-scene-gated)
+
+- Oriented spatial detail already gathers the selected site's center for every
+  path row. The spatial surface-colour basis now consumes that same node
+  instead of issuing an identical position embedding. This keeps frozen
+  appearance geometry behind the existing `train_positions` stop-gradient and
+  combines the shared backward path when positions are trainable.
+- The 4,096-ray, 128-step detail graph falls 418→416 passes and 15→14 large
+  embeddings. Across two order-balanced 32-step profiles, averaging the last
+  20 timestamps per run, graph time falls 13.952→13.766 ms (-1.33%); recorder
+  time remains flat within noise at 7.848→7.817 ms.
+- Two 2,040-step Room replicas reduce mean training 100.296→99.663 seconds
+  (-0.63%) and GPU wait 58.912→58.359 seconds (-0.94%); path submission is
+  flat at 36.765→36.738 seconds. Train/held-out quality changes
+  25.6418/23.4075→25.6453/23.4109 dB.
+- Two Bonsai replicas are end-to-end neutral: mean training changes
+  57.682→57.630 seconds (-0.09%), GPU wait 48.606→48.492 seconds (-0.23%),
+  and path submission 4.050→4.104 seconds (+1.33%). Train/held-out quality
+  changes 17.1989/16.3125→17.1983/16.3176 dB. Both scene gates record zero
+  path truncation, candidate overflow, memory pressure, or GPU fault and peak
+  below 1.73 GB under 6 GiB.
+- A nearby structure-of-arrays prototype is rejected. Emitting query-near and
+  plane-branch values into separate recorder buffers removes one graph
+  dispatch and improves that graph 0.58%, but two scalar storage writes replace
+  each `vec2` write and slow the recorder 8.4%; combined measured GPU time
+  regresses 2.65%. Feeding those external scalar streams directly is slower
+  still because fused consumers repeatedly read host-visible memory. Retain the
+  interleaved payload and its measured device-local staging.
+- Focused surface/detail tests, formatting, strict all-target lint, and the
+  complete locked serialized workspace suite pass. The full suite peaks at
+  6.10 GB (5.68 GiB) under the 6 GiB cgroup. No selected scope records swap,
+  pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

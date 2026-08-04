@@ -236,7 +236,7 @@ fn repeat_xyz(g: &mut mn::Graph, column: mn::NodeId, rows: usize) -> mn::NodeId 
 fn surface_color_basis_graph(
     g: &mut mn::Graph,
     cell_indices: mn::NodeId,
-    positions: mn::NodeId,
+    centers: mn::NodeId,
     step_normals: mn::NodeId,
     step_offsets: Option<mn::NodeId>,
     actual_radii: mn::NodeId,
@@ -244,7 +244,6 @@ fn surface_color_basis_graph(
     ray_dir_pl: mn::NodeId,
     pl: usize,
 ) -> mn::NodeId {
-    let centers = g.embedding(cell_indices, positions);
     let neg_ray_origin = g.neg(ray_origin_pl);
     let center_relative = g.add(centers, neg_ray_origin);
     let numerator_terms = g.mul(center_relative, step_normals);
@@ -891,7 +890,7 @@ fn build_volumetric_graph_with_options(
         surface_color_basis_graph(
             g,
             cell_indices,
-            positions,
+            pos_cell,
             step_surface_normals.unwrap(),
             effective_surface_offsets,
             actual_radii.unwrap(),
@@ -7199,10 +7198,11 @@ mod tests {
         let radii = graph.parameter("radii", &[1, 1]);
         let ray_origin = graph.input("ray_origin", &[1, 3]);
         let ray_direction = graph.input("ray_direction", &[1, 3]);
+        let centers = graph.embedding(cells, positions);
         let basis = surface_color_basis_graph(
             &mut graph,
             cells,
-            positions,
+            centers,
             normals,
             Some(offsets),
             radii,
@@ -8052,6 +8052,28 @@ mod tests {
         assert!(weighted.dt_grad_current.is_none());
         assert!(weighted.dt_grad_next.is_none());
         assert!(weighted.dt_grad_surface_normal.is_some());
+        let frozen_positions = graph
+            .nodes()
+            .iter()
+            .filter(|node| {
+                matches!(node.op, mn::graph::Op::StopGradient)
+                    && node.inputs.first() == Some(&vg.positions)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(frozen_positions.len(), 1);
+        let frozen_positions = frozen_positions[0].id;
+        let frozen_position_gathers = graph
+            .nodes()
+            .iter()
+            .filter(|node| {
+                matches!(node.op, mn::graph::Op::Embedding)
+                    && node.inputs.get(1) == Some(&frozen_positions)
+            })
+            .count();
+        assert_eq!(frozen_position_gathers, 2);
+        assert!(!graph.nodes().iter().any(|node| {
+            matches!(node.op, mn::graph::Op::Embedding) && node.inputs.get(1) == Some(&vg.positions)
+        }));
         let (session, _) = mn::build(
             &graph,
             mn::SessionConfig {
