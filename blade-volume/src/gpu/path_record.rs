@@ -18,9 +18,9 @@
 //!   - `dt_reference_tangents_out[f32]` (selected PowerFoam differential)
 //!   - up to four `dt_grad_*_out[vec4<f32>]` streams (PowerFoam only)
 //!
-//! The shader writes only the steps it actually takes; trailing slots
-//! keep their pre-dispatch value, which the caller zeroes before each
-//! dispatch.
+//! PowerFoam gather workgroups initialize the index and mask rows before
+//! recording. The unweighted walk still leaves trailing slots at their
+//! pre-dispatch value. Payload streams are only written for active steps.
 
 use std::{mem, ptr, slice};
 
@@ -319,8 +319,9 @@ impl PathRecorder {
     /// Record `args.num_pixels` paths into the caller-owned output buffers.
     ///
     /// The caller is responsible for:
-    ///   - zeroing every active output buffer before this call (the shader
-    ///     only writes the steps that were actually taken);
+    ///   - zeroing payload buffers before their first use;
+    ///   - zeroing index and mask rows before unweighted dispatches (weighted
+    ///     gather workgroups initialize those rows themselves);
     ///   - making sure every binding is valid for the right number of bytes;
     ///   - submitting the encoder afterwards.
     pub fn dispatch(

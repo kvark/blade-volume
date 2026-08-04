@@ -18,9 +18,9 @@
 // over face intersections) stays in this non-differentiable shader.
 //
 // Output layout: row-major `[num_pixels, max_steps]` flat buffers.
-// Pre-zero the output buffers before dispatch — the shader only writes
-// the steps that were actually taken, leaving the trailing slots at the
-// pre-dispatch value (which is canonically `mask = 0`).
+// The PowerFoam gather workgroup initializes the index/mask row before the
+// record pass writes active steps. The unweighted walker leaves trailing
+// slots at their pre-dispatch value.
 
 // #include "common.wgsl" — required for `qrot`
 // #include "radfoam.wgsl" partial: we redeclare accessors below so this
@@ -549,6 +549,16 @@ fn gather_powerfoam_candidates(
         return;
     }
     let output_pixel = g_params.pixel_offset + p_id;
+    let row_start = output_pixel * g_params.max_steps;
+    for (var step = local_id.x; step < g_params.max_steps; step += 64u) {
+        let slot = row_start + step;
+        g_cells_out[slot] = 0u;
+        g_next_cells_out[slot] = 0u;
+        g_mask_out[slot] = 0.0;
+        if (g_params.jacobian_mode == 1u) {
+            g_previous_cells_out[slot] = 0u;
+        }
+    }
     if (local_id.x == 0u) {
         atomicStore(&w_candidate_count, 0u);
     }

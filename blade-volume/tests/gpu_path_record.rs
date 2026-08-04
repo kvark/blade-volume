@@ -374,16 +374,19 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
             bufs.pixel_indices.at(0),
             size,
         );
-        // Zero the outputs (shader only writes the steps it actually
-        // takes; leftover slots must be zero).
+        // Weighted gather owns index/mask initialization. Poison those rows
+        // so this oracle verifies that trailing entries do not depend on
+        // allocator-zeroed memory or a caller-side fill.
         let pl = (num_pixels as u64) * (max_steps as u64);
+        let index_fill = if weighted { 0xff } else { 0 };
+        let mask_fill = if weighted { 0x3f } else { 0 };
         if bufs.has_geometry_jacobians() {
-            tx.fill_buffer(bufs.previous_cells.at(0), pl * 4, 0);
+            tx.fill_buffer(bufs.previous_cells.at(0), pl * 4, index_fill);
         }
-        tx.fill_buffer(bufs.cells.at(0), pl * 4, 0);
-        tx.fill_buffer(bufs.next_cells.at(0), pl * 4, 0);
+        tx.fill_buffer(bufs.cells.at(0), pl * 4, index_fill);
+        tx.fill_buffer(bufs.next_cells.at(0), pl * 4, index_fill);
         tx.fill_buffer(bufs.dts.at(0), pl * 4, 0);
-        tx.fill_buffer(bufs.mask.at(0), pl * 4, 0);
+        tx.fill_buffer(bufs.mask.at(0), pl * 4, mask_fill);
         if bufs.has_jacobians() {
             tx.fill_buffer(bufs.dt_reference_tangents.at(0), pl * 4, 0);
         }

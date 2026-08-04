@@ -3760,12 +3760,16 @@ fn collect_path_contributions(
                     buffers.pixel_indices.at(0),
                     std::mem::size_of_val(pixel_batch) as u64,
                 );
-                transfer.fill_buffer(buffers.cells.at(0), path_bytes, 0);
-                transfer.fill_buffer(buffers.next_cells.at(0), path_bytes, 0);
+                if model.radii.is_none() {
+                    transfer.fill_buffer(buffers.cells.at(0), path_bytes, 0);
+                    transfer.fill_buffer(buffers.next_cells.at(0), path_bytes, 0);
+                    transfer.fill_buffer(buffers.mask.at(0), path_bytes, 0);
+                }
                 transfer.fill_buffer(buffers.dts.at(0), path_bytes, 0);
-                transfer.fill_buffer(buffers.mask.at(0), path_bytes, 0);
-                if buffers.has_jacobians() {
+                if buffers.has_jacobians() && model.radii.is_none() {
                     transfer.fill_buffer(buffers.previous_cells.at(0), path_bytes, 0);
+                }
+                if buffers.has_jacobians() {
                     transfer.fill_buffer(buffers.dt_reference_tangents.at(0), path_bytes, 0);
                     transfer.fill_buffer(buffers.dt_grad_previous.at(0), path_bytes * 4, 0);
                     transfer.fill_buffer(buffers.dt_grad_current.at(0), path_bytes * 4, 0);
@@ -5195,11 +5199,13 @@ fn fit_appearance_pixel_batched(
                     path_bufs.pixel_indices.at(0),
                     pix_size,
                 );
-                tx.fill_buffer(path_bufs.cells.at(0), pl_bytes, 0);
-                tx.fill_buffer(path_bufs.next_cells.at(0), pl_bytes, 0);
-                tx.fill_buffer(path_bufs.mask.at(0), pl_bytes, 0);
-                if path_bufs.has_geometry_jacobians() {
-                    tx.fill_buffer(path_bufs.previous_cells.at(0), pl_bytes, 0);
+                if model.radii.is_none() {
+                    tx.fill_buffer(path_bufs.cells.at(0), pl_bytes, 0);
+                    tx.fill_buffer(path_bufs.next_cells.at(0), pl_bytes, 0);
+                    tx.fill_buffer(path_bufs.mask.at(0), pl_bytes, 0);
+                    if path_bufs.has_geometry_jacobians() {
+                        tx.fill_buffer(path_bufs.previous_cells.at(0), pl_bytes, 0);
+                    }
                 }
                 if !path_payload_initialized {
                     tx.fill_buffer(path_bufs.dts.at(0), pl_bytes, 0);
