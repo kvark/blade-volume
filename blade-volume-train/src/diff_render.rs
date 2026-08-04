@@ -215,16 +215,11 @@ fn positive_activation(
     g.mul(sp, inv_beta)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn weighted_role_linear_term(
     g: &mut mn::Graph,
-    indices: mn::NodeId,
-    geometry: mn::NodeId,
-    neg_ray_origin_geometry: mn::NodeId,
+    relative_geometry: mn::NodeId,
     recorded_jacobian: mn::NodeId,
 ) -> mn::NodeId {
-    let role_geometry = g.embedding(indices, geometry);
-    let relative_geometry = g.add(role_geometry, neg_ray_origin_geometry);
     let product = g.mul(relative_geometry, recorded_jacobian);
     g.sum_inner(product)
 }
@@ -394,10 +389,10 @@ struct SurfaceDetailEvaluation {
 }
 
 #[derive(Clone, Copy)]
-struct SurfaceQueryGeometryGraph {
-    previous_cell_indices: mn::NodeId,
-    geometry: mn::NodeId,
-    neg_ray_origin_geometry: mn::NodeId,
+struct PathRoleGeometryGraph {
+    previous: mn::NodeId,
+    current: mn::NodeId,
+    next: mn::NodeId,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -411,7 +406,7 @@ fn evaluate_surface_detail_graph(
     radii: mn::NodeId,
     ray_origin: mn::NodeId,
     ray_direction: mn::NodeId,
-    query_geometry: Option<SurfaceQueryGeometryGraph>,
+    path_geometry: Option<PathRoleGeometryGraph>,
     rows: usize,
 ) -> SurfaceDetailEvaluation {
     let queries = g.materialize(parameters.surface_queries);
@@ -422,15 +417,13 @@ fn evaluate_surface_detail_graph(
     let query_near = match (
         parameters.surface_query_grad_previous,
         parameters.surface_query_grad_current,
-        query_geometry,
+        path_geometry,
     ) {
         (
             Some(previous_gradient),
             Some(current_gradient),
-            Some(SurfaceQueryGeometryGraph {
-                previous_cell_indices,
-                geometry,
-                neg_ray_origin_geometry,
+            Some(PathRoleGeometryGraph {
+                previous, current, ..
             }),
         ) => {
             // Support-sphere and radical-face entry depths are homogeneous in
@@ -438,20 +431,8 @@ fn evaluate_surface_detail_graph(
             // makes `J_ref * geometry_ref == query_ref`, so the recorded
             // fixed-topology Jacobian dotted with live geometry is the exact
             // first-order query without another reference-tangent stream.
-            let previous_term = weighted_role_linear_term(
-                g,
-                previous_cell_indices,
-                geometry,
-                neg_ray_origin_geometry,
-                previous_gradient,
-            );
-            let current_term = weighted_role_linear_term(
-                g,
-                cell_indices,
-                geometry,
-                neg_ray_origin_geometry,
-                current_gradient,
-            );
+            let previous_term = weighted_role_linear_term(g, previous, previous_gradient);
+            let current_term = weighted_role_linear_term(g, current, current_gradient);
             g.add(previous_term, current_term)
         }
         (None, None, None) => recorded_query_near,
@@ -911,13 +892,11 @@ fn build_volumetric_graph_with_options(
     // Gather per-pixel origins and directions into the `[P*L, 3]` path layout.
     let ray_origin_pl = g.embedding(pixel_idx_per_step, ray_origin);
     let ray_dir_pl = g.embedding(pixel_idx_per_step, ray_dir_per_pixel);
-    let geometry = use_geometry_jacobians.then(|| {
+    let path_geometry = use_geometry_jacobians.then(|| {
         let positions_flat = g.reshape(differentiable_positions, &[n_cells * 3]);
         let actual_radii_flat = g.reshape(differentiable_radii.unwrap(), &[n_cells]);
         let geometry_flat = g.concat(positions_flat, actual_radii_flat, n_cells as u32, 3, 1, 1);
-        g.reshape(geometry_flat, &[n_cells, 4])
-    });
-    let neg_ray_origin_geometry = use_geometry_jacobians.then(|| {
+        let geometry = g.reshape(geometry_flat, &[n_cells, 4]);
         let zero_radius = g.constant(vec![0.0_f32; p], &[p, 1]);
         let ray_origin_flat = g.reshape(ray_origin, &[p * 3]);
         let zero_radius_flat = g.reshape(zero_radius, &[p]);
@@ -925,7 +904,19 @@ fn build_volumetric_graph_with_options(
             g.concat(ray_origin_flat, zero_radius_flat, p as u32, 3, 1, 1);
         let ray_origin_geometry = g.reshape(ray_origin_geometry_flat, &[p, 4]);
         let ray_origin_geometry_pl = g.embedding(pixel_idx_per_step, ray_origin_geometry);
-        g.neg(ray_origin_geometry_pl)
+        let neg_ray_origin_geometry = g.neg(ray_origin_geometry_pl);
+        // The interval and detail-query linearizations use the same three
+        // unique path roles. Gather each one once rather than independently
+        // scattering through the full geometry table for every consumer.
+        let mut gather_relative = |indices| {
+            let role_geometry = g.embedding(indices, geometry);
+            g.add(role_geometry, neg_ray_origin_geometry)
+        };
+        PathRoleGeometryGraph {
+            previous: gather_relative(previous_cell_indices.unwrap()),
+            current: gather_relative(cell_indices),
+            next: gather_relative(next_cell_indices),
+        }
     });
     // The same oriented plane drives the recorded-path linearization, spatial
     // appearance, and optional view-facing loss. Gather it once so those
@@ -951,11 +942,7 @@ fn build_volumetric_graph_with_options(
             step_surface_radii.unwrap(),
             ray_origin_pl,
             ray_dir_pl,
-            use_geometry_jacobians.then(|| SurfaceQueryGeometryGraph {
-                previous_cell_indices: previous_cell_indices.unwrap(),
-                geometry: geometry.unwrap(),
-                neg_ray_origin_geometry: neg_ray_origin_geometry.unwrap(),
-            }),
+            path_geometry,
             pl,
         )
     });
@@ -1038,37 +1025,15 @@ fn build_volumetric_graph_with_options(
             weighted.dt_grad_current,
             weighted.dt_grad_next,
         ) {
-            (
-                Some(previous_indices),
-                Some(previous_gradient),
-                Some(current_gradient),
-                Some(next_gradient),
-            ) => {
-                // The packed live geometry and ray-relative origin are also
-                // consumed by the spatial-detail entry-depth linearization.
-                let geometry = geometry.unwrap();
-                let neg_ray_origin_geometry = neg_ray_origin_geometry.unwrap();
-                let previous_term = weighted_role_linear_term(
-                    g,
-                    previous_indices,
-                    geometry,
-                    neg_ray_origin_geometry,
-                    previous_gradient,
-                );
-                let current_term = weighted_role_linear_term(
-                    g,
-                    cell_indices,
-                    geometry,
-                    neg_ray_origin_geometry,
-                    current_gradient,
-                );
-                let next_term = weighted_role_linear_term(
-                    g,
-                    next_cell_indices,
-                    geometry,
-                    neg_ray_origin_geometry,
-                    next_gradient,
-                );
+            (Some(_), Some(previous_gradient), Some(current_gradient), Some(next_gradient)) => {
+                let PathRoleGeometryGraph {
+                    previous,
+                    current,
+                    next,
+                } = path_geometry.unwrap();
+                let previous_term = weighted_role_linear_term(g, previous, previous_gradient);
+                let current_term = weighted_role_linear_term(g, current, current_gradient);
+                let next_term = weighted_role_linear_term(g, next, next_gradient);
                 let entry_and_current = g.add(previous_term, current_term);
                 Some(g.add(entry_and_current, next_term))
             }
@@ -7367,6 +7332,10 @@ mod tests {
         let radii = graph.embedding(cell_indices, radius_table);
         let radii = floor_surface_radii(&mut graph, radii, 1);
         let ray_direction = graph.input("ray_direction", &[1, 3]);
+        let previous_geometry = graph.embedding(previous_cell_indices, geometry);
+        let previous = graph.add(previous_geometry, neg_ray_origin_geometry);
+        let current_geometry = graph.embedding(cell_indices, geometry);
+        let current = graph.add(current_geometry, neg_ray_origin_geometry);
         let evaluation = evaluate_surface_detail_graph(
             &mut graph,
             cell_indices,
@@ -7377,10 +7346,10 @@ mod tests {
             radii,
             ray_origin,
             ray_direction,
-            Some(SurfaceQueryGeometryGraph {
-                previous_cell_indices,
-                geometry,
-                neg_ray_origin_geometry,
+            Some(PathRoleGeometryGraph {
+                previous,
+                current,
+                next: current,
             }),
             1,
         );

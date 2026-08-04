@@ -1545,6 +1545,32 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   suite pass; the last peaks at 5.37 GB (5.00 GiB) under the 6 GiB limit with
   no event.
 
+#### M2az — Reuse differentiable path-role geometry (implemented and gated)
+
+- Interval length and spatial-detail entry previously gathered the same
+  preceding/current point geometry independently. The graph now creates one
+  ray-relative `(x, y, z, radius)` node for each of the three unique path
+  roles and shares the preceding/current nodes with both linearizations. This
+  removes four large row-scaled embedding-gradient scatters without changing
+  the fixed-topology derivative contract.
+- A two-replica 32-step profile reduces mean graph time 27.43→25.85 ms
+  (-5.7%) and combined recorder/graph time 45.71→43.70 ms (-4.4%). An
+  order-balanced 510-step Room gate reduces mean training 39.998→38.577
+  seconds (-3.6%) and GPU wait 24.439→23.125 seconds (-5.4%), while held-out
+  PSNR changes 22.4460→22.4504 dB.
+- At the full 2,040-step horizon, two candidate replicas average
+  26.4991/24.3063 dB train/held out versus the preceding implementation's
+  26.4852/24.2963 dB. Mean training time falls 150.107→147.417 seconds
+  (-1.8%), GPU wait falls 93.397→91.012 seconds (-2.6%), and final Čech edges
+  change by -0.04%. All training and evaluation rays remain untruncated; the
+  cgroup peaks at 1.13 GB with zero swap, pressure, OOM, kill, or GPU fault.
+- The complete support-query graph finite difference, joint update,
+  densification/Adam-remap, and exact-resume tests exercise the shared nodes.
+  The arithmetic regrouping is quality-gated rather than claimed bit-identical
+  to the previous graph. Formatting, strict all-target lint, and the complete
+  serialized workspace suite pass; the suite peaks at 3.16 GB (2.94 GiB) under
+  6 GiB with no event.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

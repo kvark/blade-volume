@@ -763,6 +763,18 @@ At the audited revision:
   pass. All measured scopes remain untruncated and free of memory/GPU events;
   the complete serialized workspace suite peaks at 5.37 GB (5.00 GiB) under
   the 6 GiB limit with no event.
+- The detail-entry and interval linearizations now share the three unique
+  ray-relative path-role geometry gathers. A two-replica 32-step profile cuts
+  graph time by 5.7%; an order-balanced 510-step gate cuts training by 3.6%
+  with a +0.0044 dB held-out change. At 2,040 steps, two fresh candidates cut
+  mean training 150.107→147.417 seconds (-1.8%) and GPU wait by 2.6%, while
+  changing train/held-out PSNR from 26.4852/24.2963 to 26.4991/24.3063 dB and
+  mean topology by -0.04%. All paths remain exact and all isolated scopes are
+  free of memory and GPU events. This selects graph sharing while leaving a
+  fused indexed geometry-dot operation as a separately measurable follow-up.
+  Formatting, strict all-target lint, and the complete serialized workspace
+  suite pass; the suite peaks at 3.16 GB (2.94 GiB) under the 6 GiB limit with
+  no event.
 - Meganeura `7967ca2` adds one-transfer F32 parameter readback through cached
   download memory, and Blade uses it for every model/geometry snapshot. It
   leaves the training graph and values unchanged while reducing four-replica
@@ -1924,8 +1936,10 @@ material path.
    34.5% and 49.8% respectively. Joint support-entry gradients subsequently
    unlock position/radius learning and add +0.884/+0.405 dB held out on
    Room/Bonsai at the exploratory high radius rate, but raise training time by
-   57%/68% and produce mixed Bonsai tail views. The next decision points are a
-   fused indexed geometry-dot operation for the five path roles and a longer
+   57%/68% and produce mixed Bonsai tail views. Sharing the three unique
+   ray-relative geometry gathers for the five linearization consumers then
+   cuts Room training by 1.8% at unchanged quality. The next decision points
+   are a fused indexed geometry-dot operation and a longer
    conservative/high-rate schedule comparison; neither rate becomes a default
    from the present short horizon. A compact 48-float
    additive Spherical Voronoi residual is now implemented but rejected:
