@@ -1089,6 +1089,35 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   peaks at 778 MiB and the serialized workspace gate at 5.28 GiB under the
   6 GiB cgroup limit, with no swap, OOM, kill, or GPU fault.
 
+#### M2an — Stage external surface Jacobians once (implemented and gated)
+
+- Meganeura revision `17e794b` adds an explicit differentiable `materialize`
+  operation: an f32 identity copy into a distinct intermediate buffer. It is a
+  memory-placement barrier, so graph optimization and pointwise fusion cannot
+  replace it with an alias. Identity autodiff, compiler/runtime mappings,
+  WGSL/SPIR-V validation, and a physical-GPU value/gradient test cover the new
+  primitive.
+- Oriented PowerFoam training materializes the recorder's packed normal/offset
+  Jacobian immediately before its two channel splits. The public graph field
+  remains the external input, and structural coverage requires exactly one
+  materialization feeding both splits. This replaces two cold reads from the
+  external allocation with one read into device-local memory.
+- On the 200K-site, 4,096-ray, 16-view Room shape, the external splits average
+  1.11 ms. The final graph instead spends 0.67 ms on materialization and about
+  0.04 ms on both device-local splits; total graph time falls from 8.73 to
+  8.44 ms (-3.3%) despite growing from 287 to 288 passes.
+- Two order-balanced 510-step pairs reduce combined path submission/GPU wait
+  from 17.820 to 17.427 seconds (-2.2%) and training from 20.541 to 20.202
+  seconds (-1.7%). Two 2,040-step pairs confirm 69.682 to 68.351 seconds
+  (-1.9%) and 74.480 to 72.767 seconds (-2.3%), respectively.
+- Average fresh-Ply quality is preserved at 25.4154/23.2714 dB versus
+  25.4116/23.2706 dB. All 33.42M long-gate training rays and 19.27M evaluation
+  rays complete without truncation. Exact oriented resume, all 12 physical
+  path-oracle cases, formatting, strict workspace lint, and the complete
+  locked workspace suite pass. The long gate peaks at 783 MiB and the
+  serialized workspace gate at 5.49 GiB under the 6 GiB cgroup limit, with no
+  swap, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
