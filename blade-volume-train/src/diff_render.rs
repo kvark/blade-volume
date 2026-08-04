@@ -211,6 +211,15 @@ fn weighted_role_linear_term(
     g.sum_inner(product)
 }
 
+/// Repeat a `[rows, 1]` column into `[rows, 3]` without launching a tiled
+/// matrix multiplication for a scalar broadcast.
+fn repeat_xyz(g: &mut mn::Graph, column: mn::NodeId, rows: usize) -> mn::NodeId {
+    let column_flat = g.reshape(column, &[rows]);
+    let xy_flat = g.concat(column_flat, column_flat, rows as u32, 1, 1, 1);
+    let xyz_flat = g.concat(xy_flat, column_flat, rows as u32, 2, 1, 1);
+    g.reshape(xyz_flat, &[rows, 3])
+}
+
 #[allow(clippy::too_many_arguments)]
 fn surface_color_basis_graph(
     g: &mut mn::Graph,
@@ -241,13 +250,12 @@ fn surface_color_basis_graph(
     let regularized_numerator = g.mul(numerator, denominator);
     let t = g.div(regularized_numerator, regularized_denominator);
 
-    let ones_1_3 = g.constant(vec![1.0_f32; 3], &[1, 3]);
-    let t_xyz = g.matmul(t, ones_1_3);
+    let t_xyz = repeat_xyz(g, t, pl);
     let ray_offset = g.mul(ray_dir_pl, t_xyz);
     let hit = g.add(ray_origin_pl, ray_offset);
     let plane_center = match step_offsets {
         Some(offsets) => {
-            let offset_xyz = g.matmul(offsets, ones_1_3);
+            let offset_xyz = repeat_xyz(g, offsets, pl);
             let normal_offset = g.mul(normals, offset_xyz);
             g.add(centers, normal_offset)
         }
@@ -257,7 +265,7 @@ fn surface_color_basis_graph(
     let relative = g.add(hit, neg_plane_center);
     let normal_distance_terms = g.mul(relative, normals);
     let normal_distance = g.sum_inner(normal_distance_terms);
-    let normal_distance_xyz = g.matmul(normal_distance, ones_1_3);
+    let normal_distance_xyz = repeat_xyz(g, normal_distance, pl);
     let normal_component = g.mul(normals, normal_distance_xyz);
     let neg_normal_component = g.neg(normal_component);
     let tangent = g.add(relative, neg_normal_component);
@@ -268,7 +276,7 @@ fn surface_color_basis_graph(
     let radius_above_floor = g.relu(radius_above_floor);
     let radius_floor = g.constant(vec![1.0e-6_f32; pl], &[pl, 1]);
     let radii = g.add(radius_above_floor, radius_floor);
-    let radius_xyz = g.matmul(radii, ones_1_3);
+    let radius_xyz = repeat_xyz(g, radii, pl);
     let q = g.div(tangent, radius_xyz);
 
     // clamp(q, -1, 1) = relu(q + 1) - relu(q - 1) - 1.
@@ -5839,6 +5847,34 @@ mod tests {
         let actual = session.read_output(1)[0];
         let expected = (0.0 + 0.125 + 1.5 + 1.5) / 4.0;
         assert!((actual - expected).abs() < 1.0e-6, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn repeat_xyz_preserves_row_order() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping repeat_xyz row-order test: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        let column = graph.input("column", &[4, 1]);
+        let repeated = repeat_xyz(&mut graph, column, 4);
+        graph.set_outputs(vec![repeated]);
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Inference,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        session.set_input("column", &[0.25, -2.0, 7.5, 1.0]);
+        session.step();
+        session.wait();
+        assert_eq!(
+            session.read_output(12),
+            vec![0.25, 0.25, 0.25, -2.0, -2.0, -2.0, 7.5, 7.5, 7.5, 1.0, 1.0, 1.0]
+        );
     }
 
     #[test]
