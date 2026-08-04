@@ -225,24 +225,22 @@ fn surface_color_basis_graph(
     g: &mut mn::Graph,
     cell_indices: mn::NodeId,
     positions: mn::NodeId,
-    normalized_surface_normals: mn::NodeId,
-    surface_offsets: Option<mn::NodeId>,
+    step_normals: mn::NodeId,
+    step_offsets: Option<mn::NodeId>,
     actual_radii: mn::NodeId,
     ray_origin_pl: mn::NodeId,
     ray_dir_pl: mn::NodeId,
     pl: usize,
 ) -> mn::NodeId {
     let centers = g.embedding(cell_indices, positions);
-    let normals = g.embedding(cell_indices, normalized_surface_normals);
     let neg_ray_origin = g.neg(ray_origin_pl);
     let center_relative = g.add(centers, neg_ray_origin);
-    let numerator_terms = g.mul(center_relative, normals);
+    let numerator_terms = g.mul(center_relative, step_normals);
     let mut numerator = g.sum_inner(numerator_terms);
-    let step_offsets = surface_offsets.map(|offsets| g.embedding(cell_indices, offsets));
     if let Some(offsets) = step_offsets {
         numerator = g.add(numerator, offsets);
     }
-    let denominator_terms = g.mul(ray_dir_pl, normals);
+    let denominator_terms = g.mul(ray_dir_pl, step_normals);
     let denominator = g.sum_inner(denominator_terms);
     let denominator_squared = g.mul(denominator, denominator);
     let epsilon_squared = g.constant(vec![1.0e-12_f32; pl], &[pl, 1]);
@@ -256,17 +254,17 @@ fn surface_color_basis_graph(
     let plane_center = match step_offsets {
         Some(offsets) => {
             let offset_xyz = repeat_xyz(g, offsets, pl);
-            let normal_offset = g.mul(normals, offset_xyz);
+            let normal_offset = g.mul(step_normals, offset_xyz);
             g.add(centers, normal_offset)
         }
         None => centers,
     };
     let neg_plane_center = g.neg(plane_center);
     let relative = g.add(hit, neg_plane_center);
-    let normal_distance_terms = g.mul(relative, normals);
+    let normal_distance_terms = g.mul(relative, step_normals);
     let normal_distance = g.sum_inner(normal_distance_terms);
     let normal_distance_xyz = repeat_xyz(g, normal_distance, pl);
-    let normal_component = g.mul(normals, normal_distance_xyz);
+    let normal_component = g.mul(step_normals, normal_distance_xyz);
     let neg_normal_component = g.neg(normal_component);
     let tangent = g.add(relative, neg_normal_component);
 
@@ -684,13 +682,19 @@ fn build_volumetric_graph_with_options(
     // Gather per-pixel origins and directions into the `[P*L, 3]` path layout.
     let ray_origin_pl = g.embedding(pixel_idx_per_step, ray_origin);
     let ray_dir_pl = g.embedding(pixel_idx_per_step, ray_dir_per_pixel);
+    // The same oriented plane drives the recorded-path linearization, spatial
+    // appearance, and optional view-facing loss. Gather it once so those
+    // branches share both the forward payload and its backward accumulation.
+    let step_surface_normals =
+        normalized_surface_normals.map(|normals| g.embedding(cell_indices, normals));
+    let step_surface_offsets = surface_offsets.map(|offsets| g.embedding(cell_indices, offsets));
     let surface_basis = surface_color_coefficients.map(|_| {
         surface_color_basis_graph(
             g,
             cell_indices,
             positions,
-            normalized_surface_normals.unwrap(),
-            surface_offsets,
+            step_surface_normals.unwrap(),
+            step_surface_offsets,
             actual_radii.unwrap(),
             ray_origin_pl,
             ray_dir_pl,
@@ -809,22 +813,20 @@ fn build_volumetric_graph_with_options(
             _ => unreachable!("geometry path inputs must be declared together"),
         };
         let linear_terms = match (
-            normalized_surface_normals,
-            surface_offsets,
+            step_surface_normals,
+            step_surface_offsets,
             weighted.dt_grad_surface_normal,
             geometry_terms,
         ) {
-            (Some(normals), offsets, Some(recorded_gradient), geometry_terms) => {
-                let step_normals = g.embedding(cell_indices, normals);
+            (Some(step_normals), offsets, Some(recorded_gradient), geometry_terms) => {
                 let gradient_xyz_flat = g.split_a(recorded_gradient, pl as u32, 3, 1, 1);
                 let gradient_xyz = g.reshape(gradient_xyz_flat, &[pl, 3]);
                 let product = g.mul(step_normals, gradient_xyz);
                 let mut surface_term = g.sum_inner(product);
                 if let Some(offsets) = offsets {
-                    let step_offsets = g.embedding(cell_indices, offsets);
                     let gradient_w_flat = g.split_b(recorded_gradient, pl as u32, 3, 1, 1);
                     let gradient_w = g.reshape(gradient_w_flat, &[pl, 1]);
-                    let offset_term = g.mul(step_offsets, gradient_w);
+                    let offset_term = g.mul(offsets, gradient_w);
                     surface_term = g.add(surface_term, offset_term);
                 }
                 Some(match geometry_terms {
@@ -891,13 +893,12 @@ fn build_volumetric_graph_with_options(
     // half-cell when it points along the camera ray: mean over rays of
     // `sum_segments(T * alpha * max(dot(normal, ray_dir), 0)^2)`.
     let surface_normal_loss = match (
-        normalized_surface_normals,
+        step_surface_normals,
         weighted_path
             .as_ref()
             .and_then(|weighted| weighted.surface_normal_loss_scale),
     ) {
-        (Some(normals), Some(scale)) => {
-            let step_normals = g.embedding(cell_indices, normals);
+        (Some(step_normals), Some(scale)) => {
             let normal_ray_product = g.mul(step_normals, ray_dir_pl);
             let normal_ray_dot_flat = g.sum_inner(normal_ray_product);
             let normal_ray_dot = g.reshape(normal_ray_dot_flat, &[p, l]);
@@ -7101,6 +7102,62 @@ mod tests {
         let weighted = vg.weighted_path.unwrap();
         assert!(weighted.dt_grad_surface_normal.is_some());
         assert!(weighted.surface_normal_loss_scale.is_none());
+    }
+
+    #[test]
+    fn oriented_surface_data_is_gathered_once_per_path_row() {
+        let mut graph = mn::Graph::new();
+        let vg = build_volumetric_graph_with_options(
+            &mut graph,
+            16,
+            4,
+            3,
+            0,
+            2,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 3],
+            true,
+            true,
+            VolumetricGraphOptions {
+                use_surface_normal_loss: true,
+                train_positions: false,
+                train_radii: false,
+            },
+            true,
+            true,
+            false,
+            false,
+            ColorLoss::L1,
+        );
+        let weighted = vg.weighted_path.unwrap();
+        let surface_normals = weighted.surface_normals.unwrap();
+        let normalized_normals = graph
+            .nodes()
+            .iter()
+            .find(|node| {
+                matches!(&node.op, mn::graph::Op::RmsNorm { .. })
+                    && node.inputs.first() == Some(&surface_normals)
+            })
+            .unwrap()
+            .id;
+        let surface_offsets = weighted.surface_offsets.unwrap();
+        let embedding_count = |table| {
+            graph
+                .nodes()
+                .iter()
+                .filter(|node| {
+                    matches!(&node.op, mn::graph::Op::Embedding)
+                        && node.inputs.get(1) == Some(&table)
+                })
+                .count()
+        };
+        assert_eq!(embedding_count(normalized_normals), 1);
+        assert_eq!(embedding_count(surface_offsets), 1);
     }
 
     #[test]
