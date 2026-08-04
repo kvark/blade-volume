@@ -2900,6 +2900,22 @@ impl TrainingPhaseTimings {
     }
 }
 
+fn dump_path_record_gpu_timings(timings: &[(String, std::time::Duration)]) {
+    if timings.is_empty() {
+        return;
+    }
+    let total: std::time::Duration = timings.iter().map(|&(_, duration)| duration).sum();
+    eprintln!(
+        "--- path recorder GPU timings ({} passes, {:.2}ms total) ---",
+        timings.len(),
+        total.as_secs_f64() * 1000.0,
+    );
+    for &(ref name, duration) in timings {
+        eprintln!("  {name:>44}: {:>8.2}ms", duration.as_secs_f64() * 1000.0,);
+    }
+    eprintln!("---");
+}
+
 fn upload_model_parameters(
     session: &mut mn::Session,
     model: &vol::PointCloudModel,
@@ -5168,6 +5184,9 @@ fn fit_appearance_pixel_batched(
 
             let path_submit_start = std::time::Instant::now();
             record_encoder.start();
+            if profile_gpu {
+                dump_path_record_gpu_timings(record_encoder.timings());
+            }
             {
                 let mut tx = record_encoder.transfer("path-record-prepare");
                 let pix_size = (pixel_batch * std::mem::size_of::<u32>()) as u64;
