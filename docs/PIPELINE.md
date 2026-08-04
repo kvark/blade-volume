@@ -1016,6 +1016,29 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   evaluation rays remain untruncated. The paired 6 GiB scope peaks at 871 MiB
   and records no swap, pressure, OOM, kill, or GPU fault.
 
+#### M2ak — Square PowerFoam camera exclusions (implemented and gated)
+
+- CPU and WGSL splat traversal compare squared camera distance against the
+  squared `4r` exclusion radius. This removes a square root from the
+  exhaustive ray-site gather while preserving the same bounded-cloud rule in
+  direct clipping and projected candidate construction.
+- The complete physical path-record suite passes against the independent CPU
+  oracle, including mixed-camera batches, projected overflow fallback,
+  oriented Jacobians, and truncation boundaries. Exact oriented resume,
+  formatting, strict all-target lint, and the complete locked workspace suite
+  pass.
+- Two order-balanced 510-step Room pairs reduce the recorder/submission phase
+  from 7.604 to 7.320 seconds (-3.7%). A longer 2,040-step pair confirms
+  30.557 to 29.664 seconds (-2.9%), training 76.859 to 76.542 seconds (-0.4%),
+  and whole-command time 81.016 to 80.664 seconds (-0.4%).
+- Fresh-Ply quality is preserved at 25.4131/23.2677 dB versus
+  25.4126/23.2667 dB. All 8.36M training and 4.82M evaluation rays remain
+  untruncated. The long pair peaks at 646 MiB; the serialized full workspace
+  gate peaks at 5.3 GiB, with no swap, OOM, kill, or GPU fault.
+- The same profiling round rejects separate planar Jacobian buffers (training
+  +9.5%) and projected indexing for 256-ray camera slices (+102.7%). Keep the
+  packed Jacobian staging path and the 1,024-ray projected-index crossover.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
