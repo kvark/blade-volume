@@ -990,6 +990,32 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   and 4.82M evaluation rays remain untruncated. The paired 6 GiB scope peaks at
   870 MiB and records no swap, pressure, OOM, kill, or GPU fault.
 
+#### M2aj — Fuse row-scaled embedding scatters (implemented and gated)
+
+- Meganeura revision `d01e58f` recognizes the exact table-gradient chain
+  `BroadcastInner(row gradient) -> Mul(factors) -> ScatterAddAtomic` after
+  scheduling and lowers it to one row-scaled atomic scatter. The existing
+  zeroing pass, index bounds check, and compare-exchange accumulation stay in
+  place; the expanded row gradient and product buffers disappear.
+- A physical-GPU oracle covers 2,049 rows by 16 columns, a permuted 2,053-row
+  table, positive and negative products, and a partial final workgroup. Every
+  table-gradient bit matches the scalar reference. Shader validation,
+  Meganeura's practical all-target suite under its established four
+  order-sensitive exclusions, the three cloud-appearance forward/backward
+  oracles, exact oriented-PowerFoam segmented resume, strict lint, and the
+  complete locked Blade workspace suite pass.
+- Three order-balanced 200K-site profiles reduce the graph from 298 to 284
+  passes and median GPU time from 9.88 to 8.41 ms (-14.9%). Seven large
+  broadcast/multiply pairs become seven direct row-scaled scatters; every
+  three-step loss and traversal result is unchanged.
+- On a back-to-back matched 2,040-step Room pair, training falls
+  79.988→76.629 seconds (-4.2%), GPU wait 45.158→42.308 seconds (-6.3%),
+  command submission 30.710→30.061 seconds (-2.1%), and complete command
+  time 84.497→80.833 seconds (-4.3%). Fresh-Ply quality is preserved at
+  25.4111/23.2654 dB versus 25.4112/23.2594 dB. All 8.36M training and 4.82M
+  evaluation rays remain untruncated. The paired 6 GiB scope peaks at 871 MiB
+  and records no swap, pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

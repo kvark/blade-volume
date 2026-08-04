@@ -842,6 +842,16 @@ At the audited revision:
   (-6.4%). Fresh-Ply quality remains within 0.011 dB at 25.4121/23.2632 dB
   versus 25.4136/23.2739 dB, with zero truncation. The paired 6 GiB scope peaks
   at 870 MiB without swap, pressure, OOM, kill, or GPU fault.
+- Meganeura `d01e58f` fuses each single-use row-gradient broadcast and factor
+  multiply directly into the following atomic embedding-table scatter. A
+  2,049×16 physical-GPU oracle is bit exact through a partial final workgroup,
+  and shader validation plus both repositories' practical suites pass. Three
+  order-balanced 200K-site profiles reduce 298→284 passes and median GPU time
+  9.88→8.41 ms (-14.9%). The matched Room replay reduces training
+  79.988→76.629 seconds (-4.2%), GPU wait 45.158→42.308 seconds (-6.3%), and
+  complete time 84.497→80.833 seconds (-4.3%), while preserving
+  25.4111/23.2654 dB versus 25.4112/23.2594 dB and zero truncation. The paired
+  6 GiB scope peaks at 871 MiB without swap, pressure, OOM, kill, or GPU fault.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
