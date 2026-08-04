@@ -766,6 +766,14 @@ At the audited revision:
   seconds (-3.6%) while preserving 25.4112/23.2624 dB versus
   25.4113/23.2625 dB. All rays remain untruncated and the 6 GiB cgroup records
   no swap, pressure, OOM, kill, or GPU fault.
+- Four per-ray sums now use the graph's direct inner-dimension reduction rather
+  than multiplying by an all-ones column. This removes the synthetic tensor and
+  four GPU passes; three alternating profiles improve median GPU time
+  25.94→25.66 ms (-1.1%). The matched 2,040-step replay has effectively flat
+  GPU wait (86.933→86.908 seconds) and a noisy wall-time regression, so no
+  end-to-end speedup is claimed. Exact-resume and affected numerical oracles
+  pass, Room quality is preserved at 25.4134/23.2697 dB, and all rays remain
+  untruncated without cgroup or GPU faults.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched

@@ -798,6 +798,26 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   values, so this is a dispatch/command-overhead win rather than a memory-size
   claim.
 
+#### M2ab — Use direct reductions for per-ray sums (implemented and gated)
+
+- Opacity, distortion moments, optical-depth quantiles, and final RGB now use
+  Meganeura's inner-dimension reduction directly. The previous formulation
+  multiplied each `[P, L]` value by a synthetic `[L, 1]` all-ones tensor. This
+  is the same sum but removes the constant, its plumbing, and four matrix
+  multiplication dispatches.
+- Three alternating profiles against the packed-SH control reduce the graph
+  from 293 to 289 passes and median GPU time from 25.94 to 25.66 ms (-1.1%).
+  The affected loss/gradient oracles and an exact segmented mixed-view resume
+  pass on the physical GPU.
+- The matched 2,040-step Room replay does not reproduce an end-to-end speedup:
+  GPU wait is effectively unchanged at 86.933→86.908 seconds, while noisy CPU
+  submission makes training 133.847→137.618 seconds and the complete command
+  138.415→142.114 seconds. This milestone is retained as a smaller exact graph
+  and isolated dispatch win, not as a full-run performance claim. Quality is
+  preserved at 25.4134/23.2697 dB, all training and evaluation rays remain
+  untruncated, and the 6 GiB scopes report no swap, pressure, OOM, kill, or GPU
+  fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
