@@ -756,6 +756,16 @@ At the audited revision:
   untruncated, and the 6 GiB scopes report no swap, pressure, OOM, kill, or GPU
   fault. Frozen checkpoints omit only unused moments; a later explicit
   geometry unfreeze starts those moments from zero.
+- Degree-three SH training now uses six DC/rest parameter tables instead of 48
+  scalar-column tables while preserving the exact model layout and separate
+  learning-rate schedules. Legacy per-component parameter and Adam tensors are
+  migrated on resume, and densification remaps each packed row as one site's
+  state. The representative graph falls 419→293 passes; four-run median GPU
+  time falls 26.88→25.99 ms. The matched 2,040-step Room gate cuts training
+  139.111→133.847 seconds (-3.8%) and whole-command time 143.588→138.415
+  seconds (-3.6%) while preserving 25.4112/23.2624 dB versus
+  25.4113/23.2625 dB. All rays remain untruncated and the 6 GiB cgroup records
+  no swap, pressure, OOM, kill, or GPU fault.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched

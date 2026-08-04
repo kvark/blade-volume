@@ -770,6 +770,34 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   the 160-row training shape or pass another matched quality gate; exact path
   telemetry alone did not justify the faster 128-row trajectory.
 
+#### M2aa — Pack higher-order SH training parameters (implemented and gated)
+
+- Degree-three training no longer declares 48 one-column SH parameters and
+  reconstructs them with a balanced 47-concatenation tree every step. Each RGB
+  channel retains its historical `[N, 1]` DC table and stores the remaining 15
+  terms in one row-major `[N, 15]` table. The graph still gathers the identical
+  channel-major `[N, 48]` table once, so the PLY/model layout and renderer are
+  unchanged. DC/rest learning-rate schedules remain separate.
+- Upload, readback, densification moment remapping, and native checkpoints all
+  understand the packed per-site stride. A compatibility loader migrates the
+  old `sh_<channel>_<component>` parameter and Adam-moment tensors without
+  resetting optimizer time or state. Physical-GPU tests cover the packed
+  forward and gradients, legacy migration, DC/rest rates, and exact segmented
+  resumes for mixed-view, oriented-PowerFoam, and topology-changing RadFoam-v1
+  training.
+- Four matched 200K-site profiles put the old 419-pass graph at 26.52--27.13 ms
+  and the packed 293-pass graph at 25.89--26.21 ms (median 26.88→25.99 ms,
+  -3.3%). On the matched 2,040-step Room replay, training falls
+  139.111→133.847 seconds (-3.8%), GPU wait 88.849→86.933 seconds (-2.2%),
+  command submission 45.349→41.649 seconds (-8.2%), and complete command time
+  143.588→138.415 seconds (-3.6%). Fresh-Ply quality is unchanged at
+  25.4112/23.2624 dB versus 25.4113/23.2625 dB.
+- All 8.36M training and 4.82M evaluation rays remain untruncated. Training
+  peaks at 725 MiB under the 6 GiB scope, with no swap, pressure, OOM, kill, or
+  GPU fault. The serialized parameter count changes, not the number of SH
+  values, so this is a dispatch/command-overhead win rather than a memory-size
+  claim.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
