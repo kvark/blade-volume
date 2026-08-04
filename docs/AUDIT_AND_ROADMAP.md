@@ -785,6 +785,17 @@ At the audited revision:
   exact resume, shader validation, strict lint, and the practical full
   Meganeura suite pass. Scoped Room/Bonsai peaks are 1.60/1.52 GB with no
   swap, pressure, OOM, kill, or GPU fault.
+- Dense PowerFoam interval clipping now assigns a 64-lane workgroup to each
+  ray, while graphs below 32 adjacency entries per site retain the original
+  serial shader. On the 41.7-entry/site Bonsai checkpoint, the record pass
+  falls from about 26.4 to 4.4 ms and matched training falls
+  111.409→67.035 seconds (-39.8%) at neutral held-out quality
+  (16.3137→16.3171 dB). Applying the same kernel universally is rejected: the
+  15.1-entry/site Room scene regresses to 117.378 seconds. The selected
+  adaptive build preserves the original Room path at 116.229 versus 115.639
+  seconds and 23.4010 versus 23.4138 dB held out. All 14 physical path oracles
+  pass, and scoped Room/Bonsai peaks are 1.4/1.3 GB with no memory or GPU
+  fault events.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
@@ -1686,7 +1697,10 @@ material path.
    scalar concat/split broadcasts, and `048c8be` removes the remaining
    detail-vector concat tree: the detail graph falls from 537 to 461 passes
    and matched Room/Bonsai training becomes a further 5.4%/3.0% faster at
-   neutral cross-scene quality.)
+   neutral cross-scene quality. Dense PowerFoam clipping subsequently assigns
+   a workgroup per ray only above 32 adjacency entries/site: Bonsai training
+   falls another 39.8% (111.409→67.035 seconds) while Room keeps the serial
+   kernel within 0.51% of its prior timing, both at neutral held-out quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done for
    unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate

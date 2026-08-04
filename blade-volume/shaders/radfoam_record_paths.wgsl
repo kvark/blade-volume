@@ -103,6 +103,11 @@ var<uniform> g_params: RecordParams;
 
 var<workgroup> w_candidate_count: atomic<u32>;
 var<workgroup> w_tile_count: atomic<u32>;
+var<workgroup> w_parallel_cells: array<u32, 64>;
+var<workgroup> w_parallel_depths: array<f32, 64>;
+var<workgroup> w_parallel_faces: array<vec2<f32>, 64>;
+var<workgroup> w_parallel_neighbors: array<vec2<u32>, 64>;
+var<workgroup> w_parallel_valid: array<u32, 64>;
 
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     let u = q.xyz;
@@ -708,6 +713,87 @@ fn sort_candidate_row(begin: u32, count: u32) {
     }
 }
 
+fn emit_powerfoam_splats(
+    ray_origin: vec3<f32>,
+    ray_dir: vec3<f32>,
+    output_pixel: u32,
+    candidate_begin: u32,
+    valid_count: u32,
+) {
+    let row_start = output_pixel * g_params.max_steps;
+    sort_candidate_row(candidate_begin, valid_count);
+
+    var candidate_index = 0u;
+    var output_step = 0u;
+    while (candidate_index < valid_count && output_step < g_params.max_steps) {
+        let candidate_slot = candidate_begin + candidate_index;
+        let cell = g_candidates[candidate_slot];
+        let faces = g_candidate_faces[candidate_slot];
+        let neighbors = g_candidate_neighbors[candidate_slot];
+        candidate_index += 1u;
+        let differential = interval_differential(
+            ray_origin,
+            ray_dir,
+            neighbors.x,
+            cell,
+            neighbors.y,
+            faces.x,
+            faces.y,
+        );
+        if (differential.valid == 0u) {
+            continue;
+        }
+
+        let output_slot = row_start + output_step;
+        g_cells_out[output_slot] = cell;
+        g_next_cells_out[output_slot] = neighbors.y;
+        g_dts_out[output_slot] = differential.dt;
+        g_mask_out[output_slot] = 1.0;
+        if (has_surface_detail()) {
+            g_surface_queries_out[output_slot] = differential.surface_query;
+        }
+        if (g_params.jacobian_mode != 0u) {
+            var reference_tangent = 0.0;
+            if (g_params.jacobian_mode == 1u) {
+                g_previous_cells_out[output_slot] = neighbors.x;
+                let previous_geometry = vec4<f32>(
+                    g_points[neighbors.x].xyz - ray_origin,
+                    g_points[neighbors.x].w,
+                );
+                let current_geometry = vec4<f32>(
+                    g_points[cell].xyz - ray_origin,
+                    g_points[cell].w,
+                );
+                let next_geometry = vec4<f32>(
+                    g_points[neighbors.y].xyz - ray_origin,
+                    g_points[neighbors.y].w,
+                );
+                reference_tangent =
+                    dot(differential.dt_d_previous, previous_geometry) +
+                    dot(differential.dt_d_current, current_geometry) +
+                    dot(differential.dt_d_next, next_geometry);
+                g_dt_grad_previous_out[output_slot] = differential.dt_d_previous;
+                g_dt_grad_current_out[output_slot] = differential.dt_d_current;
+                g_dt_grad_next_out[output_slot] = differential.dt_d_next;
+            }
+            if ((g_params.oriented & 1u) != 0u) {
+                let surface = g_surface_normals[cell];
+                reference_tangent += dot(
+                    differential.dt_d_surface_normal.xyz,
+                    surface.xyz,
+                ) + differential.dt_d_surface_normal.w * differential.surface_offset;
+                g_dt_grad_surface_normal_out[output_slot] =
+                    differential.dt_d_surface_normal;
+            }
+            g_dt_reference_tangents_out[output_slot] = reference_tangent;
+        }
+        output_step += 1u;
+    }
+
+    let truncated = output_step == g_params.max_steps && candidate_index < valid_count;
+    g_path_status_out[output_pixel] = output_step | select(0u, 0x80000000u, truncated);
+}
+
 // Independently clipped PowerFoam cells are disjoint along a ray. Select them
 // in front-to-back order and write the same fixed-size path/Jacobian streams
 // consumed by the differentiable integration graph.
@@ -814,6 +900,71 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let truncated = output_step == g_params.max_steps && candidate_index < valid_count;
     g_path_status_out[output_pixel] = output_step | select(0u, 0x80000000u, truncated);
+}
+
+// Dense Cech graphs instead use all 64 lanes to clip one ray's candidates.
+// Each chunk stays in workgroup memory until lane zero compacts it into the
+// candidate row, avoiding a device-scope storage barrier. Lane zero then
+// sorts and emits the deterministic path.
+@compute @workgroup_size(64)
+fn record_powerfoam_splats_parallel(
+    @builtin(workgroup_id) workgroup_id: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+) {
+    let groups_y = 1u + (g_params.num_pixels - 1u) / 65535u;
+    let groups_x = 1u + (g_params.num_pixels - 1u) / groups_y;
+    let p_id = workgroup_id.y * groups_x + workgroup_id.x;
+    if (p_id >= g_params.num_pixels) {
+        return;
+    }
+
+    let output_pixel = g_params.pixel_offset + p_id;
+    let pixel_idx = g_pixel_indices[output_pixel];
+    let ray_dir = ray_dir_for_pixel(pixel_idx);
+    let ray_origin = g_camera.position;
+    let candidate_begin = output_pixel * g_params.candidate_capacity;
+    let candidate_count = min(g_candidate_counts[output_pixel], g_params.candidate_capacity);
+
+    var valid_count = 0u;
+    for (var chunk_begin = 0u; chunk_begin < candidate_count; chunk_begin += 64u) {
+        let source_slot = chunk_begin + local_id.x;
+        w_parallel_valid[local_id.x] = 0u;
+        if (source_slot < candidate_count) {
+            let cell = g_candidates[candidate_begin + source_slot];
+            let interval = power_interval(ray_origin, ray_dir, cell);
+            if (interval.valid != 0u) {
+                w_parallel_cells[local_id.x] = cell;
+                w_parallel_depths[local_id.x] = interval.effective_near;
+                w_parallel_faces[local_id.x] =
+                    vec2<f32>(interval.face_near, interval.face_far);
+                w_parallel_neighbors[local_id.x] =
+                    vec2<u32>(interval.previous, interval.next);
+                w_parallel_valid[local_id.x] = 1u;
+            }
+        }
+        workgroupBarrier();
+
+        if (local_id.x == 0u) {
+            let chunk_count = min(64u, candidate_count - chunk_begin);
+            for (var lane = 0u; lane < chunk_count; lane += 1u) {
+                if (w_parallel_valid[lane] == 0u) {
+                    continue;
+                }
+                let destination = candidate_begin + valid_count;
+                g_candidates[destination] = w_parallel_cells[lane];
+                g_candidate_depths[destination] = w_parallel_depths[lane];
+                g_candidate_faces[destination] = w_parallel_faces[lane];
+                g_candidate_neighbors[destination] = w_parallel_neighbors[lane];
+                valid_count += 1u;
+            }
+        }
+        workgroupBarrier();
+    }
+
+    if (local_id.x != 0u) {
+        return;
+    }
+    emit_powerfoam_splats(ray_origin, ray_dir, output_pixel, candidate_begin, valid_count);
 }
 
 @compute @workgroup_size(64)

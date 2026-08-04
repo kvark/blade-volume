@@ -949,6 +949,41 @@ fn gpu_surface_detail_paths_and_queries_match_cpu() {
 }
 
 #[test]
+fn gpu_dense_powerfoam_parallel_paths_match_cpu() {
+    let mut model = build_disconnected_ray_model(70);
+    let point_count = model.points.len();
+    let mut neighbors = Vec::with_capacity(point_count * (point_count - 1));
+    let mut offsets = Vec::with_capacity(point_count + 1);
+    offsets.push(0);
+    for point in 0..point_count {
+        neighbors.extend(
+            (0..point_count)
+                .filter(|&other| other != point)
+                .map(|i| i as u32),
+        );
+        offsets.push(neighbors.len() as u32);
+    }
+    model.adjacency = Some(vol::Adjacency { neighbors, offsets });
+
+    let camera = make_camera_looking_along_x(100.0);
+    let target_ray = rays_for_pixels(&camera, &[32 * 64 + 32], 64, 64)[0];
+    model.surface_normals = Some(vec![-target_ray.direction; point_count]);
+    model.surface_offsets = Some(vec![0.0; point_count]);
+    model.surface_detail = Some(vol::SurfaceDetail {
+        offsets: (0..point_count * vol::SURFACE_DETAIL_SITES)
+            .map(|index| {
+                let angle = (index % vol::SURFACE_DETAIL_SITES) as f32 * std::f32::consts::TAU
+                    / vol::SURFACE_DETAIL_SITES as f32;
+                glam::Vec3::new(0.2 * angle.cos(), 0.2 * angle.sin(), 0.03)
+            })
+            .collect(),
+        heights: vec![0.0; point_count * vol::SURFACE_DETAIL_SITES],
+        colors: vec![glam::Vec3::ZERO; point_count * vol::SURFACE_DETAIL_SITES],
+    });
+    assert_gpu_batched_path_record_matches_cpu(model, glam::Vec3::ZERO, true);
+}
+
+#[test]
 fn gpu_surface_only_tangent_matches_oriented_cpu_reference() {
     let mut model = build_disconnected_ray_model(12);
     let camera = make_camera_looking_along_x(100.0);

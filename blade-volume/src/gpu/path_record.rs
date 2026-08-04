@@ -30,6 +30,8 @@ use blade_graphics as gpu;
 
 const SPLAT_TILE_SIZE: u32 = 16;
 const SPLAT_TILE_INDEX_BUDGET: u64 = 4 * 1024 * 1024;
+const PARALLEL_SPLAT_MIN_AVERAGE_NEIGHBORS: usize = 32;
+const MAX_PARALLEL_SPLAT_WORKGROUPS_PER_DIMENSION: u32 = 65_535;
 // Sphere-hit count and surviving path depth are different budgets. Real
 // learned-radius clouds can intersect many supports before radical-plane
 // clipping leaves a much shorter disjoint path, so keep a useful candidate
@@ -57,6 +59,24 @@ fn splat_candidate_capacity(max_steps: u32, minimum: u32) -> u32 {
         .saturating_mul(4)
         .max(MIN_SPLAT_CANDIDATE_CAPACITY)
         .max(minimum)
+}
+
+fn use_parallel_splat_recording(num_points: usize, num_adjacency: usize) -> bool {
+    num_points != 0 && num_adjacency / num_points >= PARALLEL_SPLAT_MIN_AVERAGE_NEIGHBORS
+}
+
+fn parallel_splat_dispatch(num_pixels: u32) -> [u32; 3] {
+    assert!(
+        num_pixels > 0,
+        "PowerFoam path recording needs at least one ray"
+    );
+    let groups_y = num_pixels.div_ceil(MAX_PARALLEL_SPLAT_WORKGROUPS_PER_DIMENSION);
+    assert!(
+        groups_y <= MAX_PARALLEL_SPLAT_WORKGROUPS_PER_DIMENSION,
+        "PowerFoam path batch exceeds the two-dimensional dispatch limit"
+    );
+    let groups_x = num_pixels.div_ceil(groups_y);
+    [groups_x, groups_y, 1]
 }
 
 fn output_bytes(
@@ -186,6 +206,7 @@ pub struct PathRecorder {
     splat_bin_pipeline: gpu::ComputePipeline,
     splat_gather_pipeline: gpu::ComputePipeline,
     splat_record_pipeline: gpu::ComputePipeline,
+    splat_parallel_record_pipeline: gpu::ComputePipeline,
 }
 
 impl PathRecorder {
@@ -222,12 +243,19 @@ impl PathRecorder {
             data_layouts: &[&layout],
             compute: shader.at("record_powerfoam_splats"),
         });
+        let splat_parallel_record_pipeline =
+            context.create_compute_pipeline(gpu::ComputePipelineDesc {
+                name: "powerfoam-record-splat-paths-parallel",
+                data_layouts: &[&layout],
+                compute: shader.at("record_powerfoam_splats_parallel"),
+            });
         Self {
             walk_pipeline,
             splat_project_pipeline,
             splat_bin_pipeline,
             splat_gather_pipeline,
             splat_record_pipeline,
+            splat_parallel_record_pipeline,
         }
     }
 
@@ -237,6 +265,13 @@ impl PathRecorder {
         context.destroy_compute_pipeline(&mut self.splat_bin_pipeline);
         context.destroy_compute_pipeline(&mut self.splat_gather_pipeline);
         context.destroy_compute_pipeline(&mut self.splat_record_pipeline);
+        context.destroy_compute_pipeline(&mut self.splat_parallel_record_pipeline);
+    }
+
+    /// Whether this cloud has enough clipping constraints per site to benefit
+    /// from assigning a complete workgroup to every ray.
+    pub fn uses_parallel_powerfoam_recording(cloud: &crate::gpu::RadFoamGpuCloud) -> bool {
+        use_parallel_splat_recording(cloud.num_points, cloud.num_adjacency)
     }
 
     fn prepare_dispatch(
@@ -371,11 +406,18 @@ impl PathRecorder {
                 pc.bind(0, &data);
                 pc.dispatch([args.num_pixels, 1, 1]);
             }
-            let mut pass = encoder.compute("powerfoam-record-splat-paths");
-            let mut pc = pass.with(&self.splat_record_pipeline);
-            pc.bind(0, &data);
-            let groups = args.num_pixels.div_ceil(64);
-            pc.dispatch([groups, 1, 1]);
+            if Self::uses_parallel_powerfoam_recording(cloud) {
+                let mut pass = encoder.compute("powerfoam-record-splat-paths-parallel");
+                let mut pc = pass.with(&self.splat_parallel_record_pipeline);
+                pc.bind(0, &data);
+                pc.dispatch(parallel_splat_dispatch(args.num_pixels));
+            } else {
+                let mut pass = encoder.compute("powerfoam-record-splat-paths");
+                let mut pc = pass.with(&self.splat_record_pipeline);
+                pc.bind(0, &data);
+                let groups = args.num_pixels.div_ceil(64);
+                pc.dispatch([groups, 1, 1]);
+            }
             return;
         }
 
@@ -431,11 +473,20 @@ impl PathRecorder {
                 pc.dispatch([arg.num_pixels, 1, 1]);
             }
         }
-        let mut pass = encoder.compute("powerfoam-record-splat-path-batch");
-        let mut pc = pass.with(&self.splat_record_pipeline);
-        for (datum, arg) in data.iter().zip(args) {
-            pc.bind(0, datum);
-            pc.dispatch([arg.num_pixels.div_ceil(64), 1, 1]);
+        if Self::uses_parallel_powerfoam_recording(cloud) {
+            let mut pass = encoder.compute("powerfoam-record-splat-path-batch-parallel");
+            let mut pc = pass.with(&self.splat_parallel_record_pipeline);
+            for (datum, arg) in data.iter().zip(args) {
+                pc.bind(0, datum);
+                pc.dispatch(parallel_splat_dispatch(arg.num_pixels));
+            }
+        } else {
+            let mut pass = encoder.compute("powerfoam-record-splat-path-batch");
+            let mut pc = pass.with(&self.splat_record_pipeline);
+            for (datum, arg) in data.iter().zip(args) {
+                pc.bind(0, datum);
+                pc.dispatch([arg.num_pixels.div_ceil(64), 1, 1]);
+            }
         }
     }
 }
@@ -1187,5 +1238,22 @@ mod tests {
         assert_eq!(splat_candidate_capacity(512, 0), 2048);
         assert_eq!(splat_candidate_capacity(128, 2048), 2048);
         assert_eq!(splat_candidate_capacity(128, 512), 1024);
+    }
+
+    #[test]
+    fn parallel_powerfoam_recording_requires_dense_adjacency() {
+        assert!(!use_parallel_splat_recording(0, 0));
+        assert!(!use_parallel_splat_recording(200_000, 6_399_999));
+        assert!(use_parallel_splat_recording(200_000, 6_400_000));
+        assert!(use_parallel_splat_recording(200_000, 8_340_572));
+    }
+
+    #[test]
+    fn parallel_powerfoam_dispatch_assigns_one_workgroup_per_ray() {
+        assert_eq!(parallel_splat_dispatch(1), [1, 1, 1]);
+        assert_eq!(parallel_splat_dispatch(4_096), [4_096, 1, 1]);
+        assert_eq!(parallel_splat_dispatch(65_535), [65_535, 1, 1]);
+        assert_eq!(parallel_splat_dispatch(65_536), [32_768, 2, 1]);
+        assert_eq!(parallel_splat_dispatch(100_001), [50_001, 2, 1]);
     }
 }

@@ -1219,6 +1219,39 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   Room and 1.52 GB on Bonsai under a 6 GiB scope, with zero swap, pressure,
   OOM, kill, or GPU fault.
 
+#### M2ap — Parallel dense PowerFoam interval clipping (implemented and gated)
+
+- The weighted path recorder now has a deterministic dense-graph entry point.
+  One 64-lane workgroup clips one ray's candidate cells in parallel, then lane
+  zero compacts the valid intervals, performs the existing depth/index heap
+  sort, and emits the unchanged path, surface-query, and Jacobian streams.
+  There are no atomics or device-scope storage barriers, and the sparse serial
+  entry point retains its original inline shader body.
+- The recorder selects the parallel path at an average of 32 adjacency entries
+  per site and logs the decision during training. Audited real clouds separate
+  cleanly around this boundary: sparse graphs have at most 19.2 entries/site,
+  while the dense Bonsai checkpoint has 41.7. A universal parallel path is
+  rejected because Room regresses from the 115.639-second baseline to 117.378
+  seconds; a two-pass clip/record variant is also rejected at 117.158 seconds.
+  Refactoring the sparse emit tail into a helper caused a repeatable 1.1%
+  regression, so the selected shader deliberately duplicates that small tail.
+  An otherwise faster cross-lane storage prototype is also rejected because
+  its device-scope barrier requires an optional Vulkan memory-model feature.
+- On the 200K-site Bonsai profile, the record pass falls from about 26.4 to
+  4.4 ms and the complete recorder from about 30 to 8 ms. The final portable
+  2,040-step replay reduces training from 111.409 to 67.035 seconds (-39.8%)
+  and GPU wait from 101.729 to 57.483 seconds (-43.5%). Train/held-out PSNR
+  remains neutral at 17.2001/16.3171 dB versus 17.1987/16.3137 dB.
+- The final Room replay selects the serial path at 15.1 entries/site and takes
+  116.229 seconds, within 0.51% of the preceding mean; GPU wait is slightly
+  lower at 69.486 versus 69.759 seconds. Train/held-out PSNR is
+  25.6390/23.4010 dB versus 25.6517/23.4138 dB. All 14 physical path tests,
+  including a forced dense batched oriented-detail oracle, pass. The Room and
+  Bonsai scopes both peak at 1.4 GB under 6 GiB with no swap, pressure, OOM,
+  kill, or GPU fault. The complete locked workspace suite also passes without
+  Vulkan validation errors; its scope reaches the 6 GiB cap with 36 reclaim
+  events but records no swap, OOM, or kill.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

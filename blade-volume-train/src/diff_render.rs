@@ -5496,6 +5496,17 @@ fn fit_appearance_pixel_batched(
         config.spherical_voronoi_color_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
     );
+    if model.radii.is_some() {
+        let average_neighbors = gpu_cloud.num_adjacency as f64 / gpu_cloud.num_points as f64;
+        log::info!(
+            "PowerFoam interval clipping: {} ({average_neighbors:.1} adjacency entries/site)",
+            if vol::gpu::PathRecorder::uses_parallel_powerfoam_recording(&gpu_cloud) {
+                "one workgroup per ray"
+            } else {
+                "one ray per lane"
+            },
+        );
+    }
     if let Some(ref state_path) = config.resume_state_path {
         let migrated_legacy_sh = load_optimizer_checkpoint(
             &mut session,
