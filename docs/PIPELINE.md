@@ -818,6 +818,33 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   untruncated, and the 6 GiB scopes report no swap, pressure, OOM, kill, or GPU
   fault.
 
+#### M2ac — Trim frozen weighted-path differentials (implemented and gated)
+
+- Weighted path recording now selects one of three explicit differential
+  payloads: none, complete position/radius plus surface geometry, or oriented
+  surface planes only. Fixed-topology oriented training uses the compact
+  surface mode when position and radius rates are zero; densification and any
+  live position/radius schedule retain the complete mode. The recorder's
+  reference tangent and the Meganeura graph therefore contain the same active
+  terms without evaluating a large frozen geometry tangent merely to cancel it.
+- CPU↔WGSL coverage checks the surface-only tangent and four-component normal
+  and offset derivative directly. Separate graph coverage perturbs the live
+  plane, verifies its forward linearization and gradients, and requires absent
+  position/radius gradients. Mixed-view, oriented-surface, and densifying
+  segmented resumes all remain exact.
+- Three alternating 200K-site profiles reduce the fixed-geometry graph from
+  289 to 280 passes and median GPU time from 25.84 to 20.74 ms (-19.7%). The
+  `[4096, 160]` path-output allocation falls from 55.0 to 22.5 MiB because the
+  three geometry-Jacobian streams and previous-cell row are absent. Measured
+  process peak falls from 730 to 719 MiB.
+- On the matched 2,040-step Room replay, training falls 137.618→114.757 seconds
+  (-16.6%), GPU wait 86.908→68.631 seconds (-21.0%), command submission
+  45.581→40.890 seconds (-10.3%), and complete command time 142.114→119.244
+  seconds (-16.1%). Quality remains in the established run-to-run band at
+  25.4170/23.2647 dB versus 25.4134/23.2697 dB. All 8.36M training and 4.82M
+  evaluation rays remain untruncated, and the 6 GiB scopes report no swap,
+  pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

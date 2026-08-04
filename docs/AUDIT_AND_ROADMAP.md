@@ -774,6 +774,16 @@ At the audited revision:
   end-to-end speedup is claimed. Exact-resume and affected numerical oracles
   pass, Room quality is preserved at 25.4134/23.2697 dB, and all rays remain
   untruncated without cgroup or GPU faults.
+- Fixed-topology weighted training no longer evaluates complete
+  position/radius path differentials when those tables have zero learning
+  rates. The recorder emits only the oriented surface-plane reference tangent
+  and derivative; full geometry and densification retain the complete stream.
+  CPU↔WGSL, local-linearization, zero-gradient, and all three exact-resume
+  regimes pass. Three alternating profiles improve 25.84→20.74 ms (-19.7%)
+  and cut the `[4096, 160]` differential allocation by 32.5 MiB. The matched
+  Room replay reduces training 137.618→114.757 seconds (-16.6%) and GPU wait
+  86.908→68.631 seconds (-21.0%), while preserving 25.4170/23.2647 dB and
+  zero truncation. Peak memory is 719 MiB with no cgroup or GPU faults.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
