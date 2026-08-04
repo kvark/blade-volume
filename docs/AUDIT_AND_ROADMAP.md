@@ -822,6 +822,16 @@ At the audited revision:
   seconds (-11.6%), while preserving 25.4099/23.2624 dB versus
   25.4095/23.2647 dB and zero truncation. The paired 6 GiB scope peaks at
   897 MiB without swap, pressure, OOM, kill, or GPU fault.
+- Meganeura `41951b1` replaces `sum_inner` backward's multiplication by an
+  all-ones matrix with a direct row-gradient broadcast. A 513×16 physical-GPU
+  oracle is bit exact through the partial final workgroup, and compiler
+  coverage requires the specialized dispatch. Three profiles change 283→284
+  passes but reduce median GPU time 13.59→11.52 ms (-15.2%). The matched Room
+  replay reduces training 90.989→86.245 seconds (-5.2%), GPU wait
+  52.586→48.788 seconds (-7.2%), and complete time 95.520→90.481 seconds
+  (-5.3%), while preserving 25.4134/23.2717 dB versus 25.4072/23.2625 dB and
+  zero truncation. The paired 6 GiB scope peaks at 887 MiB without swap,
+  pressure, OOM, kill, or GPU fault.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched

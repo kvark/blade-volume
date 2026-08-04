@@ -938,6 +938,31 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   rays remain untruncated. The paired 6 GiB scope peaks at 897 MiB and records
   no swap, pressure, OOM, kill, or GPU fault.
 
+#### M2ah — Broadcast row-reduction gradients directly (implemented and gated)
+
+- Meganeura revision `41951b1` lowers the transpose of `sum_inner` to an
+  explicit `BroadcastInner` copy. The previous autodiff multiplied every
+  `[M, 1]` row gradient by an all-ones `[1, N]` matrix, sending simple copies
+  through the general matrix-multiplication pipeline. The new internal op has
+  its own entry point in the existing row-broadcast shader module and leaves
+  global-average-pool gradients unchanged.
+- A 513×16 physical-GPU test requires every repeated gradient to be bit exact
+  across a partial final workgroup. Compiler coverage requires the 33-group
+  direct dispatch, and shader validation, exact oriented resume, strict lint,
+  the complete Blade workspace suite, and the Meganeura all-target suite under
+  its established four order-sensitive exclusions pass.
+- Three alternating 200K-site profiles change the graph from 283 to 284 passes
+  but reduce median GPU time from 13.59 to 11.52 ms (-15.2%). The largest
+  31.5M-element backward broadcast falls from a 1.08 ms matrix multiply to a
+  0.29 ms copy; all three-step loss trajectories are unchanged.
+- On a back-to-back matched 2,040-step Room pair, training falls
+  90.989→86.245 seconds (-5.2%), GPU wait 52.586→48.788 seconds (-7.2%),
+  command submission 33.856→32.680 seconds (-3.5%), and complete command time
+  95.520→90.481 seconds (-5.3%). Fresh-Ply quality is preserved at
+  25.4134/23.2717 dB versus 25.4072/23.2625 dB. All 8.36M training and 4.82M
+  evaluation rays remain untruncated. The paired 6 GiB scope peaks at 887 MiB
+  and records no swap, pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
