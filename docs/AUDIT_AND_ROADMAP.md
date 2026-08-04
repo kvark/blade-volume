@@ -832,6 +832,16 @@ At the audited revision:
   (-5.3%), while preserving 25.4134/23.2717 dB versus 25.4072/23.2625 dB and
   zero truncation. The paired 6 GiB scope peaks at 887 MiB without swap,
   pressure, OOM, kill, or GPU fault.
+- Cloud appearance now stays channel-wise through SH, spatial surface colour,
+  and spherical-Voronoi reductions. This preserves every serialized parameter
+  and viewer layout while avoiding expanded RGB basis copies and allowing
+  Meganeura's embedding/reduction fusion to apply. Three profiles change
+  284→298 passes but reduce median GPU time 11.51→9.43 ms (-18.1%). The matched
+  Room replay reduces training 86.002→80.580 seconds (-6.3%), GPU wait
+  48.733→44.994 seconds (-7.7%), and complete time 90.564→84.783 seconds
+  (-6.4%). Fresh-Ply quality remains within 0.011 dB at 25.4121/23.2632 dB
+  versus 25.4136/23.2739 dB, with zero truncation. The paired 6 GiB scope peaks
+  at 870 MiB without swap, pressure, OOM, kill, or GPU fault.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched

@@ -963,6 +963,33 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   evaluation rays remain untruncated. The paired 6 GiB scope peaks at 887 MiB
   and records no swap, pressure, OOM, kill, or GPU fault.
 
+#### M2ai — Reduce cloud appearance by channel (implemented and gated)
+
+- SH keeps the same per-channel `[N, 1]` DC and `[N, K-1]` rest parameters,
+  but the training graph no longer concatenates RGB into `[N, 3K]` or repeats
+  every basis row to `[PL, 3K]`. Three channel reductions let Meganeura fold
+  each coefficient embedding and forward multiply into `sum_inner`. The
+  channel-major spatial and spherical-Voronoi colour tables are split at their
+  compact per-site representation instead of after per-path expansion. PLY,
+  checkpoint, learning-rate, and viewer layouts are unchanged.
+- Physical-GPU forward/backward oracles pass for SH, spatial surface colour,
+  and spherical-Voronoi colour. Exact oriented-PowerFoam segmented resume,
+  formatting, strict all-target lint, and the complete locked workspace suite
+  pass.
+- Three alternating 200K-site profiles increase the graph from 284 to 298
+  passes but reduce median GPU time from 11.51 to 9.43 ms (-18.1%). The
+  655,360-row embedding aggregate falls from 10 passes/1.65 ms to 8
+  passes/0.97 ms, while large per-path concatenations fall from 1.32 to
+  0.20 ms; all loss and traversal decisions in the three-step gate are
+  unchanged.
+- On a back-to-back matched 2,040-step Room pair, training falls
+  86.002→80.580 seconds (-6.3%), GPU wait 48.733→44.994 seconds (-7.7%),
+  command submission 32.610→31.428 seconds (-3.6%), and complete command time
+  90.564→84.783 seconds (-6.4%). Fresh-Ply quality is preserved within
+  0.011 dB at 25.4121/23.2632 dB versus 25.4136/23.2739 dB. All 8.36M training
+  and 4.82M evaluation rays remain untruncated. The paired 6 GiB scope peaks at
+  870 MiB and records no swap, pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
