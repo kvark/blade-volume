@@ -1351,6 +1351,48 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   complete locked workspace suite also pass; the latter peaks at 2.4 GB. All
   scopes record zero swap, pressure, OOM, kill, or GPU fault.
 
+#### M2at — Fused detail-weight normalization (implemented and two-scene-gated)
+
+- Meganeura revision `85e919f` adds differentiable `normalize_inner_sum` for
+  two-dimensional f32 tensors. It computes each row denominator as
+  `relu(sum - floor) + floor`, preserving the existing behavior when all
+  non-negative detail weights are negligible instead of silently replacing
+  it with ordinary softmax semantics. One forward and one closed-form backward
+  dispatch replace each row-sum/floor/broadcast/reciprocal graph.
+- Floating-point order is part of the contract. Prototype `36b9670` factored
+  the shared reciprocal-square term out of the gradient reduction. It passed
+  ordinary tolerances and was faster, but four Room replicas averaged
+  -0.0187 dB held out with 13–14 improvements versus 24–25 regressions. That
+  prototype is rejected. Revision `85e919f` applies the factor per site before
+  reduction and mirrors Meganeura's runtime multiply-by-one contraction
+  barrier. A physical 257×8 oracle covering zero, below-floor, boundary, and
+  ordinary rows is bit-exact against the expanded graph for every forward
+  value and parameter gradient.
+- The 4,096-ray, 128-step detail graph falls 438→418 passes. Short profiles
+  show a slow GPU clock ramp after process startup, but their settled endpoints
+  are 13.66 and 13.97 ms versus the prior 14.56–14.68 ms. The two fused
+  forward and two backward normalization dispatches total about 0.25 ms once
+  warm.
+- Two 2,040-step Room replicas take 100.380 and 100.487 seconds, averaging
+  100.434 seconds versus 102.906 seconds (-2.4%). Mean GPU wait falls
+  61.006→59.251 seconds (-2.9%). Train/held-out quality changes
+  25.6480/23.4202→25.6428/23.4208 dB; averaged held-out views improve 16,
+  tie two, and regress 21, with a +0.0006 dB mean.
+- Two Bonsai replicas take 57.634 and 57.824 seconds, averaging 57.729 seconds
+  versus 59.140 seconds (-2.4%); mean GPU wait falls 49.840→48.580 seconds
+  (-2.5%). Train/held-out quality changes 17.2006/16.3139→17.2008/16.3172
+  dB. Averaged held-out views improve 22, tie two, and regress 13, with a
+  +0.0039 dB mean.
+- Meganeura's 177 library tests, all 13 serial reduction GPU tests,
+  shader-module/SPIR-V/runtime-binding validation, formatting, and strict lint
+  pass. Blade's focused surface-detail and exact oriented-resume tests, strict
+  workspace lint, and complete locked all-target suite also pass. The Room and
+  Bonsai gates peak at 1.45 and 1.15 GB; the full suite peaks at 2.54 GB. All
+  selected scopes record zero swap, pressure, OOM, kill, truncation, or GPU
+  fault. A concurrent Meganeura integration run is excluded: it reproduced
+  the known NVIDIA multi-context semaphore crash at only 0.87 GB, while the
+  same complete integration file passes serially at 0.89 GB.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

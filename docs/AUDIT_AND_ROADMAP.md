@@ -833,6 +833,23 @@ At the audited revision:
   suites, strict lint, Blade's focused and complete locked workspace suites,
   and cross-scene gates pass without memory or GPU faults. The full Blade
   suite peaks at 2.4 GB.
+- Meganeura `85e919f` fuses each surface-detail row sum, positive floor,
+  reciprocal broadcast, and expanded backward chain into differentiable
+  `normalize_inner_sum` dispatches. The detail graph falls 438→418 passes;
+  settled short-profile endpoints fall from 14.56–14.68 to 13.66–13.97 ms.
+  Two Room replicas reduce mean training 102.906→100.434 seconds (-2.4%) and
+  GPU wait 61.006→59.251 seconds (-2.9%), while held-out PSNR is neutral at
+  23.4202→23.4208 dB. Two Bonsai replicas reduce mean training
+  59.140→57.729 seconds (-2.4%) and GPU wait 49.840→48.580 seconds (-2.5%);
+  held-out PSNR changes 16.3139→16.3172 dB. An initial factored-gradient
+  prototype was rejected after four Room replicas exposed a -0.0187 dB
+  held-out shift. The selected kernel instead preserves the expanded graph's
+  per-site reduction order and runtime rounding barrier; a 257×8 physical
+  oracle is bit-exact for every forward value and gradient. Meganeura's 177
+  library and 13 serial reduction tests, shader/SPIR-V/runtime-binding checks,
+  strict lint, Blade's focused detail/resume gates, and the complete locked
+  workspace suite pass. Room/Bonsai scopes peak at 1.45/1.15 GB and the full
+  suite at 2.54 GB, all without swap, pressure, OOM, kill, or GPU fault.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
@@ -1744,7 +1761,9 @@ material path.
    tangent-projection chains; Room/Bonsai improve another 6.4%/4.8% at neutral
    held-out quality. Meganeura `22bb539` then replaces the expanded
    sigmoid/reciprocal exponential identity; Room/Bonsai improve another
-   1.9%/3.8% at neutral held-out quality.)
+   1.9%/3.8% at neutral held-out quality. Meganeura `85e919f` then fuses the
+   two detail-weight normalization graphs without changing their f32 reduction
+   order; Room/Bonsai improve another 2.4%/2.4% at neutral held-out quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done for
    unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate

@@ -376,23 +376,12 @@ fn surface_detail_weights(
     g.reshape(weights, &[rows, vol::SURFACE_DETAIL_SITES])
 }
 
-fn normalize_surface_detail_weights(
-    g: &mut mn::Graph,
-    weights: mn::NodeId,
-    rows: usize,
-) -> mn::NodeId {
-    let sum = g.sum_inner(weights);
+fn normalize_surface_detail_weights(g: &mut mn::Graph, weights: mn::NodeId) -> mn::NodeId {
     // A shader-style 1e-20 floor is forward-safe but its squared denominator
     // underflows during division backward on GPUs. Padded rows then produce
     // 0/0 before their loss mask is applied. Below 1e-12 every site weight is
     // already numerically irrelevant, so keep both passes finite here.
-    let negative_floor = g.constant(vec![-1.0e-12_f32; rows], &[rows, 1]);
-    let above_floor = g.add(sum, negative_floor);
-    let above_floor = g.relu(above_floor);
-    let floor = g.constant(vec![1.0e-12_f32; rows], &[rows, 1]);
-    let denominator = g.add(above_floor, floor);
-    let denominator_sites = g.broadcast_inner(denominator, vol::SURFACE_DETAIL_SITES);
-    g.div(weights, denominator_sites)
+    g.normalize_inner_sum(weights, 1.0e-12)
 }
 
 struct SurfaceDetailEvaluation {
@@ -436,7 +425,7 @@ fn evaluate_surface_detail_graph(
         rows,
     );
     let height_weights = surface_detail_weights(g, base_query, tangent_sites, rows);
-    let normalized_height_weights = normalize_surface_detail_weights(g, height_weights, rows);
+    let normalized_height_weights = normalize_surface_detail_weights(g, height_weights);
     let heights = g.embedding(cell_indices, parameters.heights);
     let weighted_heights = g.mul(normalized_height_weights, heights);
     let normalized_height = g.sum_inner(weighted_heights);
@@ -456,7 +445,7 @@ fn evaluate_surface_detail_graph(
         rows,
     );
     let color_weights = surface_detail_weights(g, displaced_query, tangent_sites, rows);
-    let color_weights = normalize_surface_detail_weights(g, color_weights, rows);
+    let color_weights = normalize_surface_detail_weights(g, color_weights);
     SurfaceDetailEvaluation {
         effective_offsets,
         color_weights,
