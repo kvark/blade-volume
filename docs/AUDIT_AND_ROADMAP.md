@@ -850,6 +850,19 @@ At the audited revision:
   strict lint, Blade's focused detail/resume gates, and the complete locked
   workspace suite pass. Room/Bonsai scopes peak at 1.45/1.15 GB and the full
   suite at 2.54 GB, all without swap, pressure, OOM, kill, or GPU fault.
+- PowerFoam path gathering now retains each accepted sphere's discriminant
+  root in existing candidate-depth scratch, allowing both record kernels to
+  reconstruct the same `-b ± root` bounds without a second discriminant and
+  square root. A balanced profile reduces the dense parallel record pass
+  4.504→4.208 ms and total recorder time 7.972→7.660 ms. Two-replica Room and
+  Bonsai gates reduce mean training 100.359→99.821 and 57.902→57.712 seconds
+  at neutral held-out quality (23.4102→23.4184 and 16.3162→16.3148 dB).
+  All 14 physical CPU-parity path tests pass; 33.42 million long-gate rays
+  remain untruncated with no candidate overflow, memory event, or GPU fault.
+  Strict all-target lint and the complete locked serialized workspace suite
+  pass; the latter peaks at 5.75 GB under its 6 GiB cgroup with no event.
+  Broader row tiling, workgroup ray sharing, and vec2 sphere-face caching were
+  measured and rejected as neutral or slower.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes

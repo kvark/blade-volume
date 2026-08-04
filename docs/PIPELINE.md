@@ -1393,6 +1393,43 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   the known NVIDIA multi-context semaphore crash at only 0.87 GB, while the
   same complete integration file passes serially at 0.89 GB.
 
+#### M2au — Reuse gathered PowerFoam sphere roots (implemented and two-scene-gated)
+
+- The PowerFoam candidate gather already computes each accepted support
+  sphere's discriminant square root. It now retains that one f32 in the
+  existing candidate-depth scratch. Serial and workgroup recorders reconstruct
+  the original `-b ± root` bounds with the same arithmetic order, then
+  overwrite the scratch with the clipped entry depth as before. This removes
+  the record pass's duplicate `dot(oc, oc)`, discriminant, and square root
+  without adding a buffer, binding, allocation, or traversal approximation.
+- Across two order-balanced 32-step profiles (the last 20 timestamps from each
+  arm), the 4,096-ray Bonsai parallel record pass falls 4.504→4.208 ms
+  (-6.6%). Gather remains flat at 3.469→3.452 ms, and total recorder time falls
+  7.972→7.660 ms (-3.9%).
+- Two 2,040-step Room replicas reduce mean training 100.359→99.821 seconds
+  (-0.54%), path submission 36.137→35.915 seconds (-0.61%), and GPU wait
+  59.551→59.251 seconds (-0.50%). Train/held-out quality changes
+  25.6432/23.4102→25.6461/23.4184 dB; averaged held-out views improve 21 and
+  regress 18, with a +0.0074 dB mean.
+- Two Bonsai replicas reduce mean training 57.902→57.712 seconds (-0.33%),
+  path submission 4.070→4.052 seconds (-0.44%), and GPU wait 48.792→48.593
+  seconds (-0.41%). Train/held-out quality changes
+  17.2004/16.3162→17.1999/16.3148 dB; averaged held-out views improve 16, tie
+  one, and regress 20, with a -0.0014 dB mean.
+- All 14 physical path-record tests match the independent CPU oracle across
+  serial and workgroup clipping, multiple cameras, disconnected Čech
+  components, projected overflow, oriented/detail Jacobians, and truncation
+  boundaries. The long gates cover 16.71 million rays per scene with zero
+  truncation or candidate overflow. Room/Bonsai scopes peak at 1.68/1.38 GB
+  under 6 GiB. Strict all-target lint and the complete locked, serialized
+  workspace suite pass; the latter peaks at 5.75 GB. No selected scope records
+  swap, pressure, OOM, kill, or GPU fault.
+- Three nearby prototypes remain rejected: replacing regular per-pixel gathers
+  with row tiling is neutral in the graph profile and slows Bonsai 0.22%; a
+  workgroup-shared camera ray slows exhaustive gathering 2.8%; caching both
+  sphere faces rather than only the root is neutral at 7.809→7.813 ms total
+  recorder time. These results favor the narrow scalar reuse.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

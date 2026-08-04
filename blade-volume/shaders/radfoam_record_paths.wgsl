@@ -139,6 +139,7 @@ struct FaceJacobians {
 struct SphereIntersections {
     near_t: f32,
     far_t: f32,
+    root: f32,
     near_jacobian: vec4<f32>,
     far_jacobian: vec4<f32>,
     valid: u32,
@@ -236,7 +237,9 @@ fn sphere_intersections(
     let c = dot(oc, oc) - sphere.w * sphere.w;
     let discriminant = b * b - c;
     if (discriminant <= 0.0) {
-        return SphereIntersections(0.0, 0.0, vec4<f32>(0.0), vec4<f32>(0.0), 0u);
+        return SphereIntersections(
+            0.0, 0.0, 0.0, vec4<f32>(0.0), vec4<f32>(0.0), 0u,
+        );
     }
     let root = sqrt(discriminant);
     let perpendicular = oc - b * ray_dir;
@@ -245,6 +248,7 @@ fn sphere_intersections(
     return SphereIntersections(
         -b - root,
         -b + root,
+        root,
         vec4<f32>(ray_dir - root_d_center, -root_d_radius),
         vec4<f32>(ray_dir + root_d_center, root_d_radius),
         1u,
@@ -380,23 +384,20 @@ fn interval_differential(
     );
 }
 
-// Intersect one support sphere, then clip it against every radical plane in
-// its Cech neighborhood. A non-overlapping sphere cannot win power distance
-// anywhere inside the current support, so overlapping-ball neighbors are the
-// complete set of clipping constraints needed here.
+// Reconstruct one gathered support-sphere interval from its cached square root,
+// then clip it against every radical plane in its Cech neighborhood. A
+// non-overlapping sphere cannot win power distance anywhere inside the current
+// support, so overlapping-ball neighbors are the complete clipping set.
 fn power_interval(
     ray_origin: vec3<f32>,
     ray_dir: vec3<f32>,
     cell: u32,
+    sphere_root: f32,
 ) -> PowerInterval {
     let current = g_points[cell];
-    let sphere = sphere_intersections(ray_origin, ray_dir, current);
-    if (sphere.valid == 0u ||
-        sphere.far_t <= 0.0 ||
-        sphere.near_t >= g_params.depth ||
-        inside_camera_exclusion(current.xyz - ray_origin, current.w)) {
-        return PowerInterval(0.0, 0.0, 0.0, cell, cell, 0u);
-    }
+    let sphere_b = dot(ray_origin - current.xyz, ray_dir);
+    let sphere_near = -sphere_b - sphere_root;
+    let sphere_far = -sphere_b + sphere_root;
 
     var face_near = 0.0;
     var face_far = g_params.depth;
@@ -432,8 +433,8 @@ fn power_interval(
         }
     }
 
-    var effective_near = max(face_near, sphere.near_t);
-    var effective_far = min(face_far, sphere.far_t);
+    var effective_near = max(face_near, sphere_near);
+    var effective_far = min(face_far, sphere_far);
     let query_near = effective_near;
     if ((g_params.oriented & 1u) != 0u) {
         let surface_data = g_surface_normals[cell];
@@ -642,7 +643,9 @@ fn gather_powerfoam_candidates(
         }
         let slot = atomicAdd(&w_candidate_count, 1u);
         if (slot < g_params.candidate_capacity) {
-            g_candidates[output_pixel * g_params.candidate_capacity + slot] = cell;
+            let candidate_slot = output_pixel * g_params.candidate_capacity + slot;
+            g_candidates[candidate_slot] = cell;
+            g_candidate_depths[candidate_slot] = sphere.root;
         }
     }
     workgroupBarrier();
@@ -817,8 +820,10 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
     // scan, without rescanning the complete candidate row for every segment.
     var valid_count = 0u;
     for (var slot = 0u; slot < candidate_count; slot += 1u) {
-        let cell = g_candidates[candidate_begin + slot];
-        let interval = power_interval(ray_origin, ray_dir, cell);
+        let source_slot = candidate_begin + slot;
+        let cell = g_candidates[source_slot];
+        let sphere_root = g_candidate_depths[source_slot];
+        let interval = power_interval(ray_origin, ray_dir, cell, sphere_root);
         if (interval.valid == 0u) {
             continue;
         }
@@ -930,8 +935,10 @@ fn record_powerfoam_splats_parallel(
         let source_slot = chunk_begin + local_id.x;
         w_parallel_valid[local_id.x] = 0u;
         if (source_slot < candidate_count) {
-            let cell = g_candidates[candidate_begin + source_slot];
-            let interval = power_interval(ray_origin, ray_dir, cell);
+            let candidate_slot = candidate_begin + source_slot;
+            let cell = g_candidates[candidate_slot];
+            let sphere_root = g_candidate_depths[candidate_slot];
+            let interval = power_interval(ray_origin, ray_dir, cell, sphere_root);
             if (interval.valid != 0u) {
                 w_parallel_cells[local_id.x] = cell;
                 w_parallel_depths[local_id.x] = interval.effective_near;

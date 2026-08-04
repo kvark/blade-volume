@@ -530,7 +530,7 @@ pub struct PathRecordBuffers {
     splat_candidate_counts: gpu::Buffer,
     /// Device-only fixed-size candidate rows used by weighted compute splats.
     splat_candidates: gpu::Buffer,
-    /// Cached clipped entry depth parallel to [`Self::splat_candidates`].
+    /// Gathered sphere roots, then compacted clipped entry depths.
     splat_candidate_depths: gpu::Buffer,
     /// Cached radical-plane entry/exit depths.
     splat_candidate_faces: gpu::Buffer,
