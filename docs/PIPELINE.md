@@ -1039,6 +1039,31 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   +9.5%) and projected indexing for 256-ray camera slices (+102.7%). Keep the
   packed Jacobian staging path and the 1,024-ray projected-index crossover.
 
+#### M2al — Order PowerFoam intervals once (implemented and gated)
+
+- `BLADE_VOLUME_PROFILE_GPU=1` now reports path-recorder timestamps alongside
+  Meganeura's graph timings. On the 200K-site, 4,096-ray, 16-view Room shape,
+  transfer/clear costs 1.15 ms, exhaustive gathering 3.05 ms, and the original
+  cached interval recorder 7.37 ms per step.
+- The recorder still clips each candidate once, but compacts valid intervals
+  and heap-sorts them by the established `(effective depth, cell index)` key.
+  It then emits the ordered row directly instead of scanning the entire
+  candidate row again for every segment. Cached faces, neighbours, exact
+  tie-breaking, and truncation semantics are unchanged.
+- The timestamped recorder pass falls from 7.37 to 6.43 ms (-12.8%), and total
+  recorder GPU time from 11.56 to 10.46 ms (-9.5%). Two order-balanced
+  510-step pairs reduce combined path submission/GPU wait from 18.409 to
+  17.772 seconds (-3.5%) and training from 21.220 to 20.681 seconds (-2.5%).
+- A 2,040-step pair confirms combined path/GPU work at 71.693 to 69.304
+  seconds (-3.3%), training at 75.477 to 73.556 seconds (-2.5%), and complete
+  command time at 79.649 to 77.762 seconds (-2.4%). Fresh-Ply quality is
+  preserved at 25.4139/23.2701 dB versus 25.4122/23.2639 dB, with zero
+  truncation across all 8.36M training and 4.82M evaluation rays.
+- The complete physical path-record suite, exact oriented resume, formatting,
+  strict all-target lint, and locked workspace suite pass. The long pair peaks
+  at 648 MiB and the serialized workspace gate at 4.5 GiB, with no swap, OOM,
+  kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
