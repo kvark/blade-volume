@@ -728,6 +728,17 @@ At the audited revision:
   only 23.2508 dB held out at the same cost. The feature remains opt-in and a
   second-scene run is rejected until a spatial detail-site formulation gives
   it a stronger reason to exist.
+- The compact spatial detail-site slice is now implemented end to end: eight
+  tangent sites, eight radius-scaled heights, and eight view-independent RGB
+  residuals add 56 floats per point. CPU and every WGSL renderer share the
+  same two-stage height/color rule, while Meganeura consumes the recorder's
+  support query and branch mask directly. Deterministic zero-preserving
+  initialization, PLY, one-submit GPU geometry refresh, densification/Adam
+  inheritance, and exact resume are covered. Position/radius learning is
+  deliberately blocked until the support-entry query has a topology Jacobian;
+  frozen-topology detail and densification remain supported. A matched Room
+  held-out gate is the next decision point before this becomes a recommended
+  reconstruction stage.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes

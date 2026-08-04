@@ -471,19 +471,42 @@ impl RadFoamGpuCloud {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) {
+        self.update_surface_geometry(normals, offsets, None, context, encoder);
+    }
+
+    /// Replaces oriented-surface planes and optional spatial-detail geometry
+    /// in one upload and submission.
+    pub fn update_surface_geometry(
+        &self,
+        normals: &[glam::Vec3],
+        offsets: Option<&[f32]>,
+        detail: Option<&crate::SurfaceDetail>,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) {
         assert!(self.is_oriented, "cloud has no surface-normal buffer");
         assert_eq!(normals.len(), self.num_points);
         if let Some(offsets) = offsets {
             assert_eq!(offsets.len(), self.num_points);
         }
-        let size = (normals.len() * mem::size_of::<[f32; 4]>()) as u64;
-        let stage = context.create_buffer(gpu::BufferDesc {
+        if let Some(detail) = detail {
+            assert!(
+                self.has_surface_detail,
+                "cloud has no surface-detail buffer"
+            );
+            let count = self.num_points * crate::SURFACE_DETAIL_SITES;
+            assert_eq!(detail.offsets.len(), count);
+            assert_eq!(detail.heights.len(), count);
+        }
+        let normal_size = (normals.len() * mem::size_of::<[f32; 4]>()) as u64;
+        let normal_stage = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-surface-normals-update",
-            size,
+            size: normal_size,
             memory: gpu::Memory::Upload,
         });
         unsafe {
-            let dst = slice::from_raw_parts_mut(stage.data() as *mut [f32; 4], normals.len());
+            let dst =
+                slice::from_raw_parts_mut(normal_stage.data() as *mut [f32; 4], normals.len());
             for (index, (dst_normal, &normal)) in dst.iter_mut().zip(normals).enumerate() {
                 *dst_normal = normal
                     .normalize()
@@ -491,14 +514,46 @@ impl RadFoamGpuCloud {
                     .to_array();
             }
         }
+        let detail_stage = detail.map(|detail| {
+            let count = self.num_points * crate::SURFACE_DETAIL_SITES;
+            let size = (count * mem::size_of::<[f32; 4]>()) as u64;
+            let stage = context.create_buffer(gpu::BufferDesc {
+                name: "radfoam-surface-details-update",
+                size,
+                memory: gpu::Memory::Upload,
+            });
+            unsafe {
+                let dst = slice::from_raw_parts_mut(stage.data() as *mut [f32; 4], count);
+                for (index, dst_site) in dst.iter_mut().enumerate() {
+                    *dst_site = detail.offsets[index]
+                        .extend(detail.heights[index])
+                        .to_array();
+                }
+            }
+            stage
+        });
 
         encoder.start();
-        if let mut pass = encoder.transfer("radfoam-surface-normals-update") {
-            pass.copy_buffer_to_buffer(stage.at(0), self.surface_normals_buf.at(0), size);
+        if let mut pass = encoder.transfer("radfoam-surface-geometry-update") {
+            pass.copy_buffer_to_buffer(
+                normal_stage.at(0),
+                self.surface_normals_buf.at(0),
+                normal_size,
+            );
+            if let Some(ref stage) = detail_stage {
+                pass.copy_buffer_to_buffer(
+                    stage.at(0),
+                    self.surface_details_buf.at(0),
+                    stage.size(),
+                );
+            }
         }
         let sync_point = context.submit(encoder);
         let _ = context.wait_for(&sync_point, !0);
-        context.destroy_buffer(stage);
+        context.destroy_buffer(normal_stage);
+        if let Some(stage) = detail_stage {
+            context.destroy_buffer(stage);
+        }
     }
 
     /// Storage buffer view for point positions.

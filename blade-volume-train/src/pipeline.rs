@@ -681,6 +681,7 @@ fn rebuild_adjacency(
             model.radii = None;
             model.surface_normals = None;
             model.surface_offsets = None;
+            model.surface_detail = None;
             model.surface_color_coefficients = None;
             model.spherical_voronoi = None;
             model.compute_adjacency_default();
@@ -693,6 +694,7 @@ fn rebuild_adjacency(
             model.radii = None;
             model.surface_normals = None;
             model.surface_offsets = None;
+            model.surface_detail = None;
             model.surface_color_coefficients = None;
             model.spherical_voronoi = None;
             #[cfg(feature = "qhull")]
@@ -710,6 +712,7 @@ fn rebuild_adjacency(
             model.radii = None;
             model.surface_normals = None;
             model.surface_offsets = None;
+            model.surface_detail = None;
             model.surface_color_coefficients = None;
             model.spherical_voronoi = None;
             model.adjacency = Some(vol::compute_knn(&model.points, k));
@@ -802,6 +805,31 @@ fn initialize_spherical_voronoi(point_count: usize) -> vol::SphericalVoronoi {
     vol::SphericalVoronoi {
         axes,
         colors: vec![glam::Vec3::ZERO; point_count * vol::SPHERICAL_VORONOI_SITES],
+    }
+}
+
+fn initialize_surface_detail(normals: &[glam::Vec3]) -> vol::SurfaceDetail {
+    const SITE_RADIUS: f32 = 0.1;
+    let mut offsets = Vec::with_capacity(normals.len() * vol::SURFACE_DETAIL_SITES);
+    for &raw_normal in normals {
+        let normal = raw_normal.normalize_or_zero();
+        let normal = if normal == glam::Vec3::ZERO {
+            glam::Vec3::Z
+        } else {
+            normal
+        };
+        let tangent = normal.any_orthonormal_vector();
+        let bitangent = normal.cross(tangent).normalize();
+        for site in 0..vol::SURFACE_DETAIL_SITES {
+            let angle = std::f32::consts::TAU * site as f32 / vol::SURFACE_DETAIL_SITES as f32;
+            offsets.push(SITE_RADIUS * (angle.cos() * tangent + angle.sin() * bitangent));
+        }
+    }
+    let count = normals.len() * vol::SURFACE_DETAIL_SITES;
+    vol::SurfaceDetail {
+        offsets,
+        heights: vec![0.0; count],
+        colors: vec![glam::Vec3::ZERO; count],
     }
 }
 
@@ -1105,6 +1133,28 @@ pub fn train_colmap_appearance_split(
             model.points.len(),
         );
     }
+    if (config.fit.surface_detail_offset_lr_ratio > 0.0
+        || config.fit.surface_detail_height_lr_ratio > 0.0
+        || config.fit.surface_detail_color_lr_ratio > 0.0)
+        && model.surface_detail.is_none()
+    {
+        assert!(
+            config.fit.resume_state_path.is_none(),
+            "cannot add spatial PowerFoam detail while restoring an optimizer checkpoint; \
+             initialize a fresh detail model first"
+        );
+        assert!(
+            model.surface_normals.is_some() && model.radii.is_some(),
+            "spatial-detail training requires --oriented-powerfoam or an oriented input PLY"
+        );
+        model.surface_detail = Some(initialize_surface_detail(
+            model.surface_normals.as_deref().unwrap(),
+        ));
+        log::info!(
+            "initialized {} oriented PowerFoam spatial-detail tables",
+            model.points.len(),
+        );
+    }
     if (config.fit.spherical_voronoi_axis_lr_ratio > 0.0
         || config.fit.spherical_voronoi_color_lr_ratio > 0.0)
         && model.spherical_voronoi.is_none()
@@ -1221,6 +1271,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn surface_detail_initialization_is_deterministic_tangent_and_zero_preserving() {
+        let normals = [glam::Vec3::Z, glam::Vec3::new(1.0, 2.0, 3.0).normalize()];
+        let first = initialize_surface_detail(&normals);
+        let second = initialize_surface_detail(&normals);
+        assert_eq!(first, second);
+        assert_eq!(
+            first.offsets.len(),
+            normals.len() * vol::SURFACE_DETAIL_SITES
+        );
+        assert!(first.heights.iter().all(|&height| height == 0.0));
+        assert!(first.colors.iter().all(|&color| color == glam::Vec3::ZERO));
+        for (point, &normal) in normals.iter().enumerate() {
+            for &offset in &first.offsets
+                [point * vol::SURFACE_DETAIL_SITES..(point + 1) * vol::SURFACE_DETAIL_SITES]
+            {
+                assert!(offset.dot(normal).abs() < 1.0e-6);
+                assert!((offset.length() - 0.1).abs() < 1.0e-6);
+            }
+        }
+    }
+
     fn tiny_model_far_apart() -> vol::PointCloudModel {
         let points = vec![
             glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
@@ -1259,11 +1331,15 @@ mod tests {
                 0.0;
                 model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3
             ]);
+        model.surface_detail = Some(initialize_surface_detail(
+            model.surface_normals.as_deref().unwrap(),
+        ));
         model.spherical_voronoi = Some(initialize_spherical_voronoi(model.points.len()));
         rebuild_adjacency(&mut model, AdjacencyKind::Delaunay, &[]);
         assert!(model.radii.is_none());
         assert!(model.surface_normals.is_none());
         assert!(model.surface_offsets.is_none());
+        assert!(model.surface_detail.is_none());
         assert!(model.surface_color_coefficients.is_none());
         assert!(model.spherical_voronoi.is_none());
         model.validate().unwrap();

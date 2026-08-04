@@ -1118,6 +1118,39 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   serialized workspace gate at 5.49 GiB under the 6 GiB cgroup limit, with no
   swap, OOM, kill, or GPU fault.
 
+#### M2ao — Eight-site spatial surface detail (implemented, quality gate pending)
+
+- Oriented PowerFoam models can now carry eight radius-normalized tangent
+  sites, eight signed heights, and eight RGB residuals per point. The compact
+  56-float increment keeps the cloud-only representation and avoids the full
+  reference model's nested directional table.
+- The Meganeura graph matches the renderer's two-stage evaluation: height is
+  blended at the base-plane query, then RGB is blended again at the displaced
+  plane. The recorder exports the pre-surface support query and discrete plane
+  branch as one `vec2` stream; the graph materializes it once before splitting.
+- `train_colmap` exposes independent site, height, and color rate ratios. A
+  fresh table uses a deterministic eight-site tangent ring with zero height
+  and color, so enabling the representation without training preserves the
+  preceding model exactly.
+- Detail geometry is refreshed with surface normals in one GPU submission.
+  PLY checkpoints, optimizer moments, pruning/densification ancestry, and
+  segmented resume all retain the three tables exactly.
+- The differentiable normalizer uses a `1e-12` floor instead of the renderer's
+  forward-only `1e-20`: squaring the latter in division backward underflows on
+  padded rows and can inject `0/0` before masking. Active-row forward parity is
+  checked against the CPU oracle, and a physical end-to-end test covers finite
+  updates plus frozen topology.
+- Position and radius optimization remain rejected while detail is present.
+  The recorded support-entry query does not yet carry its topology Jacobian;
+  silently applying a partial gradient would make the geometry gate ambiguous.
+  Detail training and detail-aware densification with frozen positions/radii
+  are supported.
+- Physical gates cover CPU parity and nonzero gradients for every table,
+  external query-buffer binding, repeated geometry refresh, table/Adam remap
+  through densification, and exact interrupted/resumed training. The next gate
+  is a matched Room spatial-detail run against the selected compact-color
+  checkpoint, followed by Bonsai only if Room improves held-out PSNR.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

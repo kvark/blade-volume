@@ -343,6 +343,24 @@ struct Args {
     #[argh(option, default = "0.0")]
     surface_color_lr_ratio: f32,
 
+    /// radius-normalized spatial-detail site learning rate as a fraction of
+    /// the main rate (default 0 = no detail table). Under the radfoam-v1
+    /// schedule, 1 selects the absolute 0.01 to 0.001 rate.
+    #[argh(option, default = "0.0")]
+    surface_detail_offset_lr_ratio: f32,
+
+    /// radius-normalized spatial-detail height learning rate as a fraction
+    /// of the main rate (default 0). Under the radfoam-v1 schedule, 1 selects
+    /// the absolute 0.005 to 0.0005 rate.
+    #[argh(option, default = "0.0")]
+    surface_detail_height_lr_ratio: f32,
+
+    /// spatial-detail RGB residual learning rate as a fraction of the main
+    /// rate (default 0). Under the radfoam-v1 schedule, 1 selects the absolute
+    /// 0.005 to 0.0005 rate.
+    #[argh(option, default = "0.0")]
+    surface_detail_color_lr_ratio: f32,
+
     /// spherical Voronoi raw-axis learning rate as a fraction of the main
     /// rate (default 0 = no directional table). Under the radfoam-v1
     /// schedule, 1 selects the absolute 0.05 to 0.005 axis rate.
@@ -548,6 +566,20 @@ fn main() {
         eprintln!("--surface-color-lr-ratio must be finite and non-negative");
         std::process::exit(2);
     }
+    if !args.surface_detail_offset_lr_ratio.is_finite() || args.surface_detail_offset_lr_ratio < 0.0
+    {
+        eprintln!("--surface-detail-offset-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
+    if !args.surface_detail_height_lr_ratio.is_finite() || args.surface_detail_height_lr_ratio < 0.0
+    {
+        eprintln!("--surface-detail-height-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
+    if !args.surface_detail_color_lr_ratio.is_finite() || args.surface_detail_color_lr_ratio < 0.0 {
+        eprintln!("--surface-detail-color-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
     if !args.spherical_voronoi_axis_lr_ratio.is_finite()
         || args.spherical_voronoi_axis_lr_ratio < 0.0
     {
@@ -582,7 +614,9 @@ fn main() {
     if (args.position_lr_ratio > 0.0
         || args.radius_lr_ratio > 0.0
         || args.surface_normal_lr_ratio > 0.0
-        || args.surface_offset_lr_ratio > 0.0)
+        || args.surface_offset_lr_ratio > 0.0
+        || args.surface_detail_offset_lr_ratio > 0.0
+        || args.surface_detail_height_lr_ratio > 0.0)
         && geometry_rebuild_schedule == diff_render::GeometryRebuildSchedule::Fixed
         && args.geometry_rebuild_every == 0
     {
@@ -605,6 +639,9 @@ fn main() {
     if (args.surface_normal_lr_ratio > 0.0
         || args.surface_offset_lr_ratio > 0.0
         || args.surface_color_lr_ratio > 0.0
+        || args.surface_detail_offset_lr_ratio > 0.0
+        || args.surface_detail_height_lr_ratio > 0.0
+        || args.surface_detail_color_lr_ratio > 0.0
         || args.spherical_voronoi_axis_lr_ratio > 0.0
         || args.spherical_voronoi_color_lr_ratio > 0.0
         || args.surface_normal_weight > 0.0)
@@ -616,7 +653,6 @@ fn main() {
         );
         std::process::exit(2);
     }
-
     let pixel_batch = if args.pixel_batch == 0 {
         None
     } else {
@@ -657,6 +693,21 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let surface_detail_requested = args.surface_detail_offset_lr_ratio > 0.0
+        || args.surface_detail_height_lr_ratio > 0.0
+        || args.surface_detail_color_lr_ratio > 0.0;
+    if surface_detail_requested
+        && (args.position_lr_ratio > 0.0
+            || args.radius_lr_ratio > 0.0
+            || lr_groups == diff_render::LrGroups::RadFoamV1Relative
+            || lr_schedule == diff_render::LrSchedule::RadFoamV1)
+    {
+        eprintln!(
+            "spatial-detail training currently requires frozen positions and radii; use the \
+             legacy LR groups with zero position/radius rates"
+        );
+        std::process::exit(2);
+    }
     if lr_schedule == diff_render::LrSchedule::RadFoamV1
         && geometry_rebuild_schedule == diff_render::GeometryRebuildSchedule::Fixed
         && args.geometry_rebuild_every == 0
@@ -794,6 +845,9 @@ fn main() {
             surface_normal_lr_ratio: args.surface_normal_lr_ratio,
             surface_offset_lr_ratio: args.surface_offset_lr_ratio,
             surface_color_lr_ratio: args.surface_color_lr_ratio,
+            surface_detail_offset_lr_ratio: args.surface_detail_offset_lr_ratio,
+            surface_detail_height_lr_ratio: args.surface_detail_height_lr_ratio,
+            surface_detail_color_lr_ratio: args.surface_detail_color_lr_ratio,
             spherical_voronoi_axis_lr_ratio: args.spherical_voronoi_axis_lr_ratio,
             spherical_voronoi_color_lr_ratio: args.spherical_voronoi_color_lr_ratio,
             surface_normal_weight: args.surface_normal_weight,
