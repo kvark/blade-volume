@@ -379,7 +379,7 @@ pub fn build_volumetric_graph(
     use_spherical_voronoi: bool,
     color_loss_kind: ColorLoss,
 ) -> VolumetricGraph {
-    build_volumetric_graph_with_surface_normal_loss(
+    build_volumetric_graph_with_options(
         g,
         n_cells,
         n_pixels,
@@ -395,7 +395,11 @@ pub fn build_volumetric_graph(
         background_rgb,
         use_recorded_dt,
         use_surface_normals,
-        use_surface_normals,
+        VolumetricGraphOptions {
+            use_surface_normal_loss: use_surface_normals,
+            train_positions: true,
+            train_radii: true,
+        },
         use_surface_offsets,
         use_surface_color,
         collect_point_error,
@@ -404,8 +408,15 @@ pub fn build_volumetric_graph(
     )
 }
 
+#[derive(Clone, Copy)]
+struct VolumetricGraphOptions {
+    use_surface_normal_loss: bool,
+    train_positions: bool,
+    train_radii: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
-fn build_volumetric_graph_with_surface_normal_loss(
+fn build_volumetric_graph_with_options(
     g: &mut mn::Graph,
     n_cells: usize,
     n_pixels: usize,
@@ -421,7 +432,7 @@ fn build_volumetric_graph_with_surface_normal_loss(
     background_rgb: [f32; 3],
     use_recorded_dt: bool,
     use_surface_normals: bool,
-    use_surface_normal_loss: bool,
+    options: VolumetricGraphOptions,
     use_surface_offsets: bool,
     use_surface_color: bool,
     collect_point_error: bool,
@@ -452,7 +463,7 @@ fn build_volumetric_graph_with_surface_normal_loss(
         "oriented surfaces require weighted recorded paths",
     );
     assert!(
-        !use_surface_normal_loss || use_surface_normals,
+        !options.use_surface_normal_loss || use_surface_normals,
         "surface-normal loss requires oriented surfaces",
     );
     assert!(
@@ -479,8 +490,9 @@ fn build_volumetric_graph_with_surface_normal_loss(
     let weighted_inputs = use_recorded_dt.then(|| {
         let dt_grad_surface_normal =
             use_surface_normals.then(|| g.input("dt_grad_surface_normal", &[pl, 4]));
-        let surface_normal_loss_scale =
-            use_surface_normal_loss.then(|| g.input("surface_normal_loss_scale", &[1, 1]));
+        let surface_normal_loss_scale = options
+            .use_surface_normal_loss
+            .then(|| g.input("surface_normal_loss_scale", &[1, 1]));
         (
             g.input("dt_reference_tangent", &[pl]),
             g.input_u32("previous_cell_indices", &[pl]),
@@ -580,6 +592,18 @@ fn build_volumetric_graph_with_surface_normal_loss(
     let actual_radii = weighted_path
         .as_ref()
         .map(|weighted| positive_activation(g, weighted.log_radii, n_cells, RADIUS_SOFTPLUS_BETA));
+    let differentiable_positions = if options.train_positions {
+        positions
+    } else {
+        g.stop_gradient(positions)
+    };
+    let differentiable_radii = actual_radii.map(|radii| {
+        if options.train_radii {
+            radii
+        } else {
+            g.stop_gradient(radii)
+        }
+    });
     // Per-view RGB gain: separate `[num_views, 1]` table per channel
     // so each channel's gradient flows back through `embedding`
     // (which has a `scatter_add` backward). Folding channels into a
@@ -634,8 +658,8 @@ fn build_volumetric_graph_with_surface_normal_loss(
     // dispatch). To prevent NaN/Inf when `dot(n, d) = 0` for those
     // entries, we add a small ε to the divisor; the final `mask`
     // multiplication zeros the result anyway.
-    let pos_cell = g.embedding(cell_indices, positions); // [P*L, 3]
-    let pos_next = g.embedding(next_cell_indices, positions); // [P*L, 3]
+    let pos_cell = g.embedding(cell_indices, differentiable_positions); // [P*L, 3]
+    let pos_next = g.embedding(next_cell_indices, differentiable_positions); // [P*L, 3]
     let half_pl3 = g.constant(vec![0.5_f32; pl * 3], &[pl, 3]);
     let pos_sum = g.add(pos_cell, pos_next);
     let midpoint = g.mul(pos_sum, half_pl3);
@@ -720,12 +744,11 @@ fn build_volumetric_graph_with_surface_normal_loss(
         // positions/radii separately, but avoids repeating the radius
         // activation over every padded path slot and keeps each vec4
         // Jacobian intact instead of copying it through split kernels.
-        let actual_radii = actual_radii.unwrap();
         // Concat uses flat NCHW operands. Keep explicit views here so its
         // backward pass recovers the right batch and reshapes gradients back
         // to the original parameter tables.
-        let positions_flat = g.reshape(positions, &[n_cells * 3]);
-        let actual_radii_flat = g.reshape(actual_radii, &[n_cells]);
+        let positions_flat = g.reshape(differentiable_positions, &[n_cells * 3]);
+        let actual_radii_flat = g.reshape(differentiable_radii.unwrap(), &[n_cells]);
         let geometry_flat = g.concat(positions_flat, actual_radii_flat, n_cells as u32, 3, 1, 1);
         let geometry = g.reshape(geometry_flat, &[n_cells, 4]);
         let zero_radius = g.constant(vec![0.0_f32; p], &[p, 1]);
@@ -4176,6 +4199,8 @@ fn build_train_session(
     radius_lr_ratio: f32,
     surface_normal_lr_ratio: f32,
     use_surface_normal_loss: bool,
+    train_positions: bool,
+    train_radii: bool,
     surface_offset_lr_ratio: f32,
     surface_color_lr_ratio: f32,
     spherical_voronoi_axis_lr_ratio: f32,
@@ -4184,7 +4209,7 @@ fn build_train_session(
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
     let mut g = mn::Graph::new();
-    let mut vg = build_volumetric_graph_with_surface_normal_loss(
+    let mut vg = build_volumetric_graph_with_options(
         &mut g,
         n_cells,
         pixel_batch,
@@ -4200,7 +4225,11 @@ fn build_train_session(
         background_rgb,
         model.radii.is_some(),
         model.surface_normals.is_some(),
-        use_surface_normal_loss,
+        VolumetricGraphOptions {
+            use_surface_normal_loss,
+            train_positions,
+            train_radii,
+        },
         model.surface_offsets.is_some(),
         model.surface_color_coefficients.is_some(),
         collect_point_error,
@@ -4213,10 +4242,20 @@ fn build_train_session(
             .as_ref()
             .expect("interpenetration loss requires a weighted cloud")
             .log_radii;
+        let positions = if train_positions {
+            vg.positions
+        } else {
+            g.stop_gradient(vg.positions)
+        };
+        let log_radii = if train_radii {
+            log_radii
+        } else {
+            g.stop_gradient(log_radii)
+        };
         vg.loss = add_interpenetration_loss(
             &mut g,
             vg.loss,
-            vg.positions,
+            positions,
             log_radii,
             interpenetration_samples,
         );
@@ -4609,6 +4648,17 @@ fn fit_appearance_pixel_batched(
     let mut position_grad_accum = vec![0.0f32; model.points.len()];
     let mut position_grad_scratch = vec![0.0f32; model.points.len() * 3];
     let collect_powerfoam_point_error = densify.is_some() && model.radii.is_some();
+    // Densification rebuilds the session and remaps every geometry moment, so
+    // retain the established full-gradient graph while it is enabled. At a
+    // fixed topology, a zero-rate parameter is truly frozen: no downstream
+    // decision consumes its gradient or Adam moments. Frozen checkpoints omit
+    // those moments; enabling geometry later intentionally starts them at zero.
+    let train_positions = densify.is_some()
+        || config.position_lr_ratio > 0.0
+        || config.lr_groups == LrGroups::RadFoamV1Relative
+        || config.lr_schedule == LrSchedule::RadFoamV1;
+    let train_radii = densify.is_some()
+        || (config.radius_lr_ratio > 0.0 && config.lr_schedule != LrSchedule::RadFoamV1);
     let _ = n_cells;
     // Building a complete per-camera screen index does not pay for sparse
     // mixed-view batches. Keep their already parallel exhaustive gather, but
@@ -4682,6 +4732,8 @@ fn fit_appearance_pixel_batched(
         config.radius_lr_ratio,
         config.surface_normal_lr_ratio,
         config.surface_normal_weight > 0.0,
+        train_positions,
+        train_radii,
         config.surface_offset_lr_ratio,
         config.surface_color_lr_ratio,
         config.spherical_voronoi_axis_lr_ratio,
@@ -5274,6 +5326,8 @@ fn fit_appearance_pixel_batched(
                     config.radius_lr_ratio,
                     config.surface_normal_lr_ratio,
                     config.surface_normal_weight > 0.0,
+                    train_positions,
+                    train_radii,
                     config.surface_offset_lr_ratio,
                     config.surface_color_lr_ratio,
                     config.spherical_voronoi_axis_lr_ratio,
@@ -6728,7 +6782,7 @@ mod tests {
         assert!(weighted.surface_normal_loss_scale.is_some());
 
         let mut graph = mn::Graph::new();
-        let vg = build_volumetric_graph_with_surface_normal_loss(
+        let vg = build_volumetric_graph_with_options(
             &mut graph,
             16,
             4,
@@ -6744,7 +6798,11 @@ mod tests {
             [0.0; 3],
             true,
             true,
-            false,
+            VolumetricGraphOptions {
+                use_surface_normal_loss: false,
+                train_positions: true,
+                train_radii: true,
+            },
             true,
             false,
             false,
@@ -6754,6 +6812,58 @@ mod tests {
         let weighted = vg.weighted_path.unwrap();
         assert!(weighted.dt_grad_surface_normal.is_some());
         assert!(weighted.surface_normal_loss_scale.is_none());
+    }
+
+    #[test]
+    fn frozen_weighted_geometry_is_absent_from_the_backward_graph() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping frozen weighted-geometry graph test: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        build_volumetric_graph_with_options(
+            &mut graph,
+            4,
+            1,
+            2,
+            0,
+            1,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            10.0,
+            [0.0; 3],
+            true,
+            true,
+            VolumetricGraphOptions {
+                use_surface_normal_loss: false,
+                train_positions: false,
+                train_radii: false,
+            },
+            true,
+            true,
+            false,
+            false,
+            ColorLoss::SmoothL1,
+        );
+        let (session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+
+        assert!(!session.has_param_grad("positions"));
+        assert!(!session.has_param_grad("log_radii"));
+        assert!(session.has_param_grad("log_density"));
+        assert!(session.has_param_grad("surface_normals"));
+        assert!(session.has_param_grad("surface_offsets"));
+        assert!(session.has_param_grad("surface_color_coefficients"));
     }
 
     #[test]
