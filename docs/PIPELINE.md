@@ -1571,6 +1571,42 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   serialized workspace suite pass; the suite peaks at 3.16 GB (2.94 GiB) under
   6 GiB with no event.
 
+#### M2ba — Fold shared producers into reductions (implemented and two-scene-gated)
+
+- Meganeura `2acdfeb` extends reduction-prologue fusion to shared pointwise
+  and embedding producers when every consumer is a compatible reduction. It
+  clones the cheap expression into each reduction, leaves the producer alive
+  until its last use is folded, and rejects mixed or protected consumers.
+  Blade's preceding/current ray-relative geometry can therefore be loaded
+  directly by both interval and detail-query dot reductions without
+  materializing the shared four-wide rows.
+- The 200K-site profile falls 478→470 graph passes, 16→13 large embeddings,
+  and four→two materialized four-wide adds. Two-replica mean graph time falls
+  25.82→24.46 ms (-5.3%) and combined recorder/graph time falls 43.47→42.23
+  ms (-2.8%). An order-balanced 510-step Room gate reduces training
+  38.710→38.040 seconds (-1.7%) and GPU wait 23.324→22.551 seconds (-3.3%);
+  held-out PSNR changes by +0.0005 dB and mean topology by 37 edges out of
+  3.07 million.
+- On two full 2,040-step Room replicas, training falls 147.417→144.434
+  seconds (-2.0%) and GPU wait falls 91.012→88.466 seconds (-2.8%). Mean
+  train/held-out PSNR changes 26.4991/24.3063→26.4940/24.2937 dB; averaged
+  held-out views split 18 improved / 21 regressed and topology changes by
+  -0.08%. On an order-balanced Bonsai gate, training falls 92.085→89.907
+  seconds (-2.4%) and GPU wait falls 67.794→65.596 seconds (-3.2%). PSNR
+  changes 17.3804/16.7620→17.3770/16.7515 dB, views split 19/18, and topology
+  changes by +0.04%. The small metric shifts are inside replica spread and
+  balanced per view, so the repeatable performance win is selected.
+- White-box dispatch coverage proves both consumers fold and the standalone
+  embedding disappears. Fused/unfused device parity and an analytical shared
+  table-gradient test cover values and backward accumulation. Meganeura
+  formatting and strict all-target lint pass; every unaffected all-target
+  test passes. Four unrelated attention/model tests fail identically at both
+  `2acdfeb` and the pinned `85e919f` baseline on this stack and are recorded as
+  pre-existing rather than attributed to this change. All scene rays remain
+  untruncated and all scoped memory/GPU counters remain zero. Blade formatting,
+  strict workspace lint, and the complete serialized workspace suite pass
+  against the remote pin; the suite peaks at 3.55 GB (3.31 GiB) under 6 GiB.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

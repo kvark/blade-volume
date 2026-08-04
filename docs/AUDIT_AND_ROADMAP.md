@@ -775,6 +775,19 @@ At the audited revision:
   Formatting, strict all-target lint, and the complete serialized workspace
   suite pass; the suite peaks at 3.16 GB (2.94 GiB) under the 6 GiB limit with
   no event.
+- Meganeura `2acdfeb` now folds shared pointwise and embedding producers into
+  reduction prologues only when every consumer is compatible. Blade's graph
+  falls 478→470 passes and mean graph time falls 5.3%. Full 2,040-step Room
+  training falls 147.417→144.434 seconds (-2.0%) with a -0.0126 dB held-out
+  change and an 18/21 improved/regressed view split. An order-balanced Bonsai
+  gate falls 92.085→89.907 seconds (-2.4%) with -0.0105 dB held out and a
+  19/18 split. Topology changes remain within 0.08%; all paths are exact and
+  all isolated scopes are free of memory/GPU events. White-box fusion,
+  fused/unfused value parity, and analytical shared-gradient tests pass. Four
+  unrelated standalone Meganeura attention/model tests reproduce identical
+  failures at the pinned baseline; strict lint and every unaffected all-target
+  test pass. Blade's complete serialized workspace suite passes against the
+  remote pin at a 3.55 GB (3.31 GiB) peak with no memory or GPU event.
 - Meganeura `7967ca2` adds one-transfer F32 parameter readback through cached
   download memory, and Blade uses it for every model/geometry snapshot. It
   leaves the training graph and values unchanged while reducing four-replica
@@ -1938,11 +1951,12 @@ material path.
    Room/Bonsai at the exploratory high radius rate, but raise training time by
    57%/68% and produce mixed Bonsai tail views. Sharing the three unique
    ray-relative geometry gathers for the five linearization consumers then
-   cuts Room training by 1.8% at unchanged quality. The next decision points
-   are a fused indexed geometry-dot operation and a longer
-   conservative/high-rate schedule comparison; neither rate becomes a default
-   from the present short horizon. A compact 48-float
-   additive Spherical Voronoi residual is now implemented but rejected:
+   cuts Room training by 1.8% at unchanged quality. Meganeura then folds those
+   shared gathers and offsets directly into every compatible dot reduction,
+   cutting another 2.0% on Room and 2.4% on Bonsai at neutral quality. The
+   next decision point is a longer conservative/high-rate schedule comparison;
+   neither rate becomes a default from the present short horizon. A compact
+   48-float additive Spherical Voronoi residual is now implemented but rejected:
    learned and fixed axes lose 0.0168 and 0.0137 dB held out on Room while
    adding about 22% training time. On Room, a 160-entry path budget is exact
    on all 294 views; the full
