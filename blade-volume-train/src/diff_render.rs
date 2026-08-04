@@ -315,13 +315,6 @@ fn surface_color_basis_graph(
     g.stop_gradient(basis)
 }
 
-fn repeat_surface_detail_vec3(g: &mut mn::Graph, values: mn::NodeId, rows: usize) -> mn::NodeId {
-    debug_assert_eq!(vol::SURFACE_DETAIL_SITES, 8);
-    debug_assert_eq!(g.node(values).ty.shape, [rows, 3]);
-    let tiled = g.tile_inner(values, vol::SURFACE_DETAIL_SITES);
-    g.reshape(tiled, &[rows * vol::SURFACE_DETAIL_SITES, 3])
-}
-
 fn negative_exponential(g: &mut mn::Graph, input: mn::NodeId, count: usize) -> mn::NodeId {
     let sigmoid = g.sigmoid(input);
     let reciprocal = g.recip(sigmoid);
@@ -430,13 +423,7 @@ fn evaluate_surface_detail_graph(
 
     let raw_sites = g.embedding(cell_indices, parameters.offsets);
     let raw_sites = g.reshape(raw_sites, &[rows * vol::SURFACE_DETAIL_SITES, 3]);
-    let site_normals = repeat_surface_detail_vec3(g, normals, rows);
-    let normal_components = g.mul(raw_sites, site_normals);
-    let normal_components = g.sum_inner(normal_components);
-    let normal_components = repeat_xyz(g, normal_components, rows * vol::SURFACE_DETAIL_SITES);
-    let projected_normals = g.mul(site_normals, normal_components);
-    let neg_projected_normals = g.neg(projected_normals);
-    let tangent_sites = g.add(raw_sites, neg_projected_normals);
+    let tangent_sites = g.pairwise_vector_rejection(raw_sites, normals, vol::SURFACE_DETAIL_SITES);
 
     let base_query = surface_detail_query(
         g,

@@ -1283,6 +1283,43 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   passes and peaks at 2.4 GB. Room/Bonsai gates peak at 1.5/1.6 GB under the
   6 GiB scope, all with zero swap, pressure, OOM, kill, or GPU fault.
 
+#### M2ar — Direct tangent-site rejection (implemented and two-scene-gated)
+
+- Meganeura revision `f31ef08` adds differentiable pairwise vector rejection:
+  each of `N` consecutive vectors is projected off one shared unit direction.
+  Dedicated kernels evaluate the forward value and gradients for both the
+  vectors and the shared direction without atomics or device-scope barriers.
+- The surface-detail graph uses this primitive to project eight learned site
+  offsets into each oriented cell's tangent plane. It replaces the explicit
+  normal tile, dot-product reduction, scalar broadcast, projection, negation,
+  and addition chains. At the 4,096-ray, 128-step shape, the graph falls
+  454→446 passes and warmed GPU time falls 16.53–16.86→15.05–15.12 ms
+  (about -9.8%). The new forward and two backward dispatches total about
+  0.54 ms, while the removed normal tile alone held 12,582,912 floats
+  (48 MiB).
+- Two 2,040-step Room replicas take 105.929 and 103.883 seconds, averaging
+  104.906 seconds versus the pairwise-distance build's 112.039 seconds
+  (-6.4%). Mean GPU wait falls 67.314→62.521 seconds (-7.1%). Train/held-out
+  quality is neutral at 25.6442/23.4108 dB versus 25.6435/23.4102 dB;
+  averaged held-out views improve 24, tie one, and regress 14, with a
+  +0.0010 dB mean.
+- Two Bonsai replicas take 61.809 and 61.149 seconds, averaging 61.479 seconds
+  versus 64.567 seconds (-4.8%); mean GPU wait falls 54.521→51.540 seconds
+  (-5.5%). Train/held-out quality is 17.1986/16.3120 dB versus
+  17.1979/16.3147 dB. Averaged held-out views split 14 improvements, six
+  ties, and 17 regressions, with a -0.0027 dB mean.
+- A physical 257×3×8 Meganeura oracle covers the forward value and both
+  gradients. All 177 library tests, shader-module/SPIR-V/runtime-binding
+  validation, and strict lint pass. The unconstrained all-target Meganeura
+  run exhausts the 6 GiB scope while parallel GPU tests run and crashes in an
+  unrelated cooperative-matmul binary; serialized cooperative-matmul tests
+  all pass. The remaining four attention/model numerical failures reproduce
+  exactly at parent revision `508c0ab`, isolating them from this operation.
+  Blade's focused detail/resume tests, strict lint, and complete locked
+  workspace suite pass with the pinned dependency. The full suite, profile,
+  and two-scene scopes peak at 2.5/2.1/1.7 GB, with zero swap, pressure, OOM,
+  kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

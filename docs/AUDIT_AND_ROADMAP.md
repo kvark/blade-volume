@@ -806,6 +806,20 @@ At the audited revision:
   16.3137 dB on Bonsai; per-view gains/regressions are balanced. Physical
   forward/backward, detail training/remap, exact resume, shader/SPIR-V, and
   cross-scene gates pass without memory or GPU fault events.
+- Meganeura `f31ef08` similarly projects the eight learned site vectors off
+  each shared unit normal in one differentiable operation. Blade no longer
+  materializes the 48 MiB normal tile or its dot/broadcast/projection chains:
+  the detail graph falls 454→446 passes and warmed GPU time falls about 9.8%,
+  from 16.53–16.86 to 15.05–15.12 ms. Two Room replicas reduce mean training
+  112.039→104.906 seconds (-6.4%) and GPU wait 67.314→62.521 seconds (-7.1%);
+  held-out PSNR is neutral at 23.4102→23.4108 dB. Two Bonsai replicas reduce
+  mean training 64.567→61.479 seconds (-4.8%) and GPU wait
+  54.521→51.540 seconds (-5.5%); held-out PSNR changes
+  16.3147→16.3120 dB. Averaged per-view means are +0.0010 dB on Room and
+  -0.0027 dB on Bonsai. The physical forward/two-gradient oracle, shader and
+  SPIR-V validation, strict lint, pinned Blade detail/resume tests, and the
+  complete locked Blade workspace suite pass; all measured scopes record zero
+  OOM or GPU faults, and the full suite peaks at 2.5 GB.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
@@ -1712,7 +1726,10 @@ material path.
    falls another 39.8% (111.409→67.035 seconds) while Room keeps the serial
    kernel within 0.51% of its prior timing, both at neutral held-out quality.
    Meganeura `508c0ab` then removes the two 48 MiB tiled detail-distance
-   chains; Room/Bonsai improve another 3.6%/3.7% at neutral held-out quality.)
+   chains; Room/Bonsai improve another 3.6%/3.7% at neutral held-out quality.
+   Meganeura `f31ef08` removes the remaining 48 MiB normal tile and explicit
+   tangent-projection chains; Room/Bonsai improve another 6.4%/4.8% at neutral
+   held-out quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done for
    unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate
