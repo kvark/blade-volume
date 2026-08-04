@@ -594,6 +594,68 @@ fn gather_powerfoam_candidates(
     }
 }
 
+fn candidate_after(left: u32, right: u32) -> bool {
+    let left_depth = g_candidate_depths[left];
+    let right_depth = g_candidate_depths[right];
+    let left_cell = g_candidates[left];
+    let right_cell = g_candidates[right];
+    return left_depth > right_depth ||
+        (left_depth == right_depth && left_cell > right_cell);
+}
+
+fn swap_candidates(left: u32, right: u32) {
+    let left_cell = g_candidates[left];
+    let left_depth = g_candidate_depths[left];
+    let left_faces = g_candidate_faces[left];
+    let left_neighbors = g_candidate_neighbors[left];
+    let right_cell = g_candidates[right];
+    let right_depth = g_candidate_depths[right];
+    let right_faces = g_candidate_faces[right];
+    let right_neighbors = g_candidate_neighbors[right];
+    g_candidates[left] = right_cell;
+    g_candidate_depths[left] = right_depth;
+    g_candidate_faces[left] = right_faces;
+    g_candidate_neighbors[left] = right_neighbors;
+    g_candidates[right] = left_cell;
+    g_candidate_depths[right] = left_depth;
+    g_candidate_faces[right] = left_faces;
+    g_candidate_neighbors[right] = left_neighbors;
+}
+
+fn sift_candidate_heap(begin: u32, root: u32, count: u32) {
+    var current = root;
+    loop {
+        let left = 2u * current + 1u;
+        if (left >= count) {
+            break;
+        }
+        var child = left;
+        let right = left + 1u;
+        if (right < count && candidate_after(begin + right, begin + left)) {
+            child = right;
+        }
+        if (!candidate_after(begin + child, begin + current)) {
+            break;
+        }
+        swap_candidates(begin + current, begin + child);
+        current = child;
+    }
+}
+
+fn sort_candidate_row(begin: u32, count: u32) {
+    var root = count / 2u;
+    while (root > 0u) {
+        root -= 1u;
+        sift_candidate_heap(begin, root, count);
+    }
+    var end = count;
+    while (end > 1u) {
+        end -= 1u;
+        swap_candidates(begin, begin + end);
+        sift_candidate_heap(begin, 0u, end);
+    }
+}
+
 // Independently clipped PowerFoam cells are disjoint along a ray. Select them
 // in front-to-back order and write the same fixed-size path/Jacobian streams
 // consumed by the differentiable integration graph.
@@ -612,95 +674,66 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
     let candidate_count = min(g_candidate_counts[output_pixel], g_params.candidate_capacity);
     let row_start = output_pixel * g_params.max_steps;
 
-    var output_step = 0u;
-    while (output_step < g_params.max_steps) {
-        var best_slot = 0xffffffffu;
-        var best_cell = 0xffffffffu;
-        var best_near = g_params.depth;
-        var best_interval = PowerInterval(0.0, 0.0, 0.0, 0u, 0u, 0u);
-        for (var slot = 0u; slot < candidate_count; slot += 1u) {
-            let candidate_slot = candidate_begin + slot;
-            let cell = g_candidates[candidate_slot];
-            if (cell == 0xffffffffu) {
-                continue;
-            }
-            var interval = PowerInterval(0.0, 0.0, 0.0, 0u, 0u, 0u);
-            var effective_near = g_candidate_depths[candidate_slot];
-            if (output_step == 0u) {
-                // Radical-plane clipping is the expensive part of candidate
-                // ordering. Execute the original first selection scan, cache
-                // its complete interval, then keep later scans to two loads
-                // and the exact historical depth/index comparison.
-                interval = power_interval(ray_origin, ray_dir, cell);
-                if (interval.valid == 0u) {
-                    g_candidates[candidate_slot] = 0xffffffffu;
-                    continue;
-                }
-                effective_near = interval.effective_near;
-                g_candidate_depths[candidate_slot] = effective_near;
-                g_candidate_faces[candidate_slot] = vec2<f32>(
-                    interval.face_near, interval.face_far,
-                );
-                g_candidate_neighbors[candidate_slot] = vec2<u32>(
-                    interval.previous, interval.next,
-                );
-            }
-            if (effective_near < best_near ||
-                (effective_near == best_near && cell < best_cell)) {
-                best_slot = slot;
-                best_cell = cell;
-                best_near = effective_near;
-                if (output_step == 0u) {
-                    best_interval = interval;
-                }
-            }
+    // Clip each candidate once and compact the valid intervals. A heap sort
+    // then establishes the same depth/index order as the old repeated minimum
+    // scan, without rescanning the complete candidate row for every segment.
+    var valid_count = 0u;
+    for (var slot = 0u; slot < candidate_count; slot += 1u) {
+        let cell = g_candidates[candidate_begin + slot];
+        let interval = power_interval(ray_origin, ray_dir, cell);
+        if (interval.valid == 0u) {
+            continue;
         }
+        let compact_slot = candidate_begin + valid_count;
+        g_candidates[compact_slot] = cell;
+        g_candidate_depths[compact_slot] = interval.effective_near;
+        g_candidate_faces[compact_slot] = vec2<f32>(interval.face_near, interval.face_far);
+        g_candidate_neighbors[compact_slot] = vec2<u32>(interval.previous, interval.next);
+        valid_count += 1u;
+    }
+    sort_candidate_row(candidate_begin, valid_count);
 
-        if (best_slot == 0xffffffffu) {
-            break;
-        }
-        let best_candidate_slot = candidate_begin + best_slot;
-        g_candidates[best_candidate_slot] = 0xffffffffu;
-        if (output_step != 0u) {
-            let faces = g_candidate_faces[best_candidate_slot];
-            let neighbors = g_candidate_neighbors[best_candidate_slot];
-            best_interval = PowerInterval(
-                faces.x, faces.y, best_near, neighbors.x, neighbors.y, 1u,
-            );
-        }
+    var candidate_index = 0u;
+    var output_step = 0u;
+    while (candidate_index < valid_count && output_step < g_params.max_steps) {
+        let candidate_slot = candidate_begin + candidate_index;
+        let cell = g_candidates[candidate_slot];
+        let faces = g_candidate_faces[candidate_slot];
+        let neighbors = g_candidate_neighbors[candidate_slot];
+        candidate_index += 1u;
         let differential = interval_differential(
             ray_origin,
             ray_dir,
-            best_interval.previous,
-            best_cell,
-            best_interval.next,
-            best_interval.face_near,
-            best_interval.face_far,
+            neighbors.x,
+            cell,
+            neighbors.y,
+            faces.x,
+            faces.y,
         );
         if (differential.valid == 0u) {
             continue;
         }
 
         let output_slot = row_start + output_step;
-        g_cells_out[output_slot] = best_cell;
-        g_next_cells_out[output_slot] = best_interval.next;
+        g_cells_out[output_slot] = cell;
+        g_next_cells_out[output_slot] = neighbors.y;
         g_dts_out[output_slot] = differential.dt;
         g_mask_out[output_slot] = 1.0;
         if (g_params.jacobian_mode != 0u) {
             var reference_tangent = 0.0;
             if (g_params.jacobian_mode == 1u) {
-                g_previous_cells_out[output_slot] = best_interval.previous;
+                g_previous_cells_out[output_slot] = neighbors.x;
                 let previous_geometry = vec4<f32>(
-                    g_points[best_interval.previous].xyz - ray_origin,
-                    g_points[best_interval.previous].w,
+                    g_points[neighbors.x].xyz - ray_origin,
+                    g_points[neighbors.x].w,
                 );
                 let current_geometry = vec4<f32>(
-                    g_points[best_cell].xyz - ray_origin,
-                    g_points[best_cell].w,
+                    g_points[cell].xyz - ray_origin,
+                    g_points[cell].w,
                 );
                 let next_geometry = vec4<f32>(
-                    g_points[best_interval.next].xyz - ray_origin,
-                    g_points[best_interval.next].w,
+                    g_points[neighbors.y].xyz - ray_origin,
+                    g_points[neighbors.y].w,
                 );
                 reference_tangent =
                     dot(differential.dt_d_previous, previous_geometry) +
@@ -713,7 +746,7 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (g_params.oriented != 0u) {
                 reference_tangent += dot(
                     differential.dt_d_surface_normal,
-                    g_surface_normals[best_cell],
+                    g_surface_normals[cell],
                 );
                 g_dt_grad_surface_normal_out[output_slot] =
                     differential.dt_d_surface_normal;
@@ -723,20 +756,7 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
         output_step += 1u;
     }
 
-    var truncated = false;
-    if (output_step == g_params.max_steps) {
-        // The first selection scan rejected every invalid interval. Any
-        // remaining candidate therefore represents another non-empty segment.
-        for (var slot = 0u; slot < candidate_count; slot += 1u) {
-            let candidate_slot = candidate_begin + slot;
-            let cell = g_candidates[candidate_slot];
-            if (cell == 0xffffffffu) {
-                continue;
-            }
-            truncated = true;
-            break;
-        }
-    }
+    let truncated = output_step == g_params.max_steps && candidate_index < valid_count;
     g_path_status_out[output_pixel] = output_step | select(0u, 0x80000000u, truncated);
 }
 
