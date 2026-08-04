@@ -897,12 +897,11 @@ fn build_volumetric_graph_with_options(
     };
 
     // Per-channel pixel: pixel_c = (weight * color_c) @ ones_L
-    let ones_l1 = g.constant(vec![1.0; l], &[l, 1]);
     let ones_1l = g.constant(vec![1.0; l], &[1, l]);
 
     // Accumulated opacity per pixel = Σ_L weight = 1 − T_final. Drives the
     // RadFoam opacity loss + white-background compositing.
-    let opacity = g.matmul(weight, ones_l1); // [P, 1]
+    let opacity = g.sum_inner(weight); // [P, 1]
     let sh = pixel_sh(
         g,
         cell_indices,
@@ -915,7 +914,6 @@ fn build_volumetric_graph_with_options(
         &basis_inputs,
         pixel_idx_per_step,
         weight,
-        ones_l1,
         n_cells,
         p,
         l,
@@ -1069,10 +1067,10 @@ fn build_volumetric_graph_with_options(
         let half_dt = g.mul(dt_2d, half);
         let midpoint = g.add(depth_prefix, half_dt);
         let weighted_midpoint = g.mul(weight, midpoint);
-        let first_moment = g.matmul(weighted_midpoint, ones_l1);
+        let first_moment = g.sum_inner(weighted_midpoint);
         let midpoint_squared = g.mul(midpoint, midpoint);
         let weighted_midpoint_squared = g.mul(weight, midpoint_squared);
-        let second_moment = g.matmul(weighted_midpoint_squared, ones_l1);
+        let second_moment = g.sum_inner(weighted_midpoint_squared);
         let opacity_second = g.mul(opacity, second_moment);
         let first_squared = g.mul(first_moment, first_moment);
         let neg_first_squared = g.neg(first_squared);
@@ -1106,7 +1104,6 @@ fn build_volumetric_graph_with_options(
             dt_2d,
             mask_2d,
             ones_1l,
-            ones_l1,
             p,
             l,
         );
@@ -1118,11 +1115,10 @@ fn build_volumetric_graph_with_options(
             dt_2d,
             mask_2d,
             ones_1l,
-            ones_l1,
             p,
             l,
         );
-        let total_optical_depth = g.matmul(raw, ones_l1);
+        let total_optical_depth = g.sum_inner(raw);
         let valid = g.greater(total_optical_depth, quantile_far);
         let neg_near = g.neg(near_depth);
         let spread_raw = g.add(far_depth, neg_near);
@@ -1195,7 +1191,6 @@ fn optical_depth_quantile(
     dt: mn::NodeId,
     mask: mn::NodeId,
     ones_1l: mn::NodeId,
-    ones_l1: mn::NodeId,
     p: usize,
     l: usize,
 ) -> mn::NodeId {
@@ -1212,7 +1207,7 @@ fn optical_depth_quantile(
     let neg_unused = g.neg(unused_distance);
     let distance_clamped = g.add(dt, neg_unused);
     let distance_masked = g.mul(distance_clamped, mask);
-    g.matmul(distance_masked, ones_l1)
+    g.sum_inner(distance_masked)
 }
 
 /// Build the L1 distance between finite-difference gradients of a single
@@ -1399,7 +1394,6 @@ fn pixel_sh(
     basis_inputs: &[mn::NodeId], // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
     pixel_idx_per_step: mn::NodeId,
     weight: mn::NodeId,
-    ones_l1: mn::NodeId, // [L, 1] for the final reduce
     n_cells: usize,
     p: usize,
     l: usize,
@@ -1559,7 +1553,7 @@ fn pixel_sh(
     let step_colors = [red, green, blue].map(|channel| g.reshape(channel, &[p, l]));
     let pixels = step_colors.map(|color_2d| {
         let weighted = g.mul(weight, color_2d);
-        g.matmul(weighted, ones_l1)
+        g.sum_inner(weighted)
     });
     PixelSh {
         pixels,
@@ -5934,7 +5928,6 @@ mod tests {
         let sh_r = graph.parameter("sh_r", &[1, 1]);
         let sh_g = graph.parameter("sh_g", &[1, 1]);
         let sh_b = graph.parameter("sh_b", &[1, 1]);
-        let ones_l1 = graph.constant(vec![1.0], &[1, 1]);
         let [pixel, _, _] = pixel_sh(
             &mut graph,
             cell_indices,
@@ -5958,7 +5951,6 @@ mod tests {
             &[],
             pixel_idx_per_step,
             weight,
-            ones_l1,
             1,
             1,
             1,
@@ -6005,7 +5997,6 @@ mod tests {
             .map(|component| graph.input(&format!("basis_{component}"), &[p, 1]))
             .collect();
         let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, k);
-        let ones_l1 = graph.constant(vec![1.0; l], &[l, 1]);
         let pixels = pixel_sh(
             &mut graph,
             cell_indices,
@@ -6016,7 +6007,6 @@ mod tests {
             &basis_inputs,
             pixel_idx_per_step,
             weight,
-            ones_l1,
             n_cells,
             p,
             l,
@@ -6127,7 +6117,6 @@ mod tests {
         let surface_color =
             graph.parameter("surface_color_coefficients", &[n_cells, components * 3]);
         let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, 1);
-        let ones_l1 = graph.constant(vec![1.0; l], &[l, 1]);
         let pixels = pixel_sh(
             &mut graph,
             cell_indices,
@@ -6138,7 +6127,6 @@ mod tests {
             &[],
             pixel_idx_per_step,
             weight,
-            ones_l1,
             n_cells,
             p,
             l,
@@ -6225,7 +6213,6 @@ mod tests {
             colors: graph.parameter("spherical_voronoi_colors", &[n_cells, sites * 3]),
         };
         let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, 1);
-        let ones_l1 = graph.constant(vec![1.0; l], &[l, 1]);
         let pixels = pixel_sh(
             &mut graph,
             cell_indices,
@@ -6236,7 +6223,6 @@ mod tests {
             &[],
             pixel_idx_per_step,
             weight,
-            ones_l1,
             n_cells,
             p,
             l,
