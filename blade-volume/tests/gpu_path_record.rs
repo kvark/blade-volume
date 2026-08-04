@@ -92,6 +92,8 @@ struct CpuRecord {
     dt_grad_next: Vec<[f32; 4]>,
     dt_grad_surface_normal: Vec<[f32; 4]>,
     surface_queries: Vec<[f32; 2]>,
+    surface_query_grad_previous: Vec<[f32; 4]>,
+    surface_query_grad_current: Vec<[f32; 4]>,
     surface_offsets: Vec<f32>,
 }
 
@@ -152,6 +154,8 @@ fn cpu_record(
     let mut dt_grad_next = vec![[0.0; 4]; p * max_steps];
     let mut dt_grad_surface_normal = vec![[0.0; 4]; p * max_steps];
     let mut surface_queries = vec![[0.0; 2]; p * max_steps];
+    let mut surface_query_grad_previous = vec![[0.0; 4]; p * max_steps];
+    let mut surface_query_grad_current = vec![[0.0; 4]; p * max_steps];
     let mut surface_offsets = vec![0.0; p * max_steps];
     for (k, ray) in rays.iter().enumerate() {
         let path = if model.radii.is_some() {
@@ -180,6 +184,8 @@ fn cpu_record(
                         e.surface_query_near,
                         (path.ray_dir.dot(normal) < -1.0e-20) as u32 as f32,
                     ];
+                    surface_query_grad_previous[slot] = e.surface_query_d_previous.to_array();
+                    surface_query_grad_current[slot] = e.surface_query_d_current.to_array();
                 }
                 if model.radii.is_some() {
                     dt_reference_tangents[slot] = dot4(
@@ -211,6 +217,8 @@ fn cpu_record(
         dt_grad_next,
         dt_grad_surface_normal,
         surface_queries,
+        surface_query_grad_previous,
+        surface_query_grad_current,
         surface_offsets,
     }
 }
@@ -429,6 +437,10 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         if bufs.has_surface_queries() {
             tx.fill_buffer(bufs.surface_queries.at(0), pl * 8, 0);
         }
+        if bufs.has_surface_query_jacobians() {
+            tx.fill_buffer(bufs.surface_query_grad_previous.at(0), pl * 16, 0);
+            tx.fill_buffer(bufs.surface_query_grad_current.at(0), pl * 16, 0);
+        }
     }
     // Fill the batch in two slices. The exhaustive PowerFoam case binds two
     // distinct cameras within each shared compute pass, matching mixed-view
@@ -521,6 +533,16 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         size: pl * 8,
         memory: gpu::Memory::Shared,
     });
+    let surface_query_grad_previous_dl = ctx.create_buffer(gpu::BufferDesc {
+        name: "surface-query-grad-previous-download",
+        size: pl * 16,
+        memory: gpu::Memory::Shared,
+    });
+    let surface_query_grad_current_dl = ctx.create_buffer(gpu::BufferDesc {
+        name: "surface-query-grad-current-download",
+        size: pl * 16,
+        memory: gpu::Memory::Shared,
+    });
     {
         let mut tx = encoder.transfer("download-outputs");
         if bufs.has_geometry_jacobians() {
@@ -559,6 +581,18 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         }
         if bufs.has_surface_queries() {
             tx.copy_buffer_to_buffer(bufs.surface_queries.at(0), surface_queries_dl.at(0), pl * 8);
+        }
+        if bufs.has_surface_query_jacobians() {
+            tx.copy_buffer_to_buffer(
+                bufs.surface_query_grad_previous.at(0),
+                surface_query_grad_previous_dl.at(0),
+                pl * 16,
+            );
+            tx.copy_buffer_to_buffer(
+                bufs.surface_query_grad_current.at(0),
+                surface_query_grad_current_dl.at(0),
+                pl * 16,
+            );
         }
     }
     let sync = ctx.submit(&mut encoder);
@@ -664,6 +698,28 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         }
     } else {
         vec![0.0; pl as usize * 2]
+    };
+    let gpu_surface_query_grad_previous: Vec<f32> = if bufs.has_surface_query_jacobians() {
+        unsafe {
+            std::slice::from_raw_parts(
+                surface_query_grad_previous_dl.data() as *const f32,
+                pl as usize * 4,
+            )
+            .to_vec()
+        }
+    } else {
+        vec![0.0; pl as usize * 4]
+    };
+    let gpu_surface_query_grad_current: Vec<f32> = if bufs.has_surface_query_jacobians() {
+        unsafe {
+            std::slice::from_raw_parts(
+                surface_query_grad_current_dl.data() as *const f32,
+                pl as usize * 4,
+            )
+            .to_vec()
+        }
+    } else {
+        vec![0.0; pl as usize * 4]
     };
 
     let mut mismatches = 0usize;
@@ -781,6 +837,66 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
                         }
                     }
                 }
+                if jacobian_mode == PathJacobianMode::Full {
+                    for (name, cpu_gradient, gpu_gradient) in [
+                        (
+                            "surface-query previous",
+                            cpu.surface_query_grad_previous[i],
+                            &gpu_surface_query_grad_previous[i * 4..i * 4 + 4],
+                        ),
+                        (
+                            "surface-query current",
+                            cpu.surface_query_grad_current[i],
+                            &gpu_surface_query_grad_current[i * 4..i * 4 + 4],
+                        ),
+                    ] {
+                        for component in 0..4 {
+                            let expected = cpu_gradient[component];
+                            let actual = gpu_gradient[component];
+                            let absolute = (expected - actual).abs();
+                            let scale = expected.abs().max(actual.abs()).max(1.0e-4);
+                            if absolute > 5.0e-4 && absolute / scale > 5.0e-3 {
+                                mismatches += 1;
+                                if mismatches <= 8 {
+                                    eprintln!(
+                                        "slot {i}: {name} gradient[{component}] cpu={expected} \
+                                         gpu={actual} diff={absolute}",
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    let ray_origin = rays[i / max_steps].origin;
+                    let reconstructed_query = [
+                        (
+                            gpu_previous_cells[i],
+                            &gpu_surface_query_grad_previous[i * 4..i * 4 + 4],
+                        ),
+                        (
+                            gpu_cells[i],
+                            &gpu_surface_query_grad_current[i * 4..i * 4 + 4],
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(cell, gradient)| {
+                        gradient
+                            .iter()
+                            .zip(point_geometry_relative(&model, cell, ray_origin))
+                            .map(|(a, b)| a * b)
+                            .sum::<f32>()
+                    })
+                    .sum::<f32>();
+                    if (reconstructed_query - gpu_surface_queries[i * 2]).abs() > 5.0e-4 {
+                        mismatches += 1;
+                        if mismatches <= 8 {
+                            eprintln!(
+                                "slot {i}: surface query={} reconstructed={reconstructed_query}",
+                                gpu_surface_queries[i * 2],
+                            );
+                        }
+                    }
+                }
             }
             let expected_reference_tangent = match jacobian_mode {
                 PathJacobianMode::Full => cpu.dt_reference_tangents[i],
@@ -864,6 +980,8 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
     ctx.destroy_buffer(dt_grad_next_dl);
     ctx.destroy_buffer(dt_grad_surface_normal_dl);
     ctx.destroy_buffer(surface_queries_dl);
+    ctx.destroy_buffer(surface_query_grad_previous_dl);
+    ctx.destroy_buffer(surface_query_grad_current_dl);
     bufs.destroy(&ctx);
     recorder.destroy(&ctx);
     cloud.deinit(&ctx);

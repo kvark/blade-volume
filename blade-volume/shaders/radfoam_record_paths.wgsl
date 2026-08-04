@@ -90,6 +90,8 @@ var<storage, read_write> g_dt_grad_current_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_next_out: array<vec4<f32>>;
 var<storage, read_write> g_dt_grad_surface_normal_out: array<vec4<f32>>;
 var<storage, read_write> g_surface_queries_out: array<vec2<f32>>;
+var<storage, read_write> g_surface_query_grad_previous_out: array<vec4<f32>>;
+var<storage, read_write> g_surface_query_grad_current_out: array<vec4<f32>>;
 var<storage, read_write> g_candidate_counts: array<u32>;
 var<storage, read_write> g_candidates: array<u32>;
 var<storage, read_write> g_candidate_depths: array<f32>;
@@ -151,6 +153,8 @@ struct IntervalDifferential {
     dt_d_current: vec4<f32>,
     dt_d_next: vec4<f32>,
     dt_d_surface_normal: vec4<f32>,
+    surface_query_d_previous: vec4<f32>,
+    surface_query_d_current: vec4<f32>,
     surface_query: vec2<f32>,
     surface_offset: f32,
     valid: u32,
@@ -268,7 +272,8 @@ fn interval_differential(
         return IntervalDifferential(
             min(t1 - t0, g_params.max_path_dt),
             vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-            vec4<f32>(0.0), vec2<f32>(t0, 0.0), 0.0,
+            vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
+            vec2<f32>(t0, 0.0), 0.0,
             select(0u, 1u, t1 > t0),
         );
     }
@@ -278,7 +283,8 @@ fn interval_differential(
     if (sphere.valid == 0u) {
         return IntervalDifferential(
             0.0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-            vec4<f32>(0.0), vec2<f32>(t0, 0.0), 0.0, 0u,
+            vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
+            vec2<f32>(t0, 0.0), 0.0, 0u,
         );
     }
 
@@ -300,6 +306,18 @@ fn interval_differential(
         end = sphere.far_t;
         end_from_sphere = true;
     }
+    surface_query.x = start;
+    var surface_query_d_previous = vec4<f32>(0.0);
+    var surface_query_d_current = vec4<f32>(0.0);
+    if (start_from_sphere) {
+        surface_query_d_current = sphere.near_jacobian;
+    } else if (previous_idx != current_idx) {
+        let query_face = face_intersection_jacobians(
+            ray_origin, ray_dir, current, g_points[previous_idx], t0,
+        );
+        surface_query_d_current = query_face.current;
+        surface_query_d_previous = query_face.adjacent;
+    }
     if ((g_params.oriented & 1u) != 0u) {
         let surface_data = g_surface_normals[current_idx];
         let normal = surface_data.xyz;
@@ -311,7 +329,8 @@ fn interval_differential(
             if (dot(ray_origin - current.xyz, normal) > offset) {
                 return IntervalDifferential(
                     0.0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-                    vec4<f32>(0.0), surface_query, effective_offset, 0u,
+                    vec4<f32>(0.0), surface_query_d_previous,
+                    surface_query_d_current, surface_query, effective_offset, 0u,
                 );
             }
         } else {
@@ -336,7 +355,8 @@ fn interval_differential(
     if (end <= start) {
         return IntervalDifferential(
             0.0, vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0),
-            vec4<f32>(0.0), surface_query, effective_offset, 0u,
+            vec4<f32>(0.0), surface_query_d_previous,
+            surface_query_d_current, surface_query, effective_offset, 0u,
         );
     }
 
@@ -347,14 +367,9 @@ fn interval_differential(
     if (start_from_surface) {
         dt_d_current -= vec4<f32>(surface_center_jacobian, 0.0);
         dt_d_surface_normal -= surface_plane_jacobian;
-    } else if (start_from_sphere) {
-        dt_d_current -= sphere.near_jacobian;
-    } else if (previous_idx != current_idx) {
-        let face = face_intersection_jacobians(
-            ray_origin, ray_dir, current, g_points[previous_idx], t0,
-        );
-        dt_d_current -= face.current;
-        dt_d_previous -= face.adjacent;
+    } else {
+        dt_d_current -= surface_query_d_current;
+        dt_d_previous -= surface_query_d_previous;
     }
     if (end_from_surface) {
         dt_d_current += vec4<f32>(surface_center_jacobian, 0.0);
@@ -380,6 +395,7 @@ fn interval_differential(
     }
     return IntervalDifferential(
         dt, dt_d_previous, dt_d_current, dt_d_next, dt_d_surface_normal,
+        surface_query_d_previous, surface_query_d_current,
         surface_query, effective_offset, 1u,
     );
 }
@@ -755,6 +771,12 @@ fn emit_powerfoam_splats(
         g_mask_out[output_slot] = 1.0;
         if (has_surface_detail()) {
             g_surface_queries_out[output_slot] = differential.surface_query;
+            if (g_params.jacobian_mode == 1u) {
+                g_surface_query_grad_previous_out[output_slot] =
+                    differential.surface_query_d_previous;
+                g_surface_query_grad_current_out[output_slot] =
+                    differential.surface_query_d_current;
+            }
         }
         if (g_params.jacobian_mode != 0u) {
             var reference_tangent = 0.0;
@@ -865,6 +887,12 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
         g_mask_out[output_slot] = 1.0;
         if (has_surface_detail()) {
             g_surface_queries_out[output_slot] = differential.surface_query;
+            if (g_params.jacobian_mode == 1u) {
+                g_surface_query_grad_previous_out[output_slot] =
+                    differential.surface_query_d_previous;
+                g_surface_query_grad_current_out[output_slot] =
+                    differential.surface_query_d_current;
+            }
         }
         if (g_params.jacobian_mode != 0u) {
             var reference_tangent = 0.0;
@@ -1048,6 +1076,12 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
             g_mask_out[row_start + output_step] = 1.0;
             if (has_surface_detail()) {
                 g_surface_queries_out[row_start + output_step] = interval.surface_query;
+                if (g_params.jacobian_mode == 1u) {
+                    g_surface_query_grad_previous_out[row_start + output_step] =
+                        interval.surface_query_d_previous;
+                    g_surface_query_grad_current_out[row_start + output_step] =
+                        interval.surface_query_d_current;
+                }
             }
             if (g_params.power_foam != 0u && g_params.jacobian_mode != 0u) {
                 var reference_tangent = 0.0;

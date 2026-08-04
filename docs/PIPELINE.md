@@ -1140,11 +1140,12 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   padded rows and can inject `0/0` before masking. Active-row forward parity is
   checked against the CPU oracle, and a physical end-to-end test covers finite
   updates plus frozen topology.
-- Position and radius optimization remain rejected while detail is present.
-  The recorded support-entry query does not yet carry its topology Jacobian;
-  silently applying a partial gradient would make the geometry gate ambiguous.
-  Detail training and detail-aware densification with frozen positions/radii
-  are supported.
+- Position and radius optimization are supported while detail is present. The
+  recorder carries the active support-entry derivative for both the preceding
+  and current site's `(position, radius)`, and the graph evaluates that fixed-
+  topology tangent against live geometry. Frozen geometry retains the compact
+  query-only payload; full detail adds two `vec4` streams only when either
+  spatial table is trainable.
 - Physical gates cover CPU parity and nonzero gradients for every table,
   external query-buffer binding, repeated geometry refresh, table/Adam remap
   through densification, and exact interrupted/resumed training.
@@ -1505,6 +1506,44 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   All 14 physical path tests, strict all-target lint, and the complete
   serialized workspace suite pass; the latter peaks at 5.69 GB (5.30 GiB)
   under the same limit with no event.
+
+#### M2ay — Differentiate spatial-detail support entry (implemented and two-scene-gated)
+
+- Eight-site detail now composes with topology-safe position and radius
+  training. The recorder exports the active derivative of the pre-surface
+  support entry with respect to the preceding and current site's
+  `(x, y, z, radius)`. Support-sphere and radical-face branches share the CPU
+  and WGSL formulas. Meganeura reconstructs the stable local query by dotting
+  those recorded derivatives with live ray-relative geometry; Euler
+  homogeneity makes the snapshot value exact without another reference stream.
+- The two extra `vec4` outputs exist only for full geometry plus detail: they
+  add 32 bytes per path slot (20 MiB at 4,096 rays × 160 entries). Frozen
+  detail continues to bind two 16-byte dummies. A two-replica profile measures
+  414→471 graph passes and 26.90→44.47 ms combined steady recorder/graph GPU
+  time (+65.3%). The full Room gate measures 95.53→150.11 seconds (+57.1%);
+  Bonsai measures 55.33→92.82 seconds (+67.8%). This is an explicit opt-in
+  quality/cost tradeoff, not a new default schedule.
+- On the 200K-site, 2,040-step Room gate, two frozen replicas average
+  25.6449/23.4125 dB train/held out. Joint geometry at position/radius ratios
+  `0.01/0.01` averages 26.4852/24.2963 dB, gains of +0.8403/+0.8838 dB, and
+  improves 38/39 averaged held-out views. Mean Čech edges grow 3.011M→3.250M
+  (+7.9%). A reference-radius-rate `0.01/0.0005` probe reaches
+  26.5906/24.1554 dB while shrinking edges to 2.908M, so the radius rate stays
+  a scene-level policy rather than being silently selected globally.
+- On Bonsai at the same horizon, frozen detail reaches 17.1996/16.3188 dB.
+  Ratios `0.01/0.0005` reach 17.2352/16.4668 dB with 1.7% fewer edges; ratios
+  `0.01/0.01` reach 17.3405/16.7241 dB with 5.3% more edges. The high rate
+  improves 22/37 held-out views, regresses 14, and ties one, so it demonstrates
+  cross-scene mean benefit but does not qualify as a universal default.
+- CPU central differences cover sphere and radical-face query branches. All 14
+  physical recorder/oracle cases compare the new GPU streams and reconstruct
+  their query values. A train-mode Meganeura finite difference covers the
+  complete spatial-detail query, and end-to-end tests cover finite joint
+  updates, densification/Adam remap, and bit-exact interrupted resume. All
+  scene scopes record zero truncation, swap, pressure, OOM, kill, or GPU fault.
+  Formatting, strict workspace lint, and the complete serialized workspace
+  suite pass; the last peaks at 5.37 GB (5.00 GiB) under the 6 GiB limit with
+  no event.
 
 ### M3 — Training crate scaffolding
 

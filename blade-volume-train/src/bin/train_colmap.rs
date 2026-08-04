@@ -693,21 +693,6 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let surface_detail_requested = args.surface_detail_offset_lr_ratio > 0.0
-        || args.surface_detail_height_lr_ratio > 0.0
-        || args.surface_detail_color_lr_ratio > 0.0;
-    if surface_detail_requested
-        && (args.position_lr_ratio > 0.0
-            || args.radius_lr_ratio > 0.0
-            || lr_groups == diff_render::LrGroups::RadFoamV1Relative
-            || lr_schedule == diff_render::LrSchedule::RadFoamV1)
-    {
-        eprintln!(
-            "spatial-detail training currently requires frozen positions and radii; use the \
-             legacy LR groups with zero position/radius rates"
-        );
-        std::process::exit(2);
-    }
     if lr_schedule == diff_render::LrSchedule::RadFoamV1
         && geometry_rebuild_schedule == diff_render::GeometryRebuildSchedule::Fixed
         && args.geometry_rebuild_every == 0

@@ -18,6 +18,7 @@
 //!   - `dt_reference_tangents_out[f32]` (selected PowerFoam differential)
 //!   - up to four `dt_grad_*_out[vec4<f32>]` streams (PowerFoam only)
 //!   - `surface_queries_out[vec2<f32>]` (detail query near + plane-branch mask)
+//!   - two `surface_query_grad_*_out[vec4<f32>]` streams (full-detail only)
 //!
 //! PowerFoam gather workgroups initialize the index and mask rows before
 //! recording. The unweighted walk still leaves trailing slots at their
@@ -111,12 +112,19 @@ fn output_bytes(
     } else {
         mem::size_of::<[f32; 2]>() as u64
     };
+    let surface_query_jacobians = if with_surface_queries && jacobian_mode == PathJacobianMode::Full
+    {
+        2 * pl * mem::size_of::<[f32; 4]>() as u64
+    } else {
+        2 * mem::size_of::<[f32; 4]>() as u64
+    };
     base + path_status
         + previous_cells
         + reference_tangents
         + geometry_jacobians
         + surface_jacobians
         + surface_queries
+        + surface_query_jacobians
 }
 
 /// Inputs to one path-record dispatch.
@@ -184,6 +192,8 @@ struct PathRecordData {
     g_dt_grad_next_out: gpu::BufferPiece,
     g_dt_grad_surface_normal_out: gpu::BufferPiece,
     g_surface_queries_out: gpu::BufferPiece,
+    g_surface_query_grad_previous_out: gpu::BufferPiece,
+    g_surface_query_grad_current_out: gpu::BufferPiece,
     g_candidate_counts: gpu::BufferPiece,
     g_candidates: gpu::BufferPiece,
     g_candidate_depths: gpu::BufferPiece,
@@ -357,6 +367,8 @@ impl PathRecorder {
             g_dt_grad_next_out: buffers.dt_grad_next.into(),
             g_dt_grad_surface_normal_out: buffers.dt_grad_surface_normal.into(),
             g_surface_queries_out: buffers.surface_queries.into(),
+            g_surface_query_grad_previous_out: buffers.surface_query_grad_previous.into(),
+            g_surface_query_grad_current_out: buffers.surface_query_grad_current.into(),
             g_candidate_counts: buffers.splat_candidate_counts.into(),
             g_candidates: buffers.splat_candidates.into(),
             g_candidate_depths: buffers.splat_candidate_depths.into(),
@@ -524,6 +536,10 @@ pub struct PathRecordBuffers {
     pub dt_grad_surface_normal: gpu::Buffer,
     /// Pre-surface near distance and base-plane-query mask for spatial detail.
     pub surface_queries: gpu::Buffer,
+    /// Fixed-topology derivatives of the detail query depth with respect to
+    /// the entry neighbor and current site's `(x, y, z, radius)`.
+    pub surface_query_grad_previous: gpu::Buffer,
+    pub surface_query_grad_current: gpu::Buffer,
     /// Host-visible number of intersected supports for every sampled ray.
     /// Values larger than [`Self::splat_candidate_capacity`] signal that the
     /// bounded scratch row overflowed and the dispatch must be rejected.
@@ -824,6 +840,13 @@ impl PathRecordBuffers {
         } else {
             mem::size_of::<[f32; 2]>() as u64
         };
+        let has_surface_query_jacobians =
+            with_surface_queries && jacobian_mode == PathJacobianMode::Full;
+        let surface_query_jacobian_bytes = if has_surface_query_jacobians {
+            pl * mem::size_of::<[f32; 4]>() as u64
+        } else {
+            mem::size_of::<[f32; 4]>() as u64
+        };
         let pix_bytes = (num_pixels as u64) * mem::size_of::<u32>() as u64;
         let splat_candidate_capacity = if with_splat_scratch {
             splat_candidate_capacity(max_steps, min_splat_candidate_capacity)
@@ -956,6 +979,16 @@ impl PathRecordBuffers {
             size: surface_query_bytes,
             memory: mem(external && with_surface_queries),
         });
+        let surface_query_grad_previous = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-surface-query-grad-previous",
+            size: surface_query_jacobian_bytes,
+            memory: mem(external && has_surface_query_jacobians),
+        });
+        let surface_query_grad_current = context.create_buffer(gpu::BufferDesc {
+            name: "radfoam-path-record-surface-query-grad-current",
+            size: surface_query_jacobian_bytes,
+            memory: mem(external && has_surface_query_jacobians),
+        });
         let splat_candidate_counts = context.create_buffer(gpu::BufferDesc {
             name: "powerfoam-path-candidate-counts",
             size: candidate_count_bytes,
@@ -1011,6 +1044,8 @@ impl PathRecordBuffers {
             dt_grad_next,
             dt_grad_surface_normal,
             surface_queries,
+            surface_query_grad_previous,
+            surface_query_grad_current,
             splat_candidate_counts,
             splat_candidates,
             splat_candidate_depths,
@@ -1075,6 +1110,10 @@ impl PathRecordBuffers {
 
     pub fn has_surface_queries(&self) -> bool {
         self.has_surface_queries
+    }
+
+    pub fn has_surface_query_jacobians(&self) -> bool {
+        self.has_surface_queries && self.jacobian_mode == PathJacobianMode::Full
     }
 
     pub fn jacobian_mode(&self) -> PathJacobianMode {
@@ -1188,6 +1227,8 @@ impl PathRecordBuffers {
         context.destroy_buffer(self.dt_grad_next);
         context.destroy_buffer(self.dt_grad_surface_normal);
         context.destroy_buffer(self.surface_queries);
+        context.destroy_buffer(self.surface_query_grad_previous);
+        context.destroy_buffer(self.surface_query_grad_current);
         context.destroy_buffer(self.splat_candidate_counts);
         context.destroy_buffer(self.splat_candidates);
         context.destroy_buffer(self.splat_candidate_depths);
@@ -1214,19 +1255,23 @@ mod tests {
         let path_status = 4_096_u64 * 4;
         assert_eq!(
             output_bytes(4_096, 256, PathJacobianMode::Full, false),
-            slots * 88 + path_status + 8
+            slots * 88 + path_status + 40
         );
         assert_eq!(
             output_bytes(4_096, 256, PathJacobianMode::Surface, false),
-            slots * 36 + 52 + path_status + 8
+            slots * 36 + 92 + path_status
         );
         assert_eq!(
             output_bytes(4_096, 256, PathJacobianMode::None, false),
-            slots * 16 + 72 + path_status + 8
+            slots * 16 + 112 + path_status
         );
         assert_eq!(
             output_bytes(4_096, 256, PathJacobianMode::Surface, true),
-            slots * 44 + 52 + path_status
+            slots * 44 + 84 + path_status
+        );
+        assert_eq!(
+            output_bytes(4_096, 256, PathJacobianMode::Full, true),
+            slots * 128 + path_status
         );
     }
 

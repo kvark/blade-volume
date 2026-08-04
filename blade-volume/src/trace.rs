@@ -931,6 +931,12 @@ pub struct PathJacobianEntry {
     pub dt_d_surface_normal: glam::Vec4,
     /// Sphere/power-cell entry before oriented-surface clipping.
     pub surface_query_near: f32,
+    /// Derivative of [`Self::surface_query_near`] with respect to the entry
+    /// neighbor's `(x, y, z, radius)`.
+    pub surface_query_d_previous: glam::Vec4,
+    /// Derivative of [`Self::surface_query_near`] with respect to the current
+    /// site's `(x, y, z, radius)`.
+    pub surface_query_d_current: glam::Vec4,
     /// Effective uniform-plus-detail surface offset used by the forward pass.
     pub surface_offset: f32,
 }
@@ -1110,7 +1116,8 @@ fn path_interval_jacobian(
     let mut end_sphere_jacobian = None;
     let mut start_surface_jacobian = None;
     let mut end_surface_jacobian = None;
-    let mut surface_query_near = start;
+    let mut surface_query_d_previous = glam::Vec4::ZERO;
+    let mut surface_query_d_current = glam::Vec4::ZERO;
     let mut effective_surface_offset = 0.0;
 
     if bounded {
@@ -1125,8 +1132,23 @@ fn path_interval_jacobian(
             end_sphere_jacobian = Some(far_jacobian);
         }
     }
+    if let Some(jacobian) = start_sphere_jacobian {
+        surface_query_d_current = jacobian;
+    } else if previous_cell != cell {
+        let previous_pos = model.points[previous_cell as usize].truncate();
+        let previous_radius = read_radius(model, previous_cell);
+        (surface_query_d_current, surface_query_d_previous) = face_intersection_jacobians(
+            ray_origin,
+            ray_dir,
+            current_pos,
+            current_radius,
+            previous_pos,
+            previous_radius,
+            t0,
+        );
+    }
+    let surface_query_near = start;
     if let Some(normal) = normalized_surface_normal(model, cell) {
-        surface_query_near = start;
         let offset = eval_surface_detail(model, cell, ray_origin, ray_dir, surface_query_near).0;
         effective_surface_offset = offset;
         let denominator = ray_dir.dot(normal);
@@ -1158,22 +1180,9 @@ fn path_interval_jacobian(
     if let Some((center_jacobian, normal_jacobian, offset_jacobian)) = start_surface_jacobian {
         dt_d_current -= center_jacobian.extend(0.0);
         dt_d_surface_normal -= normal_jacobian.extend(offset_jacobian);
-    } else if let Some(jacobian) = start_sphere_jacobian {
-        dt_d_current -= jacobian;
-    } else if previous_cell != cell {
-        let previous_pos = model.points[previous_cell as usize].truncate();
-        let previous_radius = read_radius(model, previous_cell);
-        let (current_jacobian, previous_jacobian) = face_intersection_jacobians(
-            ray_origin,
-            ray_dir,
-            current_pos,
-            current_radius,
-            previous_pos,
-            previous_radius,
-            t0,
-        );
-        dt_d_current -= current_jacobian;
-        dt_d_previous -= previous_jacobian;
+    } else {
+        dt_d_current -= surface_query_d_current;
+        dt_d_previous -= surface_query_d_previous;
     }
 
     if let Some((center_jacobian, normal_jacobian, offset_jacobian)) = end_surface_jacobian {
@@ -1209,6 +1218,8 @@ fn path_interval_jacobian(
             dt_d_next,
             dt_d_surface_normal,
             surface_query_near,
+            surface_query_d_previous,
+            surface_query_d_current,
             surface_offset: effective_surface_offset,
         },
     ))
@@ -2282,6 +2293,20 @@ mod path_tests {
             .dt
     }
 
+    fn recorded_surface_query_for_cell(
+        model: &PointCloudModel,
+        ray: Ray,
+        settings: TraceSettings,
+        cell: u32,
+    ) -> f32 {
+        let path = record_path_jacobians(model, ray, settings);
+        path.entries
+            .iter()
+            .find(|entry| entry.cell == cell)
+            .unwrap_or_else(|| panic!("perturbation removed cell {cell} from the fixed path"))
+            .surface_query_near
+    }
+
     fn assert_site_jacobian_matches_finite_difference(
         model: &PointCloudModel,
         ray: Ray,
@@ -2306,6 +2331,34 @@ mod path_tests {
                 absolute < 2.0e-3 || absolute / scale < 1.0e-2,
                 "cell {target_cell}, parameter cell {parameter_cell}, component {component}: \
                  analytical={expected}, numerical={numerical}, absolute={absolute}",
+            );
+        }
+    }
+
+    fn assert_surface_query_jacobian_matches_finite_difference(
+        model: &PointCloudModel,
+        ray: Ray,
+        settings: TraceSettings,
+        target_cell: u32,
+        parameter_cell: u32,
+        analytical: glam::Vec4,
+    ) {
+        const EPSILON: f32 = 1.0e-3;
+        for component in 0..4 {
+            let mut plus = model.clone();
+            perturb_site(&mut plus, parameter_cell, component, EPSILON);
+            let plus_query = recorded_surface_query_for_cell(&plus, ray, settings, target_cell);
+            let mut minus = model.clone();
+            perturb_site(&mut minus, parameter_cell, component, -EPSILON);
+            let minus_query = recorded_surface_query_for_cell(&minus, ray, settings, target_cell);
+            let numerical = (plus_query - minus_query) / (2.0 * EPSILON);
+            let expected = analytical[component];
+            let absolute = (expected - numerical).abs();
+            let scale = expected.abs().max(numerical.abs()).max(1.0e-4);
+            assert!(
+                absolute < 2.0e-3 || absolute / scale < 1.0e-2,
+                "query cell {target_cell}, parameter cell {parameter_cell}, component \
+                 {component}: analytical={expected}, numerical={numerical}, absolute={absolute}",
             );
         }
     }
@@ -2369,6 +2422,22 @@ mod path_tests {
             entry.next_cell,
             entry.dt_d_next,
         );
+        assert_surface_query_jacobian_matches_finite_difference(
+            &model,
+            ray,
+            settings,
+            entry.cell,
+            entry.previous_cell,
+            entry.surface_query_d_previous,
+        );
+        assert_surface_query_jacobian_matches_finite_difference(
+            &model,
+            ray,
+            settings,
+            entry.cell,
+            entry.cell,
+            entry.surface_query_d_current,
+        );
     }
 
     #[test]
@@ -2409,6 +2478,14 @@ mod path_tests {
             entry.cell,
             entry.cell,
             entry.dt_d_current,
+        );
+        assert_surface_query_jacobian_matches_finite_difference(
+            &model,
+            ray,
+            settings,
+            entry.cell,
+            entry.cell,
+            entry.surface_query_d_current,
         );
     }
 

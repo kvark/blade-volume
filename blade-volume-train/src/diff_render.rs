@@ -103,6 +103,10 @@ pub struct SurfaceDetailGraph {
     pub colors: mn::NodeId,
     /// `[P * L, 2]` recorded query-near distance and plane-branch mask.
     pub surface_queries: mn::NodeId,
+    /// Fixed-topology entry-depth derivatives, present only when positions or
+    /// radii are trainable.
+    pub surface_query_grad_previous: Option<mn::NodeId>,
+    pub surface_query_grad_current: Option<mn::NodeId>,
 }
 
 #[derive(Clone, Debug)]
@@ -389,6 +393,13 @@ struct SurfaceDetailEvaluation {
     color_weights: mn::NodeId,
 }
 
+#[derive(Clone, Copy)]
+struct SurfaceQueryGeometryGraph {
+    previous_cell_indices: mn::NodeId,
+    geometry: mn::NodeId,
+    neg_ray_origin_geometry: mn::NodeId,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn evaluate_surface_detail_graph(
     g: &mut mn::Graph,
@@ -400,13 +411,52 @@ fn evaluate_surface_detail_graph(
     radii: mn::NodeId,
     ray_origin: mn::NodeId,
     ray_direction: mn::NodeId,
+    query_geometry: Option<SurfaceQueryGeometryGraph>,
     rows: usize,
 ) -> SurfaceDetailEvaluation {
     let queries = g.materialize(parameters.surface_queries);
     let query_near = g.split_a(queries, rows as u32, 1, 1, 1);
-    let query_near = g.reshape(query_near, &[rows, 1]);
+    let recorded_query_near = g.reshape(query_near, &[rows, 1]);
     let plane_branch = g.split_b(queries, rows as u32, 1, 1, 1);
     let plane_branch = g.reshape(plane_branch, &[rows, 1]);
+    let query_near = match (
+        parameters.surface_query_grad_previous,
+        parameters.surface_query_grad_current,
+        query_geometry,
+    ) {
+        (
+            Some(previous_gradient),
+            Some(current_gradient),
+            Some(SurfaceQueryGeometryGraph {
+                previous_cell_indices,
+                geometry,
+                neg_ray_origin_geometry,
+            }),
+        ) => {
+            // Support-sphere and radical-face entry depths are homogeneous in
+            // ray-relative `(x, y, z, radius)`. Euler's theorem therefore
+            // makes `J_ref * geometry_ref == query_ref`, so the recorded
+            // fixed-topology Jacobian dotted with live geometry is the exact
+            // first-order query without another reference-tangent stream.
+            let previous_term = weighted_role_linear_term(
+                g,
+                previous_cell_indices,
+                geometry,
+                neg_ray_origin_geometry,
+                previous_gradient,
+            );
+            let current_term = weighted_role_linear_term(
+                g,
+                cell_indices,
+                geometry,
+                neg_ray_origin_geometry,
+                current_gradient,
+            );
+            g.add(previous_term, current_term)
+        }
+        (None, None, None) => recorded_query_near,
+        _ => unreachable!("surface-query geometry inputs must be declared together"),
+    };
 
     let raw_sites = g.embedding(cell_indices, parameters.offsets);
     let raw_sites = g.reshape(raw_sites, &[rows * vol::SURFACE_DETAIL_SITES, 3]);
@@ -689,6 +739,10 @@ fn build_volumetric_graph_with_options(
     let surface_queries = options
         .use_surface_detail
         .then(|| g.input("surface_queries", &[pl, 2]));
+    let surface_query_grad_previous = (options.use_surface_detail && use_geometry_jacobians)
+        .then(|| g.input("surface_query_grad_previous", &[pl, 4]));
+    let surface_query_grad_current = (options.use_surface_detail && use_geometry_jacobians)
+        .then(|| g.input("surface_query_grad_current", &[pl, 4]));
     let surface_normal_loss_scale = options
         .use_surface_normal_loss
         .then(|| g.input("surface_normal_loss_scale", &[1, 1]));
@@ -753,6 +807,8 @@ fn build_volumetric_graph_with_options(
             &[n_cells, vol::SURFACE_DETAIL_SITES * 3],
         ),
         surface_queries: surface_queries.unwrap(),
+        surface_query_grad_previous,
+        surface_query_grad_current,
     });
     let spherical_voronoi = use_spherical_voronoi.then(|| SphericalVoronoiGraph {
         axes: g.parameter(
@@ -855,6 +911,22 @@ fn build_volumetric_graph_with_options(
     // Gather per-pixel origins and directions into the `[P*L, 3]` path layout.
     let ray_origin_pl = g.embedding(pixel_idx_per_step, ray_origin);
     let ray_dir_pl = g.embedding(pixel_idx_per_step, ray_dir_per_pixel);
+    let geometry = use_geometry_jacobians.then(|| {
+        let positions_flat = g.reshape(differentiable_positions, &[n_cells * 3]);
+        let actual_radii_flat = g.reshape(differentiable_radii.unwrap(), &[n_cells]);
+        let geometry_flat = g.concat(positions_flat, actual_radii_flat, n_cells as u32, 3, 1, 1);
+        g.reshape(geometry_flat, &[n_cells, 4])
+    });
+    let neg_ray_origin_geometry = use_geometry_jacobians.then(|| {
+        let zero_radius = g.constant(vec![0.0_f32; p], &[p, 1]);
+        let ray_origin_flat = g.reshape(ray_origin, &[p * 3]);
+        let zero_radius_flat = g.reshape(zero_radius, &[p]);
+        let ray_origin_geometry_flat =
+            g.concat(ray_origin_flat, zero_radius_flat, p as u32, 3, 1, 1);
+        let ray_origin_geometry = g.reshape(ray_origin_geometry_flat, &[p, 4]);
+        let ray_origin_geometry_pl = g.embedding(pixel_idx_per_step, ray_origin_geometry);
+        g.neg(ray_origin_geometry_pl)
+    });
     // The same oriented plane drives the recorded-path linearization, spatial
     // appearance, and optional view-facing loss. Gather it once so those
     // branches share both the forward payload and its backward accumulation.
@@ -879,6 +951,11 @@ fn build_volumetric_graph_with_options(
             step_surface_radii.unwrap(),
             ray_origin_pl,
             ray_dir_pl,
+            use_geometry_jacobians.then(|| SurfaceQueryGeometryGraph {
+                previous_cell_indices: previous_cell_indices.unwrap(),
+                geometry: geometry.unwrap(),
+                neg_ray_origin_geometry: neg_ray_origin_geometry.unwrap(),
+            }),
             pl,
         )
     });
@@ -967,21 +1044,10 @@ fn build_volumetric_graph_with_options(
                 Some(current_gradient),
                 Some(next_gradient),
             ) => {
-                // Activate radii once at the parameter table, then pack
-                // `(x,y,z,r)`. Each path role gathers the same vec4 table.
-                let positions_flat = g.reshape(differentiable_positions, &[n_cells * 3]);
-                let actual_radii_flat = g.reshape(differentiable_radii.unwrap(), &[n_cells]);
-                let geometry_flat =
-                    g.concat(positions_flat, actual_radii_flat, n_cells as u32, 3, 1, 1);
-                let geometry = g.reshape(geometry_flat, &[n_cells, 4]);
-                let zero_radius = g.constant(vec![0.0_f32; p], &[p, 1]);
-                let ray_origin_flat = g.reshape(ray_origin, &[p * 3]);
-                let zero_radius_flat = g.reshape(zero_radius, &[p]);
-                let ray_origin_geometry_flat =
-                    g.concat(ray_origin_flat, zero_radius_flat, p as u32, 3, 1, 1);
-                let ray_origin_geometry = g.reshape(ray_origin_geometry_flat, &[p, 4]);
-                let ray_origin_geometry_pl = g.embedding(pixel_idx_per_step, ray_origin_geometry);
-                let neg_ray_origin_geometry = g.neg(ray_origin_geometry_pl);
+                // The packed live geometry and ray-relative origin are also
+                // consumed by the spatial-detail entry-depth linearization.
+                let geometry = geometry.unwrap();
+                let neg_ray_origin_geometry = neg_ray_origin_geometry.unwrap();
                 let previous_term = weighted_role_linear_term(
                     g,
                     previous_indices,
@@ -3072,11 +3138,6 @@ pub(crate) fn fit_appearance_multi_view_outcome(
         || config.radius_lr_ratio > 0.0
         || config.lr_groups == LrGroups::RadFoamV1Relative
         || config.lr_schedule == LrSchedule::RadFoamV1;
-    assert!(
-        model.surface_detail.is_none() || !topology_requested,
-        "surface-detail training currently requires frozen positions and radii because the \
-         recorded support-entry query has no topology Jacobian"
-    );
     let geometry_requested = topology_requested
         || config.surface_normal_lr_ratio > 0.0
         || config.surface_offset_lr_ratio > 0.0
@@ -5028,6 +5089,31 @@ fn build_train_session(
                 .unwrap_or_else(|err| {
                     panic!("bind_external_buffer(surface_queries) failed: {err:?}")
                 });
+            if path_bufs.has_surface_query_jacobians() {
+                for (slot, buf) in [
+                    (
+                        "surface_query_grad_previous",
+                        path_bufs.surface_query_grad_previous,
+                    ),
+                    (
+                        "surface_query_grad_current",
+                        path_bufs.surface_query_grad_current,
+                    ),
+                ] {
+                    let source = gpu
+                        .get_external_buffer_source(buf)
+                        .expect("surface-query Jacobian buffer must be exportable");
+                    session
+                        .bind_external_buffer(
+                            meganeura::ExternalSlot::Input(slot),
+                            source,
+                            pl_bytes * 4,
+                        )
+                        .unwrap_or_else(|err| {
+                            panic!("bind_external_buffer({slot}) failed: {err:?}")
+                        });
+                }
+            }
         }
     }
 
@@ -5719,6 +5805,10 @@ fn fit_appearance_pixel_batched(
                 }
                 if path_bufs.has_surface_queries() && !path_payload_initialized {
                     tx.fill_buffer(path_bufs.surface_queries.at(0), pl_bytes * 2, 0);
+                }
+                if path_bufs.has_surface_query_jacobians() && !path_payload_initialized {
+                    tx.fill_buffer(path_bufs.surface_query_grad_previous.at(0), pl_bytes * 4, 0);
+                    tx.fill_buffer(path_bufs.surface_query_grad_current.at(0), pl_bytes * 4, 0);
                 }
             }
             record_args.clear();
@@ -6651,6 +6741,104 @@ mod tests {
     }
 
     #[test]
+    fn surface_detail_training_updates_positions_and_radii() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping joint surface-detail geometry training test: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        model.radii = Some(vec![0.2; model.points.len()]);
+        model.surface_normals = Some(vec![glam::Vec3::Z; model.points.len()]);
+        model.surface_offsets = Some(vec![0.0; model.points.len()]);
+        let detail_count = model.points.len() * vol::SURFACE_DETAIL_SITES;
+        model.surface_detail = Some(vol::SurfaceDetail {
+            offsets: (0..detail_count)
+                .map(|index| {
+                    let angle = std::f32::consts::TAU * (index % vol::SURFACE_DETAIL_SITES) as f32
+                        / vol::SURFACE_DETAIL_SITES as f32;
+                    0.1 * glam::Vec3::new(angle.cos(), angle.sin(), 0.0)
+                })
+                .collect(),
+            heights: (0..detail_count)
+                .map(|index| 0.01 * ((index % vol::SURFACE_DETAIL_SITES) as f32 - 3.5))
+                .collect(),
+            colors: (0..detail_count)
+                .map(|index| {
+                    let value = 0.01 * (index % vol::SURFACE_DETAIL_SITES) as f32;
+                    glam::Vec3::new(value, -0.5 * value, 0.25 * value)
+                })
+                .collect(),
+        });
+        model.compute_adjacency_default();
+        let positions_before = model
+            .points
+            .iter()
+            .map(|point| point.truncate())
+            .collect::<Vec<_>>();
+        let radii_before = model.radii.clone().unwrap();
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: glam::Quat::IDENTITY.to_array(),
+                fov: [0.5; 2],
+                principal: [0.0; 2],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
+            width: 1,
+            height: 1,
+        };
+
+        let losses = fit_appearance_multi_view(
+            &mut model,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                learning_rate: 0.01,
+                epochs: 3,
+                position_lr_ratio: 0.25,
+                radius_lr_ratio: 0.25,
+                surface_detail_offset_lr_ratio: 0.1,
+                surface_detail_height_lr_ratio: 0.1,
+                surface_detail_color_lr_ratio: 1.0,
+                geometry_rebuild_every: 1,
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        assert_eq!(losses.len(), 3);
+        assert!(losses.iter().all(|loss| loss.is_finite()));
+        assert!(model
+            .points
+            .iter()
+            .zip(positions_before)
+            .any(|(point, before)| (point.truncate() - before).length() > 1.0e-7));
+        assert!(model
+            .radii
+            .as_ref()
+            .unwrap()
+            .iter()
+            .zip(radii_before)
+            .any(|(radius, before)| (radius - before).abs() > 1.0e-7));
+        assert!(model
+            .points
+            .iter()
+            .all(|point| point.is_finite() && point.w.is_finite()));
+        assert!(model
+            .radii
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|radius| radius.is_finite() && *radius > 0.0));
+        model.validate().unwrap();
+    }
+
+    #[test]
     fn sh_color_graph_clamps_negative_values_before_weighting() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
@@ -6948,6 +7136,8 @@ mod tests {
             heights: graph.parameter("surface_detail_heights", &[1, sites]),
             colors: graph.parameter("surface_detail_colors", &[1, sites * 3]),
             surface_queries: graph.input("surface_queries", &[1, 2]),
+            surface_query_grad_previous: None,
+            surface_query_grad_current: None,
         };
         let centers = graph.parameter("positions", &[1, 3]);
         let normals = graph.parameter("surface_normals", &[1, 3]);
@@ -6967,6 +7157,7 @@ mod tests {
             radii,
             ray_origin,
             ray_direction,
+            None,
             1,
         );
         let red_table = split_rgb_table(&mut graph, parameters.colors, 1, sites)[0];
@@ -7086,6 +7277,217 @@ mod tests {
             session.read_param_grad(name, &mut gradient);
             assert!(gradient.iter().all(|value| value.is_finite()));
             assert!(gradient.iter().any(|value| value.abs() > 1.0e-8));
+        }
+    }
+
+    #[test]
+    fn surface_detail_entry_linearization_matches_cpu_finite_difference() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping surface-detail entry-gradient test: no GPU");
+            return;
+        };
+        let sites = vol::SURFACE_DETAIL_SITES;
+        let ray = vol::trace::Ray {
+            origin: glam::Vec3::new(0.7, 0.1, 0.0),
+            direction: glam::Vec3::Z,
+        };
+        let settings = vol::trace::TraceSettings {
+            start_point: 0,
+            max_steps: 4,
+            weight_threshold: 0.0,
+            depth: 20.0,
+            eval_mode: vol::trace::EvalMode::Sh,
+        };
+        let offsets = (0..sites)
+            .map(|site| {
+                let angle = std::f32::consts::TAU * site as f32 / sites as f32;
+                0.55 * glam::Vec3::new(angle.cos(), angle.sin(), 0.0)
+            })
+            .collect::<Vec<_>>();
+        let heights = (0..sites)
+            .map(|site| 0.03 * (site as f32 - 3.5))
+            .collect::<Vec<_>>();
+        let colors = (0..sites)
+            .map(|site| {
+                let value = 0.04 * site as f32;
+                glam::Vec3::new(value, -0.5 * value, 0.25 * value)
+            })
+            .collect::<Vec<_>>();
+        let model = vol::PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 10.0, 1.0)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(vol::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: Some(vec![2.0]),
+            surface_normals: Some(vec![glam::Vec3::Z]),
+            surface_offsets: Some(vec![0.0]),
+            surface_detail: Some(vol::SurfaceDetail {
+                offsets: offsets.clone(),
+                heights: heights.clone(),
+                colors: colors.clone(),
+            }),
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+        };
+        let recorded = vol::trace::record_path_jacobians(&model, ray, settings).entries[0];
+        assert_eq!(recorded.previous_cell, recorded.cell);
+
+        let mut graph = mn::Graph::new();
+        let cell_indices = graph.input_u32("cell_indices", &[1]);
+        let previous_cell_indices = graph.input_u32("previous_cell_indices", &[1]);
+        let positions = graph.parameter("positions", &[1, 3]);
+        let radius_table = graph.parameter("radii", &[1, 1]);
+        let positions_flat = graph.reshape(positions, &[3]);
+        let radii_flat = graph.reshape(radius_table, &[1]);
+        let geometry_flat = graph.concat(positions_flat, radii_flat, 1, 3, 1, 1);
+        let geometry = graph.reshape(geometry_flat, &[1, 4]);
+        let ray_origin = graph.input("ray_origin", &[1, 3]);
+        let zero_radius = graph.constant(vec![0.0_f32], &[1, 1]);
+        let ray_origin_flat = graph.reshape(ray_origin, &[3]);
+        let zero_radius_flat = graph.reshape(zero_radius, &[1]);
+        let ray_origin_geometry_flat = graph.concat(ray_origin_flat, zero_radius_flat, 1, 3, 1, 1);
+        let ray_origin_geometry = graph.reshape(ray_origin_geometry_flat, &[1, 4]);
+        let neg_ray_origin_geometry = graph.neg(ray_origin_geometry);
+        let parameters = SurfaceDetailGraph {
+            offsets: graph.parameter("surface_detail_offsets", &[1, sites * 3]),
+            heights: graph.parameter("surface_detail_heights", &[1, sites]),
+            colors: graph.parameter("surface_detail_colors", &[1, sites * 3]),
+            surface_queries: graph.input("surface_queries", &[1, 2]),
+            surface_query_grad_previous: Some(graph.input("surface_query_grad_previous", &[1, 4])),
+            surface_query_grad_current: Some(graph.input("surface_query_grad_current", &[1, 4])),
+        };
+        let centers = graph.embedding(cell_indices, positions);
+        let normals = graph.parameter("surface_normals", &[1, 3]);
+        let base_offsets = graph.parameter("surface_offsets", &[1, 1]);
+        let radii = graph.embedding(cell_indices, radius_table);
+        let radii = floor_surface_radii(&mut graph, radii, 1);
+        let ray_direction = graph.input("ray_direction", &[1, 3]);
+        let evaluation = evaluate_surface_detail_graph(
+            &mut graph,
+            cell_indices,
+            &parameters,
+            centers,
+            normals,
+            base_offsets,
+            radii,
+            ray_origin,
+            ray_direction,
+            Some(SurfaceQueryGeometryGraph {
+                previous_cell_indices,
+                geometry,
+                neg_ray_origin_geometry,
+            }),
+            1,
+        );
+        let red_table = split_rgb_table(&mut graph, parameters.colors, 1, sites)[0];
+        let red = graph.embedding(cell_indices, red_table);
+        let red = graph.mul(red, evaluation.color_weights);
+        let red = graph.sum_inner(red);
+        let loss_terms = graph.add(evaluation.effective_offsets, red);
+        let loss = graph.sum_all(loss_terms);
+        graph.set_outputs(vec![loss]);
+
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        let packed_offsets = offsets
+            .iter()
+            .flat_map(|offset| offset.to_array())
+            .collect::<Vec<_>>();
+        let mut packed_colors = vec![0.0_f32; sites * 3];
+        for site in 0..sites {
+            for channel in 0..3 {
+                packed_colors[channel * sites + site] = colors[site][channel];
+            }
+        }
+        session.set_parameter("surface_detail_offsets", &packed_offsets);
+        session.set_parameter("surface_detail_heights", &heights);
+        session.set_parameter("surface_detail_colors", &packed_colors);
+        session.set_parameter("positions", &[0.0, 0.0, 10.0]);
+        session.set_parameter("radii", &[2.0]);
+        session.set_parameter("surface_normals", &[0.0, 0.0, 1.0]);
+        session.set_parameter("surface_offsets", &[0.0]);
+        session.set_input_u32("cell_indices", &[0]);
+        session.set_input_u32("previous_cell_indices", &[0]);
+        session.set_input("surface_queries", &[recorded.surface_query_near, 0.0]);
+        session.set_input(
+            "surface_query_grad_previous",
+            recorded.surface_query_d_previous.as_ref(),
+        );
+        session.set_input(
+            "surface_query_grad_current",
+            recorded.surface_query_d_current.as_ref(),
+        );
+        session.set_input("ray_origin", ray.origin.as_ref());
+        session.set_input("ray_direction", ray.direction.as_ref());
+        session.set_adam(0.0, 0.9, 0.999, 1.0e-8);
+        session.step();
+        session.wait();
+
+        let cpu_loss = |candidate: &vol::PointCloudModel| {
+            let entry = vol::trace::record_path_jacobians(candidate, ray, settings).entries[0];
+            let (offset, color) = vol::trace::eval_surface_detail(
+                candidate,
+                0,
+                ray.origin,
+                ray.direction,
+                entry.surface_query_near,
+            );
+            offset + color.x
+        };
+        let expected_loss = cpu_loss(&model);
+        assert!((session.read_loss() - expected_loss).abs() < 2.0e-5);
+
+        let mut analytical_position = [0.0_f32; 3];
+        let mut analytical_radius = [0.0_f32; 1];
+        session.read_param_grad("positions", &mut analytical_position);
+        session.read_param_grad("radii", &mut analytical_radius);
+        const EPSILON: f32 = 1.0e-3;
+        let mut numerical = [0.0_f32; 4];
+        for (component, numerical_component) in numerical.iter_mut().enumerate() {
+            let mut plus = model.clone();
+            if component < 3 {
+                plus.points[0][component] += EPSILON;
+            } else {
+                plus.radii.as_mut().unwrap()[0] += EPSILON;
+            }
+            let mut minus = model.clone();
+            if component < 3 {
+                minus.points[0][component] -= EPSILON;
+            } else {
+                minus.radii.as_mut().unwrap()[0] -= EPSILON;
+            }
+            *numerical_component = (cpu_loss(&plus) - cpu_loss(&minus)) / (2.0 * EPSILON);
+        }
+        let analytical = [
+            analytical_position[0],
+            analytical_position[1],
+            analytical_position[2],
+            analytical_radius[0],
+        ];
+        assert!(numerical.iter().any(|value| value.abs() > 1.0e-4));
+        for (component, (&analytical, &numerical)) in
+            analytical.iter().zip(numerical.iter()).enumerate()
+        {
+            let absolute = (analytical - numerical).abs();
+            let scale = analytical.abs().max(numerical.abs()).max(1.0e-4);
+            assert!(
+                absolute < 2.0e-3 || absolute / scale < 2.0e-2,
+                "surface-detail geometry[{component}] gradient mismatch: analytical={} \
+                 numerical={} absolute={absolute}",
+                analytical,
+                numerical,
+            );
         }
     }
 
@@ -10547,6 +10949,8 @@ mod tests {
             learning_rate: 0.01,
             pixel_batch: Some(1),
             steps_per_view: 4,
+            position_lr_ratio: 0.1,
+            radius_lr_ratio: 0.1,
             surface_normal_lr_ratio: 0.1,
             surface_offset_lr_ratio: 0.1,
             surface_color_lr_ratio: 0.1,

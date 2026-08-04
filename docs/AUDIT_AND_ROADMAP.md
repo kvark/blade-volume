@@ -734,9 +734,9 @@ At the audited revision:
   same two-stage height/color rule, while Meganeura consumes the recorder's
   support query and branch mask directly. Deterministic zero-preserving
   initialization, PLY, one-submit GPU geometry refresh, densification/Adam
-  inheritance, and exact resume are covered. Position/radius learning is
-  deliberately blocked until the support-entry query has a topology Jacobian;
-  frozen-topology detail and densification remain supported. The matched
+  inheritance, and exact resume are covered. Position/radius learning now
+  carries the support-entry query's fixed-topology sphere/radical-face
+  Jacobian, while frozen detail retains its compact payload. The matched
   200K-site Room gate selects site/height/colour ratios `0.1/0.05/0.05`:
   two replicas improve the control mean by +0.2337/+0.1513 dB train/held out
   and improve 37/39 held-out views. Two tail views lose 0.115 and 0.070 dB,
@@ -748,6 +748,21 @@ At the audited revision:
   site projection optimization is rejected despite a 6.0% wall-time win
   because 17/39 averaged Room views regress. Quality remains the selection
   boundary.
+- Joint detail/geometry training passes a two-scene gate. Two 2,040-step Room
+  replicas at position/radius ratios `0.01/0.01` improve frozen-detail means
+  from 25.6449/23.4125 to 26.4852/24.2963 dB train/held out and improve 38/39
+  averaged held-out views; mean edges grow 7.9%. The same Bonsai probe improves
+  17.1996/16.3188→17.3405/16.7241 dB but improves only 22/37 views and grows
+  edges 5.3%. The reference radius ratio `0.0005` is more conservative:
+  24.1554 dB Room and 16.4668 dB Bonsai held out while shrinking topology on
+  both scenes. Full geometry raises training time by 57.1% on Room and 67.8%
+  on Bonsai, so both geometry and its rate remain opt-in. The implementation
+  adds two active `vec4` query-gradient streams only in full-detail mode;
+  sphere/face CPU finite differences, 14 physical GPU path oracles, a complete
+  graph finite difference, joint updates, densification, and bit-exact resume
+  pass. All measured scopes remain untruncated and free of memory/GPU events;
+  the complete serialized workspace suite peaks at 5.37 GB (5.00 GiB) under
+  the 6 GiB limit with no event.
 - Meganeura `7967ca2` adds one-transfer F32 parameter readback through cached
   download memory, and Blade uses it for every model/geometry snapshot. It
   leaves the training graph and values unchanged while reducing four-replica
@@ -1906,8 +1921,13 @@ material path.
    ratios `0.1/0.05/0.05`, adding 0.1513 dB held out and improving 37/39
    views. It also passes a matched Bonsai gate at +0.0701 dB held out and
    improves 33/37 views, but remains opt-in because training and PLY size grow
-   34.5% and 49.8% respectively. Its next decision point is reducing that
-   steady-state cost without changing optimizer semantics. A compact 48-float
+   34.5% and 49.8% respectively. Joint support-entry gradients subsequently
+   unlock position/radius learning and add +0.884/+0.405 dB held out on
+   Room/Bonsai at the exploratory high radius rate, but raise training time by
+   57%/68% and produce mixed Bonsai tail views. The next decision points are a
+   fused indexed geometry-dot operation for the five path roles and a longer
+   conservative/high-rate schedule comparison; neither rate becomes a default
+   from the present short horizon. A compact 48-float
    additive Spherical Voronoi residual is now implemented but rejected:
    learned and fixed axes lose 0.0168 and 0.0137 dB held out on Room while
    adding about 22% training time. On Room, a 160-entry path budget is exact
