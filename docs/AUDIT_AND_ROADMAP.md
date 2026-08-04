@@ -740,11 +740,14 @@ At the audited revision:
   200K-site Room gate selects site/height/colour ratios `0.1/0.05/0.05`:
   two replicas improve the control mean by +0.2337/+0.1513 dB train/held out
   and improve 37/39 held-out views. Two tail views lose 0.115 and 0.070 dB,
-  so the arm remains opt-in pending Bonsai transfer. Its PLY grows
-  68.65→113.45 MB and its initial training graph is about 1.96× the control;
-  full GPU evaluation time is neutral within order noise. A pre-gather site
-  projection optimization is rejected despite a 6.0% wall-time win because
-  17/39 averaged views regress. Quality remains the selection boundary.
+  while a matched two-replica 8,160-step Bonsai gate improves the control by
+  +0.1059/+0.0701 dB and improves 33/37 held-out views, ties two, and loses
+  only 0.010/0.005 dB on the other two. The arm passes the cross-scene quality
+  gate but remains opt-in: its Bonsai PLY grows 89,964,416→134,766,940 bytes
+  (+49.8%) and training grows 344.325→463.063 seconds (+34.5%). A pre-gather
+  site projection optimization is rejected despite a 6.0% wall-time win
+  because 17/39 averaged Room views regress. Quality remains the selection
+  boundary.
 - Meganeura `7967ca2` adds one-transfer F32 parameter readback through cached
   download memory, and Blade uses it for every model/geometry snapshot. It
   leaves the training graph and values unchanged while reducing four-replica
@@ -753,6 +756,14 @@ At the audited revision:
   (-10.4%) and land inside the previous PSNR spread at 23.4041 and 23.4022 dB
   held out. Peak scoped memory is 1,658,667,008 bytes with no swap, pressure,
   OOM, kill, or GPU fault.
+- Meganeura `226041c` extends the one-transfer path to batched Adam moments,
+  and Blade uses it at densification boundaries. On a real 200K→200.1K Bonsai
+  detail model, order-balanced state readback falls 11.585→0.185 seconds
+  (-98.4%, 62.8×) and whole-command time falls 16.890→5.471 seconds (-67.6%,
+  3.09×). Isolated peak memory is effectively unchanged at 1,863,389,184
+  versus 1,861,894,144 bytes, with no cgroup or GPU fault. Exact multi-name
+  Meganeura tests and Blade's detail densification/Adam-remap test cover the
+  ordering and value contract.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
@@ -1646,7 +1657,11 @@ material path.
    whole-command time 1.21× faster with identical held-out quality. Commit
    `86cfcab` then moves exhaustive contribution readback to cached download
    memory: the matched CPU scoring phase is 468.9× faster and the complete
-   densification command 4.15× faster at unchanged all-view quality.)
+   densification command 4.15× faster at unchanged all-view quality.
+   Meganeura `7967ca2` subsequently batches model parameter downloads, and
+   `226041c` batches Adam moments: the latter cuts a real 200K-site Bonsai
+   detail boundary's state readback 62.8× and whole-command time 3.09× without
+   increasing peak memory.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done for
    unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate
@@ -1733,11 +1748,14 @@ material path.
    Keep it opt-in while checking the regressed tail views. The subsequent
    compact eight-site detail arm passes its Room gate at site/height/colour
    ratios `0.1/0.05/0.05`, adding 0.1513 dB held out and improving 37/39
-   views; its next decision point is a matched Bonsai transfer rather than
-   more Room continuation. A compact 48-float additive Spherical
-   Voronoi residual is now implemented but rejected: learned and fixed axes
-   lose 0.0168 and 0.0137 dB held out on Room while adding about 22% training
-   time. On Room, a 160-entry path budget is exact on all 294 views; the full
+   views. It also passes a matched Bonsai gate at +0.0701 dB held out and
+   improves 33/37 views, but remains opt-in because training and PLY size grow
+   34.5% and 49.8% respectively. Its next decision point is reducing that
+   steady-state cost without changing optimizer semantics. A compact 48-float
+   additive Spherical Voronoi residual is now implemented but rejected:
+   learned and fixed axes lose 0.0168 and 0.0137 dB held out on Room while
+   adding about 22% training time. On Room, a 160-entry path budget is exact
+   on all 294 views; the full
    learned spatial-colour replay cuts training by 19.2% and peak host memory by
    19.2% versus 256 while slightly improving held-out PSNR. Retain the larger
    candidate floor and select path budgets from telemetry. A 128-row replay is

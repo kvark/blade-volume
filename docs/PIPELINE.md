@@ -1118,7 +1118,7 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   serialized workspace gate at 5.49 GiB under the 6 GiB cgroup limit, with no
   swap, OOM, kill, or GPU fault.
 
-#### M2ao — Eight-site spatial surface detail (implemented and Room-gated)
+#### M2ao — Eight-site spatial surface detail (implemented and two-scene-gated)
 
 - Oriented PowerFoam models can now carry eight radius-normalized tangent
   sites, eight signed heights, and eight RGB residuals per point. The compact
@@ -1153,15 +1153,23 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   Two control replicas average 25.4147/23.2643 dB train/held out. Site,
   height, and colour ratios `0.1/0.05/0.05` average 25.6484/23.4155 dB,
   gains of +0.2337/+0.1513 dB. Detail improves 37/39 held-out frames; the two
-  regressions are -0.115 and -0.070 dB, so the representation and rates are
-  selected for the experimental spatial arm but remain opt-in until they
-  transfer to Bonsai.
+  regressions are -0.115 and -0.070 dB.
+- The matched 8,160-step Bonsai gate uses the same 200K-site, 128²,
+  4,096-ray, 16-view configuration across 255 training and 37 held-out views.
+  Two detail replicas average 17.6167/16.5467 dB versus
+  17.5108/16.4767 dB for two controls, gains of +0.1059/+0.0701 dB. Detail
+  improves 33/37 held-out frames, ties two, and regresses two by only 0.010
+  and 0.005 dB. The representation and `0.1/0.05/0.05` rates therefore pass
+  the cross-scene quality gate.
 - The selected long models remain geometrically bounded: tangent-site radius
-  p99 is about 0.507 support radii, absolute normalized height p99 is about
-  0.267, and fewer than 0.003% of sites exceed one support radius. The PLY
-  grows from 68.65 to 113.45 MB. Full GPU evaluation is effectively neutral
-  (22.43 versus 23.03 seconds across order-balanced runs); do not claim an
-  intrinsic renderer speedup from that noise.
+  p99 is about 0.507 support radii on Room and 0.849 on Bonsai. Absolute
+  normalized-height p99 is about 0.267 and 0.354 respectively; only 25 of
+  1.6M Bonsai sites exceed one support radius in height. The Bonsai PLY grows
+  from 89,964,416 to 134,766,940 bytes (+49.8%), and training rises from
+  344.325 to 463.063 seconds (+34.5%). Full GPU Room evaluation is effectively
+  neutral (22.43 versus 23.03 seconds across order-balanced runs). Detail
+  remains opt-in because its quality win is real but its storage and training
+  costs are substantial.
 - Projecting all detail sites once before path gathering saves 6.0% training
   wall time, but is rejected: its four-replica mean is within aggregate noise
   while 17/39 averaged held-out frames regress and the worst loses 0.09 dB.
@@ -1174,7 +1182,15 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   training replicas average 126.293 versus 141.018 seconds (-10.4%). Their
   25.6383/23.4041 and 25.6443/23.4022 dB results stay inside the prior replica
   spread. The 6 GiB scope peaks at 1,658,667,008 bytes with zero swap,
-  pressure, OOM, kill, or GPU fault. Bonsai transfer is the next quality gate.
+  pressure, OOM, kill, or GPU fault.
+- Meganeura revision `226041c` batches Adam first/second moments in the same
+  way, and Blade uses it for densification snapshots. On a real 200K→200.1K
+  Bonsai detail boundary, order-balanced state readback falls from 11.585 to
+  0.185 seconds (-98.4%, 62.8×) and whole-command time from 16.890 to 5.471
+  seconds (-67.6%, 3.09×). Isolated runs peak at 1,863,389,184 and
+  1,861,894,144 bytes respectively, with no swap, pressure, OOM, kill, or GPU
+  fault. Exact multi-parameter moment tests and detail densification/remapping
+  coverage guard the value and ordering contract.
 
 ### M3 — Training crate scaffolding
 

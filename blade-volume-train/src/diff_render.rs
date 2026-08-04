@@ -4720,24 +4720,28 @@ fn save_adam_state(
         has_spherical_voronoi,
         has_point_error,
     );
+    let name_refs = names
+        .iter()
+        .map(|entry| entry.0.as_str())
+        .collect::<Vec<_>>();
+    let states = session.read_adam_states(&name_refs);
     let mut entries = Vec::with_capacity(names.len());
-    for (name, stride) in names {
-        let size = n_cells * stride;
-        let mut m = vec![0.0_f32; size];
-        let mut v = vec![0.0_f32; size];
-        session.read_adam_m(&name, &mut m);
-        session.read_adam_v(&name, &mut v);
+    for ((name, stride), (m, v)) in names.into_iter().zip(states) {
+        assert_eq!(m.len(), n_cells * stride);
+        assert_eq!(v.len(), n_cells * stride);
         entries.push(AdamEntry { name, stride, m, v });
     }
-    let exposure_entries = ["exposure_r", "exposure_g", "exposure_b"]
+    let exposure_names = ["exposure_r", "exposure_g", "exposure_b"];
+    let exposure_parameters = session.read_params(&exposure_names);
+    let exposure_states = session.read_adam_states(&exposure_names);
+    let exposure_entries = exposure_names
         .into_iter()
-        .map(|name| {
-            let mut parameter = vec![0.0_f32; num_views];
-            let mut m = vec![0.0_f32; num_views];
-            let mut v = vec![0.0_f32; num_views];
-            session.read_param(name, &mut parameter);
-            session.read_adam_m(name, &mut m);
-            session.read_adam_v(name, &mut v);
+        .zip(exposure_parameters)
+        .zip(exposure_states)
+        .map(|((name, parameter), (m, v))| {
+            assert_eq!(parameter.len(), num_views);
+            assert_eq!(m.len(), num_views);
+            assert_eq!(v.len(), num_views);
             FixedAdamEntry {
                 name,
                 parameter,
