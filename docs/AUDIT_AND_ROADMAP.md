@@ -764,6 +764,16 @@ At the audited revision:
   versus 1,861,894,144 bytes, with no cgroup or GPU fault. Exact multi-name
   Meganeura tests and Blade's detail densification/Adam-remap test cover the
   ordering and value contract.
+- Meganeura `760bb29` makes its direct inner broadcast public and
+  differentiable, allowing Blade to replace scalar-to-XYZ and eight-site
+  normalization concat/split trees. The Bonsai detail profile falls 537→491
+  passes and about 21.0→19.5 ms of steady GPU time. Four Room replicas reduce
+  training 126.674→122.261 seconds (-3.5%) and change held-out PSNR
+  23.3988→23.4061 dB; two Bonsai replicas reduce training 117.223→114.856
+  seconds (-2.0%) and change held-out PSNR 16.3152→16.3140 dB. Room improves
+  22/39 averaged views with a 0.0575 dB worst regression; Bonsai's worst and
+  best deltas are -0.04/+0.04 dB. Physical value/gradient coverage and exact
+  resume pass, so the cross-scene gate selects the direct broadcast.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
@@ -1661,7 +1671,10 @@ material path.
    Meganeura `7967ca2` subsequently batches model parameter downloads, and
    `226041c` batches Adam moments: the latter cuts a real 200K-site Bonsai
    detail boundary's state readback 62.8× and whole-command time 3.09× without
-   increasing peak memory.)
+   increasing peak memory. Meganeura `760bb29` then replaces Blade's repeated
+   concat/split broadcasts: the detail graph loses 46 passes and matched
+   Room/Bonsai training becomes 3.5%/2.0% faster at neutral cross-scene
+   quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done for
    unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate

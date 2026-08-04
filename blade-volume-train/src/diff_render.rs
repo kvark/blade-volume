@@ -228,10 +228,8 @@ fn weighted_role_linear_term(
 /// Repeat a `[rows, 1]` column into `[rows, 3]` without launching a tiled
 /// matrix multiplication for a scalar broadcast.
 fn repeat_xyz(g: &mut mn::Graph, column: mn::NodeId, rows: usize) -> mn::NodeId {
-    let column_flat = g.reshape(column, &[rows]);
-    let xy_flat = g.concat(column_flat, column_flat, rows as u32, 1, 1, 1);
-    let xyz_flat = g.concat(xy_flat, column_flat, rows as u32, 2, 1, 1);
-    g.reshape(xyz_flat, &[rows, 3])
+    debug_assert_eq!(g.node(column).ty.shape, [rows, 1]);
+    g.broadcast_inner(column, 3)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -406,13 +404,7 @@ fn normalize_surface_detail_weights(
     let above_floor = g.relu(above_floor);
     let floor = g.constant(vec![1.0e-12_f32; rows], &[rows, 1]);
     let denominator = g.add(above_floor, floor);
-    let denominator_sites = {
-        let flat = g.reshape(denominator, &[rows]);
-        let twice = g.concat(flat, flat, rows as u32, 1, 1, 1);
-        let four = g.concat(twice, twice, rows as u32, 2, 2, 1);
-        let eight = g.concat(four, four, rows as u32, 4, 4, 1);
-        g.reshape(eight, &[rows, vol::SURFACE_DETAIL_SITES])
-    };
+    let denominator_sites = g.broadcast_inner(denominator, vol::SURFACE_DETAIL_SITES);
     g.div(weights, denominator_sites)
 }
 

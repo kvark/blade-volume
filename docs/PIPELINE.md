@@ -1191,6 +1191,18 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   1,861,894,144 bytes respectively, with no swap, pressure, OOM, kill, or GPU
   fault. Exact multi-parameter moment tests and detail densification/remapping
   coverage guard the value and ordering contract.
+- Meganeura revision `760bb29` exposes the existing row broadcast as a
+  differentiable graph operation. Scalar-to-XYZ expansion and eight-site
+  normalization now use one broadcast instead of concat/split trees. On the
+  200K-site Bonsai profile this cuts the detail graph from 537 to 491 passes
+  and steady GPU time from about 21.0 to 19.5 ms; the control remains about
+  7.1 ms. Four matched Room replicas reduce training from 126.674 to 122.261
+  seconds (-3.5%) while held-out PSNR changes 23.3988→23.4061 dB; 22/39
+  averaged views improve, one ties, and the worst regression is 0.0575 dB.
+  Two Bonsai replicas reduce training 117.223→114.856 seconds (-2.0%) while
+  held-out PSNR changes 16.3152→16.3140 dB; per-view extrema are symmetric at
+  ±0.04 dB. Physical forward/gradient tests, cross-scene gates, and exact
+  resume therefore select the simpler broadcast path.
 
 ### M3 — Training crate scaffolding
 
