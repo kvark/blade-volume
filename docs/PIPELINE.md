@@ -1607,6 +1607,36 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   strict workspace lint, and the complete serialized workspace suite pass
   against the remote pin; the suite peaks at 3.55 GB (3.31 GiB) under 6 GiB.
 
+#### M2bb — Share invariant spatial-detail query geometry (implemented and two-scene-gated)
+
+- The base-plane and displaced-plane spatial-detail queries differ only by
+  their signed plane offset. They now share the center/ray and ray/normal dot
+  products, regularized denominator, negated center/query, and broadcast
+  radius. The height-dependent displaced query remains downstream of the base
+  query, so this changes graph construction without changing the model or
+  training schedule.
+- A two-replica 32-step 200K-site profile falls 470→462 graph passes. Mean
+  graph time falls 24.583→24.405 ms (-0.7%) and combined recorder/graph time
+  falls 42.829→42.495 ms (-0.8%). An order-balanced 510-step Room gate is
+  wall-time neutral (37.872→37.886 seconds) while GPU wait falls
+  22.762→22.655 seconds (-0.5%), held-out PSNR changes by +0.0042 dB, and
+  topology changes by -0.07%.
+- At the full 2,040-step horizon, two Room replicas reduce mean training
+  144.434→143.652 seconds (-0.5%) and GPU wait 88.466→87.697 seconds (-0.9%).
+  Mean train/held-out PSNR changes 26.4940/24.2937→26.4988/24.3179 dB, the
+  averaged held-out views split 23 improved / 16 regressed, and topology
+  changes by +0.19%. Two Bonsai replicas reduce training 89.907→89.603
+  seconds (-0.3%) and GPU wait 65.596→65.321 seconds (-0.4%). Mean
+  train/held-out PSNR changes 17.3770/16.7515→17.3955/16.7673 dB, views split
+  17 improved / 19 regressed / 1 tied, and topology changes by +0.01%. The
+  repeatable two-scene performance gain is selected; arithmetic regrouping is
+  quality-gated rather than claimed bit-identical.
+- The complete query finite difference, joint position/radius update, and
+  bit-exact interrupted-resume tests pass. Formatting, strict all-target lint,
+  and the complete serialized workspace suite pass. Its warm-cache rerun with
+  two build jobs peaks at 228,335,616 bytes (217.8 MiB) under the 6 GiB cgroup,
+  with zero swap, pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

@@ -788,6 +788,17 @@ At the audited revision:
   failures at the pinned baseline; strict lint and every unaffected all-target
   test pass. Blade's complete serialized workspace suite passes against the
   remote pin at a 3.55 GB (3.31 GiB) peak with no memory or GPU event.
+- The two spatial-detail plane queries now share all geometry that is invariant
+  to their signed offset. The 200K-site graph falls 470→462 passes. At 2,040
+  steps, two Room replicas reduce mean training 144.434→143.652 seconds
+  (-0.5%) and GPU wait by 0.9%, while held-out PSNR changes
+  24.2937→24.3179 dB and averaged views split 23/16 improved/regressed. Two
+  Bonsai replicas reduce training 89.907→89.603 seconds (-0.3%) and GPU wait
+  by 0.4%, while held-out PSNR changes 16.7515→16.7673 dB and views split
+  17/19/1. Topology changes stay within 0.19%. The complete query finite
+  difference, joint-update, exact-resume, formatting, strict lint, and
+  serialized workspace gates pass. The clean warm-cache suite rerun peaks at
+  217.8 MiB under 6 GiB with no memory or GPU event.
 - Meganeura `7967ca2` adds one-transfer F32 parameter readback through cached
   download memory, and Blade uses it for every model/geometry snapshot. It
   leaves the training graph and values unchanged while reducing four-replica
@@ -1953,7 +1964,9 @@ material path.
    ray-relative geometry gathers for the five linearization consumers then
    cuts Room training by 1.8% at unchanged quality. Meganeura then folds those
    shared gathers and offsets directly into every compatible dot reduction,
-   cutting another 2.0% on Room and 2.4% on Bonsai at neutral quality. The
+   cutting another 2.0% on Room and 2.4% on Bonsai at neutral quality. Sharing
+   the invariant geometry between the base and displaced detail-plane queries
+   then cuts another 0.5% on Room and 0.3% on Bonsai at neutral quality. The
    next decision point is a longer conservative/high-rate schedule comparison;
    neither rate becomes a default from the present short horizon. A compact
    48-float additive Spherical Voronoi residual is now implemented but rejected:

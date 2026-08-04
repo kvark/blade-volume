@@ -320,43 +320,62 @@ fn negative_exponential(g: &mut mn::Graph, input: mn::NodeId) -> mn::NodeId {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn surface_detail_query(
+fn prepare_surface_detail_query(
     g: &mut mn::Graph,
     centers: mn::NodeId,
     normals: mn::NodeId,
-    offsets: mn::NodeId,
     radii: mn::NodeId,
     ray_origin: mn::NodeId,
     ray_direction: mn::NodeId,
     query_near: mn::NodeId,
     plane_branch: mn::NodeId,
     rows: usize,
-) -> mn::NodeId {
+) -> SurfaceDetailQueryGraph {
     let neg_origin = g.neg(ray_origin);
     let center_relative = g.add(centers, neg_origin);
     let numerator_terms = g.mul(center_relative, normals);
-    let numerator = g.sum_inner(numerator_terms);
-    let numerator = g.add(numerator, offsets);
+    let base_numerator = g.sum_inner(numerator_terms);
     let denominator_terms = g.mul(ray_direction, normals);
     let denominator = g.sum_inner(denominator_terms);
     let denominator_squared = g.mul(denominator, denominator);
     let epsilon_squared = g.constant(vec![1.0e-12_f32; rows], &[rows, 1]);
     let regularized_denominator = g.add(denominator_squared, epsilon_squared);
-    let regularized_numerator = g.mul(numerator, denominator);
-    let plane_t = g.div(regularized_numerator, regularized_denominator);
     let neg_query_near = g.neg(query_near);
-    let plane_after_near = g.add(plane_t, neg_query_near);
+    let neg_centers = g.neg(centers);
+    let radius_xyz = repeat_xyz(g, radii, rows);
+    SurfaceDetailQueryGraph {
+        base_numerator,
+        denominator,
+        regularized_denominator,
+        ray_origin,
+        ray_direction,
+        query_near,
+        neg_query_near,
+        plane_branch,
+        neg_centers,
+        radius_xyz,
+    }
+}
+
+fn surface_detail_query(
+    g: &mut mn::Graph,
+    query: SurfaceDetailQueryGraph,
+    offsets: mn::NodeId,
+    rows: usize,
+) -> mn::NodeId {
+    let numerator = g.add(query.base_numerator, offsets);
+    let regularized_numerator = g.mul(numerator, query.denominator);
+    let plane_t = g.div(regularized_numerator, query.regularized_denominator);
+    let plane_after_near = g.add(plane_t, query.neg_query_near);
     let plane_advance = g.relu(plane_after_near);
-    let selected_advance = g.mul(plane_advance, plane_branch);
-    let query_t = g.add(query_near, selected_advance);
+    let selected_advance = g.mul(plane_advance, query.plane_branch);
+    let query_t = g.add(query.query_near, selected_advance);
 
     let query_t_xyz = repeat_xyz(g, query_t, rows);
-    let ray_offset = g.mul(ray_direction, query_t_xyz);
-    let hit = g.add(ray_origin, ray_offset);
-    let neg_centers = g.neg(centers);
-    let relative = g.add(hit, neg_centers);
-    let radius_xyz = repeat_xyz(g, radii, rows);
-    g.div(relative, radius_xyz)
+    let ray_offset = g.mul(query.ray_direction, query_t_xyz);
+    let hit = g.add(query.ray_origin, ray_offset);
+    let relative = g.add(hit, query.neg_centers);
+    g.div(relative, query.radius_xyz)
 }
 
 fn surface_detail_weights(
@@ -386,6 +405,20 @@ fn normalize_surface_detail_weights(g: &mut mn::Graph, weights: mn::NodeId) -> m
 struct SurfaceDetailEvaluation {
     effective_offsets: mn::NodeId,
     color_weights: mn::NodeId,
+}
+
+#[derive(Clone, Copy)]
+struct SurfaceDetailQueryGraph {
+    base_numerator: mn::NodeId,
+    denominator: mn::NodeId,
+    regularized_denominator: mn::NodeId,
+    ray_origin: mn::NodeId,
+    ray_direction: mn::NodeId,
+    query_near: mn::NodeId,
+    neg_query_near: mn::NodeId,
+    plane_branch: mn::NodeId,
+    neg_centers: mn::NodeId,
+    radius_xyz: mn::NodeId,
 }
 
 #[derive(Clone, Copy)]
@@ -443,11 +476,13 @@ fn evaluate_surface_detail_graph(
     let raw_sites = g.reshape(raw_sites, &[rows * vol::SURFACE_DETAIL_SITES, 3]);
     let tangent_sites = g.pairwise_vector_rejection(raw_sites, normals, vol::SURFACE_DETAIL_SITES);
 
-    let base_query = surface_detail_query(
+    // Height and colour weights query the base and displaced planes along the
+    // same rays. Only the signed plane offset changes between them; keep the
+    // ray/site dot products, regularized denominator, and normalization shared.
+    let query = prepare_surface_detail_query(
         g,
         centers,
         normals,
-        base_offsets,
         radii,
         ray_origin,
         ray_direction,
@@ -455,6 +490,7 @@ fn evaluate_surface_detail_graph(
         plane_branch,
         rows,
     );
+    let base_query = surface_detail_query(g, query, base_offsets, rows);
     let height_weights = surface_detail_weights(g, base_query, tangent_sites, rows);
     let normalized_height_weights = normalize_surface_detail_weights(g, height_weights);
     let heights = g.embedding(cell_indices, parameters.heights);
@@ -463,18 +499,7 @@ fn evaluate_surface_detail_graph(
     let height = g.mul(radii, normalized_height);
     let effective_offsets = g.add(base_offsets, height);
 
-    let displaced_query = surface_detail_query(
-        g,
-        centers,
-        normals,
-        effective_offsets,
-        radii,
-        ray_origin,
-        ray_direction,
-        query_near,
-        plane_branch,
-        rows,
-    );
+    let displaced_query = surface_detail_query(g, query, effective_offsets, rows);
     let color_weights = surface_detail_weights(g, displaced_query, tangent_sites, rows);
     let color_weights = normalize_surface_detail_weights(g, color_weights);
     SurfaceDetailEvaluation {
