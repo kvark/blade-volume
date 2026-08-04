@@ -191,28 +191,12 @@ fn set_sh_lr_multipliers(
 const RADIUS_SOFTPLUS_BETA: f32 = 100.0;
 const POINT_ERROR_PROBE: &str = "point_error_probe";
 
-/// Positive activation for a flat `[count, 1]` tensor. This is the stable
-/// identity `(relu(βx) - log(sigmoid(|βx|))) / β`, which avoids needing an
-/// explicit exponential graph op.
-fn positive_activation(
-    g: &mut mn::Graph,
-    input: mn::NodeId,
-    count: usize,
-    beta: f32,
-) -> mn::NodeId {
+/// Positive activation for a flat tensor.
+fn positive_activation(g: &mut mn::Graph, input: mn::NodeId, beta: f32) -> mn::NodeId {
     if beta <= 0.0 {
         return g.relu(input);
     }
-    let beta_c = g.constant(vec![beta; count], &[count, 1]);
-    let bx = g.mul(input, beta_c);
-    let relu_bx = g.relu(bx);
-    let abs_bx = g.abs(bx);
-    let sig = g.sigmoid(abs_bx);
-    let log_sig = g.log(sig);
-    let neg_log_sig = g.neg(log_sig);
-    let sp = g.add(relu_bx, neg_log_sig);
-    let inv_beta = g.constant(vec![1.0 / beta; count], &[count, 1]);
-    g.mul(sp, inv_beta)
+    g.softplus(input, beta)
 }
 
 fn weighted_role_linear_term(
@@ -537,8 +521,8 @@ fn add_interpenetration_loss(
 
     let raw_radius_a = g.embedding(edge_a, log_radii);
     let raw_radius_b = g.embedding(edge_b, log_radii);
-    let radius_a = positive_activation(g, raw_radius_a, sample_count, RADIUS_SOFTPLUS_BETA);
-    let radius_b = positive_activation(g, raw_radius_b, sample_count, RADIUS_SOFTPLUS_BETA);
+    let radius_a = positive_activation(g, raw_radius_a, RADIUS_SOFTPLUS_BETA);
+    let radius_b = positive_activation(g, raw_radius_b, RADIUS_SOFTPLUS_BETA);
     let radius_sum = g.add(radius_a, radius_b);
     let neg_distance = g.neg(distance);
     let overlap_raw = g.add(radius_sum, neg_distance);
@@ -845,7 +829,7 @@ fn build_volumetric_graph_with_options(
     });
     let actual_radii = weighted_path
         .as_ref()
-        .map(|weighted| positive_activation(g, weighted.log_radii, n_cells, RADIUS_SOFTPLUS_BETA));
+        .map(|weighted| positive_activation(g, weighted.log_radii, RADIUS_SOFTPLUS_BETA));
     let differentiable_positions = if options.train_positions {
         positions
     } else {
@@ -875,12 +859,11 @@ fn build_volumetric_graph_with_options(
     // its gradient, so a cell that dips negative dies permanently (dead
     // ReLU) — these accumulate and destabilise densification. softplus
     // (RadFoam's choice) keeps a small gradient for negatives so cells
-    // recover. Stable form with meganeura ops (no exp/softplus builtin):
-    //   softplus_β(x) = (1/β)[relu(βx) − log(sigmoid(|βx|))]
-    // (sigmoid(|βx|) ∈ [0.5,1] so the log can't overflow). At β=10,
-    // log_density = 1.0 → density ≈ 1.0, preserving the ReLU init.
+    // recover. Meganeura lowers its stable softplus to one fused pointwise
+    // dispatch. At β=10, log_density = 1.0 → density ≈ 1.0, preserving
+    // the ReLU init.
     let density_pre = g.embedding(cell_indices, log_density);
-    let density_flat = positive_activation(g, density_pre, pl, softplus_beta);
+    let density_flat = positive_activation(g, density_pre, softplus_beta);
     let density = g.reshape(density_flat, &[p, l]);
     let mask_2d = g.reshape(mask, &[p, l]);
 

@@ -1678,6 +1678,47 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   unsupported support/opacity or improve spatial appearance responsibility,
   not merely extend this fixed-cap schedule or choose one universal rate.
 
+#### M2bd — Fuse stable positive activations (implemented and two-scene-gated)
+
+- Meganeura `3c2d81e` adds a native stable softplus pointwise operation, so
+  Blade no longer expands each density/radius activation into constants,
+  multiply, ReLU, absolute value, sigmoid, log, negate, add, and final
+  multiply nodes. Its forward expression remains
+  `(relu(βx) - log(sigmoid(abs(βx)))) / β`, including finite behavior at
+  large magnitudes. The first backward implementation used the conventional
+  sigmoid derivative. It was mathematically correct and reduced the profile
+  from 462 to 448 passes, but it was rejected: at 2,040 steps Room and Bonsai
+  held-out means changed by -0.0236 and -0.0187 dB, with only 14/39 and 18/37
+  views improving, while timing was mixed. Equivalent real arithmetic is not
+  enough when floating-point regrouping changes the optimizer trajectory.
+- Meganeura `f82d0b6` instead lowers a fused backward helper that preserves the
+  expanded graph's derivative operation and accumulation order. A 513-element
+  physical process test compares the two complete graphs: parameter-gradient
+  values are bit-exact and forward values agree within strict f32 tolerance.
+  The selected Blade graph falls 462→446 passes. Across an order-balanced,
+  two-replica 32-step profile, warmed graph time falls 24.331→24.199 ms
+  (-0.54%), combined recorder/graph time falls 41.679→41.509 ms (-0.41%),
+  and short-run wall time falls 4.323→4.270 seconds (-1.23%).
+- At 2,040 steps, two Room replicas reduce mean training
+  143.706→143.184 seconds (-0.36%) and GPU wait 88.718→87.946 seconds
+  (-0.87%). Mean train/held-out PSNR changes
+  26.6700/24.3137→26.6601/24.3312 dB, with 21/39 held-out views improving,
+  two tying, and 16 regressing. Two Bonsai replicas are wall-time neutral at
+  89.672→89.690 seconds; path submission falls 4.028→3.991 seconds while
+  GPU wait changes 65.432→65.568 seconds. Mean train/held-out PSNR improves
+  17.3647/16.7411→17.3843/16.7657 dB, with a 19/1/17 view split. The
+  repeatable Room gain, neutral Bonsai cost, and positive held-out means select
+  the exact-order implementation.
+- All long-gate rays remain untruncated and the combined scope peaks at
+  1,907,179,520 bytes with zero swap, pressure, limit, OOM, kill, throttling,
+  or GPU fault. Meganeura's 20 serial pointwise tests, formatting, strict lint,
+  and all 177 library tests pass. Its broad all-target run reproduces the same
+  four unrelated attention/model failures already recorded for `2acdfeb`; it
+  reaches the 6 GiB cap and incurs reclaim events without swap or OOM. Blade
+  formatting, strict all-target workspace lint, and the complete locked,
+  serialized workspace suite pass against the remote pin. The Blade suite
+  peaks at 3,492,728,832 bytes with no memory or GPU event.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
