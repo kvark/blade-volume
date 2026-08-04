@@ -892,6 +892,29 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   untruncated. The paired scope peaks at 885 MiB and records no swap, pressure,
   OOM, kill, or GPU fault.
 
+#### M2af — Reuse oriented surface gathers (implemented and gated)
+
+- The normalized surface normal and offset for each path row are now gathered
+  once and shared by recorded-path linearization, spatial appearance, and the
+  optional view-facing loss. This keeps the plane definition explicit and
+  prevents independently materializing the same offset payload. Meganeura
+  already fused the path-linearization normal lookup into its reduction; the
+  production graph therefore realizes one fewer offset embedding rather than
+  two fewer standalone gathers.
+- Structural coverage requires exactly one embedding of each oriented table.
+  The CPU surface-basis oracle, surface tangent and normal-loss tests, exact
+  oriented resume, strict lint, and complete physical-GPU workspace suite pass.
+- Three alternating 200K-site profiles reduce the graph from 284 to 283 passes,
+  the large embedding count from 11 to 10, and median GPU time from 17.60 to
+  17.01 ms (-3.4%). The logged three-step loss trajectory is unchanged.
+- On a back-to-back matched 2,040-step Room pair, training falls
+  104.582→103.209 seconds (-1.3%), GPU wait 61.444→60.366 seconds (-1.8%),
+  command submission 37.818→37.707 seconds (-0.3%), and complete command time
+  109.103→107.490 seconds (-1.5%). Fresh-Ply quality is preserved at
+  25.4125/23.2703 dB versus 25.4096/23.2625 dB. All 8.36M training and 4.82M
+  evaluation rays remain untruncated. The paired scope peaks at 897 MiB and
+  records no swap, pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

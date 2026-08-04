@@ -802,6 +802,15 @@ At the audited revision:
   (-6.2%), while preserving 25.4103/23.2724 dB versus 25.4110/23.2709 dB and
   zero truncation. The paired 6 GiB scope peaks at 885 MiB without swap,
   pressure, OOM, kill, or GPU fault.
+- Oriented training now gathers each path row's normalized normal and offset
+  once for the recorded tangent, spatial appearance, and optional normal loss.
+  Structural and numerical coverage require the shared values. Three profiles
+  reduce the graph 284→283 passes and median GPU time 17.60→17.01 ms (-3.4%).
+  The matched Room replay reduces training 104.582→103.209 seconds (-1.3%),
+  GPU wait 61.444→60.366 seconds (-1.8%), and complete time
+  109.103→107.490 seconds (-1.5%), while preserving 25.4125/23.2703 dB versus
+  25.4096/23.2625 dB and zero truncation. The paired 6 GiB scope peaks at
+  897 MiB without memory or GPU faults.
 - Reusing finite masked path payload after a one-time initialization removes
   36 MiB of redundant dt/Jacobian fills per 4,096-ray, 128-entry training
   step, while still clearing every gather index and mask. The matched
