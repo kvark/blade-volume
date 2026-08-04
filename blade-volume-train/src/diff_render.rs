@@ -5,8 +5,9 @@
 //! parameters are per-cell density and RGB spherical-harmonic coefficients.
 //! The forward pass:
 //!
-//! 1. Packs the separately named RGB/SH parameters into one row-major table
-//!    and gathers all coefficients for each (pixel, step) with one embedding.
+//! 1. Packs the RGB/SH DC and higher-order parameter tables into one row-major
+//!    table and gathers all coefficients for each (pixel, step) with one
+//!    embedding.
 //! 2. Applies a positive density activation and computes `raw = density * dt`.
 //! 3. Computes the exclusive per-pixel cumulative sum that gives transmittance.
 //! 4. Expresses `exp(-x)` via the identity
@@ -44,9 +45,8 @@ pub struct VolumetricGraph {
     pub point_error_probe: Option<mn::NodeId>,
     /// Weighted-cloud-only radius parameter and differential path inputs.
     pub weighted_path: Option<WeightedPathGraph>,
-    /// `sh_coefficients[c][k]` is the `[n_cells, 1]` parameter table for
-    /// channel `c` ∈ {0=R, 1=G, 2=B} and SH component `k` ∈ `0..(1+sh_degree)²`.
-    pub sh_coefficients: Vec<Vec<mn::NodeId>>,
+    /// Per-channel DC and packed higher-order SH parameter tables.
+    pub sh_coefficients: Vec<ShChannelGraph>,
     /// Optional `[N, 12]` channel-major spatial surface residual table.
     pub surface_color_coefficients: Option<mn::NodeId>,
     /// Optional eight-site directional residual parameter tables.
@@ -92,6 +92,14 @@ pub struct SphericalVoronoiGraph {
 }
 
 #[derive(Clone, Debug)]
+pub struct ShChannelGraph {
+    /// `[N, 1]` DC parameter. The historical bare `sh_r/g/b` names are kept.
+    pub dc: mn::NodeId,
+    /// `[N, K-1]` packed higher-order terms, absent for degree zero.
+    pub rest: Option<mn::NodeId>,
+}
+
+#[derive(Clone, Debug)]
 pub struct WeightedPathGraph {
     /// Softplus pre-image of each rendered support radius.
     pub log_radii: mn::NodeId,
@@ -123,6 +131,29 @@ fn parameter_name(channel: &str, k: usize) -> String {
     }
 }
 
+fn sh_rest_parameter_name(channel: &str) -> String {
+    format!("{channel}_rest")
+}
+
+fn declare_sh_parameters(
+    g: &mut mn::Graph,
+    n_cells: usize,
+    num_components: usize,
+) -> Vec<ShChannelGraph> {
+    ["sh_r", "sh_g", "sh_b"]
+        .into_iter()
+        .map(|channel| ShChannelGraph {
+            dc: g.parameter(channel, &[n_cells, 1]),
+            rest: (num_components > 1).then(|| {
+                g.parameter(
+                    &sh_rest_parameter_name(channel),
+                    &[n_cells, num_components - 1],
+                )
+            }),
+        })
+        .collect()
+}
+
 fn set_sh_lr_multipliers(
     session: &mut mn::Session,
     sh_degree: usize,
@@ -131,15 +162,9 @@ fn set_sh_lr_multipliers(
 ) {
     let num_components = (1 + sh_degree) * (1 + sh_degree);
     for channel in ["sh_r", "sh_g", "sh_b"] {
-        for component in 0..num_components {
-            session.set_lr_multiplier(
-                &parameter_name(channel, component),
-                if component == 0 {
-                    dc_multiplier
-                } else {
-                    rest_multiplier
-                },
-            );
+        session.set_lr_multiplier(channel, dc_multiplier);
+        if num_components > 1 {
+            session.set_lr_multiplier(&sh_rest_parameter_name(channel), rest_multiplier);
         }
     }
 }
@@ -615,14 +640,7 @@ fn build_volumetric_graph_with_options(
     let exposure_g = g.parameter("exposure_g", &[num_views, 1]);
     let exposure_b = g.parameter("exposure_b", &[num_views, 1]);
     let view_idx = g.input_u32("view_idx", &[p]);
-    let mut sh_coefficients: Vec<Vec<mn::NodeId>> = Vec::with_capacity(3);
-    for channel in ["sh_r", "sh_g", "sh_b"] {
-        let mut per_channel = Vec::with_capacity(num_components);
-        for k in 0..num_components {
-            per_channel.push(g.parameter(&parameter_name(channel, k), &[n_cells, 1]));
-        }
-        sh_coefficients.push(per_channel);
-    }
+    let sh_coefficients = declare_sh_parameters(g, n_cells, num_components);
 
     // Density activation. ReLU (legacy) zeroes negative log-density AND
     // its gradient, so a cell that dips negative dies permanently (dead
@@ -1374,7 +1392,7 @@ struct PixelSh {
 fn pixel_sh(
     g: &mut mn::Graph,
     cell_indices: mn::NodeId,
-    sh_coefficients: &[Vec<mn::NodeId>], // 3 × K parameter tables [N, 1]
+    sh_coefficients: &[ShChannelGraph],
     surface_color_coefficients: Option<mn::NodeId>,
     surface_basis: Option<mn::NodeId>,
     spherical_voronoi: Option<(&SphericalVoronoiGraph, mn::NodeId)>,
@@ -1387,11 +1405,15 @@ fn pixel_sh(
     l: usize,
 ) -> PixelSh {
     assert_eq!(sh_coefficients.len(), 3, "pixel_sh needs RGB tables");
-    let k = sh_coefficients[0].len();
-    assert!(
-        sh_coefficients.iter().all(|channel| channel.len() == k),
-        "pixel_sh channel widths differ"
-    );
+    let k = basis_inputs.len() + 1;
+    assert!(k > 0);
+    assert!(sh_coefficients.iter().all(|channel| {
+        if k == 1 {
+            channel.rest.is_none()
+        } else {
+            channel.rest.is_some()
+        }
+    }));
     assert_eq!(
         basis_inputs.len(),
         k.saturating_sub(1),
@@ -1401,11 +1423,30 @@ fn pixel_sh(
     );
 
     let pl = p * l;
-    let coefficient_columns: Vec<mn::NodeId> = sh_coefficients
+    let coefficient_channels: Vec<mn::NodeId> = sh_coefficients
         .iter()
-        .flat_map(|channel| channel.iter().copied())
+        .map(|channel| match channel.rest {
+            Some(rest) => g.concat(channel.dc, rest, n_cells as u32, 1, (k - 1) as u32, 1),
+            None => channel.dc,
+        })
         .collect();
-    let coefficient_table = concat_columns(g, &coefficient_columns, n_cells); // [N, 3K]
+    let coefficient_rg = g.concat(
+        coefficient_channels[0],
+        coefficient_channels[1],
+        n_cells as u32,
+        k as u32,
+        k as u32,
+        1,
+    );
+    let coefficient_table = g.concat(
+        coefficient_rg,
+        coefficient_channels[2],
+        n_cells as u32,
+        (2 * k) as u32,
+        k as u32,
+        1,
+    );
+    let coefficient_table = g.reshape(coefficient_table, &[n_cells, 3 * k]);
     let coefficients = g.embedding(cell_indices, coefficient_table); // [PL, 3K]
 
     let mut basis_columns = Vec::with_capacity(k);
@@ -2929,17 +2970,25 @@ fn upload_model_parameters(
     // `model.sh_coefficients` layout (lib.rs spec):
     //   `[p0_c0_r, p0_c0_g, p0_c0_b, p0_c1_r, p0_c1_g, p0_c1_b, ..., p1_c0_r, ...]`
     // i.e. per point, RGB interleaved within each SH component, then
-    // components contiguous. We unpack into `[N]` slices, one per
-    // `sh_<chan>_<k>` parameter the graph declared.
+    // components contiguous. The graph retains one historical `[N, 1]` DC
+    // table per channel and packs all higher-order terms into `[N, K-1]`.
     let num_components = model.sh_component_count();
     let row_stride = num_components * 3;
-    let mut scratch = vec![0.0_f32; n_cells];
     for (chan_idx, chan) in ["sh_r", "sh_g", "sh_b"].iter().enumerate() {
-        for k in 0..num_components {
-            for (i, slot) in scratch.iter_mut().enumerate() {
-                *slot = model.sh_coefficients[i * row_stride + k * 3 + chan_idx];
+        let mut dc = vec![0.0_f32; n_cells];
+        for (i, slot) in dc.iter_mut().enumerate() {
+            *slot = model.sh_coefficients[i * row_stride + chan_idx];
+        }
+        session.set_parameter(chan, &dc);
+        if num_components > 1 {
+            let mut rest = vec![0.0_f32; n_cells * (num_components - 1)];
+            for i in 0..n_cells {
+                for k in 1..num_components {
+                    rest[i * (num_components - 1) + k - 1] =
+                        model.sh_coefficients[i * row_stride + k * 3 + chan_idx];
+                }
             }
-            session.set_parameter(&parameter_name(chan, k), &scratch);
+            session.set_parameter(&sh_rest_parameter_name(chan), &rest);
         }
     }
 }
@@ -2983,6 +3032,134 @@ fn save_optimizer_checkpoint(
         .map_err(|err| format!("{err:?}"))?;
     std::fs::rename(&tmp, &path).map_err(|err| format!("{err:?}"))?;
     Ok(path)
+}
+
+fn legacy_sh_tensor(
+    checkpoint: &mn::data::safetensors::SafeTensorsModel,
+    prefix: Option<&str>,
+    channel: &str,
+    num_components: usize,
+    n_cells: usize,
+) -> Result<Option<Vec<f32>>, String> {
+    let names: Vec<String> = (1..num_components)
+        .map(|component| {
+            let parameter = parameter_name(channel, component);
+            match prefix {
+                Some(prefix) => format!("{prefix}.{parameter}"),
+                None => parameter,
+            }
+        })
+        .collect();
+    let available = names
+        .iter()
+        .filter(|name| checkpoint.tensor_info().contains_key(*name))
+        .count();
+    if available == 0 {
+        return Ok(None);
+    }
+    if available != names.len() {
+        return Err(format!(
+            "legacy checkpoint has {available}/{} {channel} SH tensors for prefix {prefix:?}",
+            names.len()
+        ));
+    }
+
+    let stride = num_components - 1;
+    let mut packed = vec![0.0_f32; n_cells * stride];
+    for (component, name) in names.iter().enumerate() {
+        let values = checkpoint
+            .tensor_f32(name)
+            .map_err(|err| format!("failed to read legacy checkpoint tensor {name}: {err}"))?;
+        if values.len() != n_cells {
+            return Err(format!(
+                "legacy checkpoint tensor {name} has {} values, expected {n_cells}",
+                values.len()
+            ));
+        }
+        for (cell, value) in values.into_iter().enumerate() {
+            packed[cell * stride + component] = value;
+        }
+    }
+    Ok(Some(packed))
+}
+
+fn checkpoint_has_tensor(path: &std::path::Path, name: &str) -> Result<bool, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|err| format!("failed to open {}: {err}", path.display()))?;
+    let mut header_size_bytes = [0_u8; 8];
+    std::io::Read::read_exact(&mut file, &mut header_size_bytes)
+        .map_err(|err| format!("failed to read {} header size: {err}", path.display()))?;
+    let header_size = usize::try_from(u64::from_le_bytes(header_size_bytes))
+        .map_err(|_| format!("{} header size does not fit usize", path.display()))?;
+    const MAX_HEADER_SIZE: usize = 64 * 1024 * 1024;
+    if header_size > MAX_HEADER_SIZE {
+        return Err(format!(
+            "{} checkpoint header is {header_size} bytes (limit {MAX_HEADER_SIZE})",
+            path.display()
+        ));
+    }
+    let mut header = vec![0_u8; header_size];
+    std::io::Read::read_exact(&mut file, &mut header)
+        .map_err(|err| format!("failed to read {} header: {err}", path.display()))?;
+    let quoted_name = format!("\"{name}\"");
+    Ok(header
+        .windows(quoted_name.len())
+        .any(|window| window == quoted_name.as_bytes()))
+}
+
+/// Load a native checkpoint, migrating the pre-packed degree>0 SH layout.
+///
+/// The paired PLY has already initialized every current parameter. New
+/// checkpoints load directly. A legacy checkpoint instead stores one tensor
+/// per higher-order component; pack its parameter values and Adam moments into
+/// the current row-major tables after Meganeura restores all matching fields.
+fn load_optimizer_checkpoint(
+    session: &mut mn::Session,
+    path: &std::path::Path,
+    sh_degree: usize,
+    n_cells: usize,
+) -> Result<bool, String> {
+    let num_components = (1 + sh_degree) * (1 + sh_degree);
+    let has_packed_sh = num_components > 1 && checkpoint_has_tensor(path, "sh_r_rest")?;
+    session
+        .load_checkpoint(path)
+        .map_err(|err| format!("failed to load {}: {err:?}", path.display()))?;
+    if num_components == 1 || has_packed_sh {
+        return Ok(false);
+    }
+
+    let checkpoint = mn::data::safetensors::SafeTensorsModel::load(path.to_path_buf())
+        .map_err(|err| format!("failed to inspect {}: {err}", path.display()))?;
+    let mut migrated = false;
+    for channel in ["sh_r", "sh_g", "sh_b"] {
+        let Some(parameter) =
+            legacy_sh_tensor(&checkpoint, None, channel, num_components, n_cells)?
+        else {
+            continue;
+        };
+        let rest_name = sh_rest_parameter_name(channel);
+        session.set_parameter(&rest_name, &parameter);
+        if let Some(moment) = legacy_sh_tensor(
+            &checkpoint,
+            Some("adam_m"),
+            channel,
+            num_components,
+            n_cells,
+        )? {
+            session.write_adam_m(&rest_name, &moment);
+        }
+        if let Some(moment) = legacy_sh_tensor(
+            &checkpoint,
+            Some("adam_v"),
+            channel,
+            num_components,
+            n_cells,
+        )? {
+            session.write_adam_v(&rest_name, &moment);
+        }
+        migrated = true;
+    }
+    Ok(migrated)
 }
 
 fn save_checkpoint_step(model_path: &std::path::Path, step: usize) -> Result<(), String> {
@@ -3278,12 +3455,20 @@ fn download_model_parameters(
 
     let num_components = model.sh_component_count();
     let row_stride = num_components * 3;
-    let mut out_chan = vec![0.0f32; n_cells];
     for (chan_idx, chan) in ["sh_r", "sh_g", "sh_b"].iter().enumerate() {
-        for k in 0..num_components {
-            session.read_param(&parameter_name(chan, k), &mut out_chan);
-            for (i, &c) in out_chan.iter().enumerate() {
-                model.sh_coefficients[i * row_stride + k * 3 + chan_idx] = c;
+        let mut dc = vec![0.0_f32; n_cells];
+        session.read_param(chan, &mut dc);
+        for (i, &value) in dc.iter().enumerate() {
+            model.sh_coefficients[i * row_stride + chan_idx] = value;
+        }
+        if num_components > 1 {
+            let mut rest = vec![0.0_f32; n_cells * (num_components - 1)];
+            session.read_param(&sh_rest_parameter_name(chan), &mut rest);
+            for i in 0..n_cells {
+                for k in 1..num_components {
+                    model.sh_coefficients[i * row_stride + k * 3 + chan_idx] =
+                        rest[i * (num_components - 1) + k - 1];
+                }
             }
         }
     }
@@ -3982,8 +4167,9 @@ fn per_cell_param_names_with_stride(
         names.push((POINT_ERROR_PROBE.to_string(), 1));
     }
     for chan in ["sh_r", "sh_g", "sh_b"] {
-        for k in 0..num_components {
-            names.push((parameter_name(chan, k), 1));
+        names.push((chan.to_string(), 1));
+        if num_components > 1 {
+            names.push((sh_rest_parameter_name(chan), num_components - 1));
         }
     }
     names
@@ -3994,8 +4180,8 @@ fn per_cell_param_names_with_stride(
 /// rebuild when densification grows the cell table.
 struct AdamSnapshot {
     /// Per-parameter entries in compile order. Each holds the param
-    /// name, the per-cell stride (1 or 3), and flat (m, v) buffers of
-    /// length `n_cells * stride`.
+    /// name, its per-cell stride, and flat (m, v) buffers of length
+    /// `n_cells * stride`.
     entries: Vec<AdamEntry>,
     /// View-sized parameters are not represented in `PointCloudModel`, so
     /// their values and moments must be carried explicitly across a graph
@@ -4007,6 +4193,7 @@ struct AdamSnapshot {
 
 struct AdamEntry {
     name: String,
+    /// Number of contiguous values belonging to one cloud site.
     stride: usize,
     m: Vec<f32>,
     v: Vec<f32>,
@@ -4741,9 +4928,13 @@ fn fit_appearance_pixel_batched(
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
     );
     if let Some(ref state_path) = config.resume_state_path {
-        session
-            .load_checkpoint(state_path)
-            .unwrap_or_else(|err| panic!("failed to load {}: {err:?}", state_path.display()));
+        let migrated_legacy_sh = load_optimizer_checkpoint(
+            &mut session,
+            state_path,
+            config.sh_degree,
+            model.points.len(),
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
         if let Some(state) = config.resume_training_state {
             assert_eq!(
                 session.adam_step_count() as usize,
@@ -4756,6 +4947,9 @@ fn fit_appearance_pixel_batched(
             state_path.display(),
             session.adam_step_count()
         );
+        if migrated_legacy_sh {
+            log::info!("resume: migrated legacy per-component SH parameters and Adam moments");
+        }
     }
 
     // `pixel_idx_per_step` is constant across all training steps —
@@ -5744,7 +5938,20 @@ mod tests {
         let [pixel, _, _] = pixel_sh(
             &mut graph,
             cell_indices,
-            &[vec![sh_r], vec![sh_g], vec![sh_b]],
+            &[
+                ShChannelGraph {
+                    dc: sh_r,
+                    rest: None,
+                },
+                ShChannelGraph {
+                    dc: sh_g,
+                    rest: None,
+                },
+                ShChannelGraph {
+                    dc: sh_b,
+                    rest: None,
+                },
+            ],
             None,
             None,
             None,
@@ -5797,15 +6004,7 @@ mod tests {
         let basis_inputs: Vec<mn::NodeId> = (1..k)
             .map(|component| graph.input(&format!("basis_{component}"), &[p, 1]))
             .collect();
-        let mut sh_coefficients = Vec::with_capacity(3);
-        for channel in ["sh_r", "sh_g", "sh_b"] {
-            let columns = (0..k)
-                .map(|component| {
-                    graph.parameter(&parameter_name(channel, component), &[n_cells, 1])
-                })
-                .collect();
-            sh_coefficients.push(columns);
-        }
+        let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, k);
         let ones_l1 = graph.constant(vec![1.0; l], &[l, 1]);
         let pixels = pixel_sh(
             &mut graph,
@@ -5842,12 +6041,18 @@ mod tests {
             0.01 * (1 + channel * k * n_cells + component * n_cells + cell) as f32
         };
         for (channel_index, channel) in ["sh_r", "sh_g", "sh_b"].iter().enumerate() {
-            for component in 0..k {
-                let values: Vec<f32> = (0..n_cells)
-                    .map(|cell| coefficient(channel_index, component, cell))
-                    .collect();
-                session.set_parameter(&parameter_name(channel, component), &values);
+            let dc: Vec<f32> = (0..n_cells)
+                .map(|cell| coefficient(channel_index, 0, cell))
+                .collect();
+            session.set_parameter(channel, &dc);
+            let mut rest = vec![0.0_f32; n_cells * (k - 1)];
+            for cell in 0..n_cells {
+                for component in 1..k {
+                    rest[cell * (k - 1) + component - 1] =
+                        coefficient(channel_index, component, cell);
+                }
             }
+            session.set_parameter(&sh_rest_parameter_name(channel), &rest);
         }
         let cells = [0_u32, 1, 2, 0];
         let pixel_indices = [0_u32, 0, 1, 1];
@@ -5885,17 +6090,23 @@ mod tests {
         }
 
         for channel in ["sh_r", "sh_g", "sh_b"] {
-            for component in 0..k {
-                let name = parameter_name(channel, component);
-                let mut gradient = vec![0.0_f32; n_cells];
-                session.read_param_grad(&name, &mut gradient);
-                assert!(
-                    gradient
-                        .iter()
-                        .all(|value| value.is_finite() && *value > 0.0),
-                    "missing packed gradient for {name}: {gradient:?}"
-                );
-            }
+            let mut dc_gradient = vec![0.0_f32; n_cells];
+            session.read_param_grad(channel, &mut dc_gradient);
+            assert!(
+                dc_gradient
+                    .iter()
+                    .all(|value| value.is_finite() && *value > 0.0),
+                "missing DC gradient for {channel}: {dc_gradient:?}"
+            );
+            let rest_name = sh_rest_parameter_name(channel);
+            let mut rest_gradient = vec![0.0_f32; n_cells * (k - 1)];
+            session.read_param_grad(&rest_name, &mut rest_gradient);
+            assert!(
+                rest_gradient
+                    .iter()
+                    .all(|value| value.is_finite() && *value > 0.0),
+                "missing packed gradient for {rest_name}: {rest_gradient:?}"
+            );
         }
     }
 
@@ -5915,9 +6126,7 @@ mod tests {
         let surface_basis = graph.input("surface_basis", &[p * l, components]);
         let surface_color =
             graph.parameter("surface_color_coefficients", &[n_cells, components * 3]);
-        let sh_coefficients = ["sh_r", "sh_g", "sh_b"]
-            .map(|name| vec![graph.parameter(name, &[n_cells, 1])])
-            .to_vec();
+        let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, 1);
         let ones_l1 = graph.constant(vec![1.0; l], &[l, 1]);
         let pixels = pixel_sh(
             &mut graph,
@@ -6015,9 +6224,7 @@ mod tests {
             axes: graph.parameter("spherical_voronoi_axes", &[n_cells, sites * 3]),
             colors: graph.parameter("spherical_voronoi_colors", &[n_cells, sites * 3]),
         };
-        let sh_coefficients = ["sh_r", "sh_g", "sh_b"]
-            .map(|name| vec![graph.parameter(name, &[n_cells, 1])])
-            .to_vec();
+        let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, 1);
         let ones_l1 = graph.constant(vec![1.0; l], &[l, 1]);
         let pixels = pixel_sh(
             &mut graph,
@@ -6647,9 +6854,15 @@ mod tests {
             // Required entries:
             assert!(names.contains(&("log_density".to_string(), 1)));
             assert!(names.contains(&("positions".to_string(), 3)));
-            // Total count: 1 (density) + 1 (positions) + 3 * (1+deg)² SH params.
+            // One DC table per channel, plus one packed rest table when K>1.
             let num_components = (1 + sh_degree) * (1 + sh_degree);
-            assert_eq!(names.len(), 2 + 3 * num_components);
+            assert_eq!(names.len(), 2 + if num_components > 1 { 6 } else { 3 });
+            for channel in ["sh_r", "sh_g", "sh_b"] {
+                assert!(names.contains(&(channel.to_string(), 1)));
+                if num_components > 1 {
+                    assert!(names.contains(&(sh_rest_parameter_name(channel), num_components - 1,)));
+                }
+            }
             let weighted_names =
                 per_cell_param_names_with_stride(sh_degree, true, false, false, false, false, true);
             assert!(weighted_names.contains(&("log_radii".to_string(), 1)));
@@ -6714,11 +6927,11 @@ mod tests {
             assert_eq!(vg.max_steps, max_steps);
             assert_eq!(vg.num_views, num_views);
             assert!(vg.weighted_path.is_none());
-            // SH coefficient tables: 3 channels × (1+deg)² components.
+            // SH coefficient tables: one DC and one packed rest per channel.
             let num_components = (1 + sh_degree) * (1 + sh_degree);
             assert_eq!(vg.sh_coefficients.len(), 3);
             for chan in &vg.sh_coefficients {
-                assert_eq!(chan.len(), num_components);
+                assert_eq!(chan.rest.is_some(), num_components > 1);
             }
             // basis_inputs: K-1 entries (component 0 is folded in).
             assert_eq!(vg.basis_inputs.len(), num_components - 1);
@@ -7232,7 +7445,7 @@ mod tests {
         };
         let mut graph = mn::Graph::new();
         let dc = graph.parameter("sh_r", &[1, 1]);
-        let rest = graph.parameter("sh_r_1", &[1, 1]);
+        let rest = graph.parameter("sh_r_rest", &[1, 3]);
         let dc_loss = graph.mean_all(dc);
         let rest_loss = graph.mean_all(rest);
         let loss = graph.add(dc_loss, rest_loss);
@@ -7246,18 +7459,157 @@ mod tests {
             },
         );
         session.set_parameter("sh_r", &[0.0]);
-        session.set_parameter("sh_r_1", &[0.0]);
+        session.set_parameter("sh_r_rest", &[0.0; 3]);
         session.set_adam(0.1, 0.0, 0.0, 1.0e-8);
         set_sh_lr_multipliers(&mut session, 1, 0.25, 0.5);
         session.step();
         session.wait();
 
         let mut actual_dc = [0.0];
-        let mut actual_rest = [0.0];
+        let mut actual_rest = [0.0; 3];
         session.read_param("sh_r", &mut actual_dc);
-        session.read_param("sh_r_1", &mut actual_rest);
+        session.read_param("sh_r_rest", &mut actual_rest);
         assert!((actual_dc[0] + 0.025).abs() < 1.0e-5, "{actual_dc:?}");
-        assert!((actual_rest[0] + 0.05).abs() < 1.0e-5, "{actual_rest:?}");
+        assert!(
+            actual_rest
+                .iter()
+                .all(|value| (*value + 0.05).abs() < 1.0e-5),
+            "{actual_rest:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_component_sh_checkpoint_migrates_values_and_moments() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping legacy SH checkpoint migration test: no GPU");
+            return;
+        };
+        let (n_cells, sh_degree) = (2usize, 1usize);
+        let num_components = (1 + sh_degree) * (1 + sh_degree);
+        let value = |channel: usize, component: usize, cell: usize| {
+            (100 * channel + 10 * component + cell) as f32 * 0.01
+        };
+
+        let mut legacy_graph = mn::Graph::new();
+        let mut legacy_parameters = Vec::new();
+        let mut legacy_loss = None;
+        for channel in ["sh_r", "sh_g", "sh_b"] {
+            for component in 0..num_components {
+                let parameter =
+                    legacy_graph.parameter(&parameter_name(channel, component), &[n_cells, 1]);
+                let term = legacy_graph.mean_all(parameter);
+                legacy_loss = Some(match legacy_loss {
+                    Some(loss) => legacy_graph.add(loss, term),
+                    None => term,
+                });
+                legacy_parameters.push((channel, component));
+            }
+        }
+        legacy_graph.set_outputs(vec![legacy_loss.unwrap()]);
+        let (mut legacy_session, _) = mn::build(
+            &legacy_graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu.clone()),
+                ..Default::default()
+            },
+        );
+        for &(channel, component) in &legacy_parameters {
+            let channel_index = match channel {
+                "sh_r" => 0,
+                "sh_g" => 1,
+                "sh_b" => 2,
+                _ => unreachable!(),
+            };
+            let values: Vec<f32> = (0..n_cells)
+                .map(|cell| value(channel_index, component, cell))
+                .collect();
+            let name = parameter_name(channel, component);
+            legacy_session.set_parameter(&name, &values);
+            legacy_session.write_adam_m(
+                &name,
+                &values.iter().map(|entry| entry + 1.0).collect::<Vec<_>>(),
+            );
+            legacy_session.write_adam_v(
+                &name,
+                &values.iter().map(|entry| entry + 2.0).collect::<Vec<_>>(),
+            );
+        }
+        legacy_session.set_adam_step_count(17);
+        let checkpoint = std::env::temp_dir().join(format!(
+            "blade-volume-legacy-sh-{}.safetensors",
+            std::process::id()
+        ));
+        legacy_session.save_checkpoint(&checkpoint).unwrap();
+        drop(legacy_session);
+
+        let mut packed_graph = mn::Graph::new();
+        let packed_parameters = declare_sh_parameters(&mut packed_graph, n_cells, num_components);
+        let mut packed_loss = None;
+        for channel in &packed_parameters {
+            for parameter in [Some(channel.dc), channel.rest].into_iter().flatten() {
+                let term = packed_graph.mean_all(parameter);
+                packed_loss = Some(match packed_loss {
+                    Some(loss) => packed_graph.add(loss, term),
+                    None => term,
+                });
+            }
+        }
+        packed_graph.set_outputs(vec![packed_loss.unwrap()]);
+        let (mut packed_session, _) = mn::build(
+            &packed_graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        assert!(
+            load_optimizer_checkpoint(&mut packed_session, &checkpoint, sh_degree, n_cells,)
+                .unwrap()
+        );
+        assert_eq!(packed_session.adam_step_count(), 17);
+
+        for (channel_index, channel) in ["sh_r", "sh_g", "sh_b"].iter().enumerate() {
+            let expected_dc: Vec<f32> = (0..n_cells)
+                .map(|cell| value(channel_index, 0, cell))
+                .collect();
+            let mut actual_dc = vec![0.0_f32; n_cells];
+            packed_session.read_param(channel, &mut actual_dc);
+            assert_eq!(actual_dc, expected_dc);
+
+            let mut expected_rest = vec![0.0_f32; n_cells * (num_components - 1)];
+            for cell in 0..n_cells {
+                for component in 1..num_components {
+                    expected_rest[cell * (num_components - 1) + component - 1] =
+                        value(channel_index, component, cell);
+                }
+            }
+            let rest_name = sh_rest_parameter_name(channel);
+            let mut actual_rest = vec![0.0_f32; expected_rest.len()];
+            let mut actual_m = vec![0.0_f32; expected_rest.len()];
+            let mut actual_v = vec![0.0_f32; expected_rest.len()];
+            packed_session.read_param(&rest_name, &mut actual_rest);
+            packed_session.read_adam_m(&rest_name, &mut actual_m);
+            packed_session.read_adam_v(&rest_name, &mut actual_v);
+            assert_eq!(actual_rest, expected_rest);
+            assert_eq!(
+                actual_m,
+                expected_rest
+                    .iter()
+                    .map(|entry| entry + 1.0)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                actual_v,
+                expected_rest
+                    .iter()
+                    .map(|entry| entry + 2.0)
+                    .collect::<Vec<_>>()
+            );
+        }
+        std::fs::remove_file(checkpoint).unwrap();
     }
 
     #[test]
