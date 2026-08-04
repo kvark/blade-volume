@@ -375,12 +375,10 @@ fn surface_detail_weights(
     tangent_sites: mn::NodeId,
     rows: usize,
 ) -> mn::NodeId {
-    let query_sites = repeat_surface_detail_vec3(g, query, rows);
-    let neg_sites = g.neg(tangent_sites);
-    let delta = g.add(query_sites, neg_sites);
-    let delta_squared = g.mul(delta, delta);
-    let distance_squared = g.sum_inner(delta_squared);
     let count = rows * vol::SURFACE_DETAIL_SITES;
+    let distance_squared =
+        g.pairwise_squared_distance(query, tangent_sites, vol::SURFACE_DETAIL_SITES);
+    let distance_squared = g.reshape(distance_squared, &[count, 1]);
     let temperature = g.constant(vec![10.0_f32; count], &[count, 1]);
     let exponent = g.mul(distance_squared, temperature);
     let weights = negative_exponential(g, exponent, count);

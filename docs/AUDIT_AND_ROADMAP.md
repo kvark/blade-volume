@@ -796,6 +796,16 @@ At the audited revision:
   seconds and 23.4010 versus 23.4138 dB held out. All 14 physical path oracles
   pass, and scoped Room/Bonsai peaks are 1.4/1.3 GB with no memory or GPU
   fault events.
+- Meganeura `508c0ab` computes each detail query's eight squared site
+  distances directly, including both gradients, instead of materializing
+  48 MiB query/delta/square tensors. The production detail graph falls
+  461→454 passes and about 17.9→16.5–16.8 ms. Two Room replicas average
+  112.039 seconds versus the current 116.229-second replay (-3.6%) and two
+  Bonsai replicas average 64.567 versus 67.035 seconds (-3.7%). Held-out means
+  remain neutral at 23.4102 versus 23.4138 dB on Room and 16.3147 versus
+  16.3137 dB on Bonsai; per-view gains/regressions are balanced. Physical
+  forward/backward, detail training/remap, exact resume, shader/SPIR-V, and
+  cross-scene gates pass without memory or GPU fault events.
 - Profiling after that negative gate removes two pieces of no-op training
   work. Zero-weight view-facing normal regularization is absent from the
   production graph, reducing a representative step from 460 to 443 GPU passes
@@ -1700,7 +1710,9 @@ material path.
    neutral cross-scene quality. Dense PowerFoam clipping subsequently assigns
    a workgroup per ray only above 32 adjacency entries/site: Bonsai training
    falls another 39.8% (111.409→67.035 seconds) while Room keeps the serial
-   kernel within 0.51% of its prior timing, both at neutral held-out quality.)
+   kernel within 0.51% of its prior timing, both at neutral held-out quality.
+   Meganeura `508c0ab` then removes the two 48 MiB tiled detail-distance
+   chains; Room/Bonsai improve another 3.6%/3.7% at neutral held-out quality.)
 4. Reuse the production GPU tracer for exhaustive checkpoint evaluation while
    preserving the CPU implementation as the default oracle. (Done for
    unweighted RadFoam in `77c19b7`: physical pixel parity passes, aggregate

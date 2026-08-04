@@ -1252,6 +1252,37 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   Vulkan validation errors; its scope reaches the 6 GiB cap with 36 reclaim
   events but records no swap, OOM, or kill.
 
+#### M2aq — Direct pairwise detail distances (implemented and two-scene-gated)
+
+- Meganeura revision `508c0ab` adds a differentiable row-wise pairwise
+  squared-distance operation. A compact `[M, D]` query is compared with its
+  consecutive `[M * N, D]` site rows directly; dedicated backward kernels
+  reduce the `N` contributions into the query gradient and write site
+  gradients without atomics.
+- Both eight-site surface-detail partitions use the primitive instead of
+  materializing a `[rows, 8, 3]` query tile, subtraction, square, and inner
+  reduction. At the 4,096-ray, 128-step shape, each removed full-size
+  intermediate is 12,582,912 floats (48 MiB). The graph falls from 461 to 454
+  passes and steady measured time from about 17.9 to 16.5–16.8 ms; the new two
+  forward and four backward dispatches together take about 1.0 ms.
+- Two 2,040-step Room replicas take 113.149 and 110.928 seconds, averaging
+  112.039 seconds versus the current build's 116.229-second replay (-3.6%).
+  Mean GPU wait falls 69.486→67.314 seconds. Their train/held-out mean is
+  25.6435/23.4102 dB versus the preceding two-run 25.6517/23.4138 dB. Against
+  the exact current-build replay, averaged held-out views improve 20, tie
+  three, and regress 16; the mean is +0.0088 dB.
+- Two Bonsai replicas take 65.114 and 64.019 seconds, averaging 64.567 seconds
+  versus 67.035 seconds (-3.7%); mean GPU wait falls 57.483→54.521 seconds
+  (-5.2%). Train/held-out quality is 17.1979/16.3147 dB versus
+  17.1987/16.3137 dB. Averaged held-out views split 16 improvements, five
+  ties, and 16 regressions, with a +0.0011 dB mean.
+- A physical 513×3×8 Meganeura oracle covers forward values and both
+  gradients. All 177 library and 11 reduction/runtime tests, shader-module and
+  SPIR-V validation, strict lint, Blade's detail/densification tests, and exact
+  oriented-detail resume pass. The complete locked Blade workspace suite also
+  passes and peaks at 2.4 GB. Room/Bonsai gates peak at 1.5/1.6 GB under the
+  6 GiB scope, all with zero swap, pressure, OOM, kill, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
