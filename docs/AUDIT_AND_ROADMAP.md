@@ -799,6 +799,19 @@ At the audited revision:
   difference, joint-update, exact-resume, formatting, strict lint, and
   serialized workspace gates pass. The clean warm-cache suite rerun peaks at
   217.8 MiB under 6 GiB with no memory or GPU event.
+- A five-rate Bonsai screen followed by a two-scene 8,160-step gate rejects a
+  universal learned-radius rate. Room selects `0.005`: it reaches 25.6867 dB
+  held out versus 25.5704 at `0.0005` and 25.6062 at `0.01`, improves 29/39
+  and 25/39 views respectively, and ends at 3.189M edges. Bonsai selects
+  `0.01`: it reaches 18.6322 dB versus 17.9072 at `0.005`, improves 31/37
+  views, and ends at 8.930M rather than 8.517M edges. The associated degree
+  maxima are 238 for selected Room and 5,648 for selected Bonsai, so the
+  latter retains a hub-tail warning. All rays remain exact and the combined
+  long scope peaks at 1.14 GB without memory or GPU events. Visual comparisons
+  confirm the relative choices but retain Bonsai's large pale support blobs,
+  holes, and background floaters; another identical fixed-cap continuation is
+  not the next quality experiment. Geometry therefore remains opt-in with a
+  held-out scene-level rate bracket rather than a changed global default.
 - Meganeura `7967ca2` adds one-transfer F32 parameter readback through cached
   download memory, and Blade uses it for every model/geometry snapshot. It
   leaves the training graph and values unchanged while reducing four-replica
@@ -1967,8 +1980,11 @@ material path.
    cutting another 2.0% on Room and 2.4% on Bonsai at neutral quality. Sharing
    the invariant geometry between the base and displaced detail-plane queries
    then cuts another 0.5% on Room and 0.3% on Bonsai at neutral quality. The
-   next decision point is a longer conservative/high-rate schedule comparison;
-   neither rate becomes a default from the present short horizon. A compact
+   long radius-rate gate now selects `0.005` for Room and `0.01` for Bonsai;
+   neither becomes a universal default, and the Bonsai selection retains a
+   heavy degree tail. The next quality experiment targets unsupported
+   support/opacity and spatial responsibility rather than another identical
+   continuation or a universal radius rate. A compact
    48-float additive Spherical Voronoi residual is now implemented but rejected:
    learned and fixed axes lose 0.0168 and 0.0137 dB held out on Room while
    adding about 22% training time. On Room, a 160-entry path budget is exact

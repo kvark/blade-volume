@@ -1637,6 +1637,47 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   two build jobs peaks at 228,335,616 bytes (217.8 MiB) under the 6 GiB cgroup,
   with zero swap, pressure, OOM, kill, or GPU fault.
 
+#### M2bc — Select radius rates at the long horizon (scene-level policy gated)
+
+- A 2,040-step Bonsai screen holds every other setting fixed and sweeps radius
+  ratios `0.0005`, `0.001`, `0.0025`, `0.005`, and `0.01`. Held-out PSNR rises
+  monotonically through 16.4758, 16.4910, 16.5657, 16.6304, and 16.7634 dB.
+  The `0.005` arm limits the final graph to 8.433M edges and degree p99/max
+  203/1,968 versus 8.762M and 217/3,666 at `0.01`, but captures only 54% of
+  the high rate's gain over `0.0005`. It therefore advances as a topology-aware
+  intermediate, not as a winner from the short horizon.
+- The 8,160-step gate resolves the choice differently by scene:
+
+  | Scene | radius ratio | train/test PSNR (dB) | directed edges | training/GPU wait (s) |
+  | --- | ---: | ---: | ---: | ---: |
+  | Room | `0.0005` | 29.1776 / 25.5704 | 2,872,340 | 556.718 / 344.110 |
+  | Room | **`0.005`** | **28.9541 / 25.6867** | 3,188,820 | 554.830 / 338.675 |
+  | Room | `0.01` | 28.4694 / 25.6062 | 3,498,108 | 562.564 / 343.182 |
+  | Bonsai | `0.0005` | 18.2475 / 17.2852 | 8,107,072 | 357.470 / 270.196 |
+  | Bonsai | `0.005` | 18.9665 / 17.9072 | 8,517,388 | 357.026 / 268.167 |
+  | Bonsai | **`0.01`** | **19.6609 / 18.6322** | 8,930,116 | 359.710 / 267.021 |
+
+- Room `0.005` improves 29/39 held-out views over `0.0005` and 25/39 over
+  `0.01`. Its degree p99/max is 55/238, between 32/73 and 80/457. Bonsai
+  `0.01` improves 31/37 views over `0.005`; giving up 0.7250 dB to reduce edges
+  by 4.6% is not justified under the quality-first gate. Bonsai's degree
+  p99/max progresses 200/1,926 → 212/4,211 → 231/5,648 across the three rates,
+  so the selected high rate still carries an explicit hub-tail warning.
+- The policy is consequently scene-level: use `0.005` for the measured Room
+  trajectory and `0.01` for the measured Bonsai trajectory. Keep the public
+  default at zero (frozen geometry), and bracket at least these two rates on a
+  held-out split before training a new scene. No arm truncates a training or
+  evaluation ray; candidate maxima remain at or below 679/1,024. The combined long
+  intermediate scope peaks at 1,141,944,320 bytes under 6 GiB with zero swap,
+  pressure, OOM, kill, throttling, or GPU fault.
+- Comparison renders agree with the metric selection, but also show that rate
+  tuning is not the remaining representation fix. Room is recognizable and
+  the intermediate rate removes some errors visible in the high-rate arm. Bonsai's
+  high-rate gain is real, yet both rates retain large pale support blobs,
+  holes, and background floaters. The next quality experiment should constrain
+  unsupported support/opacity or improve spatial appearance responsibility,
+  not merely extend this fixed-cap schedule or choose one universal rate.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
