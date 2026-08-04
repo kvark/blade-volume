@@ -1097,7 +1097,9 @@ fn powerfoam_splat_interval(
     let adjacency = model.adjacency.as_ref().unwrap();
     let current = model.points[cell as usize].truncate();
     let current_radius = read_radius(model, cell);
-    if (current - ray_origin).length() < 4.0 * current_radius {
+    let camera_delta = current - ray_origin;
+    let exclusion_radius = 4.0 * current_radius;
+    if camera_delta.length_squared() < exclusion_radius * exclusion_radius {
         return None;
     }
     let (sphere_near, sphere_far, _, _) =

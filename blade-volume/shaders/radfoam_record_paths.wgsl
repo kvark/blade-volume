@@ -160,6 +160,11 @@ struct ProjectedTileBounds {
     valid: u32,
 };
 
+fn inside_camera_exclusion(delta: vec3<f32>, radius: f32) -> bool {
+    let exclusion_radius = 4.0 * radius;
+    return dot(delta, delta) < exclusion_radius * exclusion_radius;
+}
+
 fn face_intersection_jacobians(
     ray_origin: vec3<f32>,
     ray_dir: vec3<f32>,
@@ -343,7 +348,7 @@ fn power_interval(
     if (sphere.valid == 0u ||
         sphere.far_t <= 0.0 ||
         sphere.near_t >= g_params.depth ||
-        length(current.xyz - ray_origin) < 4.0 * current.w) {
+        inside_camera_exclusion(current.xyz - ray_origin, current.w)) {
         return PowerInterval(0.0, 0.0, 0.0, cell, cell, 0u);
     }
 
@@ -422,7 +427,7 @@ fn projected_tile_bounds(sphere_data: vec4<f32>) -> ProjectedTileBounds {
     let center = qrot(inverse_orientation, sphere_data.xyz - g_camera.position);
     let radius = sphere_data.w;
     if (radius <= 0.0 ||
-        length(center) < 4.0 * radius ||
+        inside_camera_exclusion(center, radius) ||
         center.z + radius <= 0.0) {
         return ProjectedTileBounds(vec2<u32>(0u), vec2<u32>(0u), 0u);
     }
@@ -571,7 +576,7 @@ fn gather_powerfoam_candidates(
             cell = g_tile_candidates[tile * g_params.tile_capacity + scan_index];
         }
         let sphere_data = g_points[cell];
-        if (length(sphere_data.xyz - ray_origin) < 4.0 * sphere_data.w) {
+        if (inside_camera_exclusion(sphere_data.xyz - ray_origin, sphere_data.w)) {
             continue;
         }
         let sphere = sphere_intersections(ray_origin, ray_dir, sphere_data);
