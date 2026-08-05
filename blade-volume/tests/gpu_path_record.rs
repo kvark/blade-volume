@@ -1026,6 +1026,35 @@ fn gpu_batched_powerfoam_paths_match_multi_camera_cpu() {
 }
 
 #[test]
+fn gpu_parallel_bvh_frontier_matches_translated_cpu() {
+    const POINT_COUNT: usize = 32 * 1024;
+    let mut model = build_disconnected_ray_model(129);
+    model
+        .points
+        .extend((model.points.len()..POINT_COUNT).map(|index| {
+            glam::Vec4::new(
+                (index % 127) as f32,
+                1000.0 + (index % 113) as f32,
+                (index % 109) as f32,
+                1.0,
+            )
+        }));
+    model.sh_coefficients.resize(POINT_COUNT * 3, 0.0);
+    model.radii.as_mut().unwrap().resize(POINT_COUNT, 0.2);
+    model
+        .adjacency
+        .as_mut()
+        .unwrap()
+        .offsets
+        .resize(POINT_COUNT + 1, 0);
+    assert_gpu_batched_path_record_matches_cpu(
+        model,
+        glam::Vec3::new(8192.0, -4096.0, 2048.0),
+        true,
+    );
+}
+
+#[test]
 fn gpu_oriented_powerfoam_paths_and_normal_jacobians_match_cpu() {
     let mut model = build_disconnected_ray_model(12);
     let camera = make_camera_looking_along_x(100.0);

@@ -179,6 +179,7 @@ struct PathRecordData {
     g_surface_details: gpu::BufferPiece,
     g_adjacency: gpu::BufferPiece,
     g_adjacency_offsets: gpu::BufferPiece,
+    g_support_bvh: gpu::BufferPiece,
     g_pixel_indices: gpu::BufferPiece,
     g_previous_cells_out: gpu::BufferPiece,
     g_cells_out: gpu::BufferPiece,
@@ -215,6 +216,7 @@ pub struct PathRecorder {
     splat_project_pipeline: gpu::ComputePipeline,
     splat_bin_pipeline: gpu::ComputePipeline,
     splat_gather_pipeline: gpu::ComputePipeline,
+    splat_bvh_gather_pipeline: gpu::ComputePipeline,
     splat_record_pipeline: gpu::ComputePipeline,
     splat_parallel_record_pipeline: gpu::ComputePipeline,
 }
@@ -248,6 +250,11 @@ impl PathRecorder {
             data_layouts: &[&layout],
             compute: shader.at("gather_powerfoam_candidates"),
         });
+        let splat_bvh_gather_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
+            name: "powerfoam-gather-path-candidates-bvh",
+            data_layouts: &[&layout],
+            compute: shader.at("gather_powerfoam_bvh_candidates"),
+        });
         let splat_record_pipeline = context.create_compute_pipeline(gpu::ComputePipelineDesc {
             name: "powerfoam-record-splat-paths",
             data_layouts: &[&layout],
@@ -264,6 +271,7 @@ impl PathRecorder {
             splat_project_pipeline,
             splat_bin_pipeline,
             splat_gather_pipeline,
+            splat_bvh_gather_pipeline,
             splat_record_pipeline,
             splat_parallel_record_pipeline,
         }
@@ -274,6 +282,7 @@ impl PathRecorder {
         context.destroy_compute_pipeline(&mut self.splat_project_pipeline);
         context.destroy_compute_pipeline(&mut self.splat_bin_pipeline);
         context.destroy_compute_pipeline(&mut self.splat_gather_pipeline);
+        context.destroy_compute_pipeline(&mut self.splat_bvh_gather_pipeline);
         context.destroy_compute_pipeline(&mut self.splat_record_pipeline);
         context.destroy_compute_pipeline(&mut self.splat_parallel_record_pipeline);
     }
@@ -282,6 +291,12 @@ impl PathRecorder {
     /// from assigning a complete workgroup to every ray.
     pub fn uses_parallel_powerfoam_recording(cloud: &crate::gpu::RadFoamGpuCloud) -> bool {
         use_parallel_splat_recording(cloud.num_points, cloud.num_adjacency)
+    }
+
+    /// Whether this cloud uses its shared support-sphere hierarchy instead of
+    /// the exhaustive candidate gather.
+    pub fn uses_support_bvh(cloud: &crate::gpu::RadFoamGpuCloud) -> bool {
+        cloud.has_support_bvh
     }
 
     fn prepare_dispatch(
@@ -354,6 +369,7 @@ impl PathRecorder {
             g_surface_details: cloud.surface_details(),
             g_adjacency: cloud.point_adjacency(),
             g_adjacency_offsets: cloud.point_adjacency_offsets(),
+            g_support_bvh: cloud.support_bvh(),
             g_pixel_indices: buffers.pixel_indices.into(),
             g_previous_cells_out: buffers.previous_cells.into(),
             g_cells_out: buffers.cells.into(),
@@ -412,9 +428,14 @@ impl PathRecorder {
                 pc.bind(0, &data);
                 pc.dispatch([tile_count, 1, 1]);
             }
-            {
+            if buffers.has_projected_splat_tiles() || !Self::uses_support_bvh(cloud) {
                 let mut pass = encoder.compute("powerfoam-gather-path-candidates");
                 let mut pc = pass.with(&self.splat_gather_pipeline);
+                pc.bind(0, &data);
+                pc.dispatch([args.num_pixels, 1, 1]);
+            } else {
+                let mut pass = encoder.compute("powerfoam-gather-path-candidates-bvh");
+                let mut pc = pass.with(&self.splat_bvh_gather_pipeline);
                 pc.bind(0, &data);
                 pc.dispatch([args.num_pixels, 1, 1]);
             }
@@ -442,7 +463,7 @@ impl PathRecorder {
 
     /// Record multiple disjoint camera slices into one output batch.
     ///
-    /// Exhaustive PowerFoam slices share one gather pass and one record pass,
+    /// PowerFoam slices share one gather pass and one record pass,
     /// while retaining a separate camera and pixel range per dispatch. Other
     /// modes use the ordinary dispatch sequence. Arguments must be ordered by
     /// non-overlapping `pixel_offset` ranges.
@@ -478,8 +499,19 @@ impl PathRecorder {
             .map(|&arg| self.prepare_dispatch(cloud, buffers, arg).0)
             .collect::<Vec<_>>();
         {
-            let mut pass = encoder.compute("powerfoam-gather-path-candidate-batch");
-            let mut pc = pass.with(&self.splat_gather_pipeline);
+            let (name, pipeline) = if Self::uses_support_bvh(cloud) {
+                (
+                    "powerfoam-gather-path-candidate-batch-bvh",
+                    &self.splat_bvh_gather_pipeline,
+                )
+            } else {
+                (
+                    "powerfoam-gather-path-candidate-batch",
+                    &self.splat_gather_pipeline,
+                )
+            };
+            let mut pass = encoder.compute(name);
+            let mut pc = pass.with(pipeline);
             for (datum, arg) in data.iter().zip(args) {
                 pc.bind(0, datum);
                 pc.dispatch([arg.num_pixels, 1, 1]);

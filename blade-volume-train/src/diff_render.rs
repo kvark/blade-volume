@@ -5599,21 +5599,10 @@ fn fit_appearance_pixel_batched(
     };
     let _ = n_cells;
     // Building a complete per-camera screen index does not pay for sparse
-    // mixed-view batches. Keep their already parallel exhaustive gather, but
-    // use projected candidates for large single-camera batches.
+    // mixed-view batches. Share the cloud's camera-independent sphere BVH
+    // between those views, but use projected candidates for large batches.
     let use_projected_candidates = model.radii.is_some()
         && pixel_batch.div_ceil(views_per_batch) >= MIN_PROJECTED_RAYS_PER_CAMERA;
-    if model.radii.is_some() {
-        log::info!(
-            "PowerFoam path candidates: {} (up to {} rays per camera)",
-            if use_projected_candidates {
-                "projected tiles"
-            } else {
-                "exhaustive gather"
-            },
-            pixel_batch.div_ceil(views_per_batch),
-        );
-    }
     let max_image_resolution = [
         views.iter().map(|view| view.width).max().unwrap_or(1),
         views.iter().map(|view| view.height).max().unwrap_or(1),
@@ -5694,6 +5683,17 @@ fn fit_appearance_pixel_batched(
     );
     if model.radii.is_some() {
         let average_neighbors = gpu_cloud.num_adjacency as f64 / gpu_cloud.num_points as f64;
+        log::info!(
+            "PowerFoam path candidates: {} (up to {} rays per camera)",
+            if use_projected_candidates {
+                "projected tiles"
+            } else if vol::gpu::PathRecorder::uses_support_bvh(&gpu_cloud) {
+                "sphere BVH"
+            } else {
+                "exhaustive gather"
+            },
+            pixel_batch.div_ceil(views_per_batch),
+        );
         log::info!(
             "PowerFoam interval clipping: {} ({average_neighbors:.1} adjacency entries/site)",
             if vol::gpu::PathRecorder::uses_parallel_powerfoam_recording(&gpu_cloud) {

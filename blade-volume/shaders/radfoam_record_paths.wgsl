@@ -70,11 +70,19 @@ struct Camera {
     principal: vec2<f32>,
 };
 
+struct SphereBvhNode {
+    minimum: vec3<f32>,
+    left: u32,
+    maximum: vec3<f32>,
+    right: u32,
+};
+
 var<storage, read> g_points: array<vec4<f32>>;
 var<storage, read> g_surface_normals: array<vec4<f32>>;
 var<storage, read> g_surface_details: array<vec4<f32>>;
 var<storage, read> g_adjacency: array<u32>;
 var<storage, read> g_adjacency_offsets: array<u32>;
+var<storage, read> g_support_bvh: array<SphereBvhNode>;
 var<storage, read> g_pixel_indices: array<u32>;
 var<storage, read_write> g_previous_cells_out: array<u32>;
 var<storage, read_write> g_cells_out: array<u32>;
@@ -110,6 +118,11 @@ var<workgroup> w_parallel_depths: array<f32, 64>;
 var<workgroup> w_parallel_faces: array<vec2<f32>, 64>;
 var<workgroup> w_parallel_neighbors: array<vec2<u32>, 64>;
 var<workgroup> w_parallel_valid: array<u32, 64>;
+var<workgroup> w_bvh_frontier_a: array<u32, 64>;
+var<workgroup> w_bvh_frontier_b: array<u32, 64>;
+var<workgroup> w_bvh_frontier_count: atomic<u32>;
+var<workgroup> w_bvh_next_count: atomic<u32>;
+var<workgroup> w_bvh_stacks: array<u32, 2048>;
 
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     let u = q.xyz;
@@ -663,6 +676,150 @@ fn gather_powerfoam_candidates(
             let candidate_slot = output_pixel * g_params.candidate_capacity + slot;
             g_candidates[candidate_slot] = cell;
             g_candidate_depths[candidate_slot] = sphere.root;
+        }
+    }
+    workgroupBarrier();
+    if (local_id.x == 0u) {
+        g_candidate_counts[output_pixel] = atomicLoad(&w_candidate_count);
+    }
+}
+
+fn ray_intersects_support_bounds(
+    ray_origin: vec3<f32>,
+    ray_dir: vec3<f32>,
+    node: SphereBvhNode,
+) -> bool {
+    var near = 0.0;
+    var far = g_params.depth;
+    for (var axis = 0u; axis < 3u; axis += 1u) {
+        let direction = ray_dir[axis];
+        if (abs(direction) <= 1e-20) {
+            if (ray_origin[axis] < node.minimum[axis] ||
+                ray_origin[axis] > node.maximum[axis]) {
+                return false;
+            }
+            continue;
+        }
+        let first = (node.minimum[axis] - ray_origin[axis]) / direction;
+        let second = (node.maximum[axis] - ray_origin[axis]) / direction;
+        near = max(near, min(first, second));
+        far = min(far, max(first, second));
+        if (far < near) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The camera-independent hierarchy is rebuilt with the cloud and shared by
+// every view. One workgroup owns one ray: all lanes initialize the fixed path
+// row and cooperatively expand six tree levels, then each lane traverses one
+// disjoint subtree and performs the same exact ray/sphere test as the
+// exhaustive gather. The tree has at most 2^30 leaves and is split in halves,
+// so each remaining subtree fits its lane's 32-word shared stack.
+@compute @workgroup_size(64)
+fn gather_powerfoam_bvh_candidates(
+    @builtin(workgroup_id) workgroup_id: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+) {
+    let p_id = workgroup_id.x;
+    if (p_id >= g_params.num_pixels) {
+        return;
+    }
+    let output_pixel = g_params.pixel_offset + p_id;
+    let row_start = output_pixel * g_params.max_steps;
+    for (var step = local_id.x; step < g_params.max_steps; step += 64u) {
+        let slot = row_start + step;
+        g_cells_out[slot] = 0u;
+        g_next_cells_out[slot] = 0u;
+        g_mask_out[slot] = 0.0;
+        if (g_params.jacobian_mode == 1u) {
+            g_previous_cells_out[slot] = 0u;
+        }
+    }
+    if (local_id.x == 0u) {
+        atomicStore(&w_candidate_count, 0u);
+        atomicStore(&w_bvh_frontier_count, 1u);
+        w_bvh_frontier_a[0] = 0u;
+    }
+    workgroupBarrier();
+
+    // Six binary levels produce at most 64 disjoint subtrees. Leaves reached
+    // early remain in the frontier exactly once while other branches expand.
+    for (var level = 0u; level < 6u; level += 1u) {
+        if (local_id.x == 0u) {
+            atomicStore(&w_bvh_next_count, 0u);
+        }
+        workgroupBarrier();
+        let frontier_count = atomicLoad(&w_bvh_frontier_count);
+        if (local_id.x < frontier_count) {
+            var node_index = w_bvh_frontier_a[local_id.x];
+            if ((level & 1u) != 0u) {
+                node_index = w_bvh_frontier_b[local_id.x];
+            }
+            let node = g_support_bvh[node_index];
+            let child_count = select(2u, 1u, (node.left & 0x80000000u) != 0u);
+            let output = atomicAdd(&w_bvh_next_count, child_count);
+            var first = node.left;
+            if (child_count == 1u) {
+                first = node_index;
+            }
+            if ((level & 1u) == 0u) {
+                w_bvh_frontier_b[output] = first;
+                if (child_count == 2u) {
+                    w_bvh_frontier_b[output + 1u] = node.right;
+                }
+            } else {
+                w_bvh_frontier_a[output] = first;
+                if (child_count == 2u) {
+                    w_bvh_frontier_a[output + 1u] = node.right;
+                }
+            }
+        }
+        workgroupBarrier();
+        if (local_id.x == 0u) {
+            atomicStore(&w_bvh_frontier_count, atomicLoad(&w_bvh_next_count));
+        }
+        workgroupBarrier();
+    }
+
+    let pixel_idx = g_pixel_indices[output_pixel];
+    let ray_dir = ray_dir_for_pixel(pixel_idx);
+    let ray_origin = g_camera.position;
+    let frontier_count = atomicLoad(&w_bvh_frontier_count);
+    if (local_id.x < frontier_count) {
+        let stack_begin = local_id.x * 32u;
+        var stack_size = 1u;
+        w_bvh_stacks[stack_begin] = w_bvh_frontier_a[local_id.x];
+        while (stack_size != 0u) {
+            stack_size -= 1u;
+            let node = g_support_bvh[w_bvh_stacks[stack_begin + stack_size]];
+            if (!ray_intersects_support_bounds(ray_origin, ray_dir, node)) {
+                continue;
+            }
+            if ((node.left & 0x80000000u) == 0u) {
+                w_bvh_stacks[stack_begin + stack_size] = node.right;
+                stack_size += 1u;
+                w_bvh_stacks[stack_begin + stack_size] = node.left;
+                stack_size += 1u;
+                continue;
+            }
+
+            let cell = node.right;
+            let sphere_data = g_points[cell];
+            if (inside_camera_exclusion(sphere_data.xyz - ray_origin, sphere_data.w)) {
+                continue;
+            }
+            let sphere = sphere_intersections(ray_origin, ray_dir, sphere_data);
+            if (sphere.valid == 0u || sphere.far_t <= 0.0 || sphere.near_t >= g_params.depth) {
+                continue;
+            }
+            let slot = atomicAdd(&w_candidate_count, 1u);
+            if (slot < g_params.candidate_capacity) {
+                let candidate_slot = output_pixel * g_params.candidate_capacity + slot;
+                g_candidates[candidate_slot] = cell;
+                g_candidate_depths[candidate_slot] = sphere.root;
+            }
         }
     }
     workgroupBarrier();

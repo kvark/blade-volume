@@ -6,6 +6,7 @@ mod radfoam;
 mod radfoam_depth;
 mod radfoam_trace;
 mod relight;
+mod sphere_bvh;
 
 pub use gaussian::{GaussianGpuCloud, InitParameters};
 pub use mesh_reference::{MeshReferenceSettings, MeshReferenceTracer, ReferenceMesh};

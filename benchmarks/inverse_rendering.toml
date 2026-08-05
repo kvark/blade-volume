@@ -1466,6 +1466,59 @@ candidate_artifact = "target/audit-runs/stable-tangent-weighted-long-v1/model.pl
 candidate_artifact_sha256 = "f9e176101d3abc55c94d0aa28207900a60735600e77461a25f3ba38187adffe6"
 selection = "accept: stable weighted linearization preserves the matched held-view result and reduces profiled GPU step time by 12.4%"
 
+# Sparse mixed-view batches used to scan every support sphere once per ray.
+# Per-camera projected tiles cost more to build than they save at only 256 rays
+# per view. A camera-independent software BVH instead stays entirely in point-
+# cloud semantics: CPU construction bounds the support spheres, and a 64-lane
+# workgroup expands six levels before traversing disjoint subtrees. Exact
+# sphere tests, candidate overflow accounting, clipping, and deterministic
+# depth/index sorting are unchanged. The measured 32K cutoff avoids the small-
+# cloud dispatch cost; no polygonal or hardware tracing proxy is involved.
+[training.powerfoam_support_bvh]
+date = "2026-08-05"
+minimum_points = 32768
+node_bytes = 32
+nodes_per_point_limit = 2
+room_points = 200000
+room_control_gather_median_ms = [2.85, 2.85]
+room_candidate_gather_median_ms = [1.07, 1.07, 1.07]
+room_gather_reduction = 0.625
+room_control_recorder_median_ms = [17.47, 17.44]
+room_candidate_recorder_median_ms = [15.52, 15.70, 15.66]
+room_recorder_reduction = 0.105
+room_control_setup_seconds = [1.354, 1.350]
+room_candidate_setup_seconds = [1.388, 1.402, 1.395]
+room_bvh_setup_overhead_seconds = 0.043
+room_candidate_max_path_steps = 95
+room_candidate_max_sphere_hits = 210
+room_candidate_truncated_rays = 0
+bonsai_points = 200000
+bonsai_control_gather_median_ms = [2.85, 2.86]
+bonsai_candidate_gather_median_ms = [1.14, 1.14]
+bonsai_gather_reduction = 0.600
+bonsai_control_recorder_median_ms = [10.60, 11.20]
+bonsai_candidate_recorder_median_ms = [9.15, 9.47]
+bonsai_recorder_reduction = 0.146
+bonsai_candidate_max_path_steps = 84
+bonsai_candidate_max_sphere_hits = 612
+bonsai_candidate_truncated_rays = 0
+crossover_points = [2000, 10063, 50000]
+crossover_control_recorder_median_ms = [0.73, 1.00, 3.38]
+crossover_unthresholded_bvh_median_ms = [0.79, 1.05, 2.27]
+small_thresholded_recorder_median_ms = 0.74
+powerfoam_bvh_bytes_at_200k = 12799968
+physical_gpu_path_tests = 15
+translated_frontier_test_points = 32768
+translated_frontier_test_offset = [8192, -4096, 2048]
+profile_cgroup_peak_memory_bytes = 1777926144
+workspace_test_cgroup_peak_memory_bytes = 5522337792
+workspace_clippy_cgroup_peak_memory_bytes = 869666816
+memory_events = 0
+control_binary_sha256 = "0714fc4f0ce555685afec2e14165d800e2a5c13d6abe4365d4fa07b85888a2db"
+final_candidate_binary_sha256 = "da0903e3919071bb47a77cf6cdef8f1abf1b22f8576efdd751fc7acaf336055c"
+artifacts = "target/audit-runs/powerfoam-sphere-bvh"
+selection = "accept: exact point-cloud BVH removes 60--63% of large-cloud gather time and 10--15% of the full recorder while thresholding the small-cloud regression"
+
 # A weighted `--init-ply` used to fall through to the fresh-run Delaunay
 # default, which discarded stored radii. Passing `--cech-radius` avoided that
 # path but reinitialized every learned radius from nearest-neighbour spacing.

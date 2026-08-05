@@ -16,6 +16,7 @@ use std::{mem, ptr, slice};
 ///   compact surface, detail-site RGB, and Spherical Voronoi parameters
 /// - `point_adjacency`: flattened neighbor list `u32[K]`
 /// - `point_adjacency_offsets`: CSR offsets `u32[N+1]`
+/// - `support_bvh`: a flat software BVH over bounded PowerFoam support spheres
 ///
 /// Notes:
 /// - This does not build any hardware ray tracing acceleration structures.
@@ -27,6 +28,7 @@ pub struct RadFoamGpuCloud {
     attributes_buf: gpu::Buffer,
     point_adjacency_buf: gpu::Buffer,
     point_adjacency_offsets_buf: gpu::Buffer,
+    support_bvh_buf: gpu::Buffer,
     point_index: PointIndex,
     has_attributes: bool,
 
@@ -35,6 +37,7 @@ pub struct RadFoamGpuCloud {
     pub num_points: usize,
     pub num_adjacency: usize,
     pub is_power_foam: bool,
+    pub(super) has_support_bvh: bool,
     pub is_oriented: bool,
     pub has_surface_detail: bool,
     pub has_surface_detail_density: bool,
@@ -182,6 +185,13 @@ impl RadFoamGpuCloud {
         // while retaining the logical edge count in `num_adjacency`.
         let adj_buffer_size = adj_size.max(mem::size_of::<u32>() as u64);
         let adj_off_size = (adjacency.offsets.len() * mem::size_of::<u32>()) as u64;
+        let has_support_bvh = model.radii.is_some() && num_points >= super::sphere_bvh::MIN_POINTS;
+        let support_bvh = match model.radii {
+            Some(ref radii) if has_support_bvh => super::sphere_bvh::build(&model.points, radii),
+            Some(_) | None => vec![super::sphere_bvh::SphereBvhNode::default()],
+        };
+        let support_bvh_size =
+            (support_bvh.len() * mem::size_of::<super::sphere_bvh::SphereBvhNode>()) as u64;
         // The mutable tree's fixed leaf buckets panic on point clouds with
         // many repeated coordinates along one axis (regular grids, planes,
         // and quantized scans). The immutable builder explicitly supports
@@ -219,6 +229,11 @@ impl RadFoamGpuCloud {
             size: adj_off_size,
             memory: gpu::Memory::Device,
         });
+        let support_bvh_buf = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-support-bvh",
+            size: support_bvh_size,
+            memory: gpu::Memory::Device,
+        });
 
         // Upload buffers
         let points_stage = context.create_buffer(gpu::BufferDesc {
@@ -249,6 +264,11 @@ impl RadFoamGpuCloud {
         let adjacency_offsets_stage = context.create_buffer(gpu::BufferDesc {
             name: "radfoam-adjacency-offsets-upload",
             size: adj_off_size,
+            memory: gpu::Memory::Upload,
+        });
+        let support_bvh_stage = context.create_buffer(gpu::BufferDesc {
+            name: "powerfoam-support-bvh-upload",
+            size: support_bvh_size,
             memory: gpu::Memory::Upload,
         });
 
@@ -387,6 +407,11 @@ impl RadFoamGpuCloud {
                 adjacency_offsets_stage.data() as *mut u32,
                 adjacency.offsets.len(),
             );
+            ptr::copy_nonoverlapping(
+                support_bvh.as_ptr(),
+                support_bvh_stage.data() as *mut super::sphere_bvh::SphereBvhNode,
+                support_bvh.len(),
+            );
         }
 
         // Encode transfers
@@ -430,6 +455,11 @@ impl RadFoamGpuCloud {
                     adj_off_size,
                 );
             }
+            pass.copy_buffer_to_buffer(
+                support_bvh_stage.at(0),
+                support_bvh_buf.at(0),
+                support_bvh_size,
+            );
         }
 
         let sync_point = context.submit(encoder);
@@ -442,6 +472,7 @@ impl RadFoamGpuCloud {
         context.destroy_buffer(attributes_stage);
         context.destroy_buffer(adjacency_stage);
         context.destroy_buffer(adjacency_offsets_stage);
+        context.destroy_buffer(support_bvh_stage);
 
         Self {
             points_buf,
@@ -450,6 +481,7 @@ impl RadFoamGpuCloud {
             attributes_buf,
             point_adjacency_buf,
             point_adjacency_offsets_buf,
+            support_bvh_buf,
             point_index,
             has_attributes: upload_attributes,
             sh_degree: model.sh_degree,
@@ -457,6 +489,7 @@ impl RadFoamGpuCloud {
             num_points,
             num_adjacency,
             is_power_foam: model.radii.is_some(),
+            has_support_bvh,
             is_oriented: model.surface_normals.is_some(),
             has_surface_detail: model.surface_detail.is_some(),
             has_surface_detail_density: model
@@ -475,6 +508,7 @@ impl RadFoamGpuCloud {
         context.destroy_buffer(self.attributes_buf);
         context.destroy_buffer(self.point_adjacency_buf);
         context.destroy_buffer(self.point_adjacency_offsets_buf);
+        context.destroy_buffer(self.support_bvh_buf);
     }
 
     /// Replaces oriented-surface planes without recreating unchanged point,
@@ -600,6 +634,11 @@ impl RadFoamGpuCloud {
     /// Storage buffer view for CSR offsets.
     pub fn point_adjacency_offsets(&self) -> gpu::BufferPiece {
         self.point_adjacency_offsets_buf.into()
+    }
+
+    /// Software BVH over bounded PowerFoam support spheres.
+    pub(super) fn support_bvh(&self) -> gpu::BufferPiece {
+        self.support_bvh_buf.into()
     }
 
     /// Site whose Voronoi or power cell contains a local-space position.

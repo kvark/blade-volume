@@ -276,8 +276,27 @@ than 23.97 seconds and exactly retains 11.91/11.64 dB train/held PSNR, including
 both 11.63/11.65 dB held frames. Its cgroup peaks at 489 MB with no pressure,
 swap, or OOM event. The default-parallel full workspace test passed but peaked
 at 5.90 GB, too close to the 6 GiB safety cap; the identical
-`--workspace --all-targets -- --test-threads=1` gate passed at 301 MB and is the
-safe local invocation for future GPU work.
+`--workspace --all-targets -- --test-threads=1` gate passed at 301 MB once
+warmed. A later rebuild showed that serial test threads do not serialize
+Cargo's compile/link jobs: that gate peaked at 5.52 GB during its first eight
+seconds, then passed without pressure or swap. Use `CARGO_BUILD_JOBS=1` as well
+as `--test-threads=1` for cold local gates; the corresponding all-target clippy
+gate peaked at 870 MB.
+
+Sparse multi-view PowerFoam batches now use a camera-independent software BVH
+over support spheres. This is a point-cloud BLAS, not a polygonal or hardware
+ray-tracing proxy: one 64-lane workgroup expands six balanced tree levels,
+traverses disjoint subtrees, and retains the exact sphere, overflow, clipping,
+and depth/index ordering rules. On the 200K-site Room checkpoint, median gather
+time falls from 2.85 to 1.07 ms and the complete recorder from 17.46 to 15.63
+ms (10.5%). Bonsai falls from 2.86 to 1.14 ms in gather and from 10.90 to 9.31
+ms overall (14.6%). The 12.8 MB hierarchy adds about 43 ms to a Room resource
+build and pays back within roughly 25 updates. At 2K and 10K sites its fixed
+workgroup cost is 0.05--0.06 ms, so clouds below the measured 32K crossover
+retain the exhaustive kernel and do not allocate the tree. A translated 32K
+frontier oracle matches the complete CPU path and all fifteen physical-GPU
+path tests pass; Room and Bonsai candidate/path maxima are unchanged. Profile
+scopes peak at 1.78 GB with no pressure, swap, or OOM event.
 
 Global path caps of 128 and 192 are rejected: 128 gives no meaningful speed
 advantage over packing at 256 and loses the held-view tail, while 192 produces
