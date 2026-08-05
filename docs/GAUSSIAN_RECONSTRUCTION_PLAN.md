@@ -275,6 +275,21 @@ supported particles, but worsens position RMSE to 0.6297, normal RMSE from
 real-scene sweep: inconsistent per-view modes are not a shared surface target
 merely because the optimizer is allowed to move in three dimensions.
 
+Retaining multiple pre-fusion density modes isolates the missing information
+more sharply, but still does not supply the missing responsibility. On the
+fixed synthetic foam, a truth oracle choosing among the strongest one, two,
+three, or four ray segments reduces training-depth RMSE from 2.7468 to 1.3424,
+1.0550, and 0.9092 world units. A top-three GPU extractor agrees with its CPU
+oracle, and robust cross-view depth plus colour improves position RMSE in the
+fixed model and three independent replicas (for example 0.6280 to 0.5977 in
+the fixed gate). Real captures reject it: the unrestricted rule moves Bonsai
+14.50/11.68 to 14.30/11.32 dB held-out mean/worst while Room improves
+14.07/13.15 to 14.34/13.50. Seven stricter colour/view-support settings have no
+joint winner, and changing only unsupported primaries regresses both. All
+runtime and CLI code is removed. The modes prove the geometry has not vanished;
+the next objective must learn which modes share one surface instead of asking
+the same per-view density field and RGB observations to vote heuristically.
+
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
 its Jacobians, and a ray-relative reference tangent; the graph evaluates the

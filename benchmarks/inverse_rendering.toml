@@ -1580,6 +1580,55 @@ memory_events = 0
 artifacts = "target/audit-runs/center-{search,depth-consensus}-synthetic-*"
 selection = "reject and remove: neither shared colour nor the source depths supply a center objective that improves known-truth geometry"
 
+# The strongest absorption segment is not always the surface. A CPU truth
+# oracle on the fixed synthetic foam reduces training-depth RMSE from 2.7468
+# to 0.9092 world units when it may choose among four segments. A matched
+# top-three GPU path agrees with the CPU segment depths/weights and a
+# pre-fusion selector passes displaced/exact textured-plane gates. Robust
+# cross-view colour plus projected depth support then improves known-truth
+# geometry in the fixed model and three independent training replicas.
+#
+# That apparent solution does not transfer. The least restrictive arm trades
+# Bonsai held-out quality for Room quality, and a seven-setting sweep over
+# colour improvement and additional-view margins contains no joint winner.
+# Restricting replacement to primaries with no two-view support also regresses
+# both scenes. The implementation, shader output, and temporary CLI switches
+# are therefore removed: extra density modes contain useful geometry, but
+# current RGB/depth agreement cannot identify it reliably without an
+# independently learned shared-surface responsibility.
+[synthetic_reconstruction.rgb_mask_foam.rejected_pre_fusion_depth_hypotheses]
+date = "2026-08-05"
+artifact = "target/audit-runs/weighted-reference-rebase-v3/model.ply"
+artifact_sha256 = "cbdf65d844d7749806fa8227a49990d978bb9ee2bc6226013404cfcc3955fbe8"
+primary_depth_rmse = 2.7468
+top2_oracle_depth_rmse = 1.3424
+top3_oracle_depth_rmse = 1.0550
+top4_oracle_depth_rmse = 0.9092
+truth_nearest_ranks = [39395, 29097, 16943, 10161]
+truth_candidate_weight_quantiles = [0.0073, 0.2498, 0.8923]
+fixed_control_position_rmse = 0.6280
+fixed_candidate_position_rmse = 0.5977
+fixed_control_held_light_psnr = [18.53, 18.24]
+fixed_candidate_held_light_psnr = [18.89, 18.45]
+repeat_control_position_rmse = [0.6182, 0.6247, 0.6238]
+repeat_candidate_position_rmse = [0.5895, 0.5890, 0.5962]
+repeat_control_held_light_psnr = [18.29, 18.55, 18.62]
+repeat_candidate_held_light_psnr = [18.36, 18.56, 18.85]
+bonsai_control_test_psnr = [14.50, 11.68]
+bonsai_unrestricted_test_psnr = [14.30, 11.32]
+room_control_test_psnr = [14.07, 13.15]
+room_unrestricted_test_psnr = [14.34, 13.50]
+best_room_sweep_test_psnr = [14.52, 13.47]
+paired_bonsai_sweep_test_psnr = [14.25, 11.36]
+unsupported_only_bonsai_test_psnr = [14.34, 11.49]
+unsupported_only_room_test_psnr = [14.04, 13.14]
+unrestricted_bonsai_consensus_seconds = 7.7
+unrestricted_room_consensus_seconds = 7.0
+combined_real_gate_peak_memory_bytes = 823332864
+memory_events = 0
+artifacts = "target/audit-runs/depth-{peak-oracle,consensus-color02,consensus-real,consensus-sweep,consensus-fill}-*"
+selection = "reject and remove: secondary modes are a strong truth oracle but RGB and self-depth agreement do not assign shared-surface responsibility across real scenes"
+
 # A weighted `--init-ply` used to fall through to the fresh-run Delaunay
 # default, which discarded stored radii. Passing `--cech-radius` avoided that
 # path but reinitialized every learned radius from nearest-neighbour spacing.
