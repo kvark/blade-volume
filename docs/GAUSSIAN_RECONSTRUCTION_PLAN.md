@@ -491,3 +491,16 @@ independent synthetic controls remain byte-identical. Exact PNG scoring changes
 the held-out means by only +0.0021 and +0.0076 dB respectively. The retry and
 its CLI knobs are removed: this is measurement noise, not enough evidence for
 another reconstruction mode.
+
+Dominant-cell ray intersections are not the missing correspondence signal.
+An experimental depth channel grouped training rays by dominant foam cell,
+nearest oriented-detail site, and camera, then least-squares intersected the
+camera bundles and moved only that site's tangent offset and height. At 128²,
+three-view support covered 12,103 Bonsai sites but only 28 Room sites. Bounded
+Bonsai steps of 5% and 20% changed held-out PSNR from 16.8278 to only 16.8285
+and 16.8293 dB; a full step fell to 16.7765 dB. Allowing two-view bundles did
+not improve the 20% result. This construction can only recover the model's own
+projection consistency: it assigns rays using the model render and never
+consults image appearance. The prototype is removed. Future geometry work must
+introduce an observation-derived correspondence or residual, rather than
+triangulating identifiers emitted by the current model.
