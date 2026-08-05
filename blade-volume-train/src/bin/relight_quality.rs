@@ -20,7 +20,9 @@
 //! Generate the reference with blade's `relight_data` test, pointing it at the
 //! asset and framing it on the asset's own bounds, then:
 //!
+//! ```text
 //!   relight_quality --dataset <dir> --asset <file.gltf>
+//! ```
 
 use blade_graphics as gpu;
 use blade_volume as vol;

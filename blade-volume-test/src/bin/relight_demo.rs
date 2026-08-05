@@ -14,7 +14,9 @@
 //! path and not about a second one that resembles it.
 //!
 //! Usage:
+//! ```text
 //!   relight_demo [--out <dir>] [--size WxH] [--asset <file>] [--exposure F]
+//! ```
 
 use blade_graphics as gpu;
 use blade_volume as vol;

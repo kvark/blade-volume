@@ -26,7 +26,9 @@
 //! conditions does this need" into a measurement.
 //!
 //! Usage:
+//! ```text
 //!   relight_bound --dataset <dir> [--held-out <name>]
+//! ```
 
 use blade_volume_train as train;
 

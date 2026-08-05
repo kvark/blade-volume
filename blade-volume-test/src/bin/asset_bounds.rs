@@ -6,7 +6,9 @@
 //! thing.
 //!
 //! Usage:
+//! ```text
 //!   asset_bounds <file.gltf>
+//! ```
 
 fn main() {
     let path = match std::env::args().nth(1) {

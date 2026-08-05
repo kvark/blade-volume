@@ -595,7 +595,7 @@ pub fn relight_model_from_gltf(
 ///
 /// Colour is the converter's own per-sample colour function evaluated at each
 /// triangle's centroid, left in **linear light**: the renderer applies the
-/// ambient gain and the sRGB encode, mirroring [`display_color`]. That is
+/// ambient gain and the sRGB encode, mirroring `display_color`. That is
 /// exact for flat base-colour materials. For textured materials it is a
 /// per-triangle average, so a texture varying within one triangle is the one
 /// place the reference is an approximation rather than ground truth.
