@@ -108,7 +108,9 @@ pub struct SphericalVoronoi {
 /// tangent plane before use. Keeping them in three components avoids a
 /// discontinuous, implicit tangent-frame convention while retaining two
 /// effective degrees of freedom. `heights` displace the surface along its
-/// normal, and `colors` are RGB residuals added to the SH appearance.
+/// normal, and `colors` are RGB residuals added to the SH appearance. Optional
+/// `density_logits` redistribute the cell's density across the same sites;
+/// eight equal logits are an exact identity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SurfaceDetail {
     /// Point-major radius-normalized site offsets, eight per point.
@@ -117,6 +119,8 @@ pub struct SurfaceDetail {
     pub heights: Vec<f32>,
     /// Point-major RGB residuals, eight per point.
     pub colors: Vec<glam::Vec3>,
+    /// Optional point-major spatial density logits, eight per point.
+    pub density_logits: Option<Vec<f32>>,
 }
 
 /// Unified point cloud model.
@@ -311,17 +315,26 @@ impl PointCloudModel {
             if detail.offsets.len() != expected
                 || detail.heights.len() != expected
                 || detail.colors.len() != expected
+                || detail
+                    .density_logits
+                    .as_ref()
+                    .is_some_and(|logits| logits.len() != expected)
             {
                 return Err(format!(
-                    "surface detail lengths are offsets={} heights={} colors={}, expected {expected}",
+                    "surface detail lengths are offsets={} heights={} colors={} density_logits={}, expected {expected} and either 0 or {expected} density logits",
                     detail.offsets.len(),
                     detail.heights.len(),
                     detail.colors.len(),
+                    detail.density_logits.as_ref().map_or(0, Vec::len),
                 ));
             }
             if detail.offsets.iter().any(|offset| !offset.is_finite())
                 || detail.heights.iter().any(|height| !height.is_finite())
                 || detail.colors.iter().any(|color| !color.is_finite())
+                || detail
+                    .density_logits
+                    .as_ref()
+                    .is_some_and(|logits| logits.iter().any(|value| !value.is_finite()))
             {
                 return Err("surface detail parameters must be finite".to_string());
             }
@@ -388,6 +401,11 @@ impl PointCloudModel {
                 .surface_detail
                 .as_ref()
                 .map_or(0, |_| 3 * SURFACE_DETAIL_SITES)
+            + self
+                .surface_detail
+                .as_ref()
+                .and_then(|detail| detail.density_logits.as_ref())
+                .map_or(0, |_| SURFACE_DETAIL_SITES)
             + self
                 .spherical_voronoi
                 .as_ref()
@@ -591,12 +609,24 @@ mod model_tests {
             offsets: vec![glam::Vec3::ZERO; SURFACE_DETAIL_SITES],
             heights: vec![0.0; SURFACE_DETAIL_SITES],
             colors: vec![glam::Vec3::ZERO; SURFACE_DETAIL_SITES],
+            density_logits: None,
         });
         assert!(model.validate().unwrap_err().contains("requires PowerFoam"));
 
         model.surface_normals = Some(vec![glam::Vec3::Z]);
         assert!(model.validate().is_ok());
         assert_eq!(model.attribute_dim(), 3 + 1 + SURFACE_DETAIL_SITES * 3);
+
+        model.surface_detail.as_mut().unwrap().density_logits =
+            Some(vec![0.0; SURFACE_DETAIL_SITES]);
+        assert!(model.validate().is_ok());
+        assert_eq!(model.attribute_dim(), 3 + 1 + SURFACE_DETAIL_SITES * 4);
+        model.surface_detail.as_mut().unwrap().density_logits = Some(Vec::new());
+        assert!(model.validate().unwrap_err().contains("lengths"));
+        model.surface_detail.as_mut().unwrap().density_logits =
+            Some(vec![f32::NAN; SURFACE_DETAIL_SITES]);
+        assert!(model.validate().unwrap_err().contains("must be finite"));
+        model.surface_detail.as_mut().unwrap().density_logits = None;
 
         model.surface_detail.as_mut().unwrap().heights.pop();
         assert!(model.validate().unwrap_err().contains("lengths"));

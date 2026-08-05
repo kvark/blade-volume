@@ -1759,6 +1759,18 @@ fn write_radfoam_ply_ascii(
                 "property float blade_surface_detail_color_{component}"
             )?;
         }
+        if model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.density_logits.is_some())
+        {
+            for site in 0..vol::SURFACE_DETAIL_SITES {
+                writeln!(
+                    file,
+                    "property float blade_surface_detail_density_logit_{site}"
+                )?;
+            }
+        }
     }
     if model.surface_color_coefficients.is_some() {
         for component in 0..vol::SURFACE_COLOR_COMPONENTS * 3 {
@@ -1832,6 +1844,11 @@ fn write_radfoam_ply_ascii(
             }
             for value in &detail.colors[base..base + vol::SURFACE_DETAIL_SITES] {
                 write!(file, " {} {} {}", value.x, value.y, value.z)?;
+            }
+            if let Some(ref density_logits) = detail.density_logits {
+                for value in &density_logits[base..base + vol::SURFACE_DETAIL_SITES] {
+                    write!(file, " {value}")?;
+                }
             }
         }
         if let Some(ref coefficients) = model.surface_color_coefficients {
@@ -1922,6 +1939,18 @@ fn write_radfoam_ply_binary(
                 "property float blade_surface_detail_color_{component}"
             )?;
         }
+        if model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.density_logits.is_some())
+        {
+            for site in 0..vol::SURFACE_DETAIL_SITES {
+                writeln!(
+                    file,
+                    "property float blade_surface_detail_density_logit_{site}"
+                )?;
+            }
+        }
     }
     if model.surface_color_coefficients.is_some() {
         for component in 0..vol::SURFACE_COLOR_COMPONENTS * 3 {
@@ -2000,6 +2029,11 @@ fn write_radfoam_ply_binary(
                 file.write_all(&value.x.to_le_bytes())?;
                 file.write_all(&value.y.to_le_bytes())?;
                 file.write_all(&value.z.to_le_bytes())?;
+            }
+            if let Some(ref density_logits) = detail.density_logits {
+                for value in &density_logits[base..base + vol::SURFACE_DETAIL_SITES] {
+                    file.write_all(&value.to_le_bytes())?;
+                }
             }
         }
         if let Some(ref coefficients) = model.surface_color_coefficients {
@@ -2721,7 +2755,7 @@ mod tests {
         assert_radii_roundtrip(PlyFormat::Ascii);
     }
 
-    fn assert_surface_planes_roundtrip(format: PlyFormat) {
+    fn assert_surface_planes_roundtrip(format: PlyFormat, with_density: bool) {
         let mut model = make_radfoam_radii_model();
         model.surface_normals = Some(vec![
             glam::Vec3::new(1.0, 0.0, 0.0),
@@ -2751,6 +2785,11 @@ mod tests {
                     )
                 })
                 .collect(),
+            density_logits: with_density.then(|| {
+                (0..model.points.len() * vol::SURFACE_DETAIL_SITES)
+                    .map(|index| index as f32 * 0.013 - 0.1)
+                    .collect()
+            }),
         });
         model.surface_color_coefficients = Some(
             (0..model.points.len() * vol::SURFACE_COLOR_COMPONENTS * 3)
@@ -2781,8 +2820,9 @@ mod tests {
             PlyFormat::Ascii => "ascii",
             PlyFormat::Binary => "binary",
         };
+        let density_suffix = if with_density { "density" } else { "legacy" };
         let path = std::env::temp_dir().join(format!(
-            "blade_volume_convert_roundtrip_surface_planes_{suffix}.ply"
+            "blade_volume_convert_roundtrip_surface_planes_{suffix}_{density_suffix}.ply"
         ));
         save_ply_with_options(&path, &model, &SaveOptions { format }).expect("save ply");
         let loaded = vol::io::load_radfoam(path.to_str().unwrap());
@@ -2800,12 +2840,17 @@ mod tests {
 
     #[test]
     fn radfoam_binary_roundtrip_preserves_surface_planes() {
-        assert_surface_planes_roundtrip(PlyFormat::Binary);
+        assert_surface_planes_roundtrip(PlyFormat::Binary, true);
     }
 
     #[test]
     fn radfoam_ascii_roundtrip_preserves_surface_planes() {
-        assert_surface_planes_roundtrip(PlyFormat::Ascii);
+        assert_surface_planes_roundtrip(PlyFormat::Ascii, true);
+    }
+
+    #[test]
+    fn radfoam_binary_roundtrip_preserves_surface_planes_without_density() {
+        assert_surface_planes_roundtrip(PlyFormat::Binary, false);
     }
 
     #[test]

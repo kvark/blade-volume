@@ -86,3 +86,89 @@ fn surface_detail_color(
     }
     return color_sum / max(weight_sum, 1e-20);
 }
+
+fn surface_detail_density_scale(
+    center: vec3<f32>,
+    radius: f32,
+    normal: vec3<f32>,
+    effective_offset: f32,
+    ray_origin: vec3<f32>,
+    ray_direction: vec3<f32>,
+    query_near: f32,
+    sites: array<vec4<f32>, SURFACE_DETAIL_SITES>,
+    logits: array<f32, SURFACE_DETAIL_SITES>,
+) -> f32 {
+    let safe_radius = max(radius, 1e-6);
+    let query_t = surface_detail_query_t(
+        center, normal, effective_offset, ray_origin, ray_direction, query_near,
+    );
+    let query = (ray_origin + query_t * ray_direction - center) / safe_radius;
+    var max_logit = -1e30;
+    for (var site_index = 0u; site_index < SURFACE_DETAIL_SITES; site_index += 1u) {
+        max_logit = max(max_logit, logits[site_index]);
+    }
+    var logit_sum = 0.0;
+    for (var site_index = 0u; site_index < SURFACE_DETAIL_SITES; site_index += 1u) {
+        logit_sum += exp(logits[site_index] - max_logit);
+    }
+    var spatial_sum = 0.0;
+    var residual_sum = 0.0;
+    for (var site_index = 0u; site_index < SURFACE_DETAIL_SITES; site_index += 1u) {
+        let tangent_site = surface_detail_project_site(sites[site_index].xyz, normal);
+        let delta = query - tangent_site;
+        let spatial_weight = exp(-SURFACE_DETAIL_TEMPERATURE * dot(delta, delta));
+        let density_residual = f32(SURFACE_DETAIL_SITES)
+            * exp(logits[site_index] - max_logit) / max(logit_sum, 1e-20) - 1.0;
+        spatial_sum += spatial_weight;
+        residual_sum += spatial_weight * density_residual;
+    }
+    return max(0.0, 1.0 + residual_sum / max(spatial_sum, 1e-20));
+}
+
+// Evaluate colour and normalized density from one displaced-plane query. The
+// standalone, scene, and splat colour renderers consume both values together;
+// sharing the spatial kernel avoids a second set of eight projections and
+// exponentials per integrated cell. Depth-only rendering retains the scalar
+// density helper above and does not pay for colour.
+fn surface_detail_color_density_scale(
+    center: vec3<f32>,
+    radius: f32,
+    normal: vec3<f32>,
+    effective_offset: f32,
+    ray_origin: vec3<f32>,
+    ray_direction: vec3<f32>,
+    query_near: f32,
+    sites: array<vec4<f32>, SURFACE_DETAIL_SITES>,
+    colors: array<vec3<f32>, SURFACE_DETAIL_SITES>,
+    logits: array<f32, SURFACE_DETAIL_SITES>,
+) -> vec4<f32> {
+    let safe_radius = max(radius, 1e-6);
+    let query_t = surface_detail_query_t(
+        center, normal, effective_offset, ray_origin, ray_direction, query_near,
+    );
+    let query = (ray_origin + query_t * ray_direction - center) / safe_radius;
+    var max_logit = -1e30;
+    for (var site_index = 0u; site_index < SURFACE_DETAIL_SITES; site_index += 1u) {
+        max_logit = max(max_logit, logits[site_index]);
+    }
+    var logit_sum = 0.0;
+    for (var site_index = 0u; site_index < SURFACE_DETAIL_SITES; site_index += 1u) {
+        logit_sum += exp(logits[site_index] - max_logit);
+    }
+    var color_sum = vec3<f32>(0.0);
+    var spatial_sum = 0.0;
+    var residual_sum = 0.0;
+    for (var site_index = 0u; site_index < SURFACE_DETAIL_SITES; site_index += 1u) {
+        let tangent_site = surface_detail_project_site(sites[site_index].xyz, normal);
+        let delta = query - tangent_site;
+        let spatial_weight = exp(-SURFACE_DETAIL_TEMPERATURE * dot(delta, delta));
+        let density_residual = f32(SURFACE_DETAIL_SITES)
+            * exp(logits[site_index] - max_logit) / max(logit_sum, 1e-20) - 1.0;
+        color_sum += spatial_weight * colors[site_index];
+        spatial_sum += spatial_weight;
+        residual_sum += spatial_weight * density_residual;
+    }
+    let denominator = max(spatial_sum, 1e-20);
+    let density_scale = max(0.0, 1.0 + residual_sum / denominator);
+    return vec4<f32>(color_sum / denominator, density_scale);
+}

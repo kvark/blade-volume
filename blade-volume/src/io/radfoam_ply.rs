@@ -110,6 +110,7 @@ struct Schema {
     surface_detail_offsets: Vec<usize>,
     surface_detail_heights: Vec<usize>,
     surface_detail_colors: Vec<usize>,
+    surface_detail_density_logits: Vec<usize>,
     surface_color: Vec<usize>,
     spherical_voronoi_axes: Vec<usize>,
     spherical_voronoi_colors: Vec<usize>,
@@ -219,22 +220,31 @@ impl Schema {
             "blade_surface_detail_color_",
             "surface-detail color",
         )?;
+        let surface_detail_density_logits = indexed_float_properties(
+            vertex,
+            "blade_surface_detail_density_logit_",
+            "surface-detail density logit",
+        )?;
         let expected_detail_offsets = crate::SURFACE_DETAIL_SITES * 3;
         let expected_detail_heights = crate::SURFACE_DETAIL_SITES;
         let expected_detail_colors = crate::SURFACE_DETAIL_SITES * 3;
         let has_surface_detail = !surface_detail_offsets.is_empty()
             || !surface_detail_heights.is_empty()
-            || !surface_detail_colors.is_empty();
+            || !surface_detail_colors.is_empty()
+            || !surface_detail_density_logits.is_empty();
         if has_surface_detail
             && (surface_detail_offsets.len() != expected_detail_offsets
                 || surface_detail_heights.len() != expected_detail_heights
-                || surface_detail_colors.len() != expected_detail_colors)
+                || surface_detail_colors.len() != expected_detail_colors
+                || (!surface_detail_density_logits.is_empty()
+                    && surface_detail_density_logits.len() != expected_detail_heights))
         {
             return Err(LoadError::invalid(format!(
-                "RadFoam PLY surface-detail property counts are offsets={} heights={} colors={}, expected {expected_detail_offsets}, {expected_detail_heights}, and {expected_detail_colors}",
+                "RadFoam PLY surface-detail property counts are offsets={} heights={} colors={} density_logits={}, expected {expected_detail_offsets}, {expected_detail_heights}, {expected_detail_colors}, and either 0 or {expected_detail_heights}",
                 surface_detail_offsets.len(),
                 surface_detail_heights.len(),
                 surface_detail_colors.len(),
+                surface_detail_density_logits.len(),
             )));
         }
         if has_surface_detail && surface_normal.is_none() {
@@ -327,6 +337,7 @@ impl Schema {
             surface_detail_offsets,
             surface_detail_heights,
             surface_detail_colors,
+            surface_detail_density_logits,
             surface_color: surface_color.into_iter().map(|entry| entry.1).collect(),
             spherical_voronoi_axes,
             spherical_voronoi_colors,
@@ -608,6 +619,11 @@ fn allocate_model(
             offsets: allocate_vec(count, glam::Vec3::ZERO, "surface-detail offset")?,
             heights: allocate_vec(count, 0.0, "surface-detail height")?,
             colors: allocate_vec(count, glam::Vec3::ZERO, "surface-detail color")?,
+            density_logits: if schema.surface_detail_density_logits.is_empty() {
+                None
+            } else {
+                Some(allocate_vec(count, 0.0, "surface-detail density logit")?)
+            },
         })
     };
     let surface_color_coefficients = if schema.surface_color.is_empty() {
@@ -736,6 +752,10 @@ fn decode_binary(
                     read_f32(&row, schema.surface_detail_colors[component + 1]),
                     read_f32(&row, schema.surface_detail_colors[component + 2]),
                 );
+                if let Some(ref mut density_logits) = detail.density_logits {
+                    density_logits[base + site] =
+                        read_f32(&row, schema.surface_detail_density_logits[site]);
+                }
             }
         }
         if let Some(ref mut coefficients) = model.surface_color_coefficients {
@@ -841,6 +861,7 @@ fn decode_ascii(
         let mut surface_detail_offsets = [0.0_f32; crate::SURFACE_DETAIL_SITES * 3];
         let mut surface_detail_heights = [0.0_f32; crate::SURFACE_DETAIL_SITES];
         let mut surface_detail_colors = [0.0_f32; crate::SURFACE_DETAIL_SITES * 3];
+        let mut surface_detail_density_logits = [0.0_f32; crate::SURFACE_DETAIL_SITES];
         let mut surface_color = [0.0_f32; crate::SURFACE_COLOR_COMPONENTS * 3];
         let mut spherical_voronoi_axes = [0.0_f32; crate::SPHERICAL_VORONOI_SITES * 3];
         let mut spherical_voronoi_colors = [0.0_f32; crate::SPHERICAL_VORONOI_SITES * 3];
@@ -886,6 +907,12 @@ fn decode_ascii(
                         .parse::<usize>()
                         .unwrap();
                     surface_detail_colors[component] = parse_f32(token, name)?;
+                }
+                name if name.starts_with("blade_surface_detail_density_logit_") => {
+                    let component = name["blade_surface_detail_density_logit_".len()..]
+                        .parse::<usize>()
+                        .unwrap();
+                    surface_detail_density_logits[component] = parse_f32(token, name)?;
                 }
                 name if name.starts_with("blade_surface_color_") => {
                     let component = name["blade_surface_color_".len()..]
@@ -937,6 +964,9 @@ fn decode_ascii(
                 detail.heights[base + site] = height;
                 detail.colors[base + site] =
                     glam::Vec3::from_slice(&surface_detail_colors[component..component + 3]);
+                if let Some(ref mut density_logits) = detail.density_logits {
+                    density_logits[base + site] = surface_detail_density_logits[site];
+                }
             }
         }
         if let Some(ref mut coefficients) = model.surface_color_coefficients {

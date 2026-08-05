@@ -335,6 +335,11 @@ fn oriented_powerfoam_scene_applies_the_surface_offset() {
                 glam::Vec3::new(value, -0.5 * value, 0.25 * value)
             })
             .collect(),
+        density_logits: Some(
+            (0..vol::SURFACE_DETAIL_SITES)
+                .map(|index| 0.25 * (index as f32 - 3.5))
+                .collect(),
+        ),
     });
     let mut axes = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
     let mut colors = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
@@ -376,6 +381,70 @@ fn oriented_powerfoam_scene_applies_the_surface_offset() {
         3.0e-3,
     );
     assert!((pixel.w - 1.0).abs() <= 1.0e-3);
+    target.destroy(&context);
+    renderer.destroy(&context);
+    context.destroy_command_encoder(&mut encoder);
+}
+
+#[test]
+fn equal_surface_detail_density_is_scene_identity_under_nonuniform_scale() {
+    let _gpu_test_guard = gpu_test_guard();
+    let Some(context) = test_context(false) else {
+        eprintln!("skipping surface-detail density scene readback: no binding-array GPU");
+        return;
+    };
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "surface-detail-density-scene-readback",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    let mut renderer = view::SceneRenderer::new(&context, gpu::TextureFormat::Rgba16Float, SIZE);
+    renderer.background_rgb = BACKGROUND.to_array();
+
+    let mut legacy = powerfoam_model(glam::Vec3::new(0.7, 0.3, 0.15));
+    legacy.surface_normals = Some(vec![glam::Vec3::Z]);
+    legacy.surface_offsets = Some(vec![0.0]);
+    legacy.surface_detail = Some(vol::SurfaceDetail {
+        offsets: (0..vol::SURFACE_DETAIL_SITES)
+            .map(|index| {
+                let angle = index as f32 * std::f32::consts::TAU / vol::SURFACE_DETAIL_SITES as f32;
+                0.35 * glam::Vec3::new(angle.cos(), angle.sin(), 0.0)
+            })
+            .collect(),
+        heights: vec![0.0; vol::SURFACE_DETAIL_SITES],
+        colors: (0..vol::SURFACE_DETAIL_SITES)
+            .map(|index| {
+                let value = 0.04 * (index as f32 - 3.5);
+                glam::Vec3::new(value, -0.5 * value, 0.25 * value)
+            })
+            .collect(),
+        density_logits: None,
+    });
+    let mut density = legacy.clone();
+    density.surface_detail.as_mut().unwrap().density_logits =
+        Some(vec![0.0; vol::SURFACE_DETAIL_SITES]);
+
+    let legacy_object = renderer.add_radfoam(&legacy, &context, &mut encoder);
+    let density_object = renderer.add_radfoam(&density, &context, &mut encoder);
+    let visible = vol::Transform {
+        position: glam::Vec3::new(0.0, 0.0, 3.0),
+        rotation: glam::Quat::from_rotation_y(0.35),
+        scale: glam::Vec3::new(2.0, 0.75, 1.5),
+    };
+    let hidden = vol::Transform::from_position(glam::Vec3::new(100.0, 0.0, 3.0));
+    renderer.scene.set_transform(legacy_object, visible);
+    renderer.scene.set_transform(density_object, hidden);
+    let mut target = Target::new(&context);
+    let legacy_pixel = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
+
+    renderer.scene.set_transform(legacy_object, hidden);
+    renderer.scene.set_transform(density_object, visible);
+    let density_pixel = read_pixel(&mut renderer, &context, &mut encoder, &mut target);
+
+    assert!(
+        (legacy_pixel - density_pixel).abs().max_element() <= 1.0e-3,
+        "legacy {legacy_pixel:?}, density {density_pixel:?}"
+    );
     target.destroy(&context);
     renderer.destroy(&context);
     context.destroy_command_encoder(&mut encoder);

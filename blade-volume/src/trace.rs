@@ -522,6 +522,61 @@ pub fn eval_surface_detail(
     (offset, color_sum / color_weight_sum.max(1.0e-20))
 }
 
+/// Evaluate the optional spatial density redistribution at one surface query.
+///
+/// The eight logits are normalized to density scales whose arithmetic mean is
+/// one, then blended with the same displaced-plane spatial weights as detail
+/// colour. Equal logits therefore return exactly one and preserve the base
+/// per-cell density.
+pub fn eval_surface_detail_density_scale(
+    model: &PointCloudModel,
+    point_idx: u32,
+    ray_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+    query_near: f32,
+    effective_offset: f32,
+) -> f32 {
+    let Some(ref detail) = model.surface_detail else {
+        return 1.0;
+    };
+    let Some(ref density_logits) = detail.density_logits else {
+        return 1.0;
+    };
+    let index = point_idx as usize;
+    let center = model.points[index].truncate();
+    let radius = model.radii.as_ref().unwrap()[index].max(1.0e-6);
+    let normal = model.surface_normals.as_ref().unwrap()[index].normalize();
+    let base = index * crate::SURFACE_DETAIL_SITES;
+    let sites = &detail.offsets[base..base + crate::SURFACE_DETAIL_SITES];
+    let logits = &density_logits[base..base + crate::SURFACE_DETAIL_SITES];
+    let query_t = surface_detail_query_t(
+        center,
+        normal,
+        effective_offset,
+        ray_origin,
+        ray_direction,
+        query_near,
+    );
+    let query = (ray_origin + query_t * ray_direction - center) / radius;
+    let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let logit_sum = logits
+        .iter()
+        .map(|logit| (*logit - max_logit).exp())
+        .sum::<f32>();
+    let mut spatial_sum = 0.0_f32;
+    let mut residual_sum = 0.0_f32;
+    for (&site, &logit) in sites.iter().zip(logits) {
+        let delta = query - projected_detail_site(site, normal);
+        let spatial_weight = (-10.0 * delta.length_squared()).exp();
+        let density_residual = crate::SURFACE_DETAIL_SITES as f32 * (logit - max_logit).exp()
+            / logit_sum.max(1.0e-20)
+            - 1.0;
+        spatial_sum += spatial_weight;
+        residual_sum += spatial_weight * density_residual;
+    }
+    (1.0 + residual_sum / spatial_sum.max(1.0e-20)).max(0.0)
+}
+
 /// Evaluate the published dot-product Spherical Voronoi residual.
 pub fn eval_spherical_voronoi(
     spherical_voronoi: &crate::SphericalVoronoi,
@@ -1402,7 +1457,15 @@ pub fn trace_powerfoam_splats(
         steps += 1;
         last_point = cell;
         t_end = near + entry.dt;
-        let density = read_density(model, cell);
+        let density = read_density(model, cell)
+            * eval_surface_detail_density_scale(
+                model,
+                cell,
+                ray.origin,
+                ray_dir,
+                entry.surface_query_near,
+                entry.surface_offset,
+            );
         if density <= 1.0e-6 {
             continue;
         }
@@ -1649,7 +1712,15 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
         )
         .and_then(|(start, end)| clip_surface_interval(model, current, ray.origin, dir, start, end))
         {
-            let s = read_density(model, current);
+            let s = read_density(model, current)
+                * eval_surface_detail_density_scale(
+                    model,
+                    current,
+                    ray.origin,
+                    dir,
+                    query_near,
+                    surface_offset,
+                );
             if s > 1e-6 {
                 let dt = segment_end - segment_start;
                 let alpha = 1.0 - (-s * dt).exp();
@@ -1780,6 +1851,7 @@ mod path_tests {
             offsets,
             heights,
             colors,
+            density_logits: None,
         }));
         let ray = Ray {
             origin: glam::Vec3::new(1.0, 0.0, 0.0),
@@ -1810,6 +1882,57 @@ mod path_tests {
     }
 
     #[test]
+    fn surface_detail_density_is_normalized_and_spatial() {
+        let mut offsets = vec![-0.5 * glam::Vec3::X; crate::SURFACE_DETAIL_SITES];
+        offsets[0] = 0.5 * glam::Vec3::X;
+        let mut logits = vec![0.0; crate::SURFACE_DETAIL_SITES];
+        let mut model = single_oriented_detail_model(Some(crate::SurfaceDetail {
+            offsets,
+            heights: vec![0.0; crate::SURFACE_DETAIL_SITES],
+            colors: vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES],
+            density_logits: Some(logits.clone()),
+        }));
+        let query_near = 10.0 - 3.0_f32.sqrt();
+        let selected_origin = glam::Vec3::X;
+
+        assert_eq!(
+            eval_surface_detail_density_scale(
+                &model,
+                0,
+                selected_origin,
+                glam::Vec3::Z,
+                query_near,
+                0.0,
+            ),
+            1.0,
+        );
+
+        logits[0] = 8.0_f32.ln();
+        model.surface_detail.as_mut().unwrap().density_logits = Some(logits);
+        let selected = eval_surface_detail_density_scale(
+            &model,
+            0,
+            selected_origin,
+            glam::Vec3::Z,
+            query_near,
+            0.0,
+        );
+        let rejected = eval_surface_detail_density_scale(
+            &model,
+            0,
+            -selected_origin,
+            glam::Vec3::Z,
+            query_near,
+            0.0,
+        );
+        let far_weight = (-10.0_f32).exp();
+        let expected = (64.0 / 15.0 + 7.0 * far_weight * 8.0 / 15.0) / (1.0 + 7.0 * far_weight);
+        assert!((selected - expected).abs() < 1.0e-6);
+        assert!(selected > 4.0);
+        assert!(rejected < 0.6);
+    }
+
+    #[test]
     fn zero_surface_detail_is_forward_identity() {
         let mut plain = single_oriented_detail_model(None);
         plain.surface_offsets = Some(vec![0.13]);
@@ -1824,6 +1947,7 @@ mod path_tests {
                 .collect(),
             heights: vec![0.0; crate::SURFACE_DETAIL_SITES],
             colors: vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES],
+            density_logits: None,
         });
         let ray = Ray {
             origin: glam::Vec3::new(0.3, -0.2, 0.0),

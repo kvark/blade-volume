@@ -177,6 +177,9 @@ impl TrainerState {
             assert_eq!(detail.offsets.len(), n * vol::SURFACE_DETAIL_SITES);
             assert_eq!(detail.heights.len(), n * vol::SURFACE_DETAIL_SITES);
             assert_eq!(detail.colors.len(), n * vol::SURFACE_DETAIL_SITES);
+            if let Some(ref density_logits) = detail.density_logits {
+                assert_eq!(density_logits.len(), n * vol::SURFACE_DETAIL_SITES);
+            }
         }
         if let Some(ref coefficients) = self.surface_color_coefficients {
             assert_eq!(coefficients.len(), n * vol::SURFACE_COLOR_COMPONENTS * 3);

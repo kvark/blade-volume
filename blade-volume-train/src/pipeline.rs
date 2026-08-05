@@ -830,6 +830,7 @@ fn initialize_surface_detail(normals: &[glam::Vec3]) -> vol::SurfaceDetail {
         offsets,
         heights: vec![0.0; count],
         colors: vec![glam::Vec3::ZERO; count],
+        density_logits: None,
     }
 }
 
@@ -1135,7 +1136,8 @@ pub fn train_colmap_appearance_split(
     }
     if (config.fit.surface_detail_offset_lr_ratio > 0.0
         || config.fit.surface_detail_height_lr_ratio > 0.0
-        || config.fit.surface_detail_color_lr_ratio > 0.0)
+        || config.fit.surface_detail_color_lr_ratio > 0.0
+        || config.fit.surface_detail_density_lr_ratio > 0.0)
         && model.surface_detail.is_none()
     {
         assert!(
@@ -1152,6 +1154,24 @@ pub fn train_colmap_appearance_split(
         ));
         log::info!(
             "initialized {} oriented PowerFoam spatial-detail tables",
+            model.points.len(),
+        );
+    }
+    if config.fit.surface_detail_density_lr_ratio > 0.0
+        && model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.density_logits.is_none())
+    {
+        assert!(
+            config.fit.resume_state_path.is_none(),
+            "cannot add spatial PowerFoam density while restoring an optimizer checkpoint; \
+             initialize a fresh detail-density model first"
+        );
+        let count = model.points.len() * vol::SURFACE_DETAIL_SITES;
+        model.surface_detail.as_mut().unwrap().density_logits = Some(vec![0.0; count]);
+        log::info!(
+            "initialized {} oriented PowerFoam spatial-density tables to identity",
             model.points.len(),
         );
     }

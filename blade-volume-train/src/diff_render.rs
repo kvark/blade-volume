@@ -101,6 +101,8 @@ pub struct SurfaceDetailGraph {
     pub heights: mn::NodeId,
     /// `[N, 24]` channel-major RGB residuals.
     pub colors: mn::NodeId,
+    /// Optional `[N, 8]` spatial density logits.
+    pub density_logits: Option<mn::NodeId>,
     /// `[P * L, 2]` recorded query-near distance and plane-branch mask.
     pub surface_queries: mn::NodeId,
     /// Fixed-topology entry-depth derivatives, present only when positions or
@@ -389,6 +391,7 @@ fn normalize_surface_detail_weights(g: &mut mn::Graph, weights: mn::NodeId) -> m
 struct SurfaceDetailEvaluation {
     effective_offsets: mn::NodeId,
     color_weights: mn::NodeId,
+    density_scale: Option<mn::NodeId>,
 }
 
 #[derive(Clone, Copy)]
@@ -486,9 +489,29 @@ fn evaluate_surface_detail_graph(
     let displaced_query = surface_detail_query(g, query, effective_offsets, rows);
     let color_weights = surface_detail_weights(g, displaced_query, tangent_sites, rows);
     let color_weights = normalize_surface_detail_weights(g, color_weights);
+    let density_scale = parameters.density_logits.map(|density_logits| {
+        let logits = g.embedding(cell_indices, density_logits);
+        let proportions = g.softmax(logits);
+        let site_count = g.constant(
+            vec![vol::SURFACE_DETAIL_SITES as f32; rows * vol::SURFACE_DETAIL_SITES],
+            &[rows, vol::SURFACE_DETAIL_SITES],
+        );
+        let scales = g.mul(proportions, site_count);
+        let negative_ones = g.constant(
+            vec![-1.0_f32; rows * vol::SURFACE_DETAIL_SITES],
+            &[rows, vol::SURFACE_DETAIL_SITES],
+        );
+        let residuals = g.add(scales, negative_ones);
+        let weighted_residuals = g.mul(color_weights, residuals);
+        let residual = g.sum_inner(weighted_residuals);
+        let ones = g.constant(vec![1.0_f32; rows], &[rows, 1]);
+        let scale = g.add(ones, residual);
+        g.relu(scale)
+    });
     SurfaceDetailEvaluation {
         effective_offsets,
         color_weights,
+        density_scale,
     }
 }
 
@@ -621,6 +644,7 @@ pub fn build_volumetric_graph(
             train_positions: true,
             train_radii: true,
             use_surface_detail: false,
+            use_surface_detail_density: false,
         },
         use_surface_offsets,
         use_surface_color,
@@ -636,6 +660,7 @@ struct VolumetricGraphOptions {
     train_positions: bool,
     train_radii: bool,
     use_surface_detail: bool,
+    use_surface_detail_density: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -700,6 +725,10 @@ fn build_volumetric_graph_with_options(
     assert!(
         !options.use_surface_detail || use_surface_normals,
         "surface detail requires oriented surfaces",
+    );
+    assert!(
+        !options.use_surface_detail_density || options.use_surface_detail,
+        "surface-detail density requires surface detail",
     );
     assert!(
         !use_spherical_voronoi || use_surface_normals,
@@ -796,6 +825,12 @@ fn build_volumetric_graph_with_options(
             "surface_detail_colors",
             &[n_cells, vol::SURFACE_DETAIL_SITES * 3],
         ),
+        density_logits: options.use_surface_detail_density.then(|| {
+            g.parameter(
+                "surface_detail_density_logits",
+                &[n_cells, vol::SURFACE_DETAIL_SITES],
+            )
+        }),
         surface_queries: surface_queries.unwrap(),
         surface_query_grad_previous,
         surface_query_grad_current,
@@ -970,6 +1005,13 @@ fn build_volumetric_graph_with_options(
             pl,
         )
     });
+    let density = surface_detail_evaluation
+        .as_ref()
+        .and_then(|evaluation| evaluation.density_scale)
+        .map_or(density, |scale| {
+            let scale = g.reshape(scale, &[p, l]);
+            g.mul(density, scale)
+        });
 
     let neg_ray_origin_pl = g.neg(ray_origin_pl);
     let mo_diff = g.add(midpoint, neg_ray_origin_pl); // [P*L, 3]
@@ -2107,6 +2149,11 @@ pub struct AppearanceFitConfig {
     /// rate. Under [`LrSchedule::RadFoamV1`] it scales the `5e-3 → 5e-4`
     /// surface schedule. `0.0` freezes the colors.
     pub surface_detail_color_lr_ratio: f32,
+    /// Spatial-detail density-logit learning rate as a fraction of the global
+    /// rate. Equal logits preserve the base density. Under
+    /// [`LrSchedule::RadFoamV1`] this scales the `5e-3 → 5e-4` surface
+    /// schedule. `0.0` freezes the logits.
+    pub surface_detail_density_lr_ratio: f32,
     /// Raw Spherical Voronoi axis learning rate as a fraction of the global
     /// rate. Axis magnitude is directional temperature. Under
     /// [`LrSchedule::RadFoamV1`] this scales PowerFoam's `5e-2 → 5e-3`
@@ -2274,6 +2321,7 @@ impl Default for AppearanceFitConfig {
             surface_detail_offset_lr_ratio: 0.0,
             surface_detail_height_lr_ratio: 0.0,
             surface_detail_color_lr_ratio: 0.0,
+            surface_detail_density_lr_ratio: 0.0,
             spherical_voronoi_axis_lr_ratio: 0.0,
             spherical_voronoi_color_lr_ratio: 0.0,
             surface_normal_weight: 0.0,
@@ -2579,6 +2627,10 @@ fn configure_optimizer(
                 config.surface_detail_color_lr_ratio,
             );
             session.set_lr_multiplier(
+                "surface_detail_density_logits",
+                config.surface_detail_density_lr_ratio,
+            );
+            session.set_lr_multiplier(
                 "spherical_voronoi_axes",
                 config.spherical_voronoi_axis_lr_ratio,
             );
@@ -2623,6 +2675,10 @@ fn configure_optimizer(
             session.set_lr_multiplier(
                 "surface_detail_colors",
                 surface_offset_rate * config.surface_detail_color_lr_ratio,
+            );
+            session.set_lr_multiplier(
+                "surface_detail_density_logits",
+                surface_offset_rate * config.surface_detail_density_lr_ratio,
             );
             let spherical_axis_rate =
                 radfoam_cosine_lr(step, total_steps, 5.0e-2, 5.0e-3, 0, total_steps);
@@ -3061,6 +3117,11 @@ pub(crate) fn fit_appearance_multi_view_outcome(
         "surface_detail_color_lr_ratio must be finite and non-negative"
     );
     assert!(
+        config.surface_detail_density_lr_ratio.is_finite()
+            && config.surface_detail_density_lr_ratio >= 0.0,
+        "surface_detail_density_lr_ratio must be finite and non-negative"
+    );
+    assert!(
         config.spherical_voronoi_axis_lr_ratio.is_finite()
             && config.spherical_voronoi_axis_lr_ratio >= 0.0,
         "spherical_voronoi_axis_lr_ratio must be finite and non-negative"
@@ -3093,9 +3154,18 @@ pub(crate) fn fit_appearance_multi_view_outcome(
     assert!(
         (config.surface_detail_offset_lr_ratio == 0.0
             && config.surface_detail_height_lr_ratio == 0.0
-            && config.surface_detail_color_lr_ratio == 0.0)
+            && config.surface_detail_color_lr_ratio == 0.0
+            && config.surface_detail_density_lr_ratio == 0.0)
             || model.surface_detail.is_some(),
         "surface-detail optimisation requires initialized sites, heights, and colors"
+    );
+    assert!(
+        config.surface_detail_density_lr_ratio == 0.0
+            || model
+                .surface_detail
+                .as_ref()
+                .is_some_and(|detail| detail.density_logits.is_some()),
+        "surface-detail density optimisation requires initialized logits"
     );
     assert!(
         (config.spherical_voronoi_axis_lr_ratio == 0.0
@@ -3302,6 +3372,9 @@ fn upload_model_parameters(
         session.set_parameter("surface_detail_offsets", &offsets);
         session.set_parameter("surface_detail_heights", &detail.heights);
         session.set_parameter("surface_detail_colors", &colors);
+        if let Some(ref density_logits) = detail.density_logits {
+            session.set_parameter("surface_detail_density_logits", density_logits);
+        }
     }
     if let Some(ref spherical_voronoi) = model.spherical_voronoi {
         let sites = vol::SPHERICAL_VORONOI_SITES;
@@ -3872,6 +3945,13 @@ fn download_model_parameters(
     }
     if model.surface_detail.is_some() {
         names.push("surface_detail_colors".to_string());
+        if model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.density_logits.is_some())
+        {
+            names.push("surface_detail_density_logits".to_string());
+        }
     }
     if model.spherical_voronoi.is_some() {
         names.push("spherical_voronoi_axes".to_string());
@@ -3927,6 +4007,9 @@ fn download_model_parameters(
                     colors[base + 2 * sites + site],
                 );
             }
+        }
+        if let Some(ref mut density_logits) = detail.density_logits {
+            *density_logits = next_parameter(&mut readback, "surface_detail_density_logits");
         }
     }
     if let Some(ref mut spherical_voronoi) = model.spherical_voronoi {
@@ -4509,10 +4592,14 @@ fn prune_and_densify(
         .surface_color_coefficients
         .as_ref()
         .map(|_| Vec::with_capacity(n_new * surface_color_block));
-    let mut new_surface_detail = model.surface_detail.as_ref().map(|_| vol::SurfaceDetail {
+    let mut new_surface_detail = model.surface_detail.as_ref().map(|old| vol::SurfaceDetail {
         offsets: Vec::with_capacity(n_new * vol::SURFACE_DETAIL_SITES),
         heights: Vec::with_capacity(n_new * vol::SURFACE_DETAIL_SITES),
         colors: Vec::with_capacity(n_new * vol::SURFACE_DETAIL_SITES),
+        density_logits: old
+            .density_logits
+            .as_ref()
+            .map(|_| Vec::with_capacity(n_new * vol::SURFACE_DETAIL_SITES)),
     });
     let mut new_spherical_voronoi =
         model
@@ -4558,6 +4645,9 @@ fn prune_and_densify(
             detail.offsets.extend_from_slice(&old.offsets[begin..end]);
             detail.heights.extend_from_slice(&old.heights[begin..end]);
             detail.colors.extend_from_slice(&old.colors[begin..end]);
+            if let Some(ref mut logits) = detail.density_logits {
+                logits.extend_from_slice(&old.density_logits.as_ref().unwrap()[begin..end]);
+            }
         }
         if let Some(ref mut spherical_voronoi) = new_spherical_voronoi {
             let old = model.spherical_voronoi.as_ref().unwrap();
@@ -4612,6 +4702,9 @@ fn prune_and_densify(
             detail.offsets.extend_from_slice(&old.offsets[begin..end]);
             detail.heights.extend_from_slice(&old.heights[begin..end]);
             detail.colors.extend_from_slice(&old.colors[begin..end]);
+            if let Some(ref mut logits) = detail.density_logits {
+                logits.extend_from_slice(&old.density_logits.as_ref().unwrap()[begin..end]);
+            }
         }
         if let Some(ref mut spherical_voronoi) = new_spherical_voronoi {
             let old = model.spherical_voronoi.as_ref().unwrap();
@@ -4648,8 +4741,8 @@ fn prune_and_densify(
 /// stride. Stride is 1 for scalar tables (`log_density`, `log_radii`,
 /// `surface_offsets`, `sh_<chan>_<k>`) and 3 for vector tables (`positions`,
 /// `surface_normals`). Spatial surface color uses stride 12; spatial-detail
-/// offsets/colors use stride 24 and heights use stride 8; both Spherical
-/// Voronoi tables use stride 24.
+/// offsets/colors use stride 24 and heights/density logits use stride 8; both
+/// Spherical Voronoi tables use stride 24.
 fn per_cell_param_names_with_stride(
     sh_degree: usize,
     has_radii: bool,
@@ -4657,6 +4750,7 @@ fn per_cell_param_names_with_stride(
     has_surface_offsets: bool,
     has_surface_color: bool,
     has_surface_detail: bool,
+    has_surface_detail_density: bool,
     has_spherical_voronoi: bool,
     has_point_error: bool,
 ) -> Vec<(String, usize)> {
@@ -4689,6 +4783,12 @@ fn per_cell_param_names_with_stride(
         names.push((
             "surface_detail_colors".to_string(),
             vol::SURFACE_DETAIL_SITES * 3,
+        ));
+    }
+    if has_surface_detail_density {
+        names.push((
+            "surface_detail_density_logits".to_string(),
+            vol::SURFACE_DETAIL_SITES,
         ));
     }
     if has_spherical_voronoi {
@@ -4754,6 +4854,7 @@ fn save_adam_state(
     has_surface_offsets: bool,
     has_surface_color: bool,
     has_surface_detail: bool,
+    has_surface_detail_density: bool,
     has_spherical_voronoi: bool,
     has_point_error: bool,
 ) -> AdamSnapshot {
@@ -4764,6 +4865,7 @@ fn save_adam_state(
         has_surface_offsets,
         has_surface_color,
         has_surface_detail,
+        has_surface_detail_density,
         has_spherical_voronoi,
         has_point_error,
     );
@@ -4824,6 +4926,7 @@ fn restore_adam_state_remap(
     has_surface_offsets: bool,
     has_surface_color: bool,
     has_surface_detail: bool,
+    has_surface_detail_density: bool,
     has_spherical_voronoi: bool,
     has_point_error: bool,
 ) {
@@ -4835,6 +4938,7 @@ fn restore_adam_state_remap(
         has_surface_offsets,
         has_surface_color,
         has_surface_detail,
+        has_surface_detail_density,
         has_spherical_voronoi,
         has_point_error,
     );
@@ -4939,6 +5043,7 @@ fn build_train_session(
     surface_detail_offset_lr_ratio: f32,
     surface_detail_height_lr_ratio: f32,
     surface_detail_color_lr_ratio: f32,
+    surface_detail_density_lr_ratio: f32,
     spherical_voronoi_axis_lr_ratio: f32,
     spherical_voronoi_color_lr_ratio: f32,
     betas: (f32, f32, f32),
@@ -4966,6 +5071,10 @@ fn build_train_session(
             train_positions,
             train_radii,
             use_surface_detail: model.surface_detail.is_some(),
+            use_surface_detail_density: model
+                .surface_detail
+                .as_ref()
+                .is_some_and(|detail| detail.density_logits.is_some()),
         },
         model.surface_offsets.is_some(),
         model.surface_color_coefficients.is_some(),
@@ -5168,6 +5277,10 @@ fn build_train_session(
         session.set_lr_multiplier("surface_detail_offsets", surface_detail_offset_lr_ratio);
         session.set_lr_multiplier("surface_detail_heights", surface_detail_height_lr_ratio);
         session.set_lr_multiplier("surface_detail_colors", surface_detail_color_lr_ratio);
+        session.set_lr_multiplier(
+            "surface_detail_density_logits",
+            surface_detail_density_lr_ratio,
+        );
     }
     if model.spherical_voronoi.is_some() {
         session.set_lr_multiplier("spherical_voronoi_axes", spherical_voronoi_axis_lr_ratio);
@@ -5574,6 +5687,7 @@ fn fit_appearance_pixel_batched(
         config.surface_detail_offset_lr_ratio,
         config.surface_detail_height_lr_ratio,
         config.surface_detail_color_lr_ratio,
+        config.surface_detail_density_lr_ratio,
         config.spherical_voronoi_axis_lr_ratio,
         config.spherical_voronoi_color_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
@@ -6011,6 +6125,10 @@ fn fit_appearance_pixel_batched(
                     model.surface_offsets.is_some(),
                     model.surface_color_coefficients.is_some(),
                     model.surface_detail.is_some(),
+                    model
+                        .surface_detail
+                        .as_ref()
+                        .is_some_and(|detail| detail.density_logits.is_some()),
                     model.spherical_voronoi.is_some(),
                     collect_powerfoam_point_error,
                 );
@@ -6216,6 +6334,7 @@ fn fit_appearance_pixel_batched(
                     config.surface_detail_offset_lr_ratio,
                     config.surface_detail_height_lr_ratio,
                     config.surface_detail_color_lr_ratio,
+                    config.surface_detail_density_lr_ratio,
                     config.spherical_voronoi_axis_lr_ratio,
                     config.spherical_voronoi_color_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
@@ -6240,6 +6359,10 @@ fn fit_appearance_pixel_batched(
                     model.surface_offsets.is_some(),
                     model.surface_color_coefficients.is_some(),
                     model.surface_detail.is_some(),
+                    model
+                        .surface_detail
+                        .as_ref()
+                        .is_some_and(|detail| detail.density_logits.is_some()),
                     model.spherical_voronoi.is_some(),
                     collect_powerfoam_point_error,
                 );
@@ -6531,6 +6654,7 @@ mod tests {
             offsets: vec![glam::Vec3::ZERO; detail_count],
             heights: vec![0.0; detail_count],
             colors: vec![glam::Vec3::ZERO; detail_count],
+            density_logits: None,
         });
         let points_before = model.points.clone();
         let radii_before = model.radii.clone();
@@ -6702,6 +6826,7 @@ mod tests {
                     glam::Vec3::new(value, -0.5 * value, 0.25 * value)
                 })
                 .collect(),
+            density_logits: Some(vec![0.0; detail_count]),
         });
         model.compute_adjacency_default();
         let positions_before = model
@@ -6738,6 +6863,7 @@ mod tests {
                 surface_detail_offset_lr_ratio: 0.25,
                 surface_detail_height_lr_ratio: 0.25,
                 surface_detail_color_lr_ratio: 1.0,
+                surface_detail_density_lr_ratio: 1.0,
                 geometry_rebuild_every: 1,
                 ..AppearanceFitConfig::default()
             },
@@ -6747,6 +6873,15 @@ mod tests {
         assert_eq!(losses.len(), 4);
         assert!(losses.iter().all(|loss| loss.is_finite()));
         assert_ne!(model.surface_detail.as_ref().unwrap(), &detail_before);
+        assert!(model
+            .surface_detail
+            .as_ref()
+            .unwrap()
+            .density_logits
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|value| value.abs() > 1.0e-7));
         assert_eq!(
             model
                 .points
@@ -6796,6 +6931,7 @@ mod tests {
                     glam::Vec3::new(value, -0.5 * value, 0.25 * value)
                 })
                 .collect(),
+            density_logits: None,
         });
         model.compute_adjacency_default();
         let positions_before = model
@@ -6832,6 +6968,7 @@ mod tests {
                 surface_detail_offset_lr_ratio: 0.1,
                 surface_detail_height_lr_ratio: 0.1,
                 surface_detail_color_lr_ratio: 1.0,
+                surface_detail_density_lr_ratio: 0.0,
                 geometry_rebuild_every: 1,
                 ..AppearanceFitConfig::default()
             },
@@ -7162,6 +7299,7 @@ mod tests {
             offsets: graph.parameter("surface_detail_offsets", &[1, sites * 3]),
             heights: graph.parameter("surface_detail_heights", &[1, sites]),
             colors: graph.parameter("surface_detail_colors", &[1, sites * 3]),
+            density_logits: Some(graph.parameter("surface_detail_density_logits", &[1, sites])),
             surface_queries: graph.input("surface_queries", &[1, 2]),
             surface_query_grad_previous: None,
             surface_query_grad_current: None,
@@ -7191,9 +7329,11 @@ mod tests {
         let red = graph.embedding(cell_indices, red_table);
         let red = graph.mul(red, evaluation.color_weights);
         let red = graph.sum_inner(red);
+        let density_scale = evaluation.density_scale.unwrap();
         let loss_terms = graph.add(evaluation.effective_offsets, red);
+        let loss_terms = graph.add(loss_terms, density_scale);
         let loss = graph.sum_all(loss_terms);
-        graph.set_outputs(vec![loss, evaluation.effective_offsets, red]);
+        graph.set_outputs(vec![loss, evaluation.effective_offsets, red, density_scale]);
 
         let (mut session, _) = mn::build(
             &graph,
@@ -7220,10 +7360,14 @@ mod tests {
                 packed_colors[channel * sites + site] = colors[site][channel];
             }
         }
+        let density_logits = (0..sites)
+            .map(|site| 0.2 * (site as f32 - 3.5))
+            .collect::<Vec<_>>();
         let query_near = 10.0 - 3.0_f32.sqrt();
         session.set_parameter("surface_detail_offsets", &packed_offsets);
         session.set_parameter("surface_detail_heights", &heights);
         session.set_parameter("surface_detail_colors", &packed_colors);
+        session.set_parameter("surface_detail_density_logits", &density_logits);
         session.set_parameter("positions", &[0.0, 0.0, 10.0]);
         session.set_parameter("surface_normals", &[0.0, 0.0, -1.0]);
         session.set_parameter("surface_offsets", &[0.0]);
@@ -7252,6 +7396,7 @@ mod tests {
                 offsets,
                 heights,
                 colors,
+                density_logits: Some(density_logits),
             }),
             surface_color_coefficients: None,
             spherical_voronoi: None,
@@ -7263,12 +7408,23 @@ mod tests {
             glam::Vec3::Z,
             query_near,
         );
+        let expected_density_scale = vol::trace::eval_surface_detail_density_scale(
+            &model,
+            0,
+            glam::Vec3::new(1.0, 0.0, 0.0),
+            glam::Vec3::Z,
+            query_near,
+            expected_offset,
+        );
         let mut actual_offset = [0.0_f32];
         let mut actual_red = [0.0_f32];
+        let mut actual_density_scale = [0.0_f32];
         session.read_output_by_index(1, &mut actual_offset);
         session.read_output_by_index(2, &mut actual_red);
+        session.read_output_by_index(3, &mut actual_density_scale);
         assert!((actual_offset[0] - expected_offset).abs() < 2.0e-5);
         assert!((actual_red[0] - expected_color.x).abs() < 2.0e-5);
+        assert!((actual_density_scale[0] - expected_density_scale).abs() < 2.0e-5);
 
         const RADIUS_EPSILON: f32 = 1.0e-3;
         let radius_loss = |radius| {
@@ -7281,7 +7437,15 @@ mod tests {
                 glam::Vec3::Z,
                 query_near,
             );
-            offset + color.x
+            let density_scale = vol::trace::eval_surface_detail_density_scale(
+                &perturbed,
+                0,
+                glam::Vec3::new(1.0, 0.0, 0.0),
+                glam::Vec3::Z,
+                query_near,
+                offset,
+            );
+            offset + color.x + density_scale
         };
         let expected_radius_gradient = (radius_loss(2.0 + RADIUS_EPSILON)
             - radius_loss(2.0 - RADIUS_EPSILON))
@@ -7299,6 +7463,7 @@ mod tests {
             ("surface_detail_offsets", sites * 3),
             ("surface_detail_heights", sites),
             ("surface_detail_colors", sites * 3),
+            ("surface_detail_density_logits", sites),
         ] {
             let mut gradient = vec![0.0_f32; size];
             session.read_param_grad(name, &mut gradient);
@@ -7357,6 +7522,7 @@ mod tests {
                 offsets: offsets.clone(),
                 heights: heights.clone(),
                 colors: colors.clone(),
+                density_logits: None,
             }),
             surface_color_coefficients: None,
             spherical_voronoi: None,
@@ -7384,6 +7550,7 @@ mod tests {
             offsets: graph.parameter("surface_detail_offsets", &[1, sites * 3]),
             heights: graph.parameter("surface_detail_heights", &[1, sites]),
             colors: graph.parameter("surface_detail_colors", &[1, sites * 3]),
+            density_logits: None,
             surface_queries: graph.input("surface_queries", &[1, 2]),
             surface_query_grad_previous: Some(graph.input("surface_query_grad_previous", &[1, 4])),
             surface_query_grad_current: Some(graph.input("surface_query_grad_current", &[1, 4])),
@@ -7977,6 +8144,11 @@ mod tests {
             colors: (0..detail_count)
                 .map(|index| glam::Vec3::splat(0.02 * index as f32))
                 .collect(),
+            density_logits: Some(
+                (0..detail_count)
+                    .map(|index| 0.01 * index as f32 - 0.1)
+                    .collect(),
+            ),
         });
         model.compute_adjacency_default();
         let parent = 2;
@@ -8029,6 +8201,11 @@ mod tests {
         assert_eq!(
             &detail.colors[4 * detail_block..5 * detail_block],
             &detail.colors[2 * detail_block..3 * detail_block],
+        );
+        let density_logits = detail.density_logits.as_ref().unwrap();
+        assert_eq!(
+            &density_logits[4 * detail_block..5 * detail_block],
+            &density_logits[2 * detail_block..3 * detail_block],
         );
         model.validate().unwrap();
     }
@@ -8140,6 +8317,7 @@ mod tests {
             offsets: vec![glam::Vec3::ZERO; detail_count],
             heights: vec![0.0; detail_count],
             colors: vec![glam::Vec3::ZERO; detail_count],
+            density_logits: None,
         });
         let view = ViewSupervision {
             camera: vol::CameraParams {
@@ -8273,7 +8451,7 @@ mod tests {
     fn per_cell_param_names_includes_positions_with_stride_3() {
         for sh_degree in 0..=3 {
             let names = per_cell_param_names_with_stride(
-                sh_degree, false, false, false, false, false, false, false,
+                sh_degree, false, false, false, false, false, false, false, false,
             );
             // Required entries:
             assert!(names.contains(&("log_density".to_string(), 1)));
@@ -8288,13 +8466,13 @@ mod tests {
                 }
             }
             let weighted_names = per_cell_param_names_with_stride(
-                sh_degree, true, false, false, false, false, false, true,
+                sh_degree, true, false, false, false, false, false, false, true,
             );
             assert!(weighted_names.contains(&("log_radii".to_string(), 1)));
             assert!(weighted_names.contains(&(POINT_ERROR_PROBE.to_string(), 1)));
             assert_eq!(weighted_names.len(), names.len() + 2);
             let oriented_names = per_cell_param_names_with_stride(
-                sh_degree, true, true, true, true, true, true, true,
+                sh_degree, true, true, true, true, true, true, true, true,
             );
             assert!(oriented_names.contains(&("surface_normals".to_string(), 3)));
             assert!(oriented_names.contains(&("surface_offsets".to_string(), 1)));
@@ -8322,7 +8500,11 @@ mod tests {
                 "surface_detail_colors".to_string(),
                 vol::SURFACE_DETAIL_SITES * 3,
             )));
-            assert_eq!(oriented_names.len(), names.len() + 10);
+            assert!(oriented_names.contains(&(
+                "surface_detail_density_logits".to_string(),
+                vol::SURFACE_DETAIL_SITES,
+            )));
+            assert_eq!(oriented_names.len(), names.len() + 11);
         }
     }
 
@@ -8454,6 +8636,7 @@ mod tests {
                 train_positions: true,
                 train_radii: true,
                 use_surface_detail: false,
+                use_surface_detail_density: false,
             },
             true,
             false,
@@ -8490,6 +8673,7 @@ mod tests {
                 train_positions: false,
                 train_radii: false,
                 use_surface_detail: false,
+                use_surface_detail_density: false,
             },
             true,
             true,
@@ -8578,6 +8762,7 @@ mod tests {
                 train_positions: false,
                 train_radii: false,
                 use_surface_detail: false,
+                use_surface_detail_density: false,
             },
             true,
             true,
@@ -10019,6 +10204,7 @@ mod tests {
                 train_positions: false,
                 train_radii: false,
                 use_surface_detail: false,
+                use_surface_detail_density: false,
             },
             true,
             false,
@@ -10816,6 +11002,7 @@ mod tests {
                 .collect(),
             heights: vec![0.0; detail_count],
             colors: vec![glam::Vec3::ZERO; detail_count],
+            density_logits: Some(vec![0.0; detail_count]),
         });
         model.compute_adjacency_default();
         let view = ViewSupervision {
@@ -10844,6 +11031,7 @@ mod tests {
                 surface_detail_offset_lr_ratio: 0.1,
                 surface_detail_height_lr_ratio: 0.1,
                 surface_detail_color_lr_ratio: 0.1,
+                surface_detail_density_lr_ratio: 0.1,
                 geometry_rebuild_every: 1,
                 densify: Some(DensifyConfig {
                     every: 1,
@@ -10865,10 +11053,20 @@ mod tests {
         assert_eq!(detail.offsets.len(), 5 * vol::SURFACE_DETAIL_SITES);
         assert_eq!(detail.heights.len(), 5 * vol::SURFACE_DETAIL_SITES);
         assert_eq!(detail.colors.len(), 5 * vol::SURFACE_DETAIL_SITES);
+        assert_eq!(
+            detail.density_logits.as_ref().unwrap().len(),
+            5 * vol::SURFACE_DETAIL_SITES,
+        );
         assert!(detail
             .colors
             .iter()
             .any(|color| color.abs().max_element() > 1.0e-7));
+        assert!(detail
+            .density_logits
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|value| value.abs() > 1.0e-7));
         model.validate().unwrap();
     }
 
@@ -11038,6 +11236,7 @@ mod tests {
                     .collect(),
                 heights: vec![0.0; detail_count],
                 colors: vec![glam::Vec3::ZERO; detail_count],
+                density_logits: Some(vec![0.0; detail_count]),
             });
             model.spherical_voronoi = Some(vol::SphericalVoronoi {
                 axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
@@ -11068,6 +11267,7 @@ mod tests {
             surface_detail_offset_lr_ratio: 0.1,
             surface_detail_height_lr_ratio: 0.1,
             surface_detail_color_lr_ratio: 0.1,
+            surface_detail_density_lr_ratio: 0.1,
             spherical_voronoi_axis_lr_ratio: 0.1,
             spherical_voronoi_color_lr_ratio: 0.1,
             surface_normal_weight: 0.1,

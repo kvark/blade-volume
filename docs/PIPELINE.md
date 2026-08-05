@@ -1816,6 +1816,46 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   not the next bottleneck. A smaller spatial-density/responsibility probe over
   the existing eight detail weights is the next quality experiment.
 
+#### M2bh — Redistribute density over spatial detail sites (implemented and two-scene-gated; opt-in)
+
+- `SurfaceDetail::density_logits` optionally stores eight scalar logits per
+  cell. Their softmax is multiplied by eight, so the site scales have arithmetic
+  mean one. The displaced-plane detail weights blend those scales for each ray;
+  equal logits return exactly one and preserve every legacy model. Binary and
+  ASCII PLY use `blade_surface_detail_density_logit_0..7`. The table adds eight
+  floats per cell (6.10 MiB at 200K sites) and remains absent by default.
+- CPU traversal, standalone WGSL, scene WGSL, compute splats, Meganeura
+  training, Adam checkpoint/remapping, densification, and exact resume share
+  the same contract. `--surface-detail-density-lr-ratio` creates an identity
+  table only for a fresh oriented-detail run. Colour rendering evaluates the
+  detail RGB residual and density scale in one spatial kernel; depth-only
+  rendering keeps the scalar path. On identical trained models this fusion
+  preserves every reported PSNR/per-view value and reduces three-run all-view
+  evaluator means by 0.50% on Room and 0.27% on Bonsai.
+- A 510-step screen over ratios `0.005`, `0.01`, `0.02`, and `0.05` improves
+  held-out Room by +0.0230, +0.0090, +0.0241, and +0.0366 dB and Bonsai by
+  +0.0108, +0.0094, +0.0140, and +0.0269 dB. Boundary probes at `0.1` and
+  `0.2` raise Room further but weaken Bonsai and introduce -0.52/-0.61 dB
+  Room tail regressions, so the cross-scene gate selects `0.05`.
+- Two order-balanced 2,040-step replicas confirm a mean improvement. Room
+  train/held-out changes 26.6764/24.3367→26.7580/24.3529 dB
+  (+0.0816/+0.0162); averaging each view across replicas gives a 21/1/17
+  improved/tied/regressed split and a -0.52 dB worst delta. Bonsai changes
+  17.3616/16.7627→17.4389/16.8070 dB (+0.0774/+0.0443), with a 25/0/12
+  averaged split and -0.21 dB worst delta. The positive two-scene means retain
+  the representation as an opt-in tool; the Room tail prevents making it the
+  default recipe.
+- Mean training time rises 142.876→158.567 seconds on Room (+11.0%) and
+  89.591→100.682 seconds on Bonsai (+12.4%). After the shared runtime kernel,
+  three-run all-view evaluator means are effectively neutral versus matched
+  controls: 19.353 versus 19.300 seconds on Room and 20.777 versus 20.863 on
+  Bonsai (the latter also has a slightly different learned topology). Both long
+  scopes peak at or below 1,501,564,928 bytes under 6 GiB with zero swap,
+  pressure, limit, OOM, kill, throttling, or GPU fault. Artifacts and telemetry
+  remain ignored under `target/audit-runs/spatial-detail-density/`. Formatting,
+  strict all-target lint, and the complete locked serialized workspace suite
+  pass; the suite peaks at 5,500,235,776 bytes with zero cgroup events.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

@@ -1983,9 +1983,15 @@ material path.
    then cuts another 0.5% on Room and 0.3% on Bonsai at neutral quality. The
    long radius-rate gate now selects `0.005` for Room and `0.01` for Bonsai;
    neither becomes a universal default, and the Bonsai selection retains a
-   heavy degree tail. The next quality experiment targets unsupported
-   support/opacity and spatial responsibility rather than another identical
-   continuation or a universal radius rate. A compact
+   heavy degree tail. Contribution diagnostics then reject a minimum-view
+   pruning shortcut, and two bounded directional-detail variants fail fresh
+   long controls. The resulting eight-logit spatial-density probe is retained
+   as opt-in: two order-balanced 2,040-step replicas improve held-out Room by
+   0.0162 dB and Bonsai by 0.0443 dB, while adding 6.10 MiB per 200K sites and
+   11.0%/12.4% training time. Averaged per-view splits are 21/1/17 and
+   25/0/12, with a -0.52 dB Room outlier, so the default remains unchanged.
+   Shared runtime evaluation keeps all-view inference within 0.5% of matched
+   controls. A compact
    48-float additive Spherical Voronoi residual is now implemented but rejected:
    learned and fixed axes lose 0.0168 and 0.0137 dB held out on Room while
    adding about 22% training time. On Room, a 160-entry path budget is exact

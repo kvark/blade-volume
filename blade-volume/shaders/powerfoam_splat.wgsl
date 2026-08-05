@@ -35,22 +35,24 @@ fn attribute_dimension() -> u32 {
     return 3u * min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS) + 1u
         + select(0u, 3u * SURFACE_COLOR_COMPONENTS, (g_params.appearance_flags & 1u) != 0u)
         + select(0u, 3u * SURFACE_DETAIL_SITES, (g_params.appearance_flags & 4u) != 0u)
+        + select(0u, SURFACE_DETAIL_SITES, (g_params.appearance_flags & 8u) != 0u)
         + select(0u, 6u * SPHERICAL_VORONOI_SITES, (g_params.appearance_flags & 2u) != 0u);
 }
 
-fn cell_density(cell: u32) -> f32 {
-    let components = min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS);
-    return g_attributes[cell * attribute_dimension() + 3u * components];
-}
-
-fn cell_color(
+fn cell_density_color(
     cell: u32,
     ray_origin: vec3<f32>,
     direction: vec3<f32>,
     query_near: f32,
-) -> vec3<f32> {
+) -> vec4<f32> {
     let components = min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS);
     let base = cell * attribute_dimension();
+    let density = g_attributes[base + 3u * components];
+    let has_detail_density = (g_params.appearance_flags & 8u) != 0u;
+    let density_scale_bound = select(1.0, f32(SURFACE_DETAIL_SITES), has_detail_density);
+    if (density * density_scale_bound <= 1e-6) {
+        return vec4<f32>(0.0, 0.0, 0.0, density);
+    }
     var coefficients: array<vec3<f32>, MAX_SH_COMPONENTS>;
     for (var component = 0u; component < components; component += 1u) {
         let offset = base + 3u * component;
@@ -106,6 +108,7 @@ fn cell_color(
             );
         }
     }
+    var density_scale = 1.0;
     if ((g_params.appearance_flags & 4u) != 0u) {
         let detail_base = base + 3u * components + 1u + compact_length;
         var detail_colors: array<vec3<f32>, SURFACE_DETAIL_SITES>;
@@ -119,18 +122,40 @@ fn cell_color(
         }
         let point = g_points[cell];
         let surface = g_surface_normals[cell];
-        color += surface_detail_color(
-            point.xyz,
-            point.w,
-            surface.xyz,
-            surface.w,
-            effective_offset,
-            ray_origin,
-            direction,
-            query_near,
-            detail_sites,
-            detail_colors,
-        );
+        if ((g_params.appearance_flags & 8u) != 0u) {
+            let density_base = detail_base + 3u * SURFACE_DETAIL_SITES;
+            var logits: array<f32, SURFACE_DETAIL_SITES>;
+            for (var site = 0u; site < SURFACE_DETAIL_SITES; site += 1u) {
+                logits[site] = g_attributes[density_base + site];
+            }
+            let detail = surface_detail_color_density_scale(
+                point.xyz,
+                point.w,
+                surface.xyz,
+                effective_offset,
+                ray_origin,
+                direction,
+                query_near,
+                detail_sites,
+                detail_colors,
+                logits,
+            );
+            color += detail.xyz;
+            density_scale = detail.w;
+        } else {
+            color += surface_detail_color(
+                point.xyz,
+                point.w,
+                surface.xyz,
+                surface.w,
+                effective_offset,
+                ray_origin,
+                direction,
+                query_near,
+                detail_sites,
+                detail_colors,
+            );
+        }
     }
     if ((g_params.appearance_flags & 2u) != 0u) {
         let detail_length = select(
@@ -138,7 +163,13 @@ fn cell_color(
             3u * SURFACE_DETAIL_SITES,
             (g_params.appearance_flags & 4u) != 0u,
         );
-        let spherical_base = base + 3u * components + 1u + compact_length + detail_length;
+        let density_length = select(
+            0u,
+            SURFACE_DETAIL_SITES,
+            (g_params.appearance_flags & 8u) != 0u,
+        );
+        let spherical_base =
+            base + 3u * components + 1u + compact_length + detail_length + density_length;
         var axes: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         var colors: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         for (var site = 0u; site < SPHERICAL_VORONOI_SITES; site += 1u) {
@@ -157,7 +188,7 @@ fn cell_color(
         }
         color += spherical_voronoi_evaluate(axes, colors, direction);
     }
-    return max(vec3<f32>(0.0), color);
+    return vec4<f32>(max(vec3<f32>(0.0), color), density * density_scale);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -184,16 +215,15 @@ fn integrate_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
             break;
         }
         let cell = g_cells[slot];
-        let density = cell_density(cell);
+        var query_near = 0.0;
+        if ((g_params.appearance_flags & 4u) != 0u) {
+            query_near = g_surface_queries[slot].x;
+        }
+        let sample = cell_density_color(cell, g_camera.position, direction, query_near);
+        let density = sample.w;
         if (density > 1e-6) {
             let alpha = 1.0 - exp(-density * g_dts[slot]);
-            var query_near = 0.0;
-            if ((g_params.appearance_flags & 4u) != 0u) {
-                query_near = g_surface_queries[slot].x;
-            }
-            color += transmittance * alpha * cell_color(
-                cell, g_camera.position, direction, query_near,
-            );
+            color += transmittance * alpha * sample.xyz;
             transmittance *= 1.0 - alpha;
         }
     }

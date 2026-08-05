@@ -26,6 +26,7 @@ fn rf_compute_attr_dim() -> u32 {
     return 3u * comps + 1u
         + select(0u, 3u * SURFACE_COLOR_COMPONENTS, rf_has_surface_color())
         + select(0u, 3u * SURFACE_DETAIL_SITES, rf_has_surface_detail())
+        + select(0u, SURFACE_DETAIL_SITES, rf_has_surface_detail_density())
         + select(0u, 6u * SPHERICAL_VORONOI_SITES, rf_has_spherical_voronoi());
 }
 
@@ -61,6 +62,10 @@ fn rf_has_surface_detail() -> bool {
     return (g_params.pad.z & 4u) != 0u;
 }
 
+fn rf_has_surface_detail_density() -> bool {
+    return (g_params.pad.z & 8u) != 0u;
+}
+
 fn rf_get_surface_normal(idx: u32) -> vec3<f32> {
     return g_surface_normals[idx].xyz;
 }
@@ -91,24 +96,66 @@ fn rf_get_surface_offset(
     );
 }
 
-fn rf_get_density(idx: u32) -> f32 {
+fn rf_get_density(
+    idx: u32,
+    ray_origin: vec3<f32>,
+    ray_direction: vec3<f32>,
+    query_near: f32,
+    surface_offset: f32,
+) -> f32 {
     let attr_dim = rf_compute_attr_dim();
     let comps = min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS);
     let sh_dim = 3u * comps;
-    return g_attributes[idx * attr_dim + sh_dim];
+    let base = idx * attr_dim;
+    let density = g_attributes[base + sh_dim];
+    if (!rf_has_surface_detail_density()) {
+        return density;
+    }
+    let compact_length = select(
+        0u,
+        3u * SURFACE_COLOR_COMPONENTS,
+        rf_has_surface_color(),
+    );
+    let density_base = base + sh_dim + 1u + compact_length + 3u * SURFACE_DETAIL_SITES;
+    var sites: array<vec4<f32>, SURFACE_DETAIL_SITES>;
+    var logits: array<f32, SURFACE_DETAIL_SITES>;
+    for (var site = 0u; site < SURFACE_DETAIL_SITES; site += 1u) {
+        sites[site] = g_surface_details[idx * SURFACE_DETAIL_SITES + site];
+        logits[site] = g_attributes[density_base + site];
+    }
+    let surface = g_surface_normals[idx];
+    return density * surface_detail_density_scale(
+        rf_get_point(idx),
+        rf_get_radius(idx),
+        surface.xyz,
+        surface_offset,
+        ray_origin,
+        ray_direction,
+        query_near,
+        sites,
+        logits,
+    );
 }
 
-fn rf_get_color(
+fn rf_get_density_color(
     idx: u32,
     ray_origin: vec3<f32>,
-    dir: vec3<f32>,
+    ray_direction: vec3<f32>,
     query_near: f32,
     surface_offset: f32,
-) -> vec3<f32> {
+) -> vec4<f32> {
     let attr_dim = rf_compute_attr_dim();
     let comps = min(sh_component_count(g_params.sh_degree), MAX_SH_COMPONENTS);
     let base = idx * attr_dim;
-
+    let density = g_attributes[base + 3u * comps];
+    let density_scale_bound = select(
+        1.0,
+        f32(SURFACE_DETAIL_SITES),
+        rf_has_surface_detail_density(),
+    );
+    if (density * density_scale_bound <= 1e-6) {
+        return vec4<f32>(0.0, 0.0, 0.0, density);
+    }
     var coeffs: array<vec3<f32>, MAX_SH_COMPONENTS>;
     for (var i = 0u; i < comps; i += 1u) {
         let offset = base + i * 3u;
@@ -118,7 +165,7 @@ fn rf_get_color(
             g_attributes[offset + 2u]
         );
     }
-    var color = 0.5 + sh_eval_color(coeffs, dir, g_params.sh_degree);
+    var color = 0.5 + sh_eval_color(coeffs, ray_direction, g_params.sh_degree);
     if (rf_has_surface_color()) {
         let surface_base = base + 3u * comps + 1u;
         let basis = surface_color_basis(
@@ -127,7 +174,7 @@ fn rf_get_color(
             rf_get_surface_normal(idx),
             surface_offset,
             ray_origin,
-            dir,
+            ray_direction,
         );
         for (var component = 0u; component < SURFACE_COLOR_COMPONENTS; component += 1u) {
             let offset = surface_base + 3u * component;
@@ -138,6 +185,7 @@ fn rf_get_color(
             );
         }
     }
+    var density_scale = 1.0;
     let compact_length = select(
         0u,
         3u * SURFACE_COLOR_COMPONENTS,
@@ -157,18 +205,40 @@ fn rf_get_color(
             );
         }
         let surface = g_surface_normals[idx];
-        color += surface_detail_color(
-            rf_get_point(idx),
-            rf_get_radius(idx),
-            surface.xyz,
-            surface.w,
-            surface_offset,
-            ray_origin,
-            dir,
-            query_near,
-            sites,
-            colors,
-        );
+        if (rf_has_surface_detail_density()) {
+            let density_base = detail_base + 3u * SURFACE_DETAIL_SITES;
+            var logits: array<f32, SURFACE_DETAIL_SITES>;
+            for (var site = 0u; site < SURFACE_DETAIL_SITES; site += 1u) {
+                logits[site] = g_attributes[density_base + site];
+            }
+            let detail = surface_detail_color_density_scale(
+                rf_get_point(idx),
+                rf_get_radius(idx),
+                surface.xyz,
+                surface_offset,
+                ray_origin,
+                ray_direction,
+                query_near,
+                sites,
+                colors,
+                logits,
+            );
+            color += detail.xyz;
+            density_scale = detail.w;
+        } else {
+            color += surface_detail_color(
+                rf_get_point(idx),
+                rf_get_radius(idx),
+                surface.xyz,
+                surface.w,
+                surface_offset,
+                ray_origin,
+                ray_direction,
+                query_near,
+                sites,
+                colors,
+            );
+        }
     }
     if (rf_has_spherical_voronoi()) {
         let detail_length = select(
@@ -176,7 +246,13 @@ fn rf_get_color(
             3u * SURFACE_DETAIL_SITES,
             rf_has_surface_detail(),
         );
-        let spherical_base = base + 3u * comps + 1u + compact_length + detail_length;
+        let density_length = select(
+            0u,
+            SURFACE_DETAIL_SITES,
+            rf_has_surface_detail_density(),
+        );
+        let spherical_base =
+            base + 3u * comps + 1u + compact_length + detail_length + density_length;
         var axes: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         var colors: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         for (var site = 0u; site < SPHERICAL_VORONOI_SITES; site += 1u) {
@@ -193,9 +269,9 @@ fn rf_get_color(
                 g_attributes[color_offset + 2u],
             );
         }
-        color += spherical_voronoi_evaluate(axes, colors, dir);
+        color += spherical_voronoi_evaluate(axes, colors, ray_direction);
     }
-    return max(vec3<f32>(0.0), color);
+    return vec4<f32>(max(vec3<f32>(0.0), color), density * density_scale);
 }
 
 fn rf_adjacency_begin(idx: u32) -> u32 {

@@ -267,7 +267,13 @@ fn assert_gpu_matches_cpu(
             model.surface_normals.is_some() as u32,
             model.surface_color_coefficients.is_some() as u32
                 | (model.spherical_voronoi.is_some() as u32) << 1
-                | (model.surface_detail.is_some() as u32) << 2,
+                | (model.surface_detail.is_some() as u32) << 2
+                | (model
+                    .surface_detail
+                    .as_ref()
+                    .is_some_and(|detail| detail.density_logits.is_some())
+                    as u32)
+                    << 3,
         ],
         _size_pad: 0,
     };
@@ -485,6 +491,11 @@ fn oriented_powerfoam_gpu_matches_cpu() {
                 glam::Vec3::new(value, -0.25 * value, 0.5 * value)
             })
             .collect(),
+        density_logits: Some(
+            (0..model.points.len() * vol::SURFACE_DETAIL_SITES)
+                .map(|index| 0.2 * ((index % vol::SURFACE_DETAIL_SITES) as f32 - 3.5))
+                .collect(),
+        ),
     });
     model.spherical_voronoi = Some(vol::SphericalVoronoi {
         axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
@@ -535,6 +546,11 @@ fn surface_detail_powerfoam_splat_gpu_matches_cpu() {
             offsets,
             heights,
             colors,
+            density_logits: Some(
+                (0..vol::SURFACE_DETAIL_SITES)
+                    .map(|index| if index == 0 { 2.0 } else { -0.25 })
+                    .collect(),
+            ),
         }),
         surface_color_coefficients: None,
         spherical_voronoi: None,

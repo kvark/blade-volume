@@ -37,6 +37,7 @@ pub struct RadFoamGpuCloud {
     pub is_power_foam: bool,
     pub is_oriented: bool,
     pub has_surface_detail: bool,
+    pub has_surface_detail_density: bool,
     pub has_surface_color: bool,
     pub has_spherical_voronoi: bool,
 }
@@ -305,7 +306,8 @@ impl RadFoamGpuCloud {
             }
 
             // Attributes: [SH, density, compact surface residual, detail RGB,
-            // SV axes, SV colors] per point. This matches the shader layout.
+            // detail density logits, SV axes, SV colors] per point. This
+            // matches the shader layout.
             if upload_attributes {
                 let dst_attrs = slice::from_raw_parts_mut(
                     attributes_stage.data() as *mut f32,
@@ -336,6 +338,15 @@ impl RadFoamGpuCloud {
                             dst_attrs[attribute_offset..attribute_offset + 3]
                                 .copy_from_slice(&color.to_array());
                             attribute_offset += 3;
+                        }
+                        if let Some(ref density_logits) = detail.density_logits {
+                            dst_attrs
+                                [attribute_offset..attribute_offset + crate::SURFACE_DETAIL_SITES]
+                                .copy_from_slice(
+                                    &density_logits
+                                        [detail_base..detail_base + crate::SURFACE_DETAIL_SITES],
+                                );
+                            attribute_offset += crate::SURFACE_DETAIL_SITES;
                         }
                     }
                     if let Some(ref spherical_voronoi) = model.spherical_voronoi {
@@ -448,6 +459,10 @@ impl RadFoamGpuCloud {
             is_power_foam: model.radii.is_some(),
             is_oriented: model.surface_normals.is_some(),
             has_surface_detail: model.surface_detail.is_some(),
+            has_surface_detail_density: model
+                .surface_detail
+                .as_ref()
+                .is_some_and(|detail| detail.density_logits.is_some()),
             has_surface_color: model.surface_color_coefficients.is_some(),
             has_spherical_voronoi: model.spherical_voronoi.is_some(),
         }

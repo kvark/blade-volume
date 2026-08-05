@@ -90,7 +90,8 @@ impl RadFoamGpuTracer {
                 cloud.is_oriented as u32,
                 cloud.has_surface_color as u32
                     | (cloud.has_spherical_voronoi as u32) << 1
-                    | (cloud.has_surface_detail as u32) << 2,
+                    | (cloud.has_surface_detail as u32) << 2
+                    | (cloud.has_surface_detail_density as u32) << 3,
                 0,
             ],
         };

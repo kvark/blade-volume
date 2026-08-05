@@ -10,9 +10,11 @@
 //   fn rf_get_surface_normal(idx: u32) -> vec3<f32>;
 //   fn rf_get_surface_offset(idx: u32, ray_origin: vec3<f32>,
 //       ray_direction: vec3<f32>, query_near: f32) -> f32;
-//   fn rf_get_density(idx: u32) -> f32;
-//   fn rf_get_color(idx: u32, ray_origin: vec3<f32>, dir: vec3<f32>,
-//       query_near: f32, surface_offset: f32) -> vec3<f32>;
+//   fn rf_get_density(idx: u32, ray_origin: vec3<f32>,
+//       ray_direction: vec3<f32>, query_near: f32, surface_offset: f32) -> f32;
+//   fn rf_get_density_color(idx: u32, ray_origin: vec3<f32>,
+//       ray_direction: vec3<f32>, query_near: f32,
+//       surface_offset: f32) -> vec4<f32>;
 //   fn rf_adjacency_begin(idx: u32) -> u32;
 //   fn rf_adjacency_end(idx: u32) -> u32;
 //   fn rf_get_neighbor(adj_idx: u32) -> u32;
@@ -157,7 +159,27 @@ fn radfoam_trace(
         let integration_begin = max(support.range.x, params.integration_start);
         if (support.range.y > integration_begin) {
             cells_visited += 1u;
-            let s = rf_get_density(current);
+            var s: f32;
+            var rgb = vec3<f32>(0.0);
+            if (params.record_depth) {
+                s = rf_get_density(
+                    current,
+                    ray_origin,
+                    ray_dir,
+                    support.query_near,
+                    support.surface_offset,
+                );
+            } else {
+                let sample = rf_get_density_color(
+                    current,
+                    ray_origin,
+                    ray_dir,
+                    support.query_near,
+                    support.surface_offset,
+                );
+                s = sample.w;
+                rgb = sample.xyz;
+            }
             if (s > 1e-6) {
                 let dt = support.range.y - integration_begin;
                 let alpha = 1.0 - exp(-s * dt);
@@ -168,13 +190,6 @@ fn radfoam_trace(
                         depth_mode = 0.5 * (integration_begin + support.range.y);
                     }
                 } else {
-                    let rgb = rf_get_color(
-                        current,
-                        ray_origin,
-                        normalize(ray_dir),
-                        support.query_near,
-                        support.surface_offset,
-                    );
                     accum_rgb += w * rgb;
                 }
                 transmittance *= (1.0 - alpha);
