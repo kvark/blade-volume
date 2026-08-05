@@ -1973,6 +1973,43 @@ memory_events = 0
 artifacts = "target/audit-runs/ray-alignment-v{1,2}"
 selection = "reject and remove the family: neither confidence gating nor dominant-mode soft selection transfers synthetic triangulation into a better real surface"
 
+# Grouping confident dominant rays by the cell that owns them is more explicit
+# than the path-local alignment above, but cell identity is still not a surface
+# correspondence. On one fixed trained truth-scene model, each camera first
+# contributes one peak-weighted mode centroid or mean ray direction per cell;
+# only cells present in at least two cameras move, and every displacement is
+# clamped to one farthest-neighbour radius. Both the 3D centroid and the
+# least-squares ray intersection point in harmful directions even at a 1%
+# step. The prototype touched only the developer benchmark and is removed.
+[synthetic_reconstruction.rgb_mask_foam.rejected_cell_mode_consensus]
+date = "2026-08-05"
+input_artifact_sha256 = "9469fbedb94dc91ef12cfef1e1009468ffcb1d7bcc7da007e1d465348be54f1a"
+sampled_training_rays = 11400
+confident_rays = 6084
+cells_with_two_view_support = 129
+control_held_pose_psnr = 24.15
+control_training_depth_rmse = 2.8197
+control_held_depth_rmse = 2.0944
+control_surface_position_rmse = 0.6183
+control_surface_normal_rmse_degrees = 66.32
+control_held_light_psnr = 18.34
+centroid_fraction = [0.01, 0.025, 0.25]
+centroid_held_pose_psnr = [24.15, 24.16, 22.24]
+centroid_training_depth_rmse = [3.9722, 6.5703, 13.4265]
+centroid_held_depth_rmse = [2.1072, 4.3509, 13.5021]
+centroid_surface_position_rmse = [0.6210, 0.6168, 1.8153]
+centroid_held_light_psnr = [18.32, 18.20, 18.06]
+ray_intersection_fraction = [0.01, 0.025, 0.05]
+ray_intersection_held_pose_psnr = [24.15, 24.15, 24.15]
+ray_intersection_training_depth_rmse = [4.3004, 7.0269, 12.0334]
+ray_intersection_held_depth_rmse = [2.0952, 4.3537, 7.0369]
+ray_intersection_surface_position_rmse = [0.6233, 0.6240, 0.6180]
+ray_intersection_held_light_psnr = [18.22, 18.29, 18.13]
+peak_memory_bytes = 245964800
+memory_events = 0
+artifacts = "target/audit-runs/cell-consensus-screen (gitignored)"
+selection = "reject and remove: ownership of one volumetric cell across cameras does not identify one surface point; future consensus must use a learned local surface coordinate"
+
 # A weighted `--init-ply` used to fall through to the fresh-run Delaunay
 # default, which discarded stored radii. Passing `--cech-radius` avoided that
 # path but reinitialized every learned radius from nearest-neighbour spacing.

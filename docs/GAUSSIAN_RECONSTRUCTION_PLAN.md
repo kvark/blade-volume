@@ -360,6 +360,20 @@ loses every held-surface metric at 6K: 13.65 versus 13.73 dB mean, 11.10 versus
 is closed as a family. The next geometry objective needs explicit cell-level
 cross-view consensus rather than another path-local weighting rule.
 
+Cell identity alone is not enough for that consensus. A post-training screen
+grouped confident dominant-mode rays by owning cell and retained only the 129
+cells seen from at least two of the six synthetic training cameras. Moving a
+cell toward either the mean of its per-camera mode points or the least-squares
+intersection of its per-camera ray bundles fails even at 1% of a one-cell
+clamped step. The centroid changes surface position RMSE from 0.6183 to 0.6210
+and held-light PSNR from 18.34 to 18.32 dB; ray intersection changes them to
+0.6233 and 18.22 dB. Both immediately enlarge the depth tail, and practical
+steps collapse the reconstruction. A Voronoi cell owns a volume of rays and
+depths, not one corresponding surface point. The implementation is removed.
+The next objective must first define a local surface coordinate inside each
+cell—such as the existing oriented plane/detail sites—and aggregate
+cross-camera responsibility there, rather than triangulating the cell center.
+
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
 its Jacobians, and a ray-relative reference tangent; the graph evaluates the
