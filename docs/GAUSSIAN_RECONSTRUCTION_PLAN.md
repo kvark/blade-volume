@@ -253,6 +253,16 @@ worst-view mean still loses 0.09 dB. Training-depth outliers remain in both
 arms. The production default therefore stays at 2,048 rays; batch size is not
 a substitute for the shared surface objective.
 
+The first control artifact also localizes that objective's input failure.
+Freshly rescored training depths have a 2.91-world-unit median per-view RMSE in
+every camera and a rare 278-unit tail, rather than one defective pose. Normals
+formed from adjacent depth pixels are already 60.08 degrees RMSE before
+fusion. Requiring four freshly projected supporting views improves the final
+normal RMSE only from 67.47 to 64.54 degrees and position RMSE from 0.681 to
+0.569. Shared-view refinement must therefore improve particle centres without
+treating the current depth-gradient normals as truth; normals should be derived
+after the surface signal is coherent.
+
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
 its Jacobians, and a ray-relative reference tangent; the graph evaluates the

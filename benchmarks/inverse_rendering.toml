@@ -1782,6 +1782,35 @@ candidate_artifact_sha256 = [
 ]
 verdict = "reject: 4.66x training time worsens geometry and the worst held views; retain the 2048-ray default"
 
+# Re-score the first control artifact without retraining and split errors by
+# view and by freshly projected depth support. The bad normal signal is already
+# present in each source depth map; requiring more agreeing views helps only
+# modestly. A shared geometry objective therefore cannot use these finite-
+# difference normals as its target. It must improve centres from view evidence
+# first and derive normals from the resulting surface afterwards.
+[synthetic_reconstruction.rgb_mask_foam.geometry_support_diagnostic]
+date = "2026-08-05"
+source_artifact_sha256 = "7a4c019c22adacc7a8903bd3acebac0188479120eae47fba8a7299c4902e8b31"
+training_depth_rmse = 2.6664
+training_depth_absolute_p50 = 0.8659
+training_depth_absolute_p90 = 3.8145
+training_depth_absolute_p99 = 7.4840
+training_depth_absolute_max = 278.3074
+training_view_rmse_p50 = 2.9080
+training_view_rmse_max = 2.9427
+training_depth_normal_p50_degrees = 55.45
+training_depth_normal_p90_degrees = 85.05
+training_depth_normal_rmse_degrees = 60.08
+surface_position_rmse = 0.6155
+surface_normal_rmse_degrees = 66.40
+surface_support_views = ["0-1", "2-3", "4+"]
+surface_support_counts = [184, 1314, 669]
+surface_support_position_rmse = [0.6814, 0.6287, 0.5685]
+surface_support_normal_rmse_degrees = [67.47, 67.17, 64.54]
+cgroup_peak_memory_bytes = 233168896
+memory_events = 0
+verdict = "source normals are too noisy to supervise fusion; improve shared-view centre consistency before deriving normals"
+
 # Filling a non-cubic world-axis lattice sequentially accidentally left most of
 # one outer layer absent. Rotating that sparse layer towards the camera bundle
 # turns the accident into an explicit camera-only initialization rule. Full and

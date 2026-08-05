@@ -324,6 +324,14 @@ fn describe_relight_score(name: &str, summary: train::inverse::score::Summary) {
     );
 }
 
+fn quantile(sorted: &[f32], fraction: f32) -> f32 {
+    if sorted.is_empty() {
+        return f32::NAN;
+    }
+    let index = ((sorted.len() - 1) as f32 * fraction).round() as usize;
+    sorted[index]
+}
+
 fn describe_depths(
     name: &str,
     dataset: &train::relight::Dataset,
@@ -335,8 +343,28 @@ fn describe_depths(
     let mut predicted_hits = 0usize;
     let mut shared_hits = 0usize;
     let mut squared_error = 0.0f64;
+    let mut absolute_errors = Vec::new();
+    let mut view_rmse = Vec::with_capacity(indices.len());
+    let mut normal_errors = Vec::new();
     for (&index, map) in indices.iter().zip(maps) {
         let geometry = dataset.read_plane(&dataset.views[index].geometry)?;
+        let camera =
+            train::relight::camera_params(&dataset.views[index], dataset.width, dataset.height);
+        let origin = glam::Vec3::from(camera.cam_position);
+        let point_at = |x: usize, y: usize| {
+            let slot = y * map.width + x;
+            (map.alpha[slot] >= options.min_alpha && map.peak[slot] >= options.min_peak).then(
+                || {
+                    origin
+                        + map.distance[slot]
+                            * train::inverse::capture::pixel_direction(
+                                &camera, map.width, map.height, x, y,
+                            )
+                },
+            )
+        };
+        let mut view_squared_error = 0.0f64;
+        let mut view_shared_hits = 0usize;
         for (pixel, truth) in geometry.iter().enumerate() {
             let truth_hit = truth[3] > 0.0;
             let predicted_hit =
@@ -345,9 +373,53 @@ fn describe_depths(
             predicted_hits += predicted_hit as usize;
             if truth_hit && predicted_hit {
                 shared_hits += 1;
-                squared_error += (map.distance[pixel] - truth[3]).powi(2) as f64;
+                view_shared_hits += 1;
+                let error = (map.distance[pixel] - truth[3]).abs();
+                squared_error += error.powi(2) as f64;
+                view_squared_error += error.powi(2) as f64;
+                absolute_errors.push(error);
             }
         }
+        for y in 0..map.height.saturating_sub(1) {
+            for x in 0..map.width.saturating_sub(1) {
+                let slot = y * map.width + x;
+                let truth = geometry[slot];
+                let (Some(here), Some(right), Some(down)) =
+                    (point_at(x, y), point_at(x + 1, y), point_at(x, y + 1))
+                else {
+                    continue;
+                };
+                let distance = map.distance[slot];
+                let step = options.max_depth_step * distance;
+                if truth[3] <= 0.0
+                    || (map.distance[slot + 1] - distance).abs() > step
+                    || (map.distance[slot + map.width] - distance).abs() > step
+                {
+                    continue;
+                }
+                let Some(normal) = (right - here).cross(down - here).try_normalize() else {
+                    continue;
+                };
+                let normal = if normal.dot(origin - here) < 0.0 {
+                    -normal
+                } else {
+                    normal
+                };
+                let Some(truth_normal) =
+                    glam::Vec3::from_array([truth[0], truth[1], truth[2]]).try_normalize()
+                else {
+                    continue;
+                };
+                normal_errors.push(
+                    normal
+                        .dot(truth_normal)
+                        .clamp(-1.0, 1.0)
+                        .acos()
+                        .to_degrees(),
+                );
+            }
+        }
+        view_rmse.push((view_squared_error / view_shared_hits.max(1) as f64).sqrt() as f32);
     }
     let precision = shared_hits as f64 / predicted_hits.max(1) as f64;
     let recall = shared_hits as f64 / truth_hits.max(1) as f64;
@@ -357,7 +429,81 @@ fn describe_depths(
         100.0 * precision,
         100.0 * recall,
     );
+    absolute_errors.sort_by(f32::total_cmp);
+    view_rmse.sort_by(f32::total_cmp);
+    normal_errors.sort_by(f32::total_cmp);
+    println!(
+        "{name} depth tails: absolute p50 {:.4}, p90 {:.4}, p99 {:.4}, max {:.4}; per-view RMSE p50 {:.4}, max {:.4}; finite-difference normal p50 {:.2}, p90 {:.2}, RMSE {:.2}",
+        quantile(&absolute_errors, 0.5),
+        quantile(&absolute_errors, 0.9),
+        quantile(&absolute_errors, 0.99),
+        quantile(&absolute_errors, 1.0),
+        quantile(&view_rmse, 0.5),
+        quantile(&view_rmse, 1.0),
+        quantile(&normal_errors, 0.5),
+        quantile(&normal_errors, 0.9),
+        (normal_errors
+            .iter()
+            .map(|angle| angle.powi(2) as f64)
+            .sum::<f64>()
+            / normal_errors.len().max(1) as f64)
+            .sqrt(),
+    );
     Ok(())
+}
+
+#[derive(Clone, Copy, Default)]
+struct ErrorBucket {
+    count: usize,
+    position_squared: f64,
+    normal_squared: f64,
+}
+
+impl ErrorBucket {
+    fn add(&mut self, position: f32, normal: f32) {
+        self.count += 1;
+        self.position_squared += position.powi(2) as f64;
+        self.normal_squared += normal.powi(2) as f64;
+    }
+
+    fn position_rmse(self) -> f64 {
+        (self.position_squared / self.count.max(1) as f64).sqrt()
+    }
+
+    fn normal_rmse(self) -> f64 {
+        (self.normal_squared / self.count.max(1) as f64).sqrt()
+    }
+}
+
+fn depth_support(
+    surfel: &vol::relight::Surfel,
+    maps: &[(vol::CameraParams, train::inverse::depth::DepthMap)],
+    options: train::inverse::depth::DepthOptions,
+) -> usize {
+    let center = glam::Vec3::from(surfel.center);
+    maps.iter()
+        .filter(|entry| {
+            let entry = *entry;
+            let camera = &entry.0;
+            let map = &entry.1;
+            let Some((pixel, _)) =
+                train::inverse::capture::project(camera, map.width, map.height, center)
+            else {
+                return false;
+            };
+            let x = (pixel[0] - 0.5).round() as isize;
+            let y = (pixel[1] - 0.5).round() as isize;
+            if x < 0 || y < 0 || x >= map.width as isize || y >= map.height as isize {
+                return false;
+            }
+            let slot = y as usize * map.width + x as usize;
+            if map.alpha[slot] < options.min_alpha || map.peak[slot] < options.min_peak {
+                return false;
+            }
+            let distance = center.distance(glam::Vec3::from(camera.cam_position));
+            (distance - map.distance[slot]).abs() <= 0.5 * surfel.radius
+        })
+        .count()
 }
 
 fn describe_surface_error(
@@ -365,6 +511,8 @@ fn describe_surface_error(
     surfels: &[vol::relight::Surfel],
     dataset: &train::relight::Dataset,
     training_indices: &[usize],
+    maps: &[(vol::CameraParams, train::inverse::depth::DepthMap)],
+    options: train::inverse::depth::DepthOptions,
 ) -> Result<(), String> {
     let truth = train::relight::gather_samples_for_views(dataset, training_indices)?;
     let positions: Vec<[f32; 3]> = truth
@@ -374,22 +522,62 @@ fn describe_surface_error(
     let tree = kiddo::ImmutableKdTree::new_from_slice(&positions);
     let mut position_squared = 0.0f64;
     let mut normal_squared = 0.0f64;
+    let mut position_errors = Vec::with_capacity(surfels.len());
+    let mut normal_errors = Vec::with_capacity(surfels.len());
+    let mut support_buckets = [ErrorBucket::default(); 3];
     for surfel in surfels {
         let center = glam::Vec3::from(surfel.center);
         let hit = tree.nearest_one::<kiddo::SquaredEuclidean>(&surfel.center);
         let sample = &truth[hit.item as usize];
-        position_squared += (center - sample.position).length_squared() as f64;
+        let position_error = (center - sample.position).length();
+        position_squared += position_error.powi(2) as f64;
         let angle = glam::Vec3::from(surfel.normal)
             .dot(sample.normal)
             .clamp(-1.0, 1.0)
             .acos()
             .to_degrees();
         normal_squared += angle.powi(2) as f64;
+        position_errors.push(position_error);
+        normal_errors.push(angle);
+        let support = depth_support(surfel, maps, options);
+        let bucket = if support < 2 {
+            0
+        } else if support < 4 {
+            1
+        } else {
+            2
+        };
+        support_buckets[bucket].add(position_error, angle);
     }
     println!(
         "{name} nearest-truth error: position {:.4} world-unit RMSE, normal {:.2} degree RMSE",
         (position_squared / surfels.len().max(1) as f64).sqrt(),
         (normal_squared / surfels.len().max(1) as f64).sqrt(),
+    );
+    position_errors.sort_by(f32::total_cmp);
+    normal_errors.sort_by(f32::total_cmp);
+    println!(
+        "{name} tails: position p50 {:.4}, p90 {:.4}, p99 {:.4}, max {:.4}; normal p50 {:.2}, p90 {:.2}, p99 {:.2}, max {:.2}",
+        quantile(&position_errors, 0.5),
+        quantile(&position_errors, 0.9),
+        quantile(&position_errors, 0.99),
+        quantile(&position_errors, 1.0),
+        quantile(&normal_errors, 0.5),
+        quantile(&normal_errors, 0.9),
+        quantile(&normal_errors, 0.99),
+        quantile(&normal_errors, 1.0),
+    );
+    println!(
+        "{name} by refreshed depth support: 0-1 views {} / {:.4} / {:.2}, 2-3 views {} / {:.4} / {:.2}, 4+ views {} / {:.4} / {:.2} (count / position RMSE / normal RMSE)",
+        support_buckets[0].count,
+        support_buckets[0].position_rmse(),
+        support_buckets[0].normal_rmse(),
+        support_buckets[1].count,
+        support_buckets[1].position_rmse(),
+        support_buckets[1].normal_rmse(),
+        support_buckets[2].count,
+        support_buckets[2].position_rmse(),
+        support_buckets[2].normal_rmse(),
     );
     Ok(())
 }
@@ -653,6 +841,8 @@ fn main() {
         &geometry.surfels,
         &dataset,
         &training_indices,
+        &maps,
+        depth_options,
     )
     .unwrap_or_else(|error| fail(error));
     let observe_started = std::time::Instant::now();
