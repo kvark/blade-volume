@@ -416,6 +416,56 @@ diagnostics_observation_seconds = 0.7
 ordinary_observation_seconds = 0.4
 quality_changed = false
 
+# Visibility and sampling are independent per photograph. Up to eight scoped
+# workers process contiguous camera chunks, then join in source order before
+# rebuilding surfel-major CSR. This preserves exact sample order and therefore
+# every downstream floating-point reduction. Five alternating complete runs
+# use separately built release binaries on the selected 256-pixel protocol;
+# both scene and environment outputs compare byte for byte. A nine-view unit
+# regression also compares the parallel ordinary/diagnostic paths against the
+# serial implementation, including all diagnostic counters.
+[observation.parallel_views]
+date = "2026-08-05"
+workers_max = 8
+quality_changed = false
+synthetic_observation_seconds = [0.009, 0.002]
+synthetic_scene_byte_identical = true
+synthetic_scene_sha256 = "8bf8e6b3b9dd86040906ab65250b0d82329d169c24e0ab4b4e630d4d869758ae"
+
+[observation.parallel_views.bonsai]
+views = 33
+control_observation_seconds = 0.3
+parallel_observation_seconds = 0.1
+control_wall_seconds = [1.94, 1.96, 1.98, 1.99, 2.02]
+parallel_wall_seconds = [1.77, 1.78, 1.79, 1.79, 1.80]
+control_median_seconds = 1.98
+parallel_median_seconds = 1.79
+throughput_speedup = 1.106
+control_median_max_rss_kib = 338328
+parallel_median_max_rss_kib = 349992
+scene_sha256 = "b90e0ddf63e115d271a0b0e8aee07d54568b11be791d4b3a31da05038b850513"
+environment_sha256 = "7ba088c587e4d0f40ded40e1536b3a0ceae7bdc5b4ff66946b9f746deebb7df2"
+
+[observation.parallel_views.room]
+views = 35
+control_observation_seconds = 0.3
+parallel_observation_seconds = 0.1
+control_wall_seconds = [2.73, 2.74, 2.74, 2.77, 2.77]
+parallel_wall_seconds = [2.51, 2.53, 2.54, 2.55, 2.58]
+control_median_seconds = 2.74
+parallel_median_seconds = 2.54
+throughput_speedup = 1.079
+control_median_max_rss_kib = 605772
+parallel_median_max_rss_kib = 606008
+scene_sha256 = "3a0cf07439a44c44a487492ff5ca20a9cb939cd11b13bf2584052a91b07cd670"
+environment_sha256 = "be4ae94a32b47410f9fd3600278b9fbbe4ce23c394e5b5e730e68a2a029c333b"
+cgroup_peak_memory_bytes = 322830336
+workspace_clippy_peak_memory_bytes = 523362304
+workspace_test_peak_memory_bytes = 3016196096
+memory_events = 0
+artifacts = "target/audit-runs/parallel-observe-v1"
+selection = "accept: bounded per-view parallelism removes about 0.2 seconds from both scenes while preserving byte-identical reconstruction outputs"
+
 # Depth extraction dominated the selected command. Caching the camera terms
 # shared by every pixel and tracing all training cameras through one scoped
 # worker pool removes 33 short-lived per-image pools. Five alternating runs

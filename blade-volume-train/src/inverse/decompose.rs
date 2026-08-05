@@ -30,6 +30,8 @@ use crate::inverse::{capture, score, visibility};
 use blade_volume as vol;
 use std::thread;
 
+const MAX_OBSERVATION_WORKERS: usize = 8;
+
 /// How the split is set up.
 #[derive(Clone, Copy, Debug)]
 pub struct FitOptions {
@@ -159,6 +161,20 @@ impl ObservationDiagnostics {
     pub fn mean_supports_per_sample(&self) -> f64 {
         self.support_count_sum as f64 / self.samples.max(1) as f64
     }
+
+    fn include(&mut self, other: Self) {
+        self.samples += other.samples;
+        self.pixels += other.pixels;
+        self.shared_pixels += other.shared_pixels;
+        self.samples_on_shared_pixels += other.samples_on_shared_pixels;
+        self.max_samples_per_pixel = self.max_samples_per_pixel.max(other.max_samples_per_pixel);
+        self.samples_with_multiple_supports += other.samples_with_multiple_supports;
+        self.support_count_sum += other.support_count_sum;
+        self.samples_without_support += other.samples_without_support;
+        self.max_supports_per_sample = self
+            .max_supports_per_sample
+            .max(other.max_supports_per_sample);
+    }
 }
 
 impl Observations {
@@ -251,6 +267,52 @@ pub fn observe_with_diagnostics(
 }
 
 fn observe_impl(
+    model: &vol::relight::RelightModel,
+    capture: &capture::Capture,
+    views: &[usize],
+    min_facing: f32,
+    collect_diagnostics: bool,
+) -> (Observations, ObservationDiagnostics) {
+    let workers = thread::available_parallelism()
+        .map_or(1, |count| count.get())
+        .min(MAX_OBSERVATION_WORKERS)
+        .min(views.len());
+    if workers <= 1 {
+        return observe_serial(model, capture, views, min_facing, collect_diagnostics);
+    }
+    let chunk_size = views.len().div_ceil(workers);
+    // Contiguous chunks and ordered joins preserve each surfel's camera order,
+    // so downstream floating-point reductions remain byte-identical.
+    let parts = thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for chunk in views.chunks(chunk_size) {
+            handles.push(scope.spawn(move || {
+                observe_serial(model, capture, chunk, min_facing, collect_diagnostics)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("observation worker panicked"))
+            .collect::<Vec<_>>()
+    });
+
+    let mut samples = Vec::with_capacity(parts.iter().map(|part| part.0.samples.len()).sum());
+    let mut offsets = Vec::with_capacity(model.surfels.len() + 1);
+    offsets.push(0);
+    for surfel in 0..model.surfels.len() {
+        for part in &parts {
+            samples.extend_from_slice(part.0.of(surfel));
+        }
+        offsets.push(samples.len() as u32);
+    }
+    let mut diagnostics = ObservationDiagnostics::default();
+    for (_, part) in parts {
+        diagnostics.include(part);
+    }
+    (Observations { samples, offsets }, diagnostics)
+}
+
+fn observe_serial(
     model: &vol::relight::RelightModel,
     capture: &capture::Capture,
     views: &[usize],
@@ -1733,22 +1795,34 @@ mod tests {
         let capture = capture::Capture {
             width: 8,
             height: 8,
-            views: vec![capture::View {
-                name: "shared".to_string(),
-                camera: vol::CameraParams {
-                    cam_position: [0.0; 3],
-                    depth: 10.0,
-                    cam_orientation: glam::Quat::IDENTITY.to_array(),
-                    fov: [1.0; 2],
-                    principal: [0.0; 2],
-                },
-                pixels: vec![[0.2, 0.3, 0.4]; 64],
-            }],
+            views: (0..9)
+                .map(|index| capture::View {
+                    name: format!("shared-{index}"),
+                    camera: vol::CameraParams {
+                        cam_position: [0.0; 3],
+                        depth: 10.0,
+                        cam_orientation: glam::Quat::IDENTITY.to_array(),
+                        fov: [1.0; 2],
+                        principal: [0.0; 2],
+                    },
+                    pixels: vec![[0.2 + 0.01 * index as f32, 0.3, 0.4]; 64],
+                })
+                .collect(),
         };
+        let views: Vec<_> = (0..capture.views.len()).collect();
 
-        let (observations, diagnostics) = observe_with_diagnostics(&model, &capture, &[0], 0.15);
-        let plain = observe(&model, &capture, &[0], 0.15);
+        let (observations, diagnostics) = observe_with_diagnostics(&model, &capture, &views, 0.15);
+        let (serial, serial_diagnostics) = observe_serial(&model, &capture, &views, 0.15, true);
+        let plain = observe(&model, &capture, &views, 0.15);
 
+        assert_eq!(diagnostics, serial_diagnostics);
+        assert_eq!(serial.offsets, observations.offsets);
+        assert_eq!(serial.samples.len(), observations.samples.len());
+        for (expected, actual) in serial.samples.iter().zip(&observations.samples) {
+            assert_eq!(expected.radiance, actual.radiance);
+            assert_eq!(expected.towards, actual.towards);
+            assert_eq!(expected.facing, actual.facing);
+        }
         assert_eq!(plain.offsets, observations.offsets);
         assert_eq!(plain.samples.len(), observations.samples.len());
         for (fast, measured) in plain.samples.iter().zip(&observations.samples) {
@@ -1757,13 +1831,13 @@ mod tests {
             assert_eq!(fast.facing, measured.facing);
         }
         assert_eq!(observations.seen(), 2);
-        assert_eq!(diagnostics.samples, 2);
-        assert_eq!(diagnostics.pixels, 1);
-        assert_eq!(diagnostics.shared_pixels, 1);
-        assert_eq!(diagnostics.samples_on_shared_pixels, 2);
+        assert_eq!(diagnostics.samples, 18);
+        assert_eq!(diagnostics.pixels, 9);
+        assert_eq!(diagnostics.shared_pixels, 9);
+        assert_eq!(diagnostics.samples_on_shared_pixels, 18);
         assert_eq!(diagnostics.max_samples_per_pixel, 2);
-        assert_eq!(diagnostics.samples_with_multiple_supports, 2);
-        assert_eq!(diagnostics.support_count_sum, 4);
+        assert_eq!(diagnostics.samples_with_multiple_supports, 18);
+        assert_eq!(diagnostics.support_count_sum, 36);
         assert_eq!(diagnostics.samples_without_support, 0);
         assert_eq!(diagnostics.max_supports_per_sample, 2);
     }

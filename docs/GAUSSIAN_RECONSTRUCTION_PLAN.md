@@ -216,6 +216,14 @@ one-submission variant is similarly marginal and makes mapped memory grow with
 the capture. Both are removed: traversal, not the host wait, is the remaining
 depth bottleneck.
 
+Observation gathering now processes contiguous camera chunks with at most
+eight scoped workers and merges them in original view order. The visibility
+and sample decisions are independent per photograph, while the ordered merge
+keeps downstream floating-point reductions exact. The pass falls from 0.3 to
+0.1 seconds on both real scenes; complete reconstruction improves 1.98 to 1.79
+seconds on Bonsai and 2.74 to 2.54 on Room. Scene and environment files are
+byte-identical, and the fixed synthetic observation pass falls from 9 to 2 ms.
+
 Current result (2026-08-03): GPU timestamps isolate the training step, not path
 recording or CPU work, as the bottleneck. At 2,048 pixels and 256 path slots, 28
 scalar embedding-gradient scatters (density plus degree-2 RGB SH) spent about
