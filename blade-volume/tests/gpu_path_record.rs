@@ -9,7 +9,8 @@
 use blade_graphics as gpu;
 use blade_volume as vol;
 use vol::gpu::{
-    PathJacobianMode, PathRecordBuffers, PathRecorder, RadFoamGpuCloud, RecordPathsArgs,
+    PathJacobianMode, PathRecordBuffers, PathRecordStats, PathRecorder, RadFoamGpuCloud,
+    RecordPathsArgs,
 };
 
 // Some physical GPU drivers can busy-wait when two contexts are initialized
@@ -445,9 +446,8 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
             tx.fill_buffer(bufs.surface_query_grad_current.at(0), pl * 16, 0);
         }
     }
-    // Fill the batch in two slices. The exhaustive PowerFoam case binds two
-    // distinct cameras within each shared compute pass, matching mixed-view
-    // training. Other cases retain the ordinary per-slice dispatch path.
+    // Fill the batch in two slices. Batched cases bind two distinct cameras
+    // within each shared compute pass, matching mixed-view training.
     let dispatch_args = [
         RecordPathsArgs {
             camera: cameras[0],
@@ -991,9 +991,161 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
     ctx.destroy_command_encoder(&mut encoder);
 }
 
+fn record_unweighted_gpu_bytes(
+    context: &gpu::Context,
+    encoder: &mut gpu::CommandEncoder,
+    cloud: &RadFoamGpuCloud,
+    recorder: &PathRecorder,
+    pixels: &[u32],
+    args: &[RecordPathsArgs],
+    batched: bool,
+) -> (Vec<u8>, PathRecordStats) {
+    let num_pixels = pixels.len() as u32;
+    let max_steps = args[0].max_steps;
+    let mut buffers = PathRecordBuffers::new_recorded_only(context, num_pixels, max_steps);
+    buffers.write_pixel_indices(pixels);
+
+    let row_bytes = u64::from(num_pixels) * u64::from(max_steps) * 4;
+    let readback = context.create_buffer(gpu::BufferDesc {
+        name: "radfoam-batch-parity-download",
+        size: row_bytes * 4,
+        memory: gpu::Memory::Shared,
+    });
+    encoder.start();
+    {
+        let mut tx = encoder.transfer("radfoam-batch-parity-prepare");
+        tx.copy_buffer_to_buffer(
+            buffers.pixel_indices_stage.at(0),
+            buffers.pixel_indices.at(0),
+            num_pixels as u64 * 4,
+        );
+        tx.fill_buffer(buffers.cells.at(0), row_bytes, 0);
+        tx.fill_buffer(buffers.next_cells.at(0), row_bytes, 0);
+        tx.fill_buffer(buffers.dts.at(0), row_bytes, 0);
+        tx.fill_buffer(buffers.mask.at(0), row_bytes, 0);
+    }
+    if batched {
+        recorder.dispatch_batch(encoder, cloud, &buffers, args);
+    } else {
+        for &arg in args {
+            recorder.dispatch(encoder, cloud, &buffers, arg);
+        }
+    }
+    {
+        let mut tx = encoder.transfer("radfoam-batch-parity-download");
+        for (index, source) in [
+            &buffers.cells,
+            &buffers.next_cells,
+            &buffers.dts,
+            &buffers.mask,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            tx.copy_buffer_to_buffer(
+                source.at(0),
+                readback.at(index as u64 * row_bytes),
+                row_bytes,
+            );
+        }
+    }
+    let sync = context.submit(encoder);
+    let _ = context.wait_for(&sync, !0);
+    let stats = buffers.path_stats(0..num_pixels as usize);
+    let bytes = unsafe {
+        std::slice::from_raw_parts(readback.data() as *const u8, (row_bytes * 4) as usize).to_vec()
+    };
+
+    context.destroy_buffer(readback);
+    buffers.destroy(context);
+    (bytes, stats)
+}
+
 #[test]
 fn gpu_path_record_matches_cpu_on_grid() {
     assert_gpu_path_record_matches_cpu(build_grid_model(12), glam::Vec3::ZERO, false, false);
+}
+
+#[test]
+fn gpu_batched_radfoam_paths_match_multi_camera_cpu() {
+    assert_gpu_batched_path_record_matches_cpu(build_grid_model(12), glam::Vec3::ZERO, false);
+}
+
+#[test]
+fn gpu_batched_radfoam_paths_are_bit_exact_with_separate_passes() {
+    let _gpu_test_guard = GPU_TEST_LOCK
+        .lock()
+        .expect("GPU path-record test lock poisoned");
+    let Some(context) = try_init_gpu() else {
+        eprintln!("skipping: no GPU");
+        return;
+    };
+
+    let model = build_grid_model(12);
+    let depth = 100.0;
+    let width = 64;
+    let height = 64;
+    let num_pixels = 8;
+    let max_steps = 16;
+    let pixels = pixel_indices_for_rays(width, height, num_pixels);
+    let mut cameras = [make_camera_looking_along_x(depth); 2];
+    cameras[1].principal[0] -= 0.025;
+    cameras[1].principal[1] += 0.015;
+    let args = [
+        RecordPathsArgs {
+            camera: cameras[0],
+            start_point: 0,
+            pixel_offset: 0,
+            max_steps,
+            image_width: width,
+            image_height: height,
+            max_path_dt: 50.0,
+            depth,
+            num_pixels: num_pixels / 2,
+        },
+        RecordPathsArgs {
+            camera: cameras[1],
+            start_point: 0,
+            pixel_offset: num_pixels / 2,
+            max_steps,
+            image_width: width,
+            image_height: height,
+            max_path_dt: 50.0,
+            depth,
+            num_pixels: num_pixels / 2,
+        },
+    ];
+
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "gpu-path-record-batch-parity-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    let mut cloud = RadFoamGpuCloud::new_path_recording(&model, &context, &mut encoder);
+    let mut recorder = PathRecorder::new(&context);
+    let separate = record_unweighted_gpu_bytes(
+        &context,
+        &mut encoder,
+        &cloud,
+        &recorder,
+        &pixels,
+        &args,
+        false,
+    );
+    let batched = record_unweighted_gpu_bytes(
+        &context,
+        &mut encoder,
+        &cloud,
+        &recorder,
+        &pixels,
+        &args,
+        true,
+    );
+    assert_eq!(batched, separate);
+
+    recorder.destroy(&context);
+    cloud.deinit(&context);
+    context.destroy_command_encoder(&mut encoder);
 }
 
 #[test]

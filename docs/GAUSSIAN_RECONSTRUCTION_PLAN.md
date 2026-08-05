@@ -444,6 +444,21 @@ targets remain native checkpoint-compatible packed parameters, dead
 input-gradient work, and compact active path storage, still at the unchanged
 safe traversal extent.
 
+Unweighted multi-view path recording now binds all camera slices in one
+compute pass. Each slice already owns a disjoint output range, so the old
+per-camera pass boundary added fifteen barriers at the production 16-view
+batch size without ordering useful data. Projected PowerFoam remains on its
+per-camera sequence because it reuses projection and binning scratch. A new
+physical-GPU regression compares cells, next cells, intervals, masks, and path
+status byte-for-byte with the old separate-pass sequence. Three production
+profiles reduce the median recorder from 17 passes and 11.48 ms to 2 passes
+and 10.31 ms (10.2%); the differentiable graph remains neutral. A two-by-two
+400-step Bonsai continuation reduces median training time from 25.261 to
+24.006 seconds (5.0%) and GPU wait from 10.268 to 9.582 seconds (6.7%). Mean
+selected-view PSNR changes by +0.0008 dB and all-view PSNR by +0.0017 dB. The
+benchmark scope peaks at 2.08 GB; the cold full-workspace physical-GPU gate
+peaks at 5.58 GB. Neither records pressure, swap, OOM, or GPU events.
+
 A 32-neighbour fused-cloud covariance prior was also tested against the 66°
 normal failure. A sign-aligned 50% blend reduces synthetic normal RMSE to
 62.08° and raises unseen-light PSNR by 0.09 dB without losing coverage. It does

@@ -2283,6 +2283,46 @@ memory_events = 0
 artifacts = "target/audit-runs/unit-column-matmul (gitignored)"
 selection = "accept in Meganeura: exact compiler-local lowering cuts graph time 21.0%, synthetic training 15.8%, and Bonsai GPU wait 11.4%; uprev Blade only after merge, then rerun workspace and reconstruction gates"
 
+# Unweighted multi-view path recording used one compute pass per camera even
+# though each dispatch writes a disjoint pixel range. Binding every camera in
+# one pass removes fifteen automatic compute barriers at the production
+# 16-view batch size without changing the shader, dispatch dimensions, or
+# traversal order. Projected PowerFoam remains per-camera because its
+# projection/binning scratch is reused. A physical-GPU oracle compares the four
+# complete recorded streams and path status against the old separate-pass
+# sequence byte-for-byte.
+[synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.batched_radfoam_paths]
+date = "2026-08-05"
+baseline_blade_commit = "2053775"
+views_per_batch = 16
+profile_repeats = 3
+control_recorder_passes = 17
+candidate_recorder_passes = 2
+control_recorder_ms = [11.50, 11.47, 11.48]
+candidate_recorder_ms = [10.30, 10.77, 10.31]
+recorder_time_reduction = 0.102
+control_graph_ms = [11.73, 11.63, 11.63]
+candidate_graph_ms = [11.66, 11.62, 11.69]
+control_profile_path_submit_seconds = [0.049, 0.048, 0.049]
+candidate_profile_path_submit_seconds = [0.021, 0.022, 0.022]
+bonsai_repeats_per_arm = 2
+bonsai_control_training_seconds = [25.629, 24.893]
+bonsai_candidate_training_seconds = [24.038, 23.973]
+bonsai_training_time_reduction = 0.050
+bonsai_control_gpu_wait_seconds = [10.175, 10.360]
+bonsai_candidate_gpu_wait_seconds = [9.586, 9.577]
+bonsai_gpu_wait_reduction = 0.067
+bonsai_control_selected_test_psnr = [24.4899, 24.4895]
+bonsai_candidate_selected_test_psnr = [24.4907, 24.4903]
+bonsai_control_all_test_psnr = [24.9419, 24.9381]
+bonsai_candidate_all_test_psnr = [24.9416, 24.9417]
+profile_peak_memory_bytes = 2081513472
+bonsai_peak_memory_bytes = 1791868928
+workspace_test_peak_memory_bytes = 5576855552
+memory_events = 0
+artifacts = "target/audit-runs/batched-radfoam-paths (gitignored)"
+selection = "accept: shared unweighted record pass is byte-exact, cuts recorder GPU time 10.2%, and cuts sustained Bonsai training time 5.0% with neutral quality"
+
 # Packing one channel at a time lowers the 200K graph's device-local plan, but
 # independent RGB atomic dispatches reintroduce the unstable material tail.
 [synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.rejected_per_channel]

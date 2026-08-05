@@ -463,10 +463,11 @@ impl PathRecorder {
 
     /// Record multiple disjoint camera slices into one output batch.
     ///
-    /// PowerFoam slices share one gather pass and one record pass,
-    /// while retaining a separate camera and pixel range per dispatch. Other
-    /// modes use the ordinary dispatch sequence. Arguments must be ordered by
-    /// non-overlapping `pixel_offset` ranges.
+    /// Slices share one pass per recording stage while retaining a separate
+    /// camera and pixel range per dispatch. Projected PowerFoam recording uses
+    /// the ordinary dispatch sequence because projection and binning scratch
+    /// is reused between slices. Arguments must be ordered by non-overlapping
+    /// `pixel_offset` ranges.
     pub fn dispatch_batch(
         &self,
         encoder: &mut gpu::CommandEncoder,
@@ -487,7 +488,7 @@ impl PathRecorder {
                 "batched path dispatch ranges must be ordered and disjoint"
             );
         }
-        if !cloud.is_power_foam || buffers.has_projected_splat_tiles() {
+        if buffers.has_projected_splat_tiles() {
             for &arg in args {
                 self.dispatch(encoder, cloud, buffers, arg);
             }
@@ -498,6 +499,16 @@ impl PathRecorder {
             .iter()
             .map(|&arg| self.prepare_dispatch(cloud, buffers, arg).0)
             .collect::<Vec<_>>();
+        if !cloud.is_power_foam {
+            let mut pass = encoder.compute("radfoam-record-path-batch");
+            let mut pc = pass.with(&self.walk_pipeline);
+            for (datum, arg) in data.iter().zip(args) {
+                pc.bind(0, datum);
+                pc.dispatch([arg.num_pixels.div_ceil(64), 1, 1]);
+            }
+            return;
+        }
+
         {
             let (name, pipeline) = if Self::uses_support_bvh(cloud) {
                 (
