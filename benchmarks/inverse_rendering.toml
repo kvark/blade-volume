@@ -2156,6 +2156,96 @@ memory_events = 0
 rejected_tree_sum_material_residual = [0.19879, 0.13821, 0.04507]
 verdict = "hold Blade uprev: the ordered engine kernel is correct and about 5% faster, but one of three full reconstructions misses the unchanged material/depth tail gate"
 
+# A later Blade-side rewrite replaced the three face dot-products themselves
+# with SumInner. It is mathematically equivalent and substantially faster, but
+# changing the logical graph also changes the scheduling of contended atomic
+# gradients. Six matched truth-scene runs move the depth-tail distribution in
+# the wrong direction, so the source rewrite is removed.
+[synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.rejected_direct_sum_inner]
+date = "2026-08-05"
+profile_repeats = 3
+control_graph_median_ms = 11.711
+candidate_graph_median_ms = 8.320
+graph_time_reduction = 0.290
+control_gpu_passes = 272
+candidate_gpu_passes = 268
+quality_repeats_per_arm = 6
+control_training_median_seconds = 11.1085
+candidate_training_median_seconds = 8.756
+control_held_pose_mean_db = 24.1367
+candidate_held_pose_mean_db = 24.1000
+control_held_pose_worst_mean_db = 23.6667
+candidate_held_pose_worst_mean_db = 23.5817
+control_training_depth_median_rmse = 3.3444
+candidate_training_depth_median_rmse = 6.4169
+control_held_light_mean_db = 18.4583
+candidate_held_light_mean_db = 18.4150
+verdict = "reject: a 29.0% graph win is not worth the shifted radiance and training-depth tails; keep MatMul in the logical graph"
+
+# Meganeura can instead recognize A[M,K] @ ones[K,1] at compile time and emit
+# the scalar-order packed reduction, while lowering its MatMulBT input gradient
+# to an exact broadcast. The logical graph and autodiff remain unchanged. A
+# 513x3 physical-GPU test compares both forward values and parameter gradients
+# bit-for-bit against generic MatMul/MatMulBT, including the partial final
+# workgroup. Eighteen order-balanced truth-scene runs put the model-level
+# quality distributions inside the control noise. One candidate depth trace
+# contains a single 972.7-unit tail sample, but p99, held radiance, extracted
+# geometry, and relighting remain stable; the identical class of surface-tail
+# event occurs in both arms. Blade remains on the merged f82d0b6 revision until
+# this independently published Meganeura branch is merged.
+[synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.unit_column_matmul]
+date = "2026-08-05"
+blade_commit = "fc1907b"
+baseline_meganeura_commit = "f82d0b6e0d4cf425e4bef2b30c0b614f313ab375"
+candidate_meganeura_commit = "0fdc69618ffb0068d4fcc4a5ffd6e4a38b49d3be"
+candidate_meganeura_branch = "perf/unit-column-matmul"
+gpu_exact_rows = 513
+gpu_exact_inner = 3
+profile_repeats = 3
+control_gpu_passes = 272
+candidate_gpu_passes = 270
+control_graph_median_ms = 11.6825
+candidate_graph_median_ms = 9.2265
+graph_time_reduction = 0.210
+control_recorder_median_ms = 11.7575
+candidate_recorder_median_ms = 11.7260
+synthetic_repeats_per_arm = 18
+synthetic_control_training_median_seconds = 11.1205
+synthetic_candidate_training_median_seconds = 9.3645
+synthetic_training_time_reduction = 0.158
+synthetic_control_gpu_wait_median_seconds = 9.7575
+synthetic_candidate_gpu_wait_median_seconds = 8.0430
+synthetic_gpu_wait_reduction = 0.176
+synthetic_control_held_pose_mean_db = 24.1067
+synthetic_candidate_held_pose_mean_db = 24.0906
+synthetic_control_held_pose_worst_mean_db = 23.6150
+synthetic_candidate_held_pose_worst_mean_db = 23.5867
+synthetic_control_held_depth_median_rmse = 2.1246
+synthetic_candidate_held_depth_median_rmse = 2.1255
+synthetic_held_depth_rmse_over_3 = [0, 1]
+synthetic_control_surface_position_median_rmse = 0.6214
+synthetic_candidate_surface_position_median_rmse = 0.6225
+synthetic_control_surface_normal_median_degrees = 66.125
+synthetic_candidate_surface_normal_median_degrees = 66.300
+synthetic_surface_position_max_over_2 = [7, 8]
+synthetic_control_held_light_median_db = 18.43
+synthetic_candidate_held_light_median_db = 18.47
+bonsai_repeats_per_arm = 2
+bonsai_control_training_seconds = [24.725, 25.860]
+bonsai_candidate_training_seconds = [23.679, 23.693]
+bonsai_control_gpu_wait_seconds = [10.255, 10.301]
+bonsai_candidate_gpu_wait_seconds = [9.131, 9.089]
+bonsai_control_selected_test_psnr = [24.4899, 24.4899]
+bonsai_candidate_selected_test_psnr = [24.4900, 24.4898]
+bonsai_control_all_test_psnr = [24.9405, 24.9431]
+bonsai_candidate_all_test_psnr = [24.9410, 24.9427]
+profile_peak_memory_bytes = 1177362432
+bonsai_peak_memory_bytes = 1292279808
+synthetic_peak_memory_bytes = 452624384
+memory_events = 0
+artifacts = "target/audit-runs/unit-column-matmul (gitignored)"
+selection = "accept in Meganeura: exact compiler-local lowering cuts graph time 21.0%, synthetic training 15.8%, and Bonsai GPU wait 11.4%; uprev Blade only after merge, then rerun workspace and reconstruction gates"
+
 # Packing one channel at a time lowers the 200K graph's device-local plan, but
 # independent RGB atomic dispatches reintroduce the unstable material tail.
 [synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.rejected_per_channel]

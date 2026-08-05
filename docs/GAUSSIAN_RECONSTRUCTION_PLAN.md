@@ -401,18 +401,34 @@ no pressure, swap, or OOM event.
 
 Global path caps of 128 and 192 are rejected: 128 gives no meaningful speed
 advantage over packing at 256 and loses the held-view tail, while 192 produces
-6.80 world-unit training-depth RMSE and an unstable material fit. The next
-reduction prototype replaces the SH ones-matmul with a generic packed
-`SumInner`. Meganeura `66e1664` preserves scalar column order and is bit-exact
-at the reduction output while lowering the synthetic step from 11.60--11.68 to
-10.92--11.02 ms. Three complete runs train in 15.29--15.40 seconds, but one
-still develops the known material/depth tail (material residual 0.1569), so
-Blade remains on its previous Meganeura revision. The engine optimization is
-published independently on `perf/packed-narrow-reduction`; it should be
-uprevved only after the reconstruction gate is made robust to the atomic
-position/topology instability. Other performance targets remain native
-checkpoint-compatible packed parameters, dead input-gradient work, and compact
-active path storage, still at the unchanged safe traversal extent.
+6.80 world-unit training-depth RMSE and an unstable material fit. An earlier
+generic packed `SumInner` engine kernel is bit-exact at its output, but a Blade
+graph rewrite to use it changes the atomic schedule. Repeating that direct
+rewrite on the current graph reduces median graph time by 29.0%, yet doubles
+median training-depth RMSE from 3.3444 to 6.4169 and loses 0.09 dB on the mean
+worst held pose. The source rewrite is removed.
+
+The accepted follow-up keeps MatMul and MatMulBT in the logical graph.
+Meganeura `0fdc696` recognizes a narrow f32 all-ones column only while lowering
+the physical plan: forward becomes the scalar-order packed reduction and the
+input gradient becomes an exact row broadcast. A 513x3 physical-GPU test
+matches generic MatMul/MatMulBT forward values and parameter gradients
+bit-for-bit. Three production-shape profiles reduce median graph time from
+11.6825 to 9.2265 ms (21.0%). Eighteen order-balanced synthetic runs reduce
+median training time from 11.1205 to 9.3645 seconds (15.8%); median held-depth
+RMSE is 2.1246 versus 2.1255, surface position is 0.6214 versus 0.6225, and
+held-light PSNR is 18.43 versus 18.47 dB. One candidate depth map contains a
+single extreme ray, but its p99, extracted geometry, radiance, and relighting
+remain stable, while large surface-tail events occur at nearly the same rate
+in both arms (7/18 versus 8/18). A two-by-two late Bonsai continuation cuts GPU
+wait by 11.4% with identical selected-view PSNR to four decimals and all-view
+means within 0.0001 dB. The engine branch is published as
+`perf/unit-column-matmul`; Blade deliberately remains on merged revision
+`f82d0b6` until that branch lands. The next integration step is a clean uprev
+followed by the full workspace, synthetic, and Bonsai gates. Other performance
+targets remain native checkpoint-compatible packed parameters, dead
+input-gradient work, and compact active path storage, still at the unchanged
+safe traversal extent.
 
 A 32-neighbour fused-cloud covariance prior was also tested against the 66°
 normal failure. A sign-aligned 50% blend reduces synthetic normal RMSE to
