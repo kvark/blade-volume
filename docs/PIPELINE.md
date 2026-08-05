@@ -1719,6 +1719,34 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   serialized workspace suite pass against the remote pin. The Blade suite
   peaks at 3,492,728,832 bytes with no memory or GPU event.
 
+#### M2be — Deduplicate exact training dispatches (profile-positive, rejected)
+
+- An instrumented plan dump showed that the profile's dominant
+  `Relu[655360]` label mostly represents packed three-, four-, eight-, and
+  sixteen-term reductions using a legacy routing sentinel, not plain ReLU
+  kernels. It also exposed exact duplicate reciprocal, narrow-dot, broadcast,
+  and negate dispatches produced by independent autodiff branches. A
+  conservative Meganeura prototype reused only byte-identical scheduled
+  operations, protected every public/state/gradient buffer, and excluded
+  materialization and atomic work. A 513-element physical test matched
+  analytic forward values and gradients.
+- The prototype removes 15 passes, taking the representative graph 446→431.
+  Two order-balanced replicas reduce warmed graph time
+  24.331→24.183 ms (-0.61%) and short-run wall time
+  4.297→4.258 seconds (-0.91%). The 510-step screen is mixed: Room held-out
+  PSNR changes 22.4034→22.4070 dB while wall time falls 0.64%; Bonsai changes
+  15.9777→15.9725 dB and is wall-time neutral. Per-view splits are 22/1/16
+  and 16/2/19 improved/tied/regressed.
+- The full 2,040-step gate rejects the change. Two Room replicas reduce mean
+  wall time 144.037→143.407 seconds (-0.44%) but change train/held-out PSNR
+  26.6722/24.3080→26.6586/24.3037 dB, with a 17/1/21 view split. Two Bonsai
+  replicas reduce wall time only 89.930→89.811 seconds (-0.13%) while changing
+  17.3947/16.7943→17.3764/16.7611 dB; only 13/37 views improve, one ties,
+  and 23 regress. The directional -0.0332 dB Bonsai loss fails the
+  quality-first gate, so neither the CSE nor its diagnostic instrumentation is
+  retained. The long scope peaks at 1,914,609,664 bytes with zero swap,
+  pressure, limit, OOM, kill, throttling, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
