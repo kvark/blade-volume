@@ -1786,6 +1786,36 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   within an observed support rather than disguise the problem as opacity or
   low view count.
 
+#### M2bg — Bound directional detail capacity (implemented experimentally; rejected)
+
+- Two zero-preserving directional additions were implemented across the model,
+  ASCII/binary PLY, CPU and all WGSL renderers, Meganeura training,
+  densification/Adam remapping, and exact resume, then removed after their
+  quality gates. The first attached three RGB direction coefficients to each
+  of the eight spatial sites (72 floats per cell). The second compressed that
+  to one RGB coefficient per site, weighted by signed camera incidence
+  `-dot(normal, normalize(ray_direction))` (24 floats per cell). Neither mixed
+  polygonal geometry into the runtime representation.
+- The 72-float form produced only noisy two-replica 2,040-step mean changes:
+  Room train/held-out moved by +0.0009/+0.0121 dB and Bonsai by
+  +0.0330/+0.0177 dB. Per-view splits were 21/0/18 and 20/1/16, with worst
+  regressions of 0.145 and 0.260 dB. Training rose about 12%/15.5%, and each
+  200K-cell PLY grew by about 55 MiB. That cost and tail risk reject the form.
+- The 24-float incidence form screened best at learning-rate ratio `0.01`, but
+  failed the fresh 2,040-step control. Room changed
+  26.6757/24.3516→26.6570/24.2995 dB, with 10/2/27 held-out views
+  improving/tying/regressing; training rose 142.018→149.216 seconds (+5.1%).
+  Bonsai changed 17.3911/16.7571→17.3703/16.7309 dB, with a 13/5/19 split;
+  training rose 89.343→95.180 seconds (+6.5%). Each PLY grew by about
+  18.3 MiB. Ratio `0.005` was also negative on Room and held-out-neutral but
+  train-negative on Bonsai.
+- The long incidence scope peaked at 1,859,657,728 bytes under 6 GiB with zero
+  swap, pressure, limit, OOM, kill, throttling, or GPU fault. The rejected
+  source remains absent; local evidence lives under
+  `target/audit-runs/directional-detail/`. Directional capacity is therefore
+  not the next bottleneck. A smaller spatial-density/responsibility probe over
+  the existing eight detail weights is the next quality experiment.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

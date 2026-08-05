@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-08-04
+Last updated: 2026-08-05
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -1108,13 +1108,14 @@ At the audited revision:
   geometry rates, and Adam epsilon, so it remains opt-in rather than a default.
 - No official pretrained checkpoint is published by the reference project, so
   cross-rendering and a matched training ablation remain outstanding.
-- The reference quaternion, eight detail sites, per-site displacement, and
-  per-detail-site eight-axis colour model remain outstanding. The exact
-  released layout, initialization, schedules, evaluation order, paper/source
-  discrepancies, and failure of a compact additive directional slice are now
-  documented. The next appearance implementation should begin with the
-  spatial detail-site/height semantics and retain an explicit storage and
-  held-out-performance gate.
+- The reference quaternion and per-detail-site eight-axis colour model remain
+  outstanding. Eight spatial detail sites and their height/colour semantics
+  are implemented, but three smaller directional alternatives have now failed
+  their held-out gates: a 48-float cell-level Spherical Voronoi residual, a
+  72-float per-detail-site linear direction residual, and a 24-float
+  per-detail-site camera-incidence residual. The next quality experiment
+  should target spatial density/responsibility inside the already observed
+  support, with the same explicit storage and held-out-performance gate.
 
 ### Adjacency and traversal
 
