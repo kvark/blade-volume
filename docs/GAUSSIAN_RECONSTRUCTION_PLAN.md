@@ -208,6 +208,14 @@ raw-float files are byte-identical, all reported scores are unchanged, and
 median process RSS rises by only 3.6--4.0 MiB. The combined scope peaks at 450
 MB with no pressure, swap, OOM, or GPU event.
 
+Batching GPU depth submission/readback is not selected. Eight-camera groups
+keep memory bounded and produce byte-identical scenes, but improve complete
+default commands by only 0.8--1.0%. On the selected 256-pixel protocol Room
+improves 2.79 to 2.74 seconds while Bonsai regresses 1.97 to 1.98. An unbounded
+one-submission variant is similarly marginal and makes mapped memory grow with
+the capture. Both are removed: traversal, not the host wait, is the remaining
+depth bottleneck.
+
 Current result (2026-08-03): GPU timestamps isolate the training step, not path
 recording or CPU work, as the bottleneck. At 2,048 pixels and 256 path slots, 28
 scalar embedding-gradient scatters (density plus degree-2 RGB SH) spent about

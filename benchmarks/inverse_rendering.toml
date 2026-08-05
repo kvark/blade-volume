@@ -605,6 +605,52 @@ room_surfels = 29692
 room_psnr = [14.61, 14.14, 13.13]
 verdict = "reject: half-float world depth costs 0.04 dB average and 0.05 dB worst held-out Bonsai quality"
 
+# Batching eight cameras into one GPU submission and one mapped readback buffer
+# removes most host waits. The gain is too small and protocol-dependent for the
+# extra memory and control flow: five default-command runs improve both scenes
+# by only 0.8--1.0%, while the selected 256-pixel/stride-eight protocol improves
+# Room by 1.8% and regresses Bonsai by 0.5%. An unbounded one-submission variant
+# behaves similarly and is unsuitable for phone video. The implementation was
+# removed; traversal remains the depth-stage bottleneck.
+[depth_tracing.gpu.rejected_batched_readback]
+date = "2026-08-05"
+views_per_submission = 8
+quality_changed = false
+scene_files_byte_identical = true
+environment_files_byte_identical = true
+
+[depth_tracing.gpu.batched_readback.bonsai]
+views = 74
+control_wall_seconds = [3.80, 3.80, 3.83, 3.84, 3.85]
+batched_wall_seconds = [3.77, 3.78, 3.80, 3.82, 3.84]
+control_median_seconds = 3.83
+batched_median_seconds = 3.80
+throughput_speedup = 1.008
+control_median_max_rss_kib = 394208
+batched_median_max_rss_kib = 394196
+scene_sha256 = "86fcd8d540a9fabfbb5d4054e56925ebf47fd2740951554d34a9f7b46f969b52"
+environment_sha256 = "a9b10e8aa09cf102e8956ab0c041d04023fd2c0d120b8b0c6a62a696952de210"
+
+[depth_tracing.gpu.batched_readback.room]
+views = 78
+control_wall_seconds = [5.10, 5.13, 5.14, 5.15, 5.16]
+batched_wall_seconds = [5.06, 5.09, 5.09, 5.12, 5.55]
+control_median_seconds = 5.14
+batched_median_seconds = 5.09
+throughput_speedup = 1.010
+control_median_max_rss_kib = 659744
+batched_median_max_rss_kib = 659600
+scene_sha256 = "4d78fbac8658fa900716db68d1b6ab5ec16e8db2b6feba81c477b2d7b30c181c"
+environment_sha256 = "2b423a8fd664858c050bd8b72874ce442f1c5a605c5515e768324dc660ac004f"
+cgroup_peak_memory_bytes = 468078592
+memory_events = 0
+selected_bonsai_control_median_seconds = 1.97
+selected_bonsai_batched_median_seconds = 1.98
+selected_room_control_median_seconds = 2.79
+selected_room_batched_median_seconds = 2.74
+artifacts = "target/audit-runs/batched-depth-readback-v1"
+verdict = "reject: less than 1% at command defaults and no joint win on the selected two-scene protocol"
+
 # Four local geometry shortcuts were gated after the overlap diagnostic. None
 # survives both Bonsai and Room. The source for every experimental switch was
 # removed; these numbers are retained so a scene-local gain is not mistaken for
