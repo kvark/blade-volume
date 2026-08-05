@@ -3981,13 +3981,17 @@ fn per_cell_farthest(model: &vol::PointCloudModel) -> (Vec<f32>, Vec<usize>) {
     (radius, farthest)
 }
 
-#[derive(Debug)]
-struct PathContributionStats {
-    per_cell: Vec<f32>,
-    rays: usize,
-    segments: usize,
-    truncated_rays: usize,
-    max_steps_used: usize,
+#[derive(Clone, Debug)]
+pub struct PathContributionStats {
+    /// Maximum accumulated volumetric weight in any sampled view.
+    pub per_cell: Vec<f32>,
+    /// Number of sampled views whose accumulated weight exceeds the requested
+    /// support threshold.
+    pub supporting_views: Vec<u32>,
+    pub rays: usize,
+    pub segments: usize,
+    pub truncated_rays: usize,
+    pub max_steps_used: usize,
 }
 
 fn finite_quantile(values: impl Iterator<Item = f32>, quantile: f32) -> f32 {
@@ -4061,6 +4065,19 @@ fn contribution_view_indices(view_count: usize, limit: usize, round: usize) -> V
         .collect()
 }
 
+fn merge_view_contributions(
+    stats: &mut PathContributionStats,
+    view_contribution: &[f32],
+    support_threshold: f32,
+) {
+    assert_eq!(stats.per_cell.len(), view_contribution.len());
+    assert_eq!(stats.supporting_views.len(), view_contribution.len());
+    for (cell, &contribution) in view_contribution.iter().enumerate() {
+        stats.per_cell[cell] = stats.per_cell[cell].max(contribution);
+        stats.supporting_views[cell] += u32::from(contribution > support_threshold);
+    }
+}
+
 /// Measure the same per-cell contribution signal used by RadFoam pruning:
 /// sum volumetric ray weights within each view, then retain the maximum over
 /// views. Each view uses one deterministic 2× downsample phase keyed by the
@@ -4078,6 +4095,7 @@ fn collect_path_contributions(
     powerfoam_candidate_capacity: u32,
     round: usize,
     view_limit: usize,
+    support_threshold: f32,
 ) -> PathContributionStats {
     const MAX_RAYS_PER_BATCH: usize = 4096;
 
@@ -4104,13 +4122,14 @@ fn collect_path_contributions(
     ];
     let capacity = max_sampled_pixels.clamp(1, MAX_RAYS_PER_BATCH);
     let mut buffers = if model.radii.is_some() {
-        vol::gpu::PathRecordBuffers::new_projected(
+        vol::gpu::PathRecordBuffers::new_powerfoam_recorded_only_projected(
             context,
             capacity as u32,
             max_steps as u32,
             model.points.len() as u32,
             max_image_resolution,
             powerfoam_candidate_capacity,
+            model.surface_detail.is_some(),
         )
     } else {
         vol::gpu::PathRecordBuffers::new_recorded_only(context, capacity as u32, max_steps as u32)
@@ -4146,6 +4165,7 @@ fn collect_path_contributions(
     });
     let mut stats = PathContributionStats {
         per_cell: vec![0.0; model.points.len()],
+        supporting_views: vec![0; model.points.len()],
         rays: 0,
         segments: 0,
         truncated_rays: 0,
@@ -4279,9 +4299,7 @@ fn collect_path_contributions(
                 .max_steps_used
                 .max(recorded_path.max_steps_used as usize);
         }
-        for (maximum, contribution) in stats.per_cell.iter_mut().zip(view_contribution) {
-            *maximum = maximum.max(contribution);
-        }
+        merge_view_contributions(&mut stats, &view_contribution, support_threshold);
     }
 
     context.destroy_command_encoder(&mut encoder);
@@ -4290,6 +4308,41 @@ fn collect_path_contributions(
     context.destroy_buffer(dts_readback);
     context.destroy_buffer(mask_readback);
     buffers.destroy(context);
+    stats
+}
+
+/// Measure the pruning collector's per-cell visibility signal without
+/// modifying the model. Each view contributes one deterministic 2×
+/// downsample phase, matching training-time pruning.
+pub fn measure_path_contributions(
+    context: &std::sync::Arc<blade_graphics::Context>,
+    model: &vol::PointCloudModel,
+    views: &[ViewSupervision],
+    max_steps: usize,
+    powerfoam_candidate_capacity: u32,
+    support_threshold: f32,
+) -> PathContributionStats {
+    assert!(
+        support_threshold.is_finite() && support_threshold >= 0.0,
+        "support threshold must be finite and non-negative"
+    );
+    let recorder = vol::gpu::PathRecorder::new(context);
+    let mut gpu_cloud = build_training_gpu_cloud(model, context);
+    let stats = collect_path_contributions(
+        context,
+        &recorder,
+        &gpu_cloud,
+        model,
+        views,
+        max_steps,
+        powerfoam_candidate_capacity,
+        0,
+        0,
+        support_threshold,
+    );
+    gpu_cloud.deinit(context);
+    let mut recorder = recorder;
+    recorder.destroy(context);
     stats
 }
 
@@ -6006,6 +6059,7 @@ fn fit_appearance_pixel_batched(
                         config.powerfoam_candidate_capacity,
                         densification_round,
                         d.contribution_views,
+                        d.prune_contribution,
                     );
                     phase_timings.contribution += contribution_start.elapsed();
                     let truncated_percent = if stats.rays == 0 {
@@ -7997,6 +8051,7 @@ mod tests {
         let mut contribution = [0.0; 2];
         let mut stats = PathContributionStats {
             per_cell: Vec::new(),
+            supporting_views: Vec::new(),
             rays: 0,
             segments: 0,
             truncated_rays: 0,
@@ -8039,6 +8094,85 @@ mod tests {
             assert_eq!(sorted.len(), selected.len());
             assert!(selected.iter().all(|&index| index < 17));
         }
+    }
+
+    #[test]
+    fn contribution_stats_retain_maximum_and_multi_view_support() {
+        let mut stats = PathContributionStats {
+            per_cell: vec![0.0; 3],
+            supporting_views: vec![0; 3],
+            rays: 0,
+            segments: 0,
+            truncated_rays: 0,
+            max_steps_used: 0,
+        };
+        merge_view_contributions(&mut stats, &[0.5, 0.01, 0.02], 0.01);
+        merge_view_contributions(&mut stats, &[0.4, 0.03, 0.0], 0.01);
+        assert_eq!(stats.per_cell, [0.5, 0.03, 0.02]);
+        assert_eq!(stats.supporting_views, [2, 1, 1]);
+    }
+
+    #[test]
+    fn contribution_collector_supports_spatial_detail_paths() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping spatial-detail contribution collector test: no GPU");
+            return;
+        };
+        let mut model = vol::PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 5.0, 4.0)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(vol::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0],
+            }),
+            radii: Some(vec![1.0]),
+            surface_normals: Some(vec![glam::Vec3::Z]),
+            surface_offsets: Some(vec![0.0]),
+            surface_detail: None,
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+        };
+        let detail_count = model.points.len() * vol::SURFACE_DETAIL_SITES;
+        model.surface_detail = Some(vol::SurfaceDetail {
+            offsets: vec![glam::Vec3::ZERO; detail_count],
+            heights: vec![0.0; detail_count],
+            colors: vec![glam::Vec3::ZERO; detail_count],
+        });
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.0, 0.0, -1.0],
+                depth: 10.0,
+                cam_orientation: glam::Quat::IDENTITY.to_array(),
+                fov: [0.5; 2],
+                principal: [0.0; 2],
+            },
+            target_rgb: vec![0.0; 3],
+            target_alpha: None,
+            width: 1,
+            height: 1,
+        };
+        let cpu = vol::trace::trace_powerfoam_splats(
+            &model,
+            crate::render::camera_ray(&view.camera, 1, 1, 0, 0),
+            vol::trace::TraceSettings {
+                max_steps: 16,
+                depth: 10.0,
+                eval_mode: vol::trace::EvalMode::Opacity,
+                ..vol::trace::TraceSettings::default()
+            },
+        );
+        assert!(cpu.rgba.w > 0.0, "CPU test ray missed the detail cloud");
+        let stats = measure_path_contributions(&gpu, &model, &[view], 16, 0, 0.01);
+        assert_eq!(stats.rays, 1);
+        assert_eq!(stats.per_cell.len(), model.points.len());
+        assert!(
+            stats.per_cell.iter().any(|&weight| weight > 0.0),
+            "collector returned no contribution: {stats:?}"
+        );
+        assert!(stats.supporting_views.contains(&1));
     }
 
     #[test]

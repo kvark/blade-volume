@@ -79,6 +79,34 @@ pub fn render_cpu(
     render_cpu_with_diagnostics(model, camera, settings).rgba
 }
 
+/// Construct the camera ray through the centre of one output pixel.
+pub fn camera_ray(
+    camera: &vol::CameraParams,
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+) -> vol::trace::Ray {
+    let tan_half = glam::Vec2::new((0.5 * camera.fov[0]).tan(), (0.5 * camera.fov[1]).tan());
+    let orientation = glam::Quat::from_xyzw(
+        camera.cam_orientation[0],
+        camera.cam_orientation[1],
+        camera.cam_orientation[2],
+        camera.cam_orientation[3],
+    );
+    let px = (x as f32 + 0.5) / width as f32;
+    let py = (y as f32 + 0.5) / height as f32;
+    let local_dir = glam::Vec3::new(
+        (px * 2.0 - 1.0 - camera.principal[0]) * tan_half.x,
+        (py * 2.0 - 1.0 - camera.principal[1]) * tan_half.y,
+        1.0,
+    );
+    vol::trace::Ray {
+        origin: glam::Vec3::from_array(camera.cam_position),
+        direction: (orientation * local_dir).normalize(),
+    }
+}
+
 /// Render like [`render_cpu`] and retain aggregate traversal diagnostics.
 /// A ray is counted as truncated only when the step cap—not opacity, the far
 /// plane, or a terminal cell—stopped it.
@@ -95,15 +123,6 @@ pub fn render_cpu_with_diagnostics(
         ..TraversalDiagnostics::default()
     };
 
-    let tan_half = glam::Vec2::new((0.5 * camera.fov[0]).tan(), (0.5 * camera.fov[1]).tan());
-    let orientation = glam::Quat::from_xyzw(
-        camera.cam_orientation[0],
-        camera.cam_orientation[1],
-        camera.cam_orientation[2],
-        camera.cam_orientation[3],
-    );
-    let origin = glam::Vec3::from_array(camera.cam_position);
-
     let trace_settings = vol::trace::TraceSettings {
         weight_threshold: settings.weight_threshold,
         max_steps: settings.max_steps,
@@ -112,25 +131,15 @@ pub fn render_cpu_with_diagnostics(
         eval_mode: vol::trace::EvalMode::Sh,
     };
 
-    let wf = settings.width as f32;
-    let hf = settings.height as f32;
-
     for iy in 0..h {
-        let py = (iy as f32 + 0.5) / hf;
-        let ndc_y = py * 2.0 - 1.0;
         for ix in 0..w {
-            let px = (ix as f32 + 0.5) / wf;
-            let ndc_x = px * 2.0 - 1.0;
-            let local_dir = glam::Vec3::new(
-                (ndc_x - camera.principal[0]) * tan_half.x,
-                (ndc_y - camera.principal[1]) * tan_half.y,
-                1.0,
+            let ray = camera_ray(
+                camera,
+                settings.width,
+                settings.height,
+                ix as u32,
+                iy as u32,
             );
-            let ray_dir = (orientation * local_dir).normalize();
-            let ray = vol::trace::Ray {
-                origin,
-                direction: ray_dir,
-            };
             let res = if model.radii.is_some() {
                 vol::trace::trace_powerfoam_splats(model, ray, trace_settings)
             } else {

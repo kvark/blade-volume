@@ -1747,6 +1747,45 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   retained. The long scope peaks at 1,914,609,664 bytes with zero swap,
   pressure, limit, OOM, kill, throttling, or GPU fault.
 
+#### M2bf — Attribute held-out support failures (implemented; prune shortcut rejected)
+
+- `eval_psnr --diagnose-worst N` now separates the global held-out tail into
+  false-positive radiance and missing-radiance pixels. The GPU renders remain
+  the metric source; only the selected `2N` rays use the CPU oracle. Each row
+  reports terminal opacity, peak weight/depth/cell, support radius, density,
+  Čech degree, and the pruning collector's maximum weight and sampled-view
+  count. `TraceResult::peak_point` retains the cell already identified while
+  computing mode depth, and `render::camera_ray` keeps diagnostic and renderer
+  camera math on one implementation.
+- The read-only contribution scan exposed a latent fixed-cap/detail-model
+  combination: the pruning collector allocated full PowerFoam Jacobians but
+  omitted the spatial-detail query contract, so it panicked before dispatch.
+  It now uses the existing compact recorded-path layout, requests detail
+  queries only when the cloud carries them, and retains per-cell sampled-view
+  counts without changing the established maximum-contribution pruning
+  decision. A physical one-cell detail path covers the corrected combination.
+- On the selected 8,160-step models, Room's 16 strongest false positives are
+  one cell with radius/density/degree `0.476/0.580/7`; it is nevertheless
+  supported in 32 sampled training views. Bonsai's false-positive peak cells
+  span 20--249 views, and its strongest missing-radiance cluster comes from
+  two degree-227/415 cells supported in 223/235 views. A minimum-view rule is
+  therefore not the missing visual mechanism: heavily observed cells can
+  still assign the wrong geometry/appearance across a broad support.
+- The scan also found 118,280/200,000 Room cells and 141,999/200,000 Bonsai
+  cells with no contribution in the collector's deterministic 2× phase. An
+  aggressive weighted-cloud prune removed only cells lacking direct or
+  one-ring contribution and reduced Room to 188,970 sites and 3.132M edges.
+  It is rejected: held-out PSNR changes 25.6867→25.6700 dB, one view loses
+  0.60 dB, and the worst tail loses another 0.05 dB. One downsample phase is
+  diagnostic evidence, not sufficient proof that a support can be deleted.
+- The successful two-scene diagnostic scopes peak at 506 and 475 MB with
+  zero swap, pressure, limit, OOM, kill, throttling, or GPU fault. The failed
+  pre-fix detail scan stopped inside its 346 MB scope with the same zero event
+  counters; leaked-buffer messages were panic cleanup, not memory pressure.
+  The next quality experiment must resolve position/direction responsibility
+  within an observed support rather than disguise the problem as opacity or
+  low view count.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

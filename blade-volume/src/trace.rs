@@ -97,6 +97,9 @@ pub struct TraceResult {
     /// volume of dust.
     pub depth_mode: f32,
     pub peak_weight: f32,
+    /// Cell whose segment produced [`Self::peak_weight`]. `None` when no
+    /// positive-density segment contributed to the ray.
+    pub peak_point: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1373,6 +1376,7 @@ pub fn trace_powerfoam_splats(
             t_end: 0.0,
             depth_mode: 0.0,
             peak_weight: 0.0,
+            peak_point: None,
         };
     }
     let ray_dir = ray.direction / direction_length;
@@ -1387,6 +1391,7 @@ pub fn trace_powerfoam_splats(
     let mut accum_rgb = glam::Vec3::ZERO;
     let mut depth_mode = 0.0_f32;
     let mut peak_weight = 0.0_f32;
+    let mut peak_point = None;
     let mut steps = 0_u32;
     let mut last_point = settings.start_point;
     let mut t_end = 0.0_f32;
@@ -1421,6 +1426,7 @@ pub fn trace_powerfoam_splats(
         if weight > peak_weight {
             peak_weight = weight;
             depth_mode = near + 0.5 * entry.dt;
+            peak_point = Some(cell);
         }
         transmittance *= 1.0 - alpha;
     }
@@ -1431,6 +1437,7 @@ pub fn trace_powerfoam_splats(
         t_end,
         depth_mode,
         peak_weight,
+        peak_point,
     }
 }
 
@@ -1588,6 +1595,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
             t_end: 0.0,
             depth_mode: 0.0,
             peak_weight: 0.0,
+            peak_point: None,
         };
     }
     dir /= dir_len;
@@ -1597,6 +1605,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
     let mut accum_rgb = glam::Vec3::ZERO;
     let mut depth_mode = 0.0f32;
     let mut peak_weight = 0.0f32;
+    let mut peak_point = None;
 
     let mut current = settings.start_point;
     let p = model.points[current as usize];
@@ -1662,6 +1671,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
                 if w > peak_weight {
                     peak_weight = w;
                     depth_mode = 0.5 * (segment_start + segment_end);
+                    peak_point = Some(current);
                 }
                 // The middle of the segment, which is where a uniform-density
                 // cell puts its mass. Using the entry point instead biases
@@ -1693,6 +1703,7 @@ pub fn trace_one_ray(model: &PointCloudModel, ray: Ray, settings: TraceSettings)
         t_end: t0,
         depth_mode,
         peak_weight,
+        peak_point,
     }
 }
 
@@ -1858,6 +1869,8 @@ mod path_tests {
         assert_eq!(opacity.t_end, colour.t_end);
         assert_eq!(opacity.depth_mode, colour.depth_mode);
         assert_eq!(opacity.peak_weight, colour.peak_weight);
+        assert_eq!(opacity.peak_point, colour.peak_point);
+        assert!(colour.peak_point.is_some());
     }
 
     #[test]
