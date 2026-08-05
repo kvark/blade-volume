@@ -727,6 +727,35 @@ memory_events = 0
 artifacts = "target/audit-runs/unweighted-gpu-trace-v1"
 verdict = "reject: compile-time specialization does not improve end-to-end reconstruction and regresses Bonsai"
 
+# Reshaping the 64-thread depth workgroup to follow wider scanline spans does
+# not improve this adjacency walk on the RTX 5070. Both 32x2 and 16x4 regress
+# Bonsai; halving the workgroup to one 8x4 warp also regresses both scenes.
+# Each candidate passes the physical-GPU depth oracle and serializes the exact
+# same scene/environment bytes. The original 8x8 launch is retained.
+[depth_tracing.gpu.rejected_workgroup_shapes]
+date = "2026-08-05"
+control_shape = [8, 8]
+shapes = [[32, 2], [16, 4], [8, 4]]
+control_bonsai_seconds_32x2 = [1.76, 1.79, 1.80, 1.81, 1.82]
+candidate_bonsai_seconds_32x2 = [1.78, 1.82, 1.82, 1.83, 2.18]
+control_room_seconds_32x2 = [2.53, 2.53, 2.56, 2.57, 2.60]
+candidate_room_seconds_32x2 = [2.58, 2.60, 2.63, 2.64, 2.64]
+control_bonsai_seconds_16x4 = [1.74, 1.76, 1.78, 1.78, 1.80]
+candidate_bonsai_seconds_16x4 = [1.79, 1.80, 1.81, 1.82, 2.16]
+control_room_seconds_16x4 = [2.56, 2.58, 2.59, 2.59, 2.60]
+candidate_room_seconds_16x4 = [2.55, 2.58, 2.58, 2.59, 2.61]
+control_bonsai_seconds_8x4 = [1.73, 1.76, 1.76, 1.78, 1.79]
+candidate_bonsai_seconds_8x4 = [1.77, 1.77, 1.78, 1.79, 2.06]
+control_room_seconds_8x4 = [2.53, 2.54, 2.55, 2.56, 2.58]
+candidate_room_seconds_8x4 = [2.53, 2.54, 2.57, 2.57, 2.60]
+scene_files_byte_identical = true
+environment_files_byte_identical = true
+gpu_depth_oracle_passed = true
+peak_memory_bytes = 351793152
+memory_events = 0
+artifacts = "target/audit-runs/depth-workgroup-v1"
+verdict = "reject: none of the three launch shapes produces a joint end-to-end speedup"
+
 # Four local geometry shortcuts were gated after the overlap diagnostic. None
 # survives both Bonsai and Room. The source for every experimental switch was
 # removed; these numbers are retained so a scene-local gain is not mistaken for

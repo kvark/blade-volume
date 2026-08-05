@@ -223,6 +223,13 @@ slows the Bonsai median from 1.79 to 1.82. All weighted, oriented, relight, and
 depth oracles pass and serialized outputs remain exact; the extra shader path
 is nevertheless removed.
 
+Changing the depth workgroup from 8x8 is rejected as well. Wider 16x4 and 32x2
+groups regress Bonsai by 0.03 and 0.02 seconds; 32x2 also regresses Room by
+0.07 seconds. A single-warp 8x4 group regresses both scene medians by 0.02
+seconds. All variants pass the physical-GPU depth oracle and emit byte-exact
+outputs, so the evidence isolates launch efficiency rather than correctness.
+The simpler 8x8 shader and dispatch remain selected.
+
 Observation gathering now processes contiguous camera chunks with at most
 eight scoped workers and merges them in original view order. The visibility
 and sample decisions are independent per photograph, while the ordered merge
