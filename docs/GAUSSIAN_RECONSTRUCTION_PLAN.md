@@ -230,6 +230,14 @@ seconds. All variants pass the physical-GPU depth oracle and emit byte-exact
 outputs, so the evidence isolates launch efficiency rather than correctness.
 The simpler 8x8 shader and dispatch remain selected.
 
+Rewriting radical-plane intersections as differences of ray-relative powers
+is rejected. It removes the per-neighbour squared-distance division and passes
+all plain, weighted, oriented, relight, and depth CPU/GPU oracles, but produces
+no end-to-end speedup. More importantly, the altered f32 order changes a few
+near-tie cell exits: the reconstructed clouds lose one Bonsai and six Room
+particles, and both held-out means fall by 0.02 dB. Traversal topology needs a
+decision-level quality gate in addition to approximate pixel parity.
+
 Observation gathering now processes contiguous camera chunks with at most
 eight scoped workers and merges them in original view order. The visibility
 and sample decisions are independent per photograph, while the ordered merge

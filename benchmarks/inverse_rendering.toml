@@ -756,6 +756,32 @@ memory_events = 0
 artifacts = "target/audit-runs/depth-workgroup-v1"
 verdict = "reject: none of the three launch shapes produces a joint end-to-end speedup"
 
+# A radical-plane intersection can be written as a difference of ray-relative
+# powers. This removes the per-neighbour squared-distance division and explicit
+# face point, and passes the existing CPU/GPU pixel oracles. It does not improve
+# complete reconstruction time, however, and its different f32 order changes
+# a few near-tie cell exits. That changes the fused topology and loses 0.02 dB
+# held-out PSNR on both scenes, so the original construction remains selected.
+[depth_tracing.gpu.rejected_power_coordinate_faces]
+date = "2026-08-05"
+control_bonsai_seconds = [1.77, 1.77, 1.78, 1.79, 1.82]
+candidate_bonsai_seconds = [1.76, 1.78, 1.78, 1.78, 1.89]
+control_room_seconds = [2.52, 2.55, 2.56, 2.58, 2.60]
+candidate_room_seconds = [2.52, 2.55, 2.56, 2.57, 2.61]
+control_bonsai_surfels = 28316
+candidate_bonsai_surfels = 28315
+control_room_surfels = 31733
+candidate_room_surfels = 31727
+control_bonsai_test_psnr = 14.50
+candidate_bonsai_test_psnr = 14.48
+control_room_test_psnr = 14.07
+candidate_room_test_psnr = 14.05
+gpu_oracles_passed = "unweighted RadFoam, weighted PowerFoam, oriented PowerFoam, surface detail, relight, depth"
+peak_memory_bytes = 348184576
+memory_events = 0
+artifacts = "target/audit-runs/power-plane-walk-v1"
+verdict = "reject: neutral throughput and f32 reordering perturbs reconstruction topology and quality"
+
 # Four local geometry shortcuts were gated after the overlap diagnostic. None
 # survives both Bonsai and Room. The source for every experimental switch was
 # removed; these numbers are retained so a scene-local gain is not mistaken for
