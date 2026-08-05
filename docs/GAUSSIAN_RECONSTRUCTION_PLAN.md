@@ -243,6 +243,16 @@ the losslessly continued step-4,000 checkpoint, it is only +0.06 dB selected
 and is -0.23/-0.14 dB train/all-37. Both sweeps are unweighted and therefore
 gate only the shared position-rate default, which remains 0.01.
 
+Larger image batches do not stabilize that geometry either. Three matched
+1,200-update synthetic repeats at 8,192 rather than 2,048 rays make training
+4.66x slower and reduce ray throughput by 14.1%. Mean held-pose radiance moves
+only +0.03 dB while its worst-view mean loses 0.32 dB. Position RMSE rises from
+0.619 to 0.631 world units and normal RMSE from 66.10 to 67.71 degrees. The
++0.19 dB mean relighting change follows a 0.73-point coverage increase, but its
+worst-view mean still loses 0.09 dB. Training-depth outliers remain in both
+arms. The production default therefore stays at 2,048 rays; batch size is not
+a substitute for the shared surface objective.
+
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
 its Jacobians, and a ray-relative reference tangent; the graph evaluates the

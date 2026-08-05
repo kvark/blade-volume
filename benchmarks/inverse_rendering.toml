@@ -1734,6 +1734,54 @@ candidate_peak_memory_bytes = 1093459968
 memory_events = 0
 verdict = "reject for COLMAP initialization: the selected-eight gain is 0.09 dB, but all 37 held views lose 0.40 dB at step 4000"
 
+# More rays per update reduce the number of independently sampled optimizer
+# steps per image observation and do not remove the atomic/topology tail.
+# Three complete repeats show that the small mean relighting gain comes with
+# more coverage, not better geometry, and does not survive the worst-view gate.
+[synthetic_reconstruction.rgb_mask_foam.rejected_large_pixel_batch]
+date = "2026-08-05"
+updates = 1200
+control_pixel_batch = 2048
+candidate_pixel_batch = 8192
+control_training_seconds = [11.515, 11.028, 11.128]
+candidate_training_seconds = [52.508, 52.049, 52.181]
+training_time_ratio = 4.655
+control_ray_throughput_per_second = 218977
+candidate_ray_throughput_per_second = 188166
+throughput_change = -0.141
+control_held_pose_psnr = [24.24, 24.12, 24.19]
+candidate_held_pose_psnr = [24.26, 24.25, 24.12]
+control_held_pose_worst_psnr = [23.85, 23.58, 23.69]
+candidate_held_pose_worst_psnr = [23.43, 23.42, 23.32]
+control_training_depth_rmse = [2.6664, 7.2754, 5.5437]
+candidate_training_depth_rmse = [11.0233, 2.8211, 3.6390]
+control_held_depth_rmse = [2.1041, 2.1451, 2.1322]
+candidate_held_depth_rmse = [2.0333, 2.0233, 2.0677]
+control_position_rmse = [0.6155, 0.6161, 0.6252]
+candidate_position_rmse = [0.6262, 0.6158, 0.6496]
+control_normal_rmse_degrees = [66.40, 66.15, 65.76]
+candidate_normal_rmse_degrees = [67.59, 67.49, 68.04]
+control_held_light_psnr = [18.39, 18.26, 18.55]
+candidate_held_light_psnr = [18.57, 18.62, 18.58]
+control_held_light_worst_psnr = [18.28, 18.22, 18.36]
+candidate_held_light_worst_psnr = [18.23, 18.31, 18.06]
+control_coverage_percent = [53.3, 53.0, 53.4]
+candidate_coverage_percent = [54.2, 54.2, 53.5]
+replica_cgroup_peak_memory_bytes = 879345664
+candidate_max_process_rss_bytes = 1037479936
+memory_events = 0
+control_artifact_sha256 = [
+    "7a4c019c22adacc7a8903bd3acebac0188479120eae47fba8a7299c4902e8b31",
+    "2f87d4433b153373ea04a61bb4aa6a5bc55aa2ed23602027b60b7bbbe9ae4214",
+    "fa667b0eb7015fdda7f6b2f482db0a05d327306bcb79ced73fa7925a2cbfb3b6",
+]
+candidate_artifact_sha256 = [
+    "02d9d15e0e81517262cd729162081c664c3fad9c351f33eef41b6b84594c2cb9",
+    "d18d63018c34ab653c558953a9e32d9cecb37daddfbc309b925827594e086bbd",
+    "00e04ca398b93191796cf7220454f931b85d037171d75d64bf2a1498bf235d2f",
+]
+verdict = "reject: 4.66x training time worsens geometry and the worst held views; retain the 2048-ray default"
+
 # Filling a non-cubic world-axis lattice sequentially accidentally left most of
 # one outer layer absent. Rotating that sparse layer towards the camera bundle
 # turns the accident into an explicit camera-only initialization rule. Full and
