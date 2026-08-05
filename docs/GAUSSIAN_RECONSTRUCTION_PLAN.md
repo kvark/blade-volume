@@ -263,6 +263,18 @@ normal RMSE only from 67.47 to 64.54 degrees and position RMSE from 0.681 to
 treating the current depth-gradient normals as truth; normals should be derived
 after the surface signal is coherent.
 
+Two normal-independent 3D center searches fail that gate and are removed. A
+camera-basis search using robust cross-view center colour passes an analytic
+plane whose supplied normals are 70 degrees wrong, but changes synthetic
+position RMSE from 0.6280 to 0.6281 and loses 0.07 dB under the held light. A
+50% acceptance floor suppresses moves without improving geometry. Scoring the
+same candidates by median refreshed source-depth residual moves 573 of 642
+supported particles, but worsens position RMSE to 0.6297, normal RMSE from
+66.38 to 66.83 degrees, coverage from 53.8% to 53.3%, and held-light PSNR from
+18.53 to 18.49 dB. The synthetic truth gate therefore rejects both before a
+real-scene sweep: inconsistent per-view modes are not a shared surface target
+merely because the optimizer is allowed to move in three dimensions.
+
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
 its Jacobians, and a ray-relative reference tangent; the graph evaluates the

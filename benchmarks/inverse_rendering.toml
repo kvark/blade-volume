@@ -1519,6 +1519,58 @@ final_candidate_binary_sha256 = "da0903e3919071bb47a77cf6cdef8f1abf1b22f8576efdd
 artifacts = "target/audit-runs/powerfoam-sphere-bvh"
 selection = "accept: exact point-cloud BVH removes 60--63% of large-cloud gather time and 10--15% of the full recorder while thresholding the small-cloud regression"
 
+# The source depth-gradient normals are already about 60 degrees wrong, so two
+# normal-independent center searches were gated on the fixed synthetic foam
+# artifact before trying real scenes. Both form a camera-derived orthonormal
+# basis, refresh source-depth visibility at every 3D candidate, and leave
+# normals/support/materials untouched. Raw cross-view center colour passes a
+# 70-degree-wrong-normal analytic plane gate but does not improve truth
+# geometry. Requiring 50% objective improvement only suppresses moves. Replacing
+# colour with median source-depth residual moves most supported particles and
+# makes every geometry/coverage metric worse. All implementation and CLI
+# switches were removed; a source field's inconsistent depth modes cannot be
+# made into a shared surface by minimizing their residual after fusion.
+[synthetic_reconstruction.rgb_mask_foam.rejected_center_only_consensus]
+date = "2026-08-05"
+artifact = "target/audit-runs/weighted-reference-rebase-v3/model.ply"
+artifact_sha256 = "cbdf65d844d7749806fa8227a49990d978bb9ee2bc6226013404cfcc3955fbe8"
+analytic_normal_error_degrees = 70.0
+analytic_initial_displacement = 0.05
+analytic_position_tolerance = 0.012
+analytic_exact_surface_tolerance = 0.000001
+control_scored = 211
+control_moved = 136
+control_position_rmse = 0.6280
+control_normal_rmse_degrees = 66.38
+control_coverage = 0.538
+control_held_light_psnr = 18.53
+control_held_light_worst_psnr = 18.24
+color_scored = 232
+color_moved = 183
+color_position_rmse = 0.6281
+color_normal_rmse_degrees = 66.50
+color_coverage = 0.539
+color_held_light_psnr = 18.46
+color_held_light_worst_psnr = 18.19
+strict_color_minimum_improvement = 0.5
+strict_color_moved = 70
+strict_color_position_rmse = 0.6283
+strict_color_normal_rmse_degrees = 66.81
+strict_color_coverage = 0.537
+strict_color_held_light_psnr = 18.52
+strict_color_held_light_worst_psnr = 18.26
+depth_consensus_scored = 642
+depth_consensus_moved = 573
+depth_consensus_position_rmse = 0.6297
+depth_consensus_normal_rmse_degrees = 66.83
+depth_consensus_coverage = 0.533
+depth_consensus_held_light_psnr = 18.49
+depth_consensus_held_light_worst_psnr = 18.26
+peak_memory_bytes = 237232128
+memory_events = 0
+artifacts = "target/audit-runs/center-{search,depth-consensus}-synthetic-*"
+selection = "reject and remove: neither shared colour nor the source depths supply a center objective that improves known-truth geometry"
+
 # A weighted `--init-ply` used to fall through to the fresh-run Delaunay
 # default, which discarded stored radii. Passing `--cech-radius` avoided that
 # path but reinitialized every learned radius from nearest-neighbour spacing.
