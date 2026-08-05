@@ -1953,10 +1953,25 @@ room_late_control_selected_all_psnr = [24.8654, 24.3337]
 room_late_weight100_selected_all_psnr = [24.8890, 24.3682]
 bonsai_late_control_selected_all_psnr = [24.4901, 24.9399]
 bonsai_late_weight100_selected_all_psnr = [24.4762, 24.9363]
-peak_memory_bytes = 1114255360
+dominant_selector = "softmax(100 * T*alpha), stopped and masked below 0.05"
+synthetic_dominant_control_held_pose_psnr = [24.15, 24.12, 24.14]
+synthetic_dominant_weight100_held_pose_psnr = [24.24, 24.20, 24.20]
+synthetic_dominant_control_position_rmse = [0.6131, 0.6313, 0.6205]
+synthetic_dominant_weight100_position_rmse = [0.5901, 0.5976, 0.5992]
+synthetic_dominant_control_normal_rmse_degrees = [66.47, 66.07, 66.12]
+synthetic_dominant_weight100_normal_rmse_degrees = [68.64, 68.22, 68.24]
+synthetic_dominant_control_held_light_psnr = [18.39, 18.38, 18.28]
+synthetic_dominant_weight100_held_light_psnr = [19.16, 19.04, 19.00]
+bonsai_dominant_weight100_step_psnr = [[17.4980, 16.6056, 17.3997], [21.3334, 20.1755, 21.0708], [22.6015, 21.4563, 22.1882]]
+bonsai_dominant_surface_psnr = [14.99, 13.65, 11.10, 14.29]
+bonsai_dominant_surface_coverage = 0.931
+bonsai_dominant_surface_particles = 30752
+bonsai_dominant_model_sha256 = "c424926ce3c5afe66b43e747e819001e7254f48333df888b0235ca31a4d41c68"
+bonsai_dominant_surface_sha256 = "74bd40e7ae08c964c585306cd799b0c45c268f134ff9488fe43de8ad4bf04014"
+peak_memory_bytes = 1211072512
 memory_events = 0
-artifacts = "target/audit-runs/ray-alignment-v1"
-selection = "reject and remove: synthetic triangulation and early radiance gains do not transfer to one reconstructable real surface; confidence gating still aligns background opacity layers"
+artifacts = "target/audit-runs/ray-alignment-v{1,2}"
+selection = "reject and remove the family: neither confidence gating nor dominant-mode soft selection transfers synthetic triangulation into a better real surface"
 
 # A weighted `--init-ply` used to fall through to the fresh-run Delaunay
 # default, which discarded stored radii. Passing `--cech-radius` avoided that

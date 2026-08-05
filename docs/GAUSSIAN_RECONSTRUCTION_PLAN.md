@@ -352,8 +352,13 @@ responsibility. On Bonsai the early 2K gain reverses by 6K, and the extracted
 surface falls from 13.73 to 13.17 dB held out and from 14.54 to 13.43 dB where
 hit. Decaying the loss before densification and ignoring contributions below
 the extractor's 0.05 confidence floor do not fix it; all experimental API and
-graph code is removed. A follow-up must identify one dominant, cross-view
-surface mode rather than regularize the whole volumetric path.
+graph code is removed. A high-temperature soft argmax over each ray's weights
+then tests the narrower dominant-mode hypothesis. It preserves small Bonsai
+radiance gains through 4K and nearly recovers the control surface, but still
+loses every held-surface metric at 6K: 13.65 versus 13.73 dB mean, 11.10 versus
+11.19 worst, and 93.1% versus 93.7% coverage. Per-ray responsibility selection
+is closed as a family. The next geometry objective needs explicit cell-level
+cross-view consensus rather than another path-local weighting rule.
 
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
