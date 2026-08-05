@@ -344,6 +344,17 @@ runtime and CLI code is removed. The modes prove the geometry has not vanished;
 the next objective must learn which modes share one surface instead of asking
 the same per-view density field and RGB observations to vote heuristically.
 
+A differentiable shared-ray prior reaches the same conclusion from inside the
+trainer. Penalizing a contributing site's angular distance from mixed-view
+camera rays reduces the synthetic position error by about 10% and adds roughly
+0.5 dB under the unseen light, but it aligns every opacity layer that carries
+responsibility. On Bonsai the early 2K gain reverses by 6K, and the extracted
+surface falls from 13.73 to 13.17 dB held out and from 14.54 to 13.43 dB where
+hit. Decaying the loss before densification and ignoring contributions below
+the extractor's 0.05 confidence floor do not fix it; all experimental API and
+graph code is removed. A follow-up must identify one dominant, cross-view
+surface mode rather than regularize the whole volumetric path.
+
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
 its Jacobians, and a ray-relative reference tangent; the graph evaluates the

@@ -1907,6 +1907,57 @@ memory_events = 0
 artifacts = "target/audit-runs/depth-{peak-oracle,consensus-color02,consensus-real,consensus-sweep,consensus-fill}-*"
 selection = "reject and remove: secondary modes are a strong truth oracle but RGB and self-depth agreement do not assign shared-surface responsibility across real scenes"
 
+# A differentiable geometry prior next penalized each site's squared angular
+# distance from every camera ray it helped render, with stopped volumetric
+# responsibility. Mixed-view batches should triangulate a genuinely shared
+# site. It does improve the masked synthetic geometry, but opaque backgrounds
+# assign responsibility to haze and secondary layers too. Cosine decay before
+# the first split and a 0.05 contribution floor do not make those layers a
+# surface: both real variants fail the extracted-particle gate and are removed.
+[synthetic_reconstruction.rgb_mask_foam.rejected_shared_ray_alignment]
+date = "2026-08-05"
+method = "mean((T*alpha) * squared angular distance from cell site to camera ray), with stopped responsibility"
+schedule = "cosine to zero over fixed-cloud training or densification warmup"
+synthetic_control_held_pose_psnr = [24.02, 24.12, 24.02]
+synthetic_control_position_rmse = [0.6163, 0.6259, 0.6080]
+synthetic_control_normal_rmse_degrees = [66.16, 65.92, 66.13]
+synthetic_control_held_light_psnr = [18.68, 18.45, 18.37]
+synthetic_control_training_seconds = [11.073, 11.083, 11.167]
+synthetic_unthresholded_weight30_held_pose_psnr = [24.38, 24.35, 24.31]
+synthetic_unthresholded_weight30_position_rmse = [0.5574, 0.5559, 0.5481]
+synthetic_unthresholded_weight30_normal_rmse_degrees = [66.75, 67.07, 66.78]
+synthetic_unthresholded_weight30_held_light_psnr = [18.77, 18.96, 19.14]
+synthetic_unthresholded_weight30_training_seconds = [13.590, 13.669, 13.674]
+synthetic_threshold = 0.05
+synthetic_thresholded_weight100_held_pose_psnr = [24.42, 24.32, 24.30]
+synthetic_thresholded_weight100_held_depth_rmse = [1.8881, 1.8966, 1.9144]
+synthetic_thresholded_weight100_position_rmse = [0.5616, 0.5560, 0.5777]
+synthetic_thresholded_weight100_normal_rmse_degrees = [68.27, 68.47, 67.69]
+synthetic_thresholded_weight100_held_light_psnr = [18.70, 18.78, 18.90]
+bonsai_control_step_psnr = [[16.6630, 16.0870, 16.5875], [21.2242, 20.0525, 20.9314], [22.6457, 21.5512, 22.2551], [24.0292, 22.8955, 23.3619]]
+bonsai_unthresholded_weight30_step_psnr = [[19.2794, 18.2243, 19.2043], [21.3673, 20.4478, 21.1688], [22.8235, 21.5695, 22.2821], [23.9798, 22.6417, 23.1740]]
+bonsai_thresholded_weight100_step_psnr = [[17.8403, 16.4987, 17.8269], [21.5006, 20.4230, 21.2837], [22.5822, 21.4132, 22.1239]]
+bonsai_step_psnr_columns = ["train", "selected held-out", "all held-out"]
+bonsai_step_indices = [2000, 4000, 6000, 8000]
+bonsai_control_surface_psnr = [14.91, 13.73, 11.19, 14.54]
+bonsai_unthresholded_surface_psnr = [14.44, 13.77, 11.85, 14.15]
+bonsai_warmup_only_surface_psnr = [14.77, 13.27, 10.96, 13.70]
+bonsai_thresholded_surface_psnr = [14.01, 13.17, 11.54, 13.43]
+bonsai_surface_psnr_columns = ["train", "held-out", "worst held-out", "held-out where-hit"]
+bonsai_control_surface_particles = 29607
+bonsai_thresholded_surface_particles = 30633
+bonsai_control_model_sha256 = "808cfd9c62fdbaab1e626b07aee9067eb71a9974b18f5b471034f445c17ae22b"
+bonsai_thresholded_model_sha256 = "362caef92a0b67cc2f320f6beb6c364faabf519d7a62c25e9bd69d5d1f33179a"
+bonsai_thresholded_surface_sha256 = "9d9c334c53c185eba40c25615d87a7652c386ea406ad3e17c1b259a39f5f7b08"
+room_late_control_selected_all_psnr = [24.8654, 24.3337]
+room_late_weight100_selected_all_psnr = [24.8890, 24.3682]
+bonsai_late_control_selected_all_psnr = [24.4901, 24.9399]
+bonsai_late_weight100_selected_all_psnr = [24.4762, 24.9363]
+peak_memory_bytes = 1114255360
+memory_events = 0
+artifacts = "target/audit-runs/ray-alignment-v1"
+selection = "reject and remove: synthetic triangulation and early radiance gains do not transfer to one reconstructable real surface; confidence gating still aligns background opacity layers"
+
 # A weighted `--init-ply` used to fall through to the fresh-run Delaunay
 # default, which discarded stored radii. Passing `--cech-radius` avoided that
 # path but reinitialized every learned radius from nearest-neighbour spacing.
