@@ -701,6 +701,32 @@ selected_room_batched_median_seconds = 2.74
 artifacts = "target/audit-runs/batched-depth-readback-v1"
 verdict = "reject: less than 1% at command defaults and no joint win on the selected two-scene protocol"
 
+# The CPU depth path benefits from specializing unweighted Voronoi faces, but
+# the analogous GPU branch does not. A uniform `power_foam` branch is 1--2%
+# slower on both scenes. Replacing that branch with a source-level constant
+# lets Naga remove the radius loads, radical-plane division, and support-sphere
+# code, yet complete reconstruction remains neutral on Room and slows Bonsai.
+# All RadFoam/PowerFoam/oriented GPU oracles pass and output files are exact;
+# the shader and composition variants were still removed as needless surface
+# area on the critical traversal path.
+[depth_tracing.gpu.rejected_unweighted_specialization]
+date = "2026-08-05"
+uniform_branch_bonsai_seconds = [1.79, 1.81]
+uniform_branch_room_seconds = [2.54, 2.57]
+constant_control_bonsai_seconds = [1.74, 1.78, 1.79, 1.79, 1.81]
+constant_candidate_bonsai_seconds = [1.74, 1.79, 1.82, 1.84, 2.17]
+constant_control_room_seconds = [2.52, 2.53, 2.54, 2.56, 2.61]
+constant_candidate_room_seconds = [2.50, 2.52, 2.54, 2.54, 2.55]
+constant_median_bonsai_seconds = [1.79, 1.82]
+constant_median_room_seconds = [2.54, 2.54]
+scene_files_byte_identical = true
+environment_files_byte_identical = true
+gpu_oracles_passed = "unweighted RadFoam, weighted PowerFoam, oriented PowerFoam, relight"
+peak_memory_bytes = 320667648
+memory_events = 0
+artifacts = "target/audit-runs/unweighted-gpu-trace-v1"
+verdict = "reject: compile-time specialization does not improve end-to-end reconstruction and regresses Bonsai"
+
 # Four local geometry shortcuts were gated after the overlap diagnostic. None
 # survives both Bonsai and Room. The source for every experimental switch was
 # removed; these numbers are retained so a scene-local gain is not mistaken for

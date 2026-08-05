@@ -216,6 +216,13 @@ one-submission variant is similarly marginal and makes mapped memory grow with
 the capture. Both are removed: traversal, not the host wait, is the remaining
 depth bottleneck.
 
+Specializing the GPU walk for unweighted RadFoam is also rejected. A uniform
+branch around the power-radius math slows both scenes by 1--2%. A compile-time
+variant removes those operations entirely, but leaves Room at 2.54 seconds and
+slows the Bonsai median from 1.79 to 1.82. All weighted, oriented, relight, and
+depth oracles pass and serialized outputs remain exact; the extra shader path
+is nevertheless removed.
+
 Observation gathering now processes contiguous camera chunks with at most
 eight scoped workers and merges them in original view order. The visibility
 and sample decisions are independent per photograph, while the ordered merge
