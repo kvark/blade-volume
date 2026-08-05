@@ -976,6 +976,46 @@ room_moved = 3238
 room_psnr = [14.60, 14.15, 13.08]
 verdict = "prefiltering texture before the facing-ranked view cap is neutral on Bonsai and loses 0.02 dB held-out Room"
 
+# A smaller tangent patch can rescue cases whose default half-radius patch is
+# not textured in four views. Applying it globally regresses at least one real
+# scene for every tested radius. Retrying only otherwise-unscored surfels at a
+# quarter radius is benign, but not material: three independently trained
+# synthetic foams produce byte-identical fitted scenes, while quantized-image
+# scoring moves by only +0.0021 dB on Bonsai and +0.0076 dB on Room. The retry
+# and its two CLI controls were removed rather than expanding the API for noise.
+[surface_refinement.multi_view.rejected_patch_radius_fallback]
+date = "2026-08-05"
+global_radius_factors = [0.25, 0.75, 1.0, 1.5, 2.0]
+fallback_radius_factors = [0.25, 0.75, 1.0, 1.5, 2.0]
+selected_control_radius_factor = 0.5
+synthetic_control_scored = 211
+synthetic_quarter_fallback_scored = 212
+synthetic_control_position_rmse = 0.6280
+synthetic_quarter_fallback_position_rmse = 0.6280
+synthetic_control_held_light_psnr = [18.53, 18.24]
+synthetic_quarter_fallback_held_light_psnr = [18.53, 18.24]
+synthetic_replica_scene_pairs_byte_identical = 3
+bonsai_control_scored = 5445
+bonsai_quarter_fallback_scored = 5814
+bonsai_control_moved = 3398
+bonsai_quarter_fallback_moved = 3592
+bonsai_control_png_psnr = [14.501454, 11.681183]
+bonsai_quarter_fallback_png_psnr = [14.503550, 11.681218]
+room_control_scored = 5823
+room_quarter_fallback_scored = 6026
+room_control_moved = 3327
+room_quarter_fallback_moved = 3404
+room_control_png_psnr = [14.067426, 13.151847]
+room_quarter_fallback_png_psnr = [14.075028, 13.169347]
+bonsai_control_seconds = [1.98, 1.99, 2.02]
+bonsai_quarter_fallback_seconds = [1.98, 2.01, 2.02]
+room_control_seconds = [2.77, 2.78, 2.81]
+room_quarter_fallback_seconds = [2.76, 2.77, 2.81]
+peak_memory_bytes = 322719744
+memory_events = 0
+artifacts = "target/audit-runs/refine-patch-fallback-real-ab-v1"
+verdict = "reject: the conservative retry is effectively neutral, while global radius changes do not transfer across the synthetic, Bonsai, and Room gates"
+
 # COLMAP capture loading decoded and rectified every selected photograph in
 # serial. A bounded eight-worker scoped pool keeps the sorted camera order and
 # deterministic error order while limiting simultaneous full-resolution source

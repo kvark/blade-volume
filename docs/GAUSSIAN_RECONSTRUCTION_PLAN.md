@@ -376,3 +376,12 @@ PSNR from 14.50 to 14.42 dB (11.68 to 11.51 worst). Room falls from 14.37 to
 14.34 dB. Normalized training-patch agreement therefore confounds orientation
 with local depth layers and occlusion; normal/covariance work remains gated on
 a shared surface objective with refreshed visibility.
+
+Changing the tangent-patch scale does not expand that objective reliably.
+Global radius factors from 0.25 to 2.0 have no joint synthetic/Bonsai/Room
+winner. A conservative quarter-radius retry only for previously unscored
+surfels adds 369 scored candidates on Bonsai and 203 on Room, but three
+independent synthetic controls remain byte-identical. Exact PNG scoring changes
+the held-out means by only +0.0021 and +0.0076 dB respectively. The retry and
+its CLI knobs are removed: this is measurement noise, not enough evidence for
+another reconstruction mode.
