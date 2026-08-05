@@ -359,6 +359,9 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         manual_barriers: false,
     });
     let mut cloud = RadFoamGpuCloud::new_path_recording(&model, &ctx, &mut encoder);
+    if weighted && batched_exhaustive && model.points.len() >= 32 * 1024 {
+        assert!(PathRecorder::uses_support_bvh(&cloud));
+    }
     let mut recorder = PathRecorder::new(&ctx);
     let mut bufs = if weighted && !batched_exhaustive {
         if jacobian_mode == PathJacobianMode::Full && !with_surface_queries {
@@ -1025,8 +1028,7 @@ fn gpu_batched_powerfoam_paths_match_multi_camera_cpu() {
     assert_gpu_batched_path_record_matches_cpu(model, glam::Vec3::ZERO, false);
 }
 
-#[test]
-fn gpu_parallel_bvh_frontier_matches_translated_cpu() {
+fn build_bvh_frontier_model() -> vol::PointCloudModel {
     const POINT_COUNT: usize = 32 * 1024;
     let mut model = build_disconnected_ray_model(129);
     model
@@ -1047,11 +1049,36 @@ fn gpu_parallel_bvh_frontier_matches_translated_cpu() {
         .unwrap()
         .offsets
         .resize(POINT_COUNT + 1, 0);
+    model
+}
+
+#[test]
+fn gpu_parallel_bvh_frontier_matches_translated_cpu() {
     assert_gpu_batched_path_record_matches_cpu(
-        model,
+        build_bvh_frontier_model(),
         glam::Vec3::new(8192.0, -4096.0, 2048.0),
         true,
     );
+}
+
+#[test]
+fn gpu_full_cloud_omits_the_path_recording_bvh() {
+    let _gpu_test_guard = GPU_TEST_LOCK
+        .lock()
+        .expect("GPU path-record test lock poisoned");
+    let Some(ctx) = try_init_gpu() else {
+        eprintln!("skipping: no GPU");
+        return;
+    };
+    let model = build_bvh_frontier_model();
+    let mut encoder = ctx.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "gpu-full-cloud-bvh-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    let mut cloud = RadFoamGpuCloud::new(&model, &ctx, &mut encoder);
+    assert!(!PathRecorder::uses_support_bvh(&cloud));
+    cloud.deinit(&ctx);
 }
 
 #[test]

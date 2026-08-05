@@ -185,7 +185,12 @@ impl RadFoamGpuCloud {
         // while retaining the logical edge count in `num_adjacency`.
         let adj_buffer_size = adj_size.max(mem::size_of::<u32>() as u64);
         let adj_off_size = (adjacency.offsets.len() * mem::size_of::<u32>()) as u64;
-        let has_support_bvh = model.radii.is_some() && num_points >= super::sphere_bvh::MIN_POINTS;
+        // Only differentiable path recording consumes this hierarchy. Full
+        // renderer/depth clouds bind the unread dummy below instead of paying
+        // its build, upload, and residency cost.
+        let has_support_bvh = !upload_attributes
+            && model.radii.is_some()
+            && num_points >= super::sphere_bvh::MIN_POINTS;
         let support_bvh = match model.radii {
             Some(ref radii) if has_support_bvh => super::sphere_bvh::build(&model.points, radii),
             Some(_) | None => vec![super::sphere_bvh::SphereBvhNode::default()],

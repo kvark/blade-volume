@@ -302,13 +302,17 @@ traverses disjoint subtrees, and retains the exact sphere, overflow, clipping,
 and depth/index ordering rules. On the 200K-site Room checkpoint, median gather
 time falls from 2.85 to 1.07 ms and the complete recorder from 17.46 to 15.63
 ms (10.5%). Bonsai falls from 2.86 to 1.14 ms in gather and from 10.90 to 9.31
-ms overall (14.6%). The 12.8 MB hierarchy adds about 43 ms to a Room resource
-build and pays back within roughly 25 updates. At 2K and 10K sites its fixed
-workgroup cost is 0.05--0.06 ms, so clouds below the measured 32K crossover
-retain the exhaustive kernel and do not allocate the tree. A translated 32K
-frontier oracle matches the complete CPU path and all fifteen physical-GPU
-path tests pass; Room and Bonsai candidate/path maxima are unchanged. Profile
-scopes peak at 1.78 GB with no pressure, swap, or OOM event.
+ms overall (14.6%). The 12.8 MB hierarchy adds about 43 ms to a Room training
+resource build and pays back within roughly 25 updates. Only the geometry-only
+`new_path_recording` cloud builds it; ordinary renderer, depth, splat, and scene
+clouds bind one unread 32-byte node. Eight order-balanced 200K-point startup
+probes consequently fall from a 0.69 to 0.65 second median and shed 12,000 KiB
+of median process RSS. At 2K and 10K sites its fixed workgroup cost is
+0.05--0.06 ms, so clouds below the measured 32K crossover retain the exhaustive
+kernel and do not allocate the tree. A translated 32K frontier oracle matches
+the complete CPU path and all sixteen physical-GPU path tests pass; Room and
+Bonsai candidate/path maxima are unchanged. Profile scopes peak at 1.78 GB with
+no pressure, swap, or OOM event.
 
 Global path caps of 128 and 192 are rejected: 128 gives no meaningful speed
 advantage over packing at 256 and loses the held-view tail, while 192 produces
