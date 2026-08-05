@@ -8,7 +8,7 @@
 
 use crate::{colmap, pipeline, relight};
 use blade_volume as vol;
-use std::path;
+use std::{path, thread};
 
 /// One image and the camera that took it.
 pub struct View {
@@ -196,7 +196,7 @@ impl Capture {
         ordered.sort_by(|a, b| a.name.cmp(&b.name));
 
         let far = far_plane(&reconstruction);
-        let mut views = Vec::new();
+        let mut inputs = Vec::new();
         for image in ordered.iter().step_by(stride.max(1)) {
             let camera = reconstruction
                 .cameras
@@ -210,24 +210,59 @@ impl Capture {
             if !path.exists() {
                 continue;
             }
-            let encoded =
-                pipeline::load_and_rectify_image(&path, width as u32, height as u32, camera)
-                    .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-            let pixels = encoded
-                .chunks_exact(3)
-                .map(|rgb| {
-                    [
-                        srgb_to_linear(rgb[0]),
-                        srgb_to_linear(rgb[1]),
-                        srgb_to_linear(rgb[2]),
-                    ]
-                })
-                .collect();
-            views.push(View {
-                name: image.name.clone(),
-                camera: reconstruction.camera_params_for(image, far),
-                pixels,
-            });
+            inputs.push((image, camera, path));
+        }
+        let mut views = Vec::with_capacity(inputs.len());
+        if !inputs.is_empty() {
+            // Decoding and rectification dominate capture loading. Keep the
+            // pool bounded because every worker temporarily holds a full-size
+            // source image as well as the resized result.
+            let workers = thread::available_parallelism()
+                .map_or(1, |count| count.get())
+                .min(8)
+                .min(inputs.len());
+            let chunk_size = inputs.len().div_ceil(workers);
+            thread::scope(|scope| -> Result<(), String> {
+                let mut tasks = Vec::with_capacity(workers);
+                for chunk in inputs.chunks(chunk_size) {
+                    let reconstruction = &reconstruction;
+                    tasks.push(scope.spawn(move || {
+                        let mut loaded = Vec::with_capacity(chunk.len());
+                        for input in chunk {
+                            let image = input.0;
+                            let camera = input.1;
+                            let path = &input.2;
+                            let encoded = pipeline::load_and_rectify_image(
+                                path,
+                                width as u32,
+                                height as u32,
+                                camera,
+                            )
+                            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+                            let pixels = encoded
+                                .chunks_exact(3)
+                                .map(|rgb| {
+                                    [
+                                        srgb_to_linear(rgb[0]),
+                                        srgb_to_linear(rgb[1]),
+                                        srgb_to_linear(rgb[2]),
+                                    ]
+                                })
+                                .collect();
+                            loaded.push(View {
+                                name: image.name.clone(),
+                                camera: reconstruction.camera_params_for(image, far),
+                                pixels,
+                            });
+                        }
+                        Ok::<Vec<View>, String>(loaded)
+                    }));
+                }
+                for task in tasks {
+                    views.extend(task.join().expect("capture worker panicked")?);
+                }
+                Ok(())
+            })?;
         }
         Ok((
             Self {

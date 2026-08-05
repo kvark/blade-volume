@@ -976,6 +976,43 @@ room_moved = 3238
 room_psnr = [14.60, 14.15, 13.08]
 verdict = "prefiltering texture before the facing-ranked view cap is neutral on Bonsai and loses 0.02 dB held-out Room"
 
+# COLMAP capture loading decoded and rectified every selected photograph in
+# serial. A bounded eight-worker scoped pool keeps the sorted camera order and
+# deterministic error order while limiting simultaneous full-resolution source
+# images. Ten alternating warm-cache capture-only runs and five complete
+# reconstruction runs use separately built control/candidate binaries. Both
+# scene files and their raw-float companions compare byte for byte; all scores
+# and particle counts are unchanged.
+[capture.parallel_decode]
+date = "2026-08-05"
+workers_max = 8
+bonsai_views = 37
+room_views = 39
+bonsai_capture_control_seconds = [0.85, 0.76, 0.76, 0.76, 0.76, 0.76, 0.76, 0.78, 0.76, 0.76]
+bonsai_capture_candidate_seconds = [0.32, 0.32, 0.33, 0.32, 0.32, 0.33, 0.32, 0.32, 0.32, 0.32]
+bonsai_capture_median_seconds = [0.76, 0.32]
+room_capture_control_seconds = [0.73, 0.67, 0.67, 0.72, 0.68, 0.68, 0.68, 0.68, 0.67, 0.67]
+room_capture_candidate_seconds = [0.22, 0.23, 0.22, 0.23, 0.23, 0.23, 0.23, 0.23, 0.22, 0.23]
+room_capture_median_seconds = [0.68, 0.23]
+bonsai_full_control_seconds = [2.88, 2.41, 2.43, 2.40, 2.39]
+bonsai_full_candidate_seconds = [2.39, 1.98, 1.97, 1.96, 1.96]
+bonsai_full_median_seconds = [2.41, 1.97]
+bonsai_full_speedup = 1.223
+room_full_control_seconds = [3.33, 3.20, 3.17, 3.20, 3.16]
+room_full_candidate_seconds = [2.83, 2.77, 2.74, 2.73, 2.76]
+room_full_median_seconds = [3.20, 2.76]
+room_full_speedup = 1.159
+bonsai_median_max_rss_kib = [336880, 340556]
+room_median_max_rss_kib = [603684, 607756]
+bonsai_scene_sha256 = "b90e0ddf63e115d271a0b0e8aee07d54568b11be791d4b3a31da05038b850513"
+room_scene_sha256 = "3a0cf07439a44c44a487492ff5ca20a9cb939cd11b13bf2584052a91b07cd670"
+full_gate_cgroup_peak_memory_bytes = 450416640
+workspace_test_peak_memory_bytes = 5125341184
+workspace_clippy_peak_memory_bytes = 874901504
+memory_events = 0
+artifacts = "target/audit-runs/parallel-capture-v1"
+selection = "accept: bounded parallel decode removes 0.44--0.45 seconds and improves complete reconstruction throughput by 16--22% with byte-identical outputs"
+
 # Reconstruction used to construct and destroy the identical relight tracer
 # once for the training split and again for the held-out split. `score_splits`
 # keeps one acceleration structure and one prefiltered environment alive. Five

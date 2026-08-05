@@ -199,6 +199,15 @@ normal error and multi-light control show that they are identifiable.
    workspace tests, physical-GPU parity, cgroup peak memory/events, and a
    committed benchmark manifest with artifact hashes.
 
+COLMAP capture loading now decodes and rectifies at most eight photographs in
+parallel while preserving the name-sorted output and deterministic error order.
+Ten alternating warm-cache runs reduce the Bonsai median from 0.76 to 0.32
+seconds and Room from 0.68 to 0.23. Five complete two-scene A/B runs improve
+median reconstruction throughput by 1.22x and 1.16x respectively; scene and
+raw-float files are byte-identical, all reported scores are unchanged, and
+median process RSS rises by only 3.6--4.0 MiB. The combined scope peaks at 450
+MB with no pressure, swap, OOM, or GPU event.
+
 Current result (2026-08-03): GPU timestamps isolate the training step, not path
 recording or CPU work, as the bottleneck. At 2,048 pixels and 256 path slots, 28
 scalar embedding-gradient scatters (density plus degree-2 RGB SH) spent about
