@@ -782,6 +782,30 @@ memory_events = 0
 artifacts = "target/audit-runs/power-plane-walk-v1"
 verdict = "reject: neutral throughput and f32 reordering perturbs reconstruction topology and quality"
 
+# World depth stays f32 while alpha and peak weight are packed together as two
+# UNORM16 values in an rg32uint target. This halves texture/readback traffic and
+# has at most 1/131070 confidence error, but the result is still not robust:
+# Room improves 1.6%, Bonsai regresses 0.6%, and quantization changes discrete
+# refinement/fusion decisions. The full rgba32float target remains selected.
+[depth_tracing.gpu.rejected_packed_confidence]
+date = "2026-08-05"
+format = "rg32uint: f32 depth bits, UNORM16 alpha, UNORM16 peak"
+control_bonsai_seconds = [1.72, 1.75, 1.77, 1.77, 1.79]
+candidate_bonsai_seconds = [1.77, 1.78, 1.78, 1.79, 1.85]
+control_room_seconds = [2.55, 2.56, 2.56, 2.56, 2.60]
+candidate_room_seconds = [2.50, 2.51, 2.52, 2.53, 2.55]
+control_bonsai_surfels = 28316
+candidate_bonsai_surfels = 28316
+control_room_surfels = 31733
+candidate_room_surfels = 31736
+rounded_bonsai_test_psnr = [14.50, 14.50]
+rounded_room_test_psnr = [14.07, 14.07]
+gpu_depth_oracle_passed = true
+peak_memory_bytes = 333926400
+memory_events = 0
+artifacts = "target/audit-runs/packed-depth-confidence-v1"
+verdict = "reject: no joint speedup and confidence quantization changes topology"
+
 # Four local geometry shortcuts were gated after the overlap diagnostic. None
 # survives both Bonsai and Room. The source for every experimental switch was
 # removed; these numbers are retained so a scene-local gain is not mistaken for

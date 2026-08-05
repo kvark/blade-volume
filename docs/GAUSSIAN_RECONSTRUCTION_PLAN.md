@@ -238,6 +238,13 @@ near-tie cell exits: the reconstructed clouds lose one Bonsai and six Room
 particles, and both held-out means fall by 0.02 dB. Traversal topology needs a
 decision-level quality gate in addition to approximate pixel parity.
 
+Packing alpha and peak weight as UNORM16 while retaining f32 world depth is not
+selected either. The 8-byte target improves Room from 2.56 to 2.52 seconds but
+regresses Bonsai from 1.77 to 1.78, and the tiny confidence error still changes
+one Bonsai refinement choice and three Room fusion cells. Rounded held-out
+scores are neutral, but a non-joint bandwidth result does not justify changing
+the reconstruction topology; the 16-byte rgba32float target remains canonical.
+
 Observation gathering now processes contiguous camera chunks with at most
 eight scoped workers and merges them in original view order. The visibility
 and sample decisions are independent per photograph, while the ordered merge
