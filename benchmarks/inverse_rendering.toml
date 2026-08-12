@@ -2010,6 +2010,52 @@ memory_events = 0
 artifacts = "target/audit-runs/cell-consensus-screen (gitignored)"
 selection = "reject and remove: ownership of one volumetric cell across cameras does not identify one surface point; future consensus must use a learned local surface coordinate"
 
+# A calibrated fronto-parallel plane sweep supplies the missing image-derived
+# signal without using cell identity or reconstructed normals. It repairs a
+# deliberately displaced analytic plane, but on the fixed RGB-only synthetic
+# foam its normalized patches prefer depth changes that lower geometric truth
+# error while damaging the fitted surface under novel lighting. Independent
+# target-depth consistency progressively suppresses the damage and the gain;
+# the strict three-view arm is effectively the original result. Searching a
+# camera ray only at fused-particle resolution reaches the same trade-off. Both
+# prototypes and their environment switches are removed.
+[synthetic_reconstruction.rgb_mask_foam.rejected_photometric_plane_sweep]
+date = "2026-08-12"
+input_artifact = "target/audit-runs/weighted-reference-rebase-v3/model.ply"
+input_artifact_sha256 = "cbdf65d844d7749806fa8227a49990d978bb9ee2bc6226013404cfcc3955fbe8"
+control_surface_position_rmse = 0.6280
+control_surface_normal_rmse_degrees = 66.38
+control_held_light_psnr = 18.53
+control_held_light_worst_psnr = 18.24
+control_coverage = 0.538
+wide_sweep_surface_position_rmse = 0.6223
+wide_sweep_surface_normal_rmse_degrees = 64.64
+wide_sweep_held_light_psnr = 18.34
+wide_sweep_held_light_worst_psnr = 18.06
+wide_sweep_coverage = 0.535
+conservative_sweep_surface_position_rmse = 0.6188
+conservative_sweep_surface_normal_rmse_degrees = 64.99
+conservative_sweep_held_light_psnr = 18.41
+conservative_sweep_held_light_worst_psnr = 18.16
+conservative_sweep_coverage = 0.539
+strict_consistency_surface_position_rmse = 0.6239
+strict_consistency_surface_normal_rmse_degrees = 66.30
+strict_consistency_held_light_psnr = 18.45
+strict_consistency_held_light_worst_psnr = 18.20
+strict_consistency_coverage = 0.540
+three_view_surface_position_rmse = 0.6274
+three_view_surface_normal_rmse_degrees = 66.38
+three_view_held_light_psnr = 18.50
+three_view_held_light_worst_psnr = 18.25
+three_view_coverage = 0.539
+particle_ray_wide_surface_position_rmse = 0.6260
+particle_ray_wide_surface_normal_rmse_degrees = 65.18
+particle_ray_wide_held_light_psnr = 18.35
+particle_ray_wide_held_light_worst_psnr = 18.00
+artifacts = "target/audit-runs/{camera-ray,photo-depth}-refine-v* (gitignored)"
+memory_events = 0
+verdict = "reject and remove: local normalized-patch minima improve truth geometry slightly but do not identify the PBR-correct surface; stricter multi-view consistency converges back to the control"
+
 # A weighted `--init-ply` used to fall through to the fresh-run Delaunay
 # default, which discarded stored radii. Passing `--cech-radius` avoided that
 # path but reinitialized every learned radius from nearest-neighbour spacing.
@@ -2282,6 +2328,45 @@ synthetic_peak_memory_bytes = 452624384
 memory_events = 0
 artifacts = "target/audit-runs/unit-column-matmul (gitignored)"
 selection = "accept in Meganeura: exact compiler-local lowering cuts graph time 21.0%, synthetic training 15.8%, and Bonsai GPU wait 11.4%; uprev Blade only after merge, then rerun workspace and reconstruction gates"
+
+# The merged optimizer was retested through a local override after aligning
+# Meganeura's Blade and Naga revisions with Blade Volume. This is the same
+# optimized graph/compiler code intended by the uprev; only the dependency
+# manifest differs from merged main. The exhaustive suite and real-scene tail
+# gate are clean, and the synthetic result sits inside the earlier 18-repeat
+# candidate distribution. Keep the checked dependency pinned until the small
+# manifest prerequisite lands.
+[synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.merged_validation]
+date = "2026-08-12"
+merged_meganeura_commit = "f0d9d50b41584e02c7163fd904896e4cbaacbda9"
+dependency_fix_commit = "9f8fa54"
+dependency_fix_branch = "fix/blade-volume-dependencies"
+blade_revision = "bd74bdc82f870f8d7f02589de5f0fbb949b6e8a8"
+naga_revision = "cefd48f6cff61d64abe1cdb4002c4e39bfc2c728"
+workspace_all_target_tests_pass = true
+workspace_test_peak_memory = "5.2G"
+workspace_all_target_clippy_pass = true
+synthetic_training_seconds = 9.708
+synthetic_final_loss = 0.012635
+synthetic_truncated_rays = 0
+synthetic_held_pose_psnr = 24.11
+synthetic_held_pose_worst_psnr = 23.64
+synthetic_surface_position_rmse = 0.6209
+synthetic_surface_normal_rmse_degrees = 66.34
+synthetic_held_light_psnr = 18.48
+synthetic_held_light_worst_psnr = 18.41
+synthetic_peak_memory = "409.8M"
+bonsai_start_step = 20400
+bonsai_end_step = 20800
+bonsai_cells = 200000
+bonsai_training_seconds = 23.930
+bonsai_gpu_wait_seconds = 8.520
+bonsai_truncated_rays = 0
+bonsai_selected_test_psnr = 24.4900
+bonsai_all_test_psnr = 24.9420
+bonsai_peak_memory = "1.4G"
+artifacts = "target/audit-runs/merged-meganeura-uprev-v1 (gitignored)"
+selection = "accept merged optimizer behavior; keep Blade Volume on f82d0b6 until Meganeura dependency fix 9f8fa54 lands, then replace the local validation override with the merged revision"
 
 # Unweighted multi-view path recording used one compute pass per camera even
 # though each dispatch writes a disjoint pixel range. Binding every camera in

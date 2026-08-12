@@ -436,13 +436,23 @@ single extreme ray, but its p99, extracted geometry, radiance, and relighting
 remain stable, while large surface-tail events occur at nearly the same rate
 in both arms (7/18 versus 8/18). A two-by-two late Bonsai continuation cuts GPU
 wait by 11.4% with identical selected-view PSNR to four decimals and all-view
-means within 0.0001 dB. The engine branch is published as
-`perf/unit-column-matmul`; Blade deliberately remains on merged revision
-`f82d0b6` until that branch lands. The next integration step is a clean uprev
-followed by the full workspace, synthetic, and Bonsai gates. Other performance
-targets remain native checkpoint-compatible packed parameters, dead
-input-gradient work, and compact active path storage, still at the unchanged
-safe traversal extent.
+means within 0.0001 dB. The engine work is merged through Meganeura `f0d9d50`.
+Its merge changed the engine's Blade/Naga pins back past the reconstruction
+validation fixes, which would give Blade Volume two incompatible
+`blade-graphics` types and restore invalid workgroup SPIR-V. Meganeura branch
+`fix/blade-volume-dependencies` (`9f8fa54`) restores the exact
+`bd74bdc`/`cefd48f` pair used here; Meganeura's full all-target suite passes
+under the 6 GiB cgroup. A local override of that commit also passes Blade
+Volume's complete all-target suite and warnings-denied clippy. A fresh
+synthetic run reaches 24.11 dB at the held pose and 18.48 dB under the held
+light with no truncated rays; a 20.4k-to-20.8k Bonsai continuation reaches
+24.4900 dB on the selected eight and 24.9420 dB on all 37 held views. Peak host
+memory is 5.2 GiB for the exhaustive suite and 1.4 GiB for Bonsai, with no
+cgroup or GPU failure. Blade Volume deliberately stays at `f82d0b6` until that
+small prerequisite lands; then the local override can become the checked
+revision without changing results. Other performance targets remain native
+checkpoint-compatible packed parameters, dead input-gradient work, and compact
+active path storage, still at the unchanged safe traversal extent.
 
 Unweighted multi-view path recording now binds all camera slices in one
 compute pass. Each slice already owns a disjoint output range, so the old
@@ -504,3 +514,20 @@ projection consistency: it assigns rays using the model render and never
 consults image appearance. The prototype is removed. Future geometry work must
 introduce an observation-derived correspondence or residual, rather than
 triangulating identifiers emitted by the current model.
+
+A calibrated image-derived plane sweep tests that requirement directly. For
+each confident source pixel it unprojects a fronto-parallel patch at 17 depth
+hypotheses, compares normalized radiance patches in the other five training
+photographs, and optionally requires the independently refined target depths
+to reproject consistently. It repairs an analytically displaced plane without
+using a reconstructed normal. On the fixed synthetic foam, however, the most
+geometrically positive arm changes position/normal RMSE from 0.6280/66.38° to
+0.6188/64.99° while reducing held-light PSNR from 18.53 to 18.41 dB. A wider
+search falls to 18.34 dB. Tight one-percent depth consistency recovers only
+18.45 dB, and requiring three supporting photographs returns geometry nearly
+to the control at 0.6274/66.38° and 18.50 dB. An analogous particle-level
+camera-ray search has the same trade-off. Both implementations are removed.
+Normalized local patch agreement supplies real observation evidence, but its
+minimum is still not the common PBR surface in occluded and view-dependent
+regions. The next objective needs learned correspondence descriptors or a
+joint rendered-surface objective, not a larger hand-designed plane sweep.
