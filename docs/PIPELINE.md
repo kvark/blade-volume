@@ -1885,6 +1885,37 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   serialized scope peaked at 2,075,435,008 bytes under 6 GiB with zero swap,
   pressure, OOM, kill, throttling, truncation, or GPU fault.
 
+#### M2bj — Recycle fixed cloud capacity (implemented experimentally; rejected)
+
+- A minimal prototype kept the fixed densification schedule active at the
+  200,000-site budget. At one boundary it reused the existing exhaustive
+  maximum-contribution collector to prune small unobserved cells, then filled
+  the exact headroom by splitting sites selected from the existing PowerFoam
+  photometric-error EMA. The model stayed cloud-only and exactly fixed-size;
+  the existing topology rebuild, field inheritance, and Adam remap handled the
+  change. The prototype added no model field, graph op, shader entry/group,
+  WGSL, binding, or pipeline variant.
+- With the established `0.01` contribution threshold, the step-510 boundary
+  recycles 5,326 Room sites and 87 Bonsai sites. After another 510 matched
+  updates, Room train/held-out PSNR changes
+  25.3359/23.4194→25.2459/23.3695 dB and Bonsai changes
+  16.8923/16.2997→16.8728/16.2993 dB. One exhaustive scan and rebuild raise
+  training time 74.184→77.824 seconds on Room and 46.055→49.979 seconds on
+  Bonsai.
+- Lowering the threshold tenfold does not isolate safe redundancy. It still
+  recycles 4,798 Room sites and changes train/held-out PSNR to
+  25.2567/23.3536 dB; the 38-site Bonsai change reaches only
+  16.8705/16.2889 dB. Thus even cells with very small sampled maximum weight
+  can be necessary traversal or held-view support, while copying a high-error
+  site's complete appearance/support state does not create missing spatial
+  responsibility.
+- All four candidate scans cover 1,044,480 rays over all 255 training views
+  with zero truncation. The two serialized scopes peak at 1,415,856,128 and
+  1,218,797,568 bytes under 6 GiB with no swap, pressure, OOM, kill,
+  throttling, or GPU fault. The implementation and CLI are removed. Future
+  capacity work needs a held-view-safe spatial responsibility signal rather
+  than another policy over the current contribution and point-error scores.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

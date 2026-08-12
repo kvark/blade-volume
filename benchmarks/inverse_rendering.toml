@@ -3464,3 +3464,52 @@ bonsai_candidate_held_psnr = [16.8072, 16.8093]
 bonsai_averaged_view_split = [16, 0, 21]
 peak_memory_bytes = 2075435008
 verdict = "reject and remove: existing reduction-template row packing needs no shader or op variant and saves 8.5-9.1% wall time, but its changed reduction tree loses 0.0236 dB on Bonsai"
+
+[training_quality.rejected_fixed_capacity_recycling]
+date = "2026-08-12"
+steps = 1020
+recycle_step = 510
+point_budget = 200000
+training_views = 255
+contribution_rays = 1044480
+truncated_rays = 0
+
+[training_quality.rejected_fixed_capacity_recycling.threshold_0_01.room]
+contribution_threshold = 0.01
+recycled_points = 5326
+control_training_seconds = 74.184
+candidate_training_seconds = 77.824
+control_train_psnr = 25.3359
+candidate_train_psnr = 25.2459
+control_held_psnr = 23.4194
+candidate_held_psnr = 23.3695
+
+[training_quality.rejected_fixed_capacity_recycling.threshold_0_01.bonsai]
+contribution_threshold = 0.01
+recycled_points = 87
+control_training_seconds = 46.055
+candidate_training_seconds = 49.979
+control_train_psnr = 16.8923
+candidate_train_psnr = 16.8728
+control_held_psnr = 16.2997
+candidate_held_psnr = 16.2993
+
+[training_quality.rejected_fixed_capacity_recycling.threshold_0_001.room]
+contribution_threshold = 0.001
+recycled_points = 4798
+candidate_training_seconds = 77.785
+candidate_train_psnr = 25.2567
+candidate_held_psnr = 23.3536
+
+[training_quality.rejected_fixed_capacity_recycling.threshold_0_001.bonsai]
+contribution_threshold = 0.001
+recycled_points = 38
+candidate_training_seconds = 49.638
+candidate_train_psnr = 16.8705
+candidate_held_psnr = 16.2889
+
+[training_quality.rejected_fixed_capacity_recycling.stability]
+peak_memory_bytes = [1415856128, 1218797568]
+memory_events = 0
+driver_faults = 0
+verdict = "reject and remove: exact fixed-size recycling loses held-out quality on both scenes; low measured contribution is not proof that a cell is redundant"

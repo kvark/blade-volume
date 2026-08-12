@@ -2000,7 +2000,15 @@ material path.
    19.2% versus 256 while slightly improving held-out PSNR. Retain the larger
    candidate floor and select path budgets from telemetry. A 128-row replay is
    exact but loses 0.0158 dB through a changed optimizer reduction shape, so
-   160 remains selected. The official
+   160 remains selected. Packing eight-wide softmax rows into the existing
+   reduction template is 8.5–9.1% faster but loses 0.0236 dB held out on
+   Bonsai because the changed f32 tree changes the optimizer trajectory; no
+   Meganeura prototype is retained. Fixed-size point recycling also fails:
+   replacing 5,326/87 low-contribution Room/Bonsai sites at one exact
+   all-view boundary changes held-out PSNR by -0.0499/-0.0004 dB, and a
+   tenfold stricter threshold loses -0.0658/-0.0108 dB. Both policies are
+   removed. Current contribution and point-error scores are not a safe proxy
+   for held-view spatial responsibility. The official
    appearance audit at commit `9639225` counts 412 extra floats per point and
    identifies spatial-norm and directional-kernel differences between paper
    and source, so each staged increment must name its exact contract.)
