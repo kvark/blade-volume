@@ -2167,6 +2167,60 @@ artifacts = "target/audit-runs/synthetic-{fixed-2048,densify-1024}-1800-v* and s
 memory_events = 0
 selection = "accept as the synthetic pipeline default: staged allocation improves static novel-view radiance, surface position and normal truth, coverage, and novel-light PBR at the same final cloud size"
 
+# Nearby initial budgets test whether the selected 1,024-site support lattice
+# merely won against the fixed 2,048-site control by chance. The 768-site arm
+# reaches the same final budget after five rounds and improves truth geometry
+# in both repeats, but its held-light tail is lower and variable. Starting from
+# 1,280 is unstable, while 1,536 gives similar held-pose radiance with worse
+# geometry and relighting. Retain 1,024 as the joint default.
+[synthetic_reconstruction.rgb_mask_foam.rejected_initial_budgets]
+date = "2026-08-12"
+updates = 1800
+target_points = 2048
+initial_points_swept = [768, 1024, 1280, 1536, 2048]
+points_768_training_seconds = [15.956, 16.114]
+points_768_held_pose_psnr = [25.60, 25.06]
+points_768_held_pose_worst_psnr = [24.65, 23.68]
+points_768_surface_position_rmse = [0.5793, 0.5595]
+points_768_surface_normal_rmse_degrees = [63.41, 65.01]
+points_768_held_light_psnr = [19.17, 18.82]
+points_768_held_light_worst_psnr = [18.77, 18.76]
+points_768_coverage = [0.560, 0.555]
+points_1280_held_pose_psnr = [22.27, 21.88]
+points_1280_surface_position_rmse = [0.7289, 0.6938]
+points_1280_held_light_psnr = [17.15, 17.64]
+points_1536_held_pose_psnr = [24.91, 25.20]
+points_1536_surface_position_rmse = [0.6266, 0.6520]
+points_1536_held_light_psnr = [18.79, 19.00]
+artifacts = "target/audit-runs/initial-budget-v1 (gitignored)"
+memory_events = 0
+verdict = "retain 1,024 initial sites: 768 improves geometry but loses the held-light tail; larger starts spend too much of the fixed budget before residual-directed allocation"
+
+# Geometry is unchanged while the fitted diffuse palette is varied on five
+# independently trained clouds. Six shared materials is the smallest count
+# that improves training-light, held-light mean, and every held-light worst
+# view. Four misses the difficult v3 tail; eight slightly misses it as well,
+# while 12/16 add capacity without improving the selected six-material fit.
+[synthetic_reconstruction.rgb_mask_foam.material_count]
+date = "2026-08-12"
+material_counts_swept = [2, 4, 6, 8, 12, 16]
+control_materials = 2
+candidate_materials = 6
+control_training_light_psnr = [18.78, 19.87, 19.73, 19.44, 19.58]
+candidate_training_light_psnr = [19.03, 20.13, 20.04, 19.70, 19.80]
+control_held_light_psnr = [18.48, 19.33, 19.19, 18.88, 19.07]
+candidate_held_light_psnr = [18.60, 19.39, 19.33, 19.00, 19.19]
+held_light_gain = [0.12, 0.06, 0.14, 0.12, 0.12]
+control_held_light_worst_psnr = [18.41, 19.14, 18.68, 18.80, 18.86]
+candidate_held_light_worst_psnr = [18.50, 19.18, 18.74, 18.89, 18.94]
+held_light_worst_gain = [0.09, 0.04, 0.06, 0.09, 0.08]
+coverage = [0.536, 0.559, 0.555, 0.557, 0.556]
+candidate_material_residual = [0.04234, 0.08209, 0.04908, 0.04016, 0.03988]
+fit_seconds = [0.650, 0.648, 0.643, 0.647, 0.624]
+artifacts = "target/audit-runs/material-count{6,8,-sweep}-v1 and initial-budget-materials-v1 (gitignored)"
+memory_events = 0
+selection = "accept six shared diffuse materials as the synthetic single-light default: all five held-light mean and worst-view gates improve with unchanged geometry, coverage, and runtime representation"
+
 # Repeated captures under known lights make surface orientation identifiable
 # without geometry or material truth. For every Gaussian, the solver searches
 # 512 sphere directions, analytically eliminates one diffuse albedo per channel,

@@ -117,7 +117,7 @@ struct Args {
     min_views: usize,
 
     /// shared PBR materials in the reconstructed surface cloud
-    #[argh(option, default = "2")]
+    #[argh(option, default = "6")]
     materials: usize,
 
     /// fit Gaussian normals from every known light except the held-out one

@@ -569,6 +569,16 @@ relighting together, but the remaining ~66° normal error keeps the next major
 milestone unchanged: learn a shared local surface coordinate and optimize it
 against a rendered-surface objective.
 
+The same staged schedule does not improve further by changing its initial
+budget. Starting from 768 sites gives excellent geometry in two repeats
+(0.5595--0.5793 position and 63.4--65.0° normal RMSE), but its unseen-light
+tail is lower and variable. Starts of 1,280 and 1,536 are worse. The 1,024-site
+default remains the joint winner. On its fixed output clouds, increasing the
+shared diffuse palette from two to six materials is independently positive:
+five clouds gain 0.06--0.14 dB under the unseen light and 0.04--0.09 dB on
+every worst view, with identical geometry and coverage. Six is now the
+synthetic default; larger palettes do not improve the difficult tail.
+
 When repeat captures under controlled known lights are available, the normal
 part is now directly solvable. `refine_normals_known_lights` searches 512
 directions per Gaussian and eliminates diffuse albedo analytically for each
