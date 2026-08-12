@@ -567,3 +567,15 @@ points. The solve takes 0.04–0.05 seconds after observations are gathered.
 This is a real reusable multi-light result, but remains opt-in: ordinary phone
 video supplies one illumination, so its next milestone is still a joint
 rendered-surface objective or an observation-trained correspondence descriptor.
+
+Sharing a small diffuse material table does not by itself make that one-light
+case identifiable. An alternating experiment fitted two shared materials from
+sun-east and searched 512 normal directions, with studio kept entirely unseen.
+At matched 1.6-cell support it improves normal RMSE by 0.65--2.00 degrees and
+mean held-light PSNR by 0.21--0.46 dB, but loses 1.5--1.9 coverage points and
+regresses the worst unseen-light view on two of four clouds. Rescaling every
+Gaussian to preserve its projected area restores coverage, but then every
+worst-view score and three of four mean unseen-light scores regress. The
+prototype is removed. The next single-light step needs an observation-derived
+cross-view surface constraint; another per-particle shading prior will merely
+choose a point on the same normal/albedo ambiguity.
