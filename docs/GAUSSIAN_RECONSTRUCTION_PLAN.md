@@ -544,6 +544,17 @@ tenfold lower initial density still reaches only 22.57 dB and worsens surface
 position RMSE from 0.6209 to 0.7495. That prototype is removed. The masks are
 valuable supervision, but a filled visual hull is not a surface representation.
 
+Applying those masks after surface extraction confirms both halves of that
+conclusion. Strictly removing particles that contradict any training
+silhouette improves normal error and every training/held-light score on five
+clouds. Even after a small support correction, however, position RMSE regresses
+on four clouds and coverage falls on four. Moving the contradictory particles
+toward the nearest silhouette instead of deleting them improves the newest
+position RMSE from 0.5853 to 0.5837, but slightly regresses held-light mean,
+worst view, and coverage. Both prototypes are removed. Masks can say that a
+point is impossible; away from a silhouette boundary they provide no depth or
+surface coordinate for the replacement.
+
 Adaptive point allocation does improve the same fixed-size cloud. Four paired
 1,800-update runs compare a fixed 2,048-site lattice with a 1,024-site support
 lattice grown to 2,048 by four existing gradient-directed densification rounds.

@@ -2081,6 +2081,47 @@ artifacts = "target/audit-runs/visual-hull-init*-v1 (gitignored)"
 memory_events = 0
 verdict = "reject and remove: a strict filled visual hull spends the cloud budget on opaque interior volume rather than learned surface support"
 
+# Silhouettes are more useful as a contradiction test on the extracted cloud
+# than as a filled initializer, but they still do not identify the surface.
+# Removing any Gaussian whose centre projects outside one of the six training
+# masks consistently improves normal error and both observed/unseen-light PBR.
+# A 1.45-cell support restores the default held-view coverage on some clouds,
+# yet four of five position RMSE values regress and four lose coverage. A
+# conservative one-pixel mask dilation has the same smaller trade-off. Moving
+# contradictory particles toward the nearest silhouette at fixed camera depth
+# retains the particles and improves position RMSE from 0.5853 to 0.5837 on the
+# newest cloud, but held-light mean/worst and coverage still regress.
+[synthetic_reconstruction.rgb_mask_foam.rejected_silhouette_surface_constraint]
+date = "2026-08-12"
+training_masks = 6
+held_out_masks_used = 0
+strict_margin_pixels = 0
+strict_disc_radius = 1.45
+control_disc_radius = 1.4
+control_surface_position_rmse = [0.6209, 0.5976, 0.5953, 0.5842, 0.5853]
+strict_surface_position_rmse = [0.6234, 0.6021, 0.5981, 0.5864, 0.5813]
+control_surface_normal_rmse_degrees = [66.34, 65.98, 67.32, 69.43, 66.34]
+strict_surface_normal_rmse_degrees = [65.66, 65.87, 67.10, 68.70, 65.56]
+control_training_light_psnr = [18.78, 19.87, 19.73, 19.44, 19.58]
+strict_training_light_psnr = [19.06, 20.15, 19.94, 19.58, 19.82]
+control_held_light_psnr = [18.48, 19.33, 19.19, 18.88, 19.07]
+strict_held_light_psnr = [18.74, 19.53, 19.33, 18.99, 19.27]
+control_held_light_worst_psnr = [18.41, 19.14, 18.68, 18.80, 18.86]
+strict_held_light_worst_psnr = [18.67, 19.25, 18.87, 18.89, 18.97]
+control_coverage = [0.536, 0.559, 0.555, 0.557, 0.556]
+strict_coverage = [0.531, 0.555, 0.552, 0.557, 0.556]
+strict_removed_particles = [103, 76, 82, 92, 105]
+move_steps_swept = [0.1, 0.25, 0.5, 1.0]
+move_rounds = 3
+move_best_position_rmse = 0.5837
+move_best_surface_normal_rmse_degrees = 66.33
+move_best_held_light_psnr = 19.06
+move_best_held_light_worst_psnr = 18.82
+move_best_coverage = 0.555
+artifacts = "target/audit-runs/silhouette-{filter,radius,replicates,margin1,move}-v1 (gitignored)"
+memory_events = 0
+verdict = "reject and remove: silhouettes identify contradictory particles, but deleting or moving them does not recover the common 3D surface across the joint geometry, coverage, and held-light gates"
+
 # The same final 2,048-cell budget works much better when half is held back for
 # gradient-directed allocation. Four fixed densification rounds grow a broad
 # 1,024-cell support cloud to 2,048 cells, followed by enough fixed-topology
