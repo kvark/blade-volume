@@ -36,6 +36,11 @@ fn attribute_dimension() -> u32 {
         + select(0u, 3u * SURFACE_COLOR_COMPONENTS, (g_params.appearance_flags & 1u) != 0u)
         + select(0u, 3u * SURFACE_DETAIL_SITES, (g_params.appearance_flags & 4u) != 0u)
         + select(0u, SURFACE_DETAIL_SITES, (g_params.appearance_flags & 8u) != 0u)
+        + select(
+            0u,
+            6u * SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS,
+            (g_params.appearance_flags & 16u) != 0u,
+        )
         + select(0u, 6u * SPHERICAL_VORONOI_SITES, (g_params.appearance_flags & 2u) != 0u);
 }
 
@@ -111,6 +116,13 @@ fn cell_density_color(
     var density_scale = 1.0;
     if ((g_params.appearance_flags & 4u) != 0u) {
         let detail_base = base + 3u * components + 1u + compact_length;
+        let density_length = select(
+            0u,
+            SURFACE_DETAIL_SITES,
+            (g_params.appearance_flags & 8u) != 0u,
+        );
+        let directional_base =
+            detail_base + 3u * SURFACE_DETAIL_SITES + density_length;
         var detail_colors: array<vec3<f32>, SURFACE_DETAIL_SITES>;
         for (var site = 0u; site < SURFACE_DETAIL_SITES; site += 1u) {
             let color_offset = detail_base + 3u * site;
@@ -119,6 +131,37 @@ fn cell_density_color(
                 g_attributes[color_offset + 1u],
                 g_attributes[color_offset + 2u],
             );
+            if ((g_params.appearance_flags & 16u) != 0u) {
+                var axes: array<vec3<f32>, SURFACE_DETAIL_DIRECTIONS>;
+                var directional_colors: array<vec3<f32>, SURFACE_DETAIL_DIRECTIONS>;
+                let site_base = site * SURFACE_DETAIL_DIRECTIONS;
+                for (var direction_index = 0u; direction_index < SURFACE_DETAIL_DIRECTIONS; direction_index += 1u) {
+                    let axis_offset = directional_base + 3u * (site_base + direction_index);
+                    axes[direction_index] = vec3<f32>(
+                        g_attributes[axis_offset],
+                        g_attributes[axis_offset + 1u],
+                        g_attributes[axis_offset + 2u],
+                    );
+                    let direction_color_offset = directional_base
+                        + 3u * SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS
+                        + 3u * (site_base + direction_index);
+                    directional_colors[direction_index] = vec3<f32>(
+                        g_attributes[direction_color_offset],
+                        g_attributes[direction_color_offset + 1u],
+                        g_attributes[direction_color_offset + 2u],
+                    );
+                }
+                let tangent_site = surface_detail_project_site(
+                    detail_sites[site].xyz,
+                    g_surface_normals[cell].xyz,
+                );
+                detail_colors[site] += surface_detail_directional_color(
+                    g_points[cell].xyz + g_points[cell].w * tangent_site,
+                    ray_origin,
+                    axes,
+                    directional_colors,
+                );
+            }
         }
         let point = g_points[cell];
         let surface = g_surface_normals[cell];
@@ -168,8 +211,14 @@ fn cell_density_color(
             SURFACE_DETAIL_SITES,
             (g_params.appearance_flags & 8u) != 0u,
         );
+        let directional_length = select(
+            0u,
+            6u * SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS,
+            (g_params.appearance_flags & 16u) != 0u,
+        );
         let spherical_base =
-            base + 3u * components + 1u + compact_length + detail_length + density_length;
+            base + 3u * components + 1u + compact_length + detail_length
+                + density_length + directional_length;
         var axes: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         var colors: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         for (var site = 0u; site < SPHERICAL_VORONOI_SITES; site += 1u) {

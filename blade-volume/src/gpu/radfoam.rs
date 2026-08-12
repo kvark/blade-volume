@@ -13,7 +13,8 @@ use std::{mem, ptr, slice};
 /// - `surface_details`: `vec4<f32>[N * 8]` containing radius-normalized site
 ///   offsets in xyz and radius-normalized heights in w, or one zero dummy
 /// - `attributes`: packed `f32[N * attr_dim]`: SH, density, then optional
-///   compact surface, detail-site RGB, and Spherical Voronoi parameters
+///   compact surface, detail-site RGB, optional per-site directional tables,
+///   and Spherical Voronoi parameters
 /// - `point_adjacency`: flattened neighbor list `u32[K]`
 /// - `point_adjacency_offsets`: CSR offsets `u32[N+1]`
 /// - `support_bvh`: a flat software BVH over bounded PowerFoam support spheres
@@ -41,6 +42,7 @@ pub struct RadFoamGpuCloud {
     pub is_oriented: bool,
     pub has_surface_detail: bool,
     pub has_surface_detail_density: bool,
+    pub has_surface_detail_directional: bool,
     pub has_surface_color: bool,
     pub has_spherical_voronoi: bool,
 }
@@ -331,8 +333,8 @@ impl RadFoamGpuCloud {
             }
 
             // Attributes: [SH, density, compact surface residual, detail RGB,
-            // detail density logits, SV axes, SV colors] per point. This
-            // matches the shader layout.
+            // detail density logits, directional axes, directional colors,
+            // SV axes, SV colors] per point. This matches the shader layout.
             if upload_attributes {
                 let dst_attrs = slice::from_raw_parts_mut(
                     attributes_stage.data() as *mut f32,
@@ -372,6 +374,21 @@ impl RadFoamGpuCloud {
                                         [detail_base..detail_base + crate::SURFACE_DETAIL_SITES],
                                 );
                             attribute_offset += crate::SURFACE_DETAIL_SITES;
+                        }
+                        if let Some(ref directional) = detail.directional {
+                            let direction_base = detail_base * crate::SURFACE_DETAIL_DIRECTIONS;
+                            let direction_end = direction_base
+                                + crate::SURFACE_DETAIL_SITES * crate::SURFACE_DETAIL_DIRECTIONS;
+                            for &axis in &directional.axes[direction_base..direction_end] {
+                                dst_attrs[attribute_offset..attribute_offset + 3]
+                                    .copy_from_slice(&axis.to_array());
+                                attribute_offset += 3;
+                            }
+                            for &color in &directional.colors[direction_base..direction_end] {
+                                dst_attrs[attribute_offset..attribute_offset + 3]
+                                    .copy_from_slice(&color.to_array());
+                                attribute_offset += 3;
+                            }
                         }
                     }
                     if let Some(ref spherical_voronoi) = model.spherical_voronoi {
@@ -501,6 +518,10 @@ impl RadFoamGpuCloud {
                 .surface_detail
                 .as_ref()
                 .is_some_and(|detail| detail.density_logits.is_some()),
+            has_surface_detail_directional: model
+                .surface_detail
+                .as_ref()
+                .is_some_and(|detail| detail.directional.is_some()),
             has_surface_color: model.surface_color_coefficients.is_some(),
             has_spherical_voronoi: model.spherical_voronoi.is_some(),
         }

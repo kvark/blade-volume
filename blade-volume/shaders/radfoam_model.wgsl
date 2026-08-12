@@ -27,6 +27,11 @@ fn rf_compute_attr_dim() -> u32 {
         + select(0u, 3u * SURFACE_COLOR_COMPONENTS, rf_has_surface_color())
         + select(0u, 3u * SURFACE_DETAIL_SITES, rf_has_surface_detail())
         + select(0u, SURFACE_DETAIL_SITES, rf_has_surface_detail_density())
+        + select(
+            0u,
+            6u * SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS,
+            rf_has_surface_detail_directional(),
+        )
         + select(0u, 6u * SPHERICAL_VORONOI_SITES, rf_has_spherical_voronoi());
 }
 
@@ -64,6 +69,10 @@ fn rf_has_surface_detail() -> bool {
 
 fn rf_has_surface_detail_density() -> bool {
     return (g_params.pad.z & 8u) != 0u;
+}
+
+fn rf_has_surface_detail_directional() -> bool {
+    return (g_params.pad.z & 16u) != 0u;
 }
 
 fn rf_get_surface_normal(idx: u32) -> vec3<f32> {
@@ -193,6 +202,13 @@ fn rf_get_density_color(
     );
     if (rf_has_surface_detail()) {
         let detail_base = base + 3u * comps + 1u + compact_length;
+        let density_length = select(
+            0u,
+            SURFACE_DETAIL_SITES,
+            rf_has_surface_detail_density(),
+        );
+        let directional_base =
+            detail_base + 3u * SURFACE_DETAIL_SITES + density_length;
         var sites: array<vec4<f32>, SURFACE_DETAIL_SITES>;
         var colors: array<vec3<f32>, SURFACE_DETAIL_SITES>;
         for (var site = 0u; site < SURFACE_DETAIL_SITES; site += 1u) {
@@ -203,6 +219,38 @@ fn rf_get_density_color(
                 g_attributes[color_offset + 1u],
                 g_attributes[color_offset + 2u],
             );
+            if (rf_has_surface_detail_directional()) {
+                var axes: array<vec3<f32>, SURFACE_DETAIL_DIRECTIONS>;
+                var directional_colors: array<vec3<f32>, SURFACE_DETAIL_DIRECTIONS>;
+                let site_base = site * SURFACE_DETAIL_DIRECTIONS;
+                for (var direction = 0u; direction < SURFACE_DETAIL_DIRECTIONS; direction += 1u) {
+                    let axis_offset = directional_base + 3u * (site_base + direction);
+                    axes[direction] = vec3<f32>(
+                        g_attributes[axis_offset],
+                        g_attributes[axis_offset + 1u],
+                        g_attributes[axis_offset + 2u],
+                    );
+                    let direction_color_offset = directional_base
+                        + 3u * SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS
+                        + 3u * (site_base + direction);
+                    directional_colors[direction] = vec3<f32>(
+                        g_attributes[direction_color_offset],
+                        g_attributes[direction_color_offset + 1u],
+                        g_attributes[direction_color_offset + 2u],
+                    );
+                }
+                let point = rf_get_point(idx);
+                let tangent_site = surface_detail_project_site(
+                    sites[site].xyz,
+                    rf_get_surface_normal(idx),
+                );
+                colors[site] += surface_detail_directional_color(
+                    point + rf_get_radius(idx) * tangent_site,
+                    ray_origin,
+                    axes,
+                    directional_colors,
+                );
+            }
         }
         let surface = g_surface_normals[idx];
         if (rf_has_surface_detail_density()) {
@@ -251,8 +299,14 @@ fn rf_get_density_color(
             SURFACE_DETAIL_SITES,
             rf_has_surface_detail_density(),
         );
+        let directional_length = select(
+            0u,
+            6u * SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS,
+            rf_has_surface_detail_directional(),
+        );
         let spherical_base =
-            base + 3u * comps + 1u + compact_length + detail_length + density_length;
+            base + 3u * comps + 1u + compact_length + detail_length
+                + density_length + directional_length;
         var axes: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         var colors: array<vec3<f32>, SPHERICAL_VORONOI_SITES>;
         for (var site = 0u; site < SPHERICAL_VORONOI_SITES; site += 1u) {

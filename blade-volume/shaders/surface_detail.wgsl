@@ -7,10 +7,38 @@
 // kernel match the released PowerFoam implementation.
 
 const SURFACE_DETAIL_SITES: u32 = 8u;
+const SURFACE_DETAIL_DIRECTIONS: u32 = 8u;
 const SURFACE_DETAIL_TEMPERATURE: f32 = 10.0;
 
 fn surface_detail_project_site(raw_site: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     return raw_site - dot(raw_site, normal) * normal;
+}
+
+fn surface_detail_directional_color(
+    site_position: vec3<f32>,
+    camera_origin: vec3<f32>,
+    axes: array<vec3<f32>, SURFACE_DETAIL_DIRECTIONS>,
+    colors: array<vec3<f32>, SURFACE_DETAIL_DIRECTIONS>,
+) -> vec3<f32> {
+    let view = site_position - camera_origin;
+    let direction = view / max(length(view), 1e-20);
+    var max_logit = -1e30;
+    for (var i = 0u; i < SURFACE_DETAIL_DIRECTIONS; i += 1u) {
+        let temperature = length(axes[i]);
+        let axis = axes[i] / max(temperature, 1e-20);
+        max_logit = max(max_logit, -temperature * length(direction - axis));
+    }
+    var weight_sum = 0.0;
+    var color_sum = vec3<f32>(0.0);
+    for (var i = 0u; i < SURFACE_DETAIL_DIRECTIONS; i += 1u) {
+        let temperature = length(axes[i]);
+        let axis = axes[i] / max(temperature, 1e-20);
+        let logit = -temperature * length(direction - axis);
+        let weight = exp(logit - max_logit);
+        weight_sum += weight;
+        color_sum += weight * colors[i];
+    }
+    return color_sum / max(weight_sum, 1e-20);
 }
 
 fn surface_detail_query_t(

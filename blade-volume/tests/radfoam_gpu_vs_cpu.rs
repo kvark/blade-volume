@@ -46,6 +46,27 @@ fn gpu_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+fn directional_detail(point_count: usize) -> vol::SurfaceDetailDirectional {
+    let count = point_count * vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+    vol::SurfaceDetailDirectional {
+        axes: (0..count)
+            .map(|index| {
+                let direction = index % vol::SURFACE_DETAIL_DIRECTIONS;
+                let angle = direction as f32 * std::f32::consts::TAU
+                    / vol::SURFACE_DETAIL_DIRECTIONS as f32;
+                let z = if direction & 1 == 0 { 0.4 } else { -0.4 };
+                6.0 * glam::Vec3::new(angle.cos(), angle.sin(), z).normalize()
+            })
+            .collect(),
+        colors: (0..count)
+            .map(|index| {
+                let value = 0.004 * ((index % 11) as f32 - 5.0);
+                glam::Vec3::new(value, -0.5 * value, 0.25 * value)
+            })
+            .collect(),
+    }
+}
+
 use radfoam_cpu_ref as cpu;
 
 /// A minimal camera uniform matching the production shader.
@@ -273,7 +294,12 @@ fn assert_gpu_matches_cpu(
                     .as_ref()
                     .is_some_and(|detail| detail.density_logits.is_some())
                     as u32)
-                    << 3,
+                    << 3
+                | (model
+                    .surface_detail
+                    .as_ref()
+                    .is_some_and(|detail| detail.directional.is_some()) as u32)
+                    << 4,
         ],
         _size_pad: 0,
     };
@@ -496,7 +522,7 @@ fn oriented_powerfoam_gpu_matches_cpu() {
                 .map(|index| 0.2 * ((index % vol::SURFACE_DETAIL_SITES) as f32 - 3.5))
                 .collect(),
         ),
-        directional: None,
+        directional: Some(directional_detail(model.points.len())),
     });
     model.spherical_voronoi = Some(vol::SphericalVoronoi {
         axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
@@ -552,7 +578,7 @@ fn surface_detail_powerfoam_splat_gpu_matches_cpu() {
                     .map(|index| if index == 0 { 2.0 } else { -0.25 })
                     .collect(),
             ),
-            directional: None,
+            directional: Some(directional_detail(1)),
         }),
         surface_color_coefficients: None,
         spherical_voronoi: None,

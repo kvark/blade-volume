@@ -340,7 +340,22 @@ fn oriented_powerfoam_scene_applies_the_surface_offset() {
                 .map(|index| 0.25 * (index as f32 - 3.5))
                 .collect(),
         ),
-        directional: None,
+        directional: Some(vol::SurfaceDetailDirectional {
+            axes: (0..vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS)
+                .map(|index| {
+                    let angle = (index % vol::SURFACE_DETAIL_DIRECTIONS) as f32
+                        * std::f32::consts::TAU
+                        / vol::SURFACE_DETAIL_DIRECTIONS as f32;
+                    6.0 * glam::Vec3::new(angle.cos(), angle.sin(), 0.25).normalize()
+                })
+                .collect(),
+            colors: (0..vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS)
+                .map(|index| {
+                    let value = 0.005 * ((index % 9) as f32 - 4.0);
+                    glam::Vec3::new(value, -0.5 * value, 0.25 * value)
+                })
+                .collect(),
+        }),
     });
     let mut axes = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
     let mut colors = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
