@@ -1908,10 +1908,11 @@ Broken into sub-steps:
   exercises the full Graph → autodiff → Adam loop on a toy: optimise a
   `[1, 3]` parameter to match a target RGB via MSE. Test converges to within
   0.02 on hosts that have a GPU; skips gracefully otherwise via
-  `try_init_gpu()`. Meganeura is pinned at `7717181`, including the scalable
-  training, zero-sparse scatter, and packed-reduction work required by the
-  production graph. blade-graphics is unified at `bd74bdc` (the revision
-  meganeura pins) so the renderer and meganeura session share one GPU context.
+  `try_init_gpu()`. Meganeura is pinned at `84a8a45`, including the merged
+  shader-modifier cleanup and the scalable training kernels required by the
+  production graph. blade-graphics is unified at `200188b` (the revision
+  Meganeura pins) so the renderer and Meganeura session share one GPU context
+  without Vulkan validation errors.
   The discrete cell walk remains outside autograd: the GPU path recorder emits
   stable cell roles, intervals, and geometry Jacobians, then meganeura
   differentiates the continuous integration graph.

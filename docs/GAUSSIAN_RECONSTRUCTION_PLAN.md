@@ -423,7 +423,7 @@ median training-depth RMSE from 3.3444 to 6.4169 and loses 0.09 dB on the mean
 worst held pose. The source rewrite is removed.
 
 The accepted follow-up keeps MatMul and MatMulBT in the logical graph.
-Meganeura `0fdc696` recognizes a narrow f32 all-ones column only while lowering
+Meganeura recognizes a narrow f32 all-ones column only while lowering
 the physical plan: forward becomes the scalar-order packed reduction and the
 input gradient becomes an exact row broadcast. A 513x3 physical-GPU test
 matches generic MatMul/MatMulBT forward values and parameter gradients
@@ -436,23 +436,27 @@ single extreme ray, but its p99, extracted geometry, radiance, and relighting
 remain stable, while large surface-tail events occur at nearly the same rate
 in both arms (7/18 versus 8/18). A two-by-two late Bonsai continuation cuts GPU
 wait by 11.4% with identical selected-view PSNR to four decimals and all-view
-means within 0.0001 dB. The engine work is merged through Meganeura `f0d9d50`.
-Its merge changed the engine's Blade/Naga pins back past the reconstruction
-validation fixes, which would give Blade Volume two incompatible
-`blade-graphics` types and restore invalid workgroup SPIR-V. Meganeura branch
-`fix/blade-volume-dependencies` (`9f8fa54`) restores the exact
-`bd74bdc`/`cefd48f` pair used here; Meganeura's full all-target suite passes
-under the 6 GiB cgroup. A local override of that commit also passes Blade
-Volume's complete all-target suite and warnings-denied clippy. A fresh
-synthetic run reaches 24.11 dB at the held pose and 18.48 dB under the held
-light with no truncated rays; a 20.4k-to-20.8k Bonsai continuation reaches
-24.4900 dB on the selected eight and 24.9420 dB on all 37 held views. Peak host
-memory is 5.2 GiB for the exhaustive suite and 1.4 GiB for Bonsai, with no
-cgroup or GPU failure. Blade Volume deliberately stays at `f82d0b6` until that
-small prerequisite lands; then the local override can become the checked
-revision without changing results. Other performance targets remain native
-checkpoint-compatible packed parameters, dead input-gradient work, and compact
-active path storage, still at the unchanged safe traversal extent.
+means within 0.0001 dB. The shader-modifier cleanup is now merged through
+Meganeura `19a1f00`.
+
+The final uprev also closes the validation issue that had looked machine
+specific. Latest Blade had lost the reconstruction branch's workgroup SPIR-V,
+device-address allocation, and descriptor-array pool fixes; Meganeura's wider
+atomic suite additionally showed that enabling the Vulkan memory model for
+cooperative matrices must also enable device scope. Blade branch
+`fix/reconstruction-vulkan-validation-2026` (`200188b`) rebases the three old
+fixes and adds the device-scope fix. Meganeura branch
+`fix/blade-volume-dependencies-v2` (`84a8a45`) contains merged main plus matching
+Blade, macro, and Naga pins. Against those exact remote commits, Blade Volume's complete
+all-target suite has zero Vulkan validation messages, peaks at 5.37 GiB with
+no swap/OOM/GPU fault, and warnings-denied clippy passes. A fresh staged
+reconstruction trains 1,800 updates in 16.44 seconds, reaches 25.00 dB on held
+poses, 0.5853 position RMSE, and 19.07 dB under the unseen light at 55.6%
+coverage. The latest artifacts are
+`target/audit-runs/dependency-uprev-v2/{model.ply,scene.rply}`. Other
+performance targets remain native checkpoint-compatible packed parameters,
+dead input-gradient work, and compact active path storage, still at the
+unchanged safe traversal extent.
 
 Unweighted multi-view path recording now binds all camera slices in one
 compute pass. Each slice already owns a disjoint output range, so the old

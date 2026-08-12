@@ -2515,6 +2515,53 @@ bonsai_peak_memory = "1.4G"
 artifacts = "target/audit-runs/merged-meganeura-uprev-v1 (gitignored)"
 selection = "accept merged optimizer behavior; keep Blade Volume on f82d0b6 until Meganeura dependency fix 9f8fa54 lands, then replace the local validation override with the merged revision"
 
+# Meganeura main now contains the compact shader-modifier implementation, but
+# its first merged manifest pointed at a newer Blade line that had lost three
+# reconstruction validation fixes. The complete Blade Volume suite passed
+# numerically yet reported invalid workgroup ArrayStride, missing device-address
+# allocation flags, and undersized descriptor pools. Rebasing those fixes onto
+# current Blade also exposed device-scope storage atomics in Meganeura's wider
+# suite; Blade now requires and enables `vulkanMemoryModelDeviceScope` whenever
+# cooperative matrices enable the Vulkan memory model. The exact dependency
+# line passes every functional, validation, memory, and reconstruction gate.
+[synthetic_reconstruction.rgb_mask_foam.performance.coalesced_sh.validated_uprev]
+date = "2026-08-12"
+meganeura_engine_commit = "19a1f001dff4663a41e6002b8f1e3950810fcad3"
+meganeura_dependency_commit = "84a8a452639508a237f817fee9caab158fae3c81"
+meganeura_dependency_branch = "fix/blade-volume-dependencies-v2"
+blade_commit = "200188b0302fc50ea9c8a995daedd186d76d5570"
+blade_branch = "fix/reconstruction-vulkan-validation-2026"
+naga_revision = "cefd48f6cff61d64abe1cdb4002c4e39bfc2c728"
+fixed_validation_classes = ["workgroup ArrayStride", "device-address allocation", "descriptor array pool sizing", "Vulkan device-scope memory model"]
+meganeura_all_target_tests_pass = true
+meganeura_vulkan_validation_messages = 0
+meganeura_test_peak_memory_bytes = 6442450944
+meganeura_memory_max_events = 2629
+meganeura_oom_events = 0
+duplicate_blade_macro_packages = 0
+workspace_all_target_tests_pass = true
+workspace_vulkan_validation_messages = 0
+workspace_test_peak_memory_bytes = 5770866688
+workspace_swap_bytes = 0
+workspace_oom_events = 0
+workspace_gpu_faults = 0
+workspace_all_target_clippy_pass = true
+synthetic_updates = 1800
+synthetic_training_seconds = 16.440
+synthetic_final_loss = 0.007523
+synthetic_held_pose_psnr = 25.00
+synthetic_held_pose_worst_psnr = 24.28
+synthetic_surface_position_rmse = 0.5853
+synthetic_surface_normal_rmse_degrees = 66.34
+synthetic_held_light_psnr = 19.07
+synthetic_held_light_worst_psnr = 18.86
+synthetic_coverage = 0.556
+synthetic_peak_memory_bytes = 890314752
+model_sha256 = "da0d5ca88b8942eed4ccc652e200ca260493b0f0f9cf8a021d0a4ed529f4a17f"
+scene_sha256 = "39ebcbe514784604005b24062412f72caa641e00b96d85334ebeaa1781eea702"
+artifacts = "target/audit-runs/dependency-uprev-v2 (gitignored)"
+selection = "accept the merged shader-modifier cleanup through the validation-aligned dependency branches; merge Blade before replacing the branch pins with main"
+
 # Unweighted multi-view path recording used one compute pass per camera even
 # though each dispatch writes a disjoint pixel range. Binding every camera in
 # one pass removes fifteen automatic compute barriers at the production
