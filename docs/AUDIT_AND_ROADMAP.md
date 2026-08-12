@@ -2017,8 +2017,18 @@ material path.
    appearance audit at commit `9639225` counts 412 extra floats per point and
    identifies spatial-norm and directional-kernel differences between paper
    and source, so each staged increment must name its exact contract.)
-2. Obtain or train a reference PowerFoam asset and cross-render it against the
-   bounded-power CPU oracle and production WGSL.
+2. Finish the reference PowerFoam pixel cross-render. (The checkpoint and
+   geometry gate now exist: an official-implementation Bonsai checkpoint at
+   step 10,000 has 162,373 full-appearance sites and scores 28.3432 dB over all
+   37 quarter-resolution held-out views. Blade's exact Rust Čech builder agrees
+   with 336,933/336,935 fresh official undirected edges, has no extra edge, and
+   builds the graph in 69 ms. The two official-only edges come from its f32
+   AABB radius round-trip and do not satisfy the predicate on the original
+   values. Serialized-vs-fresh official topology differs by 2,709 edge
+   decisions because checkpoint parameters and adjacency straddle an optimizer
+   step, but native metrics are unchanged to four decimals after rebuild. Full
+   pixel parity remains blocked specifically on the unsupported 384-float
+   per-detail directional colour table, not weighted geometry or topology.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
    sweep the ray-query batch window for invariant pixels, query count, and frame
    time. The conservative triangle BLAS remains an invisible point-candidate

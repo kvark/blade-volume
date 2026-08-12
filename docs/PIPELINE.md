@@ -97,10 +97,9 @@ Viewer auto-selection: no change needed — `RadFoamBackend` now handles both
 weighted and unweighted models. `radii.is_some()` produces Power Foam traversal
 automatically.
 
-#### M2d — Cross-check (done, self-consistency)
+#### M2d — Cross-check (geometry complete; full appearance pending)
 
-External cross-check against a PowerFoam checkpoint is parked: it needs a CUDA-
-trained scene we don't have. Instead we proved internal consistency:
+Internal consistency is covered continuously:
 
 - `radfoam_cpu_ref.rs` (CPU reference tracer) now uses the same radical-plane
   formula as `radfoam_trace.wgsl`. A `read_radius` helper returns 0 when
@@ -114,9 +113,35 @@ trained scene we don't have. Instead we proved internal consistency:
   regression and the new radii test now share a `assert_gpu_matches_cpu(...)`
   helper.
 
-When a real PowerFoam scene shows up, conversion must remain Rust-only: either
-consume an upstream interchange export or add the smallest required checkpoint
-reader to a tool crate. No Python runtime becomes part of this project.
+An external checkpoint gate now covers real trained geometry as well. The
+official implementation at commit `9639225` was trained outside the project
+dependency graph on full Mip-NeRF-360 Bonsai. The 30,000-step, 350,000-site
+attempt was stopped safely when the live CUDA allocator reached 11,487 of the
+5070's 12,227 MiB at step 10,965; its last periodic checkpoint is step 10,000,
+162,373 sites, and 674,224 serialized directed edges. The official quarter-
+resolution rasterizer scores it over all 37 held-out views at 28.3432 dB PSNR,
+0.8681 SSIM, and 0.2138 LPIPS. Rebuilding its adjacency before evaluation
+leaves all three metrics identical to four decimals.
+
+Blade's Rust Čech builder processes the activated checkpoint radii in 69 ms and
+emits 673,866 directed edges. A fresh official Warp BVH rebuild emits 673,870:
+the undirected sets have 336,933 edges in common, Blade has no extra edge, and
+the reference has two. Both official-only pairs fail the exact predicate on
+the original centers/radii by 0.09--0.22 micrometres. They pass only after the
+reference reconstructs radius from f32 AABB min/max, so the 2/336,935 delta is
+a reference quantization artifact rather than a Blade topology defect. The
+checkpoint's serialized adjacency differs from its own fresh rebuild by 1,443
+old-only and 1,266 fresh-only undirected edges because the reference saves
+post-optimizer parameters with pre-optimizer adjacency.
+
+The reference repository and project page publish no checkpoint asset. The
+native checkpoint, renders, environment, and comparison binaries therefore
+remain ignored under `target/reference/powerfoam/`; they are not vendored into
+the library or benchmark corpus. A full pixel cross-render still requires the
+remaining per-detail-site directional appearance semantics. Any eventual
+converter must remain Rust-only: consume an upstream interchange export or add
+the smallest required checkpoint reader to a tool crate. Python does not
+become a project dependency.
 
 #### M2e — Differentiable weighted geometry (implemented and device-validated)
 

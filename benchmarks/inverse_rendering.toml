@@ -3539,3 +3539,40 @@ candidate_peak_memory_bytes = [1039028224, 975097856]
 memory_events = 0
 driver_faults = 0
 verdict = "keep: skip the zero-forward point-error graph when densification cannot consume it; 3.5% faster on both scenes with neutral-to-positive mean quality and no shader/op/model variants"
+
+[powerfoam_reference.bonsai_checkpoint_10k]
+date = "2026-08-12"
+official_commit = "9639225"
+dataset = "Mip-NeRF-360 Bonsai full"
+resolution_scale = 4
+training_step = 10000
+sites = 162373
+serialized_directed_edges = 674224
+held_views = 37
+official_psnr = 28.3432
+official_ssim = 0.8681
+official_lpips = 0.2138
+fresh_adjacency_psnr = 28.3432
+fresh_adjacency_ssim = 0.8681
+fresh_adjacency_lpips = 0.2138
+checkpoint_bytes = 274188069
+checkpoint_vendored = false
+
+[powerfoam_reference.bonsai_checkpoint_10k.cech_cross_validation]
+blade_build_seconds = 0.069
+blade_directed_edges = 673866
+official_fresh_directed_edges = 673870
+common_undirected_edges = 336933
+blade_only_undirected_edges = 0
+official_only_undirected_edges = 2
+serialized_only_vs_fresh = 1443
+fresh_only_vs_serialized = 1266
+verdict = "pass geometry gate: Blade is exact on original centers/radii; two official-only near-tangent edges are introduced by its f32 AABB radius reconstruction"
+
+[powerfoam_reference.bonsai_checkpoint_10k.stability]
+training_host_peak_bytes = 4500840448
+training_peak_vram_mib = 11487
+evaluation_host_peak_bytes = 2715570176
+memory_events = 0
+driver_faults = 0
+termination = "manual at step 10965 before CUDA allocation failure; periodic step-10000 checkpoint preserved"
