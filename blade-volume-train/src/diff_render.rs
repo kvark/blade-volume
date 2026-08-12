@@ -103,12 +103,22 @@ pub struct SurfaceDetailGraph {
     pub colors: mn::NodeId,
     /// Optional `[N, 8]` spatial density logits.
     pub density_logits: Option<mn::NodeId>,
+    /// Optional released-PowerFoam directional tables at all spatial sites.
+    pub directional: Option<SurfaceDetailDirectionalGraph>,
     /// `[P * L, 2]` recorded query-near distance and plane-branch mask.
     pub surface_queries: mn::NodeId,
     /// Fixed-topology entry-depth derivatives, present only when positions or
     /// radii are trainable.
     pub surface_query_grad_previous: Option<mn::NodeId>,
     pub surface_query_grad_current: Option<mn::NodeId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SurfaceDetailDirectionalGraph {
+    /// `[N, 192]` spatial-site/direction-major raw axes.
+    pub axes: mn::NodeId,
+    /// `[N, 192]` channel-major RGB directional residuals.
+    pub colors: mn::NodeId,
 }
 
 #[derive(Clone, Debug)]
@@ -391,6 +401,7 @@ fn normalize_surface_detail_weights(g: &mut mn::Graph, weights: mn::NodeId) -> m
 struct SurfaceDetailEvaluation {
     effective_offsets: mn::NodeId,
     color_weights: mn::NodeId,
+    directional_weights: Option<mn::NodeId>,
     density_scale: Option<mn::NodeId>,
 }
 
@@ -413,6 +424,87 @@ struct PathRoleGeometryGraph {
     previous: mn::NodeId,
     current: mn::NodeId,
     next: mn::NodeId,
+}
+
+fn repeat_eight_rows(
+    g: &mut mn::Graph,
+    input: mn::NodeId,
+    rows: usize,
+    width: usize,
+) -> mn::NodeId {
+    let input = g.reshape(input, &[rows * width]);
+    let twice = g.concat(input, input, rows as u32, width as u32, width as u32, 1);
+    let four = g.concat(
+        twice,
+        twice,
+        rows as u32,
+        (2 * width) as u32,
+        (2 * width) as u32,
+        1,
+    );
+    let eight = g.concat(
+        four,
+        four,
+        rows as u32,
+        (4 * width) as u32,
+        (4 * width) as u32,
+        1,
+    );
+    g.reshape(eight, &[rows * vol::SURFACE_DETAIL_DIRECTIONS, width])
+}
+
+fn vector_lengths(g: &mut mn::Graph, vectors: mn::NodeId, rows: usize) -> mn::NodeId {
+    let squared = g.mul(vectors, vectors);
+    let squared_length = g.sum_inner(squared);
+    let epsilon = g.constant(vec![1.0e-12_f32; rows], &[rows, 1]);
+    let squared_length = g.add(squared_length, epsilon);
+    let log = g.log(squared_length);
+    let half = g.constant(vec![0.5_f32; rows], &[rows, 1]);
+    let half_log = g.mul(log, half);
+    g.exp(half_log)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn surface_detail_directional_weights(
+    g: &mut mn::Graph,
+    cell_indices: mn::NodeId,
+    parameters: &SurfaceDetailDirectionalGraph,
+    centers: mn::NodeId,
+    tangent_sites: mn::NodeId,
+    radii: mn::NodeId,
+    ray_origin: mn::NodeId,
+    rows: usize,
+) -> mn::NodeId {
+    let spatial_rows = rows * vol::SURFACE_DETAIL_SITES;
+    let directional_rows = spatial_rows * vol::SURFACE_DETAIL_DIRECTIONS;
+    let centers = repeat_eight_rows(g, centers, rows, 3);
+    let radii = g.broadcast_inner(radii, vol::SURFACE_DETAIL_SITES);
+    let radii = g.reshape(radii, &[spatial_rows, 1]);
+    let radii_xyz = repeat_xyz(g, radii, spatial_rows);
+    let scaled_sites = g.mul(tangent_sites, radii_xyz);
+    let site_positions = g.add(centers, scaled_sites);
+    let ray_origin = repeat_eight_rows(g, ray_origin, rows, 3);
+    let neg_ray_origin = g.neg(ray_origin);
+    let view = g.add(site_positions, neg_ray_origin);
+    let unit_scale = 1.0_f32 / 3.0_f32.sqrt();
+    let weight = g.constant(vec![unit_scale; 3], &[3]);
+    let direction = g.rms_norm(view, weight, 1.0e-12);
+    let directions = repeat_eight_rows(g, direction, spatial_rows, 3);
+
+    let axes = g.embedding(cell_indices, parameters.axes);
+    let axes = g.reshape(axes, &[directional_rows, 3]);
+    let temperatures = vector_lengths(g, axes, directional_rows);
+    let temperatures = repeat_xyz(g, temperatures, directional_rows);
+    let scaled_directions = g.mul(directions, temperatures);
+    let neg_axes = g.neg(axes);
+    let delta = g.add(scaled_directions, neg_axes);
+    let distances = vector_lengths(g, delta, directional_rows);
+    let neg_distances = g.neg(distances);
+    let logits = g.reshape(
+        neg_distances,
+        &[spatial_rows, vol::SURFACE_DETAIL_DIRECTIONS],
+    );
+    g.softmax(logits)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -489,6 +581,18 @@ fn evaluate_surface_detail_graph(
     let displaced_query = surface_detail_query(g, query, effective_offsets, rows);
     let color_weights = surface_detail_weights(g, displaced_query, tangent_sites, rows);
     let color_weights = normalize_surface_detail_weights(g, color_weights);
+    let directional_weights = parameters.directional.as_ref().map(|directional| {
+        surface_detail_directional_weights(
+            g,
+            cell_indices,
+            directional,
+            centers,
+            tangent_sites,
+            radii,
+            ray_origin,
+            rows,
+        )
+    });
     let density_scale = parameters.density_logits.map(|density_logits| {
         let logits = g.embedding(cell_indices, density_logits);
         let proportions = g.softmax(logits);
@@ -511,6 +615,7 @@ fn evaluate_surface_detail_graph(
     SurfaceDetailEvaluation {
         effective_offsets,
         color_weights,
+        directional_weights,
         density_scale,
     }
 }
@@ -645,6 +750,7 @@ pub fn build_volumetric_graph(
             train_radii: true,
             use_surface_detail: false,
             use_surface_detail_density: false,
+            use_surface_detail_directional: false,
         },
         use_surface_offsets,
         use_surface_color,
@@ -661,6 +767,7 @@ struct VolumetricGraphOptions {
     train_radii: bool,
     use_surface_detail: bool,
     use_surface_detail_density: bool,
+    use_surface_detail_directional: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -729,6 +836,10 @@ fn build_volumetric_graph_with_options(
     assert!(
         !options.use_surface_detail_density || options.use_surface_detail,
         "surface-detail density requires surface detail",
+    );
+    assert!(
+        !options.use_surface_detail_directional || options.use_surface_detail,
+        "surface-detail directional appearance requires surface detail",
     );
     assert!(
         !use_spherical_voronoi || use_surface_normals,
@@ -830,6 +941,13 @@ fn build_volumetric_graph_with_options(
                 "surface_detail_density_logits",
                 &[n_cells, vol::SURFACE_DETAIL_SITES],
             )
+        }),
+        directional: options.use_surface_detail_directional.then(|| {
+            let width = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS * 3;
+            SurfaceDetailDirectionalGraph {
+                axes: g.parameter("surface_detail_directional_axes", &[n_cells, width]),
+                colors: g.parameter("surface_detail_directional_colors", &[n_cells, width]),
+            }
         }),
         surface_queries: surface_queries.unwrap(),
         surface_query_grad_previous,
@@ -1206,11 +1324,9 @@ fn build_volumetric_graph_with_options(
         &sh_coefficients,
         surface_color_coefficients,
         surface_basis,
-        surface_detail.as_ref().zip(
-            surface_detail_evaluation
-                .as_ref()
-                .map(|evaluation| evaluation.color_weights),
-        ),
+        surface_detail
+            .as_ref()
+            .zip(surface_detail_evaluation.as_ref()),
         spherical_voronoi
             .as_ref()
             .map(|parameters| (parameters, ray_dir_pl)),
@@ -1731,7 +1847,7 @@ fn pixel_sh(
     sh_coefficients: &[ShChannelGraph],
     surface_color_coefficients: Option<mn::NodeId>,
     surface_basis: Option<mn::NodeId>,
-    surface_detail: Option<(&SurfaceDetailGraph, mn::NodeId)>,
+    surface_detail: Option<(&SurfaceDetailGraph, &SurfaceDetailEvaluation)>,
     spherical_voronoi: Option<(&SphericalVoronoiGraph, mn::NodeId)>,
     basis_inputs: &[mn::NodeId], // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
     pixel_idx_per_step: mn::NodeId,
@@ -1802,13 +1918,36 @@ fn pixel_sh(
         (None, None) => {}
         _ => unreachable!("surface color parameter and basis must be declared together"),
     }
-    if let Some((parameters, weights)) = surface_detail {
+    if let Some((parameters, evaluation)) = surface_detail {
         let tables = split_rgb_table(g, parameters.colors, n_cells, vol::SURFACE_DETAIL_SITES);
         for (color, table) in colors.iter_mut().zip(tables) {
             let coefficients = g.embedding(cell_indices, table);
-            let terms = g.mul(coefficients, weights);
+            let terms = g.mul(coefficients, evaluation.color_weights);
             let residual = g.sum_inner(terms);
             *color = g.add(*color, residual);
+        }
+        if let (Some(directional), Some(directional_weights)) = (
+            parameters.directional.as_ref(),
+            evaluation.directional_weights,
+        ) {
+            let width = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+            let tables = split_rgb_table(g, directional.colors, n_cells, width);
+            for (color, table) in colors.iter_mut().zip(tables) {
+                let coefficients = g.embedding(cell_indices, table);
+                let coefficients = g.reshape(
+                    coefficients,
+                    &[
+                        pl * vol::SURFACE_DETAIL_SITES,
+                        vol::SURFACE_DETAIL_DIRECTIONS,
+                    ],
+                );
+                let terms = g.mul(coefficients, directional_weights);
+                let per_site = g.sum_inner(terms);
+                let per_site = g.reshape(per_site, &[pl, vol::SURFACE_DETAIL_SITES]);
+                let terms = g.mul(per_site, evaluation.color_weights);
+                let residual = g.sum_inner(terms);
+                *color = g.add(*color, residual);
+            }
         }
     }
     match spherical_voronoi {
@@ -2154,6 +2293,15 @@ pub struct AppearanceFitConfig {
     /// [`LrSchedule::RadFoamV1`] this scales the `5e-3 → 5e-4` surface
     /// schedule. `0.0` freezes the logits.
     pub surface_detail_density_lr_ratio: f32,
+    /// Per-spatial-site directional raw-axis learning rate as a fraction of
+    /// the global rate. Axis magnitude is temperature. Under
+    /// [`LrSchedule::RadFoamV1`] this scales the released `5e-2 → 5e-3`
+    /// schedule. `0.0` freezes the axes.
+    pub surface_detail_directional_axis_lr_ratio: f32,
+    /// Per-spatial-site directional RGB residual learning rate as a fraction
+    /// of the global rate. Under [`LrSchedule::RadFoamV1`] this scales the
+    /// released `5e-3 → 5e-4` schedule. `0.0` freezes the values.
+    pub surface_detail_directional_color_lr_ratio: f32,
     /// Raw Spherical Voronoi axis learning rate as a fraction of the global
     /// rate. Axis magnitude is directional temperature. Under
     /// [`LrSchedule::RadFoamV1`] this scales PowerFoam's `5e-2 → 5e-3`
@@ -2322,6 +2470,8 @@ impl Default for AppearanceFitConfig {
             surface_detail_height_lr_ratio: 0.0,
             surface_detail_color_lr_ratio: 0.0,
             surface_detail_density_lr_ratio: 0.0,
+            surface_detail_directional_axis_lr_ratio: 0.0,
+            surface_detail_directional_color_lr_ratio: 0.0,
             spherical_voronoi_axis_lr_ratio: 0.0,
             spherical_voronoi_color_lr_ratio: 0.0,
             surface_normal_weight: 0.0,
@@ -2631,6 +2781,14 @@ fn configure_optimizer(
                 config.surface_detail_density_lr_ratio,
             );
             session.set_lr_multiplier(
+                "surface_detail_directional_axes",
+                config.surface_detail_directional_axis_lr_ratio,
+            );
+            session.set_lr_multiplier(
+                "surface_detail_directional_colors",
+                config.surface_detail_directional_color_lr_ratio,
+            );
+            session.set_lr_multiplier(
                 "spherical_voronoi_axes",
                 config.spherical_voronoi_axis_lr_ratio,
             );
@@ -2682,6 +2840,14 @@ fn configure_optimizer(
             );
             let spherical_axis_rate =
                 radfoam_cosine_lr(step, total_steps, 5.0e-2, 5.0e-3, 0, total_steps);
+            session.set_lr_multiplier(
+                "surface_detail_directional_axes",
+                spherical_axis_rate * config.surface_detail_directional_axis_lr_ratio,
+            );
+            session.set_lr_multiplier(
+                "surface_detail_directional_colors",
+                surface_offset_rate * config.surface_detail_directional_color_lr_ratio,
+            );
             session.set_lr_multiplier(
                 "spherical_voronoi_axes",
                 spherical_axis_rate * config.spherical_voronoi_axis_lr_ratio,
@@ -3135,6 +3301,16 @@ pub(crate) fn fit_appearance_multi_view_outcome(
         "surface_detail_density_lr_ratio must be finite and non-negative"
     );
     assert!(
+        config.surface_detail_directional_axis_lr_ratio.is_finite()
+            && config.surface_detail_directional_axis_lr_ratio >= 0.0,
+        "surface_detail_directional_axis_lr_ratio must be finite and non-negative"
+    );
+    assert!(
+        config.surface_detail_directional_color_lr_ratio.is_finite()
+            && config.surface_detail_directional_color_lr_ratio >= 0.0,
+        "surface_detail_directional_color_lr_ratio must be finite and non-negative"
+    );
+    assert!(
         config.spherical_voronoi_axis_lr_ratio.is_finite()
             && config.spherical_voronoi_axis_lr_ratio >= 0.0,
         "spherical_voronoi_axis_lr_ratio must be finite and non-negative"
@@ -3168,7 +3344,9 @@ pub(crate) fn fit_appearance_multi_view_outcome(
         (config.surface_detail_offset_lr_ratio == 0.0
             && config.surface_detail_height_lr_ratio == 0.0
             && config.surface_detail_color_lr_ratio == 0.0
-            && config.surface_detail_density_lr_ratio == 0.0)
+            && config.surface_detail_density_lr_ratio == 0.0
+            && config.surface_detail_directional_axis_lr_ratio == 0.0
+            && config.surface_detail_directional_color_lr_ratio == 0.0)
             || model.surface_detail.is_some(),
         "surface-detail optimisation requires initialized sites, heights, and colors"
     );
@@ -3179,6 +3357,16 @@ pub(crate) fn fit_appearance_multi_view_outcome(
                 .as_ref()
                 .is_some_and(|detail| detail.density_logits.is_some()),
         "surface-detail density optimisation requires initialized logits"
+    );
+    assert!(
+        (config.surface_detail_directional_axis_lr_ratio == 0.0
+            && config.surface_detail_directional_color_lr_ratio == 0.0)
+            || model
+                .surface_detail
+                .as_ref()
+                .and_then(|detail| detail.directional.as_ref())
+                .is_some(),
+        "surface-detail directional optimisation requires initialized axes and colors"
     );
     assert!(
         (config.spherical_voronoi_axis_lr_ratio == 0.0
@@ -3387,6 +3575,25 @@ fn upload_model_parameters(
         session.set_parameter("surface_detail_colors", &colors);
         if let Some(ref density_logits) = detail.density_logits {
             session.set_parameter("surface_detail_density_logits", density_logits);
+        }
+        if let Some(ref directional) = detail.directional {
+            let directions = sites * vol::SURFACE_DETAIL_DIRECTIONS;
+            let mut axes = Vec::with_capacity(n_cells * directions * 3);
+            for &axis in &directional.axes {
+                axes.extend_from_slice(&axis.to_array());
+            }
+            let mut colors = vec![0.0_f32; n_cells * directions * 3];
+            for point in 0..n_cells {
+                let base = point * directions * 3;
+                for direction in 0..directions {
+                    let color = directional.colors[point * directions + direction];
+                    for channel in 0..3 {
+                        colors[base + channel * directions + direction] = color[channel];
+                    }
+                }
+            }
+            session.set_parameter("surface_detail_directional_axes", &axes);
+            session.set_parameter("surface_detail_directional_colors", &colors);
         }
     }
     if let Some(ref spherical_voronoi) = model.spherical_voronoi {
@@ -3965,6 +4172,14 @@ fn download_model_parameters(
         {
             names.push("surface_detail_density_logits".to_string());
         }
+        if model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.directional.is_some())
+        {
+            names.push("surface_detail_directional_axes".to_string());
+            names.push("surface_detail_directional_colors".to_string());
+        }
     }
     if model.spherical_voronoi.is_some() {
         names.push("spherical_voronoi_axes".to_string());
@@ -4023,6 +4238,24 @@ fn download_model_parameters(
         }
         if let Some(ref mut density_logits) = detail.density_logits {
             *density_logits = next_parameter(&mut readback, "surface_detail_density_logits");
+        }
+        if let Some(ref mut directional) = detail.directional {
+            let directions = sites * vol::SURFACE_DETAIL_DIRECTIONS;
+            let axes = next_parameter(&mut readback, "surface_detail_directional_axes");
+            let colors = next_parameter(&mut readback, "surface_detail_directional_colors");
+            for point in 0..n_cells {
+                let base = point * directions * 3;
+                for direction in 0..directions {
+                    directional.axes[point * directions + direction] = glam::Vec3::from_slice(
+                        &axes[base + direction * 3..base + direction * 3 + 3],
+                    );
+                    directional.colors[point * directions + direction] = glam::Vec3::new(
+                        colors[base + direction],
+                        colors[base + directions + direction],
+                        colors[base + 2 * directions + direction],
+                    );
+                }
+            }
         }
     }
     if let Some(ref mut spherical_voronoi) = model.spherical_voronoi {
@@ -4783,8 +5016,9 @@ fn prune_and_densify(
 /// stride. Stride is 1 for scalar tables (`log_density`, `log_radii`,
 /// `surface_offsets`, `sh_<chan>_<k>`) and 3 for vector tables (`positions`,
 /// `surface_normals`). Spatial surface color uses stride 12; spatial-detail
-/// offsets/colors use stride 24 and heights/density logits use stride 8; both
-/// Spherical Voronoi tables use stride 24.
+/// offsets/colors use stride 24 and heights/density logits use stride 8;
+/// directional detail tables use stride 192; both Spherical Voronoi tables
+/// use stride 24.
 fn per_cell_param_names_with_stride(
     sh_degree: usize,
     has_radii: bool,
@@ -4793,6 +5027,7 @@ fn per_cell_param_names_with_stride(
     has_surface_color: bool,
     has_surface_detail: bool,
     has_surface_detail_density: bool,
+    has_surface_detail_directional: bool,
     has_spherical_voronoi: bool,
     has_point_error: bool,
 ) -> Vec<(String, usize)> {
@@ -4832,6 +5067,11 @@ fn per_cell_param_names_with_stride(
             "surface_detail_density_logits".to_string(),
             vol::SURFACE_DETAIL_SITES,
         ));
+    }
+    if has_surface_detail_directional {
+        let stride = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS * 3;
+        names.push(("surface_detail_directional_axes".to_string(), stride));
+        names.push(("surface_detail_directional_colors".to_string(), stride));
     }
     if has_spherical_voronoi {
         names.push((
@@ -4897,6 +5137,7 @@ fn save_adam_state(
     has_surface_color: bool,
     has_surface_detail: bool,
     has_surface_detail_density: bool,
+    has_surface_detail_directional: bool,
     has_spherical_voronoi: bool,
     has_point_error: bool,
 ) -> AdamSnapshot {
@@ -4908,6 +5149,7 @@ fn save_adam_state(
         has_surface_color,
         has_surface_detail,
         has_surface_detail_density,
+        has_surface_detail_directional,
         has_spherical_voronoi,
         has_point_error,
     );
@@ -4970,6 +5212,7 @@ fn restore_adam_state_remap(
     has_surface_color: bool,
     has_surface_detail: bool,
     has_surface_detail_density: bool,
+    has_surface_detail_directional: bool,
     has_spherical_voronoi: bool,
     has_point_error: bool,
 ) {
@@ -4982,6 +5225,7 @@ fn restore_adam_state_remap(
         has_surface_color,
         has_surface_detail,
         has_surface_detail_density,
+        has_surface_detail_directional,
         has_spherical_voronoi,
         has_point_error,
     );
@@ -5090,6 +5334,8 @@ fn build_train_session(
     surface_detail_height_lr_ratio: f32,
     surface_detail_color_lr_ratio: f32,
     surface_detail_density_lr_ratio: f32,
+    surface_detail_directional_axis_lr_ratio: f32,
+    surface_detail_directional_color_lr_ratio: f32,
     spherical_voronoi_axis_lr_ratio: f32,
     spherical_voronoi_color_lr_ratio: f32,
     betas: (f32, f32, f32),
@@ -5121,6 +5367,10 @@ fn build_train_session(
                 .surface_detail
                 .as_ref()
                 .is_some_and(|detail| detail.density_logits.is_some()),
+            use_surface_detail_directional: model
+                .surface_detail
+                .as_ref()
+                .is_some_and(|detail| detail.directional.is_some()),
         },
         model.surface_offsets.is_some(),
         model.surface_color_coefficients.is_some(),
@@ -5174,6 +5424,21 @@ fn build_train_session(
                 session.has_param_grad(name),
                 "surface-detail parameter {name} has no training gradient"
             );
+        }
+        if model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.directional.is_some())
+        {
+            for name in [
+                "surface_detail_directional_axes",
+                "surface_detail_directional_colors",
+            ] {
+                assert!(
+                    session.has_param_grad(name),
+                    "surface-detail directional parameter {name} has no training gradient"
+                );
+            }
         }
     }
     upload_model_parameters(&mut session, model, softplus_beta);
@@ -5326,6 +5591,14 @@ fn build_train_session(
         session.set_lr_multiplier(
             "surface_detail_density_logits",
             surface_detail_density_lr_ratio,
+        );
+        session.set_lr_multiplier(
+            "surface_detail_directional_axes",
+            surface_detail_directional_axis_lr_ratio,
+        );
+        session.set_lr_multiplier(
+            "surface_detail_directional_colors",
+            surface_detail_directional_color_lr_ratio,
         );
     }
     if model.spherical_voronoi.is_some() {
@@ -5725,6 +5998,8 @@ fn fit_appearance_pixel_batched(
         config.surface_detail_height_lr_ratio,
         config.surface_detail_color_lr_ratio,
         config.surface_detail_density_lr_ratio,
+        config.surface_detail_directional_axis_lr_ratio,
+        config.surface_detail_directional_color_lr_ratio,
         config.spherical_voronoi_axis_lr_ratio,
         config.spherical_voronoi_color_lr_ratio,
         (config.adam_beta1, config.adam_beta2, config.adam_eps),
@@ -6173,6 +6448,10 @@ fn fit_appearance_pixel_batched(
                         .surface_detail
                         .as_ref()
                         .is_some_and(|detail| detail.density_logits.is_some()),
+                    model
+                        .surface_detail
+                        .as_ref()
+                        .is_some_and(|detail| detail.directional.is_some()),
                     model.spherical_voronoi.is_some(),
                     collect_powerfoam_point_error,
                 );
@@ -6381,6 +6660,8 @@ fn fit_appearance_pixel_batched(
                     config.surface_detail_height_lr_ratio,
                     config.surface_detail_color_lr_ratio,
                     config.surface_detail_density_lr_ratio,
+                    config.surface_detail_directional_axis_lr_ratio,
+                    config.surface_detail_directional_color_lr_ratio,
                     config.spherical_voronoi_axis_lr_ratio,
                     config.spherical_voronoi_color_lr_ratio,
                     (config.adam_beta1, config.adam_beta2, config.adam_eps),
@@ -6409,6 +6690,10 @@ fn fit_appearance_pixel_batched(
                         .surface_detail
                         .as_ref()
                         .is_some_and(|detail| detail.density_logits.is_some()),
+                    model
+                        .surface_detail
+                        .as_ref()
+                        .is_some_and(|detail| detail.directional.is_some()),
                     model.spherical_voronoi.is_some(),
                     collect_powerfoam_point_error,
                 );
@@ -6625,6 +6910,24 @@ fn fit_appearance_pixel_batched(
 mod tests {
     use super::*;
     use crate::fit::try_init_gpu;
+
+    fn test_directional_detail(point_count: usize) -> vol::SurfaceDetailDirectional {
+        let count = point_count * vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+        vol::SurfaceDetailDirectional {
+            axes: (0..count)
+                .map(|index| {
+                    let direction = index % vol::SURFACE_DETAIL_DIRECTIONS;
+                    4.0 * glam::Vec3::new(
+                        if direction & 1 == 0 { -1.0 } else { 1.0 },
+                        if direction & 2 == 0 { -1.0 } else { 1.0 },
+                        if direction & 4 == 0 { -1.0 } else { 1.0 },
+                    )
+                    .normalize()
+                })
+                .collect(),
+            colors: vec![glam::Vec3::ZERO; count],
+        }
+    }
 
     #[test]
     fn smooth_l1_matches_pytorch_beta_one_definition() {
@@ -6874,7 +7177,7 @@ mod tests {
                 })
                 .collect(),
             density_logits: Some(vec![0.0; detail_count]),
-            directional: None,
+            directional: Some(test_directional_detail(model.points.len())),
         });
         model.compute_adjacency_default();
         let positions_before = model
@@ -6912,6 +7215,8 @@ mod tests {
                 surface_detail_height_lr_ratio: 0.25,
                 surface_detail_color_lr_ratio: 1.0,
                 surface_detail_density_lr_ratio: 1.0,
+                surface_detail_directional_axis_lr_ratio: 0.25,
+                surface_detail_directional_color_lr_ratio: 1.0,
                 geometry_rebuild_every: 1,
                 ..AppearanceFitConfig::default()
             },
@@ -6930,6 +7235,21 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value.abs() > 1.0e-7));
+        let directional = model
+            .surface_detail
+            .as_ref()
+            .unwrap()
+            .directional
+            .as_ref()
+            .unwrap();
+        assert!(directional
+            .colors
+            .iter()
+            .any(|color| color.length() > 1.0e-7));
+        assert_ne!(
+            directional.axes,
+            detail_before.directional.as_ref().unwrap().axes,
+        );
         assert_eq!(
             model
                 .points
@@ -7342,6 +7662,8 @@ mod tests {
             return;
         };
         let sites = vol::SURFACE_DETAIL_SITES;
+        let directions = vol::SURFACE_DETAIL_DIRECTIONS;
+        let directional_width = sites * directions;
         let mut graph = mn::Graph::new();
         let cell_indices = graph.input_u32("cell_indices", &[1]);
         let parameters = SurfaceDetailGraph {
@@ -7349,6 +7671,16 @@ mod tests {
             heights: graph.parameter("surface_detail_heights", &[1, sites]),
             colors: graph.parameter("surface_detail_colors", &[1, sites * 3]),
             density_logits: Some(graph.parameter("surface_detail_density_logits", &[1, sites])),
+            directional: Some(SurfaceDetailDirectionalGraph {
+                axes: graph.parameter(
+                    "surface_detail_directional_axes",
+                    &[1, directional_width * 3],
+                ),
+                colors: graph.parameter(
+                    "surface_detail_directional_colors",
+                    &[1, directional_width * 3],
+                ),
+            }),
             surface_queries: graph.input("surface_queries", &[1, 2]),
             surface_query_grad_previous: None,
             surface_query_grad_current: None,
@@ -7377,7 +7709,18 @@ mod tests {
         let red_table = split_rgb_table(&mut graph, parameters.colors, 1, sites)[0];
         let red = graph.embedding(cell_indices, red_table);
         let red = graph.mul(red, evaluation.color_weights);
-        let red = graph.sum_inner(red);
+        let mut red = graph.sum_inner(red);
+        let directional = parameters.directional.as_ref().unwrap();
+        let directional_red =
+            split_rgb_table(&mut graph, directional.colors, 1, directional_width)[0];
+        let directional_red = graph.embedding(cell_indices, directional_red);
+        let directional_red = graph.reshape(directional_red, &[sites, directions]);
+        let directional_red = graph.mul(directional_red, evaluation.directional_weights.unwrap());
+        let directional_red = graph.sum_inner(directional_red);
+        let directional_red = graph.reshape(directional_red, &[1, sites]);
+        let directional_red = graph.mul(directional_red, evaluation.color_weights);
+        let directional_red = graph.sum_inner(directional_red);
+        red = graph.add(red, directional_red);
         let density_scale = evaluation.density_scale.unwrap();
         let loss_terms = graph.add(evaluation.effective_offsets, red);
         let loss_terms = graph.add(loss_terms, density_scale);
@@ -7412,11 +7755,44 @@ mod tests {
         let density_logits = (0..sites)
             .map(|site| 0.2 * (site as f32 - 3.5))
             .collect::<Vec<_>>();
+        let axes = (0..directional_width)
+            .map(|index| {
+                let direction = index % directions;
+                4.0 * glam::Vec3::new(
+                    if direction & 1 == 0 { -1.0 } else { 1.0 },
+                    if direction & 2 == 0 { -1.0 } else { 1.0 },
+                    if direction & 4 == 0 { -1.0 } else { 1.0 },
+                )
+                .normalize()
+            })
+            .collect::<Vec<_>>();
+        let directional_colors = (0..directional_width)
+            .map(|index| {
+                let value = 0.004 * ((index % 11) as f32 - 5.0);
+                glam::Vec3::new(value, -0.5 * value, 0.25 * value)
+            })
+            .collect::<Vec<_>>();
+        let packed_axes = axes
+            .iter()
+            .flat_map(|axis| axis.to_array())
+            .collect::<Vec<_>>();
+        let mut packed_directional_colors = vec![0.0_f32; directional_width * 3];
+        for direction in 0..directional_width {
+            for channel in 0..3 {
+                packed_directional_colors[channel * directional_width + direction] =
+                    directional_colors[direction][channel];
+            }
+        }
         let query_near = 10.0 - 3.0_f32.sqrt();
         session.set_parameter("surface_detail_offsets", &packed_offsets);
         session.set_parameter("surface_detail_heights", &heights);
         session.set_parameter("surface_detail_colors", &packed_colors);
         session.set_parameter("surface_detail_density_logits", &density_logits);
+        session.set_parameter("surface_detail_directional_axes", &packed_axes);
+        session.set_parameter(
+            "surface_detail_directional_colors",
+            &packed_directional_colors,
+        );
         session.set_parameter("positions", &[0.0, 0.0, 10.0]);
         session.set_parameter("surface_normals", &[0.0, 0.0, -1.0]);
         session.set_parameter("surface_offsets", &[0.0]);
@@ -7446,7 +7822,10 @@ mod tests {
                 heights,
                 colors,
                 density_logits: Some(density_logits),
-                directional: None,
+                directional: Some(vol::SurfaceDetailDirectional {
+                    axes,
+                    colors: directional_colors,
+                }),
             }),
             surface_color_coefficients: None,
             spherical_voronoi: None,
@@ -7514,6 +7893,8 @@ mod tests {
             ("surface_detail_heights", sites),
             ("surface_detail_colors", sites * 3),
             ("surface_detail_density_logits", sites),
+            ("surface_detail_directional_axes", directional_width * 3),
+            ("surface_detail_directional_colors", directional_width * 3),
         ] {
             let mut gradient = vec![0.0_f32; size];
             session.read_param_grad(name, &mut gradient);
@@ -7602,6 +7983,7 @@ mod tests {
             heights: graph.parameter("surface_detail_heights", &[1, sites]),
             colors: graph.parameter("surface_detail_colors", &[1, sites * 3]),
             density_logits: None,
+            directional: None,
             surface_queries: graph.input("surface_queries", &[1, 2]),
             surface_query_grad_previous: Some(graph.input("surface_query_grad_previous", &[1, 4])),
             surface_query_grad_current: Some(graph.input("surface_query_grad_current", &[1, 4])),
@@ -8504,7 +8886,7 @@ mod tests {
     fn per_cell_param_names_includes_positions_with_stride_3() {
         for sh_degree in 0..=3 {
             let names = per_cell_param_names_with_stride(
-                sh_degree, false, false, false, false, false, false, false, false,
+                sh_degree, false, false, false, false, false, false, false, false, false,
             );
             // Required entries:
             assert!(names.contains(&("log_density".to_string(), 1)));
@@ -8519,13 +8901,13 @@ mod tests {
                 }
             }
             let weighted_names = per_cell_param_names_with_stride(
-                sh_degree, true, false, false, false, false, false, false, true,
+                sh_degree, true, false, false, false, false, false, false, false, true,
             );
             assert!(weighted_names.contains(&("log_radii".to_string(), 1)));
             assert!(weighted_names.contains(&(POINT_ERROR_PROBE.to_string(), 1)));
             assert_eq!(weighted_names.len(), names.len() + 2);
             let oriented_names = per_cell_param_names_with_stride(
-                sh_degree, true, true, true, true, true, true, true, true,
+                sh_degree, true, true, true, true, true, true, true, true, true,
             );
             assert!(oriented_names.contains(&("surface_normals".to_string(), 3)));
             assert!(oriented_names.contains(&("surface_offsets".to_string(), 1)));
@@ -8557,7 +8939,16 @@ mod tests {
                 "surface_detail_density_logits".to_string(),
                 vol::SURFACE_DETAIL_SITES,
             )));
-            assert_eq!(oriented_names.len(), names.len() + 11);
+            let directional_stride = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS * 3;
+            assert!(oriented_names.contains(&(
+                "surface_detail_directional_axes".to_string(),
+                directional_stride,
+            )));
+            assert!(oriented_names.contains(&(
+                "surface_detail_directional_colors".to_string(),
+                directional_stride,
+            )));
+            assert_eq!(oriented_names.len(), names.len() + 13);
         }
     }
 
@@ -8690,6 +9081,7 @@ mod tests {
                 train_radii: true,
                 use_surface_detail: false,
                 use_surface_detail_density: false,
+                use_surface_detail_directional: false,
             },
             true,
             false,
@@ -8727,6 +9119,7 @@ mod tests {
                 train_radii: false,
                 use_surface_detail: false,
                 use_surface_detail_density: false,
+                use_surface_detail_directional: false,
             },
             true,
             true,
@@ -8816,6 +9209,7 @@ mod tests {
                 train_radii: false,
                 use_surface_detail: false,
                 use_surface_detail_density: false,
+                use_surface_detail_directional: false,
             },
             true,
             true,
@@ -10269,6 +10663,7 @@ mod tests {
                 train_radii: false,
                 use_surface_detail: false,
                 use_surface_detail_density: false,
+                use_surface_detail_directional: false,
             },
             true,
             false,
@@ -11067,7 +11462,7 @@ mod tests {
             heights: vec![0.0; detail_count],
             colors: vec![glam::Vec3::ZERO; detail_count],
             density_logits: Some(vec![0.0; detail_count]),
-            directional: None,
+            directional: Some(test_directional_detail(model.points.len())),
         });
         model.compute_adjacency_default();
         let view = ViewSupervision {
@@ -11097,6 +11492,8 @@ mod tests {
                 surface_detail_height_lr_ratio: 0.1,
                 surface_detail_color_lr_ratio: 0.1,
                 surface_detail_density_lr_ratio: 0.1,
+                surface_detail_directional_axis_lr_ratio: 0.1,
+                surface_detail_directional_color_lr_ratio: 0.1,
                 geometry_rebuild_every: 1,
                 densify: Some(DensifyConfig {
                     every: 1,
@@ -11122,6 +11519,10 @@ mod tests {
             detail.density_logits.as_ref().unwrap().len(),
             5 * vol::SURFACE_DETAIL_SITES,
         );
+        let directional = detail.directional.as_ref().unwrap();
+        let directional_count = 5 * vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+        assert_eq!(directional.axes.len(), directional_count);
+        assert_eq!(directional.colors.len(), directional_count);
         assert!(detail
             .colors
             .iter()
@@ -11302,7 +11703,7 @@ mod tests {
                 heights: vec![0.0; detail_count],
                 colors: vec![glam::Vec3::ZERO; detail_count],
                 density_logits: Some(vec![0.0; detail_count]),
-                directional: None,
+                directional: Some(test_directional_detail(model.points.len())),
             });
             model.spherical_voronoi = Some(vol::SphericalVoronoi {
                 axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
@@ -11334,6 +11735,8 @@ mod tests {
             surface_detail_height_lr_ratio: 0.1,
             surface_detail_color_lr_ratio: 0.1,
             surface_detail_density_lr_ratio: 0.1,
+            surface_detail_directional_axis_lr_ratio: 0.1,
+            surface_detail_directional_color_lr_ratio: 0.1,
             spherical_voronoi_axis_lr_ratio: 0.1,
             spherical_voronoi_color_lr_ratio: 0.1,
             surface_normal_weight: 0.1,

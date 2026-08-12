@@ -835,6 +835,29 @@ fn initialize_surface_detail(normals: &[glam::Vec3]) -> vol::SurfaceDetail {
     }
 }
 
+fn initialize_surface_detail_directional(point_count: usize) -> vol::SurfaceDetailDirectional {
+    const TEMPERATURE: f32 = 4.0;
+    let mut site_axes = [glam::Vec3::ZERO; vol::SURFACE_DETAIL_DIRECTIONS];
+    for (direction, axis) in site_axes.iter_mut().enumerate() {
+        *axis = TEMPERATURE
+            * glam::Vec3::new(
+                if direction & 1 == 0 { -1.0 } else { 1.0 },
+                if direction & 2 == 0 { -1.0 } else { 1.0 },
+                if direction & 4 == 0 { -1.0 } else { 1.0 },
+            )
+            .normalize();
+    }
+    let count = point_count * vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+    let mut axes = Vec::with_capacity(count);
+    for _ in 0..point_count * vol::SURFACE_DETAIL_SITES {
+        axes.extend_from_slice(&site_axes);
+    }
+    vol::SurfaceDetailDirectional {
+        axes,
+        colors: vec![glam::Vec3::ZERO; count],
+    }
+}
+
 /// Convenience wrapper that calls [`train_colmap_appearance_split`] with no
 /// test views. Returns just the trained model for backwards compatibility.
 pub fn train_colmap_appearance(
@@ -1138,7 +1161,9 @@ pub fn train_colmap_appearance_split(
     if (config.fit.surface_detail_offset_lr_ratio > 0.0
         || config.fit.surface_detail_height_lr_ratio > 0.0
         || config.fit.surface_detail_color_lr_ratio > 0.0
-        || config.fit.surface_detail_density_lr_ratio > 0.0)
+        || config.fit.surface_detail_density_lr_ratio > 0.0
+        || config.fit.surface_detail_directional_axis_lr_ratio > 0.0
+        || config.fit.surface_detail_directional_color_lr_ratio > 0.0)
         && model.surface_detail.is_none()
     {
         assert!(
@@ -1173,6 +1198,25 @@ pub fn train_colmap_appearance_split(
         model.surface_detail.as_mut().unwrap().density_logits = Some(vec![0.0; count]);
         log::info!(
             "initialized {} oriented PowerFoam spatial-density tables to identity",
+            model.points.len(),
+        );
+    }
+    if (config.fit.surface_detail_directional_axis_lr_ratio > 0.0
+        || config.fit.surface_detail_directional_color_lr_ratio > 0.0)
+        && model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.directional.is_none())
+    {
+        assert!(
+            config.fit.resume_state_path.is_none(),
+            "cannot add directional PowerFoam detail while restoring an optimizer checkpoint; \
+             initialize a fresh directional-detail model first"
+        );
+        model.surface_detail.as_mut().unwrap().directional =
+            Some(initialize_surface_detail_directional(model.points.len()));
+        log::info!(
+            "initialized {} released-PowerFoam directional-detail tables",
             model.points.len(),
         );
     }
@@ -1312,6 +1356,21 @@ mod tests {
                 assert!((offset.length() - 0.1).abs() < 1.0e-6);
             }
         }
+    }
+
+    #[test]
+    fn directional_detail_initialization_is_deterministic_and_zero_preserving() {
+        let first = initialize_surface_detail_directional(3);
+        let second = initialize_surface_detail_directional(3);
+        assert_eq!(first, second);
+        let count = 3 * vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+        assert_eq!(first.axes.len(), count);
+        assert_eq!(first.colors.len(), count);
+        assert!(first
+            .axes
+            .iter()
+            .all(|axis| (axis.length() - 4.0).abs() < 1.0e-6));
+        assert!(first.colors.iter().all(|color| *color == glam::Vec3::ZERO));
     }
 
     fn tiny_model_far_apart() -> vol::PointCloudModel {

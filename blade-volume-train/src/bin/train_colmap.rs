@@ -367,6 +367,16 @@ struct Args {
     #[argh(option, default = "0.0")]
     surface_detail_density_lr_ratio: f32,
 
+    /// per-spatial-site directional raw-axis learning rate as a fraction of
+    /// the main rate (default 0 = no full directional detail table).
+    #[argh(option, default = "0.0")]
+    surface_detail_directional_axis_lr_ratio: f32,
+
+    /// per-spatial-site directional RGB learning rate as a fraction of the
+    /// main rate (default 0 = no full directional detail table).
+    #[argh(option, default = "0.0")]
+    surface_detail_directional_color_lr_ratio: f32,
+
     /// spherical Voronoi raw-axis learning rate as a fraction of the main
     /// rate (default 0 = no directional table). Under the radfoam-v1
     /// schedule, 1 selects the absolute 0.05 to 0.005 axis rate.
@@ -592,6 +602,18 @@ fn main() {
         eprintln!("--surface-detail-density-lr-ratio must be finite and non-negative");
         std::process::exit(2);
     }
+    if !args.surface_detail_directional_axis_lr_ratio.is_finite()
+        || args.surface_detail_directional_axis_lr_ratio < 0.0
+    {
+        eprintln!("--surface-detail-directional-axis-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
+    if !args.surface_detail_directional_color_lr_ratio.is_finite()
+        || args.surface_detail_directional_color_lr_ratio < 0.0
+    {
+        eprintln!("--surface-detail-directional-color-lr-ratio must be finite and non-negative");
+        std::process::exit(2);
+    }
     if !args.spherical_voronoi_axis_lr_ratio.is_finite()
         || args.spherical_voronoi_axis_lr_ratio < 0.0
     {
@@ -655,6 +677,8 @@ fn main() {
         || args.surface_detail_height_lr_ratio > 0.0
         || args.surface_detail_color_lr_ratio > 0.0
         || args.surface_detail_density_lr_ratio > 0.0
+        || args.surface_detail_directional_axis_lr_ratio > 0.0
+        || args.surface_detail_directional_color_lr_ratio > 0.0
         || args.spherical_voronoi_axis_lr_ratio > 0.0
         || args.spherical_voronoi_color_lr_ratio > 0.0
         || args.surface_normal_weight > 0.0)
@@ -847,6 +871,9 @@ fn main() {
             surface_detail_height_lr_ratio: args.surface_detail_height_lr_ratio,
             surface_detail_color_lr_ratio: args.surface_detail_color_lr_ratio,
             surface_detail_density_lr_ratio: args.surface_detail_density_lr_ratio,
+            surface_detail_directional_axis_lr_ratio: args.surface_detail_directional_axis_lr_ratio,
+            surface_detail_directional_color_lr_ratio: args
+                .surface_detail_directional_color_lr_ratio,
             spherical_voronoi_axis_lr_ratio: args.spherical_voronoi_axis_lr_ratio,
             spherical_voronoi_color_lr_ratio: args.spherical_voronoi_color_lr_ratio,
             surface_normal_weight: args.surface_normal_weight,
