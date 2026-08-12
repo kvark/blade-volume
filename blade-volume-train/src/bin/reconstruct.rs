@@ -127,6 +127,12 @@ struct Args {
     #[argh(switch)]
     compact_kernel: bool,
 
+    /// particles to refine against all training renders (default 0). This is
+    /// an expensive final coordinate pass; a value larger than the observed
+    /// particle count refines the complete visible surface.
+    #[argh(option, default = "0")]
+    render_refine: usize,
+
     /// write the reconstructed scene here
     #[argh(option)]
     output: Option<String>,
@@ -278,7 +284,7 @@ fn main() {
     };
 
     let started = std::time::Instant::now();
-    let fitted = train::inverse::decompose::fit(
+    let mut fitted = train::inverse::decompose::fit(
         &geometry,
         &observations,
         train::inverse::decompose::FitOptions {
@@ -302,6 +308,25 @@ fn main() {
         started.elapsed().as_secs_f64()
     );
     describe_light(&fitted.scene.environment);
+
+    if args.render_refine > 0 {
+        let stats = train::inverse::refine::refine_rendered(
+            &mut fitted.scene,
+            &capture,
+            &train_views,
+            &observations,
+            args.diffuse_samples,
+            args.render_refine,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("cannot refine the rendered surface: {error}");
+            std::process::exit(1);
+        });
+        println!(
+            "rendered surface: tested {}, moved {}, loss {:.7} -> {:.7}, in {:.1} s",
+            stats.tested, stats.moved, stats.initial_loss, stats.final_loss, stats.seconds,
+        );
+    }
 
     if let Some(ref output) = args.output {
         let output = path::Path::new(output);

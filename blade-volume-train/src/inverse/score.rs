@@ -234,6 +234,19 @@ impl Renderer {
             .to_vec()
     }
 
+    fn ensure_readback_frames(&mut self, frames: usize) {
+        let needed = (self.width * self.height * frames) as u64 * 16;
+        if self.readback.size() >= needed {
+            return;
+        }
+        self.context.destroy_buffer(self.readback);
+        self.readback = self.context.create_buffer(gpu::BufferDesc {
+            name: "inverse-score-readback",
+            size: needed,
+            memory: gpu::Memory::Download,
+        });
+    }
+
     /// A tracer for one scene, ready to draw.
     ///
     /// The tracer starts and submits the encoder itself; wrapping the call in
@@ -276,12 +289,104 @@ impl Renderer {
         show_environment: bool,
     ) -> Vec<Vec<[f32; 4]>> {
         let mut tracer = self.tracer(scene, diffuse_samples, show_environment);
-        let frames = cameras
-            .iter()
-            .map(|camera| self.draw(&mut tracer, *camera))
-            .collect();
+        let frames = self.render_prepared_views(&mut tracer, cameras);
         tracer.deinit(&self.context);
         frames
+    }
+
+    /// Build one scene tracer for repeated renders while its particle geometry
+    /// is updated between calls.
+    pub(crate) fn prepare_scene(
+        &mut self,
+        scene: &Scene,
+        diffuse_samples: u32,
+        show_environment: bool,
+    ) -> vol::gpu::RelightTracer {
+        self.tracer(scene, diffuse_samples, show_environment)
+    }
+
+    pub(crate) fn update_prepared_surfels(
+        &mut self,
+        tracer: &mut vol::gpu::RelightTracer,
+        surfels: &[vol::relight::Surfel],
+    ) {
+        tracer.update_surfels(surfels, &self.context, &mut self.encoder);
+    }
+
+    fn render_prepared_flat(
+        &mut self,
+        tracer: &mut vol::gpu::RelightTracer,
+        cameras: &[vol::CameraParams],
+    ) -> &[[f32; 4]] {
+        if cameras.is_empty() {
+            return &[];
+        }
+        self.ensure_readback_frames(cameras.len());
+        let frame_bytes = (self.width * self.height) as u64 * 16;
+        self.encoder.start();
+        self.encoder.init_texture(self.texture);
+        for (index, &camera) in cameras.iter().enumerate() {
+            tracer.dispatch(
+                &mut self.encoder,
+                self.target,
+                camera,
+                [self.width as u32, self.height as u32],
+            );
+            if let mut pass = self.encoder.transfer("inverse-score-batch-readback") {
+                pass.copy_texture_to_buffer(
+                    self.texture.into(),
+                    self.readback.at(index as u64 * frame_bytes),
+                    self.width as u32 * 16,
+                    self.extent,
+                );
+            }
+        }
+        let sync_point = self.context.submit(&mut self.encoder);
+        assert!(self.context.wait_for(&sync_point, 60_000).unwrap());
+        unsafe {
+            std::slice::from_raw_parts(
+                self.readback.data() as *const [f32; 4],
+                self.width * self.height * cameras.len(),
+            )
+        }
+    }
+
+    pub(crate) fn render_prepared_views(
+        &mut self,
+        tracer: &mut vol::gpu::RelightTracer,
+        cameras: &[vol::CameraParams],
+    ) -> Vec<Vec<[f32; 4]>> {
+        let frame_pixels = self.width * self.height;
+        self.render_prepared_flat(tracer, cameras)
+            .chunks(frame_pixels)
+            .map(<[_]>::to_vec)
+            .collect()
+    }
+
+    pub(crate) fn prepared_srgb_loss(
+        &mut self,
+        tracer: &mut vol::gpu::RelightTracer,
+        capture: &capture::Capture,
+        indices: &[usize],
+        cameras: &[vol::CameraParams],
+    ) -> f64 {
+        let frame_pixels = capture.width * capture.height;
+        let pixels = self.render_prepared_flat(tracer, cameras);
+        let mut error = 0.0f64;
+        for (frame, &index) in pixels.chunks(frame_pixels).zip(indices) {
+            for (rendered, reference) in frame.iter().zip(&capture.views[index].pixels) {
+                for channel in 0..3 {
+                    let difference = capture::linear_to_srgb(rendered[channel])
+                        - capture::linear_to_srgb(reference[channel]);
+                    error += (difference * difference) as f64;
+                }
+            }
+        }
+        error / (indices.len() * frame_pixels * 3) as f64
+    }
+
+    pub(crate) fn destroy_prepared_scene(&mut self, mut tracer: vol::gpu::RelightTracer) {
+        tracer.deinit(&self.context);
     }
 
     /// Render the given views and score them against their photographs.

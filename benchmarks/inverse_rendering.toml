@@ -3196,3 +3196,118 @@ metric = "mean absolute error"
 dielectric_truth = 0.04
 dielectric_recovered = 0.08
 error = 0.07
+
+# A final coordinate pass evaluates actual production PBR renders rather than
+# another hand-designed local correspondence. Each visible Gaussian is tested
+# at +/- one quarter-radius along its normal, with fitted appearance fixed and
+# all training cameras contributing to one joint sRGB loss. No held camera or
+# held illumination enters the solve. Bounded passes use deterministic cloud
+# order; prioritizing by observation weight was
+# rejected because it regressed the Bonsai held-view tail.
+[rendered_surface_refinement]
+date = "2026-08-12"
+step_radius_fraction = 0.25
+selection = "observed particles in deterministic cloud order"
+objective = "joint production-relight sRGB MSE over training cameras"
+appearance = "fixed fitted materials and recovered capture environment"
+held_out_evidence_used = false
+cli = "reconstruct --render-refine N"
+default_enabled = false
+
+[rendered_surface_refinement.rejected_observation_priority]
+particles = 300
+bonsai_control_psnr = [15.81, 14.50, 11.68]
+bonsai_candidate_psnr = [15.95, 14.57, 11.63]
+bonsai_control_coverage = 0.922
+bonsai_candidate_coverage = 0.920
+room_control_psnr = [14.46, 14.07, 13.15]
+room_candidate_psnr = [14.49, 14.09, 13.17]
+room_control_coverage = 0.960
+room_candidate_coverage = 0.960
+verdict = "reject: strongest observation weight clusters the bounded budget and loses 0.05 dB on the Bonsai held-view tail"
+
+[rendered_surface_refinement.synthetic_300]
+clouds = 5
+held_light_mean_gain_db = [0.05, 0.04, 0.06, 0.05, 0.07]
+held_light_worst_gain_db = [0.04, 0.03, 0.04, 0.07, 0.08]
+position_result = "mixed at the fourth decimal"
+coverage_result = "neutral within 0.1 percentage point"
+artifacts = "target/audit-runs/rendered-surface-five-v1 (gitignored)"
+
+[rendered_surface_refinement.synthetic_full]
+particles = 1309
+moved = 1125
+training_loss = [0.0081834, 0.0071744]
+control_position_rmse = 0.5842
+candidate_position_rmse = 0.5824
+control_normal_rmse_degrees = 67.33
+candidate_normal_rmse_degrees = 67.34
+control_held_light_psnr = [19.23, 18.92]
+candidate_held_light_psnr = [19.59, 19.28]
+control_coverage = 0.558
+candidate_coverage = 0.556
+seconds = 15.635
+artifacts = "target/audit-runs/rendered-surface-support-v1/min1 (gitignored)"
+
+[rendered_surface_refinement.real_3000.bonsai]
+particles = 3000
+moved = 2456
+training_loss = [0.0274895, 0.0270461]
+control_psnr = [15.81, 14.50, 11.68]
+candidate_psnr = [15.87, 14.52, 11.71]
+control_test_coverage = 0.922
+candidate_test_coverage = 0.921
+seconds = 476.8
+
+[rendered_surface_refinement.real_3000.room]
+particles = 3000
+moved = 2543
+training_loss = [0.0369082, 0.0360491]
+control_psnr = [14.46, 14.07, 13.15]
+candidate_psnr = [14.57, 14.14, 13.20]
+control_test_coverage = 0.960
+candidate_test_coverage = 0.960
+seconds = 534.8
+
+[rendered_surface_refinement.real_full.bonsai]
+particles = 7889
+moved = 6460
+training_loss = [0.0274895, 0.0254644]
+control_psnr = [15.81, 14.50, 11.68]
+candidate_psnr = [16.15, 14.68, 11.67]
+control_test_coverage = 0.922
+candidate_test_coverage = 0.921
+seconds = 1263.6
+
+[rendered_surface_refinement.real_full.room]
+particles = 6232
+moved = 5232
+training_loss = [0.0369082, 0.0349245]
+control_psnr = [14.46, 14.07, 13.15]
+candidate_psnr = [14.70, 14.23, 13.28]
+control_test_coverage = 0.960
+candidate_test_coverage = 0.961
+seconds = 1108.3
+
+[rendered_surface_refinement.real_full.stability]
+gpu = "NVIDIA GeForce RTX 5070"
+wall_seconds = 2376.833
+peak_memory_bytes = 419028992
+memory_events = 0
+driver_faults = 0
+artifact_sha256 = ["ceeaff4507614c79181784462761f4bb5da6ba1f4e3a13f87c4d8bdaca96d9c7", "f52525f97753f5b2935547feb54cea84616e960e5ffabbacf6cd86981e658f29"]
+
+[rendered_surface_refinement.performance]
+particles = 300
+rebuild_seconds = 37.412
+retained_tracer_seconds = 3.966
+speedup = 9.43
+batched_camera_seconds = 3.698
+total_speedup = 10.12
+batched_camera_speedup = 1.072
+output_sha256 = "40605aeaefe3e240402927e33a52274d359c71a76be8f979f32f8342f6fbcd8c"
+camera_batching = "one command submission and contiguous readback for every training-camera sequence; loss read directly without frame copies"
+real_bonsai_seconds = [48.3, 45.7]
+real_room_seconds = [53.6, 50.7]
+real_output_sha256 = ["176e2e9786d67ba5dfc18869ea1add36cb0f74a8aceaaf4fe918bbac60993517", "da7d55a8a9873746f79eb93a8b93886012a4e121089bf05c0a59d190289f262e"]
+verdict = "keep opt-in: joint renderer loss transfers to synthetic and real held views, but full exact coordinate descent needs a tail/coverage guard and better throughput before becoming default"

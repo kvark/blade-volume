@@ -619,3 +619,27 @@ worst-view score and three of four mean unseen-light scores regress. The
 prototype is removed. The next single-light step needs an observation-derived
 cross-view surface constraint; another per-particle shading prior will merely
 choose a point on the same normal/albedo ambiguity.
+
+That cross-view objective now exists without introducing a second geometry
+representation. An opt-in final pass moves one observed Gaussian at a time by
+one quarter-radius along its current normal, renders every training camera
+through the production PBR tracer, and keeps a direction only when it reduces
+the joint sRGB error. Materials and the recovered capture light stay fixed;
+held cameras and the held studio light never enter the solve. On five fixed
+synthetic clouds, a bounded 300-particle pass improves every held-light mean
+and worst view by 0.03--0.08 dB. A full 1,309-particle pass improves position
+RMSE from 0.5842 to 0.5824 and held-light PSNR from 19.23/18.92 to
+19.59/19.28 dB, with normal RMSE essentially unchanged at 67.3 degrees and
+coverage down only 0.2 points. This is an output-correct surface objective,
+not yet a normal solver.
+
+The objective also transfers to real captures. Moving 3,000 of roughly 30,000
+particles raises held-view Bonsai by 0.02 dB mean / 0.03 dB worst and Room by
+0.07/0.05 dB, with at most 0.1 coverage point of change. A complete Bonsai
+pass raises the held mean by 0.18 dB but loses 0.01 dB on its single worst view
+and 0.1 coverage point. It therefore remains explicit through
+`--render-refine`, not the default. A complete Room pass is unambiguously
+positive at +0.16 dB mean, +0.13 dB worst, and +0.1 coverage point. The next
+algorithmic step is a tail/coverage-aware batched or differentiable version
+that also updates normals and support; simply running more coordinate passes
+would optimize the same ambiguity at high cost.

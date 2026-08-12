@@ -87,11 +87,15 @@ pub struct RelightTracer {
     material_buf: gpu::Buffer,
     alias_buf: gpu::Buffer,
     instance_buf: gpu::Buffer,
+    stage_buf: gpu::Buffer,
+    scratch_buf: gpu::Buffer,
     specular_texture: gpu::Texture,
     specular_view: gpu::TextureView,
     sampler: gpu::Sampler,
     blas: gpu::AccelerationStructure,
     tlas: gpu::AccelerationStructure,
+    surfel_stage_offset: u64,
+    tlas_scratch_offset: u64,
 }
 
 /// Rotation taking `+Z` onto `normal`, as the columns of a 3x3.
@@ -108,6 +112,28 @@ fn basis_from_normal(normal: glam::Vec3) -> glam::Mat3 {
     let tangent = up.cross(normal).normalize();
     let bitangent = normal.cross(tangent);
     glam::Mat3::from_cols(tangent, bitangent, normal)
+}
+
+fn make_instances(surfels: &[relight::Surfel]) -> Vec<gpu::AccelerationStructureInstance> {
+    surfels
+        .iter()
+        .map(|surfel| {
+            let normal = glam::Vec3::from(surfel.normal);
+            let m = basis_from_normal(normal) * surfel.radius;
+            gpu::AccelerationStructureInstance {
+                acceleration_structure_index: 0,
+                transform: mint::ColumnMatrix3x4 {
+                    x: m.x_axis.into(),
+                    y: m.y_axis.into(),
+                    z: m.z_axis.into(),
+                    w: glam::Vec3::from(surfel.center).into(),
+                }
+                .into(),
+                mask: 0xFF,
+                custom_index: 0,
+            }
+        })
+        .collect()
 }
 
 impl RelightTracer {
@@ -231,26 +257,7 @@ impl RelightTracer {
             size: blas_sizes.data,
         });
 
-        let instances = model
-            .surfels
-            .iter()
-            .map(|surfel| {
-                let normal = glam::Vec3::from(surfel.normal);
-                let m = basis_from_normal(normal) * surfel.radius;
-                gpu::AccelerationStructureInstance {
-                    acceleration_structure_index: 0,
-                    transform: mint::ColumnMatrix3x4 {
-                        x: m.x_axis.into(),
-                        y: m.y_axis.into(),
-                        z: m.z_axis.into(),
-                        w: glam::Vec3::from(surfel.center).into(),
-                    }
-                    .into(),
-                    mask: 0xFF,
-                    custom_index: 0,
-                }
-            })
-            .collect::<Vec<_>>();
+        let instances = make_instances(&model.surfels);
         let instance_buf =
             context.create_acceleration_structure_instance_buffer(&instances, &[blas]);
         let count = model.surfels.len() as u32;
@@ -383,8 +390,6 @@ impl RelightTracer {
         let sync_point = context.submit(encoder);
         let _ = context.wait_for(&sync_point, !0);
 
-        context.destroy_buffer(scratch_buf);
-        context.destroy_buffer(stage);
         context.destroy_buffer(specular_stage);
 
         Self {
@@ -406,12 +411,66 @@ impl RelightTracer {
             material_buf,
             alias_buf,
             instance_buf,
+            stage_buf: stage,
+            scratch_buf,
             specular_texture,
             specular_view,
             sampler,
             blas,
             tlas,
+            surfel_stage_offset: vertex_size + index_size,
+            tlas_scratch_offset,
         }
+    }
+
+    /// Replace particle geometry while retaining materials, lighting, and the
+    /// shared triangle BLAS. The particle count must stay fixed.
+    pub fn update_surfels(
+        &mut self,
+        surfels: &[relight::Surfel],
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) {
+        let surfel_size = mem::size_of_val(surfels) as u64;
+        assert_eq!(
+            surfel_size,
+            self.surfel_buf.size(),
+            "relight surfel update must preserve the particle count"
+        );
+        unsafe {
+            let target = slice::from_raw_parts_mut(
+                self.stage_buf.data().add(self.surfel_stage_offset as usize)
+                    as *mut relight::Surfel,
+                surfels.len(),
+            );
+            target.copy_from_slice(surfels);
+        }
+        let instances = make_instances(surfels);
+        let instance_buf =
+            context.create_acceleration_structure_instance_buffer(&instances, &[self.blas]);
+
+        encoder.start();
+        if let mut pass = encoder.transfer("relight-surfels-update") {
+            pass.copy_buffer_to_buffer(
+                self.stage_buf.at(self.surfel_stage_offset),
+                self.surfel_buf.at(0),
+                surfel_size,
+            );
+        }
+        if let mut pass = encoder.acceleration_structure("relight-top-update") {
+            pass.build_top_level(
+                self.tlas,
+                &[self.blas],
+                surfels.len() as u32,
+                instance_buf.at(0),
+                self.scratch_buf.at(self.tlas_scratch_offset),
+            );
+        }
+        let sync_point = context.submit(encoder);
+        let _ = context.wait_for(&sync_point, !0);
+
+        context.destroy_buffer(self.instance_buf);
+        self.instance_buf = instance_buf;
     }
 
     /// Put the model under a different light.
@@ -525,6 +584,14 @@ impl RelightTracer {
         self.params.diffuse_samples
     }
 
+    /// Restart the deterministic sampling sequence used by shadowed renders.
+    ///
+    /// This lets two otherwise identical frame sequences use identical sample
+    /// directions, which is required when their image errors are compared.
+    pub fn reset_sampling(&mut self) {
+        self.params.frame_index = 0;
+    }
+
     /// Radiance for rays that hit nothing, when the environment is not shown.
     ///
     /// Rendering the same pose against two of these measures how much of the
@@ -579,6 +646,8 @@ impl RelightTracer {
         context.destroy_sampler(self.sampler);
         context.destroy_texture_view(self.specular_view);
         context.destroy_texture(self.specular_texture);
+        context.destroy_buffer(self.scratch_buf);
+        context.destroy_buffer(self.stage_buf);
         context.destroy_buffer(self.instance_buf);
         context.destroy_buffer(self.alias_buf);
         context.destroy_buffer(self.material_buf);

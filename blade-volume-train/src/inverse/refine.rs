@@ -6,7 +6,7 @@
 //! candidate position it projects one world-space tangent patch into several
 //! photographs. The right depth is the one whose reprojected patches agree.
 
-use crate::inverse::{capture, depth};
+use crate::inverse::{capture, decompose, depth, score};
 use blade_volume as vol;
 use std::thread;
 
@@ -78,6 +78,110 @@ pub struct RefineStats {
     pub mean_absolute_offset: f32,
     pub mean_relative_improvement: f32,
     pub mean_views: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderedStats {
+    pub particles: usize,
+    pub tested: usize,
+    pub moved: usize,
+    pub initial_loss: f64,
+    pub final_loss: f64,
+    pub seconds: f64,
+}
+
+fn rendered_loss(
+    renderer: &mut score::Renderer,
+    tracer: &mut vol::gpu::RelightTracer,
+    capture: &capture::Capture,
+    indices: &[usize],
+    cameras: &[vol::CameraParams],
+) -> f64 {
+    tracer.reset_sampling();
+    renderer.prepared_srgb_loss(tracer, capture, indices, cameras)
+}
+
+/// Move particles along their current normals against the complete runtime
+/// PBR render of every training photograph.
+///
+/// Materials and illumination stay fixed during the pass. Each coordinate is
+/// tested independently in both directions, and a move is retained only when
+/// it reduces the joint image loss. The held-out cameras never enter this
+/// function; callers decide which indices are training evidence.
+pub fn refine_rendered(
+    scene: &mut score::Scene,
+    capture: &capture::Capture,
+    indices: &[usize],
+    observations: &decompose::Observations,
+    diffuse_samples: u32,
+    max_particles: usize,
+) -> Result<RenderedStats, String> {
+    if observations.surfels() != scene.model.surfels.len() {
+        return Err("rendered refinement observation count does not match the model".to_string());
+    }
+    for &index in indices {
+        if index >= capture.views.len() {
+            return Err(format!("rendered refinement view {index} is out of bounds"));
+        }
+    }
+    if scene.model.surfels.is_empty() || indices.is_empty() || max_particles == 0 {
+        return Ok(RenderedStats {
+            particles: scene.model.surfels.len(),
+            ..RenderedStats::default()
+        });
+    }
+
+    let cameras: Vec<vol::CameraParams> = indices
+        .iter()
+        .map(|&index| capture.views[index].camera)
+        .collect();
+    let mut renderer = score::Renderer::new(capture.width, capture.height)?;
+    let mut tracer = renderer.prepare_scene(scene, diffuse_samples, false);
+    let started = std::time::Instant::now();
+    let mut loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+    let initial_loss = loss;
+    let candidates: Vec<usize> = (0..scene.model.surfels.len())
+        .filter(|&index| !observations.of(index).is_empty())
+        .take(max_particles)
+        .collect();
+    let tested = candidates.len();
+    let mut moved = 0usize;
+    for index in candidates {
+        let original = scene.model.surfels[index].center;
+        let normal = glam::Vec3::from(scene.model.surfels[index].normal).normalize_or_zero();
+        let step = 0.25 * scene.model.surfels[index].radius;
+        let plus = (glam::Vec3::from(original) + step * normal).to_array();
+        let mut best_loss = loss;
+        let mut best = original;
+        for sign in [-1.0f32, 1.0] {
+            scene.model.surfels[index].center =
+                (glam::Vec3::from(original) + sign * step * normal).to_array();
+            renderer.update_prepared_surfels(&mut tracer, &scene.model.surfels);
+            let candidate = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+            if candidate < best_loss {
+                best_loss = candidate;
+                best = scene.model.surfels[index].center;
+            }
+        }
+        scene.model.surfels[index].center = best;
+        if best != plus {
+            renderer.update_prepared_surfels(&mut tracer, &scene.model.surfels);
+        }
+        if best != original {
+            moved += 1;
+            loss = best_loss;
+        }
+    }
+    renderer.destroy_prepared_scene(tracer);
+    renderer.destroy();
+    Ok(RenderedStats {
+        particles: scene.model.surfels.len(),
+        tested,
+        moved,
+        initial_loss,
+        final_loss: loss,
+        seconds: started.elapsed().as_secs_f64(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -891,5 +995,81 @@ mod tests {
             exact_error < 1.0e-6 && exact_stats.moved == 0,
             "an exact sphere moved by {exact_error}; stats={exact_stats:?}"
         );
+    }
+
+    #[test]
+    fn runtime_render_loss_recovers_a_known_surface_offset() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        const SIZE: usize = 32;
+        let cameras = [
+            camera(glam::Vec3::new(0.0, 0.0, -1.2)),
+            camera(glam::Vec3::new(0.25, 0.0, -1.2)),
+        ];
+        let make_scene = |offset: f32| score::Scene {
+            model: vol::relight::RelightModel {
+                kernel: vol::relight::ParticleKernel::Gaussian,
+                surfels: vec![vol::relight::Surfel {
+                    center: [0.0, 0.0, offset],
+                    radius: 0.3,
+                    normal: [0.0, 0.0, -1.0],
+                    material: 0,
+                }],
+                materials: vec![vol::relight::Material {
+                    albedo: [0.7, 0.3, 0.2],
+                    roughness: 1.0,
+                    specular_f0: [0.04; 3],
+                    _padding: 0.0,
+                }],
+            },
+            environment: vol::relight::Environment {
+                width: 8,
+                height: 4,
+                texels: vec![[1.0; 3]; 32],
+            },
+        };
+
+        let Ok(mut truth_renderer) = score::Renderer::new(SIZE, SIZE) else {
+            eprintln!("skipping runtime render refinement test: no ray-tracing GPU");
+            return;
+        };
+        let truth = make_scene(0.0);
+        let rendered = truth_renderer.render_views(&truth, &cameras, 0, false);
+        for (index, &camera) in cameras.iter().enumerate() {
+            let single = truth_renderer.render_views(&truth, &[camera], 0, false);
+            assert_eq!(rendered[index], single[0]);
+        }
+        let mut sampled = truth_renderer.prepare_scene(&truth, 2, false);
+        let first_sampled = truth_renderer.render_prepared_views(&mut sampled, &cameras);
+        sampled.reset_sampling();
+        let second_sampled = truth_renderer.render_prepared_views(&mut sampled, &cameras);
+        assert_eq!(first_sampled, second_sampled);
+        truth_renderer.destroy_prepared_scene(sampled);
+        truth_renderer.destroy();
+        let capture = capture::Capture {
+            width: SIZE,
+            height: SIZE,
+            views: cameras
+                .iter()
+                .enumerate()
+                .map(|(index, &camera)| capture::View {
+                    name: format!("truth-{index}"),
+                    camera,
+                    pixels: rendered[index]
+                        .iter()
+                        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+                        .collect(),
+                })
+                .collect(),
+        };
+
+        let mut displaced = make_scene(0.075);
+        let observations = decompose::observe(&displaced.model, &capture, &[0, 1], 0.1);
+        assert_eq!(observations.seen(), 1);
+        let stats =
+            refine_rendered(&mut displaced, &capture, &[0, 1], &observations, 0, 1).unwrap();
+        assert_eq!(stats.tested, 1);
+        assert_eq!(stats.moved, 1);
+        assert!(stats.final_loss < stats.initial_loss);
+        assert!(displaced.model.surfels[0].center[2].abs() < 1.0e-6);
     }
 }

@@ -370,6 +370,38 @@ The latest GPU-produced equivalents are under
 The selected refined scenes and held-out comparison images are under
 `target/audit-runs/multi-view-refined-{bonsai,room}-local/`.
 
+An optional final pass now optimizes the surface against the renderer that
+will actually consume it. `--render-refine N` chooses up to `N` observed
+Gaussians in deterministic cloud order, tests a fixed quarter-radius
+displacement on both sides of each current normal, and accepts only a reduction
+in joint sRGB error across every training photograph. The fitted material and
+capture light remain fixed, so geometry cannot win by immediately repainting
+itself; held cameras never enter the objective. It adds no polygonal
+intermediate and no shader variant.
+
+A 3,000-particle real-scene gate improves Bonsai held-view mean/worst by
+0.02/0.03 dB and Room by 0.07/0.05 dB. A complete Bonsai pass improves the
+held mean by 0.18 dB, although its worst view loses 0.01 dB and coverage loses
+0.1 percentage point. A complete Room pass improves mean/worst by 0.16/0.13 dB
+and gains 0.1 coverage point. The option is therefore a validated research/
+final-quality path rather than a default. On synthetic data it is more
+decisive: a full pass improves held-light mean/worst by 0.36/0.36 dB and
+position RMSE by 0.0018 while leaving the still-poor normal error unchanged.
+The current quarter-radius choice is the conservative point of a five-step
+synthetic sweep; larger steps buy more image score but perturb truth geometry
+less consistently.
+
+The implementation keeps the relight pipeline, environment, materials and
+shared primitive BLAS alive while updating only surfel data and the TLAS.
+That makes a 300-particle synthetic pass 9.4 times faster than rebuilding the
+tracer for every candidate, with byte-identical output. Training cameras are
+also recorded into one command submission and one contiguous readback per
+candidate, and the scalar loss is evaluated directly from that mapped buffer.
+This adds another 7.2% synthetic throughput (3.966 to 3.698 seconds) and
+5.4--5.7% on the two real scenes, again with byte-identical scene files. When
+shadow rays are requested, every candidate replays the same deterministic
+sample sequence so noise cannot decide whether a coordinate is accepted.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a

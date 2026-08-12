@@ -136,6 +136,10 @@ struct Args {
     #[argh(switch)]
     no_refine: bool,
 
+    /// particles to refine against all training renders (default 0)
+    #[argh(option, default = "0")]
+    render_refine: usize,
+
     /// optional relightable Gaussian surface output
     #[argh(option)]
     surface_output: Option<String>,
@@ -973,7 +977,7 @@ fn main() {
         .unwrap_or_else(|error| fail(error));
     let given_light = args.true_light.then_some(&training_light);
     let decompose_started = std::time::Instant::now();
-    let fitted = train::inverse::decompose::fit(
+    let mut fitted = train::inverse::decompose::fit(
         &geometry,
         &observations,
         train::inverse::decompose::FitOptions {
@@ -1007,6 +1011,30 @@ fn main() {
             light_error.gauge[1],
             light_error.gauge[2],
         );
+    }
+    if args.render_refine > 0 {
+        let stats = train::inverse::refine::refine_rendered(
+            &mut fitted.scene,
+            &training_capture,
+            &training_indices,
+            &observations,
+            0,
+            args.render_refine,
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "rendered-surface refinement tested {}, moved {}, loss {:.7} -> {:.7} in {:.3} s",
+            stats.tested, stats.moved, stats.initial_loss, stats.final_loss, stats.seconds,
+        );
+        describe_surface_error(
+            "render-refined surface",
+            &fitted.scene.model.surfels,
+            &dataset,
+            &training_indices,
+            &maps,
+            depth_options,
+        )
+        .unwrap_or_else(|error| fail(error));
     }
     if let Some(ref surface_output) = args.surface_output {
         let surface_path = path::Path::new(surface_output);

@@ -524,6 +524,56 @@ fn swapping_the_environment_matches_building_the_tracer_with_it() {
     harness.destroy();
 }
 
+#[test]
+fn updating_surfels_matches_rebuilding_the_tracer() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let mut model = scene();
+    let environment = environment();
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 128, 64);
+    let camera = camera(4.0);
+    model.surfels[0].center[1] += 0.35;
+    model.surfels[1].radius *= 1.2;
+    model.surfels[2].normal = glam::Vec3::new(-0.1, 0.2, -1.0).normalize().into();
+
+    let mut updated = vol::gpu::RelightTracer::new(
+        &scene(),
+        &environment,
+        &specular,
+        vol::gpu::RelightSettings::default(),
+        &harness.context,
+        &mut harness.encoder,
+    );
+    updated.update_surfels(&model.surfels, &harness.context, &mut harness.encoder);
+    let a = harness.render(&mut updated, camera);
+    updated.deinit(&harness.context);
+
+    let mut rebuilt = vol::gpu::RelightTracer::new(
+        &model,
+        &environment,
+        &specular,
+        vol::gpu::RelightSettings::default(),
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let b = harness.render(&mut rebuilt, camera);
+    rebuilt.deinit(&harness.context);
+
+    let mut worst = 0.0f32;
+    for (left, right) in a.iter().zip(&b) {
+        for channel in 0..4 {
+            worst = worst.max((left[channel] - right[channel]).abs());
+        }
+    }
+    assert_eq!(
+        worst, 0.0,
+        "updated geometry differs from a rebuild by {worst}"
+    );
+
+    harness.destroy();
+}
+
 /// A model that has been through the file format renders the same as the one
 /// it was written from.
 ///
