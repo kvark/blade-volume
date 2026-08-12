@@ -41,6 +41,18 @@ use std::sync;
 /// real GPU and was responsible for ~43 h of wasted training runs after the
 /// May-18 Xid 62 crash. Set `BLADE_VOLUME_ALLOW_SOFTWARE=1` to override.
 pub fn try_init_gpu() -> Option<sync::Arc<gpu::Context>> {
+    #[cfg(test)]
+    {
+        static GPU_CONTEXT: sync::OnceLock<Option<sync::Arc<gpu::Context>>> = sync::OnceLock::new();
+        GPU_CONTEXT.get_or_init(init_gpu_context).clone()
+    }
+    #[cfg(not(test))]
+    {
+        init_gpu_context()
+    }
+}
+
+fn init_gpu_context() -> Option<sync::Arc<gpu::Context>> {
     if blade_volume::gpu::access_disabled() {
         eprintln!("try_init_gpu: GPU access disabled by BLADE_VOLUME_DISABLE_GPU");
         return None;
@@ -249,6 +261,17 @@ pub fn fit_constant_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_context_is_reused_within_the_test_process() {
+        let _gpu_test_guard = gpu_test_guard();
+        let Some(first) = try_init_gpu() else {
+            eprintln!("skipping GPU context reuse test: no supported GPU device");
+            return;
+        };
+        let second = try_init_gpu().expect("cached GPU context disappeared");
+        assert!(sync::Arc::ptr_eq(&first, &second));
+    }
 
     #[test]
     fn fits_target_rgb_via_adam() {
