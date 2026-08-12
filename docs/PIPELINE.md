@@ -134,6 +134,18 @@ checkpoint's serialized adjacency differs from its own fresh rebuild by 1,443
 old-only and 1,266 fresh-only undirected edges because the reference saves
 post-optimizer parameters with pre-optimizer adjacency.
 
+The checkpoint also isolates the remaining appearance gap. Repeating each
+detail site's mean RGB across its eight directional entries changes nothing
+except directional variation and drops the official rasterizer from 28.3432
+to 16.4463 dB (-11.8969 dB). Projecting that same ablation into Blade preserves
+points, activated density/radii, quaternion-derived normals, spatial sites,
+heights, and mean site colours. On identical quantized targets the official
+and Blade mean-direction renders score 16.5035 and 16.5067 dB; the renders agree
+with each other at 59.18 dB averaged over all 37 views. Thus geometry,
+orientation, spatial detail, camera mapping, and compute traversal are already
+cross-rendered. The unsupported per-detail directional colour function, not a
+traversal defect, explains essentially the complete quality gap.
+
 The reference repository and project page publish no checkpoint asset. The
 native checkpoint, renders, environment, and comparison binaries therefore
 remain ignored under `target/reference/powerfoam/`; they are not vendored into

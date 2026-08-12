@@ -2027,8 +2027,13 @@ material path.
    values. Serialized-vs-fresh official topology differs by 2,709 edge
    decisions because checkpoint parameters and adjacency straddle an optimizer
    step, but native metrics are unchanged to four decimals after rebuild. Full
-   pixel parity remains blocked specifically on the unsupported 384-float
-   per-detail directional colour table, not weighted geometry or topology.)
+   pixel parity is now isolated specifically to the unsupported 384-float
+   per-detail directional colour table: replacing it with each detail site's
+   mean colour costs 11.8969 dB in the official rasterizer, while the matched
+   mean-colour official and Blade renders agree at 59.18 dB and differ by only
+   0.0032 dB against the targets. Implement the released directional kernel as
+   one optional table nested under spatial detail, sharing its existing shader
+   path; do not add backend/shader-entry variants for it.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
    sweep the ray-query batch window for invariant pixels, query count, and frame
    time. The conservative triangle BLAS remains an invisible point-candidate

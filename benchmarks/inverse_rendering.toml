@@ -3576,3 +3576,15 @@ evaluation_host_peak_bytes = 2715570176
 memory_events = 0
 driver_faults = 0
 termination = "manual at step 10965 before CUDA allocation failure; periodic step-10000 checkpoint preserved"
+
+[powerfoam_reference.bonsai_checkpoint_10k.mean_direction_projection]
+full_official_psnr = 28.3432
+mean_direction_official_psnr = 16.4463
+directional_psnr_contribution = 11.8969
+matched_quantized_official_psnr = 16.503541
+matched_quantized_blade_psnr = 16.506705
+matched_blade_minus_official_psnr = 0.003164
+official_vs_blade_render_psnr = 59.179950
+views = 37
+projection_vendored = false
+verdict = "implement the full per-detail directional colour table: it explains the 11.90 dB gap, while matched mean-direction Blade and official renders agree at 59.18 dB"
