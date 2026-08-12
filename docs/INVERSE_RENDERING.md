@@ -412,6 +412,15 @@ normal search was rejected: even 10-degree candidates improve five synthetic
 held-light means by only 0.03--0.05 dB and truth normal RMSE by roughly 0.1
 degree while tripling position-only cost.
 
+Tail-aware and approximate-camera shortcuts were also rejected. Weighting the
+worst training camera does not transfer to the worst unseen pose. Rendering
+only the cameras that observed a particle cuts the probe time by 43%, but
+regresses three of five strict held-view gates; a final all-camera acceptance
+render restores quality and erases the speedup. A matched ten-pair Blade
+experiment also finds no measurable gain from reusing the host-side TLAS
+instance buffer (5.406 seconds in both arms, byte-identical output). The
+synchronized TLAS rebuild is the remaining exact-coordinate bottleneck.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a

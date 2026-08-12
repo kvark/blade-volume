@@ -3350,3 +3350,28 @@ position_normal_normal_rmse_degrees = [66.18, 66.03, 67.28, 69.22, 66.25]
 position_only_seconds = 3.698
 position_normal_seconds = [10.665, 10.944, 10.746, 10.577, 10.811]
 verdict = "reject and remove: four extra full renders per particle buy only 0.03--0.05 dB and about 0.1 degree normal RMSE"
+
+[rendered_surface_refinement.rejected_tail_objective]
+tail_weights = [0.1, 0.25, 0.5, 1.0]
+synthetic_clouds = 5
+baseline_worst_held_light_psnr = [18.32, 19.01, 18.70, 18.67, 18.50]
+weight_0_1_worst_held_light_psnr = [18.32, 19.01, 18.70, 18.67, 18.48]
+weight_1_0_worst_held_light_psnr = [18.30, 19.00, 18.70, 18.68, 18.47]
+verdict = "reject and remove: protecting the worst training-camera MSE does not protect unseen poses and regresses the difficult fifth cloud"
+
+[rendered_surface_refinement.rejected_observed_views]
+synthetic_clouds = 5
+exact_seconds = [3.651, 3.672, 3.635, 3.529, 3.666]
+observed_only_seconds = [2.194, 2.052, 2.085, 1.997, 2.100]
+exact_worst_held_light_psnr = [18.32, 19.01, 18.70, 18.67, 18.50]
+observed_only_worst_held_light_psnr = [18.29, 19.01, 18.71, 18.66, 18.49]
+globally_verified_seconds = [3.717, 3.619, 3.571, 3.522, 3.611]
+globally_verified_worst_held_light_psnr = [18.32, 19.01, 18.71, 18.67, 18.50]
+verdict = "reject and remove: local cameras are 43% faster but miss the strict held-view gate; global verification restores quality and erases the speedup"
+
+[rendered_surface_refinement.rejected_instance_buffer_reuse]
+alternating_pairs = 10
+control_mean_seconds = 5.406
+reuse_mean_seconds = 5.406
+output_sha256 = "40605aeaefe3e240402927e33a52274d359c71a76be8f979f32f8342f6fbcd8c"
+verdict = "reject and remove from Blade: in-place TLAS instance descriptors are exact but allocation is not measurable; the synchronized TLAS rebuild dominates"

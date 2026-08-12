@@ -648,3 +648,13 @@ about 0.1 degree of truth normal error on synthetic clouds, so that prototype
 is removed. The next algorithmic step is a tail/coverage-aware batched or
 differentiable version that makes position and support cheaper; normal work
 still needs stronger evidence than single-light PBR error.
+
+Three cheap shortcuts were measured and removed. Adding the worst
+training-camera MSE to the objective does not protect unseen poses. Scoring a
+particle on only the cameras that observed it is 43% faster, but loses up to
+0.03 dB on the synthetic held-view tail; verifying its winner against all
+cameras restores quality and all of the cost. Reusing Blade's host-side TLAS
+instance buffer is byte-exact but measures 5.406 seconds in both arms over ten
+alternating pairs. The cost is the synchronized TLAS rebuild itself, not the
+allocation. Further throughput work should therefore batch or differentiate
+geometry proposals so one rebuild evaluates more than one scalar coordinate.
