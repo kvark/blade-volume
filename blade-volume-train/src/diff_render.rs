@@ -2788,6 +2788,19 @@ fn fixed_densification_round(config: DensifyConfig, steps_done: usize) -> usize 
     (steps_done - config.warmup) / config.every
 }
 
+fn is_densify_schedule_active(
+    config: DensifyConfig,
+    current_points: usize,
+    steps_done: usize,
+) -> bool {
+    match config.schedule {
+        DensifySchedule::Fixed => {
+            steps_done < config.densify_until && current_points < config.target_points
+        }
+        DensifySchedule::RadFoamV1 => radfoam_v1_densify_active(config, current_points),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DensifyCadenceState {
     initial_points: usize,
@@ -4915,7 +4928,8 @@ fn save_adam_state(
 /// neighbourhood causes destabilising first-step updates).
 ///
 /// The Adam step counter is preserved exactly so bias correction stays
-/// continuous.
+/// continuous. State is matched by name because a temporary training-only
+/// parameter can disappear when its schedule closes at this rebuild.
 fn restore_adam_state_remap(
     session: &mut mn::Session,
     snap: &AdamSnapshot,
@@ -4942,7 +4956,6 @@ fn restore_adam_state_remap(
         has_spherical_voronoi,
         has_point_error,
     );
-    debug_assert_eq!(names.len(), snap.entries.len());
     let n_old = snap
         .entries
         .first()
@@ -4952,10 +4965,14 @@ fn restore_adam_state_remap(
     for &old_index in new_to_old {
         inheritance_count[old_index] += 1;
     }
-    for (i, name_and_stride) in names.iter().enumerate() {
-        let entry = &snap.entries[i];
-        debug_assert_eq!(entry.stride, name_and_stride.1);
-        let s = name_and_stride.1;
+    for (ref name, stride) in names {
+        let entry = snap
+            .entries
+            .iter()
+            .find(|entry| entry.name == name.as_str())
+            .unwrap_or_else(|| panic!("missing Adam state for rebuilt parameter {name}"));
+        debug_assert_eq!(entry.stride, stride);
+        let s = stride;
         let mut m = vec![0.0_f32; n_new * s];
         let mut v = vec![0.0_f32; n_new * s];
         for (j, &oi) in new_to_old.iter().enumerate() {
@@ -5578,7 +5595,9 @@ fn fit_appearance_pixel_batched(
     let setup_start = std::time::Instant::now();
     let mut position_grad_accum = vec![0.0f32; model.points.len()];
     let mut position_grad_scratch = vec![0.0f32; model.points.len() * 3];
-    let collect_powerfoam_point_error = densify.is_some() && model.radii.is_some();
+    let mut collect_powerfoam_point_error = model.radii.is_some()
+        && densify
+            .is_some_and(|value| is_densify_schedule_active(value, model.points.len(), steps_done));
     // Densification rebuilds the session and remaps every geometry moment, so
     // retain the established full-gradient graph while it is enabled. At a
     // fixed topology, a zero-rate parameter is truly frozen: no downstream
@@ -5746,12 +5765,8 @@ fn fit_appearance_pixel_batched(
     phase_timings.setup += setup_start.elapsed();
 
     while steps_done < invocation_end {
-        let densify_schedule_active = densify.is_some_and(|d| match d.schedule {
-            DensifySchedule::Fixed => {
-                steps_done < d.densify_until && model.points.len() < d.target_points
-            }
-            DensifySchedule::RadFoamV1 => radfoam_v1_densify_active(d, model.points.len()),
-        });
+        let densify_schedule_active = densify
+            .is_some_and(|value| is_densify_schedule_active(value, model.points.len(), steps_done));
         let densify_budget = match densify.filter(|_| densify_schedule_active) {
             Some(d) => match d.schedule {
                 DensifySchedule::Fixed => {
@@ -6266,6 +6281,8 @@ fn fit_appearance_pixel_batched(
                 phase_timings.topology += topology_start.elapsed();
                 position_grad_accum = vec![0.0f32; model.points.len()];
                 position_grad_scratch = vec![0.0f32; model.points.len() * 3];
+                collect_powerfoam_point_error = model.radii.is_some()
+                    && is_densify_schedule_active(d, model.points.len(), steps_done);
 
                 // Topology changed: tear down and rebuild the
                 // cell-count-dependent resources, then remap Adam moments
@@ -9521,8 +9538,13 @@ mod tests {
         let config = DensifyConfig {
             warmup: 2000,
             every: 500,
+            target_points: 200_000,
+            densify_until: 11_000,
             ..DensifyConfig::default()
         };
+        assert!(is_densify_schedule_active(config, 199_999, 10_999));
+        assert!(!is_densify_schedule_active(config, 200_000, 10_999));
+        assert!(!is_densify_schedule_active(config, 199_999, 11_000));
         assert_eq!(steps_until_fixed_densify(config, 0), 2000);
         assert_eq!(steps_until_fixed_densify(config, 1900), 100);
         assert!(fixed_densify_due(config, 2000));
@@ -9577,6 +9599,12 @@ mod tests {
         assert_eq!(radfoam_v1_next_densify_after(config, 131_072, 140_000), 100,);
         assert!(radfoam_v1_densify_active(config, 1_887_436));
         assert!(!radfoam_v1_densify_active(config, 1_887_437));
+        assert!(is_densify_schedule_active(config, 1_887_436, usize::MAX));
+        assert!(!is_densify_schedule_active(
+            config,
+            1_887_437,
+            config.warmup,
+        ));
     }
 
     #[test]
@@ -10867,7 +10895,7 @@ mod tests {
     }
 
     #[test]
-    fn powerfoam_point_error_survives_densification_rebuild() {
+    fn powerfoam_point_error_lifecycle_spans_final_densification() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping PowerFoam densification rebuild test: no GPU");

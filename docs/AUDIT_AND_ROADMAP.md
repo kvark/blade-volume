@@ -2008,7 +2008,12 @@ material path.
    all-view boundary changes held-out PSNR by -0.0499/-0.0004 dB, and a
    tenfold stricter threshold loses -0.0658/-0.0108 dB. Both policies are
    removed. Current contribution and point-error scores are not a safe proxy
-   for held-view spatial responsibility. The official
+   for held-view spatial responsibility. Conversely, the error-probe graph is
+   now omitted once no future densification round can consume it. Two
+   order-balanced fixed-capacity replicas reduce mean training time by 3.5%
+   on both Room and Bonsai and GPU wait by 4.7%/5.5%, with neutral-to-positive
+   mean train and held-out PSNR. This is a scheduler-only graph-lifetime change:
+   it adds no shader, graph op, or model/runtime variant. The official
    appearance audit at commit `9639225` counts 412 extra floats per point and
    identifies spatial-norm and directional-kernel differences between paper
    and source, so each staged increment must name its exact contract.)

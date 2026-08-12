@@ -1916,6 +1916,29 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   capacity work needs a held-view-safe spatial responsibility signal rather
   than another policy over the current contribution and point-error scores.
 
+#### M2bk — Drop inactive densification score graph (done)
+
+- Weighted training used to build the temporary per-point photometric-error
+  probe whenever a densification configuration existed, including fixed clouds
+  already at their target and RadFoam-v1 schedules past their final growth
+  boundary. The probe has exactly zero forward value and only exists to feed a
+  later split decision, so keeping its parameter and gradient path after the
+  schedule closes cannot affect any model gradient.
+- Graph construction now follows the same schedule predicate as the growth
+  loop. The probe remains live while a future round can consume it and is
+  omitted immediately after the final topology rebuild. Adam remapping matches
+  rebuilt parameters by name, allowing this temporary state to disappear while
+  preserving every surviving parameter, exposure, and bias-correction step.
+  A physical-GPU regression grows an oriented PowerFoam cloud to its target and
+  completes the following fixed-topology optimizer step.
+- Two order-balanced 1,020-step replicas at a fixed 200,000-site capacity cut
+  mean Room training time from 74.455 to 71.854 seconds (-3.5%) and GPU wait
+  from 45.217 to 43.083 seconds (-4.7%). Bonsai falls from 45.946 to 44.351
+  seconds (-3.5%) and from 32.873 to 31.081 GPU-wait seconds (-5.5%). Mean
+  train/held-out PSNR changes only 25.3357/23.4034→25.3378/23.4067 dB on Room
+  and 16.8860/16.2978→16.9054/16.3098 dB on Bonsai. The implementation adds no
+  model field, graph op, shader entry/group, WGSL, binding, or pipeline variant.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
