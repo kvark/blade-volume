@@ -1856,6 +1856,35 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   strict all-target lint, and the complete locked serialized workspace suite
   pass; the suite peaks at 5,500,235,776 bytes with zero cgroup events.
 
+#### M2bi — Pack narrow softmax rows (performance-positive, rejected)
+
+- The eight-site density table makes softmax the next measurable appearance
+  cost. Meganeura's existing reduction template can assign eight lanes to each
+  row and pack 32 rows in one 256-lane workgroup. The prototype added no graph
+  op, shader entry/group, WGSL file, binding, or pipeline-map variant. Compiler
+  coverage checked the 32-row dispatch and the 33-column fallback; a 513x8
+  physical-GPU oracle matched an independent CPU forward sum and every table
+  gradient.
+- A graph-only simplification was rejected first. Replacing the zero-preserving
+  residual form with the algebraic `8 * dot(weights, softmax(logits))` removes
+  surrounding nodes but leaves GPU-step time unchanged and changes the 32-step
+  loss from 0.0117 to 0.0132. Equal logits must return exactly one even when
+  normalized spatial weights do not sum to one bit-for-bit.
+- Two 2,040-step Room replicas reduced mean training 158.204 to 144.815
+  seconds (-8.5%) and GPU wait 99.216 to 88.565 seconds (-10.7%). Mean held-out
+  PSNR changed 24.3480 to 24.3395 dB, with 15/4/20 averaged views
+  improving/tying/regressing.
+- Two Bonsai replicas reduced mean training 98.136 to 89.213 seconds (-9.1%)
+  and GPU wait 73.203 to 64.275 seconds (-12.2%), but mean held-out PSNR changed
+  16.8319 to 16.8083 dB and the worst averaged view fell 0.045 dB. The 16/0/21
+  view split makes the quality loss directional rather than replica noise.
+- The implementation is removed. It is mathematically correct, but replacing
+  the 256-lane identity-padded reduction with an eight-lane tree changes f32
+  accumulation and the optimizer trajectory. Future reduction work on this
+  path must preserve the original tree or pass a new quality gate. The long
+  serialized scope peaked at 2,075,435,008 bytes under 6 GiB with zero swap,
+  pressure, OOM, kill, throttling, truncation, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

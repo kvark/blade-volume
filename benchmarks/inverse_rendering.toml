@@ -3442,3 +3442,25 @@ separate_16_room_psnr = [14.57, 14.07, 13.14]
 separate_8_bonsai_psnr = [15.91, 14.52, 11.72]
 separate_8_room_psnr = [14.54, 14.07, 13.17]
 verdict = "reject and remove: 64 radius rounds strongly improve synthetic clouds and Room but lose 0.11 dB on the Bonsai tail; 8-16 rounds become neutral or negative on Room"
+
+[training_performance.rejected_packed_narrow_softmax]
+date = "2026-08-12"
+features = 8
+rows_per_workgroup = 32
+gpu_oracle_rows = 513
+room_control_training_seconds = [158.747, 157.660]
+room_candidate_training_seconds = [144.773, 144.856]
+room_control_gpu_wait_seconds = [99.401, 99.030]
+room_candidate_gpu_wait_seconds = [88.747, 88.382]
+room_control_held_psnr = [24.3518, 24.3441]
+room_candidate_held_psnr = [24.3372, 24.3417]
+room_averaged_view_split = [15, 4, 20]
+bonsai_control_training_seconds = [98.585, 97.687]
+bonsai_candidate_training_seconds = [88.920, 89.505]
+bonsai_control_gpu_wait_seconds = [73.694, 72.711]
+bonsai_candidate_gpu_wait_seconds = [64.045, 64.505]
+bonsai_control_held_psnr = [16.8439, 16.8198]
+bonsai_candidate_held_psnr = [16.8072, 16.8093]
+bonsai_averaged_view_split = [16, 0, 21]
+peak_memory_bytes = 2075435008
+verdict = "reject and remove: existing reduction-template row packing needs no shader or op variant and saves 8.5-9.1% wall time, but its changed reduction tree loses 0.0236 dB on Bonsai"
