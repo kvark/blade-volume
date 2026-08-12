@@ -658,3 +658,13 @@ instance buffer is byte-exact but measures 5.406 seconds in both arms over ten
 alternating pairs. The cost is the synchronized TLAS rebuild itself, not the
 allocation. Further throughput work should therefore batch or differentiate
 geometry proposals so one rebuild evaluates more than one scalar coordinate.
+
+That batching direction now has a selected first form. Sixty-four paired
+simultaneous perturbations use each production render to update every observed
+Gaussian, with deterministic 2.5% support-relative signs and a 0.001 anchor
+prior. The opt-in `--render-refine-rounds 64` beats a 300-coordinate pass on
+all five synthetic held means and tails at about 4.2 times lower cost. It
+transfers to Bonsai at the same 14.52/11.71 dB held score in 10.0 seconds, and
+to Room with a neutral mean and +0.01 dB tail in 11.0 seconds. Exact coordinate
+descent is still stronger on Room, and simultaneous updates slightly worsen
+synthetic truth-position RMSE, so neither path becomes a default.

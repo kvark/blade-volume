@@ -83,6 +83,12 @@ pub struct RefineStats {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RenderedStats {
     pub particles: usize,
+    /// Observed particles perturbed together in each simultaneous round.
+    pub simultaneous_particles: usize,
+    /// Requested simultaneous rounds.
+    pub simultaneous_rounds: usize,
+    /// Rounds whose positive or negative proposal reduced the objective.
+    pub simultaneous_accepted: usize,
     pub tested: usize,
     pub moved: usize,
     pub radii_moved: usize,
@@ -102,19 +108,126 @@ fn rendered_loss(
     renderer.prepared_srgb_loss(tracer, capture, indices, cameras)
 }
 
+fn perturbation_sign(index: usize, round: usize) -> f32 {
+    let mut value = index as u64 ^ (round as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^= value >> 31;
+    if value & 1 == 0 {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+const SIMULTANEOUS_STEP_FACTOR: f32 = 0.025;
+const SIMULTANEOUS_OFFSET_PRIOR: f64 = 0.001;
+
+fn apply_offsets(
+    scene: &mut score::Scene,
+    candidates: &[usize],
+    anchors: &[[f32; 3]],
+    offsets: &[f32],
+) {
+    for ((&index, &anchor), &offset) in candidates.iter().zip(anchors).zip(offsets) {
+        let surfel = &mut scene.model.surfels[index];
+        let normal = glam::Vec3::from(surfel.normal).normalize_or_zero();
+        surfel.center = (glam::Vec3::from(anchor) + offset * surfel.radius * normal).to_array();
+    }
+}
+
+fn offset_prior(offsets: &[f32]) -> f64 {
+    offsets
+        .iter()
+        .map(|value| (*value * *value) as f64)
+        .sum::<f64>()
+        / offsets.len().max(1) as f64
+}
+
+fn refine_simultaneous(
+    scene: &mut score::Scene,
+    renderer: &mut score::Renderer,
+    tracer: &mut vol::gpu::RelightTracer,
+    capture: &capture::Capture,
+    indices: &[usize],
+    cameras: &[vol::CameraParams],
+    candidates: &[usize],
+    rounds: usize,
+    mut loss: f64,
+) -> (f64, usize) {
+    if candidates.is_empty() || rounds == 0 {
+        return (loss, 0);
+    }
+    let anchors: Vec<[f32; 3]> = candidates
+        .iter()
+        .map(|&index| scene.model.surfels[index].center)
+        .collect();
+    let mut offsets = vec![0.0f32; candidates.len()];
+    let mut objective = loss;
+    let mut accepted = 0usize;
+    for round in 0..rounds {
+        let plus_offsets: Vec<f32> = offsets
+            .iter()
+            .zip(candidates)
+            .map(|(&offset, &index)| {
+                offset + perturbation_sign(index, round) * SIMULTANEOUS_STEP_FACTOR
+            })
+            .collect();
+        apply_offsets(scene, candidates, &anchors, &plus_offsets);
+        renderer.update_prepared_surfels(tracer, &scene.model.surfels);
+        let plus = rendered_loss(renderer, tracer, capture, indices, cameras);
+        let plus_objective = plus + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&plus_offsets);
+
+        let minus_offsets: Vec<f32> = offsets
+            .iter()
+            .zip(candidates)
+            .map(|(&offset, &index)| {
+                offset - perturbation_sign(index, round) * SIMULTANEOUS_STEP_FACTOR
+            })
+            .collect();
+        apply_offsets(scene, candidates, &anchors, &minus_offsets);
+        renderer.update_prepared_surfels(tracer, &scene.model.surfels);
+        let minus = rendered_loss(renderer, tracer, capture, indices, cameras);
+        let minus_objective = minus + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&minus_offsets);
+
+        if plus_objective < objective && plus_objective <= minus_objective {
+            offsets = plus_offsets;
+            apply_offsets(scene, candidates, &anchors, &offsets);
+            renderer.update_prepared_surfels(tracer, &scene.model.surfels);
+            loss = plus;
+            objective = plus_objective;
+            accepted += 1;
+        } else if minus_objective < objective {
+            offsets = minus_offsets;
+            loss = minus;
+            objective = minus_objective;
+            accepted += 1;
+        } else {
+            apply_offsets(scene, candidates, &anchors, &offsets);
+            renderer.update_prepared_surfels(tracer, &scene.model.surfels);
+        }
+    }
+    (loss, accepted)
+}
+
 /// Move particles along their current normals against the complete runtime
 /// PBR render of every training photograph.
 ///
-/// Materials and illumination stay fixed during the pass. Each coordinate is
-/// tested independently in both directions, and a move is retained only when
-/// it reduces the joint image loss. The held-out cameras never enter this
-/// function; callers decide which indices are training evidence.
+/// Simultaneous rounds test one deterministic paired perturbation of every
+/// observed particle, with a small radius-normalized anchor prior. The exact
+/// pass then tests up to `max_particles` independently in both directions.
+/// Materials and illumination stay fixed throughout. The held-out cameras
+/// never enter this function; callers decide which indices are training
+/// evidence.
 pub fn refine_rendered(
     scene: &mut score::Scene,
     capture: &capture::Capture,
     indices: &[usize],
     observations: &decompose::Observations,
     diffuse_samples: u32,
+    simultaneous_rounds: usize,
     refine_radii: bool,
     max_particles: usize,
 ) -> Result<RenderedStats, String> {
@@ -126,7 +239,10 @@ pub fn refine_rendered(
             return Err(format!("rendered refinement view {index} is out of bounds"));
         }
     }
-    if scene.model.surfels.is_empty() || indices.is_empty() || max_particles == 0 {
+    if scene.model.surfels.is_empty()
+        || indices.is_empty()
+        || (simultaneous_rounds == 0 && max_particles == 0)
+    {
         return Ok(RenderedStats {
             particles: scene.model.surfels.len(),
             ..RenderedStats::default()
@@ -143,10 +259,27 @@ pub fn refine_rendered(
     let mut loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
     let initial_loss = loss;
     let radius_fraction = refine_radii.then_some(0.2);
-    let candidates: Vec<usize> = (0..scene.model.surfels.len())
+    let observed: Vec<usize> = (0..scene.model.surfels.len())
         .filter(|&index| !observations.of(index).is_empty())
-        .take(max_particles)
         .collect();
+    let (next_loss, simultaneous_accepted) = refine_simultaneous(
+        scene,
+        &mut renderer,
+        &mut tracer,
+        capture,
+        indices,
+        &cameras,
+        &observed,
+        simultaneous_rounds,
+        loss,
+    );
+    loss = next_loss;
+    let simultaneous_particles = if simultaneous_rounds > 0 {
+        observed.len()
+    } else {
+        0
+    };
+    let candidates: Vec<usize> = observed.into_iter().take(max_particles).collect();
     let tested = candidates.len();
     let mut moved = 0usize;
     let mut radii_moved = 0usize;
@@ -204,6 +337,9 @@ pub fn refine_rendered(
     renderer.destroy();
     Ok(RenderedStats {
         particles: scene.model.surfels.len(),
+        simultaneous_particles,
+        simultaneous_rounds,
+        simultaneous_accepted,
         tested,
         moved,
         radii_moved,
@@ -1100,6 +1236,7 @@ mod tests {
             &[0, 1],
             &observations,
             0,
+            0,
             false,
             1,
         )
@@ -1118,11 +1255,52 @@ mod tests {
             &[0, 1],
             &observations,
             0,
+            0,
             true,
             1,
         )
         .unwrap();
         assert_eq!(stats.radii_moved, 1);
         assert!(undersized.model.surfels[0].radius > 0.24);
+
+        let mut first = make_scene(0.075);
+        let mut second = first.clone();
+        let observations = decompose::observe(&first.model, &capture, &[0, 1], 0.1);
+        let first_stats = refine_rendered(
+            &mut first,
+            &capture,
+            &[0, 1],
+            &observations,
+            0,
+            64,
+            false,
+            0,
+        )
+        .unwrap();
+        let second_stats = refine_rendered(
+            &mut second,
+            &capture,
+            &[0, 1],
+            &observations,
+            0,
+            64,
+            false,
+            0,
+        )
+        .unwrap();
+        assert_eq!(first_stats.simultaneous_particles, 1);
+        assert_eq!(first_stats.simultaneous_rounds, 64);
+        assert!(first_stats.simultaneous_accepted > 0);
+        assert!(first_stats.final_loss < first_stats.initial_loss);
+        assert!(first.model.surfels[0].center[2].abs() < 0.075);
+        assert_eq!(
+            first.model.surfels[0].center,
+            second.model.surfels[0].center
+        );
+        assert_eq!(first_stats.final_loss, second_stats.final_loss);
+        assert_eq!(
+            first_stats.simultaneous_accepted,
+            second_stats.simultaneous_accepted
+        );
     }
 }

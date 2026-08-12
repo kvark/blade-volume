@@ -133,6 +133,10 @@ struct Args {
     #[argh(option, default = "0")]
     render_refine: usize,
 
+    /// simultaneous full-cloud render refinement rounds (default 0)
+    #[argh(option, default = "0")]
+    render_refine_rounds: usize,
+
     /// also refine Gaussian radii by a gated 20% step
     #[argh(switch)]
     render_refine_radii: bool,
@@ -313,13 +317,14 @@ fn main() {
     );
     describe_light(&fitted.scene.environment);
 
-    if args.render_refine > 0 {
+    if args.render_refine > 0 || args.render_refine_rounds > 0 {
         let stats = train::inverse::refine::refine_rendered(
             &mut fitted.scene,
             &capture,
             &train_views,
             &observations,
             args.diffuse_samples,
+            args.render_refine_rounds,
             args.render_refine_radii,
             args.render_refine,
         )
@@ -328,7 +333,10 @@ fn main() {
             std::process::exit(1);
         });
         println!(
-            "rendered surface: tested {}, moved {}, radii {}, loss {:.7} -> {:.7}, in {:.1} s",
+            "rendered surface: {} particles in {} rounds ({} accepted); tested {}, moved {}, radii {}, loss {:.7} -> {:.7}, in {:.1} s",
+            stats.simultaneous_particles,
+            stats.simultaneous_rounds,
+            stats.simultaneous_accepted,
             stats.tested,
             stats.moved,
             stats.radii_moved,

@@ -412,6 +412,23 @@ normal search was rejected: even 10-degree candidates improve five synthetic
 held-light means by only 0.03--0.05 dB and truth normal RMSE by roughly 0.1
 degree while tripling position-only cost.
 
+`--render-refine-rounds 64` is the faster full-cloud alternative. Every round
+assigns a deterministic ±2.5% radius-normalized displacement to every observed
+Gaussian, renders both signs through the same retained production tracer, and
+keeps the better sign only when joint training-camera error plus a 0.001
+anchor prior falls. Thus two renderer evaluations update thousands of scalar
+coordinates without a new shader or differentiable surrogate. It can be
+followed by `--render-refine N` when both options are supplied.
+
+On five synthetic clouds, 64 rounds beat the 300-coordinate pass on every
+held-light mean and worst view in 0.83--0.86 rather than 3.53--3.67 seconds.
+Truth position RMSE is 0.0007--0.0016 world units worse, which is why this
+remains an explicit speed/quality tradeoff. On Bonsai it matches the coordinate
+held result at 14.52/11.71 dB and improves training PSNR to 15.90 dB in 10.0
+seconds rather than 45.7. On Room it is mean-neutral and +0.01 dB worst versus
+the control in 11.0 seconds; the exact 300-coordinate pass remains stronger at
+14.14/13.20 dB but costs 50.7 seconds.
+
 Tail-aware and approximate-camera shortcuts were also rejected. Weighting the
 worst training camera does not transfer to the worst unseen pose. Rendering
 only the cameras that observed a particle cuts the probe time by 43%, but
