@@ -3311,3 +3311,42 @@ real_bonsai_seconds = [48.3, 45.7]
 real_room_seconds = [53.6, 50.7]
 real_output_sha256 = ["176e2e9786d67ba5dfc18869ea1add36cb0f74a8aceaaf4fe918bbac60993517", "da7d55a8a9873746f79eb93a8b93886012a4e121089bf05c0a59d190289f262e"]
 verdict = "keep opt-in: joint renderer loss transfers to synthetic and real held views, but full exact coordinate descent needs a tail/coverage guard and better throughput before becoming default"
+
+[rendered_surface_refinement.radius]
+cli = "--render-refine-radii"
+radius_scale_candidates = [0.8, 1.2]
+synthetic_clouds = 5
+synthetic_position_only_held_gain_db = [0.05, 0.04, 0.06, 0.05, 0.07]
+synthetic_position_radius_held_gain_db = [0.24, 0.16, 0.17, 0.18, 0.25]
+synthetic_position_radius_worst_gain_db = [0.18, 0.11, 0.13, 0.20, 0.22]
+synthetic_coverage_change = [0.000, 0.000, -0.001, -0.001, -0.003]
+selection = "20%: largest tested held-light gain, negligible truth-geometry change, real transfer passes"
+
+[rendered_surface_refinement.radius.real_3000.bonsai]
+position_only_psnr = [15.87, 14.52, 11.71]
+position_radius_psnr = [15.99, 14.56, 11.74]
+position_only_test_coverage = 0.921
+position_radius_test_coverage = 0.922
+position_radius_seconds = 912.8
+artifact_sha256 = "32541f322bebee6f0c4580103d4070588ea78955ddc939ee9220aa3fe7665380"
+
+[rendered_surface_refinement.radius.real_3000.room]
+position_only_psnr = [14.57, 14.14, 13.20]
+position_radius_psnr = [14.79, 14.35, 13.42]
+position_only_test_coverage = 0.960
+position_radius_test_coverage = 0.963
+position_radius_seconds = 1009.7
+artifact_sha256 = "97e0c7867944b367f7d15f9174ff9f64cee510b928f617ea33d949113f3b6119"
+
+[rendered_surface_refinement.rejected_normals]
+candidate_angles_degrees = [2, 5, 10]
+candidate_directions = 4
+synthetic_clouds = 5
+selected_angle_degrees = 10
+position_only_held_light_psnr = [18.33, 19.24, 19.27, 18.70, 18.65]
+position_normal_held_light_psnr = [18.36, 19.28, 19.32, 18.74, 18.71]
+position_only_normal_rmse_degrees = [66.27, 66.08, 67.35, 69.35, 66.41]
+position_normal_normal_rmse_degrees = [66.18, 66.03, 67.28, 69.22, 66.25]
+position_only_seconds = 3.698
+position_normal_seconds = [10.665, 10.944, 10.746, 10.577, 10.811]
+verdict = "reject and remove: four extra full renders per particle buy only 0.03--0.05 dB and about 0.1 degree normal RMSE"

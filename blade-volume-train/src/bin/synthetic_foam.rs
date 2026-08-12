@@ -140,6 +140,10 @@ struct Args {
     #[argh(option, default = "0")]
     render_refine: usize,
 
+    /// also refine Gaussian radii by a gated 20% step
+    #[argh(switch)]
+    render_refine_radii: bool,
+
     /// optional relightable Gaussian surface output
     #[argh(option)]
     surface_output: Option<String>,
@@ -1019,12 +1023,18 @@ fn main() {
             &training_indices,
             &observations,
             0,
+            args.render_refine_radii,
             args.render_refine,
         )
         .unwrap_or_else(|error| fail(error));
         println!(
-            "rendered-surface refinement tested {}, moved {}, loss {:.7} -> {:.7} in {:.3} s",
-            stats.tested, stats.moved, stats.initial_loss, stats.final_loss, stats.seconds,
+            "rendered-surface refinement tested {}, moved {}, radii {}, loss {:.7} -> {:.7} in {:.3} s",
+            stats.tested,
+            stats.moved,
+            stats.radii_moved,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
         );
         describe_surface_error(
             "render-refined surface",

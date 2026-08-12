@@ -85,6 +85,7 @@ pub struct RenderedStats {
     pub particles: usize,
     pub tested: usize,
     pub moved: usize,
+    pub radii_moved: usize,
     pub initial_loss: f64,
     pub final_loss: f64,
     pub seconds: f64,
@@ -114,6 +115,7 @@ pub fn refine_rendered(
     indices: &[usize],
     observations: &decompose::Observations,
     diffuse_samples: u32,
+    refine_radii: bool,
     max_particles: usize,
 ) -> Result<RenderedStats, String> {
     if observations.surfels() != scene.model.surfels.len() {
@@ -140,12 +142,14 @@ pub fn refine_rendered(
     let started = std::time::Instant::now();
     let mut loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
     let initial_loss = loss;
+    let radius_fraction = refine_radii.then_some(0.2);
     let candidates: Vec<usize> = (0..scene.model.surfels.len())
         .filter(|&index| !observations.of(index).is_empty())
         .take(max_particles)
         .collect();
     let tested = candidates.len();
     let mut moved = 0usize;
+    let mut radii_moved = 0usize;
     for index in candidates {
         let original = scene.model.surfels[index].center;
         let normal = glam::Vec3::from(scene.model.surfels[index].normal).normalize_or_zero();
@@ -171,6 +175,30 @@ pub fn refine_rendered(
             moved += 1;
             loss = best_loss;
         }
+        if let Some(fraction) = radius_fraction {
+            let original = scene.model.surfels[index].radius;
+            let plus = original * (1.0 + fraction);
+            let mut best_loss = loss;
+            let mut best = original;
+            for scale in [1.0 - fraction, 1.0 + fraction] {
+                scene.model.surfels[index].radius = original * scale;
+                renderer.update_prepared_surfels(&mut tracer, &scene.model.surfels);
+                let candidate =
+                    rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+                if candidate < best_loss {
+                    best_loss = candidate;
+                    best = scene.model.surfels[index].radius;
+                }
+            }
+            scene.model.surfels[index].radius = best;
+            if best != plus {
+                renderer.update_prepared_surfels(&mut tracer, &scene.model.surfels);
+            }
+            if best != original {
+                radii_moved += 1;
+                loss = best_loss;
+            }
+        }
     }
     renderer.destroy_prepared_scene(tracer);
     renderer.destroy();
@@ -178,6 +206,7 @@ pub fn refine_rendered(
         particles: scene.model.surfels.len(),
         tested,
         moved,
+        radii_moved,
         initial_loss,
         final_loss: loss,
         seconds: started.elapsed().as_secs_f64(),
@@ -1065,11 +1094,35 @@ mod tests {
         let mut displaced = make_scene(0.075);
         let observations = decompose::observe(&displaced.model, &capture, &[0, 1], 0.1);
         assert_eq!(observations.seen(), 1);
-        let stats =
-            refine_rendered(&mut displaced, &capture, &[0, 1], &observations, 0, 1).unwrap();
+        let stats = refine_rendered(
+            &mut displaced,
+            &capture,
+            &[0, 1],
+            &observations,
+            0,
+            false,
+            1,
+        )
+        .unwrap();
         assert_eq!(stats.tested, 1);
         assert_eq!(stats.moved, 1);
         assert!(stats.final_loss < stats.initial_loss);
         assert!(displaced.model.surfels[0].center[2].abs() < 1.0e-6);
+
+        let mut undersized = make_scene(0.0);
+        undersized.model.surfels[0].radius = 0.24;
+        let observations = decompose::observe(&undersized.model, &capture, &[0, 1], 0.1);
+        let stats = refine_rendered(
+            &mut undersized,
+            &capture,
+            &[0, 1],
+            &observations,
+            0,
+            true,
+            1,
+        )
+        .unwrap();
+        assert_eq!(stats.radii_moved, 1);
+        assert!(undersized.model.surfels[0].radius > 0.24);
     }
 }

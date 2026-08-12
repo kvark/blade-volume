@@ -640,6 +640,11 @@ pass raises the held mean by 0.18 dB but loses 0.01 dB on its single worst view
 and 0.1 coverage point. It therefore remains explicit through
 `--render-refine`, not the default. A complete Room pass is unambiguously
 positive at +0.16 dB mean, +0.13 dB worst, and +0.1 coverage point. The next
-algorithmic step is a tail/coverage-aware batched or differentiable version
-that also updates normals and support; simply running more coordinate passes
-would optimize the same ambiguity at high cost.
+shape coordinate is also identifiable: a fixed 20% radius search adds another
+0.04/0.03 dB on Bonsai and 0.21/0.22 dB on Room at 3,000 particles, restoring
+or increasing coverage. It is exposed by `--render-refine-radii`. Normal
+coordinates are not: four 10-degree candidates buy only 0.03--0.05 dB and
+about 0.1 degree of truth normal error on synthetic clouds, so that prototype
+is removed. The next algorithmic step is a tail/coverage-aware batched or
+differentiable version that makes position and support cheaper; normal work
+still needs stronger evidence than single-light PBR error.

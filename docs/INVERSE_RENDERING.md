@@ -402,6 +402,16 @@ This adds another 7.2% synthetic throughput (3.966 to 3.698 seconds) and
 shadow rays are requested, every candidate replays the same deterministic
 sample sequence so noise cannot decide whether a coordinate is accepted.
 
+`--render-refine-radii` adds two support candidates, 80% and 120% of each
+current Gaussian radius, after its position decision. Twenty percent is the
+selected point of a 5/10/20% five-cloud sweep. Relative to position-only at
+3,000 particles, it raises Bonsai held mean/worst by another 0.04/0.03 dB and
+Room by 0.21/0.22 dB; coverage is restored or increased. This doubles exact
+coordinate cost, so it remains a separate final-quality switch. A four-way
+normal search was rejected: even 10-degree candidates improve five synthetic
+held-light means by only 0.03--0.05 dB and truth normal RMSE by roughly 0.1
+degree while tripling position-only cost.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a

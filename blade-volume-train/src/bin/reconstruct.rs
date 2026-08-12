@@ -133,6 +133,10 @@ struct Args {
     #[argh(option, default = "0")]
     render_refine: usize,
 
+    /// also refine Gaussian radii by a gated 20% step
+    #[argh(switch)]
+    render_refine_radii: bool,
+
     /// write the reconstructed scene here
     #[argh(option)]
     output: Option<String>,
@@ -316,6 +320,7 @@ fn main() {
             &train_views,
             &observations,
             args.diffuse_samples,
+            args.render_refine_radii,
             args.render_refine,
         )
         .unwrap_or_else(|error| {
@@ -323,8 +328,13 @@ fn main() {
             std::process::exit(1);
         });
         println!(
-            "rendered surface: tested {}, moved {}, loss {:.7} -> {:.7}, in {:.1} s",
-            stats.tested, stats.moved, stats.initial_loss, stats.final_loss, stats.seconds,
+            "rendered surface: tested {}, moved {}, radii {}, loss {:.7} -> {:.7}, in {:.1} s",
+            stats.tested,
+            stats.moved,
+            stats.radii_moved,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
         );
     }
 
