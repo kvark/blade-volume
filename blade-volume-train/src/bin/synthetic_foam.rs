@@ -49,8 +49,12 @@ struct Args {
     height: u32,
 
     /// camera-derived initial foam sites
-    #[argh(option, default = "2048")]
+    #[argh(option, default = "1024")]
     points: usize,
+
+    /// final adaptively densified foam-site budget
+    #[argh(option, default = "2048")]
+    target_points: usize,
 
     /// initial volume radius divided by median camera distance to its focus
     #[argh(option, default = "0.7")]
@@ -73,7 +77,7 @@ struct Args {
     views_per_batch: usize,
 
     /// adam updates per training camera
-    #[argh(option, default = "200")]
+    #[argh(option, default = "300")]
     steps_per_view: usize,
 
     /// base Adam learning rate
@@ -311,6 +315,27 @@ fn describe_scores(name: &str, scores: &[f32]) {
     let mean = scores.iter().sum::<f32>() / scores.len().max(1) as f32;
     let worst = scores.iter().copied().fold(f32::INFINITY, f32::min);
     println!("{name}: {mean:.2} dB mean, {worst:.2} dB worst {scores:?}");
+}
+
+fn densify_config(
+    initial_points: usize,
+    target_points: usize,
+) -> Result<Option<train::diff_render::DensifyConfig>, String> {
+    if target_points < initial_points {
+        return Err(format!(
+            "target point budget {target_points} is smaller than {initial_points} initial sites"
+        ));
+    }
+    Ok(
+        (target_points > initial_points).then(|| train::diff_render::DensifyConfig {
+            every: 150,
+            fraction: 0.25,
+            warmup: 300,
+            target_points,
+            densify_until: 1050,
+            ..train::diff_render::DensifyConfig::default()
+        }),
+    )
 }
 
 fn describe_relight_score(name: &str, summary: train::inverse::score::Summary) {
@@ -624,6 +649,8 @@ fn main() {
     let Some(gpu) = train::fit::try_init_gpu() else {
         fail("no supported GPU device");
     };
+    let densify =
+        densify_config(args.points, args.target_points).unwrap_or_else(|error| fail(error));
     let config = train::diff_render::AppearanceFitConfig {
         learning_rate: args.learning_rate,
         pixel_batch: Some(args.pixel_batch),
@@ -636,6 +663,7 @@ fn main() {
         softplus_beta: 10.0,
         position_lr_ratio: args.position_lr_ratio,
         geometry_rebuild_every: args.geometry_rebuild_every,
+        densify,
         ..train::diff_render::AppearanceFitConfig::default()
     };
     let model = match args.input {
@@ -1004,5 +1032,20 @@ mod tests {
             .filter(|position| position.dot(camera_side) > 0.85)
             .count();
         assert_eq!(front, 20, "the sparse outer layer moved off camera-side");
+    }
+
+    #[test]
+    fn staged_point_budget_spends_the_middle_of_training_densifying() {
+        let config = densify_config(1024, 2048).unwrap().unwrap();
+        assert_eq!(config.every, 150);
+        assert_eq!(config.warmup, 300);
+        assert_eq!(config.densify_until, 1050);
+        assert_eq!(config.target_points, 2048);
+    }
+
+    #[test]
+    fn fixed_or_invalid_point_budgets_are_explicit() {
+        assert!(densify_config(2048, 2048).unwrap().is_none());
+        assert!(densify_config(2048, 1024).is_err());
     }
 }

@@ -531,3 +531,24 @@ Normalized local patch agreement supplies real observation evidence, but its
 minimum is still not the common PBR surface in occluded and view-dependent
 regions. The next objective needs learned correspondence descriptors or a
 joint rendered-surface objective, not a larger hand-designed plane sweep.
+
+Mask-only initialization also needs to preserve a support volume. Filling the
+strict intersection of all six training silhouettes with all 2,048 sites makes
+almost every site opaque and drops held-pose quality from 24.11 to 22.45 dB;
+tenfold lower initial density still reaches only 22.57 dB and worsens surface
+position RMSE from 0.6209 to 0.7495. That prototype is removed. The masks are
+valuable supervision, but a filled visual hull is not a surface representation.
+
+Adaptive point allocation does improve the same fixed-size cloud. Four paired
+1,800-update runs compare a fixed 2,048-site lattice with a 1,024-site support
+lattice grown to 2,048 by four existing gradient-directed densification rounds.
+The staged median improves held-pose radiance from 24.61 to 25.06 dB, surface
+position RMSE from 0.6302 to 0.5945, normal RMSE from 66.78° to 66.65°, coverage
+from 53.8% to 55.6%, and held-light PBR from 18.10 to 19.10 dB. Training time
+rises 15.7%, from 16.83 to 19.47 seconds. The synthetic benchmark now exposes
+the initial and final budgets separately and defaults to the staged schedule;
+the production trainer already uses the same tested densification machinery.
+This is the first current gate to improve static radiance, truth geometry, and
+relighting together, but the remaining ~66° normal error keeps the next major
+milestone unchanged: learn a shared local surface coordinate and optimize it
+against a rendered-surface objective.
