@@ -459,6 +459,35 @@ fn projected_detail_site(offset: glam::Vec3, normal: glam::Vec3) -> glam::Vec3 {
     offset - offset.dot(normal) * normal
 }
 
+fn eval_surface_detail_directional(
+    directional: &crate::SurfaceDetailDirectional,
+    detail_index: usize,
+    site_position: glam::Vec3,
+    ray_origin: glam::Vec3,
+) -> glam::Vec3 {
+    let base = detail_index * crate::SURFACE_DETAIL_DIRECTIONS;
+    let axes = &directional.axes[base..base + crate::SURFACE_DETAIL_DIRECTIONS];
+    let colors = &directional.colors[base..base + crate::SURFACE_DETAIL_DIRECTIONS];
+    let direction = (site_position - ray_origin).normalize_or_zero();
+    let mut max_logit = f32::NEG_INFINITY;
+    for &axis in axes {
+        let temperature = axis.length();
+        let site = axis / temperature.max(1.0e-20);
+        max_logit = max_logit.max(-temperature * (direction - site).length());
+    }
+    let mut weight_sum = 0.0_f32;
+    let mut color_sum = glam::Vec3::ZERO;
+    for (&axis, &color) in axes.iter().zip(colors) {
+        let temperature = axis.length();
+        let site = axis / temperature.max(1.0e-20);
+        let logit = -temperature * (direction - site).length();
+        let weight = (logit - max_logit).exp();
+        weight_sum += weight;
+        color_sum += weight * color;
+    }
+    color_sum / weight_sum.max(1.0e-20)
+}
+
 /// Evaluate one oriented cell's reference-style spatial height and RGB detail.
 ///
 /// `query_near` is the sphere/power-cell entry before oriented-surface
@@ -513,10 +542,17 @@ pub fn eval_surface_detail(
     let displaced_query = (ray_origin + displaced_t * ray_direction - center) / radius;
     let mut color_sum = glam::Vec3::ZERO;
     let mut color_weight_sum = 0.0_f32;
-    for (&site, &color) in sites.iter().zip(colors) {
+    for (site_index, (&site, &color)) in sites.iter().zip(colors).enumerate() {
         let delta = displaced_query - projected_detail_site(site, normal);
         let weight = (-10.0 * delta.length_squared()).exp();
-        color_sum += weight * color;
+        let directional_color = detail
+            .directional
+            .as_ref()
+            .map_or(glam::Vec3::ZERO, |table| {
+                let site_position = center + radius * projected_detail_site(site, normal);
+                eval_surface_detail_directional(table, base + site_index, site_position, ray_origin)
+            });
+        color_sum += weight * (color + directional_color);
         color_weight_sum += weight;
     }
     (offset, color_sum / color_weight_sum.max(1.0e-20))
@@ -1852,6 +1888,7 @@ mod path_tests {
             heights,
             colors,
             density_logits: None,
+            directional: None,
         }));
         let ray = Ray {
             origin: glam::Vec3::new(1.0, 0.0, 0.0),
@@ -1891,6 +1928,7 @@ mod path_tests {
             heights: vec![0.0; crate::SURFACE_DETAIL_SITES],
             colors: vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES],
             density_logits: Some(logits.clone()),
+            directional: None,
         }));
         let query_near = 10.0 - 3.0_f32.sqrt();
         let selected_origin = glam::Vec3::X;
@@ -1933,6 +1971,76 @@ mod path_tests {
     }
 
     #[test]
+    fn surface_detail_directional_color_uses_each_world_site() {
+        let mut offsets = vec![-0.5 * glam::Vec3::X; crate::SURFACE_DETAIL_SITES];
+        offsets[0] = 0.5 * glam::Vec3::X;
+        let count = crate::SURFACE_DETAIL_SITES * crate::SURFACE_DETAIL_DIRECTIONS;
+        let ray_origin = glam::Vec3::new(-10.0, 0.0, 0.0);
+        let selected_site = glam::Vec3::new(1.0, 0.0, 10.0);
+        let view_direction = (selected_site - ray_origin).normalize();
+        let mut axes = vec![-20.0 * view_direction; count];
+        let mut directional_colors = vec![glam::Vec3::ZERO; count];
+        axes[0] = 20.0 * view_direction;
+        directional_colors[0] = glam::Vec3::new(0.2, -0.1, 0.05);
+        let model = single_oriented_detail_model(Some(crate::SurfaceDetail {
+            offsets,
+            heights: vec![0.0; crate::SURFACE_DETAIL_SITES],
+            colors: vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES],
+            density_logits: None,
+            directional: Some(crate::SurfaceDetailDirectional {
+                axes,
+                colors: directional_colors,
+            }),
+        }));
+        let query_near = 10.0 - 3.0_f32.sqrt();
+        let (_, color) = eval_surface_detail(&model, 0, ray_origin, view_direction, query_near);
+        assert!(color.x > 0.19);
+        assert!(color.y < -0.095);
+        assert!(color.z > 0.0475);
+    }
+
+    #[test]
+    fn zero_surface_detail_directional_residual_is_identity() {
+        let plain = single_oriented_detail_model(Some(crate::SurfaceDetail {
+            offsets: vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES],
+            heights: vec![0.0; crate::SURFACE_DETAIL_SITES],
+            colors: vec![glam::Vec3::splat(0.1); crate::SURFACE_DETAIL_SITES],
+            density_logits: None,
+            directional: None,
+        }));
+        let mut directional = plain.clone();
+        directional.surface_detail.as_mut().unwrap().directional =
+            Some(crate::SurfaceDetailDirectional {
+                axes: vec![
+                    glam::Vec3::ZERO;
+                    crate::SURFACE_DETAIL_SITES * crate::SURFACE_DETAIL_DIRECTIONS
+                ],
+                colors: vec![
+                    glam::Vec3::ZERO;
+                    crate::SURFACE_DETAIL_SITES * crate::SURFACE_DETAIL_DIRECTIONS
+                ],
+            });
+        let ray = Ray {
+            origin: glam::Vec3::new(0.3, -0.2, 0.0),
+            direction: glam::Vec3::Z,
+        };
+        let settings = TraceSettings {
+            depth: 20.0,
+            eval_mode: EvalMode::Sh,
+            ..settings_for(0)
+        };
+        let expected = trace_one_ray(&plain, ray, settings);
+        let actual = trace_one_ray(&directional, ray, settings);
+        assert_eq!(actual.rgba, expected.rgba);
+        assert_eq!(actual.steps, expected.steps);
+        assert_eq!(actual.last_point, expected.last_point);
+        assert_eq!(actual.t_end, expected.t_end);
+        assert_eq!(actual.depth_mode, expected.depth_mode);
+        assert_eq!(actual.peak_weight, expected.peak_weight);
+        assert_eq!(actual.peak_point, expected.peak_point);
+    }
+
+    #[test]
     fn zero_surface_detail_is_forward_identity() {
         let mut plain = single_oriented_detail_model(None);
         plain.surface_offsets = Some(vec![0.13]);
@@ -1948,6 +2056,7 @@ mod path_tests {
             heights: vec![0.0; crate::SURFACE_DETAIL_SITES],
             colors: vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES],
             density_logits: None,
+            directional: None,
         });
         let ray = Ray {
             origin: glam::Vec3::new(0.3, -0.2, 0.0),

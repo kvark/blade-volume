@@ -1271,6 +1271,7 @@ fn gpu_surface_detail_paths_and_queries_match_cpu() {
             .collect(),
         colors: vec![glam::Vec3::ZERO; model.points.len() * vol::SURFACE_DETAIL_SITES],
         density_logits: None,
+        directional: None,
     });
     assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false, false);
 }
@@ -1307,6 +1308,7 @@ fn gpu_dense_powerfoam_parallel_paths_match_cpu() {
         heights: vec![0.0; point_count * vol::SURFACE_DETAIL_SITES],
         colors: vec![glam::Vec3::ZERO; point_count * vol::SURFACE_DETAIL_SITES],
         density_logits: None,
+        directional: None,
     });
     assert_gpu_batched_path_record_matches_cpu(model, glam::Vec3::ZERO, true);
 }

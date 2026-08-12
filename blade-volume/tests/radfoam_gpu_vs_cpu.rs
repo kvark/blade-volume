@@ -496,6 +496,7 @@ fn oriented_powerfoam_gpu_matches_cpu() {
                 .map(|index| 0.2 * ((index % vol::SURFACE_DETAIL_SITES) as f32 - 3.5))
                 .collect(),
         ),
+        directional: None,
     });
     model.spherical_voronoi = Some(vol::SphericalVoronoi {
         axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
@@ -551,6 +552,7 @@ fn surface_detail_powerfoam_splat_gpu_matches_cpu() {
                     .map(|index| if index == 0 { 2.0 } else { -0.25 })
                     .collect(),
             ),
+            directional: None,
         }),
         surface_color_coefficients: None,
         spherical_voronoi: None,

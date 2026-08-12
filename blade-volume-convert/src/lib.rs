@@ -1771,6 +1771,25 @@ fn write_radfoam_ply_ascii(
                 )?;
             }
         }
+        if model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.directional.is_some())
+        {
+            let component_count = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS * 3;
+            for component in 0..component_count {
+                writeln!(
+                    file,
+                    "property float blade_surface_detail_directional_axis_{component}"
+                )?;
+            }
+            for component in 0..component_count {
+                writeln!(
+                    file,
+                    "property float blade_surface_detail_directional_color_{component}"
+                )?;
+            }
+        }
     }
     if model.surface_color_coefficients.is_some() {
         for component in 0..vol::SURFACE_COLOR_COMPONENTS * 3 {
@@ -1848,6 +1867,16 @@ fn write_radfoam_ply_ascii(
             if let Some(ref density_logits) = detail.density_logits {
                 for value in &density_logits[base..base + vol::SURFACE_DETAIL_SITES] {
                     write!(file, " {value}")?;
+                }
+            }
+            if let Some(ref directional) = detail.directional {
+                let base = base * vol::SURFACE_DETAIL_DIRECTIONS;
+                let end = base + vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+                for value in &directional.axes[base..end] {
+                    write!(file, " {} {} {}", value.x, value.y, value.z)?;
+                }
+                for value in &directional.colors[base..end] {
+                    write!(file, " {} {} {}", value.x, value.y, value.z)?;
                 }
             }
         }
@@ -1951,6 +1980,25 @@ fn write_radfoam_ply_binary(
                 )?;
             }
         }
+        if model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.directional.is_some())
+        {
+            let component_count = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS * 3;
+            for component in 0..component_count {
+                writeln!(
+                    file,
+                    "property float blade_surface_detail_directional_axis_{component}"
+                )?;
+            }
+            for component in 0..component_count {
+                writeln!(
+                    file,
+                    "property float blade_surface_detail_directional_color_{component}"
+                )?;
+            }
+        }
     }
     if model.surface_color_coefficients.is_some() {
         for component in 0..vol::SURFACE_COLOR_COMPONENTS * 3 {
@@ -2033,6 +2081,20 @@ fn write_radfoam_ply_binary(
             if let Some(ref density_logits) = detail.density_logits {
                 for value in &density_logits[base..base + vol::SURFACE_DETAIL_SITES] {
                     file.write_all(&value.to_le_bytes())?;
+                }
+            }
+            if let Some(ref directional) = detail.directional {
+                let base = base * vol::SURFACE_DETAIL_DIRECTIONS;
+                let end = base + vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+                for value in &directional.axes[base..end] {
+                    file.write_all(&value.x.to_le_bytes())?;
+                    file.write_all(&value.y.to_le_bytes())?;
+                    file.write_all(&value.z.to_le_bytes())?;
+                }
+                for value in &directional.colors[base..end] {
+                    file.write_all(&value.x.to_le_bytes())?;
+                    file.write_all(&value.y.to_le_bytes())?;
+                    file.write_all(&value.z.to_le_bytes())?;
                 }
             }
         }
@@ -2789,6 +2851,30 @@ mod tests {
                 (0..model.points.len() * vol::SURFACE_DETAIL_SITES)
                     .map(|index| index as f32 * 0.013 - 0.1)
                     .collect()
+            }),
+            directional: Some(vol::SurfaceDetailDirectional {
+                axes: (0..model.points.len()
+                    * vol::SURFACE_DETAIL_SITES
+                    * vol::SURFACE_DETAIL_DIRECTIONS)
+                    .map(|index| {
+                        glam::Vec3::new(
+                            index as f32 * 0.001 - 0.3,
+                            index as f32 * -0.002 + 0.2,
+                            index as f32 * 0.003 - 0.1,
+                        )
+                    })
+                    .collect(),
+                colors: (0..model.points.len()
+                    * vol::SURFACE_DETAIL_SITES
+                    * vol::SURFACE_DETAIL_DIRECTIONS)
+                    .map(|index| {
+                        glam::Vec3::new(
+                            index as f32 * -0.0005,
+                            index as f32 * 0.0007,
+                            index as f32 * -0.0009 + 0.05,
+                        )
+                    })
+                    .collect(),
             }),
         });
         model.surface_color_coefficients = Some(

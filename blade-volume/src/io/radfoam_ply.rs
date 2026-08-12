@@ -111,6 +111,8 @@ struct Schema {
     surface_detail_heights: Vec<usize>,
     surface_detail_colors: Vec<usize>,
     surface_detail_density_logits: Vec<usize>,
+    surface_detail_directional_axes: Vec<usize>,
+    surface_detail_directional_colors: Vec<usize>,
     surface_color: Vec<usize>,
     spherical_voronoi_axes: Vec<usize>,
     spherical_voronoi_colors: Vec<usize>,
@@ -225,26 +227,45 @@ impl Schema {
             "blade_surface_detail_density_logit_",
             "surface-detail density logit",
         )?;
+        let surface_detail_directional_axes = indexed_float_properties(
+            vertex,
+            "blade_surface_detail_directional_axis_",
+            "surface-detail directional axis",
+        )?;
+        let surface_detail_directional_colors = indexed_float_properties(
+            vertex,
+            "blade_surface_detail_directional_color_",
+            "surface-detail directional color",
+        )?;
         let expected_detail_offsets = crate::SURFACE_DETAIL_SITES * 3;
         let expected_detail_heights = crate::SURFACE_DETAIL_SITES;
         let expected_detail_colors = crate::SURFACE_DETAIL_SITES * 3;
         let has_surface_detail = !surface_detail_offsets.is_empty()
             || !surface_detail_heights.is_empty()
             || !surface_detail_colors.is_empty()
-            || !surface_detail_density_logits.is_empty();
+            || !surface_detail_density_logits.is_empty()
+            || !surface_detail_directional_axes.is_empty()
+            || !surface_detail_directional_colors.is_empty();
+        let expected_detail_directional =
+            crate::SURFACE_DETAIL_SITES * crate::SURFACE_DETAIL_DIRECTIONS * 3;
         if has_surface_detail
             && (surface_detail_offsets.len() != expected_detail_offsets
                 || surface_detail_heights.len() != expected_detail_heights
                 || surface_detail_colors.len() != expected_detail_colors
                 || (!surface_detail_density_logits.is_empty()
-                    && surface_detail_density_logits.len() != expected_detail_heights))
+                    && surface_detail_density_logits.len() != expected_detail_heights)
+                || surface_detail_directional_axes.len() != surface_detail_directional_colors.len()
+                || (!surface_detail_directional_axes.is_empty()
+                    && surface_detail_directional_axes.len() != expected_detail_directional))
         {
             return Err(LoadError::invalid(format!(
-                "RadFoam PLY surface-detail property counts are offsets={} heights={} colors={} density_logits={}, expected {expected_detail_offsets}, {expected_detail_heights}, {expected_detail_colors}, and either 0 or {expected_detail_heights}",
+                "RadFoam PLY surface-detail property counts are offsets={} heights={} colors={} density_logits={} directional_axes={} directional_colors={}, expected {expected_detail_offsets}, {expected_detail_heights}, {expected_detail_colors}, either 0 or {expected_detail_heights}, and either zero or {expected_detail_directional} directional components each",
                 surface_detail_offsets.len(),
                 surface_detail_heights.len(),
                 surface_detail_colors.len(),
                 surface_detail_density_logits.len(),
+                surface_detail_directional_axes.len(),
+                surface_detail_directional_colors.len(),
             )));
         }
         if has_surface_detail && surface_normal.is_none() {
@@ -338,6 +359,8 @@ impl Schema {
             surface_detail_heights,
             surface_detail_colors,
             surface_detail_density_logits,
+            surface_detail_directional_axes,
+            surface_detail_directional_colors,
             surface_color: surface_color.into_iter().map(|entry| entry.1).collect(),
             spherical_voronoi_axes,
             spherical_voronoi_colors,
@@ -624,6 +647,25 @@ fn allocate_model(
             } else {
                 Some(allocate_vec(count, 0.0, "surface-detail density logit")?)
             },
+            directional: if schema.surface_detail_directional_axes.is_empty() {
+                None
+            } else {
+                let count = count
+                    .checked_mul(crate::SURFACE_DETAIL_DIRECTIONS)
+                    .ok_or_else(|| {
+                        LoadError::invalid(
+                            "RadFoam PLY surface-detail directional allocation overflow",
+                        )
+                    })?;
+                Some(crate::SurfaceDetailDirectional {
+                    axes: allocate_vec(count, glam::Vec3::ZERO, "surface-detail directional axis")?,
+                    colors: allocate_vec(
+                        count,
+                        glam::Vec3::ZERO,
+                        "surface-detail directional color",
+                    )?,
+                })
+            },
         })
     };
     let surface_color_coefficients = if schema.surface_color.is_empty() {
@@ -756,6 +798,30 @@ fn decode_binary(
                     density_logits[base + site] =
                         read_f32(&row, schema.surface_detail_density_logits[site]);
                 }
+                if let Some(ref mut directional) = detail.directional {
+                    let detail_index = base + site;
+                    let direction_base = detail_index * crate::SURFACE_DETAIL_DIRECTIONS;
+                    let property_base = site * crate::SURFACE_DETAIL_DIRECTIONS * 3;
+                    for direction in 0..crate::SURFACE_DETAIL_DIRECTIONS {
+                        let component = property_base + direction * 3;
+                        directional.axes[direction_base + direction] = glam::Vec3::new(
+                            read_f32(&row, schema.surface_detail_directional_axes[component]),
+                            read_f32(&row, schema.surface_detail_directional_axes[component + 1]),
+                            read_f32(&row, schema.surface_detail_directional_axes[component + 2]),
+                        );
+                        directional.colors[direction_base + direction] = glam::Vec3::new(
+                            read_f32(&row, schema.surface_detail_directional_colors[component]),
+                            read_f32(
+                                &row,
+                                schema.surface_detail_directional_colors[component + 1],
+                            ),
+                            read_f32(
+                                &row,
+                                schema.surface_detail_directional_colors[component + 2],
+                            ),
+                        );
+                    }
+                }
             }
         }
         if let Some(ref mut coefficients) = model.surface_color_coefficients {
@@ -862,6 +928,10 @@ fn decode_ascii(
         let mut surface_detail_heights = [0.0_f32; crate::SURFACE_DETAIL_SITES];
         let mut surface_detail_colors = [0.0_f32; crate::SURFACE_DETAIL_SITES * 3];
         let mut surface_detail_density_logits = [0.0_f32; crate::SURFACE_DETAIL_SITES];
+        let mut surface_detail_directional_axes =
+            [0.0_f32; crate::SURFACE_DETAIL_SITES * crate::SURFACE_DETAIL_DIRECTIONS * 3];
+        let mut surface_detail_directional_colors =
+            [0.0_f32; crate::SURFACE_DETAIL_SITES * crate::SURFACE_DETAIL_DIRECTIONS * 3];
         let mut surface_color = [0.0_f32; crate::SURFACE_COLOR_COMPONENTS * 3];
         let mut spherical_voronoi_axes = [0.0_f32; crate::SPHERICAL_VORONOI_SITES * 3];
         let mut spherical_voronoi_colors = [0.0_f32; crate::SPHERICAL_VORONOI_SITES * 3];
@@ -913,6 +983,18 @@ fn decode_ascii(
                         .parse::<usize>()
                         .unwrap();
                     surface_detail_density_logits[component] = parse_f32(token, name)?;
+                }
+                name if name.starts_with("blade_surface_detail_directional_axis_") => {
+                    let component = name["blade_surface_detail_directional_axis_".len()..]
+                        .parse::<usize>()
+                        .unwrap();
+                    surface_detail_directional_axes[component] = parse_f32(token, name)?;
+                }
+                name if name.starts_with("blade_surface_detail_directional_color_") => {
+                    let component = name["blade_surface_detail_directional_color_".len()..]
+                        .parse::<usize>()
+                        .unwrap();
+                    surface_detail_directional_colors[component] = parse_f32(token, name)?;
                 }
                 name if name.starts_with("blade_surface_color_") => {
                     let component = name["blade_surface_color_".len()..]
@@ -966,6 +1048,19 @@ fn decode_ascii(
                     glam::Vec3::from_slice(&surface_detail_colors[component..component + 3]);
                 if let Some(ref mut density_logits) = detail.density_logits {
                     density_logits[base + site] = surface_detail_density_logits[site];
+                }
+                if let Some(ref mut directional) = detail.directional {
+                    let direction_base = (base + site) * crate::SURFACE_DETAIL_DIRECTIONS;
+                    let component_base = site * crate::SURFACE_DETAIL_DIRECTIONS * 3;
+                    for direction in 0..crate::SURFACE_DETAIL_DIRECTIONS {
+                        let component = component_base + direction * 3;
+                        directional.axes[direction_base + direction] = glam::Vec3::from_slice(
+                            &surface_detail_directional_axes[component..component + 3],
+                        );
+                        directional.colors[direction_base + direction] = glam::Vec3::from_slice(
+                            &surface_detail_directional_colors[component..component + 3],
+                        );
+                    }
                 }
             }
         }

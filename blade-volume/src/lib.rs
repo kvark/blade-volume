@@ -59,6 +59,7 @@ pub const SURFACE_COLOR_COMPONENTS: usize = 4;
 /// radius-normalized tangent offset and height per site; appearance stores one
 /// view-independent RGB residual per site.
 pub const SURFACE_DETAIL_SITES: usize = 8;
+pub const SURFACE_DETAIL_DIRECTIONS: usize = 8;
 /// Directional sites in the compact Spherical Voronoi appearance model.
 ///
 /// Eight matches the parameter-cardinality comparison in the Spherical
@@ -121,6 +122,21 @@ pub struct SurfaceDetail {
     pub colors: Vec<glam::Vec3>,
     /// Optional point-major spatial density logits, eight per point.
     pub density_logits: Option<Vec<f32>>,
+    /// Optional released-PowerFoam directional residual at every spatial
+    /// detail site. The static `colors` remain the zero-preserving base.
+    pub directional: Option<SurfaceDetailDirectional>,
+}
+
+/// Directional colour residual for every spatial detail site.
+///
+/// Entries are point-major, then spatial-site-major, then direction-major.
+/// A raw axis encodes both direction and temperature: its normalized value is
+/// the spherical site and its length scales the chord-distance exponential.
+/// The blended RGB is added to [`SurfaceDetail::colors`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct SurfaceDetailDirectional {
+    pub axes: Vec<glam::Vec3>,
+    pub colors: Vec<glam::Vec3>,
 }
 
 /// Unified point cloud model.
@@ -328,6 +344,23 @@ impl PointCloudModel {
                     detail.density_logits.as_ref().map_or(0, Vec::len),
                 ));
             }
+            if let Some(ref directional) = detail.directional {
+                let directional_expected = expected * SURFACE_DETAIL_DIRECTIONS;
+                if directional.axes.len() != directional_expected
+                    || directional.colors.len() != directional_expected
+                {
+                    return Err(format!(
+                        "surface-detail directional lengths are axes={} colors={}, expected {directional_expected}",
+                        directional.axes.len(),
+                        directional.colors.len(),
+                    ));
+                }
+                if directional.axes.iter().any(|axis| !axis.is_finite())
+                    || directional.colors.iter().any(|color| !color.is_finite())
+                {
+                    return Err("surface-detail directional parameters must be finite".to_string());
+                }
+            }
             if detail.offsets.iter().any(|offset| !offset.is_finite())
                 || detail.heights.iter().any(|height| !height.is_finite())
                 || detail.colors.iter().any(|color| !color.is_finite())
@@ -406,6 +439,11 @@ impl PointCloudModel {
                 .as_ref()
                 .and_then(|detail| detail.density_logits.as_ref())
                 .map_or(0, |_| SURFACE_DETAIL_SITES)
+            + self
+                .surface_detail
+                .as_ref()
+                .and_then(|detail| detail.directional.as_ref())
+                .map_or(0, |_| 6 * SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS)
             + self
                 .spherical_voronoi
                 .as_ref()
@@ -610,6 +648,7 @@ mod model_tests {
             heights: vec![0.0; SURFACE_DETAIL_SITES],
             colors: vec![glam::Vec3::ZERO; SURFACE_DETAIL_SITES],
             density_logits: None,
+            directional: None,
         });
         assert!(model.validate().unwrap_err().contains("requires PowerFoam"));
 
@@ -620,6 +659,34 @@ mod model_tests {
         model.surface_detail.as_mut().unwrap().density_logits =
             Some(vec![0.0; SURFACE_DETAIL_SITES]);
         assert!(model.validate().is_ok());
+
+        model.surface_detail.as_mut().unwrap().directional = Some(SurfaceDetailDirectional {
+            axes: vec![glam::Vec3::X; SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS],
+            colors: vec![glam::Vec3::ZERO; SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS],
+        });
+        assert!(model.validate().is_ok());
+        assert_eq!(
+            model.attribute_dim(),
+            3 + 1
+                + SURFACE_DETAIL_SITES * 3
+                + SURFACE_DETAIL_SITES
+                + 6 * SURFACE_DETAIL_SITES * SURFACE_DETAIL_DIRECTIONS
+        );
+
+        model
+            .surface_detail
+            .as_mut()
+            .unwrap()
+            .directional
+            .as_mut()
+            .unwrap()
+            .colors
+            .pop();
+        assert!(model
+            .validate()
+            .unwrap_err()
+            .contains("directional lengths"));
+        model.surface_detail.as_mut().unwrap().directional = None;
         assert_eq!(model.attribute_dim(), 3 + 1 + SURFACE_DETAIL_SITES * 4);
         model.surface_detail.as_mut().unwrap().density_logits = Some(Vec::new());
         assert!(model.validate().unwrap_err().contains("lengths"));

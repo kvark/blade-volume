@@ -340,6 +340,7 @@ fn oriented_powerfoam_scene_applies_the_surface_offset() {
                 .map(|index| 0.25 * (index as f32 - 3.5))
                 .collect(),
         ),
+        directional: None,
     });
     let mut axes = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
     let mut colors = vec![glam::Vec3::ZERO; vol::SPHERICAL_VORONOI_SITES];
@@ -419,6 +420,7 @@ fn equal_surface_detail_density_is_scene_identity_under_nonuniform_scale() {
             })
             .collect(),
         density_logits: None,
+        directional: None,
     });
     let mut density = legacy.clone();
     density.surface_detail.as_mut().unwrap().density_logits =

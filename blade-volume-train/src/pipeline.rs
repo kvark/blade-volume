@@ -831,6 +831,7 @@ fn initialize_surface_detail(normals: &[glam::Vec3]) -> vol::SurfaceDetail {
         heights: vec![0.0; count],
         colors: vec![glam::Vec3::ZERO; count],
         density_logits: None,
+        directional: None,
     }
 }
 

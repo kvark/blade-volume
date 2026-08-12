@@ -4613,6 +4613,17 @@ fn prune_and_densify(
             .density_logits
             .as_ref()
             .map(|_| Vec::with_capacity(n_new * vol::SURFACE_DETAIL_SITES)),
+        directional: old
+            .directional
+            .as_ref()
+            .map(|_| vol::SurfaceDetailDirectional {
+                axes: Vec::with_capacity(
+                    n_new * vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS,
+                ),
+                colors: Vec::with_capacity(
+                    n_new * vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS,
+                ),
+            }),
     });
     let mut new_spherical_voronoi =
         model
@@ -4660,6 +4671,15 @@ fn prune_and_densify(
             detail.colors.extend_from_slice(&old.colors[begin..end]);
             if let Some(ref mut logits) = detail.density_logits {
                 logits.extend_from_slice(&old.density_logits.as_ref().unwrap()[begin..end]);
+            }
+            if let Some(ref mut directional) = detail.directional {
+                let begin = begin * vol::SURFACE_DETAIL_DIRECTIONS;
+                let end = end * vol::SURFACE_DETAIL_DIRECTIONS;
+                let old = old.directional.as_ref().unwrap();
+                directional.axes.extend_from_slice(&old.axes[begin..end]);
+                directional
+                    .colors
+                    .extend_from_slice(&old.colors[begin..end]);
             }
         }
         if let Some(ref mut spherical_voronoi) = new_spherical_voronoi {
@@ -4717,6 +4737,15 @@ fn prune_and_densify(
             detail.colors.extend_from_slice(&old.colors[begin..end]);
             if let Some(ref mut logits) = detail.density_logits {
                 logits.extend_from_slice(&old.density_logits.as_ref().unwrap()[begin..end]);
+            }
+            if let Some(ref mut directional) = detail.directional {
+                let begin = begin * vol::SURFACE_DETAIL_DIRECTIONS;
+                let end = end * vol::SURFACE_DETAIL_DIRECTIONS;
+                let old = old.directional.as_ref().unwrap();
+                directional.axes.extend_from_slice(&old.axes[begin..end]);
+                directional
+                    .colors
+                    .extend_from_slice(&old.colors[begin..end]);
             }
         }
         if let Some(ref mut spherical_voronoi) = new_spherical_voronoi {
@@ -6672,6 +6701,7 @@ mod tests {
             heights: vec![0.0; detail_count],
             colors: vec![glam::Vec3::ZERO; detail_count],
             density_logits: None,
+            directional: None,
         });
         let points_before = model.points.clone();
         let radii_before = model.radii.clone();
@@ -6844,6 +6874,7 @@ mod tests {
                 })
                 .collect(),
             density_logits: Some(vec![0.0; detail_count]),
+            directional: None,
         });
         model.compute_adjacency_default();
         let positions_before = model
@@ -6949,6 +6980,7 @@ mod tests {
                 })
                 .collect(),
             density_logits: None,
+            directional: None,
         });
         model.compute_adjacency_default();
         let positions_before = model
@@ -7414,6 +7446,7 @@ mod tests {
                 heights,
                 colors,
                 density_logits: Some(density_logits),
+                directional: None,
             }),
             surface_color_coefficients: None,
             spherical_voronoi: None,
@@ -7540,6 +7573,7 @@ mod tests {
                 heights: heights.clone(),
                 colors: colors.clone(),
                 density_logits: None,
+                directional: None,
             }),
             surface_color_coefficients: None,
             spherical_voronoi: None,
@@ -8166,6 +8200,7 @@ mod tests {
                     .map(|index| 0.01 * index as f32 - 0.1)
                     .collect(),
             ),
+            directional: None,
         });
         model.compute_adjacency_default();
         let parent = 2;
@@ -8335,6 +8370,7 @@ mod tests {
             heights: vec![0.0; detail_count],
             colors: vec![glam::Vec3::ZERO; detail_count],
             density_logits: None,
+            directional: None,
         });
         let view = ViewSupervision {
             camera: vol::CameraParams {
@@ -11031,6 +11067,7 @@ mod tests {
             heights: vec![0.0; detail_count],
             colors: vec![glam::Vec3::ZERO; detail_count],
             density_logits: Some(vec![0.0; detail_count]),
+            directional: None,
         });
         model.compute_adjacency_default();
         let view = ViewSupervision {
@@ -11265,6 +11302,7 @@ mod tests {
                 heights: vec![0.0; detail_count],
                 colors: vec![glam::Vec3::ZERO; detail_count],
                 density_logits: Some(vec![0.0; detail_count]),
+                directional: None,
             });
             model.spherical_voronoi = Some(vol::SphericalVoronoi {
                 axes: (0..model.points.len() * vol::SPHERICAL_VORONOI_SITES)
