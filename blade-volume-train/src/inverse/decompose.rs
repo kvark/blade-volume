@@ -240,6 +240,117 @@ impl Observations {
     }
 }
 
+/// Observations of one fixed surface under a known illumination.
+pub struct KnownLightObservations<'a> {
+    pub irradiance: crate::relight::Irradiance,
+    pub observations: &'a Observations,
+}
+
+/// Result of fitting surface orientation across known illuminations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NormalRefinement {
+    pub supported: usize,
+    pub changed: usize,
+}
+
+fn normal_candidates(count: usize) -> Vec<glam::Vec3> {
+    let golden_angle = std::f32::consts::PI * (3.0 - 5.0f32.sqrt());
+    (0..count)
+        .map(|index| {
+            let y = 1.0 - 2.0 * (index as f32 + 0.5) / count as f32;
+            let radius = (1.0 - y * y).sqrt();
+            let angle = golden_angle * index as f32;
+            glam::Vec3::new(radius * angle.cos(), y, radius * angle.sin())
+        })
+        .collect()
+}
+
+fn photometric_normal_score(
+    normal: glam::Vec3,
+    towards: glam::Vec3,
+    readings: &[(crate::relight::Irradiance, [f32; 3])],
+) -> f64 {
+    if normal.dot(towards) <= 0.05 {
+        return f64::INFINITY;
+    }
+    let shades: Vec<_> = readings.iter().map(|entry| entry.0.shade(normal)).collect();
+    let mut error = 0.0f64;
+    for channel in 0..3 {
+        let mut numerator = 0.0f64;
+        let mut denominator = 0.0f64;
+        for (shade, entry) in shades.iter().zip(readings) {
+            let observed = &entry.1;
+            numerator += shade[channel] as f64 * observed[channel] as f64;
+            denominator += (shade[channel] as f64).powi(2);
+        }
+        let albedo = if denominator > 1.0e-12 {
+            (numerator / denominator).clamp(0.005, 0.8)
+        } else {
+            0.5
+        };
+        for (shade, entry) in shades.iter().zip(readings) {
+            let observed = &entry.1;
+            error += (albedo * shade[channel] as f64 - observed[channel] as f64).powi(2);
+        }
+    }
+    error
+}
+
+/// Fit one diffuse normal per Gaussian against repeated captures under known
+/// lights. Albedo is eliminated analytically for every candidate, so the fit
+/// cannot improve merely by painting one illumination into the material.
+pub fn refine_normals_known_lights(
+    model: &mut vol::relight::RelightModel,
+    lights: &[KnownLightObservations<'_>],
+    candidate_count: usize,
+) -> NormalRefinement {
+    let candidates = normal_candidates(candidate_count.max(1));
+    let mut stats = NormalRefinement::default();
+    for index in 0..model.surfels.len() {
+        let mut readings = Vec::new();
+        let mut towards = glam::Vec3::ZERO;
+        for light in lights {
+            let samples = light.observations.of(index);
+            if samples.is_empty() {
+                continue;
+            }
+            let mut radiance = [0.0f32; 3];
+            for sample in samples {
+                for (sum, value) in radiance.iter_mut().zip(sample.radiance) {
+                    *sum += value;
+                }
+                towards += sample.towards;
+            }
+            for value in &mut radiance {
+                *value /= samples.len() as f32;
+            }
+            readings.push((light.irradiance, radiance));
+        }
+        let Some(towards) = towards.try_normalize() else {
+            continue;
+        };
+        if readings.len() < 2 {
+            continue;
+        }
+        stats.supported += 1;
+        let current = glam::Vec3::from(model.surfels[index].normal);
+        let mut best = current;
+        let mut best_score = photometric_normal_score(current, towards, &readings);
+        for &candidate in &candidates {
+            let score = photometric_normal_score(candidate, towards, &readings);
+            if score < best_score {
+                best = candidate;
+                best_score = score;
+            }
+        }
+        if best != current {
+            model.surfels[index].normal = best.to_array();
+            stats.changed += 1;
+        }
+    }
+    stats
+}
+
 /// Gather what every surfel looked like, from the views that could see it.
 ///
 /// Visibility is decided with a depth buffer per view rather than by ray
@@ -1743,6 +1854,65 @@ mod tests {
             samples,
             offsets: (0..=mean.len() as u32).collect(),
         }
+    }
+
+    #[test]
+    fn known_lights_recover_a_diffuse_normal_without_knowing_albedo() {
+        let truth = glam::Vec3::new(0.35, 0.25, 0.902_774).normalize();
+        let albedo = [0.6, 0.4, 0.25];
+        let mut irradiance = Vec::new();
+        for (component, sign) in [(3, 1.0), (3, -1.0), (1, 1.0), (2, 1.0)] {
+            let mut light = crate::relight::Irradiance::default();
+            light.coefficients[0] = [2.0; 3];
+            light.coefficients[component] = [sign; 3];
+            irradiance.push(light);
+        }
+        let observations: Vec<_> = irradiance
+            .iter()
+            .map(|light| {
+                let shade = light.shade(truth);
+                Observations {
+                    samples: vec![Sample {
+                        radiance: std::array::from_fn(|channel| albedo[channel] * shade[channel]),
+                        towards: glam::Vec3::Z,
+                        facing: truth.z,
+                    }],
+                    offsets: vec![0, 1],
+                }
+            })
+            .collect();
+        let lights: Vec<_> = irradiance
+            .into_iter()
+            .zip(&observations)
+            .map(|(irradiance, observations)| KnownLightObservations {
+                irradiance,
+                observations,
+            })
+            .collect();
+        let mut model = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0; 3],
+                radius: 1.0,
+                normal: glam::Vec3::new(-0.5, 0.5, 0.7).normalize().to_array(),
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material::default()],
+        };
+
+        let stats = refine_normals_known_lights(&mut model, &lights, 4096);
+        let recovered = glam::Vec3::from(model.surfels[0].normal);
+        assert_eq!(
+            stats,
+            NormalRefinement {
+                supported: 1,
+                changed: 1
+            }
+        );
+        assert!(
+            recovered.dot(truth) > 0.995,
+            "normal {recovered:?} against {truth:?}"
+        );
     }
 
     fn with_unseen_prefix(unseen: usize, mean: &[[f32; 3]]) -> Observations {

@@ -120,6 +120,10 @@ struct Args {
     #[argh(option, default = "2")]
     materials: usize,
 
+    /// fit Gaussian normals from every known light except the held-out one
+    #[argh(switch)]
+    photometric_normals: bool,
+
     /// retain fused depth centers instead of multi-view photo refinement
     #[argh(switch)]
     no_refine: bool,
@@ -607,6 +611,46 @@ fn describe_surface_error(
     Ok(())
 }
 
+fn refine_photometric_normals(
+    model: &mut vol::relight::RelightModel,
+    dataset: &train::relight::Dataset,
+    views: &[usize],
+    held_out_environment: usize,
+) -> Result<train::inverse::decompose::NormalRefinement, String> {
+    let mut observations = Vec::new();
+    let mut irradiance = Vec::new();
+    for environment in 0..dataset.environments.len() {
+        if environment == held_out_environment {
+            continue;
+        }
+        let capture =
+            train::inverse::capture::Capture::from_relight_dataset(dataset, environment, true)?;
+        observations.push(train::inverse::decompose::observe(
+            model, &capture, views, -1.0,
+        ));
+        let light = vol::io::try_load_environment(&dataset.environment_files[environment])
+            .map_err(|error| error.to_string())?;
+        irradiance.push(train::relight::Irradiance::project(
+            &light.texels,
+            light.width,
+            light.height,
+        ));
+    }
+    let lights: Vec<_> = irradiance
+        .into_iter()
+        .zip(&observations)
+        .map(
+            |(irradiance, observations)| train::inverse::decompose::KnownLightObservations {
+                irradiance,
+                observations,
+            },
+        )
+        .collect();
+    Ok(train::inverse::decompose::refine_normals_known_lights(
+        model, &lights, 512,
+    ))
+}
+
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
@@ -617,6 +661,16 @@ fn main() {
         .iter()
         .position(|name| name == &args.environment)
         .unwrap_or_else(|| fail(format!("no environment named '{}'", args.environment)));
+    let held_out_environment = dataset
+        .environments
+        .iter()
+        .position(|name| name == &args.held_out_environment)
+        .unwrap_or_else(|| {
+            fail(format!(
+                "no environment named '{}'",
+                args.held_out_environment
+            ))
+        });
     let (training_indices, held_out_indices) = split_views(
         dataset.views.len(),
         args.held_out_stride,
@@ -748,7 +802,11 @@ fn main() {
         min_peak: args.min_peak,
         max_steps: args.max_steps as u32,
         voxel_factor: args.voxel_factor,
-        disc_radius: args.disc_radius,
+        disc_radius: if args.photometric_normals {
+            args.disc_radius.max(1.6)
+        } else {
+            args.disc_radius
+        },
         min_views: args.min_views,
         ..train::inverse::depth::DepthOptions::default()
     };
@@ -859,11 +917,28 @@ fn main() {
     for surfel in surfels.iter_mut() {
         surfel.material = 0;
     }
-    let geometry = vol::relight::RelightModel {
+    let mut geometry = vol::relight::RelightModel {
         kernel: vol::relight::ParticleKernel::Gaussian,
         surfels,
         materials: vec![vol::relight::Material::default()],
     };
+    if args.photometric_normals {
+        let started = std::time::Instant::now();
+        let stats = refine_photometric_normals(
+            &mut geometry,
+            &dataset,
+            &training_indices,
+            held_out_environment,
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "photometrically refined {} of {} supported normals ({} particles) in {:.3} s",
+            stats.changed,
+            stats.supported,
+            geometry.surfels.len(),
+            started.elapsed().as_secs_f64(),
+        );
+    }
     describe_surface_error(
         "extracted surface",
         &geometry.surfels,
@@ -924,16 +999,6 @@ fn main() {
             .unwrap_or_else(|error| fail(format!("cannot write {surface_output}: {error}")));
         println!("wrote {surface_output}");
     }
-    let held_out_environment = dataset
-        .environments
-        .iter()
-        .position(|name| name == &args.held_out_environment)
-        .unwrap_or_else(|| {
-            fail(format!(
-                "no environment named '{}'",
-                args.held_out_environment
-            ))
-        });
     let held_out_light =
         vol::io::try_load_environment(&dataset.environment_files[held_out_environment])
             .unwrap_or_else(|error| fail(error));

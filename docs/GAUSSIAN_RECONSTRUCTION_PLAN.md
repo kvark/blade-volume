@@ -552,3 +552,18 @@ This is the first current gate to improve static radiance, truth geometry, and
 relighting together, but the remaining ~66° normal error keeps the next major
 milestone unchanged: learn a shared local surface coordinate and optimize it
 against a rendered-surface objective.
+
+When repeat captures under controlled known lights are available, the normal
+part is now directly solvable. `refine_normals_known_lights` searches 512
+directions per Gaussian and eliminates diffuse albedo analytically for each
+candidate, so illumination cannot win by being baked into a free material.
+The synthetic `--photometric-normals` gate uses sun-east, sun-west, sky-dome,
+and uniform captures while keeping studio entirely held out. Correct normals
+make discs more edge-on; raising only this opt-in path's minimum support from
+1.4 to 1.6 fused-cell radii closes the resulting gaps. Across the fixed
+reference and three staged clouds, normal RMSE moves from 65.98–69.43° to
+53.96–57.56°, held-light PSNR gains 0.37–0.68 dB, and coverage gains 0.6–1.0
+points. The solve takes 0.04–0.05 seconds after observations are gathered.
+This is a real reusable multi-light result, but remains opt-in: ordinary phone
+video supplies one illumination, so its next milestone is still a joint
+rendered-surface objective or an observation-trained correspondence descriptor.

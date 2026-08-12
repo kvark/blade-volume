@@ -2126,6 +2126,39 @@ artifacts = "target/audit-runs/synthetic-{fixed-2048,densify-1024}-1800-v* and s
 memory_events = 0
 selection = "accept as the synthetic pipeline default: staged allocation improves static novel-view radiance, surface position and normal truth, coverage, and novel-light PBR at the same final cloud size"
 
+# Repeated captures under known lights make surface orientation identifiable
+# without geometry or material truth. For every Gaussian, the solver searches
+# 512 sphere directions, analytically eliminates one diffuse albedo per channel,
+# and scores the shared residual across all non-held environments. `studio`
+# remains unseen. Corrected normals make discs more edge-on, so the opt-in path
+# couples the solve to a minimum 1.6-cell support radius; the 1.4-only arm gains
+# PSNR but loses 2.3-2.6 coverage points, while 1.6 wins both. The fixed
+# reference and three independently trained staged clouds all pass.
+[synthetic_reconstruction.rgb_mask_foam.known_light_normals]
+date = "2026-08-12"
+training_environments = ["sun-east", "sun-west", "sky-dome", "uniform"]
+held_out_environment = "studio"
+candidate_directions = 512
+control_disc_radius = 1.4
+candidate_disc_radius = 1.6
+control_surface_position_rmse = [0.6209, 0.5976, 0.5953, 0.5842]
+candidate_surface_position_rmse = [0.6204, 0.5972, 0.5947, 0.5839]
+control_surface_normal_rmse_degrees = [66.34, 65.98, 67.32, 69.43]
+candidate_surface_normal_rmse_degrees = [53.96, 54.41, 56.31, 57.56]
+control_training_light_psnr = [18.78, 19.87, 19.73, 19.44]
+candidate_training_light_psnr = [19.29, 20.78, 20.26, 20.03]
+control_held_light_psnr = [18.48, 19.33, 19.19, 18.88]
+candidate_held_light_psnr = [18.85, 20.01, 19.59, 19.34]
+control_held_light_worst_psnr = [18.41, 19.14, 18.68, 18.80]
+candidate_held_light_worst_psnr = [18.63, 19.60, 19.02, 19.12]
+control_coverage = [0.536, 0.559, 0.555, 0.557]
+candidate_coverage = [0.542, 0.566, 0.565, 0.564]
+changed_normals = [1215, 1226, 1167, 1226]
+refinement_seconds = [0.051, 0.038, 0.038, 0.039]
+artifacts = "target/audit-runs/photometric-normals-{cli,staged-r16}-v* (gitignored)"
+memory_events = 0
+selection = "accept as opt-in known-light supervision: normal, training-light, held-light, worst-view, and coverage gates pass on every cloud; this does not claim to solve the single-light phone-video case"
+
 # A weighted `--init-ply` used to fall through to the fresh-run Delaunay
 # default, which discarded stored radii. Passing `--cech-radius` avoided that
 # path but reinitialized every learned radius from nearest-neighbour spacing.
