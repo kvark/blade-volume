@@ -55,6 +55,10 @@ struct Args {
     #[argh(option, default = "24")]
     iterations: usize,
 
+    /// brightest diffuse albedo used to fix the material/light scale (default 0.8)
+    #[argh(option, default = "0.8")]
+    brightest_albedo: f32,
+
     /// rounds in which roughness and reflectance are re-chosen (default 3;
     /// 0 leaves every surface a rough dielectric, which is the albedo-only fit)
     #[argh(option, default = "3")]
@@ -282,6 +286,7 @@ fn main() {
             environment_width: args.environment_width,
             iterations: args.iterations,
             specular_rounds: args.specular_rounds,
+            brightest_albedo: args.brightest_albedo,
             ..Default::default()
         },
         train::inverse::decompose::Given {

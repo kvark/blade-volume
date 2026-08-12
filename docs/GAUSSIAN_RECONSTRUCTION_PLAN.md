@@ -120,6 +120,20 @@ six views of RGB plus foreground alpha; G-buffer positions and normals are read
 only after training for diagnostics. Cameras 1 and 5 are excluded from
 training, surface fusion, refinement, observations, and material fitting.
 
+The 2026-08-12 gate also removes the last synthetic-only shortcut from the
+default: `sun-east` is now recovered from those RGB observations rather than
+handed to the material fit. Twelve shared diffuse materials are the robust
+choice across five independently trained clouds; 64--128 are rejected because
+one repeat collapses below 14.7 dB even as the other four improve. A fresh
+default run reaches 25.02 dB at unseen poses and 19.23 dB (18.92 worst) under
+the unseen `studio` light at 55.8% coverage. Its recovered capture-light shape
+is still 62.7% RMS from truth after the unidentifiable colour/scale gauge, so
+this is an honest end-to-end result, not a claim that illumination is solved.
+`--true-light` retains the former ceiling, and `--brightest-albedo` exposes the
+otherwise unknowable scale prior. The complete latest asset is
+`target/audit-runs/unknown-light-default-v1/{model.ply,scene.rply,scene.f32}`;
+the `.f32` sidecar is the recovered environment.
+
 Aligning the deliberately sparse outer lattice layer with the mean camera side
 raises held-pose radiance from the 20.13 dB world-axis baseline to 24.17 dB
 (23.72 worst) without increasing the site budget. The trained foam yields 2,152
@@ -453,7 +467,7 @@ at 5.37 GiB with no swap/OOM/GPU fault, and warnings-denied clippy passes. A
 fresh staged reconstruction trains 1,800 updates in 16.44 seconds, reaches
 25.00 dB on held
 poses, 0.5853 position RMSE, and 19.07 dB under the unseen light at 55.6%
-coverage. The latest artifacts are
+coverage. The validation-uprev control artifacts are
 `target/audit-runs/dependency-uprev-v2/{model.ply,scene.rply}`. Other
 performance targets remain native checkpoint-compatible packed parameters,
 dead input-gradient work, and compact active path storage, still at the

@@ -2221,6 +2221,68 @@ artifacts = "target/audit-runs/material-count{6,8,-sweep}-v1 and initial-budget-
 memory_events = 0
 selection = "accept six shared diffuse materials as the synthetic single-light default: all five held-light mean and worst-view gates improve with unchanged geometry, coverage, and runtime representation"
 
+# The earlier synthetic gate handed `sun-east` to the material solver. That is
+# a useful ceiling, but not the requested photographs-only pipeline. The
+# default now recovers the capture environment and reserves `--true-light` for
+# that diagnostic. Five fixed reconstructed clouds sweep the sharing prior;
+# twelve clusters have the best mean and the best worst repeat. More capacity
+# is not monotonic: 64/128 clusters collapse one repeat to 14.60/14.50 dB as
+# the material/light split changes gauge, despite helping the other four.
+#
+# Absolute material/light scale and per-channel white balance are not present
+# in RGB: multiplying the light and dividing the material produces the same
+# photographs. `brightest_albedo = 0.8` remains a stated prior and is exposed
+# to calibrated users. Sweeping it against the held-out light is recorded only
+# as a gauge diagnostic, not used for selection, because that would leak the
+# answer. The recovered light errors below compare diffuse SH after their best
+# per-channel gauge, so they measure shape rather than that assumption.
+[synthetic_reconstruction.rgb_mask_foam.unknown_capture_light]
+date = "2026-08-12"
+capture_environment = "sun-east"
+held_out_environment = "studio"
+material_counts_swept = [6, 8, 12, 16, 20, 24, 32, 48, 64, 96, 128]
+selected_materials = 12
+brightest_albedo = 0.8
+selected_held_light_psnr = [18.28, 19.20, 19.21, 18.65, 18.58]
+selected_held_light_worst_psnr = [18.28, 18.98, 18.66, 18.60, 18.42]
+selected_light_relative_rms_percent = [60.3, 63.5, 62.9, 56.5, 62.7]
+known_light_six_material_psnr = [18.60, 19.39, 19.33, 19.00, 19.19]
+count_6_held_light_psnr = [18.17, 18.83, 18.98, 18.62, 18.55]
+count_8_held_light_psnr = [18.14, 19.16, 18.29, 18.02, 18.52]
+count_16_held_light_psnr = [18.28, 19.09, 18.94, 18.12, 18.82]
+count_20_held_light_psnr = [18.62, 19.13, 18.93, 18.18, 19.08]
+count_64_failure_held_light_psnr = 14.60
+count_128_failure_held_light_psnr = 14.50
+artifacts = "target/audit-runs/unknown-light-{grid,wide,anchor,truth,default}-v1 (gitignored)"
+memory_peak_bytes = 265121792
+memory_events = 0
+selection = "recover the capture light by default and use 12 shared diffuse materials; retain the true-light path only as an explicit diagnostic ceiling"
+
+# A fresh default run trains rather than reusing one of the selection clouds.
+# Its unknown-light fit beats its true-light controls under the unseen studio,
+# because the recovered smooth light partly absorbs the remaining geometry and
+# forward-model error; this is useful output quality, not evidence that its
+# 62.7%-wrong light shape is physically correct.
+[synthetic_reconstruction.rgb_mask_foam.unknown_capture_light.latest]
+foam_training_seconds = 16.552
+held_pose_psnr = 25.02
+held_pose_worst_psnr = 23.93
+surface_position_rmse = 0.5842
+surface_normal_rmse_degrees = 67.33
+surface_particles = 2343
+materials = 12
+light_relative_rms_percent = 62.7
+training_light_held_pose_psnr = 19.78
+held_light_psnr = 19.23
+held_light_worst_psnr = 18.92
+coverage = 0.558
+true_light_materials_6_held_light_psnr = 18.95
+true_light_materials_12_held_light_psnr = 19.01
+model_sha256 = "7e0ff5420ba30e035c68ee2c9d3537bbc18357f64349dac8e7039a2619dc0871"
+surface_sha256 = "ef4635031544a6877b2e939e11a43276ca1eaea39d38fbf282bbc8323c82fcf8"
+environment_sha256 = "7b0f8f5f569088f180d331da9ad74d891ade50f188343aeb8fb847231987988e"
+artifact = "target/audit-runs/unknown-light-default-v1/{model.ply,scene.rply,scene.f32} (gitignored)"
+
 # Repeated captures under known lights make surface orientation identifiable
 # without geometry or material truth. For every Gaussian, the solver searches
 # 512 sphere directions, analytically eliminates one diffuse albedo per channel,

@@ -117,8 +117,16 @@ struct Args {
     min_views: usize,
 
     /// shared PBR materials in the reconstructed surface cloud
-    #[argh(option, default = "6")]
+    #[argh(option, default = "12")]
     materials: usize,
+
+    /// hand the real capture light to the material fit as a diagnostic control
+    #[argh(switch)]
+    true_light: bool,
+
+    /// brightest diffuse albedo assumed when recovering an unknown light
+    #[argh(option, default = "0.8")]
+    brightest_albedo: f32,
 
     /// fit Gaussian normals from every known light except the held-out one
     #[argh(switch)]
@@ -963,6 +971,7 @@ fn main() {
     );
     let training_light = vol::io::try_load_environment(&dataset.environment_files[environment])
         .unwrap_or_else(|error| fail(error));
+    let given_light = args.true_light.then_some(&training_light);
     let decompose_started = std::time::Instant::now();
     let fitted = train::inverse::decompose::fit(
         &geometry,
@@ -973,11 +982,12 @@ fn main() {
             // specular lobe from one light. A false mirror fits that light and
             // fails catastrophically under the held-out one.
             specular_rounds: 0,
+            brightest_albedo: args.brightest_albedo,
             ..train::inverse::decompose::FitOptions::default()
         },
         train::inverse::decompose::Given {
             visibility: None,
-            light: Some(&training_light),
+            light: given_light,
         },
     );
     println!(
@@ -987,6 +997,17 @@ fn main() {
         fitted.unseen,
         decompose_started.elapsed().as_secs_f64(),
     );
+    if !args.true_light {
+        let light_error =
+            train::inverse::truth::compare_environment(&training_light, &fitted.scene.environment);
+        println!(
+            "recovered training light: {:.1}% relative RMS after gauge [{:.3}, {:.3}, {:.3}]",
+            100.0 * light_error.relative_rms,
+            light_error.gauge[0],
+            light_error.gauge[1],
+            light_error.gauge[2],
+        );
+    }
     if let Some(ref surface_output) = args.surface_output {
         let surface_path = path::Path::new(surface_output);
         if let Some(parent) = surface_path
@@ -998,6 +1019,16 @@ fn main() {
         vol::io::try_save_relight(surface_path, &fitted.scene.model)
             .unwrap_or_else(|error| fail(format!("cannot write {surface_output}: {error}")));
         println!("wrote {surface_output}");
+        let environment_path = surface_path.with_extension("f32");
+        vol::io::try_save_environment(&environment_path, &fitted.scene.environment).unwrap_or_else(
+            |error| {
+                fail(format!(
+                    "cannot write {}: {error}",
+                    environment_path.display()
+                ))
+            },
+        );
+        println!("wrote {}", environment_path.display());
     }
     let held_out_light =
         vol::io::try_load_environment(&dataset.environment_files[held_out_environment])
@@ -1013,7 +1044,7 @@ fn main() {
     let training_summary = renderer.score_splits(
         &train::inverse::score::Scene {
             model: fitted.scene.model.clone(),
-            environment: training_light,
+            environment: fitted.scene.environment,
         },
         &training_capture,
         &[(&held_out_indices, None)],

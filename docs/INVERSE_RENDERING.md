@@ -157,6 +157,11 @@ stated**:
 What survives both gauges — the *ratio* between two materials' albedos, and
 the *shape* of the light — is what the measurement is about.
 
+`reconstruct --brightest-albedo` exposes the scale anchor for a calibrated
+capture or a scene containing a reference patch. Without such information the
+default remains 0.8 and the output reports an assumption, not a recovered
+absolute reflectance.
+
 ### visibility, and why the bounce is not optional
 
 Without shadowing, a patch of floor in a sphere's shadow has one way to be
