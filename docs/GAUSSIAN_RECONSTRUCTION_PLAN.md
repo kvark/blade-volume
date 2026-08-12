@@ -446,11 +446,12 @@ atomic suite additionally showed that enabling the Vulkan memory model for
 cooperative matrices must also enable device scope. Blade branch
 `fix/reconstruction-vulkan-validation-2026` (`200188b`) rebases the three old
 fixes and adds the device-scope fix. Meganeura branch
-`fix/blade-volume-dependencies-v2` (`84a8a45`) contains merged main plus matching
-Blade, macro, and Naga pins. Against those exact remote commits, Blade Volume's complete
-all-target suite has zero Vulkan validation messages, peaks at 5.37 GiB with
-no swap/OOM/GPU fault, and warnings-denied clippy passes. A fresh staged
-reconstruction trains 1,800 updates in 16.44 seconds, reaches 25.00 dB on held
+`fix/blade-volume-dependencies-v2` (`84a8a45`) contains merged main plus
+matching Blade, macro, and Naga pins. Against those exact remote commits, Blade
+Volume's complete all-target suite has zero Vulkan validation messages, peaks
+at 5.37 GiB with no swap/OOM/GPU fault, and warnings-denied clippy passes. A
+fresh staged reconstruction trains 1,800 updates in 16.44 seconds, reaches
+25.00 dB on held
 poses, 0.5853 position RMSE, and 19.07 dB under the unseen light at 55.6%
 coverage. The latest artifacts are
 `target/audit-runs/dependency-uprev-v2/{model.ply,scene.rply}`. Other
