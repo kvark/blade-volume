@@ -3427,3 +3427,18 @@ unregularized_64 = "passes both real scenes but loses 0.01 dB on one synthetic t
 prior_0_003_64 = "passes all synthetic gates but loses 0.01 dB on the Bonsai tail"
 prior_0_01_128 = "passes all synthetic gates but loses 0.01 dB on the Room mean"
 verdict = "retain the weakest 0.001 prior at 64 rounds; it is the only tested schedule that passes every synthetic tail and both real-scene transfer gates"
+
+[rendered_surface_refinement.simultaneous.rejected_radius_batch]
+joint_64_synthetic_psnr = [18.53, 19.45, 19.46, 18.88, 18.79]
+joint_64_bonsai_psnr = [16.01, 14.58, 11.52]
+joint_64_room_psnr = [14.62, 14.12, 13.20]
+separate_64_synthetic_psnr = [18.67, 19.49, 19.61, 18.98, 18.92]
+separate_64_bonsai_psnr = [16.09, 14.62, 11.60]
+separate_64_room_psnr = [14.67, 14.16, 13.22]
+separate_64_seconds = [1.638, 1.622, 1.618, 1.602, 1.634]
+exact_300_radius_seconds = [7.250, 7.236, 7.097, 7.069, 7.276]
+separate_16_bonsai_psnr = [15.94, 14.53, 11.70]
+separate_16_room_psnr = [14.57, 14.07, 13.14]
+separate_8_bonsai_psnr = [15.91, 14.52, 11.72]
+separate_8_room_psnr = [14.54, 14.07, 13.17]
+verdict = "reject and remove: 64 radius rounds strongly improve synthetic clouds and Room but lose 0.11 dB on the Bonsai tail; 8-16 rounds become neutral or negative on Room"

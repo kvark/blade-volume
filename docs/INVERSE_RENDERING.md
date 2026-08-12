@@ -438,6 +438,14 @@ experiment also finds no measurable gain from reusing the host-side TLAS
 instance buffer (5.406 seconds in both arms, byte-identical output). The
 synchronized TLAS rebuild is the remaining exact-coordinate bottleneck.
 
+Support radii cannot simply join the paired position schedule. Joint and
+separate radius perturbations improve every fixed synthetic cloud and Room,
+but a 64-round phase loses 0.11 dB on the worst Bonsai view and 0.2 coverage
+points. Eight and sixteen radius rounds avoid that tail loss but become neutral
+or negative on Room, while forbidding shrinkage accepts no useful changes.
+That prototype is removed; `--render-refine-radii` continues to apply only to
+the exact coordinate pass.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a

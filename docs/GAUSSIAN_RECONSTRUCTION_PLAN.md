@@ -668,3 +668,13 @@ transfers to Bonsai at the same 14.52/11.71 dB held score in 10.0 seconds, and
 to Room with a neutral mean and +0.01 dB tail in 11.0 seconds. Exact coordinate
 descent is still stronger on Room, and simultaneous updates slightly worsen
 synthetic truth-position RMSE, so neither path becomes a default.
+
+The same batching does not generalize to support radii. A separate 64-round
+radius phase improves all five synthetic held-light means and tails over exact
+300-particle position-plus-radius descent in 1.60--1.64 rather than 7.07--7.28
+seconds. It also improves Room by 0.09/0.06 dB mean/worst over paired positions,
+but loses 0.11 dB on the Bonsai tail and 0.2 coverage points. Joint proposals
+have the same failure; expansion-only proposals are neutral, and reducing the
+radius phase to 8--16 rounds makes Room neutral or worse. The prototype is
+removed. Batched radius updates need an objective that observes support loss,
+not another schedule or radius prior.
