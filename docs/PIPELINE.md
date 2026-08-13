@@ -2072,6 +2072,33 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   or GPU fault. The remaining 5.7× Bonsai gap is chiefly the full colour
   parameter's Adam update and its required colour backward, not dead geometry.
 
+#### M2bo — Keep private Adam state device-local (done)
+
+- The large-table optimizer profile exposed a memory-placement bug rather than
+  an Adam arithmetic problem. Meganeura allocated every first- and second-moment
+  buffer as host-visible shared memory so that infrequent checkpoint and
+  densification transfers could use a mapped pointer. The 200K-site directional
+  colour table therefore updated two 153.6 MB moments across the host-visible
+  heap on every step.
+- Adam moments now use device-local memory. Initialization joins the existing
+  build-time GPU clear, while explicit state reads, writes, and checkpoint
+  restores use upload/download staging. Parameters, public APIs, update order,
+  and the generic Adam shader are unchanged. This adds no graph operation,
+  shader edit, shader entry/group, binding, pipeline, or backend variant.
+- On the exact 200K-site 4,096-ray Room profile, Adam falls from
+  65.27--66.16 ms to 16.16--16.93 ms (74.5% at the midpoint), and the complete
+  directional graph falls from 202.2 ms before the frozen-weight change to
+  126.6--127.5 ms with both changes. Four-step GPU wait falls from 0.899 to
+  0.584 seconds. The matched control and candidate both score 25.8181 dB on
+  the four training views and 25.2813 dB on eight held-out views, including
+  identical reported per-view scores. The 10 GB cgroup peak falls from 6.797
+  to 6.530 GB with zero swap, OOM, or GPU fault.
+- Meganeura's complete all-target test and clippy gates pass on the RTX 5070;
+  the state suite now explicitly verifies the GPU-cleared zero moments before
+  exercising staged read/write and checkpoint paths. The remaining bounded
+  performance target is the required directional-colour backward itself, not
+  another Adam or shader-taxonomy specialization.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

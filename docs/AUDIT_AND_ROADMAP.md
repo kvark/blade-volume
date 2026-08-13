@@ -2049,9 +2049,15 @@ material path.
    the cost: Adam alone grows from 1.2 to 65.3 ms, and the path recorder is not
    responsible. Omitting directional-weight gradients only when every geometry
    source is frozen cuts another 11.1%/12.1% on Room/Bonsai at unchanged
-   held-out quality; the Bonsai gap is now 5.7×. The next bounded target is the
-   required colour-table backward itself, followed by a longer quality gate.
-   Do not add backend or shader-entry variants for this work.)
+   held-out quality; the Bonsai gap is then 5.7×. The Adam profile subsequently
+   identifies an allocator bug: both large private moments live in host-visible
+   memory. Keeping those moments device-local, with staged state/checkpoint
+   transfers, cuts the 200K-site Adam pass from 65.3--66.2 to 16.2--16.9 ms and
+   the complete profiled graph to 126.6--127.5 ms. Eight held-out Room views are
+   unchanged at 25.2813 dB, and this runtime-only change adds no graph op,
+   shader edit, shader entry/group, or backend variant. The next bounded target
+   is now solely the required colour-table backward, followed by a longer
+   quality gate.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
    sweep the ray-query batch window for invariant pixels, query count, and frame
    time. The conservative triangle BLAS remains an invisible point-candidate
