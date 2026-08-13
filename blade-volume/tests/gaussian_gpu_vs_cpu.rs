@@ -26,6 +26,13 @@ fn dc(color: glam::Vec3) -> [f32; 3] {
     ((color - 0.5) / 0.282_094_8).to_array()
 }
 
+fn sh1(color: glam::Vec3, z_delta: glam::Vec3) -> [f32; 12] {
+    let mut coefficients = [0.0; 12];
+    coefficients[..3].copy_from_slice(&dc(color));
+    coefficients[6..9].copy_from_slice(&(z_delta / 0.488_602_52).to_array());
+    coefficients
+}
+
 fn adversarial_model() -> vol::PointCloudModel {
     // The broad far particle's support proxy starts before the narrow near
     // particle's proxy. Correct 3DGRT ordering is nevertheless near red at
@@ -35,12 +42,18 @@ fn adversarial_model() -> vol::PointCloudModel {
         glam::Vec4::new(0.0, 0.0, 2.0, 0.5),
     ];
     let mut sh_coefficients = Vec::new();
-    sh_coefficients.extend_from_slice(&dc(glam::Vec3::new(0.0, 0.0, 1.0)));
-    sh_coefficients.extend_from_slice(&dc(glam::Vec3::new(1.0, 0.0, 0.0)));
+    sh_coefficients.extend_from_slice(&sh1(
+        glam::Vec3::new(0.0, 0.0, 0.8),
+        glam::Vec3::new(0.0, 0.1, 0.2),
+    ));
+    sh_coefficients.extend_from_slice(&sh1(
+        glam::Vec3::new(0.8, 0.0, 0.0),
+        glam::Vec3::new(0.2, 0.1, 0.0),
+    ));
     vol::PointCloudModel {
         points,
         sh_coefficients,
-        sh_degree: 0,
+        sh_degree: 1,
         transforms: Some(vol::Transforms {
             rotations: vec![glam::Quat::IDENTITY; 2],
             scales: vec![
@@ -81,7 +94,7 @@ fn gaussian_gpu_orders_overlapping_scales_like_cpu_oracle() {
     let params = GaussianParams {
         min_opacity: 0.01,
         min_transmittance: 0.0,
-        sh_degree: 0,
+        sh_degree: model.sh_degree as u32,
         debug_mode: 0,
         pad: [0; 4],
     };

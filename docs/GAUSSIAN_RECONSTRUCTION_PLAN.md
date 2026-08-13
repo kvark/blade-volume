@@ -1789,3 +1789,29 @@ Held-light PBR quality falls on four clouds and coverage drops from roughly
 53--56% to 46--49%. The existing factor-5 default remains; useful new capacity
 needs residual-guided placement or a representation improvement rather than a
 uniformly finer voxel grid.
+
+Degree-one spherical harmonics are selected only when the capture provides at
+least eight training views. The existing graph is generalized in place: each
+colour channel becomes a one- or four-column table and the already-supported
+`sum_inner(embedding(indices, coefficients) * basis)` expression evaluates it.
+There is no new Meganeura operation, shader, shader entry, binding, pipeline,
+or alternate renderer graph. Training still begins with 500 SH-0 appearance
+updates; sufficiently observed captures are promoted by copying DC and zeroing
+the three directional terms before the 1,000 support updates.
+
+The policy comes from paired held-view gates. With 18 training views, Bonsai
+improves from 18.26/18.22 dB mean/worst at SH-0 to 18.62/18.55 dB at SH-1;
+Room improves from 17.15/16.42 to 17.45/16.74 dB. Fit time rises from 11.6 to
+12.1 seconds and 17.8 to 18.4 seconds respectively. Conversely, unconditional
+SH-1 overfits all five six-view uniform-light synthetic clouds: mean changes
+are -0.04, -0.08, -0.35, -0.02, and -0.04 dB, and worst-view changes are
+-0.29, -0.18, -0.41, -0.16, and -0.08 dB. Keeping those captures at SH-0
+reproduces the selected fixed-cloud 20.83/19.87 dB gate and writes no
+directional PLY properties.
+
+The exact CPU evaluator, differentiable graph, coefficient upload/readback,
+PLY persistence, and production Gaussian WGSL path are covered by degree-one
+tests. The Bonsai PLY grows from 204 to 312 KiB; runtime GPU allocation does
+not grow because `GaussianGpu` already reserves the renderer's maximum 16 SH
+components. All paired runs completed in 12 GiB scopes with zero swap,
+pressure, OOM, Xid, reset, or GPU-fault events on the RTX 5070.
