@@ -1851,3 +1851,16 @@ held quality. Bonsai falls from 11.3 to 7.3 seconds while retaining
 18.62/18.55 dB. The cap avoids unbounded host contention; batches below 64
 rays per worker use fewer threads. This changes only private CPU work
 partitioning and adds no dependency, operation, graph, shader, or public API.
+
+Hierarchical depth fusion does not rescue the geometry either. A prototype
+kept the factor-5 cloud everywhere but replaced a coarse cell with factor-3
+children only when multiple fine subcells had independent camera support.
+Requiring at least four of six training views grows the fixed cloud from 2,179
+to 2,538 particles, changes direct held quality from 20.83/19.87 to
+20.81/19.87 dB, and lowers held-light PBR from 17.88/17.76 to 17.86/17.73 dB
+while reducing coverage from 53.5% to 53.2%. Requiring all six views adds only
+11 particles but still reaches just 20.79/19.85 dB and worsens nearest-truth
+position RMSE from 0.6212 to 0.6239. The prototype is removed. Agreement among
+depth modes is not accuracy when the source foam places those modes at the
+same biased depth; the next geometry step needs a correction signal rather
+than finer aggregation.
