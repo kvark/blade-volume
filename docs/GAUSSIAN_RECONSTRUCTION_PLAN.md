@@ -1220,3 +1220,18 @@ overlapping-Gaussian colour mixture, but remaining geometry and visibility
 error still makes the extra lights an inconsistent material constraint. The
 multi-tracer material API and synthetic branch are removed; the selected
 primary-light polish remains the smaller and better output path.
+
+Screen-disjoint batching is not selected for the exact rendered center/radius
+polish. Grouping at most eight particles whose 1.25-radius projected bounds do
+not overlap cuts the fixed 1,170-particle pass from 20.49 to 7.16 seconds. A
+failed whole-frame proposal recursively falls back to smaller batches, so all
+retained batches lower the training objective. The four-cloud held-light
+mean/worst deltas versus the sequential pass are 0.00/+0.01, +0.02/+0.02,
+-0.02/-0.03, and -0.01/-0.02 dB; coverage also loses 0.1 point on two clouds,
+while position and normal truth errors are mixed. A cap of four is slower and
+does not recover the tail. Finite Gaussian support and visibility remain
+coupled outside nominally disjoint image rectangles, so the prototype and its
+host-only batching types are removed. A safe speedup needs a cheaper exact
+TLAS update or differentiable/batched geometry objective, not approximate
+independence. No shader, graph operation, entry variant, or output format was
+added.
