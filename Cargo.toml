@@ -32,7 +32,7 @@ unused_extern_crates = "warn"
 blade-graphics = { git = "https://github.com/kvark/blade", rev = "200188b0302fc50ea9c8a995daedd186d76d5570" }
 blade-macros = { version = "0.3", git = "https://github.com/kvark/blade", rev = "200188b0302fc50ea9c8a995daedd186d76d5570" }
 # Includes scalable training kernels and cached bulk parameter downloads.
-meganeura = { git = "https://github.com/kvark/meganeura", rev = "1b16215e5e16cdcff654af0ca7977879ab974cdc" }
+meganeura = { git = "https://github.com/kvark/meganeura", rev = "5275ad73de328246c2bce2cf5d4a9713395f1a66" }
 bytemuck = "1"
 glam = { version = "0.30", features = ["mint"] }
 flate2 = "1"
