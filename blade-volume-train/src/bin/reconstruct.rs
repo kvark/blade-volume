@@ -15,6 +15,7 @@
 //!   reconstruct --sparse etc/data/bonsai/sparse/0 --images etc/data/bonsai/images
 
 use blade_volume as vol;
+use blade_volume_convert as convert;
 use blade_volume_train as train;
 use std::path;
 
@@ -145,6 +146,14 @@ struct Args {
     #[argh(switch)]
     compact_kernel: bool,
 
+    /// masked PowerFoam updates per view after Gaussian surface extraction
+    #[argh(option, default = "0")]
+    surface_powerfoam_steps_per_view: usize,
+
+    /// optional trained surface-PowerFoam light-field PLY output
+    #[argh(option)]
+    surface_powerfoam_output: Option<String>,
+
     /// particles to refine against all training renders (default 0). This is
     /// an expensive final coordinate pass; a value larger than the observed
     /// particle count refines the complete visible surface.
@@ -229,6 +238,18 @@ fn main() {
         }
     };
     let (train_views, test_views) = capture.split(args.test_every);
+    if args.surface_powerfoam_steps_per_view > 0 && args.masks.is_none() {
+        eprintln!("surface PowerFoam continuation requires --masks");
+        std::process::exit(1);
+    }
+    if args.surface_powerfoam_steps_per_view > 0 && args.compact_kernel {
+        eprintln!("surface PowerFoam continuation requires Gaussian particles");
+        std::process::exit(1);
+    }
+    if args.surface_powerfoam_output.is_some() && args.surface_powerfoam_steps_per_view == 0 {
+        eprintln!("--surface-powerfoam-output requires --surface-powerfoam-steps-per-view");
+        std::process::exit(1);
+    }
     let normal_captures =
         load_normal_captures(&capture, sparse, height, &args).unwrap_or_else(|message| {
             eprintln!("cannot load normal captures: {message}");
@@ -291,6 +312,45 @@ fn main() {
             stats.changed,
             stats.supported,
             args.normal_images.len() + 1,
+            started.elapsed().as_secs_f64(),
+        );
+    }
+
+    if args.surface_powerfoam_steps_per_view > 0 {
+        let started = std::time::Instant::now();
+        let Some(gpu) = train::fit::try_init_gpu() else {
+            eprintln!("cannot initialize a supported GPU for surface PowerFoam continuation");
+            std::process::exit(1);
+        };
+        let outcome = train::inverse::powerfoam::continue_surface(
+            &mut geometry,
+            &capture,
+            &train_views,
+            train::inverse::powerfoam::ContinueOptions {
+                steps_per_view: args.surface_powerfoam_steps_per_view,
+                ..Default::default()
+            },
+            gpu,
+        )
+        .unwrap_or_else(|message| {
+            eprintln!("cannot continue the extracted surface: {message}");
+            std::process::exit(1);
+        });
+        if let Some(ref output) = args.surface_powerfoam_output {
+            convert::save_ply(path::Path::new(output), &outcome.light_field).unwrap_or_else(
+                |error| {
+                    eprintln!("cannot write surface PowerFoam {output}: {error:?}");
+                    std::process::exit(1);
+                },
+            );
+            println!("wrote {output}");
+        }
+        let stats = outcome.stats;
+        println!(
+            "geometry: continued through masked PowerFoam for {} updates, loss {:.6} -> {:.6}, in {:.1} s",
+            stats.updates,
+            stats.initial_loss,
+            stats.final_loss,
             started.elapsed().as_secs_f64(),
         );
     }
@@ -881,6 +941,8 @@ mod tests {
         .unwrap();
         assert!(defaults.environment.is_none());
         assert!(defaults.masks.is_none());
+        assert_eq!(defaults.surface_powerfoam_steps_per_view, 0);
+        assert!(defaults.surface_powerfoam_output.is_none());
 
         let known = <Args as argh::FromArgs>::from_args(
             &["reconstruct"],
@@ -907,6 +969,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(masked.masks.as_deref(), Some("masks"));
+        assert_eq!(masked.surface_powerfoam_steps_per_view, 0);
+
+        let continued = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--masks",
+                "masks",
+                "--surface-powerfoam-steps-per-view",
+                "300",
+                "--surface-powerfoam-output",
+                "surface.ply",
+            ],
+        )
+        .unwrap();
+        assert_eq!(continued.surface_powerfoam_steps_per_view, 300);
+        assert_eq!(
+            continued.surface_powerfoam_output.as_deref(),
+            Some("surface.ply")
+        );
     }
 
     #[test]

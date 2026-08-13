@@ -428,8 +428,20 @@ held-view light-field PSNR and self-distilled Gaussian alpha reaches only
 gate, not an image-only default. Production capture now accepts an optional
 mask directory mirroring the COLMAP image paths, rectifies masks with the same
 camera, and applies them to foam-depth fusion, radiance observations, and
-patch refinement. The next production step is an explicit fixed-surface
-continuation stage enabled only when those independent masks are supplied.
+patch refinement. The production fixed-surface continuation is now explicit
+and enabled only when those independent masks are supplied. It holds centers
+and offsets fixed, reuses the existing differentiable PowerFoam path to learn
+density, degree-two SH, radii, and normals, updates the Gaussian surface, and
+optionally writes the trained static light field. It adds no shader, graph
+operation, binding, pipeline, `ShaderEntry`, or runtime representation variant.
+
+The production implementation repeats the six-view/1,800-update gate at a
+24.17 dB held-view light-field mean (23.40/24.94 dB), within 0.02 dB of the
+prototype. After the unchanged photometric-normal, material, and rendered-
+normal stages it reaches 19.84/19.57 dB held-light PBR at 54.2% coverage,
+slightly above the prototype's 19.80/19.52 dB. Centers remain bit-exact. The
+22.3-second isolated training run peaks at 222,801,920 bytes with zero swap,
+pressure, OOM, throttle, Xid, or GPU fault.
 The complete all-target workspace gate passes on the physical RTX 5070 in
 93.5 seconds at a 2,632,908,800-byte cgroup peak, with zero swap, pressure,
 OOM, throttle, Xid, or GPU-fault event. Workspace clippy also passes at a

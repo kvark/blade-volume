@@ -34,11 +34,11 @@ So the pipeline reports two families of number and never mixes them:
 `reconstruct` produces the first. `inverse_truth` produces the second, against
 a scene built for the purpose.
 
-## The four stages
+## The stages
 
-    capture ──▶ surface ──▶ decompose ──▶ score
-    images       discs      material +     render it back
-    + poses                 light          and compare
+    capture ──▶ surface ──▶ masked PowerFoam ──▶ decompose ──▶ score
+    images       discs      optional weighted    material +     render back
+    + poses                 continuation         light          and compare
 
 `blade-volume-train/src/inverse/`, one module each. The fourth shares no code
 with the first three, so it has no opportunity to agree with the solver by
@@ -61,6 +61,15 @@ views is an error. The ordinary unmasked path is unchanged.
 ### surface
 
 Two sources, and the choice matters more than anything else in the pipeline.
+
+After either source establishes a Gaussian surface, an optional
+`--surface-powerfoam-steps-per-view 300` stage holds every center fixed and
+learns density, degree-two SH, support radius, and oriented cell normal from
+RGB plus the independent foreground masks. Learned radii/normals return to the
+Gaussian surface before material/light decomposition. The static light field
+can be retained with `--surface-powerfoam-output surface.ply`. At least three
+training views are required; the stage is never inferred from RGB or from the
+surface renderer's own alpha.
 
 **Sparse points.** COLMAP's triangulated points, with normals from the local
 covariance and a side chosen by the cameras that can see them. Free, needs no
