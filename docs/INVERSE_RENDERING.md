@@ -422,13 +422,20 @@ score and coverage value remains unchanged. The physical-GPU scope peaks at
 current Gaussian radius, after its position decision. Expansion is tested
 first so a successful support-preserving move avoids the second rebuild.
 Twenty percent is the selected point of a 5/10/20% five-cloud sweep. Relative
-to position-only at
-3,000 particles, it raises Bonsai held mean/worst by another 0.04/0.03 dB and
+to position-only at 3,000 particles, it raises Bonsai held mean/worst by
+another 0.04/0.03 dB and
 Room by 0.21/0.22 dB; coverage is restored or increased. This doubles exact
 coordinate cost, so it remains a separate final-quality switch. A four-way
 normal search was rejected: even 10-degree candidates improve five synthetic
 held-light means by only 0.03--0.05 dB and truth normal RMSE by roughly 0.1
 degree while tripling position-only cost.
+
+Expansion-only exact search is not an equivalent cheaper radius path. It saves
+13--17% and gains 0.2--0.4 synthetic coverage points, but gives back most of
+the relighting improvement: the fixed held score falls from 18.43/18.37 to
+18.33/18.29 dB and the fifth from 18.80/18.62 to 18.66/18.49. The second
+candidate is retained because this option is explicitly the final-quality
+path, not the fastest surface-preserving approximation.
 
 `--render-refine-rounds 64` is the faster full-cloud alternative. Every round
 assigns a deterministic ±2.5% radius-normalized displacement to every observed

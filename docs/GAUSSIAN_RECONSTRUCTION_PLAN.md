@@ -800,3 +800,9 @@ direction and lowers those radius passes again to 68.1 and 71.5 seconds, or
 25--29% below the original loop. All reported real train/test quality and
 coverage values are unchanged. This is CPU control flow only: it adds no
 shader, operation, buffer, bind group, or pipeline variant.
+
+Removing the shrink proposal entirely saves another 13--17% and gains 0.2--0.4
+synthetic coverage points, but gives back most of the radius path's held-light
+gain. The fixed score falls from 18.43/18.37 to 18.33/18.29 dB and the fifth
+from 18.80/18.62 to 18.66/18.49. Expansion-only is removed; the explicit radius
+option remains a final-quality rather than minimum-cost path.
