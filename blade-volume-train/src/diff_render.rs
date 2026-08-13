@@ -5947,7 +5947,6 @@ fn fit_appearance_pixel_batched(
     }
     let setup_start = std::time::Instant::now();
     let mut position_grad_accum = vec![0.0f32; model.points.len()];
-    let mut position_grad_scratch = vec![0.0f32; model.points.len() * 3];
     let mut collect_powerfoam_point_error = model.radii.is_some()
         && densify
             .is_some_and(|value| is_densify_schedule_active(value, model.points.len(), steps_done));
@@ -6100,6 +6099,12 @@ fn fit_appearance_pixel_batched(
         if migrated_legacy_sh {
             log::info!("resume: migrated legacy per-component SH parameters and Adam moments");
         }
+    }
+    if !collect_powerfoam_point_error
+        && densify
+            .is_some_and(|value| is_densify_schedule_active(value, model.points.len(), steps_done))
+    {
+        session.set_adam_grouped_grad_norm("positions", 3);
     }
 
     // `pixel_idx_per_step` is constant across all training steps —
@@ -6416,22 +6421,6 @@ fn fit_appearance_pixel_batched(
             losses.push(loss);
             phase_timings.gpu_step_wait += gpu_step_start.elapsed();
 
-            let gradient_readback_start = std::time::Instant::now();
-            if densify_schedule_active
-                && !collect_powerfoam_point_error
-                && session.has_param_grad("positions")
-            {
-                session.read_param_grad("positions", &mut position_grad_scratch);
-                for (i, accumulated) in position_grad_accum.iter_mut().enumerate() {
-                    let base = i * 3;
-                    let x = position_grad_scratch[base];
-                    let y = position_grad_scratch[base + 1];
-                    let z = position_grad_scratch[base + 2];
-                    *accumulated += (x * x + y * y + z * z).sqrt();
-                }
-            }
-            phase_timings.gradient_readback += gradient_readback_start.elapsed();
-
             if step == 0 || (step + 1).is_multiple_of(log_every) {
                 let window: usize = log_every.min(losses.len());
                 let recent_avg: f32 =
@@ -6594,6 +6583,11 @@ fn fit_appearance_pixel_batched(
                 } else {
                     vec![f32::INFINITY; n_old]
                 };
+                if !collect_powerfoam_point_error {
+                    let gradient_readback_start = std::time::Instant::now();
+                    position_grad_accum = session.read_adam_grouped_grad_norm("positions");
+                    phase_timings.gradient_readback += gradient_readback_start.elapsed();
+                }
                 let densify_score = if collect_powerfoam_point_error {
                     adam_snap
                         .entries
@@ -6639,7 +6633,6 @@ fn fit_appearance_pixel_batched(
                 }
                 phase_timings.topology += topology_start.elapsed();
                 position_grad_accum = vec![0.0f32; model.points.len()];
-                position_grad_scratch = vec![0.0f32; model.points.len() * 3];
                 collect_powerfoam_point_error = model.radii.is_some()
                     && is_densify_schedule_active(d, model.points.len(), steps_done);
 
@@ -6719,6 +6712,11 @@ fn fit_appearance_pixel_batched(
                 );
                 session = rebuilt.0;
                 gpu_cloud = rebuilt.1;
+                if !collect_powerfoam_point_error
+                    && is_densify_schedule_active(d, model.points.len(), steps_done)
+                {
+                    session.set_adam_grouped_grad_norm("positions", 3);
+                }
                 // pixel_idx_per_step is constant across cycles — re-upload
                 // to the fresh session.
                 session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);

@@ -812,3 +812,21 @@ and cannot establish reference-schedule quality; their artifact metrics remain
 valid historical results. All matched runs use 128-step paths with zero
 truncation, and their 6 GiB scopes report zero swap, pressure, OOM, or GPU
 faults. Raw evidence is ignored under `target/audit-runs/dc-lr-fix-gate/`.
+
+The unweighted densification score is now accumulated on the GPU by the
+existing Adam dispatch and downloaded once per growth boundary. This is exact
+temporal accumulation, not gradient sampling, and adds no Meganeura operation,
+shader group, entry point, pipeline variant, or dispatch. The accepted raw
+evidence is under `target/audit-runs/adam-grouped-grad-norm-v1/`:
+
+- Bonsai step 4,000→5,500: 84.741→41.164 seconds training,
+  44.134→0.064 seconds gradient readback, 150,220→150,196 cells, and
+  16.0160→16.0187 dB selected held-out PSNR.
+- Room step 2,750→2,875: 123.183→97.391 seconds training,
+  25.007→0.007 seconds gradient readback, the same 735,103-cell target, and
+  22.7424→22.7397 dB selected held-out PSNR.
+
+Every-two-step and every-four-step CPU sampling controls are rejected: they
+reduce the Bonsai segment to 61.406 and 55.456 seconds but both finish near
+15.895 dB held out. Their raw evidence is under
+`target/audit-runs/position-gradient-sample{2,4}-v1/`.

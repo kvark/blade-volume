@@ -1069,3 +1069,27 @@ mean/tail deltas of -0.28/-0.35, +0.33/+0.24, -1.19/-0.92, -1.00/-1.05, and
 +0.04/+0.02 dB. Both prototypes are removed. Filtering derivatives across
 inconsistent density modes changes orientation but cannot decide which mode is
 the shared surface.
+
+Unweighted densification no longer downloads the complete position gradient
+after every optimizer step. Meganeura `419e928` optionally folds an exact
+grouped gradient-norm accumulator into its existing Adam shader: for the
+`[N,3]` position table, one lane per point adds
+`sqrt(gx² + gy² + gz²)` to a persistent `N`-element buffer. Blade reads that
+buffer once at the densification boundary. This adds no graph operation,
+shader group, entry point, pipeline variant, or extra dispatch.
+
+The matched three-round Bonsai segment falls from 84.741 to 41.164 seconds;
+gradient readback falls from 44.134 to 0.064 seconds and selected held-out PSNR
+changes from 16.0160 to 16.0187 dB. Room's final 698,940→735,103 growth
+boundary falls from 123.183 to 97.391 seconds; readback falls from 25.007 to
+0.007 seconds and held-out PSNR changes from 22.7424 to 22.7397 dB. Sampling
+the old CPU readback every two or four steps was faster but lost about 0.12 dB
+on Bonsai after three growth rounds, so temporal subsampling is rejected.
+
+The same Meganeura change fixes the previously suspicious local test crashes.
+The default builder now shares one process GPU context instead of creating a
+validated Vulkan instance/device in every parallel test. The formerly
+crashing 43-test `gpu_smoke` target passes at normal parallelism in 2.24
+seconds with an 888 MB scope peak; its serial workaround took 13.77 seconds.
+The complete all-target gate passes in its 12 GiB cgroup with zero swap, OOM,
+throttling, or recorded GPU faults.
