@@ -1672,3 +1672,20 @@ On the fixed 2,179-particle cloud, fit time rises only 1.606 to 1.650 seconds
 (2.8%); the isolated scope peaks at 1.06 GB with zero swap or OOM events.
 `FitOptions` therefore defaults to 64 candidates. This is a one-line policy
 change on the same graph and index, not another shader or operation variant.
+
+The direct graph is generalized in place from one isotropic scale to three
+fixed-rotation anisotropic scales. The existing extracted clouds already carry
+a useful frame: local Y has median/mean absolute alignment 1.000/0.887 with the
+nearest training-truth normal. At scale rate 0.005, matched five-cloud
+continuations improve the held samples over fixed scales by 2.469, 1.009,
+1.263, 1.643, and 1.443 dB. Median learned axis ratio is 1.22--1.24 and p90 is
+1.81--1.89. Replacing every learned ellipsoid with a volume-equivalent sphere
+changes held PSNR by -0.239, -0.115, -0.064, -0.159, and +0.050 dB: most of
+the gain comes from correcting support size, while directional covariance adds
+0.105 dB on average. Larger scale rates over-expand support and are rejected.
+
+The former `fit_isotropic`/`build_isotropic_graph` surface is renamed to
+`fit`/`build_graph` instead of adding parallel APIs. Rotations stay fixed host
+inputs and isotropic clouds remain the equal-scale special case. No graph
+operation, shader, shader entry, binding, pipeline variant, or dependency is
+added.

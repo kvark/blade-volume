@@ -35,7 +35,7 @@ pub struct RayResponse {
     pub response: f32,
 }
 
-/// Fixed-width candidate table consumed by [`build_isotropic_graph`].
+/// Fixed-width candidate table consumed by [`build_graph`].
 #[derive(Clone, Debug)]
 pub struct FlatCandidates {
     pub indices: Vec<u32>,
@@ -146,10 +146,10 @@ impl CandidateGrid {
     }
 }
 
-/// Differentiable outputs and parameters of the minimal isotropic Gaussian
-/// image-formation graph.
+/// Differentiable outputs and parameters of the Gaussian image-formation
+/// graph.
 #[derive(Clone, Copy, Debug)]
-pub struct IsotropicGraph {
+pub struct GaussianGraph {
     pub loss: mn::NodeId,
     pub pixels: [mn::NodeId; 3],
     pub opacity: mn::NodeId,
@@ -159,7 +159,7 @@ pub struct IsotropicGraph {
     pub sh: [mn::NodeId; 3],
 }
 
-/// Minimal optimizer settings for direct isotropic-Gaussian reconstruction.
+/// Minimal optimizer settings for direct Gaussian reconstruction.
 #[derive(Clone, Copy, Debug)]
 pub struct FitOptions {
     pub steps: usize,
@@ -612,20 +612,20 @@ pub fn render_rays(
     output
 }
 
-/// Build a direct, differentiable isotropic-Gaussian renderer using only
+/// Build a direct, differentiable anisotropic-Gaussian renderer using only
 /// Meganeura's existing graph operations.
 ///
 /// Candidate order is a discrete input and must be refreshed by the caller as
 /// particles move. Positions, scales, opacity, SH-0 colour, exact ray response,
 /// and front-to-back compositing are all inside the graph.
-pub fn build_isotropic_graph(
+pub fn build_graph(
     g: &mut mn::Graph,
     particles: usize,
     pixels: usize,
     candidates_per_pixel: usize,
     opacity_loss_weight: f32,
     background: [f32; 3],
-) -> IsotropicGraph {
+) -> GaussianGraph {
     assert!(particles > 0);
     assert!(pixels > 0);
     assert!(candidates_per_pixel > 0);
@@ -639,9 +639,11 @@ pub fn build_isotropic_graph(
     let ray_directions = g.input("ray_directions", &[pixels, 3]);
     let labels = g.input("labels", &[pixels, 3]);
     let target_alpha = g.input("target_alpha", &[pixels, 1]);
+    let rotation_rows =
+        ["rotation_x", "rotation_y", "rotation_z"].map(|name| g.input(name, &[particles, 3]));
 
     let positions = g.parameter("positions", &[particles, 3]);
-    let log_scales = g.parameter("log_scales", &[particles, 1]);
+    let log_scales = g.parameter("log_scales", &[particles, 3]);
     let opacity_logits = g.parameter("opacity_logits", &[particles, 1]);
     let sh = ["sh_r", "sh_g", "sh_b"].map(|name| g.parameter(name, &[particles, 1]));
 
@@ -650,24 +652,50 @@ pub fn build_isotropic_graph(
     let directions = g.embedding(pixel_indices, ray_directions);
     let negative_centers = g.neg(centers);
     let relative_origins = g.add(origins, negative_centers);
-    let origin_direction = g.mul(relative_origins, directions);
-    let numerator = g.sum_inner(origin_direction);
-    let numerator = g.neg(numerator);
-    let direction_squared = g.mul(directions, directions);
-    let denominator = g.sum_inner(direction_squared);
-    let depth = g.div(numerator, denominator);
-    let depth_xyz = g.broadcast_inner(depth, 3);
-    let along_ray = g.mul(depth_xyz, directions);
-    let closest = g.add(relative_origins, along_ray);
-    let closest_squared = g.mul(closest, closest);
-    let distance_squared = g.sum_inner(closest_squared);
 
     let raw_scales = g.embedding(candidate_indices, log_scales);
     let scales = g.softplus(raw_scales, 1.0);
-    let scale_floor = g.constant(vec![MIN_SCALE; rows], &[rows, 1]);
+    let scale_floor = g.constant(vec![MIN_SCALE; rows * 3], &[rows, 3]);
     let scales = g.add(scales, scale_floor);
-    let scale_squared = g.mul(scales, scales);
-    let normalized_distance_squared = g.div(distance_squared, scale_squared);
+    let scale_x = g.split_a(scales, rows as u32, 1, 2, 1);
+    let scale_x = g.reshape(scale_x, &[rows, 1]);
+    let scale_yz = g.split_b(scales, rows as u32, 1, 2, 1);
+    let scale_y = g.split_a(scale_yz, rows as u32, 1, 1, 1);
+    let scale_y = g.reshape(scale_y, &[rows, 1]);
+    let scale_z = g.split_b(scale_yz, rows as u32, 1, 1, 1);
+    let scale_z = g.reshape(scale_z, &[rows, 1]);
+
+    let mut gaussian_origins = Vec::with_capacity(3);
+    let mut gaussian_directions = Vec::with_capacity(3);
+    for (rotation_row, scale) in rotation_rows.into_iter().zip([scale_x, scale_y, scale_z]) {
+        let basis = g.embedding(candidate_indices, rotation_row);
+        let origin_product = g.mul(relative_origins, basis);
+        let local_origin = g.sum_inner(origin_product);
+        gaussian_origins.push(g.div(local_origin, scale));
+        let direction_product = g.mul(directions, basis);
+        let local_direction = g.sum_inner(direction_product);
+        gaussian_directions.push(g.div(local_direction, scale));
+    }
+    let mut numerator_terms = Vec::with_capacity(3);
+    let mut denominator_terms = Vec::with_capacity(3);
+    for (&origin, &direction) in gaussian_origins.iter().zip(&gaussian_directions) {
+        numerator_terms.push(g.mul(origin, direction));
+        denominator_terms.push(g.mul(direction, direction));
+    }
+    let numerator_xy = g.add(numerator_terms[0], numerator_terms[1]);
+    let numerator = g.add(numerator_xy, numerator_terms[2]);
+    let numerator = g.neg(numerator);
+    let denominator_xy = g.add(denominator_terms[0], denominator_terms[1]);
+    let denominator = g.add(denominator_xy, denominator_terms[2]);
+    let depth = g.div(numerator, denominator);
+    let mut distance_terms = Vec::with_capacity(3);
+    for (&origin, &direction) in gaussian_origins.iter().zip(&gaussian_directions) {
+        let along_ray = g.mul(depth, direction);
+        let closest = g.add(origin, along_ray);
+        distance_terms.push(g.mul(closest, closest));
+    }
+    let distance_xy = g.add(distance_terms[0], distance_terms[1]);
+    let normalized_distance_squared = g.add(distance_xy, distance_terms[2]);
     let negative_half = g.constant(vec![-0.5_f32; rows], &[rows, 1]);
     let exponent = g.mul(normalized_distance_squared, negative_half);
     let response = g.exp(exponent);
@@ -744,7 +772,7 @@ pub fn build_isotropic_graph(
         accumulated_opacity,
     ]);
 
-    IsotropicGraph {
+    GaussianGraph {
         loss,
         pixels,
         opacity: accumulated_opacity,
@@ -773,7 +801,7 @@ fn validate_fit(
 ) -> Result<(), String> {
     model.validate()?;
     if model.sh_degree != 0 {
-        return Err("direct isotropic Gaussian fitting currently requires SH degree 0".to_string());
+        return Err("direct Gaussian fitting currently requires SH degree 0".to_string());
     }
     if let Some((index, point)) = model
         .points
@@ -786,18 +814,10 @@ fn validate_fit(
             point.w
         ));
     }
-    let transforms = model
+    model
         .transforms
         .as_ref()
         .ok_or_else(|| "direct Gaussian fitting requires model transforms".to_string())?;
-    for (index, scale) in transforms.scales.iter().enumerate() {
-        let tolerance = 1.0e-4 * scale.max_element();
-        if (scale.x - scale.y).abs() > tolerance || (scale.x - scale.z).abs() > tolerance {
-            return Err(format!(
-                "Gaussian {index} is anisotropic; the minimal direct fitter only supports equal scales"
-            ));
-        }
-    }
     if view_indices.is_empty() {
         return Err("direct Gaussian fitting needs at least one view".to_string());
     }
@@ -855,7 +875,11 @@ fn model_parameters(model: &vol::PointCloudModel) -> [Vec<f32>; 6] {
     let log_scales = transforms
         .scales
         .iter()
-        .map(|scale| inverse_softplus((scale.x - MIN_SCALE).max(1.0e-8)))
+        .flat_map(|scale| {
+            scale
+                .to_array()
+                .map(|value| inverse_softplus((value - MIN_SCALE).max(1.0e-8)))
+        })
         .collect();
     let opacity_logits = model
         .points
@@ -891,10 +915,29 @@ fn set_model_parameters(session: &mut mn::Session, model: &vol::PointCloudModel)
     session.set_parameter("sh_b", &sh_b);
 }
 
+fn set_rotation_inputs(session: &mut mn::Session, model: &vol::PointCloudModel) {
+    let rotations = &model.transforms.as_ref().unwrap().rotations;
+    let mut rows: [Vec<f32>; 3] = std::array::from_fn(|_| Vec::with_capacity(rotations.len() * 3));
+    for &rotation in rotations {
+        for (values, axis) in rows
+            .iter_mut()
+            .zip([glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z])
+        {
+            values.extend((rotation.normalize() * axis).to_array());
+        }
+    }
+    for (name, values) in ["rotation_x", "rotation_y", "rotation_z"]
+        .into_iter()
+        .zip(rows)
+    {
+        session.set_input(name, &values);
+    }
+}
+
 fn download_model(session: &mn::Session, model: &mut vol::PointCloudModel) {
     let count = model.points.len();
     let mut positions = vec![0.0_f32; count * 3];
-    let mut log_scales = vec![0.0_f32; count];
+    let mut log_scales = vec![0.0_f32; count * 3];
     let mut opacity_logits = vec![0.0_f32; count];
     let mut sh: [Vec<f32>; 3] = std::array::from_fn(|_| vec![0.0_f32; count]);
     session.read_param("positions", &mut positions);
@@ -908,13 +951,16 @@ fn download_model(session: &mn::Session, model: &mut vol::PointCloudModel) {
         let position = glam::Vec3::from_slice(&positions[3 * index..3 * index + 3]);
         let opacity = MAX_ALPHA / (1.0 + (-opacity_logits[index]).exp());
         model.points[index] = position.extend(opacity);
-        let scale = MIN_SCALE
-            + if log_scales[index] > 20.0 {
-                log_scales[index]
-            } else {
-                log_scales[index].exp().ln_1p()
-            };
-        transforms.scales[index] = glam::Vec3::splat(scale);
+        let scale = glam::Vec3::from_array(std::array::from_fn(|axis| {
+            let value = log_scales[3 * index + axis];
+            MIN_SCALE
+                + if value > 20.0 {
+                    value
+                } else {
+                    value.exp().ln_1p()
+                }
+        }));
+        transforms.scales[index] = scale;
         for (channel, values) in sh.iter().enumerate() {
             model.sh_coefficients[3 * index + channel] = values[index];
         }
@@ -1015,15 +1061,15 @@ fn read_loss(session: &mn::Session) -> f32 {
     loss[0]
 }
 
-/// Fit an isotropic Gaussian light field directly to posed RGB images.
+/// Fit a Gaussian light field directly to posed RGB images.
 ///
 /// This is intentionally the small baseline: fixed particle count, SH-0, and
 /// exact CPU response testing after private screen-tile culling. It establishes
 /// whether direct Gaussian image formation improves reconstruction before
-/// anisotropy, higher-order SH, or densification add implementation surface
-/// area. Capture radiance is converted from linear light to the display-referred
-/// sRGB convention stored by [`vol::PointCloudModel`].
-pub fn fit_isotropic(
+/// learned rotations, higher-order SH, or densification add implementation
+/// surface area. Capture radiance is converted from linear light to the
+/// display-referred sRGB convention stored by [`vol::PointCloudModel`].
+pub fn fit(
     model: &mut vol::PointCloudModel,
     capture: &crate::inverse::capture::Capture,
     view_indices: &[usize],
@@ -1032,7 +1078,7 @@ pub fn fit_isotropic(
 ) -> Result<FitStats, String> {
     validate_fit(model, capture, view_indices, options)?;
     let mut graph = mn::Graph::new();
-    build_isotropic_graph(
+    build_graph(
         &mut graph,
         model.points.len(),
         options.batch_size,
@@ -1049,6 +1095,7 @@ pub fn fit_isotropic(
         },
     );
     set_model_parameters(&mut session, model);
+    set_rotation_inputs(&mut session, model);
     let mut candidate_index =
         CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
 
@@ -1368,14 +1415,14 @@ mod tests {
     }
 
     #[test]
-    fn isotropic_graph_matches_oracle_and_has_position_gradient() {
+    fn anisotropic_graph_matches_oracle_and_has_position_gradient() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = crate::fit::try_init_gpu() else {
-            eprintln!("skipping isotropic Gaussian graph test: no GPU");
+            eprintln!("skipping anisotropic Gaussian graph test: no GPU");
             return;
         };
         let mut graph = mn::Graph::new();
-        build_isotropic_graph(&mut graph, 2, 1, 2, 0.0, [0.0; 3]);
+        build_graph(&mut graph, 2, 1, 2, 0.0, [0.0; 3]);
         let (mut session, _report) = mn::build(
             &graph,
             mn::SessionConfig {
@@ -1386,8 +1433,17 @@ mod tests {
         );
 
         session.set_parameter("positions", &[0.25, 0.0, 2.0, 0.0, 0.0, 4.0]);
-        let unit_scale_preimage = (1.0_f32.exp() - 1.0).ln();
-        session.set_parameter("log_scales", &[unit_scale_preimage; 2]);
+        let front_scale = glam::Vec3::new(0.5, 1.5, 2.0);
+        let back_scale = glam::Vec3::ONE;
+        let log_scales: Vec<f32> = [front_scale, back_scale]
+            .into_iter()
+            .flat_map(|scale| {
+                scale
+                    .to_array()
+                    .map(|value| inverse_softplus(value - MIN_SCALE))
+            })
+            .collect();
+        session.set_parameter("log_scales", &log_scales);
         session.set_parameter("opacity_logits", &[0.0; 2]);
         let bright = 0.5 / SH_C0;
         session.set_parameter("sh_r", &[bright, -bright]);
@@ -1400,12 +1456,30 @@ mod tests {
         session.set_input("ray_directions", &[0.0, 0.0, 1.0]);
         session.set_input("labels", &[0.2, 0.2, 0.1]);
         session.set_input("target_alpha", &[0.0]);
+        let front_rotation = glam::Quat::from_rotation_y(0.6);
+        for (name, axis) in [
+            ("rotation_x", glam::Vec3::X),
+            ("rotation_y", glam::Vec3::Y),
+            ("rotation_z", glam::Vec3::Z),
+        ] {
+            let values: Vec<f32> = [front_rotation * axis, axis]
+                .into_iter()
+                .flat_map(|value| value.to_array())
+                .collect();
+            session.set_input(name, &values);
+        }
         session.step();
         session.wait();
 
-        let scale = 1.0 + MIN_SCALE;
-        let response = (-0.5 * 0.25_f32.powi(2) / scale.powi(2)).exp();
-        let front_alpha = 0.5 * response * MAX_ALPHA;
+        let response = ray_response(
+            glam::Vec3::ZERO,
+            glam::Vec3::Z,
+            glam::Vec3::new(0.25, 0.0, 2.0),
+            front_rotation,
+            front_scale,
+        )
+        .unwrap();
+        let front_alpha = 0.5 * response.response * MAX_ALPHA;
         let back_alpha = 0.5 * MAX_ALPHA;
         let expected = [
             front_alpha,
@@ -1423,19 +1497,25 @@ mod tests {
         session.read_param_grad("positions", &mut position_gradient);
         assert!(position_gradient.iter().all(|value| value.is_finite()));
         assert!(position_gradient[0].abs() > 1.0e-5);
+        let mut scale_gradient = [0.0_f32; 6];
+        session.read_param_grad("log_scales", &mut scale_gradient);
+        assert!(scale_gradient.iter().all(|value| value.is_finite()));
+        assert!(scale_gradient[..3].iter().any(|value| value.abs() > 1.0e-5));
     }
 
     #[test]
     fn direct_fit_recovers_multiview_position() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = crate::fit::try_init_gpu() else {
-            eprintln!("skipping direct isotropic Gaussian fit test: no GPU");
+            eprintln!("skipping direct Gaussian fit test: no GPU");
             return;
         };
         let bright = (0.8 - 0.5) / SH_C0;
         let mut truth = model(vec![glam::Vec4::new(0.0, 0.0, 4.0, 0.8)]);
         truth.sh_coefficients.fill(bright);
-        truth.transforms.as_mut().unwrap().scales[0] = glam::Vec3::splat(0.45);
+        let transforms = truth.transforms.as_mut().unwrap();
+        transforms.rotations[0] = glam::Quat::from_rotation_y(0.4);
+        transforms.scales[0] = glam::Vec3::new(0.35, 0.55, 0.45);
         let capture = synthetic_capture(&truth);
 
         let mut fitted = truth.clone();
@@ -1443,7 +1523,7 @@ mod tests {
         let initial_distance = fitted.points[0]
             .truncate()
             .distance(truth.points[0].truncate());
-        let stats = fit_isotropic(
+        let stats = fit(
             &mut fitted,
             &capture,
             &[0, 1],
