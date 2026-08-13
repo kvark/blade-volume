@@ -858,3 +858,18 @@ observed normals under two copies of one light, while the corrected path
 reports no supported normals and emits a byte-identical scene. Distinct known
 lights retain the analytical normal-recovery result and the earlier synthetic
 0.37--0.68 dB unseen-light gain.
+
+Two attempts to extend that result beyond directly constrained particles are
+rejected by a four-cloud held-light gate. Replacing the squared photometric
+residual with a 0.05 Huber loss changes truth-normal RMSE by only -0.16 to
++0.04 degrees and loses 0.03 dB on the fixed mean plus 0.07/0.09 dB on the
+fourth mean/tail. Local propagation has a real geometric signal: fully copying
+four-light normals from coherent tangent-plane neighbours improves normal RMSE
+by 5.75--7.81 degrees. It also loses 0.6--0.8 coverage points and regresses
+three held-light tails; increasing support to 1.7 cells restores coverage but
+still loses 0.27--0.34 dB on difficult tails. A strict four-neighbour, 20%
+blend preserves coverage and improves all four normal RMSEs by 0.67--0.94
+degrees, but exact paired scoring still changes the fourth mean/tail by
++0.0020/-0.0068 dB. All implementations are removed. Unobserved normals need
+an objective that also constrains their rendered support and appearance, not
+spatial diffusion of otherwise accurate measurements.
