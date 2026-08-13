@@ -1380,3 +1380,47 @@ while improving their static-LF aggregate. All four record zero truncation at
 on one cloud, so it remains rejected. The synthetic gate can now persist the
 continued light field with `--surface-powerfoam-output`, matching production
 `reconstruct` and preventing a PBR-only performance decision.
+
+The first honest single-light continuation audit makes the remaining ambiguity
+explicit. Without photometric normals or the later multi-light rendered-normal
+oracle, the four selected clouds finish at 0.5842--0.6213 position RMSE but
+63.77--67.15 degrees normal RMSE; held-light PBR spans 19.18--20.33 dB. The
+ordinary phone-capture path therefore remains much less geometrically accurate
+than the calibrated-repeat gate. Removing the selected view-facing normal loss
+speeds continuation by about 11%, but worsens truth-normal RMSE by 1.19--1.59
+degrees on every cloud and regresses held-light PBR on three. Doubling its
+normal rate also worsens every normal gate by 1.5--2.3 degrees. The selected
+0.1 loss weight and 0.1 normal-rate ratio remain.
+
+Appearance-derived material shortcuts do not repair that single-light gap.
+Assigning unseen Gaussian particles from the nearest recovered-light palette
+colour loses 0.02--0.06 dB held-light PBR on all four clouds. Treating the
+trained PowerFoam SH field as dense material observations nearly eliminates
+unseen particles, but loses 0.9--1.2 dB because the static field correctly
+bakes the training illumination into appearance. Both prototypes are removed;
+the light field and relightable material surface remain distinct outputs.
+
+A staged geometry-only continuation with the converged density and SH frozen
+is also rejected. A 600-update, 0.0025-rate surface-offset pass worsens position
+RMSE 0.6213→0.6220 and held-light mean/worst 19.18/18.99→19.09/18.90 dB. A
+conservative 150-update, 0.0005-rate pass leaves the mean effectively neutral
+but loses the tail 18.99→18.97 dB. In both cases the sampled frozen-field loss
+fails to show a stable improvement. Finally, freezing support radii removes the
+full geometry Jacobians and cuts the same 1,800-update pass from 17.5 to 12.3
+seconds, but worsens normal RMSE 65.13→66.36 degrees, coverage by 0.5 point,
+and held-light mean/worst to 18.93/18.68 dB. The prototypes are removed. Radius
+learning is expensive but useful; the next performance work must optimize its
+existing Jacobian path, while the next fidelity work still needs independent
+dense multi-view correspondence rather than another rendered-coordinate knob.
+
+Per-dispatch profiling at the selected 192-entry row narrows that performance
+work further. The graph step is about 6.0 ms on the RTX 5070. Three existing
+four-term, two-gather surface-colour reductions account for roughly 1.15 ms;
+the three radius-gradient `ScatterAddAtomicRowMul` passes account for another
+1.06--1.17 ms. A Meganeura scheduling prototype that stopped cloning shared
+pointwise producers into compatible reductions materialized two extra passes,
+raised each surface-colour reduction from about 0.38 to 0.44--0.47 ms, and
+raised the complete graph step to 6.21--6.28 ms. The prototype and diagnostic
+hooks are removed. Existing code-generated reduction fusion is beneficial;
+future work should improve the generic multi-gather reduction or atomic
+accumulation itself, not add a Blade-specific op or pre-made shader variant.

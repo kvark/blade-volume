@@ -2303,6 +2303,18 @@ Broken into sub-steps:
   unchanged position/coverage, and neutral-to-positive median static-LF and
   held-light PBR scores. A faster 160-entry row is rejected by a 0.09 dB
   static-LF tail regression.
+  A follow-up single-light audit keeps the normal prior and trainable support
+  radii: removing either is faster but consistently worsens truth geometry and
+  held-light output. Freezing the converged appearance for a separate offset
+  pass and deriving materials from that static field are also rejected. The
+  continuation therefore retains one representation and one joint schedule;
+  no staged optimizer mode, shader variant, or material fallback is added.
+  A dispatch-level follow-up also rejects materializing the shared expressions
+  feeding the surface-colour reductions: it adds two passes and slows a GPU
+  step from about 6.0 to 6.21--6.28 ms. The retained Meganeura path discovers
+  the fused multi-gather reductions through code generation; the remaining
+  performance targets are their generic implementation and the radius-gradient
+  atomic accumulation, not new operation or shader-entry variants.
 
 #### M3d — Online viewer attach
 
