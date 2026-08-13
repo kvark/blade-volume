@@ -121,7 +121,8 @@ fn rendered_loss(
 }
 
 /// Refine the small shared diffuse-material table against complete production
-/// renders of the training photographs.
+/// renders of the training photographs, first at `step` and then at half that
+/// step.
 pub fn refine_rendered_materials(
     scene: &mut score::Scene,
     capture: &capture::Capture,
@@ -152,36 +153,38 @@ pub fn refine_rendered_materials(
     let mut coordinates = 0;
     let mut proposals = 0;
     let mut changed = 0;
-    for material in 0..scene.model.materials.len() {
-        for channel in 0..3 {
-            coordinates += 1;
-            let original = scene.model.materials[material].albedo[channel];
-            let candidates = [(original - step).max(0.0), (original + step).min(1.0)];
-            let mut best = original;
-            let mut best_loss = loss;
-            let mut uploaded = original;
-            for candidate in candidates {
-                if candidate == original {
-                    continue;
+    for step in [step, 0.5 * step] {
+        for material in 0..scene.model.materials.len() {
+            for channel in 0..3 {
+                coordinates += 1;
+                let original = scene.model.materials[material].albedo[channel];
+                let candidates = [(original - step).max(0.0), (original + step).min(1.0)];
+                let mut best = original;
+                let mut best_loss = loss;
+                let mut uploaded = original;
+                for candidate in candidates {
+                    if candidate == original {
+                        continue;
+                    }
+                    scene.model.materials[material].albedo[channel] = candidate;
+                    renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
+                    uploaded = candidate;
+                    let candidate_loss =
+                        rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+                    proposals += 1;
+                    if candidate_loss < best_loss {
+                        best_loss = candidate_loss;
+                        best = candidate;
+                    }
                 }
-                scene.model.materials[material].albedo[channel] = candidate;
-                renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
-                uploaded = candidate;
-                let candidate_loss =
-                    rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
-                proposals += 1;
-                if candidate_loss < best_loss {
-                    best_loss = candidate_loss;
-                    best = candidate;
+                scene.model.materials[material].albedo[channel] = best;
+                if uploaded != best {
+                    renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
                 }
-            }
-            scene.model.materials[material].albedo[channel] = best;
-            if uploaded != best {
-                renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
-            }
-            if best != original {
-                changed += 1;
-                loss = best_loss;
+                if best != original {
+                    changed += 1;
+                    loss = best_loss;
+                }
             }
         }
     }
@@ -1366,8 +1369,8 @@ mod tests {
         recolored.model.materials[0].albedo = [0.6, 0.4, 0.2];
         let stats = refine_rendered_materials(&mut recolored, &capture, &[0, 1], 0, 0.1)
             .expect("material refinement");
-        assert_eq!(stats.coordinates, 3);
-        assert_eq!(stats.proposals, 6);
+        assert_eq!(stats.coordinates, 6);
+        assert_eq!(stats.proposals, 12);
         assert_eq!(stats.changed, 2);
         assert!(stats.final_loss < stats.initial_loss);
         for (actual, expected) in recolored.model.materials[0]

@@ -910,21 +910,22 @@ joint material objective should render or solve those mixtures explicitly.
 
 The first direct rendered-material objective is selected as an opt-in final
 pass. `--render-refine-materials` coordinate descends only the RGB albedo of
-the small shared palette, with a fixed 0.025 step, against complete production
-renders of every training camera. Geometry, light, assignments, roughness, and
-specular response stay fixed. This differs from the rejected appearance-inside-
-geometry prototype: one six-material pass evaluates at most 36 proposals,
-rather than re-solving appearance for thousands of geometry proposals.
+the small shared palette, first with a 0.025 step and then 0.0125, against
+complete production renders of every training camera. Geometry, light,
+assignments, roughness, and specular response stay fixed. This differs from
+the rejected appearance-inside-geometry prototype: one six-material pass
+evaluates at most 72 proposals, rather than re-solving appearance for thousands
+of geometry proposals.
 
 Four exact known-light synthetic pairs improve held-light mean/worst PSNR by
-0.091/0.080, 0.104/0.106, 0.122/0.105, and 0.107/0.089 dB; covered-pixel PSNR
-improves by 0.127--0.154 dB with identical coverage. The transfer gate at
+0.120/0.107, 0.126/0.139, 0.152/0.134, and 0.154/0.131 dB; covered-pixel PSNR
+improves by 0.143--0.195 dB with identical coverage. The transfer gate at
 128² and every-eighth held views is also positive: Bonsai improves held
-mean/worst/covered PSNR by 0.077/0.070/0.096 dB and Room by
-0.133/0.097/0.149 dB, again with identical coverage. The six-material pass
-takes 1.4 seconds on each real scene. It remains explicit because it optimizes
-training images and the absolute real-scene score is still low, but the
-consistent unseen-view result is enough to retain it.
+mean/worst/covered PSNR by 0.111/0.102/0.138 dB and Room by
+0.190/0.137/0.212 dB, again with identical coverage. The six-material pass
+takes 1.9--2.1 seconds on the real scenes. It remains explicit because it
+optimizes training images and the absolute real-scene score is still low, but
+the consistent unseen-view result is enough to retain it.
 
 The implementation adds one in-place material-buffer update to the existing
 relight tracer and an oracle proves its output is byte-identical to rebuilding

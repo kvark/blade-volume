@@ -178,7 +178,8 @@ materials with those normals. Photograph names and selected poses must match.
 `--render-refine-materials` optionally finishes a small shared material table
 against complete production renders of every training view. It coordinate
 descends the three diffuse albedo channels by a fixed 0.025 step while holding
-geometry, light, assignments, roughness, and specular response fixed. Each
+geometry, light, assignments, roughness, and specular response fixed, then
+repeats at 0.0125 to resolve values between the coarse candidates. Each
 proposal updates only the existing material buffer; it does not rebuild the
 acceleration structures or add a shader, operation, bind-group, or pipeline
 variant. This is deliberately a final pass for a small palette, not a scalable
