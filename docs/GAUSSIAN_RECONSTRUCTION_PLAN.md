@@ -988,3 +988,15 @@ Every exact held-light mean/tail is below the selected pass, including
 to fit physical quantities in linear radiance; this final coordinate pass is
 explicitly selected for rendered output quality, where sRGB is the measured
 objective.
+
+Widening the depth-map derivative does not recover the missing surface either.
+A symmetric left/right and up/down derivative improves truth position by
+0.006--0.014 world units and normal RMSE by 0.6--1.6 degrees on four of five
+fixed clouds, but requiring all four neighbours removes 13--16% of the fused
+particles, costs about two coverage points, and regresses four held-light
+means. Falling back to the original one-sided derivative wherever the extra
+samples are unavailable preserves support exactly, yet produces held-light
+mean/tail deltas of -0.28/-0.35, +0.33/+0.24, -1.19/-0.92, -1.00/-1.05, and
++0.04/+0.02 dB. Both prototypes are removed. Filtering derivatives across
+inconsistent density modes changes orientation but cannot decide which mode is
+the shared surface.
