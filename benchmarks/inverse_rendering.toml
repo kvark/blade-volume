@@ -3517,6 +3517,122 @@ room_test_coverage = [0.938, 0.939, 0.940]
 room_seconds = [5.1, 10.0, 19.8]
 verdict = "not the conservative schedule: RGB improves monotonically, but Bonsai loses 0.1 coverage point from 16 rounds and synthetic support drift reaches 0.4 points; retain as explicit PSNR-first choices"
 
+[rendered_surface_refinement.localized_antithetic.rejected_normals]
+date = "2026-08-13"
+step_degrees = 1.0
+rounds = [2, 4, 8]
+position_8_held_light_psnr = [18.40, 19.31, 19.33, 18.79, 18.73]
+normal_8_held_light_psnr = [18.45, 19.37, 19.40, 18.84, 18.78]
+position_8_worst_held_light_psnr = [18.37, 19.09, 18.80, 18.75, 18.56]
+normal_8_worst_held_light_psnr = [18.42, 19.15, 18.86, 18.80, 18.61]
+position_8_normal_rmse_degrees = [66.28, 66.04, 67.31, 69.43, 66.31]
+normal_8_normal_rmse_degrees = [66.24, 66.01, 67.22, 69.33, 66.23]
+position_8_coverage = [0.536, 0.559, 0.554, 0.556, 0.555]
+normal_8_coverage = [0.535, 0.558, 0.553, 0.555, 0.555]
+bonsai_position_8_test_psnr = [14.30, 11.92]
+bonsai_normal_8_test_psnr = [14.30, 11.92]
+bonsai_position_8_coverage = 0.919
+bonsai_normal_8_coverage = 0.918
+bonsai_position_8_seconds = 2.7
+bonsai_normal_8_seconds = 5.2
+room_position_8_test_psnr = [14.24, 13.47]
+room_normal_8_test_psnr = [14.29, 13.53]
+room_position_8_coverage = 0.937
+room_normal_8_coverage = 0.937
+room_position_8_seconds = 2.6
+room_normal_8_seconds = 5.1
+peak_memory_bytes = 796524544
+swap_peak_bytes = 0
+memory_events = 0
+driver_faults = 0
+verdict = "reject and remove: the localized normal signal is real but doubles real-scene cost for negligible truth-normal correction and loses support on Bonsai and four synthetic clouds"
+
+[rendered_surface_refinement.localized_antithetic.rejected_radii]
+date = "2026-08-13"
+step_log_radius = 0.025
+rounds = 8
+position_held_light_psnr = [18.40, 19.31, 19.33, 18.79, 18.73]
+bidirectional_held_light_psnr = [18.89, 19.73, 19.81, 19.23, 19.19]
+position_coverage = [0.536, 0.559, 0.554, 0.556, 0.555]
+bidirectional_coverage = [0.534, 0.555, 0.550, 0.551, 0.552]
+bidirectional_bonsai_test_psnr = [14.38, 11.78]
+bidirectional_bonsai_coverage = 0.918
+bidirectional_room_test_psnr = [14.42, 13.70]
+bidirectional_room_coverage = 0.939
+expansion_8_held_light_psnr = [18.50, 19.31, 19.36, 18.77, 18.73]
+expansion_8_coverage = [0.551, 0.564, 0.561, 0.561, 0.561]
+expansion_8_where_hit_psnr = [18.03, 18.43, 18.63, 17.98, 17.80]
+expansion_8_bonsai_test_psnr = [14.30, 11.92]
+expansion_8_room_test_psnr = [14.35, 13.57]
+expansion_2_held_light_psnr = [18.43, 19.31, 19.34, 18.78, 18.73]
+expansion_2_coverage = [0.540, 0.561, 0.557, 0.558, 0.555]
+expansion_2_bonsai_test_psnr = [14.30, 11.92]
+expansion_2_room_test_psnr = [14.27, 13.49]
+peak_memory_bytes = 301678592
+swap_peak_bytes = 0
+memory_events = 0
+driver_faults = 0
+verdict = "reject and remove: bidirectional RGB fitting contracts support; expansion-only fitting blurs covered regions, is Bonsai-neutral, and still regresses one synthetic mean"
+
+[rendered_surface_refinement.localized_antithetic.rejected_footprints]
+date = "2026-08-13"
+selected_box_held_light_psnr = [18.40, 19.31, 19.33, 18.79, 18.73]
+kernel_ellipse_held_light_psnr = [18.43, 19.34, 19.37, 18.82, 18.76]
+correct_bounds_held_light_psnr = [18.40, 19.30, 19.32, 18.78, 18.71]
+selected_box_position_rmse = [0.6204, 0.5974, 0.5943, 0.5838, 0.5856]
+kernel_ellipse_position_rmse = [0.6201, 0.5969, 0.5948, 0.5840, 0.5858]
+correct_bounds_position_rmse = [0.6206, 0.5972, 0.5950, 0.5841, 0.5856]
+selected_box_bonsai_test_psnr = [14.30, 11.92]
+kernel_ellipse_bonsai_test_psnr = [14.25, 11.87]
+correct_bounds_bonsai_test_psnr = [14.29, 11.93]
+selected_box_room_test_psnr = [14.24, 13.47]
+kernel_ellipse_room_test_psnr = [14.21, 13.44]
+correct_bounds_room_test_psnr = [14.24, 13.46]
+selected_box_real_seconds = [2.7, 2.6]
+kernel_ellipse_real_seconds = [7.0, 5.8]
+correct_bounds_real_seconds = [2.7, 2.7]
+verdict = "reject and remove: an exact weighted ellipse over-focuses and is CPU-expensive; correct ellipse bounds dilute the contextual signal and regress held views"
+
+[synthetic_reconstruction.rgb_mask_foam.known_light_normals.rejected_view_aggregation]
+date = "2026-08-13"
+clouds = 4
+mean_normal_rmse_degrees = [53.96, 54.41, 56.31, 57.56]
+median_normal_rmse_degrees = [54.00, 54.54, 56.18, 57.45]
+trimmed_normal_rmse_degrees = [54.00, 54.55, 56.16, 57.36]
+mean_held_light_psnr = [18.97, 20.06, 19.65, 19.45]
+median_held_light_psnr = [19.07, 20.11, 19.93, 19.50]
+trimmed_held_light_psnr = [19.03, 20.06, 19.89, 19.50]
+mean_worst_held_light_psnr = [18.73, 19.64, 19.07, 19.23]
+median_worst_held_light_psnr = [18.76, 19.64, 19.29, 19.33]
+trimmed_worst_held_light_psnr = [18.76, 19.61, 19.28, 19.30]
+mean_coverage = [0.542, 0.566, 0.565, 0.564]
+median_coverage = [0.539, 0.563, 0.562, 0.562]
+trimmed_coverage = [0.540, 0.564, 0.564, 0.563]
+median_radius_1_62_held_light_psnr = [19.10, 20.08, 19.94, 19.45]
+median_radius_1_62_worst_held_light_psnr = [18.78, 19.63, 19.30, 19.25]
+median_radius_1_62_coverage = [0.542, 0.566, 0.564, 0.565]
+median_radius_1_62_normal_rmse_degrees = [54.04, 54.72, 56.33, 57.43]
+verdict = "reject and remove: robust view aggregation improves appearance by suppressing shared-surface disagreement, but loses coverage, strict tails, and truth orientation"
+
+[rendered_surface_refinement.localized_antithetic.prefix_sums]
+date = "2026-08-13"
+alternating_pairs = 3
+synthetic_clouds = 5
+synthetic_outputs_byte_identical = true
+bonsai_control_seconds = [2.7, 2.7, 2.7]
+bonsai_candidate_seconds = [2.2, 2.2, 2.2]
+bonsai_median_speedup_percent = 18.5
+bonsai_output_sha256 = "6a2b9fd08ee640f2b78ebe89a86e8c54294feba08433ece89d79c417ef9cfd5c"
+room_control_seconds = [2.6, 2.6, 2.6]
+room_candidate_seconds = [2.2, 2.3, 2.3]
+room_median_speedup_percent = 11.5
+room_output_sha256 = "b97f74625c1347849eac18ca75fec2b56264513f9dd7454c871c41a7ef114bf8"
+peak_memory_bytes = 318631936
+swap_peak_bytes = 0
+memory_events = 0
+driver_faults = 0
+verdict = "keep: one f64 summed-area table replaces repeated rectangle pixel scans, preserves every output byte, and improves both real-scene medians without a GPU variant"
+
 [rendered_surface_refinement.simultaneous.rejected_radius_batch]
 joint_64_synthetic_psnr = [18.53, 19.45, 19.46, 18.88, 18.79]
 joint_64_bonsai_psnr = [16.01, 14.58, 11.52]

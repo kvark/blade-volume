@@ -494,6 +494,43 @@ and synthetic support drift reaches 0.4 points. Eight is consequently the
 recommended coverage-preserving schedule. Larger values are valid explicit
 PSNR-first choices rather than a new default.
 
+Applying the localized antithetic method to one-degree tangent-space normal
+steps is still rejected. Eight rounds improve five synthetic held means/tails
+by 0.05--0.07 dB and truth-normal RMSE by only 0.03--0.10 degrees, but lose 0.1
+coverage point on four clouds. They double real-scene refinement time; Room
+gains 0.05/0.06 dB, while Bonsai stays at 14.30/11.92 dB and loses 0.1 coverage
+point. Two to four rounds preserve real coverage but are nearly neutral. The
+prototype adds no GPU variant, and is removed rather than adding another weak
+CLI coordinate.
+
+Localized log-radius updates remain rejected as well. Bidirectional updates
+gain 0.42--0.49 dB on synthetic means but lose 0.2--0.5 coverage points and
+drop the Bonsai tail by 0.14 dB. Expansion-only updates recover support but
+blur every synthetic covered region; even a two-round cap is Bonsai-neutral
+and regresses one synthetic mean. The existing exact, bounded radius polish
+therefore remains the only retained radius path.
+
+Two more literal footprint localizers are rejected. Kernel-weighting an affine
+projected ellipse loses 0.05 dB on Bonsai and 0.03 dB on Room and makes the CPU
+selection pass over twice as slow. Expanding only to the ellipse's correct
+axis-aligned bounds is cheap, but regresses four synthetic means and one metric
+on each real scene. The retained small rectangle deliberately supplies some
+neighbourhood context; it is not an exact Gaussian rasterization.
+
+Median and trimmed-mean view aggregation are also rejected for the known-light
+normal solver. They can gain up to 0.28 dB held-light mean, but consistently
+reduce coverage and worsen truth-normal RMSE on half or more of the tested
+clouds; support correction does not repair every tail. The ordinary per-light
+view mean remains selected because the disagreement is surface error, not
+independent radiometric noise.
+
+Rectangle localization uses one f64 summed-area table per antithetic error
+field. A Gaussian/view query is consequently four additions rather than a
+fresh pixel scan. Three alternating real-scene pairs are byte-identical and
+reduce the selected eight-round pass from 2.7 to 2.2 seconds on Bonsai and
+from 2.6 to a 2.3-second median on Room. The change is CPU-only and introduces
+no renderer variant.
+
 Tail-aware and approximate-camera shortcuts were also rejected. Weighting the
 worst training camera does not transfer to the worst unseen pose. Rendering
 only the cameras that observed a particle cuts the probe time by 43%, but

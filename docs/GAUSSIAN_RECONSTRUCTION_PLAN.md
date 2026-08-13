@@ -712,6 +712,60 @@ coverage-preserving opt-in schedule is therefore `--render-refine-rounds 8`;
 larger values remain available as an explicit PSNR-first choice, and none
 becomes a default.
 
+The localized signal does not make surfel-normal optimization strong enough to
+retain. A prototype applies deterministic one-degree tangent perturbations and
+uses the same per-footprint antithetic selection plus complete-render
+acceptance. Eight normal rounds improve all five synthetic held-light
+mean/tails by 0.05--0.07 dB and truth-normal RMSE by only 0.03--0.10 degrees,
+while four clouds lose 0.1 coverage point. Room gains 0.05/0.06 dB, but Bonsai
+is unchanged at 14.30/11.92 dB, loses 0.1 coverage point, and total refinement
+time grows from 2.7 to 5.2 seconds. Two to four rounds preserve real coverage
+but buy only 0.00--0.03 dB and still move synthetic support. The prototype and
+CLI are removed. A useful normal/covariance update needs multi-light or
+geometric evidence, not more single-light rendered coordinates.
+
+Localized radius updates do not solve the support trade either. Allowing both
+directions for eight rounds raises synthetic held means by 0.42--0.49 dB and
+Room by 0.18/0.23 dB, but contracts support by 0.2--0.5 points and drops the
+Bonsai tail by 0.14 dB. Expansion-only updates restore support. Eight rounds
+then lose covered-region quality on every synthetic cloud and regress the
+fourth mean by 0.02 dB; Bonsai is exactly neutral while its refinement time
+doubles. Capping expansion at two rounds leaves Bonsai neutral, Room only
++0.03/+0.02 dB, and still regresses the fourth synthetic mean by 0.01 dB.
+Both variants are removed. Radius fitting needs observed foreground evidence,
+not RGB error alone.
+
+Making the localized screen region more geometrically literal is negative too.
+An affine projected ellipse weighted by the production particle kernel
+improves synthetic scores, but over-focuses the centre and loses 0.05 dB on
+Bonsai and 0.03 dB on Room while making CPU selection 2.2--2.6 times slower.
+Using only the ellipse's mathematically correct axis-aligned bounds avoids that
+cost but dilutes the useful signal: four synthetic means regress, Bonsai loses
+0.01 dB mean, and Room loses 0.01 dB tail. Both are removed. The selected
+smaller rectangular patch is an empirical contextual estimator, not a claim
+that it exactly rasterizes the Gaussian footprint.
+
+Robust per-light aggregation does not improve the controlled-light normal
+solver physically. Replacing each light's mean across camera views with a
+channel median raises held-light mean PSNR by 0.05--0.28 dB, but loses 0.2--0.3
+coverage points and worsens truth-normal RMSE on two of four clouds. A 1.62
+support correction restores most coverage, then worsens truth normals on three
+clouds and loses one tail. Dropping only the per-channel minimum and maximum is
+less aggressive, but still loses one tail by 0.03 dB, reduces coverage on all
+four clouds, and worsens two truth-normal scores. Both aggregators are removed;
+they suppress real cross-view surface disagreement as though it were an
+outlier, improving appearance without recovering orientation.
+
+The retained rectangular localizer is now cheaper without changing that
+selection rule. Each antithetic render pair builds one f64 summed-area table
+of its per-pixel error difference; every projected rectangle then reads four
+values instead of scanning its pixels again for every Gaussian. Three
+alternating same-source pairs reduce Bonsai refinement from 2.7 to 2.2 seconds
+(18.5%) and Room from 2.6 to a 2.3-second median (11.5%). All five synthetic
+scenes and all twelve real pair outputs are byte-identical to the direct-scan
+control. This is CPU-only bookkeeping and adds no shader, op, binding,
+pipeline, or acceleration-structure variant.
+
 The same batching does not generalize to support radii. A separate 64-round
 radius phase improves all five synthetic held-light means and tails over exact
 300-particle position-plus-radius descent in 1.60--1.64 rather than 7.07--7.28

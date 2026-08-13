@@ -253,20 +253,62 @@ fn mean_error(errors: &[f32]) -> f64 {
     errors.iter().map(|&value| value as f64).sum::<f64>() / errors.len().max(1) as f64
 }
 
+struct ErrorDifference {
+    width: usize,
+    height: usize,
+    sums: Vec<f64>,
+}
+
+impl ErrorDifference {
+    fn new(plus: &[f32], minus: &[f32], width: usize, height: usize) -> Self {
+        assert_eq!(plus.len(), minus.len());
+        let frame_pixels = width * height;
+        assert_eq!(plus.len() % frame_pixels, 0);
+        let stride = width + 1;
+        let frame_sums = stride * (height + 1);
+        let mut sums = vec![0.0f64; plus.len() / frame_pixels * frame_sums];
+        for (frame, (plus, minus)) in plus
+            .chunks(frame_pixels)
+            .zip(minus.chunks(frame_pixels))
+            .enumerate()
+        {
+            let base = frame * frame_sums;
+            for y in 0..height {
+                let mut row = 0.0f64;
+                for x in 0..width {
+                    let pixel = y * width + x;
+                    row += (plus[pixel] - minus[pixel]) as f64;
+                    sums[base + (y + 1) * stride + x + 1] = sums[base + y * stride + x + 1] + row;
+                }
+            }
+        }
+        Self {
+            width,
+            height,
+            sums,
+        }
+    }
+
+    fn sum(&self, frame: usize, min_x: usize, max_x: usize, min_y: usize, max_y: usize) -> f64 {
+        let stride = self.width + 1;
+        let base = frame * stride * (self.height + 1);
+        let at = |x: usize, y: usize| self.sums[base + y * stride + x];
+        at(max_x, max_y) + at(min_x, min_y) - at(min_x, max_y) - at(max_x, min_y)
+    }
+}
+
 fn projected_error_difference(
-    plus: &[f32],
-    minus: &[f32],
+    errors: &ErrorDifference,
     capture: &capture::Capture,
     cameras: &[vol::CameraParams],
     surfel: &vol::relight::Surfel,
 ) -> Option<f32> {
-    debug_assert_eq!(plus.len(), minus.len());
-    debug_assert_eq!(plus.len(), cameras.len() * capture.width * capture.height);
+    debug_assert_eq!(errors.width, capture.width);
+    debug_assert_eq!(errors.height, capture.height);
     let center = glam::Vec3::from(surfel.center);
     let normal = glam::Vec3::from(surfel.normal).normalize_or_zero();
     let tangent = tangent_to(normal);
     let bitangent = normal.cross(tangent);
-    let frame_pixels = capture.width * capture.height;
     let mut difference = 0.0f64;
     let mut samples = 0usize;
     for (frame, camera) in cameras.iter().enumerate() {
@@ -302,13 +344,11 @@ fn projected_error_difference(
         let max_x = (pixel[0] + extent_x).ceil().min(capture.width as f32) as usize;
         let min_y = (pixel[1] - extent_y).floor().max(0.0) as usize;
         let max_y = (pixel[1] + extent_y).ceil().min(capture.height as f32) as usize;
-        for y in min_y..max_y {
-            for x in min_x..max_x {
-                let slot = frame * frame_pixels + y * capture.width + x;
-                difference += (plus[slot] - minus[slot]) as f64;
-                samples += 1;
-            }
+        if min_x >= max_x || min_y >= max_y {
+            continue;
         }
+        difference += errors.sum(frame, min_x, max_x, min_y, max_y);
+        samples += (max_x - min_x) * (max_y - min_y);
     }
     (samples > 0).then_some((difference / samples as f64) as f32)
 }
@@ -360,6 +400,8 @@ fn refine_simultaneous(
         let minus_errors = rendered_errors(renderer, tracer, capture, indices, cameras);
         let minus = mean_error(&minus_errors);
         let minus_objective = minus + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&minus_offsets);
+        let error_difference =
+            ErrorDifference::new(&plus_errors, &minus_errors, capture.width, capture.height);
 
         // A whole-frame SPSA difference gives every particle the same scalar
         // direction, although one particle affects only a small screen patch.
@@ -378,7 +420,7 @@ fn refine_simultaneous(
                 surfel.center = (glam::Vec3::from(anchors[candidate])
                     + offset * surfel.radius * normal)
                     .to_array();
-                projected_error_difference(&plus_errors, &minus_errors, capture, cameras, &surfel)
+                projected_error_difference(&error_difference, capture, cameras, &surfel)
                     .filter(|gradient| *gradient != 0.0)
                     .map_or(offset, |gradient| {
                         offset
@@ -1128,6 +1170,38 @@ fn source_depth_visible(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_difference_matches_direct_rectangle_sums() {
+        const WIDTH: usize = 4;
+        const HEIGHT: usize = 3;
+        let plus: Vec<f32> = (0..2 * WIDTH * HEIGHT)
+            .map(|index| 0.1 * index as f32)
+            .collect();
+        let minus: Vec<f32> = (0..2 * WIDTH * HEIGHT)
+            .map(|index| 0.03 * (index % 5) as f32)
+            .collect();
+        let field = ErrorDifference::new(&plus, &minus, WIDTH, HEIGHT);
+        for frame in 0..2 {
+            for min_y in 0..HEIGHT {
+                for max_y in min_y + 1..=HEIGHT {
+                    for min_x in 0..WIDTH {
+                        for max_x in min_x + 1..=WIDTH {
+                            let mut expected = 0.0f64;
+                            for y in min_y..max_y {
+                                for x in min_x..max_x {
+                                    let index = frame * WIDTH * HEIGHT + y * WIDTH + x;
+                                    expected += (plus[index] - minus[index]) as f64;
+                                }
+                            }
+                            let actual = field.sum(frame, min_x, max_x, min_y, max_y);
+                            assert!((actual - expected).abs() < 1.0e-12);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     fn camera(position: glam::Vec3) -> vol::CameraParams {
         let orientation = glam::Quat::from_rotation_arc(glam::Vec3::Z, (-position).normalize());
