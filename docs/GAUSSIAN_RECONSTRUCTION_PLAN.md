@@ -390,6 +390,26 @@ The next objective must first define a local surface coordinate inside each
 cell—such as the existing oriented plane/detail sites—and aggregate
 cross-camera responsibility there, rather than triangulating the cell center.
 
+That surface coordinate cannot be introduced on the initial camera-filled
+volume lattice. A staged 1,024→2,048-site synthetic control initialized
+PowerFoam reference radii and camera-facing half-cell planes before training;
+held-view radiance falls from roughly 25 dB on the selected unweighted foam to
+20.52 dB, held-depth recall is zero, and no Gaussian survives multi-view
+fusion. Removing the oriented clipping still reaches only 20.96 dB, with less
+than one percent depth recall and again no fused surface. Both benchmark
+switches are removed. PowerFoam surface/detail sites remain appropriate after
+a surface correspondence exists, but weighted splats over a volume lattice do
+not create that correspondence.
+
+The unoriented isolation exposed and fixed an independent weighted-training
+bug. Radius optimization requests full position/radius path Jacobians, whose
+buffer layout also contains an unused surface-normal stream. Session setup was
+binding that stream even when the graph and model had no oriented normals, so
+Meganeura correctly returned `UnknownSlot`. Binding now follows the model/graph
+semantic instead of buffer capacity, and a physical-GPU regression trains an
+unoriented weighted cloud for two updates with a per-step rebuild cadence. No
+dummy normal parameter, shader, operation, or entry variant is added.
+
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
 its Jacobians, and a ray-relative reference tangent; the graph evaluates the

@@ -5555,7 +5555,11 @@ fn build_train_session(
                     .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
             }
         }
-        if path_bufs.has_surface_jacobians() {
+        if model.surface_normals.is_some() {
+            assert!(
+                path_bufs.has_surface_jacobians(),
+                "oriented weighted graph requires recorded surface Jacobians"
+            );
             let source = gpu
                 .get_external_buffer_source(path_bufs.dt_grad_surface_normal)
                 .expect("surface-normal path buffer must be exportable");
@@ -11494,6 +11498,51 @@ mod tests {
             .unwrap()
             .iter()
             .all(|normal| (normal.length() - 1.0).abs() < 1.0e-5));
+        model.validate().unwrap();
+    }
+
+    #[test]
+    fn weighted_training_does_not_require_oriented_surface_inputs() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping unoriented PowerFoam training test: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        model.radii = Some(vec![0.2; model.points.len()]);
+        model.compute_adjacency_default();
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: glam::Quat::IDENTITY.to_array(),
+                fov: [0.5; 2],
+                principal: [0.0; 2],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
+            width: 1,
+            height: 1,
+        };
+        let losses = fit_appearance_multi_view(
+            &mut model,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                learning_rate: 0.01,
+                epochs: 2,
+                radius_lr_ratio: 0.01,
+                geometry_rebuild_every: 1,
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        assert_eq!(losses.len(), 2);
+        assert!(losses.iter().all(|loss| loss.is_finite()));
+        assert!(model.surface_normals.is_none());
         model.validate().unwrap();
     }
 
