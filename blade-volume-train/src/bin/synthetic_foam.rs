@@ -136,6 +136,10 @@ struct Args {
     #[argh(option, default = "0")]
     surface_powerfoam_steps_per_view: usize,
 
+    /// optional trained surface-PowerFoam light-field PLY output
+    #[argh(option)]
+    surface_powerfoam_output: Option<String>,
+
     /// retain fused depth centers instead of multi-view photo refinement
     #[argh(switch)]
     no_refine: bool,
@@ -685,6 +689,9 @@ fn refine_photometric_normals(
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
+    if args.surface_powerfoam_output.is_some() && args.surface_powerfoam_steps_per_view == 0 {
+        fail("--surface-powerfoam-output requires --surface-powerfoam-steps-per-view");
+    }
     let dataset = train::relight::Dataset::load(path::Path::new(&args.dataset))
         .unwrap_or_else(|error| fail(error));
     let environment = dataset
@@ -969,6 +976,19 @@ fn main() {
             gpu,
         )
         .unwrap_or_else(|error| fail(error));
+        if let Some(ref output) = args.surface_powerfoam_output {
+            let output = path::Path::new(output);
+            if let Some(parent) = output
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent).unwrap_or_else(|error| fail(error));
+            }
+            convert::save_ply(output, &outcome.light_field).unwrap_or_else(|error| {
+                fail(format!("cannot write {}: {error:?}", output.display()))
+            });
+            println!("wrote {}", output.display());
+        }
         println!(
             "surface PowerFoam: {} updates, loss {:.6} -> {:.6}, in {:.3} s",
             outcome.stats.updates,
@@ -1253,10 +1273,16 @@ mod tests {
                 "model.ply",
                 "--surface-powerfoam-steps-per-view",
                 "300",
+                "--surface-powerfoam-output",
+                "surface.ply",
             ],
         )
         .unwrap();
         assert_eq!(continued.surface_powerfoam_steps_per_view, 300);
+        assert_eq!(
+            continued.surface_powerfoam_output.as_deref(),
+            Some("surface.ply")
+        );
     }
 
     fn camera(position: glam::Vec3, target: glam::Vec3) -> vol::CameraParams {
@@ -1328,5 +1354,6 @@ mod tests {
         .unwrap();
         assert_eq!(args.materials, 6);
         assert_eq!(args.surface_powerfoam_steps_per_view, 0);
+        assert!(args.surface_powerfoam_output.is_none());
     }
 }

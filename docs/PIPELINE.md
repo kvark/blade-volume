@@ -2296,7 +2296,13 @@ Broken into sub-steps:
   without adding a renderer or serialized representation. A four-cloud gate
   rejects trainable surface offsets and a sparser topology rebuild cadence;
   the retained continuation still learns only density, SH, radii, and normals
-  at the selected 100-update refresh cadence.
+  at the selected 100-update refresh cadence. The benchmark can persist the
+  trained static light field through `--surface-powerfoam-output`, mirroring
+  production. A profiled, order-balanced gate selects a 192-entry training
+  path row: it cuts continuation time by about 19% with zero truncation,
+  unchanged position/coverage, and neutral-to-positive median static-LF and
+  held-light PBR scores. A faster 160-entry row is rejected by a 0.09 dB
+  static-LF tail regression.
 
 #### M3d — Online viewer attach
 

@@ -28,7 +28,7 @@ impl Default for ContinueOptions {
     fn default() -> Self {
         Self {
             steps_per_view: 300,
-            max_steps: 256,
+            max_steps: 192,
         }
     }
 }
@@ -196,6 +196,13 @@ fn update_surface(surface: &mut vol::relight::RelightModel, cloud: &vol::PointCl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_continuation_defaults_are_bounded() {
+        let options = ContinueOptions::default();
+        assert_eq!(options.steps_per_view, 300);
+        assert_eq!(options.max_steps, 192);
+    }
 
     fn surface() -> vol::relight::RelightModel {
         let material = vol::relight::Material {

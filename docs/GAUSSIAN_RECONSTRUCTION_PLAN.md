@@ -1363,3 +1363,20 @@ clouds. Cadence 100 remains. The measured bottleneck is the differentiable
 PowerFoam work between rebuilds, not adjacency refresh. All runs were isolated
 under the 12 GiB scope; peak host memory was below 0.37 GB with zero swap, OOM,
 Xid, or reset events.
+
+The differentiable continuation itself now uses a selected 192-entry path row
+instead of 256. Profiling the 2,179-particle surface shows that the graph, not
+the recorder, dominates each update: 8.1 ms across 258 graph passes versus
+1.3--1.5 ms for path recording, with 524,288-element padded activations at the
+old budget. In three order-balanced repeats on each of two discriminating
+clouds, median continuation time falls 21.17→17.21 and 21.38→17.29 seconds
+(18.7% and 19.1%). The fixed cloud's median static-light-field score remains
+23.78/23.21 dB mean/worst and held-light PBR changes by -0.01/-0.01 dB; the
+second cloud gains +0.04/+0.04 dB static LF and +0.03/+0.01 dB PBR. Position
+RMSE and coverage are unchanged, median normal RMSE changes by at most 0.01
+degree, and two further independent clouds stay within 0.03 dB downstream
+while improving their static-LF aggregate. All four record zero truncation at
+28--36/192 paths. A 160-entry arm is faster but loses 0.07/0.09 dB static LF
+on one cloud, so it remains rejected. The synthetic gate can now persist the
+continued light field with `--surface-powerfoam-output`, matching production
+`reconstruct` and preventing a PBR-only performance decision.
