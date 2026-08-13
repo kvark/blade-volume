@@ -1014,7 +1014,14 @@ fn main() {
         if test_views.is_empty() {
             eprintln!("no usable test views (image files missing?)");
         } else {
-            let psnrs = pipeline::evaluate_views(&outcome.model, &test_views, &config);
+            let mut evaluator =
+                pipeline::GpuViewEvaluator::new(&outcome.model, &config, gpu.clone());
+            let psnrs = evaluator
+                .evaluate(&test_views, config.fit.background_rgb)
+                .unwrap_or_else(|err| {
+                    eprintln!("GPU test-view evaluation failed: {err}");
+                    std::process::exit(3);
+                });
             // Train-set PSNR too, for comparison.
             let train_views = pipeline::build_views_from(
                 &outcome.reconstruction,
@@ -1022,7 +1029,13 @@ fn main() {
                 &config,
                 train_images.iter().copied(),
             );
-            let train_psnrs = pipeline::evaluate_views(&outcome.model, &train_views, &config);
+            let train_psnrs = evaluator
+                .evaluate(&train_views, config.fit.background_rgb)
+                .unwrap_or_else(|err| {
+                    eprintln!("GPU train-view evaluation failed: {err}");
+                    std::process::exit(3);
+                });
+            evaluator.deinit();
             let avg_train: f32 =
                 train_psnrs.iter().copied().sum::<f32>() / train_psnrs.len() as f32;
             let avg_test: f32 = psnrs.iter().copied().sum::<f32>() / psnrs.len() as f32;
