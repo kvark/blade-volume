@@ -29,6 +29,10 @@ struct Args {
     #[argh(option)]
     images: String,
 
+    /// optional foreground-mask directory mirroring the image paths
+    #[argh(option)]
+    masks: Option<String>,
+
     /// width to work at (default 320). Height follows the camera's aspect.
     #[argh(option, default = "320")]
     width: usize,
@@ -210,9 +214,10 @@ fn main() {
     };
 
     let started = std::time::Instant::now();
-    let (capture, reconstruction) = match train::inverse::capture::Capture::from_colmap(
+    let (capture, reconstruction) = match train::inverse::capture::Capture::from_colmap_with_masks(
         sparse,
         images,
+        args.masks.as_deref().map(path::Path::new),
         args.width,
         height,
         args.stride,
@@ -635,14 +640,14 @@ fn surfels_from_foam(
     let mut maps = Vec::with_capacity(views.len());
     let mut hit = 0usize;
     let mut total = 0usize;
-    for ((camera, _), map) in requests.into_iter().zip(depth_maps) {
+    for ((&view_index, (camera, _)), mut map) in views.iter().zip(requests).zip(depth_maps) {
+        total += mask_depth(&mut map, &capture.views[view_index]);
         hit += map
             .alpha
             .iter()
             .zip(&map.peak)
             .filter(|&(&a, &p)| a >= options.min_alpha && p >= options.min_peak)
             .count();
-        total += map.alpha.len();
         maps.push((camera, map));
     }
     println!(
@@ -685,6 +690,26 @@ fn surfels_from_foam(
         );
     }
     surfels
+}
+
+fn mask_depth(
+    map: &mut train::inverse::depth::DepthMap,
+    view: &train::inverse::capture::View,
+) -> usize {
+    let Some(ref mask) = view.mask else {
+        return map.alpha.len();
+    };
+    assert_eq!(mask.len(), map.alpha.len());
+    let mut foreground = 0;
+    for (index, &coverage) in mask.iter().enumerate() {
+        if coverage <= 0.5 {
+            map.alpha[index] = 0.0;
+            map.peak[index] = 0.0;
+        } else {
+            foreground += 1;
+        }
+    }
+    foreground
 }
 
 /// The height that keeps the camera's aspect ratio at the chosen width.
@@ -735,9 +760,10 @@ fn load_normal_captures(
         .iter()
         .zip(&args.normal_environment)
         .map(|(images, environment)| {
-            let (capture, _) = train::inverse::capture::Capture::from_colmap(
+            let (capture, _) = train::inverse::capture::Capture::from_colmap_with_masks(
                 sparse,
                 path::Path::new(images),
+                args.masks.as_deref().map(path::Path::new),
                 args.width,
                 height,
                 args.stride,
@@ -854,6 +880,7 @@ mod tests {
         )
         .unwrap();
         assert!(defaults.environment.is_none());
+        assert!(defaults.masks.is_none());
 
         let known = <Args as argh::FromArgs>::from_args(
             &["reconstruct"],
@@ -868,6 +895,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(known.environment.as_deref(), Some("capture.f32"));
+    }
+
+    #[test]
+    fn foreground_masks_are_an_optional_cli_input() {
+        let masked = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse", "sparse", "--images", "images", "--masks", "masks",
+            ],
+        )
+        .unwrap();
+        assert_eq!(masked.masks.as_deref(), Some("masks"));
+    }
+
+    #[test]
+    fn foreground_masks_reject_foam_depth_before_fusion() {
+        let mut map = train::inverse::depth::DepthMap {
+            width: 2,
+            height: 1,
+            distance: vec![2.0, 3.0],
+            alpha: vec![0.9, 0.8],
+            peak: vec![0.4, 0.3],
+        };
+        let view = train::inverse::capture::View {
+            name: "masked".to_string(),
+            camera: vol::CameraParams::default(),
+            pixels: vec![[0.0; 3]; 2],
+            mask: Some(vec![0.5, 1.0]),
+        };
+        assert_eq!(mask_depth(&mut map, &view), 1);
+        assert_eq!(map.distance, [2.0, 3.0]);
+        assert_eq!(map.alpha, [0.0, 0.8]);
+        assert_eq!(map.peak, [0.0, 0.3]);
     }
 
     #[test]

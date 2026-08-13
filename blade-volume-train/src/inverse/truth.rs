@@ -201,6 +201,7 @@ pub fn photograph(
             name: format!("truth{index:03}"),
             camera: *camera,
             pixels: frame.iter().map(|t| [t[0], t[1], t[2]]).collect(),
+            mask: None,
         })
         .collect();
     capture::Capture {

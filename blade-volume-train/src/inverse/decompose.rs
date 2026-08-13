@@ -652,6 +652,9 @@ fn observe_serial(
                 continue;
             }
             let pixel = y * width + x;
+            if !view.is_foreground(pixel) {
+                continue;
+            }
             if collect_diagnostics {
                 claims[pixel] += 1;
                 sampled[pixel] = true;
@@ -2209,7 +2212,7 @@ mod tests {
             surfels: vec![surfel(0.0), surfel(0.01)],
             materials: vec![vol::relight::Material::default()],
         };
-        let capture = capture::Capture {
+        let mut capture = capture::Capture {
             width: 8,
             height: 8,
             views: (0..9)
@@ -2223,6 +2226,7 @@ mod tests {
                         principal: [0.0; 2],
                     },
                     pixels: vec![[0.2 + 0.01 * index as f32, 0.3, 0.4]; 64],
+                    mask: None,
                 })
                 .collect(),
         };
@@ -2257,6 +2261,14 @@ mod tests {
         assert_eq!(diagnostics.support_count_sum, 36);
         assert_eq!(diagnostics.samples_without_support, 0);
         assert_eq!(diagnostics.max_supports_per_sample, 2);
+
+        for view in &mut capture.views {
+            view.mask = Some(vec![0.0; capture.width * capture.height]);
+        }
+        let (masked, masked_diagnostics) = observe_with_diagnostics(&model, &capture, &views, 0.15);
+        assert_eq!(masked.seen(), 0);
+        assert_eq!(masked_diagnostics.samples, 0);
+        assert_eq!(masked_diagnostics.pixels, 0);
     }
 
     /// A sphere of surfels, one material, under a light from one side.

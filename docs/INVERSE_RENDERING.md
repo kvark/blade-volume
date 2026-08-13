@@ -51,6 +51,13 @@ Everything downstream is in **linear** radiance — fitting a physical material
 against display-encoded values recovers a material wrong by a power of 2.2,
 which looks like a plausible albedo and is not one.
 
+An optional `reconstruct --masks masks/` directory mirrors the relative image
+paths. Each mask is rectified with the same calibrated camera, composited over
+black for scoring, and rejects background rays before foam-depth fusion,
+surfel observations, and normalized-patch refinement. Every selected image
+must have a mask when the option is present; silently mixing objectives across
+views is an error. The ordinary unmasked path is unchanged.
+
 ### surface
 
 Two sources, and the choice matters more than anything else in the pipeline.
@@ -585,8 +592,10 @@ and readback count is halved. Presentation continues to ignore alpha.
 A follow-up foreground-MSE experiment did not justify extending the optimizer.
 At weight 0.05, a 64-round position-plus-radius pass improved three of five
 synthetic held-light means and tails, was mixed on one, and regressed the fifth.
-Since ordinary COLMAP captures also have no foreground mask, both the loss
-control and the batched-radius prototype were removed.
+The benchmark COLMAP captures supplied no independent foreground masks, so
+both the loss control and the batched-radius prototype were removed. Capture
+mask ingestion now exists for datasets that do supply that evidence; it does
+not make this scene-sensitive objective a production default.
 
 ## What the numbers are limited by, in order
 

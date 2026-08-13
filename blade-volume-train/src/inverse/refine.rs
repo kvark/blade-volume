@@ -1259,6 +1259,11 @@ fn normalized_patch(
     let mut pixels = Vec::with_capacity(side * side);
     for point in patch_points(center, tangent, bitangent, radius, side) {
         let (pixel, _) = capture::project(&view.camera, width, height, point)?;
+        if let Some(ref mask) = view.mask {
+            if sample_scalar(mask, width, height, pixel)? <= 0.5 {
+                return None;
+            }
+        }
         pixels.push(sample_rgb(&view.pixels, width, height, pixel)?);
     }
     let mut mean = [0.0f32; 3];
@@ -1462,6 +1467,7 @@ mod tests {
                     name: format!("synthetic-{index}"),
                     camera: *camera,
                     pixels,
+                    mask: None,
                 }
             })
             .collect();
@@ -1473,6 +1479,38 @@ mod tests {
             },
             depths,
         )
+    }
+
+    #[test]
+    fn normalized_patches_do_not_cross_the_foreground_mask() {
+        let (mut capture, _) = plane_fixture();
+        let view = &capture.views[0];
+        assert!(normalized_patch(
+            glam::Vec3::ZERO,
+            glam::Vec3::X,
+            glam::Vec3::Y,
+            0.1,
+            view,
+            capture.width,
+            capture.height,
+            3,
+            1.0e-4,
+        )
+        .is_some());
+
+        capture.views[0].mask = Some(vec![0.0; capture.width * capture.height]);
+        assert!(normalized_patch(
+            glam::Vec3::ZERO,
+            glam::Vec3::X,
+            glam::Vec3::Y,
+            0.1,
+            &capture.views[0],
+            capture.width,
+            capture.height,
+            3,
+            1.0e-4,
+        )
+        .is_none());
     }
 
     fn plane_surfels(offset: f32) -> Vec<vol::relight::Surfel> {
@@ -1541,6 +1579,7 @@ mod tests {
                     name: format!("sphere-{index}"),
                     camera: *camera,
                     pixels,
+                    mask: None,
                 }
             })
             .collect();
@@ -1725,6 +1764,7 @@ mod tests {
                         .iter()
                         .map(|pixel| [pixel[0], pixel[1], pixel[2]])
                         .collect(),
+                    mask: None,
                 })
                 .collect(),
         };
@@ -1898,6 +1938,7 @@ mod tests {
                         .iter()
                         .map(|pixel| [pixel[0], pixel[1], pixel[2]])
                         .collect(),
+                    mask: None,
                 })
                 .collect(),
         };

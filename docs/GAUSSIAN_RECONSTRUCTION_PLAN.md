@@ -410,6 +410,31 @@ semantic instead of buffer capacity, and a physical-GPU regression trains an
 unoriented weighted cloud for two updates with a per-step rebuild cadence. No
 dummy normal parameter, shader, operation, or entry variant is added.
 
+Starting weighted surface semantics only after a Gaussian surface exists is a
+different result. A fixed-center continuation converts the selected 2,179-site
+Gaussian reconstruction to oriented PowerFoam, learns radii, normals, density,
+and appearance for 1,800 updates, then converts the learned sites directly
+back to surface Gaussians. With the independently rendered foreground masks it
+improves held-view light-field PSNR from 24.11 to 24.19 dB, holds position RMSE
+exactly at 0.6204, changes pre/final normal RMSE from 53.66/53.95° to
+53.45/53.85°, and improves held-light PBR mean/worst from 19.49/19.25 to
+19.80/19.52 dB while coverage rises from 54.0% to 54.2%. This is the first
+joint winner for a surface-stage PowerFoam continuation.
+
+The evidence source is decisive. RGB-only continuation reaches 23.66 dB
+held-view light-field PSNR and self-distilled Gaussian alpha reaches only
+21.81 dB; neither is selected. The latter also regresses held-light PBR to
+19.59/19.32 dB and 53.9% coverage. Synthetic truth masks therefore remain a
+gate, not an image-only default. Production capture now accepts an optional
+mask directory mirroring the COLMAP image paths, rectifies masks with the same
+camera, and applies them to foam-depth fusion, radiance observations, and
+patch refinement. The next production step is an explicit fixed-surface
+continuation stage enabled only when those independent masks are supplied.
+The complete all-target workspace gate passes on the physical RTX 5070 in
+93.5 seconds at a 2,632,908,800-byte cgroup peak, with zero swap, pressure,
+OOM, throttle, Xid, or GPU-fault event. Workspace clippy also passes at a
+654,110,720-byte peak. This is a clean post-750 W PSU stability sample.
+
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
 its Jacobians, and a ray-relative reference tangent; the graph evaluates the
@@ -801,10 +826,11 @@ returning accumulated cloud coverage in alpha. A binary synthetic foreground
 MSE with weight 0.05 improved the batched-radius held-light mean/worst score on
 three of five fixed clouds, was mixed on one, and regressed the fifth. The
 fixed-cloud deltas versus RGB-only were -0.01/+0.03, +0.02/+0.03,
-+0.03/+0.07, +0.02/+0.03, and -0.04/-0.01 dB (mean/worst). Real COLMAP
-captures do not supply that mask, so the term cannot repair the earlier
-Bonsai failure. The foreground-loss API and batched-radius prototype are
-therefore removed rather than adding another synthetic-only control.
++0.03/+0.07, +0.02/+0.03, and -0.04/-0.01 dB (mean/worst). The available real
+COLMAP benchmark captures do not supply that mask, so the term cannot repair
+the earlier Bonsai failure. The foreground-loss API and batched-radius
+prototype are therefore removed rather than adding another synthetic-only
+control.
 
 Coverage alpha does select a smaller performance change. Reconstruction
 scoring now reads coverage from the same black-background render used for

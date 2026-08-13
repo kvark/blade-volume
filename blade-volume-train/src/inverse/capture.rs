@@ -17,6 +17,14 @@ pub struct View {
     pub camera: vol::CameraParams,
     /// Linear radiance, row major, `width * height` texels.
     pub pixels: Vec<[f32; 3]>,
+    /// Optional foreground coverage, row major. Values are in `[0, 1]`.
+    pub mask: Option<Vec<f32>>,
+}
+
+impl View {
+    pub fn is_foreground(&self, pixel: usize) -> bool {
+        self.mask.as_ref().is_none_or(|mask| mask[pixel] > 0.5)
+    }
 }
 
 /// Every posed image of one scene, at one resolution.
@@ -45,6 +53,21 @@ pub fn linear_to_srgb(value: f32) -> f32 {
     } else {
         1.055 * value.powf(1.0 / 2.4) - 0.055
     }
+}
+
+fn decode_pixels(encoded: &[f32], mask: Option<&[f32]>) -> Vec<[f32; 3]> {
+    encoded
+        .chunks_exact(3)
+        .enumerate()
+        .map(|(index, rgb)| {
+            let coverage = mask.map_or(1.0, |mask| mask[index]);
+            [
+                coverage * srgb_to_linear(rgb[0]),
+                coverage * srgb_to_linear(rgb[1]),
+                coverage * srgb_to_linear(rgb[2]),
+            ]
+        })
+        .collect()
 }
 
 /// Where a world point lands in a view, in pixels, and how far away it is.
@@ -145,14 +168,17 @@ impl Capture {
             } else {
                 None
             };
+            let mask: Option<Vec<f32>> = geometry.as_ref().map(|plane| {
+                plane
+                    .iter()
+                    .map(|texel| if texel[3] > 0.0 { 1.0 } else { 0.0 })
+                    .collect()
+            });
             let pixels = radiance
                 .iter()
                 .enumerate()
                 .map(|(index, texel)| {
-                    if geometry
-                        .as_ref()
-                        .is_some_and(|plane| plane[index][3] <= 0.0)
-                    {
+                    if mask.as_ref().is_some_and(|mask| mask[index] == 0.0) {
                         [0.0; 3]
                     } else {
                         [texel[0], texel[1], texel[2]]
@@ -163,6 +189,7 @@ impl Capture {
                 name: format!("view_{:03}-{environment_name}", view.index),
                 camera: relight::camera_params(view, dataset.width, dataset.height),
                 pixels,
+                mask,
             });
         }
         Ok(Self {
@@ -181,6 +208,23 @@ impl Capture {
     pub fn from_colmap(
         sparse: &path::Path,
         images: &path::Path,
+        width: usize,
+        height: usize,
+        stride: usize,
+    ) -> Result<(Self, colmap::Reconstruction), String> {
+        Self::from_colmap_with_masks(sparse, images, None, width, height, stride)
+    }
+
+    /// Read a COLMAP reconstruction, its images, and optional foreground masks.
+    ///
+    /// The mask directory mirrors the image directory: a view named
+    /// `room/frame.png` reads `masks/room/frame.png`. Masks are rectified onto
+    /// the same pinhole plane as their photographs. Missing masks are errors;
+    /// silently mixing masked and unmasked views would change the objective.
+    pub fn from_colmap_with_masks(
+        sparse: &path::Path,
+        images: &path::Path,
+        masks: Option<&path::Path>,
         width: usize,
         height: usize,
         stride: usize,
@@ -210,7 +254,16 @@ impl Capture {
             if !path.exists() {
                 continue;
             }
-            inputs.push((image, camera, path));
+            let mask = masks.map(|directory| directory.join(&image.name));
+            if let Some(ref mask) = mask {
+                if !mask.exists() {
+                    return Err(format!(
+                        "cannot read mask {}: file does not exist",
+                        mask.display()
+                    ));
+                }
+            }
+            inputs.push((image, camera, path, mask));
         }
         let mut views = Vec::with_capacity(inputs.len());
         if !inputs.is_empty() {
@@ -239,20 +292,33 @@ impl Capture {
                                 camera,
                             )
                             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-                            let pixels = encoded
-                                .chunks_exact(3)
-                                .map(|rgb| {
-                                    [
-                                        srgb_to_linear(rgb[0]),
-                                        srgb_to_linear(rgb[1]),
-                                        srgb_to_linear(rgb[2]),
-                                    ]
+                            let mask = input
+                                .3
+                                .as_ref()
+                                .map(|mask_path| {
+                                    pipeline::load_and_rectify_image(
+                                        mask_path,
+                                        width as u32,
+                                        height as u32,
+                                        camera,
+                                    )
+                                    .map_err(|error| {
+                                        format!("cannot read mask {}: {error}", mask_path.display())
+                                    })
+                                    .map(|encoded| {
+                                        encoded
+                                            .chunks_exact(3)
+                                            .map(|rgb| rgb[0].clamp(0.0, 1.0))
+                                            .collect::<Vec<_>>()
+                                    })
                                 })
-                                .collect();
+                                .transpose()?;
+                            let pixels = decode_pixels(&encoded, mask.as_deref());
                             loaded.push(View {
                                 name: image.name.clone(),
                                 camera: reconstruction.camera_params_for(image, far),
                                 pixels,
+                                mask,
                             });
                         }
                         Ok::<Vec<View>, String>(loaded)
@@ -368,5 +434,25 @@ mod tests {
         // And it is the sRGB one rather than a 2.2 power law: they disagree
         // most in the toe, which is exactly where dark albedo is decided.
         assert!((srgb_to_linear(0.05) - 0.05f32.powf(2.2)).abs() > 1.0e-3);
+    }
+
+    #[test]
+    fn mask_coverage_composites_linear_radiance_over_black() {
+        let encoded = [1.0, 0.5, 0.0, 0.25, 0.75, 1.0];
+        let unmasked = decode_pixels(&encoded, None);
+        let masked = decode_pixels(&encoded, Some(&[1.0, 0.25]));
+        assert_eq!(masked[0], unmasked[0]);
+        for channel in 0..3 {
+            assert!((masked[1][channel] - 0.25 * unmasked[1][channel]).abs() < 1.0e-7);
+        }
+
+        let view = View {
+            name: "mask".to_string(),
+            camera: camera(),
+            pixels: masked,
+            mask: Some(vec![0.5, 0.500_1]),
+        };
+        assert!(!view.is_foreground(0));
+        assert!(view.is_foreground(1));
     }
 }
