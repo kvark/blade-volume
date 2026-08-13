@@ -57,7 +57,7 @@ fn init_gpu_context() -> Option<sync::Arc<gpu::Context>> {
         eprintln!("try_init_gpu: GPU access disabled by BLADE_VOLUME_DISABLE_GPU");
         return None;
     }
-    let ctx = mn::init_gpu_context().ok()?;
+    let ctx = mn::init_gpu_context_with(mn::GpuOptions::from_env()).ok()?;
     let info = ctx.device_information();
     let allow_sw = std::env::var("BLADE_VOLUME_ALLOW_SOFTWARE")
         .map(|v| v == "1")
