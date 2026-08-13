@@ -438,6 +438,17 @@ experiment also finds no measurable gain from reusing the host-side TLAS
 instance buffer (5.406 seconds in both arms, byte-identical output). The
 synchronized TLAS rebuild is the remaining exact-coordinate bottleneck.
 
+Prioritizing the bounded pass by estimated screen impact is also tail-unsafe.
+Sorting by radius squared times summed view-facing improves four of five
+position-only synthetic means by 0.08--0.10 dB, but the fixed cloud is neutral,
+its worst view loses 0.01 dB, and all five lose 0.1--0.3 coverage points. With
+radius search the means improve by 0.05--0.39 dB while coverage loses
+0.6--1.2 points. The real-scene position gate has the same split: Bonsai gains
+0.07 dB mean but loses 0.05 dB worst and 0.2 coverage points; Room gains
+0.02/0.02 dB without a visible coverage change. The ordering is removed.
+Budget selection needs explicit diversity or support preservation rather than
+spending every probe on the largest visible discs.
+
 Support radii cannot simply join the paired position schedule. Joint and
 separate radius perturbations improve every fixed synthetic cloud and Room,
 but a 64-round phase loses 0.11 dB on the worst Bonsai view and 0.2 coverage

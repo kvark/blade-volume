@@ -661,6 +661,17 @@ alternating pairs. The cost is the synchronized TLAS rebuild itself, not the
 allocation. Further throughput work should therefore batch or differentiate
 geometry proposals so one rebuild evaluates more than one scalar coordinate.
 
+Screen-impact ordering does not make a bounded pass safer. Ranking particles
+by radius squared times summed view-facing improves four of five position-only
+synthetic means by 0.08--0.10 dB, but loses 0.1--0.3 coverage points everywhere
+and drops the fixed cloud's worst view by 0.01 dB. Adding radius updates raises
+all five held-light means by 0.05--0.39 dB while losing 0.6--1.2 coverage
+points. The earlier real-scene priority gate confirms the trade: Bonsai gains
+0.07 dB mean but loses 0.05 dB worst and 0.2 coverage points, while Room gains
+only 0.02/0.02 dB. The prototype is removed. Any future bounded selection must
+preserve spatial/support diversity rather than concentrating exclusively on
+the largest visible discs.
+
 That batching direction now has a selected first form. Sixty-four paired
 simultaneous perturbations use each production render to update every observed
 Gaussian, with deterministic 2.5% support-relative signs and a 0.001 anchor
