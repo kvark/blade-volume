@@ -41,6 +41,19 @@ fn surface_detail_directional_color(
     return color_sum / max(weight_sum, 1e-20);
 }
 
+// Released PowerFoam clamps every directional texel before interpolating the
+// eight spatial sites. The returned value remains a residual around 0.5 so it
+// composes with Blade's SH and other optional appearance terms.
+fn surface_detail_released_residual(
+    mean_residual: vec3<f32>,
+    directional_residual: vec3<f32>,
+) -> vec3<f32> {
+    return max(
+        vec3<f32>(0.5) + mean_residual + directional_residual,
+        vec3<f32>(0.0),
+    ) - vec3<f32>(0.5);
+}
+
 fn surface_detail_query_t(
     center: vec3<f32>,
     normal: vec3<f32>,

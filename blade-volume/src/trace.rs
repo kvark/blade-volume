@@ -545,14 +545,18 @@ pub fn eval_surface_detail(
     for (site_index, (&site, &color)) in sites.iter().zip(colors).enumerate() {
         let delta = displaced_query - projected_detail_site(site, normal);
         let weight = (-10.0 * delta.length_squared()).exp();
-        let directional_color = detail
-            .directional
-            .as_ref()
-            .map_or(glam::Vec3::ZERO, |table| {
-                let site_position = center + radius * projected_detail_site(site, normal);
-                eval_surface_detail_directional(table, base + site_index, site_position, ray_origin)
-            });
-        color_sum += weight * (color + directional_color);
+        let site_color = detail.directional.as_ref().map_or(color, |table| {
+            let site_position = center + radius * projected_detail_site(site, normal);
+            let directional_color = eval_surface_detail_directional(
+                table,
+                base + site_index,
+                site_position,
+                ray_origin,
+            );
+            (glam::Vec3::splat(0.5) + color + directional_color).max(glam::Vec3::ZERO)
+                - glam::Vec3::splat(0.5)
+        });
+        color_sum += weight * site_color;
         color_weight_sum += weight;
     }
     (offset, color_sum / color_weight_sum.max(1.0e-20))
@@ -2038,6 +2042,35 @@ mod path_tests {
         assert_eq!(actual.depth_mode, expected.depth_mode);
         assert_eq!(actual.peak_weight, expected.peak_weight);
         assert_eq!(actual.peak_point, expected.peak_point);
+    }
+
+    #[test]
+    fn released_directional_texels_clamp_before_spatial_interpolation() {
+        let count = crate::SURFACE_DETAIL_SITES * crate::SURFACE_DETAIL_DIRECTIONS;
+        let axes = vec![glam::Vec3::X; count];
+        let mut directional_colors = Vec::with_capacity(count);
+        for site in 0..crate::SURFACE_DETAIL_SITES {
+            directional_colors.extend(std::iter::repeat_n(
+                if site == 0 {
+                    -glam::Vec3::X
+                } else {
+                    glam::Vec3::X
+                },
+                crate::SURFACE_DETAIL_DIRECTIONS,
+            ));
+        }
+        let model = single_oriented_detail_model(Some(crate::SurfaceDetail {
+            offsets: vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES],
+            heights: vec![0.0; crate::SURFACE_DETAIL_SITES],
+            colors: vec![glam::Vec3::ZERO; crate::SURFACE_DETAIL_SITES],
+            density_logits: None,
+            directional: Some(crate::SurfaceDetailDirectional {
+                axes,
+                colors: directional_colors,
+            }),
+        }));
+        let (_, residual) = eval_surface_detail(&model, 0, glam::Vec3::ZERO, glam::Vec3::Z, 0.0);
+        assert!((residual.x - 0.8125).abs() < 1.0e-6, "{residual:?}");
     }
 
     #[test]

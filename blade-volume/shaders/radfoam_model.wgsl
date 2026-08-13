@@ -244,11 +244,14 @@ fn rf_get_density_color(
                     sites[site].xyz,
                     rf_get_surface_normal(idx),
                 );
-                colors[site] += surface_detail_directional_color(
-                    point + rf_get_radius(idx) * tangent_site,
-                    ray_origin,
-                    axes,
-                    directional_colors,
+                colors[site] = surface_detail_released_residual(
+                    colors[site],
+                    surface_detail_directional_color(
+                        point + rf_get_radius(idx) * tangent_site,
+                        ray_origin,
+                        axes,
+                        directional_colors,
+                    ),
                 );
             }
         }

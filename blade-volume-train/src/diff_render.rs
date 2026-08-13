@@ -1920,31 +1920,47 @@ fn pixel_sh(
     }
     if let Some((parameters, evaluation)) = surface_detail {
         let tables = split_rgb_table(g, parameters.colors, n_cells, vol::SURFACE_DETAIL_SITES);
-        for (color, table) in colors.iter_mut().zip(tables) {
-            let coefficients = g.embedding(cell_indices, table);
-            let terms = g.mul(coefficients, evaluation.color_weights);
-            let residual = g.sum_inner(terms);
-            *color = g.add(*color, residual);
-        }
         if let (Some(directional), Some(directional_weights)) = (
             parameters.directional.as_ref(),
             evaluation.directional_weights,
         ) {
             let width = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
-            let tables = split_rgb_table(g, directional.colors, n_cells, width);
-            for (color, table) in colors.iter_mut().zip(tables) {
-                let coefficients = g.embedding(cell_indices, table);
-                let coefficients = g.reshape(
-                    coefficients,
+            let directional_tables = split_rgb_table(g, directional.colors, n_cells, width);
+            let bias = g.constant(
+                vec![0.5_f32; pl * vol::SURFACE_DETAIL_SITES],
+                &[pl, vol::SURFACE_DETAIL_SITES],
+            );
+            let negative_bias = g.constant(
+                vec![-0.5_f32; pl * vol::SURFACE_DETAIL_SITES],
+                &[pl, vol::SURFACE_DETAIL_SITES],
+            );
+            for ((color, table), directional_table) in
+                colors.iter_mut().zip(tables).zip(directional_tables)
+            {
+                let mean_coefficients = g.embedding(cell_indices, table);
+                let directional_coefficients = g.embedding(cell_indices, directional_table);
+                let directional_coefficients = g.reshape(
+                    directional_coefficients,
                     &[
                         pl * vol::SURFACE_DETAIL_SITES,
                         vol::SURFACE_DETAIL_DIRECTIONS,
                     ],
                 );
-                let terms = g.mul(coefficients, directional_weights);
+                let terms = g.mul(directional_coefficients, directional_weights);
                 let per_site = g.sum_inner(terms);
                 let per_site = g.reshape(per_site, &[pl, vol::SURFACE_DETAIL_SITES]);
+                let per_site = g.add(mean_coefficients, per_site);
+                let per_site = g.add(per_site, bias);
+                let per_site = g.relu(per_site);
+                let per_site = g.add(per_site, negative_bias);
                 let terms = g.mul(per_site, evaluation.color_weights);
+                let residual = g.sum_inner(terms);
+                *color = g.add(*color, residual);
+            }
+        } else {
+            for (color, table) in colors.iter_mut().zip(tables) {
+                let coefficients = g.embedding(cell_indices, table);
+                let terms = g.mul(coefficients, evaluation.color_weights);
                 let residual = g.sum_inner(terms);
                 *color = g.add(*color, residual);
             }

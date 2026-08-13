@@ -155,11 +155,14 @@ fn cell_density_color(
                     detail_sites[site].xyz,
                     g_surface_normals[cell].xyz,
                 );
-                detail_colors[site] += surface_detail_directional_color(
-                    g_points[cell].xyz + g_points[cell].w * tangent_site,
-                    ray_origin,
-                    axes,
-                    directional_colors,
+                detail_colors[site] = surface_detail_released_residual(
+                    detail_colors[site],
+                    surface_detail_directional_color(
+                        g_points[cell].xyz + g_points[cell].w * tangent_site,
+                        ray_origin,
+                        axes,
+                        directional_colors,
+                    ),
                 );
             }
         }
