@@ -519,6 +519,7 @@ fn evaluate_surface_detail_graph(
     ray_origin: mn::NodeId,
     ray_direction: mn::NodeId,
     path_geometry: Option<PathRoleGeometryGraph>,
+    differentiate_directional_weights: bool,
     rows: usize,
 ) -> SurfaceDetailEvaluation {
     let queries = g.materialize(parameters.surface_queries);
@@ -582,7 +583,7 @@ fn evaluate_surface_detail_graph(
     let color_weights = surface_detail_weights(g, displaced_query, tangent_sites, rows);
     let color_weights = normalize_surface_detail_weights(g, color_weights);
     let directional_weights = parameters.directional.as_ref().map(|directional| {
-        surface_detail_directional_weights(
+        let weights = surface_detail_directional_weights(
             g,
             cell_indices,
             directional,
@@ -591,7 +592,12 @@ fn evaluate_surface_detail_graph(
             radii,
             ray_origin,
             rows,
-        )
+        );
+        if differentiate_directional_weights {
+            weights
+        } else {
+            g.stop_gradient(weights)
+        }
     });
     let density_scale = parameters.density_logits.map(|density_logits| {
         let logits = g.embedding(cell_indices, density_logits);
@@ -752,6 +758,7 @@ pub fn build_volumetric_graph(
             use_surface_detail_density: false,
             use_surface_detail_directional: false,
             train_surface_detail_directional_axes: false,
+            differentiate_surface_detail_directional_weights: false,
         },
         use_surface_offsets,
         use_surface_color,
@@ -770,6 +777,7 @@ struct VolumetricGraphOptions {
     use_surface_detail_density: bool,
     use_surface_detail_directional: bool,
     train_surface_detail_directional_axes: bool,
+    differentiate_surface_detail_directional_weights: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -846,6 +854,11 @@ fn build_volumetric_graph_with_options(
     assert!(
         !options.train_surface_detail_directional_axes || options.use_surface_detail_directional,
         "training surface-detail directional axes requires directional appearance",
+    );
+    assert!(
+        !options.differentiate_surface_detail_directional_weights
+            || options.use_surface_detail_directional,
+        "differentiating surface-detail directional weights requires directional appearance",
     );
     assert!(
         !use_spherical_voronoi || use_surface_normals,
@@ -1115,6 +1128,7 @@ fn build_volumetric_graph_with_options(
             ray_origin_pl,
             ray_dir_pl,
             path_geometry,
+            options.differentiate_surface_detail_directional_weights,
             pl,
         )
     });
@@ -5370,6 +5384,10 @@ fn build_train_session(
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
+    let use_surface_detail_directional = model
+        .surface_detail
+        .as_ref()
+        .is_some_and(|detail| detail.directional.is_some());
     let mut g = mn::Graph::new();
     let mut vg = build_volumetric_graph_with_options(
         &mut g,
@@ -5396,11 +5414,14 @@ fn build_train_session(
                 .surface_detail
                 .as_ref()
                 .is_some_and(|detail| detail.density_logits.is_some()),
-            use_surface_detail_directional: model
-                .surface_detail
-                .as_ref()
-                .is_some_and(|detail| detail.directional.is_some()),
+            use_surface_detail_directional,
             train_surface_detail_directional_axes: surface_detail_directional_axis_lr_ratio > 0.0,
+            differentiate_surface_detail_directional_weights: use_surface_detail_directional
+                && (surface_detail_directional_axis_lr_ratio > 0.0
+                    || train_positions
+                    || train_radii
+                    || surface_normal_lr_ratio > 0.0
+                    || surface_detail_offset_lr_ratio > 0.0),
         },
         model.surface_offsets.is_some(),
         model.surface_color_coefficients.is_some(),
@@ -7733,6 +7754,7 @@ mod tests {
             ray_origin,
             ray_direction,
             None,
+            true,
             1,
         );
         let red_table = split_rgb_table(&mut graph, parameters.colors, 1, sites)[0];
@@ -8042,6 +8064,7 @@ mod tests {
                 current,
                 next: current,
             }),
+            false,
             1,
         );
         let red_table = split_rgb_table(&mut graph, parameters.colors, 1, sites)[0];
@@ -9112,6 +9135,7 @@ mod tests {
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 train_surface_detail_directional_axes: false,
+                differentiate_surface_detail_directional_weights: false,
             },
             true,
             false,
@@ -9151,6 +9175,7 @@ mod tests {
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 train_surface_detail_directional_axes: false,
+                differentiate_surface_detail_directional_weights: false,
             },
             true,
             true,
@@ -9242,6 +9267,7 @@ mod tests {
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 train_surface_detail_directional_axes: false,
+                differentiate_surface_detail_directional_weights: false,
             },
             true,
             true,
@@ -10697,6 +10723,7 @@ mod tests {
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 train_surface_detail_directional_axes: false,
+                differentiate_surface_detail_directional_weights: false,
             },
             true,
             false,

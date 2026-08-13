@@ -2049,6 +2049,29 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   remaining dominant cost. Keep full directional training opt-in and do not
   run a long gate until that cost falls without adding backend/shader variants.
 
+#### M2bn — Omit frozen directional-weight backward (done)
+
+- Hardware timestamps now follow `MEGANEURA_GPU_TIMING` when Blade creates the
+  GPU context shared by rendering and training. The matched 4,096×160 Room
+  profile measures 21.5 ms for the no-directional graph and 202.2 ms for
+  fixed-axis directional colour. Adam grows from 1.2 to 65.3 ms, while the
+  remaining large directional pointwise and reduction gradients account for
+  most of the rest; the roughly 14 ms path recorder is not the bottleneck.
+- Directional weights depend on axes, positions, radii, surface normals, and
+  spatial detail offsets. When all five sources are already frozen, the same
+  forward weights now sit behind a zero-cost `stop_gradient` alias. Any
+  positive source rate, or a densification graph that retains geometry
+  gradients, preserves the original backward path. Directional RGB gradients
+  are unchanged. This adds no public option, model field, Meganeura operation,
+  shader, binding, pipeline, or backend variant.
+- The profiled directional graph falls from 202.2 to 176.2 ms (-12.9%). The
+  255-step Room run falls from 65.774 to 58.503 seconds (-11.1%) and scores
+  26.6813/24.4126 dB versus 26.6822/24.4125 before. Bonsai falls from 53.900
+  to 47.399 seconds (-12.1%) with exactly the same reported 18.1287/17.4162
+  dB and per-view scores. Both 10 GB cgroups report zero swap, OOM, throttle,
+  or GPU fault. The remaining 5.7× Bonsai gap is chiefly the full colour
+  parameter's Adam update and its required colour backward, not dead geometry.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -2251,7 +2274,7 @@ manifest accidentally.
 
 - A longer two-scene training gate for the full PowerFoam directional table;
   the short Room/Bonsai screen is complete, but the remaining colour-table
-  backward still costs 6.4× on Bonsai.
+  backward still costs 5.7× on Bonsai.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.

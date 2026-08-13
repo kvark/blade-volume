@@ -2045,9 +2045,13 @@ material path.
    zero-cost stop-gradient alias: the matched Room run is 26.1% faster at a
    2,048-ray batch, and a stable 4,096-ray run scores 24.4125 dB held out. A
    matched Bonsai screen is neutral at 17.4160→17.4162 dB but remains 6.4×
-   slower than its no-directional control. The next bounded target is therefore
-   the colour-table backward itself, followed by a longer quality gate. Do not
-   add backend or shader-entry variants for this work.)
+   slower than its no-directional control. Hardware profiling then isolates
+   the cost: Adam alone grows from 1.2 to 65.3 ms, and the path recorder is not
+   responsible. Omitting directional-weight gradients only when every geometry
+   source is frozen cuts another 11.1%/12.1% on Room/Bonsai at unchanged
+   held-out quality; the Bonsai gap is now 5.7×. The next bounded target is the
+   required colour-table backward itself, followed by a longer quality gate.
+   Do not add backend or shader-entry variants for this work.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
    sweep the ray-query batch window for invariant pixels, query count, and frame
    time. The conservative triangle BLAS remains an invisible point-candidate
