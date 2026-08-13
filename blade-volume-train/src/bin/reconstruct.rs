@@ -284,7 +284,7 @@ fn main() {
 
     // ------------------------------------------------------------- geometry
     let started = std::time::Instant::now();
-    let surfels = match args.foam {
+    let (surfels, sparse_support) = match args.foam {
         Some(ref foam) => surfels_from_foam(
             path::Path::new(foam),
             &capture,
@@ -292,7 +292,10 @@ fn main() {
             &train_views,
             &args,
         ),
-        None => surfels_from_sparse(&reconstruction, &capture, &args),
+        None => (
+            surfels_from_sparse(&reconstruction, &capture, &args),
+            Vec::new(),
+        ),
     };
     let kernel = if args.compact_kernel {
         vol::relight::ParticleKernel::Compact
@@ -379,7 +382,7 @@ fn main() {
 
     // ---------------------------------------------------- material and light
     let started = std::time::Instant::now();
-    let (observations, observation_diagnostics) = if args.observation_diagnostics {
+    let (mut observations, observation_diagnostics) = if args.observation_diagnostics {
         let (observations, diagnostics) = train::inverse::decompose::observe_with_diagnostics(
             &geometry,
             &capture,
@@ -404,6 +407,28 @@ fn main() {
         geometry.surfels.len(),
         started.elapsed().as_secs_f64()
     );
+    let sparse_added = sparse_support.len();
+    if sparse_added > 0 {
+        let sparse_start = observations.surfels() - sparse_added;
+        let sparse_seen = (sparse_start..observations.surfels())
+            .filter(|&index| !observations.of(index).is_empty())
+            .count();
+        println!(
+            "observed: {sparse_seen} of {sparse_added} sparse-track additions seen by at least one training view"
+        );
+    }
+    let sparse_supplemented = supplement_sparse_track_observations(
+        &mut observations,
+        &geometry,
+        &capture,
+        &sparse_support,
+        train::inverse::decompose::FitOptions::default().min_facing,
+    );
+    if sparse_supplemented > 0 {
+        println!(
+            "observed: supplemented {sparse_supplemented} otherwise-unseen sparse-track additions"
+        );
+    }
     if let Some(observation_diagnostics) = observation_diagnostics {
         let shared = 100.0 * observation_diagnostics.samples_on_shared_pixels as f64
             / observation_diagnostics.samples.max(1) as f64;
@@ -723,7 +748,7 @@ fn surfels_from_foam(
     reconstruction: &train::colmap::Reconstruction,
     views: &[usize],
     args: &Args,
-) -> Vec<vol::relight::Surfel> {
+) -> (Vec<vol::relight::Surfel>, Vec<SparseSupport>) {
     let mut model = match vol::io::try_load(&foam.to_string_lossy()) {
         Ok(m) => m,
         Err(e) => {
@@ -810,7 +835,7 @@ fn surfels_from_foam(
         "geometry: merged at a cell size of {voxel:.4} world units in {:.1} s",
         fuse_started.elapsed().as_secs_f64(),
     );
-    let sparse_added = add_sparse_track_support(
+    let sparse_support = add_sparse_track_support(
         &mut surfels,
         reconstruction,
         capture,
@@ -818,7 +843,10 @@ fn surfels_from_foam(
         voxel,
         options.disc_radius,
     );
-    println!("geometry: added {sparse_added} particles from training-only sparse tracks");
+    println!(
+        "geometry: added {} particles from training-only sparse tracks",
+        sparse_support.len()
+    );
     if !args.no_multi_view_refine {
         let refine_started = std::time::Instant::now();
         let refine_views: Vec<train::inverse::refine::RefinementView<'_>> = views
@@ -847,12 +875,27 @@ fn surfels_from_foam(
             refine_started.elapsed().as_secs_f64(),
         );
     }
-    surfels
+    (surfels, sparse_support)
 }
 
 struct SparseCell {
     position_sum: glam::Vec3,
     count: usize,
+    views: collections::HashMap<usize, SparseViewCell>,
+}
+
+struct SparseViewCell {
+    radiance_sum: [f32; 3],
+    count: usize,
+}
+
+struct SparseSupport {
+    observations: Vec<SparseTrackObservation>,
+}
+
+struct SparseTrackObservation {
+    view: usize,
+    radiance: [f32; 3],
 }
 
 fn add_sparse_track_support(
@@ -862,29 +905,38 @@ fn add_sparse_track_support(
     views: &[usize],
     voxel: f32,
     radius_factor: f32,
-) -> usize {
+) -> Vec<SparseSupport> {
     if surfels.is_empty() || !voxel.is_finite() || voxel <= 0.0 {
-        return 0;
+        return Vec::new();
     }
     let image_ids: collections::HashMap<&str, u32> = reconstruction
         .images
         .iter()
         .map(|image| (image.name.as_str(), image.id))
         .collect();
-    let training_ids: collections::HashSet<u32> = views
+    let training_views: collections::HashMap<u32, usize> = views
         .iter()
-        .filter_map(|&index| image_ids.get(capture.views[index].name.as_str()).copied())
+        .filter_map(|&index| {
+            image_ids
+                .get(capture.views[index].name.as_str())
+                .map(|&image_id| (image_id, index))
+        })
         .collect();
     let mut cells = collections::HashMap::<[i32; 3], SparseCell>::new();
     for point in &reconstruction.points {
         let training_support = point
             .track_image_ids
             .iter()
-            .filter(|image| training_ids.contains(image))
+            .filter_map(|image| training_views.get(image).copied())
             .count();
         if training_support < 2 || point.error > 1.0 {
             continue;
         }
+        let point_views: collections::HashSet<usize> = point
+            .track_image_ids
+            .iter()
+            .filter_map(|image| training_views.get(image).copied())
+            .collect();
         let position = glam::Vec3::new(
             point.xyz[0] as f32,
             point.xyz[1] as f32,
@@ -896,9 +948,40 @@ fn add_sparse_track_support(
         let cell = cells.entry(key).or_insert(SparseCell {
             position_sum: glam::Vec3::ZERO,
             count: 0,
+            views: collections::HashMap::new(),
         });
         cell.position_sum += position;
         cell.count += 1;
+        for view in point_views {
+            let image = &capture.views[view];
+            let Some((pixel, _)) = train::inverse::capture::project(
+                &image.camera,
+                capture.width,
+                capture.height,
+                position,
+            ) else {
+                continue;
+            };
+            if pixel[0] < 0.0
+                || pixel[1] < 0.0
+                || pixel[0] >= capture.width as f32
+                || pixel[1] >= capture.height as f32
+            {
+                continue;
+            }
+            let pixel = pixel[1] as usize * capture.width + pixel[0] as usize;
+            if !image.is_foreground(pixel) {
+                continue;
+            }
+            let entry = cell.views.entry(view).or_insert(SparseViewCell {
+                radiance_sum: [0.0; 3],
+                count: 0,
+            });
+            for (sum, value) in entry.radiance_sum.iter_mut().zip(image.pixels[pixel]) {
+                *sum += value;
+            }
+            entry.count += 1;
+        }
     }
     let mut points: Vec<glam::Vec3> = cells
         .values()
@@ -919,8 +1002,8 @@ fn add_sparse_track_support(
     let occupied: Vec<[f32; 3]> = surfels.iter().map(|surfel| surfel.center).collect();
     let occupied = kiddo::ImmutableKdTree::new_from_slice(&occupied);
     let minimum_distance_squared = voxel * voxel;
-    let start = surfels.len();
     let mut added = Vec::<glam::Vec3>::new();
+    let mut support = Vec::<SparseSupport>::new();
     for mut candidate in candidates {
         let center = glam::Vec3::from(candidate.center);
         if occupied
@@ -937,8 +1020,88 @@ fn add_sparse_track_support(
         candidate.material = surfels.len() as u32;
         surfels.push(candidate);
         added.push(center);
+        let key = center
+            .to_array()
+            .map(|coordinate| (coordinate / voxel).floor() as i32);
+        let mut observations: Vec<SparseTrackObservation> = cells[&key]
+            .views
+            .iter()
+            .filter(|entry| entry.1.count >= 2)
+            .map(|entry| SparseTrackObservation {
+                view: *entry.0,
+                radiance: entry.1.radiance_sum.map(|sum| sum / entry.1.count as f32),
+            })
+            .collect();
+        observations.sort_unstable_by_key(|entry| entry.view);
+        support.push(SparseSupport { observations });
     }
-    surfels.len() - start
+    support
+}
+
+fn supplement_sparse_track_observations(
+    observations: &mut train::inverse::decompose::Observations,
+    model: &vol::relight::RelightModel,
+    capture: &train::inverse::capture::Capture,
+    support: &[SparseSupport],
+    min_facing: f32,
+) -> usize {
+    if support.is_empty() {
+        return 0;
+    }
+    let sparse_start = model.surfels.len() - support.len();
+    let mut supplements = Vec::with_capacity(support.len());
+    let mut supplemented = 0;
+    for (offset, sparse) in support.iter().enumerate() {
+        let surfel_index = sparse_start + offset;
+        let surfel = &model.surfels[surfel_index];
+        let center = glam::Vec3::from(surfel.center);
+        let normal = glam::Vec3::from(surfel.normal);
+        let mut samples = Vec::new();
+        if observations.of(surfel_index).is_empty() && sparse.observations.len() >= 2 {
+            for sparse_observation in &sparse.observations {
+                let view = &capture.views[sparse_observation.view];
+                let towards =
+                    (glam::Vec3::from(view.camera.cam_position) - center).normalize_or_zero();
+                let facing = normal.dot(towards);
+                if facing < min_facing {
+                    continue;
+                }
+                samples.push(train::inverse::decompose::Sample {
+                    radiance: sparse_observation.radiance,
+                    towards,
+                    facing,
+                });
+            }
+            supplemented += usize::from(!samples.is_empty());
+        }
+        supplements.push(samples);
+    }
+    if supplemented == 0 {
+        return 0;
+    }
+
+    let old_samples = std::mem::take(&mut observations.samples);
+    let old_offsets = std::mem::take(&mut observations.offsets);
+    let prefix_end = old_offsets[sparse_start] as usize;
+    observations.samples =
+        Vec::with_capacity(old_samples.len() + supplements.iter().map(Vec::len).sum::<usize>());
+    observations
+        .samples
+        .extend_from_slice(&old_samples[..prefix_end]);
+    observations
+        .offsets
+        .extend_from_slice(&old_offsets[..=sparse_start]);
+    for (offset, samples) in supplements.iter().enumerate() {
+        let index = sparse_start + offset;
+        let begin = old_offsets[index] as usize;
+        let end = old_offsets[index + 1] as usize;
+        observations
+            .samples
+            .extend_from_slice(&old_samples[begin..end]);
+        observations.samples.extend_from_slice(samples);
+        observations.offsets.push(observations.samples.len() as u32);
+    }
+    supplemented
 }
 
 fn mask_depth(
@@ -1211,8 +1374,15 @@ mod tests {
             1.0,
             1.7,
         );
-        assert!(added > 0);
+        assert!(!added.is_empty());
         assert!(supported[1..].iter().all(|surfel| surfel.radius == 1.7));
+        assert!(added.iter().all(|support| {
+            support.observations.len() == 2
+                && support
+                    .observations
+                    .iter()
+                    .all(|observation| observation.view < 2)
+        }));
 
         let mut held_only = supported[..1].to_vec();
         let added = add_sparse_track_support(
@@ -1223,7 +1393,84 @@ mod tests {
             1.0,
             1.7,
         );
-        assert_eq!(added, 0);
+        assert!(added.is_empty());
+    }
+
+    #[test]
+    fn sparse_track_observations_supplement_only_unseen_particles() {
+        let camera = vol::CameraParams {
+            cam_position: [0.0, 0.0, -2.0],
+            depth: 100.0,
+            cam_orientation: glam::Quat::IDENTITY.to_array(),
+            fov: [1.0; 2],
+            principal: [0.0; 2],
+        };
+        let capture = train::inverse::capture::Capture {
+            width: 1,
+            height: 1,
+            views: (0..2)
+                .map(|index| train::inverse::capture::View {
+                    name: format!("train-{index}"),
+                    camera,
+                    pixels: vec![[0.25, 0.5, 0.75]],
+                    mask: None,
+                })
+                .collect(),
+        };
+        let model = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![
+                vol::relight::Surfel {
+                    center: [0.0; 3],
+                    radius: 1.0,
+                    normal: [0.0, 0.0, -1.0],
+                    material: 0,
+                },
+                vol::relight::Surfel {
+                    center: [0.0; 3],
+                    radius: 1.0,
+                    normal: [0.0, 0.0, -1.0],
+                    material: 1,
+                },
+            ],
+            materials: vec![vol::relight::Material::default(); 2],
+        };
+        let original = train::inverse::decompose::Sample {
+            radiance: [1.0, 0.0, 0.0],
+            towards: -glam::Vec3::Z,
+            facing: 1.0,
+        };
+        let mut observations = train::inverse::decompose::Observations {
+            samples: vec![original],
+            offsets: vec![0, 1, 1],
+        };
+        let support = vec![SparseSupport {
+            observations: vec![
+                SparseTrackObservation {
+                    view: 0,
+                    radiance: [0.25, 0.5, 0.75],
+                },
+                SparseTrackObservation {
+                    view: 1,
+                    radiance: [0.5, 0.25, 0.125],
+                },
+            ],
+        }];
+
+        let supplemented = supplement_sparse_track_observations(
+            &mut observations,
+            &model,
+            &capture,
+            &support,
+            0.15,
+        );
+
+        assert_eq!(supplemented, 1);
+        assert_eq!(observations.of(0).len(), 1);
+        assert_eq!(observations.of(0)[0].radiance, original.radiance);
+        assert_eq!(observations.of(1).len(), 2);
+        assert_eq!(observations.of(1)[0].radiance, [0.25, 0.5, 0.75]);
+        assert_eq!(observations.of(1)[1].radiance, [0.5, 0.25, 0.125]);
     }
 
     #[test]

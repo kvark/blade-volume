@@ -1897,3 +1897,27 @@ rejected. On the selected Room gate it preserves the exact loss and held-view
 quality but raises direct-fit time from 6.2 to 7.3 seconds. The ray work still
 dominates scoped thread creation at this batch and cloud size; eight workers
 remain simpler than introducing a persistent pool.
+
+Sparse additions now carry material evidence from the same training tracks
+that justified their geometry. The ordinary centre/depth observation pass sees
+only 3 of 180 new Room particles and 4 of 241 new Bonsai particles. For an
+otherwise-unseen addition, each training image contributes only when at least
+two low-error sparse points in that cell were tracked there. Radiance is
+averaged at the original point projections rather than sampled at the cell
+centre, avoiding the aggregate centre's error at depth discontinuities, and at
+least two distinct training views are required. Held images remain excluded.
+
+On the exact Room geometry, this supplements 177 particles and improves held
+PBR mean/worst from 11.31/10.26 to 11.52/10.38 dB without changing 75.6%
+coverage; direct Gaussian quality remains 17.70/17.15 dB versus the prior
+17.70/17.16 dB. On Bonsai it supplements 235 particles and improves held PBR
+from 12.78/12.40 to 12.96/12.67 dB while direct quality changes from
+18.63/18.56 to 18.63/18.57 dB. Final artifacts and telemetry are ignored under
+`target/audit-runs/sparse-track-observation-v6/{room,bonsai}/`.
+
+Filtering sparse geometry by agreement with the source foam depth is rejected:
+it retains only 52 Room additions and erases the direct gain, reaching
+17.40/16.65 dB. Raising per-cell/image evidence from two tracked points to
+three is also rejected; it lowers Room PBR to 11.50/10.09 dB. Sparse tracks are
+useful precisely where the source field's visible surface is missing or biased,
+so the independent correspondence is the appropriate observation gate.
