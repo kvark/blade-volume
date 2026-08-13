@@ -1,7 +1,102 @@
 use blade_volume as vol;
-use std::path;
+use std::{fs, io, path};
 
 const SH_C0: f32 = 0.282_094_8;
+
+const POWERFOAM_DIRECTIONAL_MAGIC: [u8; 8] = *b"BVPFDIR\0";
+const POWERFOAM_DIRECTIONAL_VERSION: u32 = 1;
+
+/// Load the released PowerFoam directional table from a compact interchange
+/// file. The payload is point-major, then spatial-site-major, then
+/// direction-major: all raw XYZ axes followed by all RGB residuals.
+///
+/// The header is `BVPFDIR\0`, little-endian version `1`, and a little-endian
+/// `u64` point count. This deliberately contains only the data absent from a
+/// regular Blade PLY; geometry and mean-direction appearance stay in that PLY.
+pub fn load_powerfoam_directional(
+    file_path: impl AsRef<path::Path>,
+) -> io::Result<(usize, vol::SurfaceDetailDirectional)> {
+    let mut reader = io::BufReader::new(fs::File::open(file_path)?);
+    let mut magic = [0_u8; 8];
+    io::Read::read_exact(&mut reader, &mut magic)?;
+    if magic != POWERFOAM_DIRECTIONAL_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid PowerFoam directional interchange magic",
+        ));
+    }
+    let mut version_bytes = [0_u8; 4];
+    io::Read::read_exact(&mut reader, &mut version_bytes)?;
+    let version = u32::from_le_bytes(version_bytes);
+    if version != POWERFOAM_DIRECTIONAL_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unsupported PowerFoam directional interchange version {version}"),
+        ));
+    }
+    let mut point_count_bytes = [0_u8; 8];
+    io::Read::read_exact(&mut reader, &mut point_count_bytes)?;
+    let point_count = usize::try_from(u64::from_le_bytes(point_count_bytes)).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "PowerFoam directional point count does not fit usize",
+        )
+    })?;
+    let entry_count = point_count
+        .checked_mul(vol::SURFACE_DETAIL_SITES)
+        .and_then(|count| count.checked_mul(vol::SURFACE_DETAIL_DIRECTIONS))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "PowerFoam directional entry count overflows usize",
+            )
+        })?;
+    let half_bytes = entry_count.checked_mul(12).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "PowerFoam directional payload size overflows usize",
+        )
+    })?;
+    let payload_bytes = half_bytes.checked_mul(2).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "PowerFoam directional payload size overflows usize",
+        )
+    })?;
+    let mut payload = vec![0_u8; payload_bytes];
+    io::Read::read_exact(&mut reader, &mut payload)?;
+    let mut trailing = [0_u8; 1];
+    if io::Read::read(&mut reader, &mut trailing)? != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "PowerFoam directional interchange has trailing bytes",
+        ));
+    }
+
+    let decode = |bytes: &[u8]| -> io::Result<Vec<glam::Vec3>> {
+        bytes
+            .chunks_exact(12)
+            .map(|chunk| {
+                let value = glam::Vec3::new(
+                    f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+                    f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
+                    f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]),
+                );
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "PowerFoam directional payload contains a non-finite value",
+                    ))
+                }
+            })
+            .collect()
+    };
+    let axes = decode(&payload[..half_bytes])?;
+    let colors = decode(&payload[half_bytes..])?;
+    Ok((point_count, vol::SurfaceDetailDirectional { axes, colors }))
+}
 
 /// Interior jitter applied to triangulated output when none is requested.
 ///
@@ -2155,6 +2250,53 @@ fn logit(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn powerfoam_directional_interchange_roundtrips_exactly() {
+        let point_count = 2_usize;
+        let entry_count = point_count * vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+        let axes = (0..entry_count)
+            .map(|index| {
+                glam::Vec3::new(
+                    index as f32 * 0.01,
+                    1.0 - index as f32 * 0.02,
+                    index as f32 * -0.03,
+                )
+            })
+            .collect::<Vec<_>>();
+        let colors = (0..entry_count)
+            .map(|index| {
+                glam::Vec3::new(
+                    index as f32 * -0.004,
+                    index as f32 * 0.005,
+                    0.25 - index as f32 * 0.006,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&POWERFOAM_DIRECTIONAL_MAGIC);
+        bytes.extend_from_slice(&POWERFOAM_DIRECTIONAL_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&(point_count as u64).to_le_bytes());
+        for values in [&axes, &colors] {
+            for value in values {
+                for component in value.to_array() {
+                    bytes.extend_from_slice(&component.to_le_bytes());
+                }
+            }
+        }
+        let file_path = std::env::temp_dir().join(format!(
+            "blade-volume-powerfoam-directional-{}-{:?}.bin",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        std::fs::write(&file_path, bytes).unwrap();
+
+        let (loaded_count, loaded) = load_powerfoam_directional(&file_path).unwrap();
+        assert_eq!(loaded_count, point_count);
+        assert_eq!(loaded.axes, axes);
+        assert_eq!(loaded.colors, colors);
+        std::fs::remove_file(file_path).unwrap();
+    }
 
     #[test]
     fn srgb_transfer_roundtrips_code_values() {
