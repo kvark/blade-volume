@@ -962,3 +962,15 @@ refinement is consistently 0.02--0.03 dB below the selected primary-light
 pass. Every prototype and CLI/API addition is removed. PBR recovery remains
 blocked on a more accurate shared surface and forward light transport; image
 score alone is explicitly not evidence of physical material recovery.
+
+Feeding the successful measured-light normals back into the existing
+multi-view position sweep does not produce that surface. A second sweep moves
+97--148 particles and improves three held-light means by 0.02--0.12 dB, but
+the fixed mean/tail lose 0.025/0.02 dB and one cloud loses 0.1 coverage point.
+A 5% acceptance threshold gives away the strongest gain without fixing the
+loss. Retaining moves only for particles whose normal actually changed makes
+the fixed regression larger at 0.04/0.02 dB. Truth position changes by at most
+0.0006, while truth normal error becomes 0.1--0.2 degrees worse in every arm.
+The implementation is removed. A photometrically better shading normal is not
+automatically the tangent plane that matches patches around a noisy layered
+center; those variables need one joint surface correspondence objective.
