@@ -162,6 +162,12 @@ capture or a scene containing a reference patch. Without such information the
 default remains 0.8 and the output reports an assumption, not a recovered
 absolute reflectance.
 
+For a controlled capture whose illumination is measured,
+`reconstruct --environment capture.f32` fixes that linear-radiance environment
+and solves only the materials. Its resolution also selects the matching
+visibility directions. Without the option, reconstruction retains the harder
+unknown-light fit and writes its recovered environment beside the scene.
+
 ### visibility, and why the bounce is not optional
 
 Without shadowing, a patch of floor in a sphere's shadow has one way to be

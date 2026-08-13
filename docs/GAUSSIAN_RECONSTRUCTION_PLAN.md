@@ -839,3 +839,11 @@ with output quality in the decisive arms: it worsens on the large relighting
 gain and improves on the loss. The implementation is removed. With noisy
 orientation, neither the fitted environment nor corrected per-surfel albedo is
 an independent signal for choosing the other.
+
+The controlled-light path is now available to ordinary COLMAP captures, not
+only synthetic diagnostics. `reconstruct --environment capture.f32` loads a
+measured linear-radiance environment, uses its resolution for visibility, and
+holds it fixed while fitting materials. Unknown-light recovery remains the
+default. A reduced Bonsai end-to-end smoke reconstructs and scores normally,
+and its written environment sidecar is byte-identical to the supplied file;
+the command adds no alternate material or rendering implementation.

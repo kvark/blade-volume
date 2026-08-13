@@ -51,6 +51,11 @@ struct Args {
     #[argh(option, default = "32")]
     environment_width: usize,
 
+    /// known linear-radiance environment; when supplied, fit materials without
+    /// trying to recover the capture light
+    #[argh(option)]
+    environment: Option<String>,
+
     /// alternations between solving for albedo and for light (default 24)
     #[argh(option, default = "24")]
     iterations: usize,
@@ -153,6 +158,19 @@ struct Args {
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
+
+    let known_light = args.environment.as_ref().map(|file| {
+        vol::io::try_load_environment(path::Path::new(file)).unwrap_or_else(|error| {
+            eprintln!("cannot read known environment {file}: {error}");
+            std::process::exit(1);
+        })
+    });
+    if let Some(ref file) = args.environment {
+        println!("light: fixed from {file}");
+    }
+    let environment_width = known_light
+        .as_ref()
+        .map_or(args.environment_width, |light| light.width);
 
     let sparse = path::Path::new(&args.sparse);
     let images = path::Path::new(&args.images);
@@ -276,7 +294,7 @@ fn main() {
         None
     } else {
         let started = std::time::Instant::now();
-        let directions = train::inverse::decompose::environment_directions(args.environment_width);
+        let directions = train::inverse::decompose::environment_directions(environment_width);
         let computed = train::inverse::visibility::compute(
             &geometry,
             &directions,
@@ -297,7 +315,7 @@ fn main() {
         &observations,
         train::inverse::decompose::FitOptions {
             materials: args.materials,
-            environment_width: args.environment_width,
+            environment_width,
             iterations: args.iterations,
             specular_rounds: args.specular_rounds,
             brightest_albedo: args.brightest_albedo,
@@ -305,7 +323,7 @@ fn main() {
         },
         train::inverse::decompose::Given {
             visibility: shadows.as_ref(),
-            light: None,
+            light: known_light.as_ref(),
         },
     );
     println!(
@@ -607,4 +625,33 @@ fn describe_light(environment: &vol::relight::Environment) {
         direction.z,
         brightest.1 / mean.max(1.0e-6)
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_environment_is_an_optional_cli_input() {
+        let defaults = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &["--sparse", "sparse", "--images", "images"],
+        )
+        .unwrap();
+        assert!(defaults.environment.is_none());
+
+        let known = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--environment",
+                "capture.f32",
+            ],
+        )
+        .unwrap();
+        assert_eq!(known.environment.as_deref(), Some("capture.f32"));
+    }
 }
