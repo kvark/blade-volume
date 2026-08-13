@@ -2099,6 +2099,44 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   performance target is the required directional-colour backward itself, not
   another Adam or shader-taxonomy specialization.
 
+#### M2bp — Keep dedicated parameter gradients device-local (done)
+
+- The next profile found the same placement mistake on parameter gradients.
+  They must keep dedicated allocations because runtime optimizer passes consume
+  them after the static graph, but optional gradient inspection does not require
+  a permanently mapped buffer. Large directional-colour accumulation was
+  therefore paying host-visible bandwidth on both the backward write and the
+  following optimizer read.
+- Meganeura's memory plan now separates allocation lifetime from host
+  visibility: parameter gradients stay dedicated but use device-local memory.
+  Existing inspection, CPU clipping, and legacy CPU-SGD paths stage transfers;
+  the device-local kill switch still restores the all-shared diagnostic layout.
+  A new CPU-clipping test verifies the complete staged read/scale/write path,
+  and the full suite caught and closed the initially missed CPU-SGD direct
+  mapping before the change was selected.
+- The downstream all-target gate found one more concrete host-visibility
+  contract: a parameter gradient can itself be a compile-time constant, and
+  session construction initializes constants from the host. The memory plan
+  now leaves only those constant gradients shared. A direct scalar-loss
+  regression and the previously aborting oriented-surface Jacobian test both
+  pass; this exception is tiny and does not affect the measured colour table.
+- On the same 200K-site Room profile, the 38.4M-element colour-gradient add
+  falls from 9.51 to 0.76 ms, Adam from 16.93 to 3.01 ms, and the steady full
+  graph from 126.65 to 87.72 ms (-30.7%). Four-step GPU wait falls from 0.584
+  to 0.444 seconds. The four training views remain 25.8181 dB and all eight
+  held views remain 25.2813 dB with identical reported per-view scores. The
+  10 GB profile scope peaks at 6.934 GB with zero limit, swap, OOM, or GPU
+  fault event.
+- Meganeura fmt, warning-denied clippy, and every all-target test pass in a
+  12 GB cgroup; the final scope peaks at 10.219 GB with no limit event or swap.
+  This generic allocator change adds no graph op, shader edit, shader
+  entry/group, binding, pipeline, renderer, or backend variant. The remaining
+  directional cost is now the actual per-ray colour function rather than
+  storage placement.
+- The final locked Blade workspace fmt, warning-denied clippy, and all-target
+  tests also pass under a 12 GB cgroup. That scope peaks at 4.791 GB with zero
+  limit, swap, OOM, kill, or GPU-fault events on the RTX 5070.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

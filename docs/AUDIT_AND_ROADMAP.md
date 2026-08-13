@@ -2055,8 +2055,17 @@ material path.
    transfers, cuts the 200K-site Adam pass from 65.3--66.2 to 16.2--16.9 ms and
    the complete profiled graph to 126.6--127.5 ms. Eight held-out Room views are
    unchanged at 25.2813 dB, and this runtime-only change adds no graph op,
-   shader edit, shader entry/group, or backend variant. The next bounded target
-   is now solely the required colour-table backward, followed by a longer
+   shader edit, shader entry/group, or backend variant. Separating dedicated
+   gradient lifetime from host visibility then keeps parameter gradients
+   device-local while staging the diagnostic and CPU fallback APIs. The
+   38.4M-element colour-gradient add falls from 9.51 to 0.76 ms, Adam falls
+   again from 16.93 to 3.01 ms, and the steady graph reaches 87.72 ms (-30.7%)
+   at the same reported per-view quality. Full shared/device, clipping,
+   accumulation, CPU-SGD, checkpoint, and all-target gates pass. Constant
+   parameter gradients remain shared because the session initializes constants
+   from the host; regressions cover this rare dual-role buffer and the
+   downstream oriented-surface graph that exposed it. The remaining bounded
+   target is now the actual per-ray colour function, followed by a longer
    quality gate.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
    sweep the ray-query batch window for invariant pixels, query count, and frame
