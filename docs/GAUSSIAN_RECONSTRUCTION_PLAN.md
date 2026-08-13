@@ -1424,3 +1424,29 @@ raised the complete graph step to 6.21--6.28 ms. The prototype and diagnostic
 hooks are removed. Existing code-generated reduction fusion is beneficial;
 future work should improve the generic multi-gather reduction or atomic
 accumulation itself, not add a Blade-specific op or pre-made shader variant.
+
+Splitting the facing-ranked photographs into two disjoint correspondence sets
+does not make the image-derived center sweep more reliable. Requiring both
+halves to prefer the same depth cuts accepted moves from 63/92/86/90 to
+31/54/46/52 on four clouds, but changes neither position nor normal error
+meaningfully. Held-light mean/worst PSNR changes by 0.00/-0.05,
+-0.04/-0.04, 0.00/-0.06, and -0.02/+0.02 dB while scoring work roughly
+triples. The prototype is removed. Agreement between smaller subsets of the
+same normalized patches cannot resolve their shared occlusion and material
+ambiguity; the fidelity target remains a learned descriptor or joint rendered
+surface objective.
+
+The narrow row-scaled atomic accumulation is now selected without adding an
+operation or shader variant. Meganeura mutates the existing fused scatter's
+work mapping when its row has at most 16 channels: one invocation loads the
+source row, index, and scale once, then accumulates its channels. Wider rows
+retain the scalar mapping. On the surface continuation's four- and nine-channel
+gradients, the three dominant scatters fall from 1.06--1.23 ms to about
+0.08 ms total and the 258-pass graph from about 6.1 to 5.0 ms. Four complete
+1,800-update continuations fall from 17.69--17.95 to 15.57--15.68 seconds
+(12--13%) with unchanged position error and coverage within 0.1 point.
+Held-light mean PSNR changes by +0.01, +0.03, +0.13, and -0.07 dB in the
+first paired runs; repeated fourth-cloud medians narrow the last delta to
+-0.04 dB, within both kernels' observed atomic variance. A repeated-index
+physical-GPU gradient oracle is bit-exact, the complete Meganeura all-target
+suite passes, and Blade pins Meganeura `6022c11`.
