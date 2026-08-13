@@ -1840,3 +1840,14 @@ sync path; it adds no cache, operation, shader, or public setting. Extending
 the support-stage sync interval from 10 to 20 is rejected despite reaching
 4.9 and 10.4 seconds: stale growing supports reduce Bonsai mean/worst quality
 by 0.05/0.08 dB. Support therefore retains the ten-update cadence.
+
+Indexed per-ray candidate recording is now divided into at most eight
+contiguous host ranges. Each worker owns disjoint output slices and retains the
+same exact response test, depth sort, and point-index tie break, so the
+existing indexed-versus-exhaustive test remains bit-exact. Two warm fixed-cloud
+runs take 2.72 and 2.77 seconds instead of 5.10 seconds after the static-index
+change (5.4 seconds before either optimization), with unchanged 20.83/19.87 dB
+held quality. Bonsai falls from 11.3 to 7.3 seconds while retaining
+18.62/18.55 dB. The cap avoids unbounded host contention; batches below 64
+rays per worker use fewer threads. This changes only private CPU work
+partitioning and adds no dependency, operation, graph, shader, or public API.

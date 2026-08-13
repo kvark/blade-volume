@@ -660,29 +660,102 @@ fn record_indexed_candidates(
 ) -> FlatCandidates {
     let pixels = batch.origins.len();
     let entries = pixels * candidates_per_pixel;
-    let mut result = FlatCandidates {
-        indices: vec![0_u32; entries],
-        mask: vec![0.0_f32; entries],
-        pixel_indices: vec![0_u32; entries],
-        depths: vec![0.0_f32; entries],
+    let mut indices = vec![0_u32; entries];
+    let mut mask = vec![0.0_f32; entries];
+    let mut pixel_indices = vec![0_u32; entries];
+    let mut depths = vec![0.0_f32; entries];
+    let worker_count = thread::available_parallelism()
+        .map_or(1, |count| count.get())
+        .min(8)
+        .min(pixels.div_ceil(64).max(1));
+    let chunk_pixels = pixels.div_ceil(worker_count);
+    thread::scope(|scope| {
+        let mut remaining = CandidateSlices {
+            indices: &mut indices,
+            mask: &mut mask,
+            pixel_indices: &mut pixel_indices,
+            depths: &mut depths,
+        };
+        for worker in 0..worker_count {
+            let begin = worker * chunk_pixels;
+            let end = (begin + chunk_pixels).min(pixels);
+            if begin == end {
+                break;
+            }
+            let chunk_entries = (end - begin) * candidates_per_pixel;
+            let (worker_indices, rest) = remaining.indices.split_at_mut(chunk_entries);
+            remaining.indices = rest;
+            let (worker_mask, rest) = remaining.mask.split_at_mut(chunk_entries);
+            remaining.mask = rest;
+            let (worker_pixel_indices, rest) = remaining.pixel_indices.split_at_mut(chunk_entries);
+            remaining.pixel_indices = rest;
+            let (worker_depths, rest) = remaining.depths.split_at_mut(chunk_entries);
+            remaining.depths = rest;
+            scope.spawn(move || {
+                record_indexed_candidate_range(
+                    model,
+                    &batch.origins[begin..end],
+                    &batch.directions[begin..end],
+                    &batch.views[begin..end],
+                    &batch.pixels[begin..end],
+                    index,
+                    begin,
+                    candidates_per_pixel,
+                    min_alpha,
+                    CandidateSlices {
+                        indices: worker_indices,
+                        mask: worker_mask,
+                        pixel_indices: worker_pixel_indices,
+                        depths: worker_depths,
+                    },
+                );
+            });
+        }
+    });
+    FlatCandidates {
+        indices,
+        mask,
+        pixel_indices,
+        depths,
         pixels,
         candidates_per_pixel,
-    };
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_indexed_candidate_range(
+    model: &vol::PointCloudModel,
+    origins: &[glam::Vec3],
+    directions: &[glam::Vec3],
+    views: &[usize],
+    pixels: &[usize],
+    index: &CandidateIndex,
+    first_pixel: usize,
+    candidates_per_pixel: usize,
+    min_alpha: f32,
+    output: CandidateSlices<'_>,
+) {
     let mut hits = Vec::new();
-    for pixel in 0..pixels {
-        match index.candidates(batch.views[pixel], batch.pixels[pixel]) {
+    for (local_pixel, (((&origin, &direction), &view), &pixel)) in origins
+        .iter()
+        .zip(directions)
+        .zip(views)
+        .zip(pixels)
+        .enumerate()
+    {
+        match index.candidates(view, pixel) {
             Some(candidates) => collect_candidate_hits(
                 model,
-                batch.origins[pixel],
-                batch.directions[pixel],
+                origin,
+                direction,
                 candidates.iter().map(|&candidate| candidate as usize),
                 min_alpha,
                 &mut hits,
             ),
             None => collect_candidate_hits(
                 model,
-                batch.origins[pixel],
-                batch.directions[pixel],
+                origin,
+                direction,
                 0..model.points.len(),
                 min_alpha,
                 &mut hits,
@@ -694,16 +767,17 @@ fn record_indexed_candidates(
                 .then_with(|| left.1.cmp(&right.1))
         });
         for (slot, &(depth, particle)) in hits.iter().take(candidates_per_pixel).enumerate() {
-            let flat = pixel * candidates_per_pixel + slot;
-            result.indices[flat] = particle;
-            result.mask[flat] = 1.0;
-            result.depths[flat] = depth;
+            let flat = local_pixel * candidates_per_pixel + slot;
+            output.indices[flat] = particle;
+            output.mask[flat] = 1.0;
+            output.depths[flat] = depth;
         }
-        let pixel_index = u32::try_from(pixel).expect("ray batch exceeds u32 pixel indices");
-        result.pixel_indices[pixel * candidates_per_pixel..(pixel + 1) * candidates_per_pixel]
+        let pixel_index =
+            u32::try_from(first_pixel + local_pixel).expect("ray batch exceeds u32 pixel indices");
+        output.pixel_indices
+            [local_pixel * candidates_per_pixel..(local_pixel + 1) * candidates_per_pixel]
             .fill(pixel_index);
     }
-    result
 }
 
 /// Render an SH-0 or SH-1 Gaussian model with the exact CPU response oracle.
