@@ -411,6 +411,30 @@ impl Renderer {
         error / (indices.len() * frame_pixels * 3) as f64
     }
 
+    pub(crate) fn prepared_srgb_errors(
+        &mut self,
+        tracer: &mut vol::gpu::RelightTracer,
+        capture: &capture::Capture,
+        indices: &[usize],
+        cameras: &[vol::CameraParams],
+    ) -> Vec<f32> {
+        let frame_pixels = capture.width * capture.height;
+        let pixels = self.render_prepared_flat(tracer, cameras);
+        let mut errors = Vec::with_capacity(pixels.len());
+        for (frame, &index) in pixels.chunks(frame_pixels).zip(indices) {
+            for (rendered, reference) in frame.iter().zip(&capture.views[index].pixels) {
+                let mut error = 0.0f32;
+                for channel in 0..3 {
+                    let difference = capture::linear_to_srgb(rendered[channel])
+                        - capture::linear_to_srgb(reference[channel]);
+                    error += difference * difference;
+                }
+                errors.push(error / 3.0);
+            }
+        }
+        errors
+    }
+
     pub(crate) fn destroy_prepared_scene(&mut self, mut tracer: vol::gpu::RelightTracer) {
         self.geometry_update_pending = false;
         tracer.deinit(&self.context);

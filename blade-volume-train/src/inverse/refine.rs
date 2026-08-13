@@ -120,6 +120,17 @@ fn rendered_loss(
     renderer.prepared_srgb_loss(tracer, capture, indices, cameras)
 }
 
+fn rendered_errors(
+    renderer: &mut score::Renderer,
+    tracer: &mut vol::gpu::RelightTracer,
+    capture: &capture::Capture,
+    indices: &[usize],
+    cameras: &[vol::CameraParams],
+) -> Vec<f32> {
+    tracer.reset_sampling();
+    renderer.prepared_srgb_errors(tracer, capture, indices, cameras)
+}
+
 /// Refine the small shared diffuse-material table against complete production
 /// renders of the training photographs, first at `step` and then at half that
 /// step.
@@ -238,6 +249,70 @@ fn offset_prior(offsets: &[f32]) -> f64 {
         / offsets.len().max(1) as f64
 }
 
+fn mean_error(errors: &[f32]) -> f64 {
+    errors.iter().map(|&value| value as f64).sum::<f64>() / errors.len().max(1) as f64
+}
+
+fn projected_error_difference(
+    plus: &[f32],
+    minus: &[f32],
+    capture: &capture::Capture,
+    cameras: &[vol::CameraParams],
+    surfel: &vol::relight::Surfel,
+) -> Option<f32> {
+    debug_assert_eq!(plus.len(), minus.len());
+    debug_assert_eq!(plus.len(), cameras.len() * capture.width * capture.height);
+    let center = glam::Vec3::from(surfel.center);
+    let normal = glam::Vec3::from(surfel.normal).normalize_or_zero();
+    let tangent = tangent_to(normal);
+    let bitangent = normal.cross(tangent);
+    let frame_pixels = capture.width * capture.height;
+    let mut difference = 0.0f64;
+    let mut samples = 0usize;
+    for (frame, camera) in cameras.iter().enumerate() {
+        let Some((pixel, _)) = capture::project(camera, capture.width, capture.height, center)
+        else {
+            continue;
+        };
+        let Some((pixel_tangent, _)) = capture::project(
+            camera,
+            capture.width,
+            capture.height,
+            center + surfel.radius * tangent,
+        ) else {
+            continue;
+        };
+        let Some((pixel_bitangent, _)) = capture::project(
+            camera,
+            capture.width,
+            capture.height,
+            center + surfel.radius * bitangent,
+        ) else {
+            continue;
+        };
+        let extent_x = (pixel_tangent[0] - pixel[0])
+            .abs()
+            .max((pixel_bitangent[0] - pixel[0]).abs())
+            .max(0.5);
+        let extent_y = (pixel_tangent[1] - pixel[1])
+            .abs()
+            .max((pixel_bitangent[1] - pixel[1]).abs())
+            .max(0.5);
+        let min_x = (pixel[0] - extent_x).floor().max(0.0) as usize;
+        let max_x = (pixel[0] + extent_x).ceil().min(capture.width as f32) as usize;
+        let min_y = (pixel[1] - extent_y).floor().max(0.0) as usize;
+        let max_y = (pixel[1] + extent_y).ceil().min(capture.height as f32) as usize;
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                let slot = frame * frame_pixels + y * capture.width + x;
+                difference += (plus[slot] - minus[slot]) as f64;
+                samples += 1;
+            }
+        }
+    }
+    (samples > 0).then_some((difference / samples as f64) as f32)
+}
+
 fn refine_simultaneous(
     scene: &mut score::Scene,
     renderer: &mut score::Renderer,
@@ -269,7 +344,8 @@ fn refine_simultaneous(
             .collect();
         apply_offsets(scene, candidates, &anchors, &plus_offsets);
         renderer.update_prepared_surfels(&scene.model.surfels);
-        let plus = rendered_loss(renderer, tracer, capture, indices, cameras);
+        let plus_errors = rendered_errors(renderer, tracer, capture, indices, cameras);
+        let plus = mean_error(&plus_errors);
         let plus_objective = plus + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&plus_offsets);
 
         let minus_offsets: Vec<f32> = offsets
@@ -281,10 +357,52 @@ fn refine_simultaneous(
             .collect();
         apply_offsets(scene, candidates, &anchors, &minus_offsets);
         renderer.update_prepared_surfels(&scene.model.surfels);
-        let minus = rendered_loss(renderer, tracer, capture, indices, cameras);
+        let minus_errors = rendered_errors(renderer, tracer, capture, indices, cameras);
+        let minus = mean_error(&minus_errors);
         let minus_objective = minus + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&minus_offsets);
 
-        if plus_objective < objective && plus_objective <= minus_objective {
+        // A whole-frame SPSA difference gives every particle the same scalar
+        // direction, although one particle affects only a small screen patch.
+        // Correlate each antithetic sign with the error difference inside its
+        // projected Gaussian footprint instead. The proposal is still scored
+        // by complete production renders, with the two original whole-frame
+        // perturbations retained as fallbacks, so this changes neither the
+        // renderer nor the acceptance objective.
+        let localized_offsets: Vec<f32> = offsets
+            .iter()
+            .zip(candidates)
+            .enumerate()
+            .map(|(candidate, (&offset, &index))| {
+                let mut surfel = scene.model.surfels[index];
+                let normal = glam::Vec3::from(surfel.normal).normalize_or_zero();
+                surfel.center = (glam::Vec3::from(anchors[candidate])
+                    + offset * surfel.radius * normal)
+                    .to_array();
+                projected_error_difference(&plus_errors, &minus_errors, capture, cameras, &surfel)
+                    .filter(|gradient| *gradient != 0.0)
+                    .map_or(offset, |gradient| {
+                        offset
+                            - gradient.signum()
+                                * perturbation_sign(index, round)
+                                * SIMULTANEOUS_STEP_FACTOR
+                    })
+            })
+            .collect();
+        apply_offsets(scene, candidates, &anchors, &localized_offsets);
+        renderer.update_prepared_surfels(&scene.model.surfels);
+        let localized = rendered_loss(renderer, tracer, capture, indices, cameras);
+        let localized_objective =
+            localized + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&localized_offsets);
+
+        if localized_objective < objective
+            && localized_objective <= plus_objective
+            && localized_objective <= minus_objective
+        {
+            offsets = localized_offsets;
+            loss = localized;
+            objective = localized_objective;
+            accepted += 1;
+        } else if plus_objective < objective && plus_objective <= minus_objective {
             offsets = plus_offsets;
             apply_offsets(scene, candidates, &anchors, &offsets);
             renderer.update_prepared_surfels(&scene.model.surfels);
@@ -293,6 +411,8 @@ fn refine_simultaneous(
             accepted += 1;
         } else if minus_objective < objective {
             offsets = minus_offsets;
+            apply_offsets(scene, candidates, &anchors, &offsets);
+            renderer.update_prepared_surfels(&scene.model.surfels);
             loss = minus;
             objective = minus_objective;
             accepted += 1;
@@ -308,8 +428,12 @@ fn refine_simultaneous(
 /// PBR render of every training photograph.
 ///
 /// Simultaneous rounds test one deterministic paired perturbation of every
-/// observed particle, with a small radius-normalized anchor prior. The exact
-/// pass then tests up to `max_particles` independently in both directions.
+/// observed particle, derive a localized direction from the per-pixel
+/// antithetic error inside each projected Gaussian footprint, and keep the
+/// best of that proposal and the original two whole-frame directions. Every
+/// proposal refreshes the production TLAS and all training renders. A small
+/// radius-normalized anchor prior limits drift. The exact pass then tests up
+/// to `max_particles` independently in both directions.
 /// Materials and illumination stay fixed throughout. The held-out cameras
 /// never enter this function; callers decide which indices are training
 /// evidence.
@@ -1311,7 +1435,6 @@ mod tests {
         let second_sampled = truth_renderer.render_prepared_views(&mut sampled, &cameras);
         assert_eq!(first_sampled, second_sampled);
         truth_renderer.destroy_prepared_scene(sampled);
-        truth_renderer.destroy();
         let capture = capture::Capture {
             width: SIZE,
             height: SIZE,
@@ -1328,6 +1451,16 @@ mod tests {
                 })
                 .collect(),
         };
+        let mut scored = truth_renderer.prepare_scene(&truth, 2, false);
+        scored.reset_sampling();
+        let scalar_loss =
+            truth_renderer.prepared_srgb_loss(&mut scored, &capture, &[0, 1], &cameras);
+        scored.reset_sampling();
+        let pixel_errors =
+            truth_renderer.prepared_srgb_errors(&mut scored, &capture, &[0, 1], &cameras);
+        assert!((scalar_loss - mean_error(&pixel_errors)).abs() < 1.0e-8);
+        truth_renderer.destroy_prepared_scene(scored);
+        truth_renderer.destroy();
 
         let mut displaced = make_scene(0.075);
         let observations = decompose::observe(&displaced.model, &capture, &[0, 1], 0.1);
@@ -1420,5 +1553,18 @@ mod tests {
             first_stats.simultaneous_accepted,
             second_stats.simultaneous_accepted
         );
+
+        let mut final_renderer = score::Renderer::new(SIZE, SIZE).unwrap();
+        let mut final_tracer = final_renderer.prepare_scene(&first, 0, false);
+        let final_loss = rendered_loss(
+            &mut final_renderer,
+            &mut final_tracer,
+            &capture,
+            &[0, 1],
+            &cameras,
+        );
+        final_renderer.destroy_prepared_scene(final_tracer);
+        final_renderer.destroy();
+        assert!((first_stats.final_loss - final_loss).abs() < 1.0e-8);
     }
 }

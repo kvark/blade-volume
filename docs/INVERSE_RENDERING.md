@@ -472,22 +472,27 @@ the relighting improvement: the fixed held score falls from 18.43/18.37 to
 candidate is retained because this option is explicitly the final-quality
 path, not the fastest surface-preserving approximation.
 
-`--render-refine-rounds 64` is the faster full-cloud alternative. Every round
+`--render-refine-rounds 8` is the faster full-cloud alternative. Every round
 assigns a deterministic ±2.5% radius-normalized displacement to every observed
-Gaussian, renders both signs through the same retained production tracer, and
-keeps the better sign only when joint training-camera error plus a 0.001
-anchor prior falls. Thus two renderer evaluations update thousands of scalar
-coordinates without a new shader or differentiable surrogate. It can be
-followed by `--render-refine N` when both options are supplied.
+Gaussian and renders both signs through the retained production tracer. Each
+Gaussian then correlates its sign with the sRGB error difference inside its
+projected footprint. A complete render accepts the localized full-cloud
+proposal only when joint training-camera error plus a 0.001 anchor prior falls;
+the two global signs remain fallbacks. This introduces no new shader, op,
+binding, pipeline, or acceleration-structure variant. It can be followed by
+`--render-refine N` when both options are supplied.
 
-On five synthetic clouds, 64 rounds beat the 300-coordinate pass on every
-held-light mean and worst view in 0.83--0.86 rather than 3.53--3.67 seconds.
-Truth position RMSE is 0.0007--0.0016 world units worse, which is why this
-remains an explicit speed/quality tradeoff. On Bonsai it matches the coordinate
-held result at 14.52/11.71 dB and improves training PSNR to 15.90 dB in 10.0
-seconds rather than 45.7. On Room it is mean-neutral and +0.01 dB worst versus
-the control in 11.0 seconds; the exact 300-coordinate pass remains stronger at
-14.14/13.20 dB but costs 50.7 seconds.
+Eight rounds improve every held-light mean and worst view over the former
+64-round global method on five synthetic clouds in 0.227--0.234 rather than
+0.460--0.475 seconds. They improve truth position RMSE on four clouds and are
+within 0.0002 world units on the fifth. Matched current-pipeline transfer keeps
+held coverage fixed or better: Bonsai moves from 14.23/11.85 to 14.30/11.92 dB
+and Room from 14.18/13.41 to 14.24/13.47 dB, with a 2.6--2.7-second pass.
+Longer schedules keep improving RGB—64 rounds reach 14.42/11.98 on Bonsai and
+14.54/13.79 dB on Room—but Bonsai gives up 0.1 coverage point from round 16
+and synthetic support drift reaches 0.4 points. Eight is consequently the
+recommended coverage-preserving schedule. Larger values are valid explicit
+PSNR-first choices rather than a new default.
 
 Tail-aware and approximate-camera shortcuts were also rejected. Weighting the
 worst training camera does not transfer to the worst unseen pose. Rendering

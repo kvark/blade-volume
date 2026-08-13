@@ -3428,6 +3428,95 @@ prior_0_003_64 = "passes all synthetic gates but loses 0.01 dB on the Bonsai tai
 prior_0_01_128 = "passes all synthetic gates but loses 0.01 dB on the Room mean"
 verdict = "retain the weakest 0.001 prior at 64 rounds; it is the only tested schedule that passes every synthetic tail and both real-scene transfer gates"
 
+# Localizing the same antithetic error field to each projected Gaussian
+# footprint makes eight rounds stronger and faster than the retained global
+# 64-round control. Complete production renders still select every proposal;
+# the old whole-frame signs remain fallbacks. No GPU interface or shader grows.
+[rendered_surface_refinement.localized_antithetic]
+date = "2026-08-13"
+cli = "--render-refine-rounds 8"
+rounds = 8
+step_radius_fraction = 0.025
+offset_prior = 0.001
+particles = "all observed"
+held_out_evidence_used = false
+synthetic_clouds = 5
+global_64_held_light_psnr = [18.30, 19.27, 19.28, 18.70, 18.62]
+localized_8_held_light_psnr = [18.40, 19.31, 19.33, 18.79, 18.73]
+global_64_worst_held_light_psnr = [18.29, 19.02, 18.74, 18.65, 18.44]
+localized_8_worst_held_light_psnr = [18.37, 19.09, 18.80, 18.75, 18.56]
+global_64_where_hit_psnr = [18.18, 18.44, 18.69, 17.96, 17.75]
+localized_8_where_hit_psnr = [18.25, 18.50, 18.73, 18.07, 17.87]
+global_64_coverage = [0.536, 0.559, 0.555, 0.556, 0.557]
+localized_8_coverage = [0.536, 0.559, 0.554, 0.556, 0.555]
+extracted_position_rmse = [0.6209, 0.5976, 0.5953, 0.5842, 0.5853]
+localized_8_position_rmse = [0.6204, 0.5974, 0.5943, 0.5838, 0.5856]
+global_64_seconds = [0.464, 0.472, 0.463, 0.460, 0.475]
+localized_8_seconds = [0.227, 0.231, 0.234, 0.228, 0.229]
+localized_8_artifact_sha256 = [
+    "f77fef2a8bab5567647a69119c8a2956ec8d5ed0e73404a72d94e6a22f821590",
+    "d27eea1e1d13b2c97dd644b40d8adc75ca7222a0bd71c789d7996cb45417b683",
+    "e49d7f88d7d9311b01290e94acc4ec60ef09476f4cc014f9c13f881c0f3b1336",
+    "0118845dd96b4a46a976a1f7f84594e83c3c1ff6da91d93bd9517c49003250e5",
+    "11bec3a9cc31e6bb9718b38904b88a857499887a170cba38027a824a91f03192",
+]
+peak_memory_bytes = 301719552
+swap_peak_bytes = 0
+memory_events = 0
+driver_faults = 0
+verdict = "keep opt-in at eight rounds: all synthetic mean/tail/where-hit gates improve over global 64 at about half the time; small support changes do not transfer to the real controls"
+
+[rendered_surface_refinement.localized_antithetic.real.bonsai]
+accepted_rounds = 8
+control_train_psnr = [15.45, 12.14]
+localized_train_psnr = [15.54, 12.17]
+control_test_psnr = [14.23, 11.85]
+localized_test_psnr = [14.30, 11.92]
+control_test_coverage = 0.919
+localized_test_coverage = 0.919
+control_test_where_hit_psnr = 15.20
+localized_test_where_hit_psnr = 15.29
+seconds = 2.7
+artifact_sha256 = "6a2b9fd08ee640f2b78ebe89a86e8c54294feba08433ece89d79c417ef9cfd5c"
+
+[rendered_surface_refinement.localized_antithetic.real.room]
+accepted_rounds = 8
+control_train_psnr = [14.82, 11.94]
+localized_train_psnr = [14.90, 12.00]
+control_test_psnr = [14.18, 13.41]
+localized_test_psnr = [14.24, 13.47]
+control_test_coverage = 0.936
+localized_test_coverage = 0.937
+control_test_where_hit_psnr = 14.93
+localized_test_where_hit_psnr = 14.99
+seconds = 2.6
+artifact_sha256 = "b97f74625c1347849eac18ca75fec2b56264513f9dd7454c871c41a7ef114bf8"
+
+[rendered_surface_refinement.localized_antithetic.longer_schedules]
+rounds = [16, 32, 64]
+synthetic_held_light_psnr = [
+    [18.50, 19.38, 19.43, 18.88, 18.84],
+    [18.67, 19.53, 19.60, 19.03, 19.03],
+    [18.88, 19.65, 19.76, 19.31, 19.19],
+]
+synthetic_worst_held_light_psnr = [
+    [18.46, 19.16, 18.92, 18.84, 18.66],
+    [18.62, 19.29, 19.13, 19.01, 18.86],
+    [18.75, 19.41, 19.29, 19.19, 18.96],
+]
+synthetic_coverage = [
+    [0.536, 0.558, 0.553, 0.555, 0.555],
+    [0.536, 0.558, 0.553, 0.554, 0.555],
+    [0.537, 0.557, 0.552, 0.554, 0.553],
+]
+bonsai_test_psnr = [[14.34, 11.96], [14.40, 11.97], [14.42, 11.98]]
+bonsai_test_coverage = [0.918, 0.918, 0.918]
+bonsai_seconds = [5.2, 10.3, 20.1]
+room_test_psnr = [[14.30, 13.53], [14.41, 13.63], [14.54, 13.79]]
+room_test_coverage = [0.938, 0.939, 0.940]
+room_seconds = [5.1, 10.0, 19.8]
+verdict = "not the conservative schedule: RGB improves monotonically, but Bonsai loses 0.1 coverage point from 16 rounds and synthetic support drift reaches 0.4 points; retain as explicit PSNR-first choices"
+
 [rendered_surface_refinement.simultaneous.rejected_radius_batch]
 joint_64_synthetic_psnr = [18.53, 19.45, 19.46, 18.88, 18.79]
 joint_64_bonsai_psnr = [16.01, 14.58, 11.52]

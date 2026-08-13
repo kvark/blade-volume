@@ -687,15 +687,30 @@ dropping 0.3 coverage points. The anchor needs no masks or extra render, but it
 only preserves the initializer's silhouette; it adds no evidence about missing
 geometry. The implementation is removed.
 
-That batching direction now has a selected first form. Sixty-four paired
-simultaneous perturbations use each production render to update every observed
-Gaussian, with deterministic 2.5% support-relative signs and a 0.001 anchor
-prior. The opt-in `--render-refine-rounds 64` beats a 300-coordinate pass on
-all five synthetic held means and tails at about 4.2 times lower cost. It
-transfers to Bonsai at the same 14.52/11.71 dB held score in 10.0 seconds, and
-to Room with a neutral mean and +0.01 dB tail in 11.0 seconds. Exact coordinate
-descent is still stronger on Room, and simultaneous updates slightly worsen
-synthetic truth-position RMSE, so neither path becomes a default.
+That batching direction now has a selected localized form. Each paired
+perturbation still renders every training view through the production tracer,
+but every Gaussian correlates its deterministic sign with the error difference
+inside its own projected footprint instead of inheriting one whole-frame
+direction. The resulting full-cloud proposal and both original global
+directions are scored by complete renders with a 0.001 anchor prior. This adds
+only a CPU-side error field and selection pass: no shader, op, binding,
+pipeline, or acceleration-structure variant.
+
+Eight localized rounds beat the earlier 64 global rounds on all five synthetic
+held-light means and tails: 18.40/18.37, 19.31/19.09, 19.33/18.80,
+18.79/18.75, and 18.73/18.56 dB versus 18.30/18.29, 19.27/19.02,
+19.28/18.74, 18.70/18.65, and 18.62/18.44. Where-hit PSNR improves on all
+five. Position RMSE improves on four and changes by only 0.0002 on the fifth.
+The pass takes 0.227--0.234 seconds instead of 0.460--0.475. Matched current
+Bonsai and Room controls preserve or improve held coverage while raising both
+mean and tail: Bonsai 14.23/11.85 to 14.30/11.92 dB and Room 14.18/13.41 to
+14.24/13.47 dB, in 2.6--2.7 seconds. Longer schedules continue improving RGB:
+64 rounds reach 14.42/11.98 on Bonsai and 14.54/13.79 dB on Room. They are not
+the conservative choice because Bonsai loses 0.1 coverage point from 16 rounds
+onward and several synthetic clouds lose up to 0.4 points. The recommended
+coverage-preserving opt-in schedule is therefore `--render-refine-rounds 8`;
+larger values remain available as an explicit PSNR-first choice, and none
+becomes a default.
 
 The same batching does not generalize to support radii. A separate 64-round
 radius phase improves all five synthetic held-light means and tails over exact
