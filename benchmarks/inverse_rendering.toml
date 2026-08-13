@@ -3745,6 +3745,38 @@ memory_events = 0
 driver_faults = 0
 verdict = "keep: skip the zero-forward point-error graph when densification cannot consume it; 3.5% faster on both scenes with neutral-to-positive mean quality and no shader/op/model variants"
 
+[training_performance.rejected_growth_topology_cadence]
+date = "2026-08-13"
+implementation_changes = 0
+room_qhull_profile_points = 698940
+room_qhull_profile_total_seconds = 12.749
+room_qhull_profile_triangulation_seconds = 10.169
+room_qhull_profile_edge_extraction_seconds = 1.150
+room_qhull_profile_csr_seconds = 0.717
+bonsai_control_geometry_every = 100
+bonsai_control_training_seconds = 41.164
+bonsai_control_all_37_psnr = 16.4900
+bonsai_every_125_training_seconds = 36.397
+bonsai_every_125_all_37_psnr = 16.3869
+bonsai_every_125_worst_view_delta = -5.25
+bonsai_every_250_training_seconds = 24.213
+bonsai_every_250_all_37_psnr = 16.5416
+bonsai_every_250_worst_view_delta = -1.40
+bonsai_every_500_training_seconds = 19.147
+bonsai_every_500_selected_8_psnr = 15.9301
+room_control_geometry_every = 25
+room_control_training_seconds = 97.391
+room_control_all_39_psnr = 22.7521
+room_every_50_training_seconds = 47.832
+room_every_50_all_39_psnr = 22.7518
+room_every_50_worst_view_delta = -0.14
+maximum_candidate_memory_peak_bytes = 3996409856
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/{qhull-phase-profile-v1,qhull-stack-ids-v1,growth-topology-cadence-v1} (gitignored)"
+verdict = "reject: less frequent exact rebuilds save 11.6-50.9% of segment time, but perturb moving-topology trajectories and regress individual held-out views by up to 5.25 dB; Qhull triangulation itself is the dominant exact-rebuild cost"
+
 [powerfoam_reference.bonsai_checkpoint_10k]
 date = "2026-08-12"
 official_commit = "9639225"

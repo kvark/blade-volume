@@ -830,3 +830,21 @@ Every-two-step and every-four-step CPU sampling controls are rejected: they
 reduce the Bonsai segment to 61.406 and 55.456 seconds but both finish near
 15.895 dB held out. Their raw evidence is under
 `target/audit-runs/position-gradient-sample{2,4}-v1/`.
+
+Exact Qhull is now the dominant unweighted growth cost. On the 698,940-cell
+Room boundary, an isolated 12.749-second rebuild spends 10.169 seconds in
+Qhull itself, 1.150 extracting tetrahedron edges, and 0.717 building the CSR.
+Removing the tiny four-index heap allocation from edge extraction changes the
+total by only 0.040 seconds in one run and is not retained.
+
+Reducing rebuild cadence changes discrete training decisions too much. Bonsai
+cadence 125, 250, and 500 reduce the matched 41.164-second segment to 36.397,
+24.213, and 19.147 seconds. Cadence 125 loses 0.103 dB over all 37 held views
+and one view loses 5.25 dB. Cadence 250 gains 0.052 dB on average but still
+moves individual views from -1.40 to +1.60 dB; cadence 500 loses 0.089 dB on
+the selected eight. Room cadence 50 cuts 97.391 to 47.832 seconds and is
+mean-neutral over all 39 views, but individual changes still span -0.14 to
++0.14 dB. All cadence candidates are rejected; exact triangulation remains an
+architectural cost rather than a justification for weaker growth semantics.
+Raw evidence stays ignored under
+`target/audit-runs/{qhull-phase-profile-v1,growth-topology-cadence-v1}/`.

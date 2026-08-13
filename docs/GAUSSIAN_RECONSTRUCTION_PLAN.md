@@ -1093,3 +1093,15 @@ crashing 43-test `gpu_smoke` target passes at normal parallelism in 2.24
 seconds with an 888 MB scope peak; its serial workaround took 13.77 seconds.
 The complete all-target gate passes in its 12 GiB cgroup with zero swap, OOM,
 throttling, or recorded GPU faults.
+
+The next profile closes the easy exact-topology optimizations. An isolated
+698,940-cell Room rebuild spends 10.169 of 12.749 seconds inside Qhull; edge
+extraction and CSR construction account for only 1.150 and 0.717 seconds. A
+stack-only tetrahedron-index micro-optimization moves the total by just 0.040
+seconds and is removed. Less frequent exact rebuilds are fast but not stable:
+Bonsai cadence 125/250 changes individual held views by as much as -5.25/-1.40
+dB, and Room cadence 50 spans -0.14 to +0.14 dB despite a neutral mean. The
+existing growth cadences remain selected. A meaningful further topology win
+needs an algorithmic replacement for repeated exact Delaunay construction,
+not more shader variants, skipped correctness checks, or stale-topology
+tuning.
