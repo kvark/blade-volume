@@ -1921,3 +1921,9 @@ it retains only 52 Room additions and erases the direct gain, reaching
 three is also rejected; it lowers Room PBR to 11.50/10.09 dB. Sparse tracks are
 useful precisely where the source field's visible surface is missing or biased,
 so the independent correspondence is the appropriate observation gate.
+
+Partially selecting the nearest 64 Gaussian hits before sorting is rejected.
+It preserves the exact `(depth, particle)` ordering and Room quality, but the
+selected tile index already leaves short hit lists: fit time is 6.3 seconds
+instead of 6.2 seconds with the full small-vector sort. The prototype is
+removed rather than adding another candidate-list policy.
