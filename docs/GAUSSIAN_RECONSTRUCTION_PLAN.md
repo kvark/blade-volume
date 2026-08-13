@@ -1644,3 +1644,31 @@ The complete deterministic 500-update gate retains the exact 0.6073759 to
 0.40126857 audit-loss trajectory and completes in 1.775 seconds. The index adds
 no public option, graph operation, shader, shader entry, binding, or GPU
 pipeline variant.
+
+A radius-normalized centre-anchor prior does not turn that image gradient into
+geometry evidence. On a fresh fixed-cloud gate, a 500-update free-centre stage
+at rate 0.001 improves an 8,192-ray held-pose static-field sample from 14.28 to
+15.50 dB, but worsens nearest-training-truth position RMSE from 0.62094 to
+0.63382. Anchor weights from 0.0001 through 10 only trace a tradeoff: at weight
+10 the RMSE still worsens to 0.62149 while the held gain shrinks to 0.13 dB.
+The experimental graph inputs and public option are removed. This confirms
+that a centre can become a better light-field proxy without becoming better
+surface geometry; the next accepted geometry step needs new support on the
+existing cloud surface or independent multi-view depth evidence, not another
+penalty on the same ambiguous image gradient.
+
+Naively splitting broad Gaussians is also rejected. Offsetting two smaller
+children damages both truth distance and held images; keeping the children
+coincident avoids moving geometry, but only adds opacity overdraw. Duplicating
+the highest-opacity 5% improves the five held samples by 0.118, 0.016, 0.061,
+0.073, and 0.101 dB, while a small update to the existing opacity parameter is
+both substantially stronger and free of new particles. No densification API is
+kept until a residual or gradient can place genuinely new surface support.
+
+The accelerated recorder does make a larger exact candidate budget practical.
+With matched 500-update SH/opacity continuations, 64 candidates improve the
+same five held samples over 32 by 0.020, 0.071, 0.145, 0.080, and 0.150 dB.
+On the fixed 2,179-particle cloud, fit time rises only 1.606 to 1.650 seconds
+(2.8%); the isolated scope peaks at 1.06 GB with zero swap or OOM events.
+`FitOptions` therefore defaults to 64 candidates. This is a one-line policy
+change on the same graph and index, not another shader or operation variant.

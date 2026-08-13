@@ -180,7 +180,7 @@ impl Default for FitOptions {
         Self {
             steps: 1_000,
             batch_size: 512,
-            candidates_per_pixel: 32,
+            candidates_per_pixel: 64,
             candidate_min_alpha: 1.0e-4,
             geometry_sync_every: 25,
             position_learning_rate: 2.0e-4,
