@@ -1235,3 +1235,13 @@ host-only batching types are removed. A safe speedup needs a cheaper exact
 TLAS update or differentiable/batched geometry objective, not approximate
 independence. No shader, graph operation, entry variant, or output format was
 added.
+
+An exact in-place TLAS refit is also not worth the extra Blade API. A local
+Vulkan `UPDATE`/Metal refit implementation reserves the correct update scratch,
+passes the existing updated-versus-rebuilt pixel regression, and produces
+byte-identical `.ply`, `.rply`, and `.f32` outputs. The same fixed pass changes
+only from 20.49 to 20.07 seconds. Rebuilding the small 2,179-instance TLAS is
+therefore not the bottleneck; repeated render/readback synchronization is. The
+Blade changes, local dependency override, and one changed relight call are
+removed. Future exact work should reduce synchronization boundaries while
+retaining the sequential acceptance decisions.
