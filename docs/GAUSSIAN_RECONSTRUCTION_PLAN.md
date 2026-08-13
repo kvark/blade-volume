@@ -1573,3 +1573,17 @@ the production COLMAP loader remains minimal and does not retain observations
 for a metric that has no transfer case. A useful learned descriptor needs
 spatial context or nonlinear view invariance, not just rescaling the same
 normalized patch coordinates.
+
+Training the same positive metric on the desired depth ordering fails an even
+earlier gate. A second diagnostic uses 1,206 training-only truth tracks and
+nearby normal offsets to increase descriptor coordinates whose disagreement
+ranks the exact surface ahead of a displaced tangent patch. On the fixed cloud
+it improves position RMSE from 0.6213 to 0.6208 and normal RMSE from 66.56 to
+66.55 degrees, but held-light mean/worst PSNR falls from 18.07/18.06 to
+18.04/18.01 dB. It is rejected before the five-cloud gate and removed. This
+control is more fundamental than the choice of descriptor: with noisy normals,
+finite overlapping Gaussian support, and an imperfect material/visibility
+model, moving a proxy toward the nearest truth surface can make the final
+renderer less correct. The next joint objective must optimize surface and
+support together; correspondence depth alone is not a sufficient target for
+the current proxy.
