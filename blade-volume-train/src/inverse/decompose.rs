@@ -88,7 +88,7 @@ impl Default for FitOptions {
             // One material per surfel. Sharing is a prior about the scene
             // rather than something the photographs said, and it costs both
             // the albedo and the re-rendering to buy a better-shaped light.
-            specular_rounds: 3,
+            specular_rounds: 0,
             lobe_margin: 0.15,
             bounces: 3,
             min_facing: 0.15,
@@ -1879,6 +1879,11 @@ fn update_light(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_fit_declines_unidentified_specular_lobes() {
+        assert_eq!(FitOptions::default().specular_rounds, 0);
+    }
 
     /// One head-on observation per surfel, which is all a diffuse-only test
     /// needs and is deliberately not enough to identify a lobe.
