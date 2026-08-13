@@ -449,6 +449,16 @@ The complete all-target workspace gate passes on the physical RTX 5070 in
 OOM, throttle, Xid, or GPU-fault event. Workspace clippy also passes at a
 654,110,720-byte peak. This is a clean post-750 W PSU stability sample.
 
+Learning those established centers more gently is still not selected. A
+`0.001` position/base learning-rate ratio was paired with the fixed-center
+continuation on all five synthetic clouds under the simplified Meganeura
+runtime. Held-light mean/worst deltas were +0.04/+0.09, +0.09/+0.12,
+-0.15/-0.10, +0.05/+0.01, and +0.06/+0.00 dB. Position RMSE regressed by
+0.0001--0.0002 world units on every cloud and normal error was mixed. The
+lower final training loss therefore reflects appearance/topology overfit, not
+a better shared surface. The experimental rate is removed; production keeps
+the centers fixed.
+
 The weighted linearization no longer gathers three reference positions and
 three reference radii for every path slot. The recorder emits the raw interval,
 its Jacobians, and a ray-relative reference tangent; the graph evaluates the
