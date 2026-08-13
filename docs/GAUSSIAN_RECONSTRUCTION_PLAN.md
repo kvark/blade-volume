@@ -1450,3 +1450,21 @@ first paired runs; repeated fourth-cloud medians narrow the last delta to
 -0.04 dB, within both kernels' observed atomic variance. A repeated-index
 physical-GPU gradient oracle is bit-exact, the complete Meganeura all-target
 suite passes, and Blade pins Meganeura `6022c11`.
+
+The next two generic scheduling shortcuts are not selected. Packing four
+pointwise elements into each invocation initially exposed that the runtime
+uniform path deliberately zeroes the unused padding fields; reducing the
+dispatch without plumbing the new count consequently left three quarters of
+each output unwritten. The probe was stopped inside the 12 GiB scope and
+removed. More importantly, even that invalid quarter-work dispatch did not
+improve the dominant ReLU family, so adding runtime protocol and vector/scalar
+codegen branches has no performance case. Separately, one-lane-per-row
+reductions can provably bypass their workgroup scratch and barrier. A generated
+WGSL test and the complete physical-GPU reduction oracle passed, but the
+surface-colour family remained 1.58--1.84 ms versus 1.58--1.77 ms before, and
+the graph remained about 5.0 ms. Explicitly hoisting each gather's indirect
+row index out of the nine-column loop is likewise bit-exact and flat at
+1.63--1.82 ms; the driver already handles that invariant effectively. Both
+reduction branches are removed: table traffic dominates, and none of these
+experiments justifies another schedule mode, operation, shader entry, or
+retained special case.
