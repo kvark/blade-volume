@@ -11,6 +11,7 @@
 use blade_graphics as gpu;
 use blade_volume as vol;
 use blade_volume_view as view;
+use std::sync;
 
 const SIZE: view::RenderSize = view::RenderSize {
     width: 128,
@@ -20,6 +21,12 @@ const SIZE: view::RenderSize = view::RenderSize {
 /// presented in an sRGB colour space, which means nothing downstream applies
 /// the display curve and the blit has to.
 const FORMAT: gpu::TextureFormat = gpu::TextureFormat::Bgra8Unorm;
+
+// These tests each own a complete Vulkan device. Creating all three devices
+// concurrently intermittently faults inside the NVIDIA loader during memory
+// allocation; the same tests and resources are stable when their device
+// lifetimes do not overlap.
+static GPU_TEST_LOCK: sync::Mutex<()> = sync::Mutex::new(());
 
 struct Harness {
     context: gpu::Context,
@@ -175,6 +182,9 @@ fn mean(pixels: &[[u8; 4]]) -> f64 {
 
 #[test]
 fn the_backend_presents_a_frame_and_changes_it_with_the_light() {
+    let _gpu_test_guard = GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(sync::PoisonError::into_inner);
     let Some(mut harness) = Harness::new() else {
         return;
     };
@@ -251,6 +261,9 @@ fn the_backend_presents_a_frame_and_changes_it_with_the_light() {
 /// way before this test existed.
 #[test]
 fn the_frame_is_the_right_way_up() {
+    let _gpu_test_guard = GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(sync::PoisonError::into_inner);
     let Some(mut harness) = Harness::new() else {
         return;
     };
@@ -314,6 +327,9 @@ fn the_frame_is_the_right_way_up() {
 /// silhouette on a white background.
 #[test]
 fn tone_mapping_keeps_bright_things_apart() {
+    let _gpu_test_guard = GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(sync::PoisonError::into_inner);
     let Some(mut harness) = Harness::new() else {
         return;
     };
