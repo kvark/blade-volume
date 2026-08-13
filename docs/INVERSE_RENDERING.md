@@ -220,6 +220,13 @@ renderer's own shading, which is asserted as a unit test, and still fails in the
 studio scene, where the photographs carry a bounce the lobe path does not model
 and the orbit sees each surfel from one elevation.
 
+This remains true even with repeated measured illumination and the selected
+photometric-normal solve. A complete-render roughness search improves unseen-
+light PSNR while making truth roughness error two to four times worse: gloss is
+compensating for geometry and missing bounce. Allowing metal hypotheses also
+produces a held-light collapse on one independent cloud. These paths are
+removed rather than reported as PBR recovery.
+
 On bonsai it does not yet reach the goal. The fresh Smooth-L1 foam plus
 two-view depth consensus and confidence weighting reaches 14.89 dB on the views
 used for extraction and 14.03 dB on held-out views. The selected multi-view

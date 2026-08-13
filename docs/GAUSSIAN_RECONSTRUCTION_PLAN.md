@@ -942,3 +942,23 @@ joint perturbation anyway, then enter held cameras unconstrained. The one-line
 candidate-set prototype is removed without a real-scene run. A whole-render
 objective still needs training-view support or an independent prior for every
 coordinate it moves.
+
+Repeated known-light captures still do not make roughness or metalness safe to
+recover on the current geometry. Re-enabling the existing constrained lobe
+solver after four-light photometric normals improves three unseen-light means
+by only 0.03--0.06 dB, while one false-metal assignment collapses the fourth
+from 19.80 to 16.43 dB despite a lower training residual. Evaluating the same
+dielectric/metal hypotheses directly through complete production renders of
+all measured lights avoids that collapse, but calls two to four of six shared
+clusters metallic and regresses one held-light mean/tail by 0.26/0.12 dB.
+
+Forbidding metalness makes every held-light mean and tail improve by
+0.07--0.12 dB, but a nearest-truth material diagnostic shows the mechanism is
+wrong: roughness MAE rises from 0.08--0.09 to 0.20--0.34 on all four clouds.
+The optimizer is using gloss to absorb geometry and missing-bounce error. A
+rough-dielectric prior strong enough to preserve truth accepts zero roughness
+changes. Even reusing all four measured lights for diffuse-only rendered
+refinement is consistently 0.02--0.03 dB below the selected primary-light
+pass. Every prototype and CLI/API addition is removed. PBR recovery remains
+blocked on a more accurate shared surface and forward light transport; image
+score alone is explicitly not evidence of physical material recovery.
