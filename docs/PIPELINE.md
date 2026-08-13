@@ -2324,6 +2324,12 @@ Broken into sub-steps:
   session, so plan dumps, dispatch serialization, alias controls, and GPU
   timing can diagnose this production graph instead of silently using the
   defaults.
+  Packing a second independent row into each invocation is retained: it keeps
+  the portable 256-thread workgroup and exact scalar order while amortizing
+  scheduling. On the same 5070 it lowers the warm graph from 5.14--5.33 ms to
+  4.91--5.21 ms and the dominant reduction family from 1.76--1.79 ms to
+  1.58--1.74 ms. A 120-update gate produces byte-identical PLY and raw-scene
+  outputs; four rows per invocation loses the gain late in the run.
 
 #### M3d — Online viewer attach
 
