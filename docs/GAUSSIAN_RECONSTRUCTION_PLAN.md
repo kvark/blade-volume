@@ -122,13 +122,15 @@ training, surface fusion, refinement, observations, and material fitting.
 
 The 2026-08-12 gate also removes the last synthetic-only shortcut from the
 default: `sun-east` is now recovered from those RGB observations rather than
-handed to the material fit. Twelve shared diffuse materials are the robust
-choice across five independently trained clouds; 64--128 are rejected because
-one repeat collapses below 14.7 dB even as the other four improve. A fresh
-default run reaches 25.02 dB at unseen poses and 19.23 dB (18.92 worst) under
-the unseen `studio` light at 55.8% coverage. Its recovered capture-light shape
-is still 62.7% RMS from truth after the unidentifiable colour/scale gauge, so
-this is an honest end-to-end result, not a claim that illumination is solved.
+handed to the material fit. The first unknown-light sweep selected twelve
+shared diffuse materials and rejected 64--128 because one repeat collapsed
+below 14.7 dB even as the other four improved. The later five-cloud staged
+gate selected six; it improves every held-light mean and tail over two and is
+now the default. A fresh default run reaches 25.02 dB at unseen poses and
+19.23 dB (18.92 worst) under the unseen `studio` light at 55.8% coverage. Its
+recovered capture-light shape is still 62.7% RMS from truth after the
+unidentifiable colour/scale gauge, so this is an honest end-to-end result, not
+a claim that illumination is solved.
 `--true-light` retains the former ceiling, and `--brightest-albedo` exposes the
 otherwise unknowable scale prior. The complete latest asset is
 `target/audit-runs/unknown-light-default-v1/{model.ply,scene.rply,scene.f32}`;
@@ -724,3 +726,18 @@ regresses all five clouds. None changes the measured 0.02-second fit time.
 The temporary resolution control is removed. The material/light ambiguity is
 not caused by using too many environment texels: diffuse transport already
 projects those texels onto a much smaller observable subspace.
+
+Profiling appearance inside exact geometry descent is not yet a selected joint
+optimizer. Re-running the six-way chromaticity clustering and one diffuse solve
+for every position/radius proposal improves four five-cloud held-light gates,
+but the fifth loses 0.03 dB mean and 0.05 dB worst while cost rises from
+7.1--7.2 to 12.4--17.5 seconds. The failure is not just support coupling: its
+position-only tail still loses 0.05 dB. Keeping every material assignment fixed
+removes the relabelling discontinuity. A 300-position gate then changes the
+five held-light mean/worst scores by +0.06/+0.05, +0.22/+0.21, +0.02/+0.02,
++0.02/-0.01, and +0.03/+0.01 dB, but position RMSE is neutral or worse on all
+five and runtime nearly doubles. Adding radii again loses 0.03 dB on the fifth
+tail. Both prototypes and their GPU material-update API are removed. A future
+joint solve needs a batched or differentiable geometry gradient with a stable
+appearance parameterization; thousands of full appearance solves per scalar
+coordinate are too costly for the small, tail-unsafe gain.
