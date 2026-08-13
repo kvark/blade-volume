@@ -140,6 +140,14 @@ struct Args {
     #[argh(option)]
     surface_powerfoam_output: Option<String>,
 
+    /// optional directly trained anisotropic Gaussian light-field PLY output
+    #[argh(option)]
+    gaussian_output: Option<String>,
+
+    /// direct Gaussian updates, split evenly between appearance and support
+    #[argh(option, default = "1000")]
+    gaussian_steps: usize,
+
     /// retain fused depth centers instead of multi-view photo refinement
     #[argh(switch)]
     no_refine: bool,
@@ -692,6 +700,9 @@ fn main() {
     if args.surface_powerfoam_output.is_some() && args.surface_powerfoam_steps_per_view == 0 {
         fail("--surface-powerfoam-output requires --surface-powerfoam-steps-per-view");
     }
+    if args.gaussian_output.is_some() && args.gaussian_steps < 2 {
+        fail("--gaussian-output requires at least two --gaussian-steps");
+    }
     let dataset = train::relight::Dataset::load(path::Path::new(&args.dataset))
         .unwrap_or_else(|error| fail(error));
     let environment = dataset
@@ -1185,6 +1196,80 @@ fn main() {
         )
         .unwrap_or_else(|error| fail(error));
     }
+    if let Some(ref output) = args.gaussian_output {
+        let started = std::time::Instant::now();
+        let mut gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
+            .unwrap_or_else(|error| fail(error));
+        let Some(gpu) = train::fit::try_init_gpu() else {
+            fail("no supported GPU device for direct Gaussian training");
+        };
+        let appearance_steps = args.gaussian_steps / 2;
+        let support_steps = args.gaussian_steps - appearance_steps;
+        let appearance = train::gaussian_splat::FitOptions {
+            steps: appearance_steps,
+            batch_size: 512,
+            candidates_per_pixel: 64,
+            candidate_min_alpha: 1.0e-5,
+            geometry_sync_every: 10,
+            position_learning_rate: 0.0,
+            scale_learning_rate: 0.0,
+            opacity_learning_rate: 0.0,
+            sh_learning_rate: 0.002,
+            opacity_loss_weight: 1.5,
+            background: [0.0; 3],
+        };
+        let appearance_stats = train::gaussian_splat::fit(
+            &mut gaussian,
+            &training_capture,
+            &training_indices,
+            appearance,
+            gpu.clone(),
+        )
+        .unwrap_or_else(|error| fail(error));
+        let support_stats = train::gaussian_splat::fit(
+            &mut gaussian,
+            &training_capture,
+            &training_indices,
+            train::gaussian_splat::FitOptions {
+                steps: support_steps,
+                scale_learning_rate: 0.005,
+                opacity_learning_rate: 0.05,
+                ..appearance
+            },
+            gpu,
+        )
+        .unwrap_or_else(|error| fail(error));
+        let held_out_scores = train::gaussian_splat::evaluate_views(
+            &gaussian,
+            &training_capture,
+            &held_out_indices,
+            64,
+            1.0e-5,
+            [0.0; 3],
+        )
+        .unwrap_or_else(|error| fail(error));
+        let output = path::Path::new(output);
+        if let Some(parent) = output
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).unwrap_or_else(|error| fail(error));
+        }
+        convert::save_ply(output, &gaussian)
+            .unwrap_or_else(|error| fail(format!("cannot write {}: {error:?}", output.display())));
+        println!(
+            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6}, in {:.3} s",
+            appearance_stats.steps,
+            appearance_stats.initial_loss,
+            appearance_stats.final_loss,
+            support_stats.steps,
+            support_stats.initial_loss,
+            support_stats.final_loss,
+            started.elapsed().as_secs_f64(),
+        );
+        describe_scores("direct Gaussian held-out", &held_out_scores);
+        println!("wrote {}", output.display());
+    }
     if let Some(ref surface_output) = args.surface_output {
         let surface_path = path::Path::new(surface_output);
         if let Some(parent) = surface_path
@@ -1285,6 +1370,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn direct_gaussian_output_is_opt_in() {
+        let args = <Args as argh::FromArgs>::from_args(
+            &["synthetic_foam"],
+            &[
+                "--dataset",
+                "capture",
+                "--output",
+                "model.ply",
+                "--gaussian-output",
+                "light-field.ply",
+                "--gaussian-steps",
+                "800",
+            ],
+        )
+        .unwrap();
+        assert_eq!(args.gaussian_output.as_deref(), Some("light-field.ply"));
+        assert_eq!(args.gaussian_steps, 800);
+    }
+
     fn camera(position: glam::Vec3, target: glam::Vec3) -> vol::CameraParams {
         vol::CameraParams {
             cam_position: position.to_array(),
@@ -1355,5 +1460,7 @@ mod tests {
         assert_eq!(args.materials, 6);
         assert_eq!(args.surface_powerfoam_steps_per_view, 0);
         assert!(args.surface_powerfoam_output.is_none());
+        assert!(args.gaussian_output.is_none());
+        assert_eq!(args.gaussian_steps, 1_000);
     }
 }

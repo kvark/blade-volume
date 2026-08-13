@@ -1689,3 +1689,41 @@ The former `fit_isotropic`/`build_isotropic_graph` surface is renamed to
 inputs and isotropic clouds remain the equal-scale special case. No graph
 operation, shader, shader entry, binding, pipeline variant, or dependency is
 added.
+
+The accepted direct path is now available from the real synthetic pipeline as
+an opt-in persisted artifact. `--gaussian-output <path>` converts the final
+refined Gaussian relight surface to a neutral `PointCloudModel`, runs the
+selected two-stage fit, scores the complete held-out views, and writes the
+result through the ordinary Gaussian PLY serializer. The conversion preserves
+centres, maps local Y onto the extracted normal, and divides the relight
+surfel's three-sigma finite-support radius by three to obtain the backend's
+one-sigma scale. SH-0 starts at neutral grey, so PBR materials and their
+training illumination cannot leak into the static light field.
+
+The default 1,000-update schedule spends 500 updates on SH appearance with
+fixed geometry, then 500 on SH, opacity, and three anisotropic scales. Centres
+remain fixed in both stages; the rejected free-centre experiment is also
+reflected in `FitOptions::default`. This reuses one graph and the existing
+operations throughout.
+
+The end-to-end five-cloud gate, starting from independently reconstructed
+RadFoam fields and rerunning surface extraction plus final rendered-surface
+refinement, gives:
+
+| cloud | source RadFoam held mean | direct held mean | direct held worst |
+| --- | ---: | ---: | ---: |
+| fixed | 14.81 dB | 20.32 dB | 19.49 dB |
+| v2 | 14.77 dB | 20.18 dB | 19.95 dB |
+| v3 | 14.90 dB | 20.39 dB | 19.82 dB |
+| v4 | 14.83 dB | 20.39 dB | 20.21 dB |
+| v5 | 14.89 dB | 20.32 dB | 19.54 dB |
+
+Every cloud improves over its source RadFoam field on the same environment and
+pose split, by 5.48 dB on average. The fixed-scene stages reduce the audit loss
+from 0.511946 to 0.373538 and then 0.128335 in 4.482 seconds. A warm release
+process takes 6.6 seconds for the complete surface and direct-field path, and
+the isolated scopes peak at 135--141 MiB of host memory. All five runs record
+zero swap, memory-pressure, OOM, or GPU-fault events on the RTX 5070. The
+generated `light-field.ply`, relight scene, source foam, and telemetry remain
+deliberately untracked under
+`target/audit-runs/direct-gaussian-production-v1/{fixed,v2,v3,v4,v5}/`.

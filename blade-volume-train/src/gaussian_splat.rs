@@ -183,7 +183,7 @@ impl Default for FitOptions {
             candidates_per_pixel: 64,
             candidate_min_alpha: 1.0e-4,
             geometry_sync_every: 25,
-            position_learning_rate: 2.0e-4,
+            position_learning_rate: 0.0,
             scale_learning_rate: 5.0e-3,
             opacity_learning_rate: 5.0e-2,
             sh_learning_rate: 2.5e-3,
@@ -198,6 +198,57 @@ pub struct FitStats {
     pub steps: usize,
     pub initial_loss: f32,
     pub final_loss: f32,
+}
+
+/// Convert an established relightable Gaussian surface into the neutral
+/// `PointCloudModel` consumed by direct light-field training.
+///
+/// A relight surfel stores its finite support at three standard deviations;
+/// the Gaussian backend stores one standard deviation. The surface normal is
+/// kept as local Y, matching the extracted tangent frame. Appearance starts at
+/// neutral grey instead of leaking the PBR material or its training light into
+/// the static field.
+pub fn from_surface(surface: &vol::relight::RelightModel) -> Result<vol::PointCloudModel, String> {
+    surface.validate()?;
+    if surface.kernel != vol::relight::ParticleKernel::Gaussian {
+        return Err("direct Gaussian training requires a Gaussian surface".to_string());
+    }
+    if surface.is_empty() {
+        return Err("direct Gaussian training requires at least one surface particle".to_string());
+    }
+    let count = surface.surfels.len();
+    let model = vol::PointCloudModel {
+        points: surface
+            .surfels
+            .iter()
+            .map(|surfel| glam::Vec3::from(surfel.center).extend(0.5))
+            .collect(),
+        sh_coefficients: vec![0.0; count * 3],
+        sh_degree: 0,
+        transforms: Some(vol::Transforms {
+            rotations: surface
+                .surfels
+                .iter()
+                .map(|surfel| {
+                    glam::Quat::from_rotation_arc(glam::Vec3::Y, glam::Vec3::from(surfel.normal))
+                })
+                .collect(),
+            scales: surface
+                .surfels
+                .iter()
+                .map(|surfel| glam::Vec3::splat(surfel.radius / 3.0))
+                .collect(),
+        }),
+        adjacency: None,
+        radii: None,
+        surface_normals: None,
+        surface_offsets: None,
+        surface_detail: None,
+        surface_color_coefficients: None,
+        spherical_voronoi: None,
+    };
+    model.validate()?;
+    Ok(model)
 }
 
 struct RayBatch {
@@ -610,6 +661,86 @@ pub fn render_rays(
         output.push(radiance.extend(1.0 - transmittance));
     }
     output
+}
+
+/// Score complete capture views with the exact CPU response oracle.
+///
+/// The returned values are display-referred sRGB PSNR, one per requested
+/// view, matching the colour domain used by direct Gaussian fitting.
+pub fn evaluate_views(
+    model: &vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    candidates_per_pixel: usize,
+    min_alpha: f32,
+    background: [f32; 3],
+) -> Result<Vec<f32>, String> {
+    model.validate()?;
+    if model.sh_degree != 0 || model.transforms.is_none() {
+        return Err("direct Gaussian evaluation requires transformed SH-0 Gaussians".to_string());
+    }
+    if candidates_per_pixel == 0 {
+        return Err("direct Gaussian evaluation needs at least one candidate".to_string());
+    }
+    if capture.width == 0 || capture.height == 0 {
+        return Err("direct Gaussian evaluation needs a non-empty capture extent".to_string());
+    }
+    if view_indices.is_empty() {
+        return Err("direct Gaussian evaluation needs at least one view".to_string());
+    }
+    if !min_alpha.is_finite() || min_alpha < 0.0 {
+        return Err("candidate minimum alpha must be finite and non-negative".to_string());
+    }
+    if let Some(&index) = view_indices
+        .iter()
+        .find(|&&index| index >= capture.views.len())
+    {
+        return Err(format!(
+            "capture view {index} is outside {} available views",
+            capture.views.len()
+        ));
+    }
+
+    let pixels = capture.width * capture.height;
+    let mut scores = Vec::with_capacity(view_indices.len());
+    for &view_index in view_indices {
+        let view = &capture.views[view_index];
+        let origin = glam::Vec3::from(view.camera.cam_position);
+        let origins = vec![origin; pixels];
+        let directions: Vec<_> = (0..capture.height)
+            .flat_map(|y| {
+                (0..capture.width).map(move |x| {
+                    crate::inverse::capture::pixel_direction(
+                        &view.camera,
+                        capture.width,
+                        capture.height,
+                        x,
+                        y,
+                    )
+                })
+            })
+            .collect();
+        let rendered = render_rays(
+            model,
+            &origins,
+            &directions,
+            candidates_per_pixel,
+            min_alpha,
+            background,
+        );
+        let squared_error: f64 = rendered
+            .iter()
+            .zip(&view.pixels)
+            .map(|(actual, expected)| {
+                let expected =
+                    glam::Vec3::from(*expected).map(crate::inverse::capture::linear_to_srgb);
+                (actual.truncate() - expected).length_squared() as f64
+            })
+            .sum();
+        let mse = squared_error / (3 * pixels) as f64;
+        scores.push((-10.0 * mse.log10()) as f32);
+    }
+    Ok(scores)
 }
 
 /// Build a direct, differentiable anisotropic-Gaussian renderer using only
@@ -1166,6 +1297,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn gaussian_surface_conversion_preserves_geometry_without_material_leakage() {
+        let surface = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![
+                vol::relight::Surfel {
+                    center: [1.0, 2.0, 3.0],
+                    radius: 0.6,
+                    normal: glam::Vec3::Z.to_array(),
+                    material: 0,
+                },
+                vol::relight::Surfel {
+                    center: [-1.0, 0.0, 4.0],
+                    radius: 0.3,
+                    normal: (-glam::Vec3::Y).to_array(),
+                    material: 1,
+                },
+            ],
+            materials: vec![
+                vol::relight::Material::default(),
+                vol::relight::Material {
+                    albedo: [1.0, 0.0, 0.0],
+                    ..vol::relight::Material::default()
+                },
+            ],
+        };
+        let model = from_surface(&surface).unwrap();
+        assert_eq!(model.points[0], glam::Vec4::new(1.0, 2.0, 3.0, 0.5));
+        assert_eq!(model.points[1], glam::Vec4::new(-1.0, 0.0, 4.0, 0.5));
+        assert_eq!(model.sh_coefficients, [0.0; 6]);
+        let transforms = model.transforms.unwrap();
+        assert_close(transforms.scales[0].x, 0.2, 1.0e-6);
+        assert_close(transforms.scales[1].x, 0.1, 1.0e-6);
+        for (rotation, surfel) in transforms.rotations.iter().zip(&surface.surfels) {
+            let normal = glam::Vec3::from(surfel.normal);
+            assert!((*rotation * glam::Vec3::Y).dot(normal) > 0.9999);
+        }
+    }
+
+    #[test]
+    fn selected_fit_defaults_keep_established_centres_fixed() {
+        assert_eq!(FitOptions::default().position_learning_rate, 0.0);
+    }
+
     fn synthetic_capture(model: &vol::PointCloudModel) -> crate::inverse::capture::Capture {
         let width = 9;
         let height = 7;
@@ -1226,6 +1401,17 @@ mod tests {
             height,
             views,
         }
+    }
+
+    #[test]
+    fn exact_view_evaluation_scores_its_source_model() {
+        let bright = (0.8 - 0.5) / SH_C0;
+        let mut truth = model(vec![glam::Vec4::new(0.0, 0.0, 4.0, 0.8)]);
+        truth.sh_coefficients.fill(bright);
+        truth.transforms.as_mut().unwrap().scales[0] = glam::Vec3::splat(0.5);
+        let capture = synthetic_capture(&truth);
+        let scores = evaluate_views(&truth, &capture, &[0, 1], 1, 0.0, [0.0; 3]).unwrap();
+        assert!(scores.iter().all(|score| *score > 100.0), "{scores:?}");
     }
 
     fn empty_capture(width: usize, height: usize) -> crate::inverse::capture::Capture {
