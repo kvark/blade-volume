@@ -752,3 +752,11 @@ one-buffer encoder then resets an in-flight command buffer and produced a
 reproducible NVIDIA Xid 31. The retained path submits once and waits once, and
 its physical update/rebuild oracle plus the analytical recovery fixture pass.
 It adds no shader, operation, bind-group, or pipeline variant.
+
+Putting both signs of one exact coordinate into that submission is a smaller
+but rejected extension. Three byte-identical position/radius runs have a 6.876
+second median, only 1.6% below the selected 6.989 seconds. Supporting it needs
+a second full-cloud upload slot, delayed instance-buffer retirement, and a
+separate pair-render/readback path. That complexity is not justified by the
+gain, so the prototype is removed. Further acceleration has to reduce TLAS
+rebuild or render work itself rather than only one more host submission.
