@@ -1829,3 +1829,14 @@ training capacity rather than new multi-view evidence. The prototype is
 removed; future support must come from independent depth evidence or a
 different surface representation, not another split of the same image
 residual.
+
+Candidate geometry is now synchronized only when its parameters can change.
+The appearance stage has zero position, scale, and opacity learning rates, so
+its former 50 full model readbacks and all-view tile-index rebuilds were exact
+no-ops. Skipping them preserves the fixed-cloud 20.83/19.87 dB gate and the
+Bonsai 18.62/18.55 dB gate while reducing fit time from 5.4 to 5.1 seconds and
+12.1 to 11.3 seconds respectively. This is one condition around the existing
+sync path; it adds no cache, operation, shader, or public setting. Extending
+the support-stage sync interval from 10 to 20 is rejected despite reaching
+4.9 and 10.4 seconds: stale growing supports reduce Bonsai mean/worst quality
+by 0.05/0.08 dB. Support therefore retains the ten-update cadence.

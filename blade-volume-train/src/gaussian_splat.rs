@@ -1346,6 +1346,12 @@ fn read_loss(session: &mn::Session) -> f32 {
     loss[0]
 }
 
+fn changes_candidate_geometry(options: FitOptions) -> bool {
+    options.position_learning_rate > 0.0
+        || options.scale_learning_rate > 0.0
+        || options.opacity_learning_rate > 0.0
+}
+
 /// Fit a Gaussian light field directly to posed RGB images.
 ///
 /// This is intentionally the small baseline: fixed particle count, SH-0/1, and
@@ -1396,12 +1402,13 @@ pub fn fit(
     session.set_lr_multiplier("log_scales", options.scale_learning_rate);
     session.set_lr_multiplier("opacity_logits", options.opacity_learning_rate);
     session.set_lr_multiplier("sh_", options.sh_learning_rate);
+    let sync_candidate_geometry = changes_candidate_geometry(options);
     for step in 0..options.steps {
         let batch = sample_rays(capture, view_indices, options.batch_size, step as u32);
         set_batch(&mut session, model, &batch, &candidate_index, options);
         session.step();
         session.wait();
-        if (step + 1) % options.geometry_sync_every == 0 {
+        if sync_candidate_geometry && (step + 1) % options.geometry_sync_every == 0 {
             download_model(&session, model);
             candidate_index =
                 CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
@@ -1494,6 +1501,21 @@ mod tests {
     #[test]
     fn selected_fit_defaults_keep_established_centres_fixed() {
         assert_eq!(FitOptions::default().position_learning_rate, 0.0);
+    }
+
+    #[test]
+    fn appearance_only_updates_do_not_rebuild_candidate_geometry() {
+        let appearance = FitOptions {
+            position_learning_rate: 0.0,
+            scale_learning_rate: 0.0,
+            opacity_learning_rate: 0.0,
+            ..FitOptions::default()
+        };
+        assert!(!changes_candidate_geometry(appearance));
+        assert!(changes_candidate_geometry(FitOptions {
+            scale_learning_rate: 0.01,
+            ..appearance
+        }));
     }
 
     #[test]
