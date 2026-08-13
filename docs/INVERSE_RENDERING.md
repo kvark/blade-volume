@@ -449,6 +449,13 @@ radius search the means improve by 0.05--0.39 dB while coverage loses
 Budget selection needs explicit diversity or support preservation rather than
 spending every probe on the largest visible discs.
 
+Stratifying that impact ranking over the complete deterministic cloud order
+reduces the synthetic coverage loss, but does not fix the unseen-pose tail.
+Position-only Bonsai is mean-neutral and loses 0.04 dB worst; adding radii
+gains 0.04 dB mean but loses 0.12 dB worst and 0.2 coverage points. Room gains
+only 0.01/0.01 dB for positions and 0.03/0.01 dB with radii. This second
+selector is removed as well.
+
 Support radii cannot simply join the paired position schedule. Joint and
 separate radius perturbations improve every fixed synthetic cloud and Room,
 but a 64-round phase loses 0.11 dB on the worst Bonsai view and 0.2 coverage

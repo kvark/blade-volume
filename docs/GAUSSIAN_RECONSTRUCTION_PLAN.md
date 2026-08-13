@@ -672,6 +672,13 @@ only 0.02/0.02 dB. The prototype is removed. Any future bounded selection must
 preserve spatial/support diversity rather than concentrating exclusively on
 the largest visible discs.
 
+Dividing the cloud order into equal strata and choosing one high-impact
+particle per stratum reduces the synthetic support loss, but still fails the
+real tail. Position-only Bonsai is mean-neutral and loses 0.04 dB worst;
+adding radius search gains 0.04 dB mean but loses 0.12 dB worst and 0.2
+coverage points. Room gains only 0.01/0.01 dB and 0.03/0.01 dB respectively.
+The stratified selector is removed too.
+
 That batching direction now has a selected first form. Sixty-four paired
 simultaneous perturbations use each production render to update every observed
 Gaussian, with deterministic 2.5% support-relative signs and a 0.001 anchor
