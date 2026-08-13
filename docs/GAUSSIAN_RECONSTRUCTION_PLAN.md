@@ -1549,3 +1549,12 @@ time from 0.224--0.232 to 0.415--0.439 seconds because retaining rendered
 frames and building a second summed-area field costs more than the selected
 colour-only path. The prototype is removed. Single-scale image gradients are
 not independent geometry evidence and should not be added to this localizer.
+
+Requiring the localized rendered direction to agree between alternating
+three-view subsets is more conservative but not more accurate. It reuses the
+same antithetic renders and summed-area data, yet lowers all five held-light
+means by 0.01--0.03 dB versus the all-view direction, loses as much as 0.05 dB
+on a worst view, and leaves truth geometry neutral to slightly worse. Like the
+earlier split-patch test, weaker subsets discard useful evidence without
+making their shared visibility and material ambiguity independent. The
+prototype is removed without adding a control or representation variant.
