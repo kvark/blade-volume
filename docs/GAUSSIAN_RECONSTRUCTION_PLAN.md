@@ -1474,6 +1474,15 @@ reduction branches are removed: table traffic dominates, and none of these
 experiments justifies another schedule mode, operation, shader entry, or
 retained special case.
 
+Amortizing that portable scalar path across two independent rows is selected.
+It keeps the existing 256-thread workgroup, bindings, operation set, and
+`ShaderEntry` sentinel, but dispatches half as many workgroups and lets each
+invocation stride to its second row. The 258-pass continuation graph falls
+from 5.14--5.33 to 4.91--5.21 ms and its dominant reductions from 1.76--1.79
+to 1.58--1.74 ms. A 120-update gate produces byte-identical PLY and raw-scene
+outputs. Three rows loses the tail gain and four returns to the control late
+in the run, so two is retained in Meganeura `1b16215` and Blade `b92a1b9`.
+
 Estimating a normal from the fused positions inside each voxel does not repair
 the geometric initializer. Replacing its depth normal with the least-variance
 axis of a weighted intra-voxel covariance raises the fixed held-light mean from
