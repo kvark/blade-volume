@@ -828,3 +828,14 @@ to 5.6 seconds. More decisively, Bonsai and Room held means, tails, and
 coverage remain unchanged at report precision even though runtime rises
 35.2→70.8 and 36.6→82.5 seconds. The lower training loss does not transfer;
 the quarter-radius coordinate is already fine enough for this objective.
+
+Reassigning shared materials after illumination correction does not stabilize
+the unknown-light decomposition. An unconstrained halfway EM step gains as
+much as +0.44/+0.37 dB on one synthetic mean/tail but loses -0.25/-0.20 on
+another. Requiring a new material to be two or four times closer in corrected
+chromaticity reduces label churn, yet the same cloud still loses -0.08/-0.06
+dB and the fixed-cloud tail loses 0.02 dB. Recovered-light RMS is anti-correlated
+with output quality in the decisive arms: it worsens on the large relighting
+gain and improves on the loss. The implementation is removed. With noisy
+orientation, neither the fitted environment nor corrected per-surfel albedo is
+an independent signal for choosing the other.
