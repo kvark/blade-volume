@@ -1209,3 +1209,14 @@ to 1.62 cells restores coverage, but weakens geometry and loses up to 0.09 dB
 of the selected gain on the third cloud. The simpler anchored mean and existing
 1.60-cell support remain. This adds no shader, graph operation, runtime field,
 or alternate point-cloud representation.
+
+Extending the exact rendered-material coordinate descent across all four
+measured lights is not selected. On the fixed cloud it changes 35 of 36 albedo
+coordinates but lowers unseen-light mean/worst PSNR from the selected
+19.49/19.25 to 19.46/19.24 dB. Giving the primary capture half of the total
+objective weight reaches only 19.47/19.25 dB while increasing material-polish
+time from about 0.52 to 3.15 seconds. The complete renderer resolves the
+overlapping-Gaussian colour mixture, but remaining geometry and visibility
+error still makes the extra lights an inconsistent material constraint. The
+multi-tracer material API and synthetic branch are removed; the selected
+primary-light polish remains the smaller and better output path.
