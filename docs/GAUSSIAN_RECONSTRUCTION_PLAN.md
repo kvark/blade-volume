@@ -717,3 +717,10 @@ that the small shared-material solve is poorly conditioned: a lower recovered
 light RMS does not imply better unseen-light rendering. Both code changes are
 removed; future decomposition work needs an explicit held-independent prior or
 joint objective, not a cosmetically more stable initializer.
+
+Reducing the recovered environment from 32x16 to 16x8 is effectively
+byte-equivalent at the output gate; 8x4 is mixed by up to -0.05 dB and 4x2
+regresses all five clouds. None changes the measured 0.02-second fit time.
+The temporary resolution control is removed. The material/light ambiguity is
+not caused by using too many environment texels: diffuse transport already
+projects those texels onto a much smaller observable subspace.
