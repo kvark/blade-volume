@@ -148,6 +148,10 @@ struct Args {
     #[argh(switch)]
     render_refine_radii: bool,
 
+    /// refine the shared diffuse material table against complete renders
+    #[argh(switch)]
+    render_refine_materials: bool,
+
     /// optional relightable Gaussian surface output
     #[argh(option)]
     surface_output: Option<String>,
@@ -1009,6 +1013,25 @@ fn main() {
         fitted.unseen,
         decompose_started.elapsed().as_secs_f64(),
     );
+    if args.render_refine_materials {
+        let stats = train::inverse::refine::refine_rendered_materials(
+            &mut fitted.scene,
+            &training_capture,
+            &training_indices,
+            0,
+            0.025,
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "render-refined {} of {} material coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.3} s",
+            stats.changed,
+            stats.coordinates,
+            stats.proposals,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
+        );
+    }
     if !args.true_light {
         let light_error =
             train::inverse::truth::compare_environment(&training_light, &fitted.scene.environment);

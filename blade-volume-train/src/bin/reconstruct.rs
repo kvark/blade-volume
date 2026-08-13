@@ -155,6 +155,10 @@ struct Args {
     #[argh(switch)]
     render_refine_radii: bool,
 
+    /// refine a small shared diffuse-material table against complete renders
+    #[argh(switch)]
+    render_refine_materials: bool,
+
     /// write the reconstructed scene here
     #[argh(option)]
     output: Option<String>,
@@ -372,6 +376,29 @@ fn main() {
         started.elapsed().as_secs_f64()
     );
     describe_light(&fitted.scene.environment);
+
+    if args.render_refine_materials {
+        let stats = train::inverse::refine::refine_rendered_materials(
+            &mut fitted.scene,
+            &capture,
+            &train_views,
+            args.diffuse_samples,
+            0.025,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("cannot refine rendered materials: {error}");
+            std::process::exit(1);
+        });
+        println!(
+            "rendered materials: changed {} of {} coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.1} s",
+            stats.changed,
+            stats.coordinates,
+            stats.proposals,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
+        );
+    }
 
     if args.render_refine > 0 || args.render_refine_rounds > 0 {
         let stats = train::inverse::refine::refine_rendered(

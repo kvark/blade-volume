@@ -175,6 +175,15 @@ image directory with `--normal-images` and its light with
 normal per particle across the known lights, then fits the primary capture's
 materials with those normals. Photograph names and selected poses must match.
 
+`--render-refine-materials` optionally finishes a small shared material table
+against complete production renders of every training view. It coordinate
+descends the three diffuse albedo channels by a fixed 0.025 step while holding
+geometry, light, assignments, roughness, and specular response fixed. Each
+proposal updates only the existing material buffer; it does not rebuild the
+acceleration structures or add a shader, operation, bind-group, or pipeline
+variant. This is deliberately a final pass for a small palette, not a scalable
+per-particle material optimizer and not a default.
+
 ### visibility, and why the bounce is not optional
 
 Without shadowing, a patch of floor in a sphere's shadow has one way to be

@@ -580,6 +580,60 @@ fn updating_surfels_matches_rebuilding_the_tracer() {
     harness.destroy();
 }
 
+#[test]
+fn updating_materials_matches_rebuilding_the_tracer() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let mut model = scene();
+    let environment = environment();
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 128, 64);
+    let camera = camera(4.0);
+    model.materials[0].albedo = [0.1, 0.75, 0.35];
+    model.materials[1].roughness = 0.8;
+    model.materials[2].specular_f0 = [0.4, 0.2, 0.7];
+
+    let mut updated = vol::gpu::RelightTracer::new(
+        &scene(),
+        &environment,
+        &specular,
+        vol::gpu::RelightSettings::default(),
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let before = harness.render(&mut updated, camera);
+    updated.update_materials(&model.materials, &harness.context, &mut harness.encoder);
+    let a = harness.render(&mut updated, camera);
+    updated.deinit(&harness.context);
+
+    let mut rebuilt = vol::gpu::RelightTracer::new(
+        &model,
+        &environment,
+        &specular,
+        vol::gpu::RelightSettings::default(),
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let b = harness.render(&mut rebuilt, camera);
+    rebuilt.deinit(&harness.context);
+
+    let mut worst = 0.0f32;
+    let mut moved = 0.0f32;
+    for ((left, right), old) in a.iter().zip(&b).zip(&before) {
+        for channel in 0..4 {
+            worst = worst.max((left[channel] - right[channel]).abs());
+            moved = moved.max((left[channel] - old[channel]).abs());
+        }
+    }
+    assert!(moved > 0.05, "the material update did not change the image");
+    assert_eq!(
+        worst, 0.0,
+        "updated materials differ from a rebuild by {worst}"
+    );
+
+    harness.destroy();
+}
+
 /// A model that has been through the file format renders the same as the one
 /// it was written from.
 ///

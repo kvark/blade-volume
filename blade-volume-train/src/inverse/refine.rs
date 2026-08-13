@@ -97,6 +97,18 @@ pub struct RenderedStats {
     pub seconds: f64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderedMaterialStats {
+    /// Scalar albedo coordinates visited.
+    pub coordinates: usize,
+    /// Distinct lower/upper proposals rendered.
+    pub proposals: usize,
+    pub changed: usize,
+    pub initial_loss: f64,
+    pub final_loss: f64,
+    pub seconds: f64,
+}
+
 fn rendered_loss(
     renderer: &mut score::Renderer,
     tracer: &mut vol::gpu::RelightTracer,
@@ -106,6 +118,83 @@ fn rendered_loss(
 ) -> f64 {
     tracer.reset_sampling();
     renderer.prepared_srgb_loss(tracer, capture, indices, cameras)
+}
+
+/// Refine the small shared diffuse-material table against complete production
+/// renders of the training photographs.
+pub fn refine_rendered_materials(
+    scene: &mut score::Scene,
+    capture: &capture::Capture,
+    indices: &[usize],
+    diffuse_samples: u32,
+    step: f32,
+) -> Result<RenderedMaterialStats, String> {
+    if !step.is_finite() || step <= 0.0 || step >= 1.0 {
+        return Err("rendered material step must be finite and between zero and one".to_string());
+    }
+    for &index in indices {
+        if index >= capture.views.len() {
+            return Err(format!("rendered material view {index} is out of bounds"));
+        }
+    }
+    if scene.model.materials.is_empty() || indices.is_empty() {
+        return Ok(RenderedMaterialStats::default());
+    }
+    let cameras: Vec<_> = indices
+        .iter()
+        .map(|&index| capture.views[index].camera)
+        .collect();
+    let mut renderer = score::Renderer::new(capture.width, capture.height)?;
+    let mut tracer = renderer.prepare_scene(scene, diffuse_samples, false);
+    let started = std::time::Instant::now();
+    let mut loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+    let initial_loss = loss;
+    let mut coordinates = 0;
+    let mut proposals = 0;
+    let mut changed = 0;
+    for material in 0..scene.model.materials.len() {
+        for channel in 0..3 {
+            coordinates += 1;
+            let original = scene.model.materials[material].albedo[channel];
+            let candidates = [(original - step).max(0.0), (original + step).min(1.0)];
+            let mut best = original;
+            let mut best_loss = loss;
+            let mut uploaded = original;
+            for candidate in candidates {
+                if candidate == original {
+                    continue;
+                }
+                scene.model.materials[material].albedo[channel] = candidate;
+                renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
+                uploaded = candidate;
+                let candidate_loss =
+                    rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+                proposals += 1;
+                if candidate_loss < best_loss {
+                    best_loss = candidate_loss;
+                    best = candidate;
+                }
+            }
+            scene.model.materials[material].albedo[channel] = best;
+            if uploaded != best {
+                renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
+            }
+            if best != original {
+                changed += 1;
+                loss = best_loss;
+            }
+        }
+    }
+    renderer.destroy_prepared_scene(tracer);
+    renderer.destroy();
+    Ok(RenderedMaterialStats {
+        coordinates,
+        proposals,
+        changed,
+        initial_loss,
+        final_loss: loss,
+        seconds: started.elapsed().as_secs_f64(),
+    })
 }
 
 fn perturbation_sign(index: usize, round: usize) -> f32 {
@@ -1173,7 +1262,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_render_loss_recovers_a_known_surface_offset() {
+    fn runtime_render_loss_recovers_known_surface_and_material_offsets() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         const SIZE: usize = 32;
         let cameras = [
@@ -1272,6 +1361,22 @@ mod tests {
         .unwrap();
         assert_eq!(stats.radii_moved, 1);
         assert!(undersized.model.surfels[0].radius > 0.24);
+
+        let mut recolored = make_scene(0.0);
+        recolored.model.materials[0].albedo = [0.6, 0.4, 0.2];
+        let stats = refine_rendered_materials(&mut recolored, &capture, &[0, 1], 0, 0.1)
+            .expect("material refinement");
+        assert_eq!(stats.coordinates, 3);
+        assert_eq!(stats.proposals, 6);
+        assert_eq!(stats.changed, 2);
+        assert!(stats.final_loss < stats.initial_loss);
+        for (actual, expected) in recolored.model.materials[0]
+            .albedo
+            .iter()
+            .zip([0.7, 0.3, 0.2])
+        {
+            assert!((actual - expected).abs() < 1.0e-6);
+        }
 
         let mut first = make_scene(0.075);
         let mut second = first.clone();

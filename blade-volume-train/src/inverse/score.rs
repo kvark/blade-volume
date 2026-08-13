@@ -325,6 +325,15 @@ impl Renderer {
         self.geometry_update_pending = true;
     }
 
+    pub(crate) fn update_prepared_materials(
+        &mut self,
+        tracer: &mut vol::gpu::RelightTracer,
+        materials: &[vol::relight::Material],
+    ) {
+        assert!(!self.geometry_update_pending);
+        tracer.update_materials(materials, &self.context, &mut self.encoder);
+    }
+
     fn render_prepared_flat(
         &mut self,
         tracer: &mut vol::gpu::RelightTracer,

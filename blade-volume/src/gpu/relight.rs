@@ -95,6 +95,7 @@ pub struct RelightTracer {
     blas: gpu::AccelerationStructure,
     tlas: gpu::AccelerationStructure,
     surfel_stage_offset: u64,
+    material_stage_offset: u64,
     tlas_scratch_offset: u64,
 }
 
@@ -419,8 +420,45 @@ impl RelightTracer {
             blas,
             tlas,
             surfel_stage_offset: vertex_size + index_size,
+            material_stage_offset: vertex_size + index_size + surfel_size,
             tlas_scratch_offset,
         }
+    }
+
+    /// Replace the shared material table without rebuilding geometry or
+    /// lighting. The material count must stay fixed.
+    pub fn update_materials(
+        &mut self,
+        materials: &[relight::Material],
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) {
+        let material_size = mem::size_of_val(materials) as u64;
+        assert_eq!(
+            material_size,
+            self.material_buf.size(),
+            "relight material update must preserve the material count"
+        );
+        unsafe {
+            let target = slice::from_raw_parts_mut(
+                self.stage_buf
+                    .data()
+                    .add(self.material_stage_offset as usize)
+                    as *mut relight::Material,
+                materials.len(),
+            );
+            target.copy_from_slice(materials);
+        }
+        encoder.start();
+        if let mut pass = encoder.transfer("relight-materials-update") {
+            pass.copy_buffer_to_buffer(
+                self.stage_buf.at(self.material_stage_offset),
+                self.material_buf.at(0),
+                material_size,
+            );
+        }
+        let sync_point = context.submit(encoder);
+        let _ = context.wait_for(&sync_point, !0);
     }
 
     /// Replace particle geometry while retaining materials, lighting, and the
