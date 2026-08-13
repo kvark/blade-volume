@@ -17,7 +17,7 @@
 use blade_volume as vol;
 use blade_volume_convert as convert;
 use blade_volume_train as train;
-use std::path;
+use std::{collections, path};
 
 #[derive(argh::FromArgs)]
 /// Reconstruct geometry, material and light from a posed capture.
@@ -285,7 +285,13 @@ fn main() {
     // ------------------------------------------------------------- geometry
     let started = std::time::Instant::now();
     let surfels = match args.foam {
-        Some(ref foam) => surfels_from_foam(path::Path::new(foam), &capture, &train_views, &args),
+        Some(ref foam) => surfels_from_foam(
+            path::Path::new(foam),
+            &capture,
+            &reconstruction,
+            &train_views,
+            &args,
+        ),
         None => surfels_from_sparse(&reconstruction, &capture, &args),
     };
     let kernel = if args.compact_kernel {
@@ -714,6 +720,7 @@ fn surfels_from_sparse(
 fn surfels_from_foam(
     foam: &path::Path,
     capture: &train::inverse::capture::Capture,
+    reconstruction: &train::colmap::Reconstruction,
     views: &[usize],
     args: &Args,
 ) -> Vec<vol::relight::Surfel> {
@@ -803,6 +810,15 @@ fn surfels_from_foam(
         "geometry: merged at a cell size of {voxel:.4} world units in {:.1} s",
         fuse_started.elapsed().as_secs_f64(),
     );
+    let sparse_added = add_sparse_track_support(
+        &mut surfels,
+        reconstruction,
+        capture,
+        views,
+        voxel,
+        options.disc_radius,
+    );
+    println!("geometry: added {sparse_added} particles from training-only sparse tracks");
     if !args.no_multi_view_refine {
         let refine_started = std::time::Instant::now();
         let refine_views: Vec<train::inverse::refine::RefinementView<'_>> = views
@@ -832,6 +848,97 @@ fn surfels_from_foam(
         );
     }
     surfels
+}
+
+struct SparseCell {
+    position_sum: glam::Vec3,
+    count: usize,
+}
+
+fn add_sparse_track_support(
+    surfels: &mut Vec<vol::relight::Surfel>,
+    reconstruction: &train::colmap::Reconstruction,
+    capture: &train::inverse::capture::Capture,
+    views: &[usize],
+    voxel: f32,
+    radius_factor: f32,
+) -> usize {
+    if surfels.is_empty() || !voxel.is_finite() || voxel <= 0.0 {
+        return 0;
+    }
+    let image_ids: collections::HashMap<&str, u32> = reconstruction
+        .images
+        .iter()
+        .map(|image| (image.name.as_str(), image.id))
+        .collect();
+    let training_ids: collections::HashSet<u32> = views
+        .iter()
+        .filter_map(|&index| image_ids.get(capture.views[index].name.as_str()).copied())
+        .collect();
+    let mut cells = collections::HashMap::<[i32; 3], SparseCell>::new();
+    for point in &reconstruction.points {
+        let training_support = point
+            .track_image_ids
+            .iter()
+            .filter(|image| training_ids.contains(image))
+            .count();
+        if training_support < 2 || point.error > 1.0 {
+            continue;
+        }
+        let position = glam::Vec3::new(
+            point.xyz[0] as f32,
+            point.xyz[1] as f32,
+            point.xyz[2] as f32,
+        );
+        let key = position
+            .to_array()
+            .map(|coordinate| (coordinate / voxel).floor() as i32);
+        let cell = cells.entry(key).or_insert(SparseCell {
+            position_sum: glam::Vec3::ZERO,
+            count: 0,
+        });
+        cell.position_sum += position;
+        cell.count += 1;
+    }
+    let mut points: Vec<glam::Vec3> = cells
+        .values()
+        .filter(|cell| cell.count >= 5)
+        .map(|cell| cell.position_sum / cell.count as f32)
+        .collect();
+    points.sort_by(|left, right| left.to_array().partial_cmp(&right.to_array()).unwrap());
+    let cameras: Vec<glam::Vec3> = views
+        .iter()
+        .map(|&index| glam::Vec3::from(capture.views[index].camera.cam_position))
+        .collect();
+    let (candidates, _) = train::inverse::surface::surfels_from_points(
+        &points,
+        &cameras,
+        train::inverse::surface::SurfaceOptions::default(),
+    );
+
+    let occupied: Vec<[f32; 3]> = surfels.iter().map(|surfel| surfel.center).collect();
+    let occupied = kiddo::ImmutableKdTree::new_from_slice(&occupied);
+    let minimum_distance_squared = voxel * voxel;
+    let start = surfels.len();
+    let mut added = Vec::<glam::Vec3>::new();
+    for mut candidate in candidates {
+        let center = glam::Vec3::from(candidate.center);
+        if occupied
+            .nearest_one::<kiddo::SquaredEuclidean>(&candidate.center)
+            .distance
+            < minimum_distance_squared
+            || added
+                .iter()
+                .any(|&other| center.distance_squared(other) < minimum_distance_squared)
+        {
+            continue;
+        }
+        candidate.radius = voxel * radius_factor.max(0.1);
+        candidate.material = surfels.len() as u32;
+        surfels.push(candidate);
+        added.push(center);
+    }
+    surfels.len() - start
 }
 
 fn mask_depth(
@@ -1029,6 +1136,95 @@ fn describe_light(environment: &vol::relight::Environment) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sparse_support_fixture(track_image_ids: Vec<u32>) -> train::colmap::Reconstruction {
+        let mut points = Vec::new();
+        for y in 0..4 {
+            for x in 0..4 {
+                for sample in 0..5 {
+                    points.push(train::colmap::ColmapPoint3D {
+                        id: points.len() as u64,
+                        xyz: [x as f64 + 0.01 * sample as f64, y as f64, 0.0],
+                        rgb: [128; 3],
+                        error: 0.25,
+                        track_len: track_image_ids.len() as u64,
+                        track_image_ids: track_image_ids.clone(),
+                    });
+                }
+            }
+        }
+        let images = [(10, "train-a"), (11, "train-b"), (12, "held-a")]
+            .into_iter()
+            .map(|(id, name)| train::colmap::ColmapImage {
+                id,
+                camera_id: 1,
+                name: name.to_string(),
+                quat_wxyz: [1.0, 0.0, 0.0, 0.0],
+                translation: [0.0; 3],
+                num_points2d: 0,
+            })
+            .collect();
+        train::colmap::Reconstruction {
+            cameras: collections::HashMap::new(),
+            images,
+            points,
+        }
+    }
+
+    fn sparse_support_capture() -> train::inverse::capture::Capture {
+        let camera = vol::CameraParams {
+            cam_position: [1.5, 1.5, -5.0],
+            depth: 100.0,
+            cam_orientation: glam::Quat::IDENTITY.to_array(),
+            fov: [1.0; 2],
+            principal: [0.0; 2],
+        };
+        train::inverse::capture::Capture {
+            width: 1,
+            height: 1,
+            views: ["train-a", "train-b", "held-a"]
+                .into_iter()
+                .map(|name| train::inverse::capture::View {
+                    name: name.to_string(),
+                    camera,
+                    pixels: vec![[0.0; 3]],
+                    mask: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn sparse_support_uses_only_tracks_from_selected_training_views() {
+        let capture = sparse_support_capture();
+        let mut supported = vec![vol::relight::Surfel {
+            center: [100.0, 100.0, 100.0],
+            radius: 1.0,
+            normal: [0.0, 0.0, 1.0],
+            material: 0,
+        }];
+        let added = add_sparse_track_support(
+            &mut supported,
+            &sparse_support_fixture(vec![10, 11]),
+            &capture,
+            &[0, 1],
+            1.0,
+            1.7,
+        );
+        assert!(added > 0);
+        assert!(supported[1..].iter().all(|surfel| surfel.radius == 1.7));
+
+        let mut held_only = supported[..1].to_vec();
+        let added = add_sparse_track_support(
+            &mut held_only,
+            &sparse_support_fixture(vec![12, 12]),
+            &capture,
+            &[0, 1],
+            1.0,
+            1.7,
+        );
+        assert_eq!(added, 0);
+    }
 
     #[test]
     fn known_environment_is_an_optional_cli_input() {

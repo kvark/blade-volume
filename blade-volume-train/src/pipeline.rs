@@ -1395,6 +1395,7 @@ mod tests {
                 rgb: [255, 0, 0],
                 error: 0.0,
                 track_len: 1,
+                track_image_ids: vec![0],
             })
             .collect();
         let reconstruction = colmap::Reconstruction {

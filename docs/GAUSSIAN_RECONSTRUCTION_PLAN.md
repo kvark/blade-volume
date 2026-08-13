@@ -1864,3 +1864,30 @@ position RMSE from 0.6212 to 0.6239. The prototype is removed. Agreement among
 depth modes is not accuracy when the source foam places those modes at the
 same biased depth; the next geometry step needs a correction signal rather
 than finer aggregation.
+
+COLMAP sparse tracks do provide an independent triangulated coordinate, but
+they do not improve the already extracted surface by acting as another centre
+anchor. After excluding every point without support from at least two of the
+18 selected training cameras, 26,524 Bonsai tracks remain. A conservative
+prototype considered only tracks below one-pixel reprojection error, took a
+robust local normal-direction median, moved each supported surfel halfway, and
+kept the cloud fixed at 3,060 particles. It supports 424 surfels and moves 399
+by only 0.110 voxel on average, yet direct held quality falls from 18.62/18.55
+to 18.52/18.49 dB. The anchor is removed. Sparse correspondences overlap the
+textured region already handled by the image patch sweep; their useful role is
+to add otherwise missing support, not compete with that surface coordinate.
+
+That support-only form is selected. Tracks are retained only to identify
+points triangulated by at least two selected training cameras; held-camera-only
+tracks cannot contribute. Low-error points are averaged into the same coarse
+cells as depth fusion, cells with fewer than five samples are rejected, local
+point-cloud covariance supplies orientation, and candidates within one cell
+of existing support are suppressed. Existing particles never move. This adds
+241 particles to Bonsai and changes its direct held mean/worst from
+18.62/18.55 to 18.63/18.56 dB. On the paired Room gate it adds 180 particles,
+improves direct held quality from 17.46/16.76 to 17.70/17.16 dB, and changes
+the relightable proxy from 11.28/10.25 to 11.31/10.26 dB while coverage rises
+73.3% to 75.6%. The implementation adds no dependency, shader, graph
+operation, rendering path, or point representation; it reuses the existing
+surfel estimator and stores only the COLMAP track image IDs that the loader
+previously skipped.

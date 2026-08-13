@@ -346,9 +346,10 @@ pub struct ColmapPoint3D {
     pub xyz: [f64; 3],
     pub rgb: [u8; 3],
     pub error: f64,
-    /// Length of the original track. The track entries themselves are skipped
-    /// on read.
+    /// Length of the original track.
     pub track_len: u64,
+    /// Images that triangulated this point. The point2D indices are skipped.
+    pub track_image_ids: Vec<u32>,
 }
 
 /// Complete sparse reconstruction.
@@ -578,11 +579,16 @@ pub fn try_load_points3d(path: &path::Path) -> io::Result<Vec<ColmapPoint3D>> {
         let b = read_u8(&mut file)?;
         let error = read_f64(&mut file)?;
         let track_len = read_u64(&mut file)?;
-        // Each track entry is image_id (u32) + point2D_idx (u32) = 8 bytes.
-        let track_bytes = track_len
+        let _track_bytes = track_len
             .checked_mul(8)
             .ok_or_else(|| invalid_data("COLMAP point3D track byte count overflows u64"))?;
-        skip(&mut file, track_bytes)?;
+        let track_capacity = usize::try_from(track_len)
+            .map_err(|_| invalid_data("COLMAP point3D track length does not fit usize"))?;
+        let mut track_image_ids = reserve_records(track_capacity, "track")?;
+        for _ in 0..track_len {
+            track_image_ids.push(read_u32(&mut file)?);
+            let _point2d_index = read_u32(&mut file)?;
+        }
         if !x.is_finite() || !y.is_finite() || !z.is_finite() || !error.is_finite() || error < 0.0 {
             return Err(invalid_data(format!(
                 "COLMAP point3D {id} has invalid coordinates or error"
@@ -594,6 +600,7 @@ pub fn try_load_points3d(path: &path::Path) -> io::Result<Vec<ColmapPoint3D>> {
             rgb: [r, g, b],
             error,
             track_len,
+            track_image_ids,
         });
     }
     Ok(out)
@@ -930,6 +937,7 @@ mod tests {
         assert_eq!(r.points[1].xyz, [1.0, 2.0, 3.0]);
         assert_eq!(r.points[2].rgb, [0, 0, 255]);
         assert_eq!(r.points[2].track_len, 2);
+        assert_eq!(r.points[2].track_image_ids, vec![10, 10]);
 
         let _ = fs::remove_dir_all(&dir);
     }
