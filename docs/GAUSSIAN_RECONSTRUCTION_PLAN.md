@@ -895,3 +895,15 @@ the same last regression and smaller gains. All variants are removed. A centre
 claim is not the production renderer's depth-band Gaussian blend, so a valid
 correction must use the actual per-pixel compositing weights rather than an
 overlap count surrogate.
+
+Using the actual production compositing fractions as confidence weights gets
+closer but still does not define the right solve. The observation pass sums the
+same truncated Gaussian coverage over the same two-radius depth band as WGSL,
+then weights each centre sample by its share. Full fractions improve three of
+four exact held-light gates, including +0.0242/+0.0240 dB on the fourth
+mean/tail, but regress the second by 0.0036/0.0016 dB and 0.0114 dB where hit.
+Square-root fractions clear the second and improve the third and fourth, but
+move the fixed worst view by -0.0054 dB. Both implementations are removed.
+The photograph contains the weighted *sum* of several unknown surfel colours;
+changing independent-sample confidence cannot invert that equation. A future
+joint material objective should render or solve those mixtures explicitly.
