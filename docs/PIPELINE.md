@@ -2315,6 +2315,15 @@ Broken into sub-steps:
   the fused multi-gather reductions through code generation; the remaining
   performance targets are their generic implementation and the radius-gradient
   atomic accumulation, not new operation or shader-entry variants.
+  Profiling the three dominant four-column reductions rejects two further
+  generic-code mutations. Vector evaluation changes low floating-point bits;
+  preserving the scalar loop while omitting its single-lane workgroup scratch
+  is bit-exact, but leaves the 258-pass step unchanged at 5.06--5.32 ms versus
+  5.06--5.35 ms. Meganeura therefore keeps the existing reduction lowerer.
+  Blade now forwards runtime environment options into the shared training
+  session, so plan dumps, dispatch serialization, alias controls, and GPU
+  timing can diagnose this production graph instead of silently using the
+  defaults.
 
 #### M3d — Online viewer attach
 

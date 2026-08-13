@@ -5459,6 +5459,7 @@ fn build_train_session(
         mn::SessionConfig {
             mode: mn::Mode::Training,
             gpu: Some(gpu.clone()),
+            runtime: mn::SessionOptions::from_env(),
             ..Default::default()
         },
     );
