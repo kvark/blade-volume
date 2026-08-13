@@ -87,7 +87,7 @@ pub struct RenderedStats {
     pub simultaneous_particles: usize,
     /// Requested simultaneous rounds.
     pub simultaneous_rounds: usize,
-    /// Rounds whose positive or negative proposal reduced the objective.
+    /// Rounds whose localized or whole-frame proposal reduced the objective.
     pub simultaneous_accepted: usize,
     pub tested: usize,
     pub moved: usize,

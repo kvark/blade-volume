@@ -147,7 +147,8 @@ struct Args {
     #[argh(option, default = "0")]
     render_refine: usize,
 
-    /// simultaneous full-cloud render refinement rounds (default 0)
+    /// simultaneous full-cloud render refinement rounds (default 0; use 8 for
+    /// the conservative final-quality schedule)
     #[argh(option, default = "0")]
     render_refine_rounds: usize,
 
