@@ -168,6 +168,13 @@ and solves only the materials. Its resolution also selects the matching
 visibility directions. Without the option, reconstruction retains the harder
 unknown-light fit and writes its recovered environment beside the scene.
 
+If the same posed capture is repeated under measured lights, pass each aligned
+image directory with `--normal-images` and its light with
+`--normal-environment`; both options are repeatable and require the primary
+`--environment` too. The solver eliminates diffuse albedo while choosing one
+normal per particle across the known lights, then fits the primary capture's
+materials with those normals. Photograph names and selected poses must match.
+
 ### visibility, and why the bounce is not optional
 
 Without shadowing, a patch of floor in a sphere's shadow has one way to be

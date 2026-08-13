@@ -847,3 +847,14 @@ holds it fixed while fitting materials. Unknown-light recovery remains the
 default. A reduced Bonsai end-to-end smoke reconstructs and scores normally,
 and its written environment sidecar is byte-identical to the supplied file;
 the command adds no alternate material or rendering implementation.
+
+That path now also accepts repeated aligned captures under additional measured
+lights through paired repeatable `--normal-images` and
+`--normal-environment` arguments. It exposes the already selected synthetic
+photometric-normal solve to COLMAP input before the primary material fit. A
+new identifiability guard deduplicates irradiance maps with the same shape up
+to per-channel scale: the initial identity smoke incorrectly moved 26 of 63
+observed normals under two copies of one light, while the corrected path
+reports no supported normals and emits a byte-identical scene. Distinct known
+lights retain the analytical normal-recovery result and the earlier synthetic
+0.37--0.68 dB unseen-light gain.

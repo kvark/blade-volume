@@ -56,6 +56,15 @@ struct Args {
     #[argh(option)]
     environment: Option<String>,
 
+    /// additional aligned image directory used to fit normals under another
+    /// known light; repeat together with --normal-environment
+    #[argh(option)]
+    normal_images: Vec<String>,
+
+    /// measured environment for the corresponding --normal-images capture
+    #[argh(option)]
+    normal_environment: Vec<String>,
+
     /// alternations between solving for albedo and for light (default 24)
     #[argh(option, default = "24")]
     iterations: usize,
@@ -159,6 +168,11 @@ fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
 
+    if let Err(message) = validate_normal_captures(&args) {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
+
     let known_light = args.environment.as_ref().map(|file| {
         vol::io::try_load_environment(path::Path::new(file)).unwrap_or_else(|error| {
             eprintln!("cannot read known environment {file}: {error}");
@@ -242,6 +256,30 @@ fn main() {
     if geometry.surfels.is_empty() {
         eprintln!("no geometry survived; nothing to fit");
         std::process::exit(1);
+    }
+
+    if !args.normal_images.is_empty() {
+        let started = std::time::Instant::now();
+        let stats = refine_normals_from_captures(
+            &mut geometry,
+            &capture,
+            &train_views,
+            sparse,
+            height,
+            known_light.as_ref().expect("known light validated above"),
+            &args,
+        )
+        .unwrap_or_else(|message| {
+            eprintln!("cannot refine normals: {message}");
+            std::process::exit(1);
+        });
+        println!(
+            "geometry: photometrically refined {} of {} supported normals from {} known lights in {:.1} s",
+            stats.changed,
+            stats.supported,
+            args.normal_images.len() + 1,
+            started.elapsed().as_secs_f64(),
+        );
     }
 
     // ---------------------------------------------------- material and light
@@ -592,6 +630,91 @@ fn aspect_height(sparse: &path::Path, width: usize) -> Result<usize, String> {
     Ok(((width * camera.height as usize) / camera.width as usize).max(1))
 }
 
+fn validate_normal_captures(args: &Args) -> Result<(), String> {
+    if args.normal_images.len() != args.normal_environment.len() {
+        return Err(format!(
+            "--normal-images was supplied {} times but --normal-environment was supplied {} times",
+            args.normal_images.len(),
+            args.normal_environment.len(),
+        ));
+    }
+    if !args.normal_images.is_empty() && args.environment.is_none() {
+        return Err(
+            "photometric normal refinement also needs --environment for the primary capture"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn refine_normals_from_captures(
+    model: &mut vol::relight::RelightModel,
+    primary: &train::inverse::capture::Capture,
+    train_views: &[usize],
+    sparse: &path::Path,
+    height: usize,
+    primary_light: &vol::relight::Environment,
+    args: &Args,
+) -> Result<train::inverse::decompose::NormalRefinement, String> {
+    let mut observations = vec![train::inverse::decompose::observe(
+        model,
+        primary,
+        train_views,
+        -1.0,
+    )];
+    let mut irradiance = vec![train::relight::Irradiance::project(
+        &primary_light.texels,
+        primary_light.width,
+        primary_light.height,
+    )];
+    for (images, environment) in args.normal_images.iter().zip(&args.normal_environment) {
+        let (capture, _) = train::inverse::capture::Capture::from_colmap(
+            sparse,
+            path::Path::new(images),
+            args.width,
+            height,
+            args.stride,
+        )?;
+        if capture.views.len() != primary.views.len()
+            || capture
+                .views
+                .iter()
+                .zip(&primary.views)
+                .any(|(left, right)| left.name != right.name)
+        {
+            return Err(format!(
+                "{images} does not contain the same selected photographs as the primary capture"
+            ));
+        }
+        observations.push(train::inverse::decompose::observe(
+            model,
+            &capture,
+            train_views,
+            -1.0,
+        ));
+        let light = vol::io::try_load_environment(path::Path::new(environment))
+            .map_err(|error| format!("cannot read {environment}: {error}"))?;
+        irradiance.push(train::relight::Irradiance::project(
+            &light.texels,
+            light.width,
+            light.height,
+        ));
+    }
+    let lights: Vec<_> = irradiance
+        .into_iter()
+        .zip(&observations)
+        .map(
+            |(irradiance, observations)| train::inverse::decompose::KnownLightObservations {
+                irradiance,
+                observations,
+            },
+        )
+        .collect();
+    Ok(train::inverse::decompose::refine_normals_known_lights(
+        model, &lights, 512,
+    ))
+}
+
 /// Say what the recovered light looks like, in terms that can be checked.
 ///
 /// A single number for the whole sky hides the only thing worth knowing about
@@ -653,5 +776,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(known.environment.as_deref(), Some("capture.f32"));
+    }
+
+    #[test]
+    fn normal_captures_require_paired_images_and_lights() {
+        let parse = |extra: &[&str]| {
+            let mut arguments = vec!["--sparse", "sparse", "--images", "images"];
+            arguments.extend_from_slice(extra);
+            <Args as argh::FromArgs>::from_args(&["reconstruct"], &arguments).unwrap()
+        };
+
+        let missing_primary = parse(&[
+            "--normal-images",
+            "images-west",
+            "--normal-environment",
+            "west.f32",
+        ]);
+        assert!(validate_normal_captures(&missing_primary).is_err());
+
+        let mismatched = parse(&[
+            "--environment",
+            "east.f32",
+            "--normal-images",
+            "images-west",
+        ]);
+        assert!(validate_normal_captures(&mismatched).is_err());
+
+        let paired = parse(&[
+            "--environment",
+            "east.f32",
+            "--normal-images",
+            "images-west",
+            "--normal-environment",
+            "west.f32",
+            "--normal-images",
+            "images-sky",
+            "--normal-environment",
+            "sky.f32",
+        ]);
+        validate_normal_captures(&paired).unwrap();
+        assert_eq!(paired.normal_images.len(), 2);
     }
 }

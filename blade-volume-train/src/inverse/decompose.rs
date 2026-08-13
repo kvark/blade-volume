@@ -296,6 +296,30 @@ fn photometric_normal_score(
     error
 }
 
+fn irradiance_shapes_differ(
+    left: &crate::relight::Irradiance,
+    right: &crate::relight::Irradiance,
+) -> bool {
+    let mut largest = 0.0f64;
+    for channel in 0..3 {
+        let mut dot = 0.0f64;
+        let mut left_squared = 0.0f64;
+        let mut right_squared = 0.0f64;
+        for coefficient in 0..9 {
+            let a = left.coefficients[coefficient][channel] as f64;
+            let b = right.coefficients[coefficient][channel] as f64;
+            dot += a * b;
+            left_squared += a * a;
+            right_squared += b * b;
+        }
+        if left_squared > 1.0e-12 && right_squared > 1.0e-12 {
+            let cosine = dot / (left_squared * right_squared).sqrt();
+            largest = largest.max(1.0 - cosine.clamp(-1.0, 1.0));
+        }
+    }
+    largest > 1.0e-4
+}
+
 /// Fit one diffuse normal per Gaussian against repeated captures under known
 /// lights. Albedo is eliminated analytically for every candidate, so the fit
 /// cannot improve merely by painting one illumination into the material.
@@ -304,12 +328,29 @@ pub fn refine_normals_known_lights(
     lights: &[KnownLightObservations<'_>],
     candidate_count: usize,
 ) -> NormalRefinement {
+    // Per-channel light scale is absorbed exactly by the unknown albedo. Two
+    // captures with the same irradiance shape therefore provide only one
+    // normal constraint, even when their exposure or white balance differs.
+    let mut distinct = Vec::new();
+    for light in lights {
+        if distinct
+            .iter()
+            .all(|existing: &&KnownLightObservations<'_>| {
+                irradiance_shapes_differ(&existing.irradiance, &light.irradiance)
+            })
+        {
+            distinct.push(light);
+        }
+    }
+    if distinct.len() < 2 {
+        return NormalRefinement::default();
+    }
     let candidates = normal_candidates(candidate_count.max(1));
     let mut stats = NormalRefinement::default();
     for index in 0..model.surfels.len() {
         let mut readings = Vec::new();
         let mut towards = glam::Vec3::ZERO;
-        for light in lights {
+        for &light in &distinct {
             let samples = light.observations.of(index);
             if samples.is_empty() {
                 continue;
@@ -1913,6 +1954,47 @@ mod tests {
             recovered.dot(truth) > 0.995,
             "normal {recovered:?} against {truth:?}"
         );
+    }
+
+    #[test]
+    fn duplicate_known_lights_do_not_claim_normal_support() {
+        let mut irradiance = crate::relight::Irradiance::default();
+        irradiance.coefficients[0] = [2.0, 1.0, 0.5];
+        irradiance.coefficients[3] = [1.0, 0.5, 0.25];
+        let mut scaled = irradiance;
+        for coefficient in &mut scaled.coefficients {
+            coefficient[0] *= 2.0;
+            coefficient[1] *= 0.5;
+            coefficient[2] *= 3.0;
+        }
+        let observations = from_means(&[[0.5, 0.25, 0.125]]);
+        let lights = [
+            KnownLightObservations {
+                irradiance,
+                observations: &observations,
+            },
+            KnownLightObservations {
+                irradiance: scaled,
+                observations: &observations,
+            },
+        ];
+        let original = glam::Vec3::new(-0.5, 0.5, 0.7).normalize().to_array();
+        let mut model = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0; 3],
+                radius: 1.0,
+                normal: original,
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material::default()],
+        };
+
+        assert_eq!(
+            refine_normals_known_lights(&mut model, &lights, 4096),
+            NormalRefinement::default()
+        );
+        assert_eq!(model.surfels[0].normal, original);
     }
 
     fn with_unseen_prefix(unseen: usize, mean: &[[f32; 3]]) -> Observations {
