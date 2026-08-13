@@ -412,13 +412,17 @@ synthetic clouds retain every reported held-light mean, worst view, and
 coverage value; truth position/normal changes stay within 0.0004 world units
 and 0.04 degrees. On real captures, position-only Bonsai falls 45.7→35.2
 seconds and Room 50.7→36.6; position-plus-radius falls 91.3→72.7 and
-101.0→79.5 seconds. Every reported train/test score and coverage value remains
-unchanged. The physical-GPU scope peaks at 317 MB with zero swap, memory event,
-or GPU fault.
+101.0→79.5 seconds. Trying radius expansion before shrinkage matches the more
+common accepted direction and reduces those two radius passes again to 68.1
+and 71.5 seconds, or 25--29% below the original loop. Every reported train/test
+score and coverage value remains unchanged. The physical-GPU scope peaks at
+791 MB with zero swap, memory event, or GPU fault.
 
-`--render-refine-radii` adds two support candidates, 80% and 120% of each
-current Gaussian radius, after its position decision. Twenty percent is the
-selected point of a 5/10/20% five-cloud sweep. Relative to position-only at
+`--render-refine-radii` adds two support candidates, 120% and 80% of each
+current Gaussian radius, after its position decision. Expansion is tested
+first so a successful support-preserving move avoids the second rebuild.
+Twenty percent is the selected point of a 5/10/20% five-cloud sweep. Relative
+to position-only at
 3,000 particles, it raises Bonsai held mean/worst by another 0.04/0.03 dB and
 Room by 0.21/0.22 dB; coverage is restored or increased. This doubles exact
 coordinate cost, so it remains a separate final-quality switch. A four-way

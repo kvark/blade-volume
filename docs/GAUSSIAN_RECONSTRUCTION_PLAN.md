@@ -787,6 +787,8 @@ from 3.487 to 2.594 seconds (25.6%), and position-plus-radius from 6.983 to
 mean, tail, and coverage score; truth position/normal changes stay within
 0.0004 world units and 0.04 degrees. Position-only Bonsai falls 45.7→35.2
 seconds and Room 50.7→36.6; with radii they fall 91.3→72.7 and 101.0→79.5.
-All reported real train/test quality and coverage values are unchanged. This
-is a two-branch CPU control-flow change only: it adds no shader, operation,
-buffer, bind group, or pipeline variant.
+Trying radius expansion before shrinkage matches the more common accepted
+direction and lowers those radius passes again to 68.1 and 71.5 seconds, or
+25--29% below the original loop. All reported real train/test quality and
+coverage values are unchanged. This is CPU control flow only: it adds no
+shader, operation, buffer, bind group, or pipeline variant.

@@ -320,7 +320,7 @@ pub fn refine_rendered(
             let plus = original * (1.0 + fraction);
             let mut best_loss = loss;
             let mut best = original;
-            for scale in [1.0 - fraction, 1.0 + fraction] {
+            for scale in [1.0 + fraction, 1.0 - fraction] {
                 scene.model.surfels[index].radius = original * scale;
                 renderer.update_prepared_surfels(&scene.model.surfels);
                 let candidate =
@@ -328,7 +328,7 @@ pub fn refine_rendered(
                 if candidate < best_loss {
                     best_loss = candidate;
                     best = scene.model.surfels[index].radius;
-                    if scale < 1.0 {
+                    if scale > 1.0 {
                         break;
                     }
                 }
