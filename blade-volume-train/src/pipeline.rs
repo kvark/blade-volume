@@ -315,7 +315,7 @@ pub fn build_views(
         .iter()
         .filter(|img| images_dir.join(&img.name).is_file())
         .take(config.max_views.unwrap_or(reconstruction.images.len()));
-    build_views_from(reconstruction, images_dir, config, images)
+    build_views_from_optional_masks(reconstruction, images_dir, None, config, images).unwrap()
 }
 
 /// Build a custom slice of views — same machinery as [`build_views`] but the
@@ -327,6 +327,31 @@ pub fn build_views_from<'a>(
     config: &PipelineConfig,
     images: impl IntoIterator<Item = &'a colmap::ColmapImage>,
 ) -> Vec<diff_render::ViewSupervision> {
+    build_views_from_optional_masks(reconstruction, images_dir, None, config, images).unwrap()
+}
+
+/// Build a custom slice of foreground-masked views.
+///
+/// `masks_dir` mirrors `images_dir`: an image named `room/frame.png` uses
+/// `masks_dir/room/frame.png`. Every selected image must have a readable mask;
+/// mixing masked and unmasked supervision is rejected.
+pub fn build_views_from_with_masks<'a>(
+    reconstruction: &colmap::Reconstruction,
+    images_dir: &path::Path,
+    masks_dir: &path::Path,
+    config: &PipelineConfig,
+    images: impl IntoIterator<Item = &'a colmap::ColmapImage>,
+) -> Result<Vec<diff_render::ViewSupervision>, String> {
+    build_views_from_optional_masks(reconstruction, images_dir, Some(masks_dir), config, images)
+}
+
+fn build_views_from_optional_masks<'a>(
+    reconstruction: &colmap::Reconstruction,
+    images_dir: &path::Path,
+    masks_dir: Option<&path::Path>,
+    config: &PipelineConfig,
+    images: impl IntoIterator<Item = &'a colmap::ColmapImage>,
+) -> Result<Vec<diff_render::ViewSupervision>, String> {
     let mut views = Vec::new();
     for image in images {
         let camera = reconstruction
@@ -359,16 +384,42 @@ pub fn build_views_from<'a>(
                 continue;
             }
         };
+        let target_alpha = masks_dir
+            .map(|directory| {
+                let mask_path = directory.join(&image.name);
+                load_and_rectify_image(&mask_path, config.resolution.0, config.resolution.1, camera)
+                    .map_err(|error| format!("cannot read mask {}: {error}", mask_path.display()))
+                    .map(|rgb| {
+                        rgb.chunks_exact(3)
+                            .map(|pixel| pixel[0].clamp(0.0, 1.0))
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .transpose()?;
+        let target_rgb = if let Some(ref alpha) = target_alpha {
+            target_rgb
+                .chunks_exact(3)
+                .zip(alpha)
+                .flat_map(|(rgb, &coverage)| {
+                    std::array::from_fn::<f32, 3, _>(|channel| {
+                        coverage * rgb[channel]
+                            + (1.0 - coverage) * config.fit.background_rgb[channel]
+                    })
+                })
+                .collect()
+        } else {
+            target_rgb
+        };
         let cam = reconstruction.camera_params_for(image, config.far_plane);
         views.push(diff_render::ViewSupervision {
             camera: cam,
             target_rgb,
-            target_alpha: None,
+            target_alpha,
             width: config.resolution.0,
             height: config.resolution.1,
         });
     }
-    views
+    Ok(views)
 }
 
 /// Render each `view` at the configured resolution and report per-view +
@@ -986,6 +1037,36 @@ pub fn train_colmap_appearance_split(
     _test_views: usize,
     gpu: sync::Arc<gpu::Context>,
 ) -> TrainOutcome {
+    train_colmap_appearance_split_optional_masks(sparse_dir, images_dir, None, config, gpu).unwrap()
+}
+
+/// Mask-supervised variant of [`train_colmap_appearance_split`].
+///
+/// The mask directory mirrors the image directory. Missing or unreadable
+/// masks are errors so a training run cannot silently mix objectives.
+pub fn train_colmap_appearance_split_with_masks(
+    sparse_dir: &path::Path,
+    images_dir: &path::Path,
+    masks_dir: &path::Path,
+    config: &PipelineConfig,
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<TrainOutcome, String> {
+    train_colmap_appearance_split_optional_masks(
+        sparse_dir,
+        images_dir,
+        Some(masks_dir),
+        config,
+        gpu,
+    )
+}
+
+fn train_colmap_appearance_split_optional_masks(
+    sparse_dir: &path::Path,
+    images_dir: &path::Path,
+    masks_dir: Option<&path::Path>,
+    config: &PipelineConfig,
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<TrainOutcome, String> {
     let pipeline_start = std::time::Instant::now();
     let load_start = std::time::Instant::now();
     let recon = colmap::load_reconstruction(sparse_dir);
@@ -1092,7 +1173,7 @@ pub fn train_colmap_appearance_split(
     );
 
     let view_start = std::time::Instant::now();
-    let views = if config.test_every > 0 {
+    let view_images = if config.test_every > 0 {
         let (train_imgs, test_imgs) =
             split_train_test(&recon, images_dir, config.max_views, 0, config.test_every);
         log::info!(
@@ -1101,10 +1182,17 @@ pub fn train_colmap_appearance_split(
             train_imgs.len(),
             test_imgs.len(),
         );
-        build_views_from(&recon, images_dir, config, train_imgs)
+        train_imgs
     } else {
-        build_views(&recon, images_dir, config)
+        recon
+            .images
+            .iter()
+            .filter(|image| images_dir.join(&image.name).is_file())
+            .take(config.max_views.unwrap_or(recon.images.len()))
+            .collect()
     };
+    let views =
+        build_views_from_optional_masks(&recon, images_dir, masks_dir, config, view_images)?;
     let view_duration = view_start.elapsed();
     if views.is_empty() {
         log::warn!("no usable training views — returning untrained initial model");
@@ -1117,12 +1205,12 @@ pub fn train_colmap_appearance_split(
             adjacency_duration.as_secs_f64(),
             view_duration.as_secs_f64(),
         );
-        return TrainOutcome {
+        return Ok(TrainOutcome {
             model,
             reconstruction: recon,
             training_loss: Vec::new(),
             endpoint_checkpoint: None,
-        };
+        });
     }
 
     if config.oriented_powerfoam && model.surface_normals.is_none() {
@@ -1286,12 +1374,12 @@ pub fn train_colmap_appearance_split(
         view_duration.as_secs_f64(),
         training_duration.as_secs_f64(),
     );
-    TrainOutcome {
+    Ok(TrainOutcome {
         model,
         reconstruction: recon,
         training_loss: fit_outcome.losses,
         endpoint_checkpoint: fit_outcome.endpoint_checkpoint,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1837,6 +1925,48 @@ mod tests {
     }
 
     #[test]
+    fn masked_views_composite_over_the_training_background_and_require_every_mask() {
+        let dir = std::env::temp_dir().join("blade-volume-train-masked-pipeline");
+        let sparse = dir.join("sparse/0");
+        let images = dir.join("images");
+        let masks = dir.join("masks");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_colmap_fixture(&sparse, &images);
+        std::fs::create_dir_all(&masks).unwrap();
+        image::GrayImage::from_pixel(4, 4, image::Luma([64]))
+            .save(masks.join("frame0001.png"))
+            .unwrap();
+        image::GrayImage::from_pixel(4, 4, image::Luma([255]))
+            .save(masks.join("frame0002.png"))
+            .unwrap();
+
+        let recon = crate::colmap::load_reconstruction(&sparse);
+        let config = PipelineConfig {
+            resolution: (4, 4),
+            fit: diff_render::AppearanceFitConfig {
+                background_rgb: [1.0; 3],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let views =
+            build_views_from_with_masks(&recon, &images, &masks, &config, recon.images.iter())
+                .unwrap();
+        let coverage = 64.0 / 255.0;
+        assert_eq!(views.len(), 2);
+        assert!((views[0].target_alpha.as_ref().unwrap()[0] - coverage).abs() < 1.0e-6);
+        let expected_red = coverage * (200.0 / 255.0) + 1.0 - coverage;
+        assert!((views[0].target_rgb[0] - expected_red).abs() < 1.0e-6);
+
+        std::fs::remove_file(masks.join("frame0002.png")).unwrap();
+        assert!(
+            build_views_from_with_masks(&recon, &images, &masks, &config, recon.images.iter(),)
+                .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn build_views_skips_equirectangular_cameras() {
         let dir = std::env::temp_dir().join("blade-volume-train-equirectangular");
         let sparse = dir.join("sparse/0");
@@ -1928,6 +2058,47 @@ mod tests {
             .sh_coefficients
             .iter()
             .all(|value| value.is_finite()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn masked_end_to_end_colmap_train_runs_on_the_physical_gpu() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping masked COLMAP training test: no GPU");
+            return;
+        };
+        let dir = std::env::temp_dir().join("blade-volume-train-masked-e2e");
+        let sparse = dir.join("sparse/0");
+        let images = dir.join("images");
+        let masks = dir.join("masks");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_colmap_fixture(&sparse, &images);
+        std::fs::create_dir_all(&masks).unwrap();
+        for name in ["frame0001.png", "frame0002.png"] {
+            image::GrayImage::from_pixel(4, 4, image::Luma([255]))
+                .save(masks.join(name))
+                .unwrap();
+        }
+        let config = PipelineConfig {
+            resolution: (8, 8),
+            max_steps: 16,
+            max_views: Some(2),
+            max_initial_points: None,
+            fit: diff_render::AppearanceFitConfig {
+                epochs: 1,
+                opacity_weight: 1.0,
+                ..Default::default()
+            },
+            far_plane: 50.0,
+            ..Default::default()
+        };
+        let outcome =
+            train_colmap_appearance_split_with_masks(&sparse, &images, &masks, &config, gpu)
+                .unwrap();
+        assert_eq!(outcome.training_loss.len(), 2);
+        assert!(outcome.training_loss.iter().all(|loss| loss.is_finite()));
+        outcome.model.validate().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -2228,6 +2228,12 @@ Broken into sub-steps:
     at 24×24, 2000 subsampled cells. Outputs a binary PLY + an
     interpolated-camera novel-view strip.
 
+    `train_colmap --masks masks/` reads a directory mirroring the relative
+    image paths, rectifies continuous foreground coverage with the calibrated
+    camera, composites target RGB over the selected training background, and
+    supervises opacity. Masked CLI runs default the opacity weight to 1;
+    unmasked behavior remains unchanged. A missing selected mask is an error.
+
     Training checkpoints pair the interchange PLY with a meganeura
     `.safetensors` parameter/Adam sidecar, a versioned `.trainstate` sidecar
     for all deterministic RNG streams plus dynamic topology and densification

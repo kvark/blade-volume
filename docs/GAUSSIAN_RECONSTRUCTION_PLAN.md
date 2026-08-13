@@ -425,10 +425,12 @@ The evidence source is decisive. RGB-only continuation reaches 23.66 dB
 held-view light-field PSNR and self-distilled Gaussian alpha reaches only
 21.81 dB; neither is selected. The latter also regresses held-light PBR to
 19.59/19.32 dB and 53.9% coverage. Synthetic truth masks therefore remain a
-gate, not an image-only default. Production capture now accepts an optional
-mask directory mirroring the COLMAP image paths, rectifies masks with the same
-camera, and applies them to foam-depth fusion, radiance observations, and
-patch refinement. The production fixed-surface continuation is now explicit
+gate, not an image-only default. Production capture and initial light-field
+training now accept an optional mask directory mirroring the COLMAP image
+paths and rectify masks with the same camera. Capture applies them to foam-
+depth fusion, radiance observations, and patch refinement; light-field
+training supervises opacity and composites RGB over its configured background.
+The production fixed-surface continuation is now explicit
 and enabled only when those independent masks are supplied. It holds centers
 and offsets fixed, reuses the existing differentiable PowerFoam path to learn
 density, degree-two SH, radii, and normals, updates the Gaussian surface, and

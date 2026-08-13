@@ -37,7 +37,9 @@ cargo run --release -p blade-volume-train --bin train_colmap -- \
 
 Outputs a binary RadFoam PLY plus a 5-frame interpolated-camera strip
 (`novel_00.png` … `novel_04.png`). The PLY can be opened with the viewer
-above. See `docs/PIPELINE.md` for the design and `docs/MESH_TO_FOAM.md`
+above. Add `--masks masks/` for a foreground directory mirroring the image
+paths; masked runs supervise opacity and default its loss weight to 1. See
+`docs/PIPELINE.md` for the design and `docs/MESH_TO_FOAM.md`
 for the parallel mesh-to-foam path.
 
 CI enforces workspace formatting, all-feature clippy with warnings denied,

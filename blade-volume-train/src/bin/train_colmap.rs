@@ -27,7 +27,7 @@
 use argh::FromArgs;
 use blade_volume as vol;
 use blade_volume_convert as convert;
-use blade_volume_train::{diff_render, fit, pipeline};
+use blade_volume_train::{colmap, diff_render, fit, pipeline};
 use std::{fs, path};
 
 /// Train a RadFoam from a COLMAP sparse reconstruction.
@@ -40,6 +40,10 @@ struct Args {
     /// path to the COLMAP images directory
     #[argh(option)]
     images: String,
+
+    /// optional foreground-mask directory mirroring the image paths
+    #[argh(option)]
+    masks: Option<String>,
 
     /// output PLY path for the trained foam
     #[argh(option)]
@@ -275,11 +279,10 @@ struct Args {
     #[argh(option, default = "0.2")]
     grad_loss_weight: f32,
 
-    /// weight on the RadFoam opacity loss `mean((opacity-1)^2)` (default 0 =
-    /// off). Pushes rays to full opacity and suppresses
-    /// semi-transparent floaters independently of the background choice.
-    #[argh(option, default = "0.0")]
-    opacity_weight: f32,
+    /// weight on the RadFoam opacity loss (default 1 with --masks, otherwise
+    /// 0). A mask targets its foreground coverage instead of opaque rays.
+    #[argh(option)]
+    opacity_weight: Option<f32>,
 
     /// weight on smooth per-ray depth variance (default 0 = off). Small
     /// values such as 1e-4 discourage floaters and thick multi-surface rays.
@@ -466,6 +469,10 @@ fn resolve_max_views(requested: usize) -> Option<usize> {
     (requested > 0).then_some(requested)
 }
 
+fn resolve_opacity_weight(requested: Option<f32>, masked: bool) -> f32 {
+    requested.unwrap_or(if masked { 1.0 } else { 0.0 })
+}
+
 fn select_adjacency(args: &Args) -> pipeline::AdjacencyKind {
     if args.powerfoam_reference_radii {
         pipeline::AdjacencyKind::PowerFoamReference
@@ -505,6 +512,31 @@ fn copy_endpoint_checkpoint(source: &path::Path, output: &path::Path) -> Result<
         ));
     }
     Ok(())
+}
+
+fn build_evaluation_views(
+    reconstruction: &colmap::Reconstruction,
+    images_dir: &path::Path,
+    masks_dir: Option<&path::Path>,
+    config: &pipeline::PipelineConfig,
+    images: &[&colmap::ColmapImage],
+) -> Result<Vec<diff_render::ViewSupervision>, String> {
+    if let Some(masks_dir) = masks_dir {
+        pipeline::build_views_from_with_masks(
+            reconstruction,
+            images_dir,
+            masks_dir,
+            config,
+            images.iter().copied(),
+        )
+    } else {
+        Ok(pipeline::build_views_from(
+            reconstruction,
+            images_dir,
+            config,
+            images.iter().copied(),
+        ))
+    }
 }
 
 fn main() {
@@ -855,7 +887,7 @@ fn main() {
             lr_min_ratio: args.lr_min_ratio,
             patch_size: args.patch_size,
             grad_loss_weight: args.grad_loss_weight,
-            opacity_weight: args.opacity_weight,
+            opacity_weight: resolve_opacity_weight(args.opacity_weight, args.masks.is_some()),
             distortion_weight: args.distortion_weight,
             quantile_weight: args.quantile_weight,
             interpenetration_weight: args.interpenetration_weight,
@@ -933,6 +965,7 @@ fn main() {
 
     let sparse = path::Path::new(&args.sparse);
     let images = path::Path::new(&args.images);
+    let masks = args.masks.as_deref().map(path::Path::new);
     if !sparse.is_dir() {
         eprintln!(
             "sparse reconstruction directory does not exist: {}",
@@ -944,18 +977,38 @@ fn main() {
         eprintln!("image directory does not exist: {}", images.display());
         std::process::exit(2);
     }
+    if let Some(masks) = masks {
+        if !masks.is_dir() {
+            eprintln!("mask directory does not exist: {}", masks.display());
+            std::process::exit(2);
+        }
+    }
     let Some(gpu) = fit::try_init_gpu() else {
         eprintln!("no supported GPU device — cannot train");
         std::process::exit(2);
     };
     let pipeline_start = std::time::Instant::now();
-    let outcome = pipeline::train_colmap_appearance_split(
-        sparse,
-        images,
-        &config,
-        args.test_views,
-        gpu.clone(),
-    );
+    let outcome = if let Some(masks) = masks {
+        pipeline::train_colmap_appearance_split_with_masks(
+            sparse,
+            images,
+            masks,
+            &config,
+            gpu.clone(),
+        )
+        .unwrap_or_else(|message| {
+            eprintln!("cannot load masked training views: {message}");
+            std::process::exit(2);
+        })
+    } else {
+        pipeline::train_colmap_appearance_split(
+            sparse,
+            images,
+            &config,
+            args.test_views,
+            gpu.clone(),
+        )
+    };
     let pipeline_duration = pipeline_start.elapsed();
 
     let output = path::Path::new(&args.output);
@@ -1009,12 +1062,17 @@ fn main() {
             args.test_views,
             args.test_every,
         );
-        let test_views = pipeline::build_views_from(
+        let test_views = build_evaluation_views(
             &outcome.reconstruction,
             images,
+            masks,
             &config,
-            test_images.iter().copied(),
-        );
+            &test_images,
+        )
+        .unwrap_or_else(|message| {
+            eprintln!("cannot load masked test views: {message}");
+            std::process::exit(2);
+        });
         if test_views.is_empty() {
             eprintln!("no usable test views (image files missing?)");
         } else {
@@ -1027,12 +1085,17 @@ fn main() {
                     std::process::exit(3);
                 });
             // Train-set PSNR too, for comparison.
-            let train_views = pipeline::build_views_from(
+            let train_views = build_evaluation_views(
                 &outcome.reconstruction,
                 images,
+                masks,
                 &config,
-                train_images.iter().copied(),
-            );
+                &train_images,
+            )
+            .unwrap_or_else(|message| {
+                eprintln!("cannot reload masked training views: {message}");
+                std::process::exit(2);
+            });
             let train_psnrs = evaluator
                 .evaluate(&train_views, config.fit.background_rgb)
                 .unwrap_or_else(|err| {
@@ -1202,6 +1265,9 @@ mod tests {
         assert_eq!(default.pixel_batch, 1024);
         assert_eq!(default.views_per_batch, 0);
         assert!(!default.skip_eval);
+        assert!(default.masks.is_none());
+        assert_eq!(default.opacity_weight, None);
+        assert_eq!(resolve_opacity_weight(default.opacity_weight, false), 0.0);
         assert_eq!(
             resolve_views_per_batch(default.views_per_batch, Some(default.pixel_batch), 0),
             Ok(16)
@@ -1241,6 +1307,24 @@ mod tests {
         )
         .unwrap();
         assert!(skip_eval.skip_eval);
+
+        let masked = <Args as argh::FromArgs>::from_args(
+            &["train_colmap"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--masks",
+                "masks",
+                "--output",
+                "model.ply",
+            ],
+        )
+        .unwrap();
+        assert_eq!(masked.masks.as_deref(), Some("masks"));
+        assert_eq!(resolve_opacity_weight(masked.opacity_weight, true), 1.0);
+        assert_eq!(resolve_opacity_weight(Some(0.25), true), 0.25);
     }
 
     #[test]
