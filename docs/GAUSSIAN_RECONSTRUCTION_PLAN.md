@@ -741,3 +741,14 @@ tail. Both prototypes and their GPU material-update API are removed. A future
 joint solve needs a batched or differentiable geometry gradient with a stable
 appearance parameterization; thousands of full appearance solves per scalar
 coordinate are too costly for the small, tail-unsafe gain.
+
+The exact rendered-surface loop now records its particle upload, TLAS rebuild,
+all training-camera renders, and readback into one command buffer. An
+unrendered restoration is coalesced into the next scored state. Three
+alternating 300-position/radius pairs reduce median refinement time from 7.194
+to 6.989 seconds (2.9%); every pair improves, and final losses, scores, and both
+asset hashes are identical. Simply omitting the old wait is invalid: Blade's
+one-buffer encoder then resets an in-flight command buffer and produced a
+reproducible NVIDIA Xid 31. The retained path submits once and waits once, and
+its physical update/rebuild oracle plus the analytical recovery fixture pass.
+It adds no shader, operation, bind-group, or pipeline variant.

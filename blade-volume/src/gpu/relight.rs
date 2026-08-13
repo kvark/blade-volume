@@ -431,6 +431,22 @@ impl RelightTracer {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) {
+        encoder.start();
+        self.record_surfels_update(surfels, context, encoder);
+        let sync_point = context.submit(encoder);
+        let _ = context.wait_for(&sync_point, !0);
+    }
+
+    /// Record a particle-geometry update into an encoder that is already
+    /// active. Previously submitted work using this tracer must be finished;
+    /// the caller must submit and finish this work before recording another
+    /// update or changing the upload data.
+    pub fn record_surfels_update(
+        &mut self,
+        surfels: &[relight::Surfel],
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) {
         let surfel_size = mem::size_of_val(surfels) as u64;
         assert_eq!(
             surfel_size,
@@ -449,7 +465,6 @@ impl RelightTracer {
         let instance_buf =
             context.create_acceleration_structure_instance_buffer(&instances, &[self.blas]);
 
-        encoder.start();
         if let mut pass = encoder.transfer("relight-surfels-update") {
             pass.copy_buffer_to_buffer(
                 self.stage_buf.at(self.surfel_stage_offset),
@@ -466,9 +481,6 @@ impl RelightTracer {
                 self.scratch_buf.at(self.tlas_scratch_offset),
             );
         }
-        let sync_point = context.submit(encoder);
-        let _ = context.wait_for(&sync_point, !0);
-
         context.destroy_buffer(self.instance_buf);
         self.instance_buf = instance_buf;
     }

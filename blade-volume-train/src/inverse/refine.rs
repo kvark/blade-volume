@@ -176,7 +176,7 @@ fn refine_simultaneous(
             })
             .collect();
         apply_offsets(scene, candidates, &anchors, &plus_offsets);
-        renderer.update_prepared_surfels(tracer, &scene.model.surfels);
+        renderer.update_prepared_surfels(&scene.model.surfels);
         let plus = rendered_loss(renderer, tracer, capture, indices, cameras);
         let plus_objective = plus + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&plus_offsets);
 
@@ -188,14 +188,14 @@ fn refine_simultaneous(
             })
             .collect();
         apply_offsets(scene, candidates, &anchors, &minus_offsets);
-        renderer.update_prepared_surfels(tracer, &scene.model.surfels);
+        renderer.update_prepared_surfels(&scene.model.surfels);
         let minus = rendered_loss(renderer, tracer, capture, indices, cameras);
         let minus_objective = minus + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&minus_offsets);
 
         if plus_objective < objective && plus_objective <= minus_objective {
             offsets = plus_offsets;
             apply_offsets(scene, candidates, &anchors, &offsets);
-            renderer.update_prepared_surfels(tracer, &scene.model.surfels);
+            renderer.update_prepared_surfels(&scene.model.surfels);
             loss = plus;
             objective = plus_objective;
             accepted += 1;
@@ -206,7 +206,7 @@ fn refine_simultaneous(
             accepted += 1;
         } else {
             apply_offsets(scene, candidates, &anchors, &offsets);
-            renderer.update_prepared_surfels(tracer, &scene.model.surfels);
+            renderer.update_prepared_surfels(&scene.model.surfels);
         }
     }
     (loss, accepted)
@@ -293,7 +293,7 @@ pub fn refine_rendered(
         for sign in [-1.0f32, 1.0] {
             scene.model.surfels[index].center =
                 (glam::Vec3::from(original) + sign * step * normal).to_array();
-            renderer.update_prepared_surfels(&mut tracer, &scene.model.surfels);
+            renderer.update_prepared_surfels(&scene.model.surfels);
             let candidate = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
             if candidate < best_loss {
                 best_loss = candidate;
@@ -302,7 +302,7 @@ pub fn refine_rendered(
         }
         scene.model.surfels[index].center = best;
         if best != plus {
-            renderer.update_prepared_surfels(&mut tracer, &scene.model.surfels);
+            renderer.update_prepared_surfels(&scene.model.surfels);
         }
         if best != original {
             moved += 1;
@@ -315,7 +315,7 @@ pub fn refine_rendered(
             let mut best = original;
             for scale in [1.0 - fraction, 1.0 + fraction] {
                 scene.model.surfels[index].radius = original * scale;
-                renderer.update_prepared_surfels(&mut tracer, &scene.model.surfels);
+                renderer.update_prepared_surfels(&scene.model.surfels);
                 let candidate =
                     rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
                 if candidate < best_loss {
@@ -325,7 +325,7 @@ pub fn refine_rendered(
             }
             scene.model.surfels[index].radius = best;
             if best != plus {
-                renderer.update_prepared_surfels(&mut tracer, &scene.model.surfels);
+                renderer.update_prepared_surfels(&scene.model.surfels);
             }
             if best != original {
                 radii_moved += 1;

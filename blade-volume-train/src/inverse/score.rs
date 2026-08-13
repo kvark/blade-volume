@@ -138,6 +138,8 @@ pub struct Renderer {
     target: gpu::TextureView,
     readback: gpu::Buffer,
     encoder: gpu::CommandEncoder,
+    staged_surfels: Vec<vol::relight::Surfel>,
+    geometry_update_pending: bool,
     extent: gpu::Extent,
     width: usize,
     height: usize,
@@ -204,6 +206,8 @@ impl Renderer {
             target,
             readback,
             encoder,
+            staged_surfels: Vec::new(),
+            geometry_update_pending: false,
             extent,
             width,
             height,
@@ -219,6 +223,7 @@ impl Renderer {
         tracer: &mut vol::gpu::RelightTracer,
         camera: vol::CameraParams,
     ) -> Vec<[f32; 4]> {
+        assert!(!self.geometry_update_pending);
         self.encoder.start();
         self.encoder.init_texture(self.texture);
         tracer.dispatch(
@@ -266,6 +271,7 @@ impl Renderer {
         diffuse_samples: u32,
         show_environment: bool,
     ) -> vol::gpu::RelightTracer {
+        assert!(!self.geometry_update_pending);
         let specular = vol::relight::SpecularEnvironment::prefilter(
             &scene.environment,
             scene.environment.width,
@@ -313,12 +319,10 @@ impl Renderer {
         self.tracer(scene, diffuse_samples, show_environment)
     }
 
-    pub(crate) fn update_prepared_surfels(
-        &mut self,
-        tracer: &mut vol::gpu::RelightTracer,
-        surfels: &[vol::relight::Surfel],
-    ) {
-        tracer.update_surfels(surfels, &self.context, &mut self.encoder);
+    pub(crate) fn update_prepared_surfels(&mut self, surfels: &[vol::relight::Surfel]) {
+        self.staged_surfels.clear();
+        self.staged_surfels.extend_from_slice(surfels);
+        self.geometry_update_pending = true;
     }
 
     fn render_prepared_flat(
@@ -327,11 +331,16 @@ impl Renderer {
         cameras: &[vol::CameraParams],
     ) -> &[[f32; 4]] {
         if cameras.is_empty() {
+            assert!(!self.geometry_update_pending);
             return &[];
         }
         self.ensure_readback_frames(cameras.len());
         let frame_bytes = (self.width * self.height) as u64 * 16;
         self.encoder.start();
+        if self.geometry_update_pending {
+            tracer.record_surfels_update(&self.staged_surfels, &self.context, &mut self.encoder);
+            self.geometry_update_pending = false;
+        }
         self.encoder.init_texture(self.texture);
         for (index, &camera) in cameras.iter().enumerate() {
             tracer.dispatch(
@@ -394,6 +403,7 @@ impl Renderer {
     }
 
     pub(crate) fn destroy_prepared_scene(&mut self, mut tracer: vol::gpu::RelightTracer) {
+        self.geometry_update_pending = false;
         tracer.deinit(&self.context);
     }
 
@@ -480,6 +490,7 @@ impl Renderer {
     }
 
     pub fn destroy(mut self) {
+        assert!(!self.geometry_update_pending);
         self.context.destroy_buffer(self.readback);
         self.context.destroy_texture_view(self.target);
         self.context.destroy_texture(self.texture);
