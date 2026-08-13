@@ -679,6 +679,14 @@ adding radius search gains 0.04 dB mean but loses 0.12 dB worst and 0.2
 coverage points. Room gains only 0.01/0.01 dB and 0.03/0.01 dB respectively.
 The stratified selector is removed too.
 
+A self-supervised alpha anchor also fails to make impact ordering safe. Weight
+0.05 leaves 0.6--1.1 points of radius-path coverage loss. At 0.5 most support
+drift closes, but the fixed position gate loses 0.05 dB mean/worst, the fifth
+loses 0.02/0.02 dB, and the fixed radius gate loses 0.10/0.04 dB while still
+dropping 0.3 coverage points. The anchor needs no masks or extra render, but it
+only preserves the initializer's silhouette; it adds no evidence about missing
+geometry. The implementation is removed.
+
 That batching direction now has a selected first form. Sixty-four paired
 simultaneous perturbations use each production render to update every observed
 Gaussian, with deterministic 2.5% support-relative signs and a 0.001 anchor

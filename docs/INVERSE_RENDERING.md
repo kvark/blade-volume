@@ -474,6 +474,15 @@ gains 0.04 dB mean but loses 0.12 dB worst and 0.2 coverage points. Room gains
 only 0.01/0.01 dB for positions and 0.03/0.01 dB with radii. This second
 selector is removed as well.
 
+Anchoring proposal alpha to the initial cloud's own training-view alpha does
+not rescue impact ordering. It needs no masks or extra render, but weight 0.05
+still leaves 0.6--1.1 points of radius-path coverage loss. Raising the weight
+to 0.5 closes most support drift, then the fixed position gate loses 0.05 dB
+mean/worst, the fifth loses 0.02/0.02 dB, and the fixed radius gate loses
+0.10/0.04 dB while coverage still falls 0.3 points. Both the anchor and ranking
+remain removed: preserving an initializer's soft silhouette is not the same as
+observing the missing surface.
+
 Support radii cannot simply join the paired position schedule. Joint and
 separate radius perturbations improve every fixed synthetic cloud and Room,
 but a 64-round phase loses 0.11 dB on the worst Bonsai view and 0.2 coverage
