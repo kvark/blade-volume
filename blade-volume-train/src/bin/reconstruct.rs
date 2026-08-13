@@ -73,9 +73,9 @@ struct Args {
     #[argh(option, default = "0.8")]
     brightest_albedo: f32,
 
-    /// rounds in which roughness and reflectance are re-chosen (default 3;
-    /// 0 leaves every surface a rough dielectric, which is the albedo-only fit)
-    #[argh(option, default = "3")]
+    /// rounds in which roughness and reflectance are re-chosen (default 0;
+    /// nonzero is an experimental calibrated-material fit)
+    #[argh(option, default = "0")]
     specular_rounds: usize,
 
     /// disc radius as a multiple of the local point spacing (default 1.4).
@@ -803,6 +803,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(known.environment.as_deref(), Some("capture.f32"));
+    }
+
+    #[test]
+    fn production_defaults_decline_unidentified_specular_lobes() {
+        let defaults = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &["--sparse", "sparse", "--images", "images"],
+        )
+        .unwrap();
+        assert_eq!(defaults.specular_rounds, 0);
+
+        let experimental = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--specular-rounds",
+                "3",
+            ],
+        )
+        .unwrap();
+        assert_eq!(experimental.specular_rounds, 3);
     }
 
     #[test]

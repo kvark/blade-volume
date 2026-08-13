@@ -963,6 +963,10 @@ pass. Every prototype and CLI/API addition is removed. PBR recovery remains
 blocked on a more accurate shared surface and forward light transport; image
 score alone is explicitly not evidence of physical material recovery.
 
+The production `reconstruct` CLI therefore defaults specular fitting off. A
+nonzero `--specular-rounds` remains available for calibrated experiments, but
+rough dielectrics are the honest default until the missing evidence exists.
+
 Feeding the successful measured-light normals back into the existing
 multi-view position sweep does not produce that surface. A second sweep moves
 97--148 particles and improves three held-light means by 0.02--0.12 dB, but

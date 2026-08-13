@@ -227,6 +227,11 @@ compensating for geometry and missing bounce. Allowing metal hypotheses also
 produces a held-light collapse on one independent cloud. These paths are
 removed rather than reported as PBR recovery.
 
+Accordingly, `reconstruct` defaults `--specular-rounds` to zero and emits rough
+dielectrics. A nonzero value keeps the constrained lobe solver available for a
+calibrated experiment, but it is opt-in until the geometry and light transport
+make roughness and metalness identifiable.
+
 On bonsai it does not yet reach the goal. The fresh Smooth-L1 foam plus
 two-view depth consensus and confidence weighting reaches 14.89 dB on the views
 used for extraction and 14.03 dB on held-out views. The selected multi-view
