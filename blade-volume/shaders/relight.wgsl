@@ -601,5 +601,12 @@ fn trace_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     // Whatever the surfels did not cover shows what is behind them.
     let radiance = traced.xyz + traced.w * behind;
-    textureStore(g_out, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(radiance, 1.0));
+    // Preserve geometric coverage in alpha. Presentation ignores alpha, while
+    // reconstruction can compare support without rendering a second
+    // background. `traced.w` is the transmittance left after all surfaces.
+    textureStore(
+        g_out,
+        vec2<i32>(i32(gid.x), i32(gid.y)),
+        vec4<f32>(radiance, 1.0 - traced.w),
+    );
 }

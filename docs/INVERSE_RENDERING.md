@@ -446,6 +446,19 @@ or negative on Room, while forbidding shrinkage accepts no useful changes.
 That prototype is removed; `--render-refine-radii` continues to apply only to
 the exact coordinate pass.
 
+The production relight tracer now preserves accumulated Gaussian coverage in
+its output alpha. This replaces scoring's black/white background pair with one
+black-background render: RGB supplies PSNR and alpha supplies coverage. A GPU
+oracle checks the coverage compositor against the CPU implementation, and the
+existing fixed-cloud score keeps the same 53.6% coverage while score dispatch
+and readback count is halved. Presentation continues to ignore alpha.
+
+A follow-up foreground-MSE experiment did not justify extending the optimizer.
+At weight 0.05, a 64-round position-plus-radius pass improved three of five
+synthetic held-light means and tails, was mixed on one, and regressed the fifth.
+Since ordinary COLMAP captures also have no foreground mask, both the loss
+control and the batched-radius prototype were removed.
+
 ## What the numbers are limited by, in order
 
 1. **Geometry.** Voxel-averaging per-view depth modes is an initializer, not a

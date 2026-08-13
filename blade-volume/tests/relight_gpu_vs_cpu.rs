@@ -300,6 +300,7 @@ fn gpu_shading_matches_the_cpu_reference() {
 
     let mut covered = 0usize;
     let mut worst = 0.0f32;
+    let mut worst_coverage = 0.0f32;
     for y in 0..SIZE[1] {
         for x in 0..SIZE[0] {
             let direction = ray_direction(&camera, x, y);
@@ -377,6 +378,7 @@ fn gpu_shading_matches_the_cpu_reference() {
             for channel in 0..3 {
                 worst = worst.max((actual[channel] - expected[channel]).abs());
             }
+            worst_coverage = worst_coverage.max((actual[3] - (1.0 - transmittance)).abs());
         }
     }
 
@@ -388,6 +390,10 @@ fn gpu_shading_matches_the_cpu_reference() {
     assert!(
         worst < TOLERANCE,
         "GPU and CPU shading differ by {worst:.4}, over the {TOLERANCE} allowed"
+    );
+    assert!(
+        worst_coverage < TOLERANCE,
+        "GPU and CPU coverage differ by {worst_coverage:.4}, over the {TOLERANCE} allowed"
     );
 
     tracer.deinit(&harness.context);

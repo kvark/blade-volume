@@ -84,10 +84,15 @@ fn psnr(mean_square_error: f64) -> f64 {
 }
 
 /// Compare one rendered frame against its photograph.
-///
-/// `covered` is the per-pixel fraction of the frame that met geometry, which
-/// the caller obtains by differencing two backgrounds.
 pub fn compare(rendered: &[[f32; 4]], reference: &[[f32; 3]], covered: &[f32]) -> Score {
+    compare_coverage(rendered, reference, Some(covered))
+}
+
+fn compare_coverage(
+    rendered: &[[f32; 4]],
+    reference: &[[f32; 3]],
+    covered: Option<&[f32]>,
+) -> Score {
     /// A pixel counts as covered when geometry accounts for most of it.
     const MOSTLY: f32 = 0.5;
 
@@ -95,9 +100,12 @@ pub fn compare(rendered: &[[f32; 4]], reference: &[[f32; 3]], covered: &[f32]) -
     let mut encoded = 0.0f64;
     let mut inside = 0.0f64;
     let mut inside_count = 0usize;
+    let mut coverage_sum = 0.0f64;
     for (index, texel) in rendered.iter().enumerate() {
         let truth = reference[index];
-        let is_covered = covered[index] >= MOSTLY;
+        let coverage = covered.map_or(texel[3], |values| values[index]);
+        let is_covered = coverage >= MOSTLY;
+        coverage_sum += coverage as f64;
         for channel in 0..3 {
             let difference = (texel[channel] - truth[channel]) as f64;
             linear += difference * difference;
@@ -114,7 +122,7 @@ pub fn compare(rendered: &[[f32; 4]], reference: &[[f32; 3]], covered: &[f32]) -
     Score {
         linear_psnr: psnr(linear / samples),
         srgb_psnr: psnr(encoded / samples),
-        coverage: covered.iter().map(|&c| c as f64).sum::<f64>() / covered.len() as f64,
+        coverage: coverage_sum / rendered.len() as f64,
         covered_srgb_psnr: if inside_count > 0 {
             psnr(inside / (inside_count * 3) as f64)
         } else {
@@ -391,10 +399,8 @@ impl Renderer {
 
     /// Render the given views and score them against their photographs.
     ///
-    /// Each view is drawn twice, against a black background and a white one.
-    /// The difference is exactly the fraction of the pixel that missed all
-    /// geometry, so coverage is measured rather than guessed, and the black
-    /// render is the one that gets scored.
+    /// Coverage comes directly from the production renderer's alpha channel;
+    /// RGB is scored against a black background.
     pub fn score(
         &mut self,
         scene: &Scene,
@@ -442,21 +448,14 @@ impl Renderer {
     ) -> Summary {
         let mut scores = Vec::new();
         let mut elapsed = std::time::Duration::ZERO;
+        tracer.set_background([0.0; 3]);
         for &index in indices {
             let view = &capture.views[index];
             let started = std::time::Instant::now();
-            tracer.set_background([0.0; 3]);
-            let dark = self.draw(tracer, view.camera);
-            tracer.set_background([1.0; 3]);
-            let bright = self.draw(tracer, view.camera);
+            let rendered = self.draw(tracer, view.camera);
             elapsed += started.elapsed();
 
-            let covered: Vec<f32> = dark
-                .iter()
-                .zip(&bright)
-                .map(|(d, b)| (1.0 - (b[0] - d[0])).clamp(0.0, 1.0))
-                .collect();
-            scores.push(compare(&dark, &view.pixels, &covered));
+            scores.push(compare_coverage(&rendered, &view.pixels, None));
 
             if let Some(directory) = dump {
                 let stem = path::Path::new(&view.name)
@@ -464,7 +463,7 @@ impl Renderer {
                     .map_or_else(|| view.name.clone(), |s| s.to_string_lossy().into_owned());
                 save_rgba(
                     &directory.join(format!("{stem}-render.png")),
-                    &dark,
+                    &rendered,
                     self.width,
                     self.height,
                 );
@@ -476,8 +475,7 @@ impl Renderer {
                 );
             }
         }
-        // Two draws per view, so milliseconds per frame is half the mean.
-        let per_frame_ms = elapsed.as_secs_f64() * 1000.0 / (2 * indices.len().max(1)) as f64;
+        let per_frame_ms = elapsed.as_secs_f64() * 1000.0 / indices.len().max(1) as f64;
         Summary::of(&scores, per_frame_ms)
     }
 
@@ -532,6 +530,15 @@ mod tests {
         let score = compare(&rendered, &reference, &[1.0; 16]);
         assert!(score.linear_psnr > 90.0 && score.srgb_psnr > 90.0);
         assert!((score.coverage - 1.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn coverage_comes_from_rendered_alpha() {
+        let reference = vec![[0.2, 0.3, 0.4]; 2];
+        let rendered = vec![[0.2, 0.3, 0.4, 0.25], [0.2, 0.3, 0.4, 0.75]];
+        let score = compare_coverage(&rendered, &reference, None);
+        assert!((score.coverage - 0.5).abs() < 1.0e-6);
+        assert!(score.covered_srgb_psnr > 90.0);
     }
 
     #[test]

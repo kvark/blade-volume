@@ -678,3 +678,21 @@ have the same failure; expansion-only proposals are neutral, and reducing the
 radius phase to 8--16 rounds makes Room neutral or worse. The prototype is
 removed. Batched radius updates need an objective that observes support loss,
 not another schedule or radius prior.
+
+That missing observation was tested directly after the runtime renderer began
+returning accumulated cloud coverage in alpha. A binary synthetic foreground
+MSE with weight 0.05 improved the batched-radius held-light mean/worst score on
+three of five fixed clouds, was mixed on one, and regressed the fifth. The
+fixed-cloud deltas versus RGB-only were -0.01/+0.03, +0.02/+0.03,
++0.03/+0.07, +0.02/+0.03, and -0.04/-0.01 dB (mean/worst). Real COLMAP
+captures do not supply that mask, so the term cannot repair the earlier
+Bonsai failure. The foreground-loss API and batched-radius prototype are
+therefore removed rather than adding another synthetic-only control.
+
+Coverage alpha does select a smaller performance change. Reconstruction
+scoring now reads coverage from the same black-background render used for
+PSNR instead of rendering every camera again against white. This halves score
+dispatches and readbacks, removes a temporary coverage image, and adds no
+shader or bind-group variant. The physical-GPU compositor oracle checks RGB
+and alpha together; the fixed synthetic cloud retains exactly 53.6% reported
+coverage after the change.
