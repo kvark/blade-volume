@@ -132,6 +132,10 @@ struct Args {
     #[argh(switch)]
     photometric_normals: bool,
 
+    /// masked PowerFoam updates per view after Gaussian surface extraction
+    #[argh(option, default = "0")]
+    surface_powerfoam_steps_per_view: usize,
+
     /// retain fused depth centers instead of multi-view photo refinement
     #[argh(switch)]
     no_refine: bool,
@@ -949,6 +953,30 @@ fn main() {
         surfels,
         materials: vec![vol::relight::Material::default()],
     };
+    if args.surface_powerfoam_steps_per_view > 0 {
+        let started = std::time::Instant::now();
+        let Some(gpu) = train::fit::try_init_gpu() else {
+            fail("no supported GPU device for surface PowerFoam continuation");
+        };
+        let outcome = train::inverse::powerfoam::continue_surface(
+            &mut geometry,
+            &training_capture,
+            &training_indices,
+            train::inverse::powerfoam::ContinueOptions {
+                steps_per_view: args.surface_powerfoam_steps_per_view,
+                ..Default::default()
+            },
+            gpu,
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "surface PowerFoam: {} updates, loss {:.6} -> {:.6}, in {:.3} s",
+            outcome.stats.updates,
+            outcome.stats.initial_loss,
+            outcome.stats.final_loss,
+            started.elapsed().as_secs_f64(),
+        );
+    }
     if args.photometric_normals {
         let started = std::time::Instant::now();
         let stats = refine_photometric_normals(
@@ -1214,6 +1242,23 @@ fn main() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn surface_powerfoam_continuation_is_opt_in() {
+        let continued = <Args as argh::FromArgs>::from_args(
+            &["synthetic_foam"],
+            &[
+                "--dataset",
+                "capture",
+                "--output",
+                "model.ply",
+                "--surface-powerfoam-steps-per-view",
+                "300",
+            ],
+        )
+        .unwrap();
+        assert_eq!(continued.surface_powerfoam_steps_per_view, 300);
+    }
+
     fn camera(position: glam::Vec3, target: glam::Vec3) -> vol::CameraParams {
         vol::CameraParams {
             cam_position: position.to_array(),
@@ -1282,5 +1327,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(args.materials, 6);
+        assert_eq!(args.surface_powerfoam_steps_per_view, 0);
     }
 }

@@ -2288,6 +2288,16 @@ Broken into sub-steps:
   and held-light gate. Production and synthetic calibrated-repeat paths share
   the selected implementation; single-light capture is unchanged.
 
+- **M3c-7 — Gate Gaussian surfaces through masked PowerFoam (implemented).**
+  `synthetic_foam --surface-powerfoam-steps-per-view N` now runs the same
+  fixed-center continuation exposed by production `reconstruct`, before the
+  known-light normal and PBR material stages. This keeps the complete
+  synthetic truth and held-light gate available as the continuation evolves,
+  without adding a renderer or serialized representation. A four-cloud gate
+  rejects trainable surface offsets and a sparser topology rebuild cadence;
+  the retained continuation still learns only density, SH, radii, and normals
+  at the selected 100-update refresh cadence.
+
 #### M3d — Online viewer attach
 
 - During training, periodically convert `TrainerState → PointCloudModel` and hand it

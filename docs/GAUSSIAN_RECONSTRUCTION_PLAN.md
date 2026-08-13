@@ -1340,3 +1340,26 @@ for example, tone-mapped `studio` mean/worst changes 23.84/21.00 to
 23.83/20.99 dB. The dual-tracer host API and hidden benchmark gate are removed.
 An exact speedup must preserve early acceptance while reducing work within one
 proposal, rather than batching work the current algorithm often skips.
+
+Learning the signed oriented-surface offset during the new masked PowerFoam
+continuation is not selected. `synthetic_foam` now exposes the production
+continuation stage so this can be gated through the same four-cloud geometry,
+known-light-normal, material, and unseen-light chain. At an offset-rate ratio
+of 0.01, final truth-normal RMSE improves on all four clouds by 0.24--0.93
+degrees, but position RMSE worsens by 0.0007--0.0011 on every cloud and one
+held-light result loses 0.11/0.09 dB mean/worst. A 0.0025 ratio limits the
+position regression to 0.0002--0.0003, but worsens one normal result, one tail,
+and one coverage result. Both lower the masked training objective. The offset
+API and CLI control are removed: the differentiable renderer can use this
+coordinate to improve its own oriented-cell appearance without recovering the
+common Gaussian surface.
+
+Halving the continuation's topology-refresh count is not a meaningful speedup
+either. Raising the fixed rebuild cadence from 100 to 200 updates changes the
+four 1,800-update times from 21.49--21.62 seconds to 21.17--21.50 seconds,
+with three improvements below 0.12 seconds and one 0.32-second outlier. It also
+loses up to 0.2 coverage point and shifts held-light means negatively on two
+clouds. Cadence 100 remains. The measured bottleneck is the differentiable
+PowerFoam work between rebuilds, not adjacency refresh. All runs were isolated
+under the 12 GiB scope; peak host memory was below 0.37 GB with zero swap, OOM,
+Xid, or reset events.
