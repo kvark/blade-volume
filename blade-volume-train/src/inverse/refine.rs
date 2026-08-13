@@ -103,6 +103,8 @@ pub struct RenderedMaterialStats {
     pub coordinates: usize,
     /// Distinct lower/upper proposals rendered.
     pub proposals: usize,
+    /// Coordinates whose final albedo differs from its input by more than
+    /// numerical noise.
     pub changed: usize,
     pub initial_loss: f64,
     pub final_loss: f64,
@@ -369,9 +371,20 @@ pub fn refine_rendered_materials(
     let started = std::time::Instant::now();
     let mut loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
     let initial_loss = loss;
+    let initial_materials = scene.model.materials.clone();
+    if let Some(candidate_loss) = fit_rendered_linear_albedo(
+        scene,
+        &mut renderer,
+        &mut tracer,
+        capture,
+        indices,
+        &cameras,
+        loss,
+    ) {
+        loss = candidate_loss;
+    }
     let mut coordinates = 0;
     let mut proposals = 0;
-    let mut changed = 0;
     for step in [step, 0.5 * step] {
         for material in 0..scene.model.materials.len() {
             for channel in 0..3 {
@@ -401,12 +414,17 @@ pub fn refine_rendered_materials(
                     renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
                 }
                 if best != original {
-                    changed += 1;
                     loss = best_loss;
                 }
             }
         }
     }
+    let changed = initial_materials
+        .iter()
+        .zip(&scene.model.materials)
+        .flat_map(|(before, after)| before.albedo.iter().zip(after.albedo))
+        .filter(|&(before, after)| (*before - after).abs() > 1.0e-6)
+        .count();
     renderer.destroy_prepared_scene(tracer);
     renderer.destroy();
     Ok(RenderedMaterialStats {
@@ -417,6 +435,168 @@ pub fn refine_rendered_materials(
         final_loss: loss,
         seconds: started.elapsed().as_secs_f64(),
     })
+}
+
+fn rendered_linear_rgb(
+    renderer: &mut score::Renderer,
+    tracer: &mut vol::gpu::RelightTracer,
+    cameras: &[vol::CameraParams],
+) -> Vec<f32> {
+    tracer.reset_sampling();
+    renderer
+        .render_prepared_views(tracer, cameras)
+        .into_iter()
+        .flatten()
+        .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
+        .collect()
+}
+
+fn solve_dense(matrix: &mut [f64], right: &mut [f64]) -> bool {
+    let size = right.len();
+    debug_assert_eq!(matrix.len(), size * size);
+    for column in 0..size {
+        let Some(pivot) = (column..size).max_by(|&left, &right_row| {
+            matrix[left * size + column]
+                .abs()
+                .total_cmp(&matrix[right_row * size + column].abs())
+        }) else {
+            return false;
+        };
+        if !matrix[pivot * size + column].is_finite()
+            || matrix[pivot * size + column].abs() < 1.0e-12
+        {
+            return false;
+        }
+        if pivot != column {
+            for entry in 0..size {
+                matrix.swap(column * size + entry, pivot * size + entry);
+            }
+            right.swap(column, pivot);
+        }
+        let diagonal = matrix[column * size + column];
+        for entry in column..size {
+            matrix[column * size + entry] /= diagonal;
+        }
+        right[column] /= diagonal;
+        for row in 0..size {
+            if row == column {
+                continue;
+            }
+            let factor = matrix[row * size + column];
+            if factor == 0.0 {
+                continue;
+            }
+            for entry in column..size {
+                matrix[row * size + entry] -= factor * matrix[column * size + entry];
+            }
+            right[row] -= factor * right[column];
+        }
+    }
+    right.iter().all(|value| value.is_finite())
+}
+
+#[allow(clippy::too_many_arguments)]
+/// Solve the shared albedos from the production renderer's affine response.
+/// Geometry, material assignments, light, and every non-albedo parameter stay
+/// fixed. The ridge keeps correlated palette entries near their observation-
+/// based initializer; the exact sRGB objective still decides acceptance.
+fn fit_rendered_linear_albedo(
+    scene: &mut score::Scene,
+    renderer: &mut score::Renderer,
+    tracer: &mut vol::gpu::RelightTracer,
+    capture: &capture::Capture,
+    indices: &[usize],
+    cameras: &[vol::CameraParams],
+    current_loss: f64,
+) -> Option<f64> {
+    const MAX_COORDINATES: usize = 96;
+    const RIDGE_RATIO: f64 = 1.0e-4;
+
+    let original = scene.model.materials.clone();
+    let coordinates = original.len() * 3;
+    if coordinates == 0 || coordinates > MAX_COORDINATES {
+        return None;
+    }
+    let original_albedo: Vec<f64> = original
+        .iter()
+        .flat_map(|material| material.albedo)
+        .map(f64::from)
+        .collect();
+    for material in &mut scene.model.materials {
+        material.albedo = [0.0; 3];
+    }
+    renderer.update_prepared_materials(tracer, &scene.model.materials);
+    let base = rendered_linear_rgb(renderer, tracer, cameras);
+    let mut responses = Vec::with_capacity(coordinates);
+    for coordinate in 0..coordinates {
+        let material = coordinate / 3;
+        let channel = coordinate % 3;
+        scene.model.materials[material].albedo[channel] = 1.0;
+        renderer.update_prepared_materials(tracer, &scene.model.materials);
+        let rendered = rendered_linear_rgb(renderer, tracer, cameras);
+        responses.push(
+            rendered
+                .iter()
+                .zip(&base)
+                .map(|(value, base)| value - base)
+                .collect::<Vec<_>>(),
+        );
+        scene.model.materials[material].albedo[channel] = 0.0;
+    }
+    let target: Vec<f32> = indices
+        .iter()
+        .flat_map(|&index| capture.views[index].pixels.iter())
+        .flat_map(|pixel| *pixel)
+        .collect();
+    debug_assert_eq!(target.len(), base.len());
+    let residual: Vec<f32> = target
+        .iter()
+        .zip(&base)
+        .map(|(target, base)| target - base)
+        .collect();
+    let mut matrix = vec![0.0f64; coordinates * coordinates];
+    let mut right = vec![0.0f64; coordinates];
+    for row in 0..coordinates {
+        right[row] = responses[row]
+            .iter()
+            .zip(&residual)
+            .map(|(&response, &residual)| f64::from(response) * f64::from(residual))
+            .sum();
+        for column in 0..=row {
+            let product = responses[row]
+                .iter()
+                .zip(&responses[column])
+                .map(|(&left, &right)| f64::from(left) * f64::from(right))
+                .sum();
+            matrix[row * coordinates + column] = product;
+            matrix[column * coordinates + row] = product;
+        }
+    }
+    let trace = (0..coordinates)
+        .map(|index| matrix[index * coordinates + index])
+        .sum::<f64>();
+    let ridge = (RIDGE_RATIO * trace / coordinates as f64).max(1.0e-9);
+    for coordinate in 0..coordinates {
+        matrix[coordinate * coordinates + coordinate] += ridge;
+        right[coordinate] += ridge * original_albedo[coordinate];
+    }
+    if !solve_dense(&mut matrix, &mut right) {
+        scene.model.materials = original;
+        renderer.update_prepared_materials(tracer, &scene.model.materials);
+        return None;
+    }
+    for (coordinate, value) in right.into_iter().enumerate() {
+        scene.model.materials[coordinate / 3].albedo[coordinate % 3] = value.clamp(0.0, 1.0) as f32;
+    }
+    renderer.update_prepared_materials(tracer, &scene.model.materials);
+    let candidate_loss = rendered_loss(renderer, tracer, capture, indices, cameras);
+    if candidate_loss < current_loss {
+        Some(candidate_loss)
+    } else {
+        scene.model.materials = original;
+        renderer.update_prepared_materials(tracer, &scene.model.materials);
+        None
+    }
 }
 
 fn perturbation_sign(index: usize, round: usize) -> f32 {
@@ -1380,6 +1560,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dense_solver_pivots_to_the_known_solution() {
+        let mut matrix = [0.0, 2.0, 1.0, 3.0];
+        let mut right = [4.0, 7.0];
+        assert!(solve_dense(&mut matrix, &mut right));
+        assert!((right[0] - 1.0).abs() < 1.0e-12);
+        assert!((right[1] - 2.0).abs() < 1.0e-12);
+    }
+
+    #[test]
     fn error_difference_matches_direct_rectangle_sums() {
         const WIDTH: usize = 4;
         const HEIGHT: usize = 3;
@@ -1828,7 +2017,10 @@ mod tests {
             .iter()
             .zip([0.7, 0.3, 0.2])
         {
-            assert!((actual - expected).abs() < 1.0e-6);
+            assert!(
+                (actual - expected).abs() < 2.0e-5,
+                "albedo {actual} != {expected}; stats={stats:?}"
+            );
         }
 
         let mut first = make_scene(0.075);

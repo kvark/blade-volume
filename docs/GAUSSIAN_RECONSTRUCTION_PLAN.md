@@ -1468,3 +1468,37 @@ row index out of the nine-column loop is likewise bit-exact and flat at
 reduction branches are removed: table traffic dominates, and none of these
 experiments justifies another schedule mode, operation, shader entry, or
 retained special case.
+
+Estimating a normal from the fused positions inside each voxel does not repair
+the geometric initializer. Replacing its depth normal with the least-variance
+axis of a weighted intra-voxel covariance raises the fixed held-light mean from
+19.16 to 19.26 dB, but lowers the worst view to 18.88 dB, reduces coverage from
+52.2% to 50.8%, and worsens normal RMSE from 65.13 to 72.05 degrees. Requiring
+the covariance residual to be below 5% of its trace, aligning its axis within
+60 degrees, and blending it halfway still gives only 19.07/18.91 dB held-light
+mean/worst with 65.88-degree normals. Both prototypes are removed. Samples
+inside a spatial voxel retain camera-ray depth uncertainty; their covariance
+is not reliable surface-tangent evidence.
+
+The selected rendered-material pass now begins with a joint linear solve over
+the small shared albedo table. With geometry, assignments, light, roughness,
+and specular response fixed, the production renderer is affine in diffuse
+albedo: an all-zero render supplies the intercept and one unit render per
+albedo coordinate supplies the basis. Normal equations solve the overlapping
+Gaussian pixel mixtures directly, with a `1e-4` ridge toward the observation-
+based initializer; the existing exact sRGB coordinate descent then polishes
+and accepts the result. The host-only implementation caps the system at 96
+coordinates (32 materials) and adds no WGSL, operation, binding, shader entry,
+or pipeline variant.
+
+Against the prior selected outputs, four independent full continuations improve
+held-light mean/worst PSNR by 0.11/0.02, 0.06/0.03, 0.02/0.04, and 0.06/0.07
+dB with unchanged coverage. Two in-process controls clone the identical fitted
+scene immediately before refinement and compare against coordinate descent
+alone, removing atomic continuation variance: fixed improves held-light
+mean/worst/covered PSNR by 0.07/0.02/0.13 dB, and the formerly regressing second
+cloud improves by 0.05/0.04/0.08 dB. The linear stage adds about 0.14--0.15
+seconds to the six-material synthetic pass. A deliberately sparse replay with
+only 19% coverage loses 0.58 dB where hit despite a lower training objective;
+the pass therefore remains explicit through `--render-refine-materials` rather
+than becoming an unconditional material fit.
