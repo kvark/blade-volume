@@ -1,7 +1,7 @@
 //! Direct image formation for Gaussian point clouds.
 //!
 //! The continuous response follows 3DGUT/3DGRT: project sigma points only to
-//! find conservative screen-space candidates, then evaluate each candidate at
+//! find finite screen-space candidates, then evaluate each candidate at
 //! its exact maximum-response point on the camera ray. Candidate indices are
 //! discrete host inputs; all Gaussian parameters in the response and alpha
 //! compositing remain differentiable Meganeura graph values.
@@ -14,6 +14,8 @@ use std::{sync, thread};
 const SH_C0: f32 = 0.282_094_8;
 const MIN_SCALE: f32 = 1.0e-4;
 const MAX_ALPHA: f32 = 0.999;
+const TILE_SIZE: usize = 16;
+const TILE_SUPPORT_MARGIN: f32 = 1.25;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
 /// points. The covariance columns follow `glam::Mat2`'s column-major layout.
@@ -49,6 +51,99 @@ struct CandidateSlices<'a> {
     mask: &'a mut [f32],
     pixel_indices: &'a mut [u32],
     depths: &'a mut [f32],
+}
+
+struct CandidateGrid {
+    width: usize,
+    tiles_x: usize,
+    tiles: Vec<Vec<u32>>,
+}
+
+struct CandidateIndex {
+    views: Vec<Option<CandidateGrid>>,
+}
+
+impl CandidateIndex {
+    fn new(
+        model: &vol::PointCloudModel,
+        capture: &crate::inverse::capture::Capture,
+        view_indices: &[usize],
+        min_alpha: f32,
+    ) -> Self {
+        let mut views: Vec<Option<CandidateGrid>> = std::iter::repeat_with(|| None)
+            .take(capture.views.len())
+            .collect();
+        if min_alpha == 0.0 {
+            return Self { views };
+        }
+        for &view_index in view_indices {
+            views[view_index] = Some(CandidateGrid::new(
+                model,
+                &capture.views[view_index].camera,
+                capture.width,
+                capture.height,
+                min_alpha,
+            ));
+        }
+        Self { views }
+    }
+
+    fn candidates(&self, view: usize, pixel: usize) -> Option<&[u32]> {
+        let grid = self.views[view].as_ref()?;
+        let x = pixel % grid.width;
+        let y = pixel / grid.width;
+        let tile = (y / TILE_SIZE) * grid.tiles_x + x / TILE_SIZE;
+        Some(&grid.tiles[tile])
+    }
+}
+
+impl CandidateGrid {
+    fn new(
+        model: &vol::PointCloudModel,
+        camera: &vol::CameraParams,
+        width: usize,
+        height: usize,
+        min_alpha: f32,
+    ) -> Self {
+        let tiles_x = width.div_ceil(TILE_SIZE);
+        let tiles_y = height.div_ceil(TILE_SIZE);
+        let mut tiles = vec![Vec::new(); tiles_x * tiles_y];
+        let transforms = model.transforms.as_ref().unwrap();
+        for (index, point) in model.points.iter().enumerate() {
+            if point.w < min_alpha {
+                continue;
+            }
+            let Some((min, max)) = projected_support_bounds(
+                camera,
+                width,
+                height,
+                point.truncate(),
+                transforms.rotations[index],
+                transforms.scales[index],
+                point.w,
+                min_alpha,
+            ) else {
+                continue;
+            };
+            let min_x = min.x.floor().max(0.0) as usize / TILE_SIZE;
+            let min_y = min.y.floor().max(0.0) as usize / TILE_SIZE;
+            let max_x = max.x.ceil().min(width.saturating_sub(1) as f32) as usize / TILE_SIZE;
+            let max_y = max.y.ceil().min(height.saturating_sub(1) as f32) as usize / TILE_SIZE;
+            if min_x > max_x || min_y > max_y || min_x >= tiles_x || min_y >= tiles_y {
+                continue;
+            }
+            for tile_y in min_y..=max_y.min(tiles_y - 1) {
+                for tile_x in min_x..=max_x.min(tiles_x - 1) {
+                    tiles[tile_y * tiles_x + tile_x].push(index as u32);
+                }
+            }
+        }
+        Self {
+            width,
+            tiles_x,
+            tiles,
+        }
+    }
 }
 
 /// Differentiable outputs and parameters of the minimal isotropic Gaussian
@@ -108,6 +203,8 @@ pub struct FitStats {
 struct RayBatch {
     origins: Vec<glam::Vec3>,
     directions: Vec<glam::Vec3>,
+    views: Vec<usize>,
+    pixels: Vec<usize>,
     labels: Vec<f32>,
     alpha: Vec<f32>,
 }
@@ -171,6 +268,48 @@ pub fn project_conic(
     })
 }
 
+fn projected_support_bounds(
+    camera: &vol::CameraParams,
+    width: usize,
+    height: usize,
+    mean: glam::Vec3,
+    rotation: glam::Quat,
+    scale: glam::Vec3,
+    opacity: f32,
+    min_alpha: f32,
+) -> Option<(glam::Vec2, glam::Vec2)> {
+    let response_threshold = (min_alpha / opacity).clamp(f32::MIN_POSITIVE, 1.0);
+    let gaussian_radius = (-2.0 * response_threshold.ln()).sqrt() * TILE_SUPPORT_MARGIN;
+    let world_radius = gaussian_radius * scale.max_element();
+    let camera_rotation = glam::Quat::from_array(camera.cam_orientation);
+    let local_mean = camera_rotation.inverse() * (mean - glam::Vec3::from(camera.cam_position));
+    if local_mean.z + world_radius <= 1.0e-6 {
+        return None;
+    }
+    if local_mean.z - world_radius <= 1.0e-6 {
+        return Some((
+            glam::Vec2::ZERO,
+            glam::Vec2::new(
+                width.saturating_sub(1) as f32,
+                height.saturating_sub(1) as f32,
+            ),
+        ));
+    }
+
+    let conic = project_conic(camera, width, height, mean, rotation, scale)?;
+    let conic_extent = glam::Vec2::new(
+        (gaussian_radius * gaussian_radius * conic.covariance.x_axis.x.max(0.0)).sqrt(),
+        (gaussian_radius * gaussian_radius * conic.covariance.y_axis.y.max(0.0)).sqrt(),
+    );
+    let min = conic.mean - conic_extent;
+    let max = conic.mean + conic_extent;
+    if max.x < 0.0 || max.y < 0.0 || min.x >= width as f32 || min.y >= height as f32 {
+        None
+    } else {
+        Some((min, max))
+    }
+}
+
 /// Evaluate the exact maximum of a 3D anisotropic Gaussian along a ray.
 pub fn ray_response(
     ray_origin: glam::Vec3,
@@ -206,9 +345,8 @@ pub fn ray_response(
 /// Record the closest exact Gaussian candidates for a ray batch.
 ///
 /// This deliberately uses an `O(rays * particles)` CPU oracle. It is the
-/// correctness path for small training gates; `project_conic` supplies the
-/// tested primitive for replacing it with tile culling without changing the
-/// differentiable graph.
+/// correctness path for small training gates and for checking the private tile
+/// index without changing the differentiable graph.
 pub fn record_candidates(
     model: &vol::PointCloudModel,
     ray_origins: &[glam::Vec3],
@@ -302,25 +440,16 @@ fn record_candidate_range(
     min_alpha: f32,
     output: CandidateSlices<'_>,
 ) {
-    let transforms = model.transforms.as_ref().unwrap();
     let mut hits = Vec::with_capacity(model.points.len());
     for (local_pixel, (&origin, &direction)) in ray_origins.iter().zip(ray_directions).enumerate() {
-        hits.clear();
-        for (index, point) in model.points.iter().enumerate() {
-            let Some(hit) = ray_response(
-                origin,
-                direction,
-                point.truncate(),
-                transforms.rotations[index],
-                transforms.scales[index],
-            ) else {
-                continue;
-            };
-            let alpha = point.w * hit.response;
-            if hit.depth > 0.0 && alpha.is_finite() && alpha >= min_alpha {
-                hits.push((hit.depth, index as u32));
-            }
-        }
+        collect_candidate_hits(
+            model,
+            origin,
+            direction,
+            0..model.points.len(),
+            min_alpha,
+            &mut hits,
+        );
         hits.sort_unstable_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
@@ -338,6 +467,89 @@ fn record_candidate_range(
             [local_pixel * candidates_per_pixel..(local_pixel + 1) * candidates_per_pixel]
             .fill(pixel);
     }
+}
+
+fn collect_candidate_hits(
+    model: &vol::PointCloudModel,
+    origin: glam::Vec3,
+    direction: glam::Vec3,
+    indices: impl Iterator<Item = usize>,
+    min_alpha: f32,
+    hits: &mut Vec<(f32, u32)>,
+) {
+    hits.clear();
+    let transforms = model.transforms.as_ref().unwrap();
+    for index in indices {
+        let point = model.points[index];
+        let Some(hit) = ray_response(
+            origin,
+            direction,
+            point.truncate(),
+            transforms.rotations[index],
+            transforms.scales[index],
+        ) else {
+            continue;
+        };
+        let alpha = point.w * hit.response;
+        if hit.depth > 0.0 && alpha.is_finite() && alpha >= min_alpha {
+            hits.push((hit.depth, index as u32));
+        }
+    }
+}
+
+fn record_indexed_candidates(
+    model: &vol::PointCloudModel,
+    batch: &RayBatch,
+    index: &CandidateIndex,
+    candidates_per_pixel: usize,
+    min_alpha: f32,
+) -> FlatCandidates {
+    let pixels = batch.origins.len();
+    let entries = pixels * candidates_per_pixel;
+    let mut result = FlatCandidates {
+        indices: vec![0_u32; entries],
+        mask: vec![0.0_f32; entries],
+        pixel_indices: vec![0_u32; entries],
+        depths: vec![0.0_f32; entries],
+        pixels,
+        candidates_per_pixel,
+    };
+    let mut hits = Vec::new();
+    for pixel in 0..pixels {
+        match index.candidates(batch.views[pixel], batch.pixels[pixel]) {
+            Some(candidates) => collect_candidate_hits(
+                model,
+                batch.origins[pixel],
+                batch.directions[pixel],
+                candidates.iter().map(|&candidate| candidate as usize),
+                min_alpha,
+                &mut hits,
+            ),
+            None => collect_candidate_hits(
+                model,
+                batch.origins[pixel],
+                batch.directions[pixel],
+                0..model.points.len(),
+                min_alpha,
+                &mut hits,
+            ),
+        }
+        hits.sort_unstable_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        for (slot, &(depth, particle)) in hits.iter().take(candidates_per_pixel).enumerate() {
+            let flat = pixel * candidates_per_pixel + slot;
+            result.indices[flat] = particle;
+            result.mask[flat] = 1.0;
+            result.depths[flat] = depth;
+        }
+        let pixel_index = u32::try_from(pixel).expect("ray batch exceeds u32 pixel indices");
+        result.pixel_indices[pixel * candidates_per_pixel..(pixel + 1) * candidates_per_pixel]
+            .fill(pixel_index);
+    }
+    result
 }
 
 /// Render an SH-0 Gaussian model with the exact CPU response oracle.
@@ -589,6 +801,9 @@ fn validate_fit(
     if view_indices.is_empty() {
         return Err("direct Gaussian fitting needs at least one view".to_string());
     }
+    if capture.width == 0 || capture.height == 0 {
+        return Err("direct Gaussian fitting needs a non-empty capture extent".to_string());
+    }
     if let Some(&index) = view_indices
         .iter()
         .find(|&&index| index >= capture.views.len())
@@ -722,6 +937,8 @@ fn sample_rays(
 ) -> RayBatch {
     let mut origins = Vec::with_capacity(count);
     let mut directions = Vec::with_capacity(count);
+    let mut views = Vec::with_capacity(count);
+    let mut pixels = Vec::with_capacity(count);
     let mut labels = Vec::with_capacity(count * 3);
     let mut alpha = Vec::with_capacity(count);
     let pixel_count = capture.width * capture.height;
@@ -740,6 +957,8 @@ fn sample_rays(
             x,
             y,
         ));
+        views.push(view_index);
+        pixels.push(pixel);
         labels.extend(
             view.pixels[pixel]
                 .into_iter()
@@ -750,6 +969,8 @@ fn sample_rays(
     RayBatch {
         origins,
         directions,
+        views,
+        pixels,
         labels,
         alpha,
     }
@@ -759,12 +980,13 @@ fn set_batch(
     session: &mut mn::Session,
     model: &vol::PointCloudModel,
     batch: &RayBatch,
+    index: &CandidateIndex,
     options: FitOptions,
 ) {
-    let candidates = record_candidates(
+    let candidates = record_indexed_candidates(
         model,
-        &batch.origins,
-        &batch.directions,
+        batch,
+        index,
         options.candidates_per_pixel,
         options.candidate_min_alpha,
     );
@@ -796,11 +1018,11 @@ fn read_loss(session: &mn::Session) -> f32 {
 /// Fit an isotropic Gaussian light field directly to posed RGB images.
 ///
 /// This is intentionally the small baseline: fixed particle count, SH-0, and
-/// exact CPU candidate recording. It establishes whether direct Gaussian image
-/// formation improves reconstruction before tile culling, anisotropy, SH, or
-/// densification add implementation surface area. Capture radiance is converted
-/// from linear light to the display-referred sRGB convention stored by
-/// [`vol::PointCloudModel`].
+/// exact CPU response testing after private screen-tile culling. It establishes
+/// whether direct Gaussian image formation improves reconstruction before
+/// anisotropy, higher-order SH, or densification add implementation surface
+/// area. Capture radiance is converted from linear light to the display-referred
+/// sRGB convention stored by [`vol::PointCloudModel`].
 pub fn fit_isotropic(
     model: &mut vol::PointCloudModel,
     capture: &crate::inverse::capture::Capture,
@@ -827,9 +1049,11 @@ pub fn fit_isotropic(
         },
     );
     set_model_parameters(&mut session, model);
+    let mut candidate_index =
+        CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
 
     let audit = sample_rays(capture, view_indices, options.batch_size, u32::MAX);
-    set_batch(&mut session, model, &audit, options);
+    set_batch(&mut session, model, &audit, &candidate_index, options);
     session.step();
     session.wait();
     let initial_loss = read_loss(&session);
@@ -841,17 +1065,21 @@ pub fn fit_isotropic(
     session.set_lr_multiplier("sh_", options.sh_learning_rate);
     for step in 0..options.steps {
         let batch = sample_rays(capture, view_indices, options.batch_size, step as u32);
-        set_batch(&mut session, model, &batch, options);
+        set_batch(&mut session, model, &batch, &candidate_index, options);
         session.step();
         session.wait();
         if (step + 1) % options.geometry_sync_every == 0 {
             download_model(&session, model);
+            candidate_index =
+                CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
         }
     }
     download_model(&session, model);
 
     session.clear_optimizer();
-    set_batch(&mut session, model, &audit, options);
+    candidate_index =
+        CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
+    set_batch(&mut session, model, &audit, &candidate_index, options);
     session.step();
     session.wait();
     let final_loss = read_loss(&session);
@@ -950,6 +1178,39 @@ mod tests {
             width,
             height,
             views,
+        }
+    }
+
+    fn empty_capture(width: usize, height: usize) -> crate::inverse::capture::Capture {
+        let cameras = [
+            vol::CameraParams::looking_at(
+                glam::Vec3::ZERO,
+                glam::Vec3::new(0.0, 0.0, 4.0),
+                60.0_f32.to_radians(),
+                width as f32 / height as f32,
+                20.0,
+            ),
+            vol::CameraParams::looking_at(
+                glam::Vec3::new(1.0, 0.5, 0.0),
+                glam::Vec3::new(0.0, 0.0, 4.0),
+                60.0_f32.to_radians(),
+                width as f32 / height as f32,
+                20.0,
+            ),
+        ];
+        crate::inverse::capture::Capture {
+            width,
+            height,
+            views: cameras
+                .into_iter()
+                .enumerate()
+                .map(|(index, camera)| crate::inverse::capture::View {
+                    name: format!("empty-{index}"),
+                    camera,
+                    pixels: vec![[0.0; 3]; width * height],
+                    mask: Some(vec![0.0; width * height]),
+                })
+                .collect(),
         }
     }
 
@@ -1067,6 +1328,43 @@ mod tests {
         assert_eq!(recorded.mask, [1.0, 1.0, 1.0]);
         assert_eq!(recorded.depths, [2.0, 3.0, 4.0]);
         assert_eq!(recorded.pixel_indices, [0, 0, 0]);
+    }
+
+    #[test]
+    fn tiled_candidates_match_exhaustive_recording() {
+        let points: Vec<glam::Vec4> = (0..25)
+            .map(|index| {
+                let x = (index % 5) as f32 * 0.7 - 1.4;
+                let y = (index / 5) as f32 * 0.55 - 1.1;
+                glam::Vec4::new(x, y, 3.5 + 0.05 * index as f32, 0.8)
+            })
+            .collect();
+        let mut model = model(points);
+        model
+            .transforms
+            .as_mut()
+            .unwrap()
+            .scales
+            .fill(glam::Vec3::splat(0.12));
+        let capture = empty_capture(64, 48);
+        let batch = sample_rays(&capture, &[0, 1], 1_024, 17);
+        let exhaustive = record_candidates(&model, &batch.origins, &batch.directions, 8, 1.0e-4);
+        let index = CandidateIndex::new(&model, &capture, &[0, 1], 1.0e-4);
+        let tiled = record_indexed_candidates(&model, &batch, &index, 8, 1.0e-4);
+        assert_eq!(tiled.indices, exhaustive.indices);
+        assert_eq!(tiled.mask, exhaustive.mask);
+        assert_eq!(tiled.depths, exhaustive.depths);
+        assert_eq!(tiled.pixel_indices, exhaustive.pixel_indices);
+
+        let candidate_entries: usize = index
+            .views
+            .iter()
+            .flatten()
+            .flat_map(|grid| &grid.tiles)
+            .map(Vec::len)
+            .sum();
+        let exhaustive_entries = 2 * 4 * 3 * model.points.len();
+        assert!(candidate_entries < exhaustive_entries / 2);
     }
 
     #[test]

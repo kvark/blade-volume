@@ -1630,3 +1630,17 @@ candidate recording while keeping the same continuous graph, then extend
 scale to anisotropic covariance. The temporary benchmark driver is removed;
 generated PLYs remain outside version control under
 `target/audit-runs/direct-gaussian-*`.
+
+The first candidate accelerator keeps that graph and operation set unchanged.
+Each selected camera gets a private 16x16-pixel tile index. The 3DGUT conic and
+opacity threshold give its screen bound, with a full-screen fallback when the
+finite support crosses the near plane; exact 3D response and per-ray depth
+sorting still decide every retained hit. On the fixed
+2,179-particle cloud and a 2,048-ray six-view batch, indexed candidates are
+bit-exact with the exhaustive recorder. Median recording time falls from 25.68
+to 9.49 ms; rebuilding all six view indices costs 2.99 ms and is amortized over
+the configured ten-step geometry interval, for a 2.62x candidate-stage speedup.
+The complete deterministic 500-update gate retains the exact 0.6073759 to
+0.40126857 audit-loss trajectory and completes in 1.775 seconds. The index adds
+no public option, graph operation, shader, shader entry, binding, or GPU
+pipeline variant.
