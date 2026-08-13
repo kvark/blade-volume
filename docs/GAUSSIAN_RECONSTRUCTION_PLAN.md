@@ -1927,3 +1927,9 @@ It preserves the exact `(depth, particle)` ordering and Room quality, but the
 selected tile index already leaves short hit lists: fit time is 6.3 seconds
 instead of 6.2 seconds with the full small-vector sort. The prototype is
 removed rather than adding another candidate-list policy.
+
+Reducing the fixed candidate table is also rejected. On Room, 48 candidates
+keeps the 6.2-second fit time but lowers held direct quality from 17.70/17.16
+to 17.47/16.95 dB. At 32 candidates, quality collapses to 14.98/14.55 dB and
+time rises to 6.8 seconds. The selected 64 rows are a measured capacity floor
+for overlapping Gaussian layers at this resolution, not removable padding.
