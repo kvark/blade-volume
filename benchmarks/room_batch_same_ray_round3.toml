@@ -1235,7 +1235,7 @@ decision_commit = "27242ad"
 reason = "Four times the sampled rays required only 4% more training/topology time and improved fresh held-out PSNR by 0.20 dB over the preceding 1024-ray segment"
 
 [fresh_color_loss_gate]
-status = "rejected"
+status = "coverage-confounded"
 git_commit = "17c9663"
 protocol = "fresh matched 50K initialization through the 735103-cell step-2875 cap, then 500 fixed-cap steps; 255 training and all 39 every-eighth held-out views at 128x128"
 control_loss = "l1"
@@ -1279,8 +1279,55 @@ beta_0_1_step1000_worst_view_delta = -1.58
 beta_0_01_step1000_all_39_delta = 0.1008
 beta_0_01_step1000_improved_views = 22
 beta_0_01_step1000_worst_view_delta = -0.85
-decision = "retain L1 for Room: beta 1 raises the mean but leaves two severe end-of-sequence regressions after settling; smaller beta continuously trades mean gain for tail safety without producing a robust winner, so the experimental beta API is not retained"
+decision = "do not use this gate for loss selection: the 255-view cap omitted the final 17 non-held-out cameras, so the last two held-out views measured unsupported extrapolation; the beta prototype is not retained"
 artifact_path = "target/audit-runs/room-fresh-loss-gate-v1"
+
+[full_coverage_color_loss_gate]
+status = "completed"
+git_commit = "6d8f665"
+protocol = "fresh matched 50K initialization through the 735103-cell step-2875 cap, then 500 fixed-cap steps; all 272 non-held-out training views and all 39 every-eighth held-out views at 128x128"
+control_loss = "l1"
+candidate_loss = "smooth-l1-beta-1"
+step1000_control_cells = 98692
+step1000_candidate_cells = 99286
+step1000_control_train_psnr = 21.7950
+step1000_candidate_train_psnr = 22.2019
+step1000_control_all_39_test_psnr = 21.2661
+step1000_candidate_all_39_test_psnr = 21.6302
+step1000_all_39_delta = 0.3641
+step1000_improved_views = 32
+step1000_regressed_views = 6
+step1000_worst_view_delta = -0.34
+step2875_cells = 735103
+step2875_control_train_psnr = 24.3533
+step2875_candidate_train_psnr = 24.3504
+step2875_control_all_39_test_psnr = 23.2889
+step2875_candidate_all_39_test_psnr = 23.2839
+step2875_all_39_delta = -0.0050
+step3375_control_train_psnr = 24.9704
+step3375_candidate_train_psnr = 25.0086
+step3375_control_all_39_test_psnr = 23.7403
+step3375_candidate_all_39_test_psnr = 23.7481
+step3375_all_39_delta = 0.0078
+step3375_improved_views = 18
+step3375_regressed_views = 21
+step3375_worst_view_delta = -0.84
+step3375_best_view_delta = 0.80
+control_growth_training_seconds = 589.625
+candidate_growth_training_seconds = 579.491
+control_settle_training_seconds = 54.019
+candidate_settle_training_seconds = 49.775
+growth_scope_memory_peak_bytes = 4268408832
+settle_scope_memory_peak_bytes = 3724972032
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+sampled_gpu_power_peak_watts = 94.53
+sampled_gpu_temperature_peak_celsius = 61
+sampled_gpu_memory_peak_mib = 2138
+decision = "Smooth-L1 is selected for short Room budgets but not as the Room endpoint default: it gains 0.364 dB at step 1000, then is mean-neutral with a broad per-view redistribution at the cap and after settling; use all non-held-out cameras for complete llffhold evaluation"
+artifact_path = "target/audit-runs/room-full-coverage-loss-gate-v1"
 
 [selection]
 status = "selected"

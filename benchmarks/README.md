@@ -849,21 +849,28 @@ architectural cost rather than a justification for weaker growth semantics.
 Raw evidence stays ignored under
 `target/audit-runs/{qhull-phase-profile-v1,growth-topology-cadence-v1}/`.
 
-The current Room trajectory does not reproduce Bonsai's Smooth-L1 selection
-safely. Fresh L1 and beta-1 arms use the same 50,000-point initialization,
-growth schedule, 735,103-point cap, and all-39 held-out evaluation. At the
-step-2,875 cap Smooth-L1 gains 0.141 dB on average and improves 31 of 39
-views, but its worst view loses 1.86 dB. A matched 500-step fixed-cap settle
-leaves essentially the same result: 23.584 versus 23.445 dB all-39, with 30
-views improved, while the last two views lose 1.89 and 1.18 dB. Beta pilots
-at step 1,000 expose a continuous tradeoff rather than a robust setting:
-beta 0.1 gains 0.312 dB with a -1.58 dB tail, and beta 0.01 gains 0.101 dB
-with a -0.85 dB tail. The beta prototype is removed and Room retains L1.
-The full gate stays ignored under
-`target/audit-runs/room-fresh-loss-gate-v1/`.
+The first Room Smooth-L1 gate is coverage-confounded. Its 255-view cap omits
+the last 17 non-held-out cameras, making held-out `DSCF4963.JPG` and
+`DSCF4971.JPG` unsupported extrapolation. Their apparent -1.89/-1.18 dB
+Smooth-L1 tail is not a valid reason to reject the loss. With all 272
+non-held-out views, L1 raises those images from roughly 20.5/17.4 dB to
+27.4/26.3 dB after settling.
+
+The corrected fresh 272/39 gate finds that Smooth-L1 improves short-budget
+convergence, not the Room endpoint. At step 1,000 it reaches 21.630 versus
+21.266 dB all-39, improves 32 views, and has a -0.34 dB worst delta. Both arms
+then reach the same 735,103-point cap. Smooth-L1 is -0.005 dB at step 2,875
+and +0.008 dB after a matched 500-step settle; the final per-view changes span
+-0.84 to +0.80 dB. It is selected for short Room budgets but not as the Room
+endpoint default. The beta prototype remains removed. Raw evidence stays
+ignored under `target/audit-runs/room-{fresh,full-coverage}-loss-gate-v1/`.
 
 All arms ran in 8 GiB scopes. The largest scope peak was 4,089,389,056 bytes,
 with zero swap, pressure, OOM, or GPU-fault events. Across 393 NVIDIA samples
 after the 750 W PSU installation, the observed peaks were 95.29 W, 59 C, and
 2,177 MiB VRAM. This workload is stable on the RTX 5070, though its short GPU
 bursts do not constitute a full-power PSU stress test.
+
+The full-coverage arms add another 310 NVIDIA samples and peak at 94.53 W,
+61 C, and 2,138 MiB VRAM. Their largest 8 GiB scope reaches 4,268,408,832
+bytes with zero swap, pressure, OOM, or GPU-fault events.

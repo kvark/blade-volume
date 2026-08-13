@@ -65,7 +65,7 @@ struct Args {
     #[argh(option, default = "32")]
     height: u32,
 
-    /// max number of training views (default 8)
+    /// max number of training views (default 8; 0 uses all available views)
     #[argh(option, default = "8")]
     views: usize,
 
@@ -462,6 +462,10 @@ fn resolve_views_per_batch(
     Ok(selected)
 }
 
+fn resolve_max_views(requested: usize) -> Option<usize> {
+    (requested > 0).then_some(requested)
+}
+
 fn select_adjacency(args: &Args) -> pipeline::AdjacencyKind {
     if args.powerfoam_reference_radii {
         pipeline::AdjacencyKind::PowerFoamReference
@@ -835,7 +839,7 @@ fn main() {
     let config = pipeline::PipelineConfig {
         resolution: (args.width, args.height),
         max_steps: args.max_steps,
-        max_views: Some(args.views),
+        max_views: resolve_max_views(args.views),
         max_initial_points: (args.max_points > 0).then_some(args.max_points),
         initialization,
         fit: diff_render::AppearanceFitConfig {
@@ -1253,6 +1257,12 @@ mod tests {
             resolve_views_per_batch(16, Some(1024), 16),
             Err("--views-per-batch > 1 requires random-pixel sampling")
         );
+    }
+
+    #[test]
+    fn zero_view_cap_uses_every_available_training_view() {
+        assert_eq!(resolve_max_views(0), None);
+        assert_eq!(resolve_max_views(272), Some(272));
     }
 
     #[test]

@@ -1106,14 +1106,19 @@ needs an algorithmic replacement for repeated exact Delaunay construction,
 not more shader variants, skipped correctness checks, or stale-topology
 tuning.
 
-The fresh Room loss gate also closes the obvious cross-scene follow-up to the
-Bonsai Smooth-L1 result. Beta-1 Smooth-L1 reaches 23.5837 dB over all 39 held
-views after a matched fixed-cap settle, versus 23.4454 dB for L1, and improves
-30 views. It is nevertheless rejected because two end-of-sequence views lose
-1.89 and 1.18 dB. Beta-0.1 and beta-0.01 pilots progressively reduce the
-worst early loss from 1.58 to 0.85 dB, but also reduce the mean gain from
-0.312 to 0.101 dB and the improved-view count from 33 to 22. There is no
-robust cross-scene beta selection, so the experimental scalar control is
-removed and the existing L1 API remains unchanged. The next quality work
-should target the spatial appearance representation or sampling coverage,
-not add another scene-sensitive loss knob.
+The first fresh Room loss gate was not a valid all-view tail comparison. Its
+255-view cap omitted the last 17 non-held-out cameras, and the two apparent
+Smooth-L1 failures were held-out views beyond that training arc. Repeating
+from initialization with all 272 non-held-out cameras raises those endpoint
+views by roughly 6--10 dB and removes the false tail failure. This also
+motivates the minimal CLI convention `--views 0`: it now forwards the
+library's existing unlimited-view mode instead of requesting an empty set.
+
+The corrected loss conclusion is budget-dependent. Smooth-L1 gains 0.364 dB
+all-39 at step 1,000 and improves 32 views, but at the shared 735,103-point
+cap it is -0.005 dB. After 500 fixed-cap steps it is +0.008 dB, with per-view
+changes spanning -0.84 to +0.80 dB. Smooth-L1 is useful for early Room
+convergence and remains selected for Bonsai, but it is not a robust Room
+endpoint default. The experimental beta control remains removed. The next
+quality work should target spatial appearance or sampling efficiency rather
+than add another scene-sensitive loss knob.
