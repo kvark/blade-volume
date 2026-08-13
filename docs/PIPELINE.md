@@ -19,8 +19,9 @@ rendered. Both link `blade-volume` for shared types and shaders.
 - No new representations beyond what we render. The maintained radiance-field
   trainer optimises RadFoam, bounded PowerFoam, or anisotropic Gaussian
   particles. Reconstruction emits finite surface-Gaussian particles for the
-  relightable path, and the synthetic pipeline can fit a static Gaussian light
-  field from the same cloud with `--gaussian-output`. See
+  relightable path, and both `reconstruct` and the synthetic pipeline can fit a
+  static Gaussian light field from the same cloud with `--gaussian-output`.
+  See
   [GAUSSIAN_RECONSTRUCTION_PLAN.md](GAUSSIAN_RECONSTRUCTION_PLAN.md).
 - No on-device capture code initially — phone capture stays manual (record + transfer).
   We'll automate that later if and only if the rest of the pipeline is solid.

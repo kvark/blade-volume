@@ -1203,39 +1203,11 @@ fn main() {
         let Some(gpu) = train::fit::try_init_gpu() else {
             fail("no supported GPU device for direct Gaussian training");
         };
-        let appearance_steps = args.gaussian_steps / 2;
-        let support_steps = args.gaussian_steps - appearance_steps;
-        let appearance = train::gaussian_splat::FitOptions {
-            steps: appearance_steps,
-            batch_size: 512,
-            candidates_per_pixel: 64,
-            candidate_min_alpha: 1.0e-5,
-            geometry_sync_every: 10,
-            position_learning_rate: 0.0,
-            scale_learning_rate: 0.0,
-            opacity_learning_rate: 0.0,
-            sh_learning_rate: 0.002,
-            opacity_loss_weight: 1.5,
-            background: [0.0; 3],
-        };
-        let appearance_stats = train::gaussian_splat::fit(
+        let stats = train::gaussian_splat::fit_staged(
             &mut gaussian,
             &training_capture,
             &training_indices,
-            appearance,
-            gpu.clone(),
-        )
-        .unwrap_or_else(|error| fail(error));
-        let support_stats = train::gaussian_splat::fit(
-            &mut gaussian,
-            &training_capture,
-            &training_indices,
-            train::gaussian_splat::FitOptions {
-                steps: support_steps,
-                scale_learning_rate: 0.005,
-                opacity_learning_rate: 0.05,
-                ..appearance
-            },
+            args.gaussian_steps,
             gpu,
         )
         .unwrap_or_else(|error| fail(error));
@@ -1259,12 +1231,12 @@ fn main() {
             .unwrap_or_else(|error| fail(format!("cannot write {}: {error:?}", output.display())));
         println!(
             "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6}, in {:.3} s",
-            appearance_stats.steps,
-            appearance_stats.initial_loss,
-            appearance_stats.final_loss,
-            support_stats.steps,
-            support_stats.initial_loss,
-            support_stats.final_loss,
+            stats.appearance.steps,
+            stats.appearance.initial_loss,
+            stats.appearance.final_loss,
+            stats.support.steps,
+            stats.support.initial_loss,
+            stats.support.final_loss,
             started.elapsed().as_secs_f64(),
         );
         describe_scores("direct Gaussian held-out", &held_out_scores);

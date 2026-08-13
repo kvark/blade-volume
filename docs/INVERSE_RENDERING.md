@@ -36,9 +36,10 @@ a scene built for the purpose.
 
 ## The stages
 
-    capture ──▶ surface ──▶ masked PowerFoam ──▶ decompose ──▶ score
-    images       discs      optional weighted    material +     render back
-    + poses                 continuation         light          and compare
+    capture ──▶ surface ──▶ masked PowerFoam ──▶ decompose ──▶ relight score
+    images       discs      optional weighted    material +
+    + poses                 continuation         light
+                    └──────▶ direct Gaussian ────────────────▶ static LF PLY
 
 `blade-volume-train/src/inverse/`, one module each. The fourth shares no code
 with the first three, so it has no opportunity to agree with the solver by
@@ -70,6 +71,15 @@ Gaussian surface before material/light decomposition. The static light field
 can be retained with `--surface-powerfoam-output surface.ply`. At least three
 training views are required; the stage is never inferred from RGB or from the
 surface renderer's own alpha.
+
+The same final surface can seed an ordinary static Gaussian light field with
+`--gaussian-output light-field.ply`. Its first half-schedule learns neutral
+SH-0 appearance; its second also learns opacity and three anisotropic scales.
+Reconstructed centres and tangent-frame rotations stay fixed. If every
+training view has an independent foreground mask, that mask also supervises
+opacity; unmasked room captures use RGB alone. This output is intentionally
+separate from the relightable scene: it reproduces the captured illumination
+but does not claim to have separated material from light.
 
 **Sparse points.** COLMAP's triangulated points, with normals from the local
 covariance and a side chosen by the cameras that can see them. Free, needs no

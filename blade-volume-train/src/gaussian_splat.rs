@@ -200,6 +200,79 @@ pub struct FitStats {
     pub final_loss: f32,
 }
 
+/// Statistics for the selected appearance-then-support training schedule.
+#[derive(Clone, Copy, Debug)]
+pub struct StagedFitStats {
+    pub appearance: FitStats,
+    pub support: FitStats,
+}
+
+/// Apply the selected direct-Gaussian schedule to an established cloud.
+///
+/// The first half learns only SH-0 appearance. The second half also learns
+/// opacity and three anisotropic scales, while keeping the reconstructed
+/// centres fixed. Foreground opacity is supervised when every selected view
+/// carries a mask; ordinary scene captures continue without that optional
+/// term.
+pub fn fit_staged(
+    model: &mut vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    steps: usize,
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<StagedFitStats, String> {
+    if steps < 2 {
+        return Err("staged direct Gaussian fitting requires at least two updates".to_string());
+    }
+    let opacity_loss_weight = if view_indices.iter().all(|&index| {
+        capture
+            .views
+            .get(index)
+            .is_some_and(|view| view.mask.is_some())
+    }) {
+        1.5
+    } else {
+        0.0
+    };
+    let appearance_steps = steps / 2;
+    let appearance_options = FitOptions {
+        steps: appearance_steps,
+        batch_size: 512,
+        candidates_per_pixel: 64,
+        candidate_min_alpha: 1.0e-5,
+        geometry_sync_every: 10,
+        position_learning_rate: 0.0,
+        scale_learning_rate: 0.0,
+        opacity_learning_rate: 0.0,
+        sh_learning_rate: 0.002,
+        opacity_loss_weight,
+        background: [0.0; 3],
+    };
+    let appearance = fit(
+        model,
+        capture,
+        view_indices,
+        appearance_options,
+        gpu.clone(),
+    )?;
+    let support = fit(
+        model,
+        capture,
+        view_indices,
+        FitOptions {
+            steps: steps - appearance_steps,
+            scale_learning_rate: 0.005,
+            opacity_learning_rate: 0.05,
+            ..appearance_options
+        },
+        gpu,
+    )?;
+    Ok(StagedFitStats {
+        appearance,
+        support,
+    })
+}
+
 /// Convert an established relightable Gaussian surface into the neutral
 /// `PointCloudModel` consumed by direct light-field training.
 ///
@@ -621,10 +694,6 @@ pub fn render_rays(
         model.sh_degree, 0,
         "Gaussian CPU oracle requires SH degree 0"
     );
-    let transforms = model
-        .transforms
-        .as_ref()
-        .expect("Gaussian CPU oracle requires model transforms");
     let candidates = record_candidates(
         model,
         ray_origins,
@@ -632,12 +701,26 @@ pub fn render_rays(
         candidates_per_pixel,
         min_alpha,
     );
+    render_recorded(model, ray_origins, ray_directions, &candidates, background)
+}
+
+fn render_recorded(
+    model: &vol::PointCloudModel,
+    ray_origins: &[glam::Vec3],
+    ray_directions: &[glam::Vec3],
+    candidates: &FlatCandidates,
+    background: [f32; 3],
+) -> Vec<glam::Vec4> {
+    let transforms = model
+        .transforms
+        .as_ref()
+        .expect("Gaussian CPU oracle requires model transforms");
     let mut output = Vec::with_capacity(ray_origins.len());
     for pixel in 0..ray_origins.len() {
         let mut radiance = glam::Vec3::ZERO;
         let mut transmittance = 1.0_f32;
-        for slot in 0..candidates_per_pixel {
-            let flat = pixel * candidates_per_pixel + slot;
+        for slot in 0..candidates.candidates_per_pixel {
+            let flat = pixel * candidates.candidates_per_pixel + slot;
             if candidates.mask[flat] == 0.0 {
                 continue;
             }
@@ -702,6 +785,7 @@ pub fn evaluate_views(
     }
 
     let pixels = capture.width * capture.height;
+    let index = CandidateIndex::new(model, capture, view_indices, min_alpha);
     let mut scores = Vec::with_capacity(view_indices.len());
     for &view_index in view_indices {
         let view = &capture.views[view_index];
@@ -720,12 +804,21 @@ pub fn evaluate_views(
                 })
             })
             .collect();
-        let rendered = render_rays(
+        let batch = RayBatch {
+            origins,
+            directions,
+            views: vec![view_index; pixels],
+            pixels: (0..pixels).collect(),
+            labels: Vec::new(),
+            alpha: Vec::new(),
+        };
+        let candidates =
+            record_indexed_candidates(model, &batch, &index, candidates_per_pixel, min_alpha);
+        let rendered = render_recorded(
             model,
-            &origins,
-            &directions,
-            candidates_per_pixel,
-            min_alpha,
+            &batch.origins,
+            &batch.directions,
+            &candidates,
             background,
         );
         let squared_error: f64 = rendered

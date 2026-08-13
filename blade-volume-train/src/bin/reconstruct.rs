@@ -154,6 +154,14 @@ struct Args {
     #[argh(option)]
     surface_powerfoam_output: Option<String>,
 
+    /// optional directly trained anisotropic Gaussian light-field PLY output
+    #[argh(option)]
+    gaussian_output: Option<String>,
+
+    /// direct Gaussian updates, split evenly between appearance and support
+    #[argh(option, default = "1000")]
+    gaussian_steps: usize,
+
     /// particles to refine against all training renders (default 0). This is
     /// an expensive final coordinate pass; a value larger than the observed
     /// particle count refines the complete visible surface.
@@ -248,6 +256,14 @@ fn main() {
     }
     if args.surface_powerfoam_output.is_some() && args.surface_powerfoam_steps_per_view == 0 {
         eprintln!("--surface-powerfoam-output requires --surface-powerfoam-steps-per-view");
+        std::process::exit(1);
+    }
+    if args.gaussian_output.is_some() && args.gaussian_steps < 2 {
+        eprintln!("--gaussian-output requires at least two --gaussian-steps");
+        std::process::exit(1);
+    }
+    if args.gaussian_output.is_some() && args.compact_kernel {
+        eprintln!("--gaussian-output requires Gaussian particles");
         std::process::exit(1);
     }
     let normal_captures =
@@ -534,6 +550,72 @@ fn main() {
         );
     }
 
+    if let Some(ref output) = args.gaussian_output {
+        let started = std::time::Instant::now();
+        let mut gaussian =
+            train::gaussian_splat::from_surface(&fitted.scene.model).unwrap_or_else(|error| {
+                eprintln!("cannot initialize direct Gaussian field: {error}");
+                std::process::exit(1);
+            });
+        let initial_test =
+            score_gaussian_test(&gaussian, &capture, &test_views).unwrap_or_else(|error| {
+                eprintln!("cannot score direct Gaussian field: {error}");
+                std::process::exit(1);
+            });
+        let Some(gpu) = train::fit::try_init_gpu() else {
+            eprintln!("cannot initialize a supported GPU for direct Gaussian training");
+            std::process::exit(1);
+        };
+        let stats = train::gaussian_splat::fit_staged(
+            &mut gaussian,
+            &capture,
+            &train_views,
+            args.gaussian_steps,
+            gpu,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("cannot fit direct Gaussian field: {error}");
+            std::process::exit(1);
+        });
+        let test = score_gaussian_test(&gaussian, &capture, &test_views).unwrap_or_else(|error| {
+            eprintln!("cannot score direct Gaussian field: {error}");
+            std::process::exit(1);
+        });
+        let output = path::Path::new(output);
+        if let Some(parent) = output
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).unwrap_or_else(|error| {
+                eprintln!("cannot create {}: {error}", parent.display());
+                std::process::exit(1);
+            });
+        }
+        convert::save_ply(output, &gaussian).unwrap_or_else(|error| {
+            eprintln!(
+                "cannot write direct Gaussian {}: {error:?}",
+                output.display()
+            );
+            std::process::exit(1);
+        });
+        println!(
+            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6}, in {:.1} s",
+            stats.appearance.steps,
+            stats.appearance.initial_loss,
+            stats.appearance.final_loss,
+            stats.support.steps,
+            stats.support.initial_loss,
+            stats.support.final_loss,
+            started.elapsed().as_secs_f64(),
+        );
+        if let (Some((initial_mean, initial_worst)), Some((mean, worst))) = (initial_test, test) {
+            println!(
+                "direct Gaussian test: {initial_mean:.2} -> {mean:.2} dB mean, {initial_worst:.2} -> {worst:.2} dB worst"
+            );
+        }
+        println!("wrote {}", output.display());
+    }
+
     if let Some(ref output) = args.output {
         let output = path::Path::new(output);
         if let Err(e) = vol::io::try_save_relight(output, &fitted.scene.model) {
@@ -782,6 +864,22 @@ fn aspect_height(sparse: &path::Path, width: usize) -> Result<usize, String> {
     Ok(((width * camera.height as usize) / camera.width as usize).max(1))
 }
 
+fn score_gaussian_test(
+    model: &vol::PointCloudModel,
+    capture: &train::inverse::capture::Capture,
+    views: &[usize],
+) -> Result<Option<(f32, f32)>, String> {
+    if views.is_empty() {
+        return Ok(None);
+    }
+    let scores =
+        train::gaussian_splat::evaluate_views(model, capture, views, 64, 1.0e-5, [0.0; 3])?;
+    Ok(Some((
+        scores.iter().sum::<f32>() / scores.len() as f32,
+        scores.iter().copied().fold(f32::INFINITY, f32::min),
+    )))
+}
+
 fn validate_normal_captures(args: &Args) -> Result<(), String> {
     if args.normal_images.len() != args.normal_environment.len() {
         return Err(format!(
@@ -943,6 +1041,8 @@ mod tests {
         assert!(defaults.masks.is_none());
         assert_eq!(defaults.surface_powerfoam_steps_per_view, 0);
         assert!(defaults.surface_powerfoam_output.is_none());
+        assert!(defaults.gaussian_output.is_none());
+        assert_eq!(defaults.gaussian_steps, 1_000);
 
         let known = <Args as argh::FromArgs>::from_args(
             &["reconstruct"],
@@ -957,6 +1057,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(known.environment.as_deref(), Some("capture.f32"));
+    }
+
+    #[test]
+    fn direct_gaussian_output_is_opt_in() {
+        let args = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--gaussian-output",
+                "light-field.ply",
+                "--gaussian-steps",
+                "800",
+            ],
+        )
+        .unwrap();
+        assert_eq!(args.gaussian_output.as_deref(), Some("light-field.ply"));
+        assert_eq!(args.gaussian_steps, 800);
     }
 
     #[test]

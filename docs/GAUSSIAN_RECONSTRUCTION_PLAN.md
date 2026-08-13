@@ -1727,3 +1727,20 @@ zero swap, memory-pressure, OOM, or GPU-fault events on the RTX 5070. The
 generated `light-field.ply`, relight scene, source foam, and telemetry remain
 deliberately untracked under
 `target/audit-runs/direct-gaussian-production-v1/{fixed,v2,v3,v4,v5}/`.
+
+The identical schedule is also exposed by the production COLMAP
+`reconstruct` command. Both callers share `fit_staged`; the CLI does not copy
+optimizer constants or introduce another graph. Complete held-out views are
+scored before and after fitting through the same exact response oracle, now
+using the private tile index for candidate enumeration.
+
+A real-input smoke gate uses five selected Bonsai cameras at 64x42, four for
+training and one held out. Depth from an existing 57,484-cell field fuses to a
+deliberately coarse 162-particle surface. The default 1,000 updates reduce loss
+from 0.822654 to 0.538042 and then 0.351435, while held-view static-field PSNR
+improves from 9.01 to 11.38 dB. The same coarse PBR proxy scores 10.16 dB, so
+the direct field is 1.22 dB better even in this low-capacity smoke test. The
+complete warm run takes 4.76 seconds and peaks at 125 MiB with no swap,
+memory-pressure, OOM, kernel, or GPU fault. Artifacts remain ignored under
+`target/audit-runs/reconstruct-direct-gaussian-bonsai-default/`; this validates
+the production path, not a full-resolution Bonsai quality claim.
