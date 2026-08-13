@@ -1105,3 +1105,15 @@ existing growth cadences remain selected. A meaningful further topology win
 needs an algorithmic replacement for repeated exact Delaunay construction,
 not more shader variants, skipped correctness checks, or stale-topology
 tuning.
+
+The fresh Room loss gate also closes the obvious cross-scene follow-up to the
+Bonsai Smooth-L1 result. Beta-1 Smooth-L1 reaches 23.5837 dB over all 39 held
+views after a matched fixed-cap settle, versus 23.4454 dB for L1, and improves
+30 views. It is nevertheless rejected because two end-of-sequence views lose
+1.89 and 1.18 dB. Beta-0.1 and beta-0.01 pilots progressively reduce the
+worst early loss from 1.58 to 0.85 dB, but also reduce the mean gain from
+0.312 to 0.101 dB and the improved-view count from 33 to 22. There is no
+robust cross-scene beta selection, so the experimental scalar control is
+removed and the existing L1 API remains unchanged. The next quality work
+should target the spatial appearance representation or sampling coverage,
+not add another scene-sensitive loss knob.
