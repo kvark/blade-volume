@@ -884,3 +884,14 @@ fourth. Its primary residual is likewise mixed. Even known illumination does
 not make that corrected colour independent evidence while orientation,
 visibility, and per-pixel Gaussian overlap remain wrong. The alternate fit API
 and albedo-observation path are removed.
+
+Correcting duplicated material evidence by projected-centre claims is also
+too weak. Keeping only the nearest Gaussian centre per photograph pixel gains
+0.01 dB on two held-light tails, loses 0.02 dB on the other two, and makes
+3--6 additional particles unseen. Retaining all observations but dividing
+their confidence by the claim count improves three clouds or leaves them
+neutral, yet still loses 0.01 dB on the fourth tail; square-root weighting has
+the same last regression and smaller gains. All variants are removed. A centre
+claim is not the production renderer's depth-band Gaussian blend, so a valid
+correction must use the actual per-pixel compositing weights rather than an
+overlap count surrogate.
