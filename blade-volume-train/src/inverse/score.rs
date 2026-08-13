@@ -325,6 +325,15 @@ impl Renderer {
         self.geometry_update_pending = true;
     }
 
+    pub(crate) fn update_prepared_surfel_geometry(
+        &mut self,
+        tracer: &mut vol::gpu::RelightTracer,
+        surfels: &[vol::relight::Surfel],
+    ) {
+        assert!(!self.geometry_update_pending);
+        tracer.update_surfels(surfels, &self.context, &mut self.encoder);
+    }
+
     pub(crate) fn update_prepared_materials(
         &mut self,
         tracer: &mut vol::gpu::RelightTracer,

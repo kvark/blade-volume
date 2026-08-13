@@ -1158,3 +1158,28 @@ Room-tail gain. The implementation and diagnostic switch are removed. Normal-
 only motion remains selected: a photometric loss can exploit tangent freedom,
 but without correspondence it does not know which neighbouring surface point
 the moved particle is meant to represent.
+
+The selected known-light path now closes one mismatch between normal fitting
+and the final renderer. After the sample-wise photometric solve and material
+fit, an opt-in complete-render pass perturbs every observed Gaussian normal in
+deterministic antithetic pairs across all measured lights. A summed-area table
+of the plus/minus pixel-error difference chooses a direction inside each
+particle's projected footprint; a full multi-light render accepts or rejects
+the combined proposal. Centers, radii, materials, assignments, and lights stay
+fixed. Normal changes rebuild every affected TLAS because they rotate the
+finite surface proxy; a regression verifies that the retained state has the
+same loss as a fresh tracer.
+
+On the fixed cloud and three independent training replicas, with `studio`
+entirely held out, held-light mean/worst PSNR changes from 19.08/18.84 to
+19.43/19.20, 20.19/19.78 to 20.44/20.02, 19.80/19.21 to 20.05/19.42, and
+19.61/19.36 to 19.91/19.59 dB. All eight rounds are accepted and reduce their
+complete four-light training objective by 10.1--12.2% in 0.72--0.75 seconds.
+The fixed-cloud normal-only isolation gains 0.36/0.37 dB before the existing
+material polish. Coverage falls 0.1--0.4 points and nearest-truth normal RMSE
+rises 0.17--0.35 degrees: these are effective PBR shading normals compensating
+for remaining surface/transport error, not more accurate geometric normals.
+The pass is therefore opt-in through `--render-refine-normals` in both the
+synthetic gate and calibrated multi-capture `reconstruct`; ordinary one-light
+phone capture remains unchanged. No shader, Meganeura operation, entry/group,
+binding, pipeline, or serialized field is added.

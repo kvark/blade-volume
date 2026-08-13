@@ -1744,8 +1744,14 @@ fixed ablation rather than merely changing topology.
 The CPU maximum-response oracle, exact batched ordering, and physical-GPU pixel
 parity are implemented. Scene traversal applies Gaussian cloud transforms
 without rebuilding point data or the local TLAS, and transformed-pixel tests
-pass. Cross-rendering a recognized checkpoint against official 3DGRUT and the
-hit-window performance sweep remain.
+pass. The relightable surface-Gaussian pipeline additionally has an opt-in
+complete-render normal polish for calibrated multi-light captures. Four
+synthetic clouds improve unseen-light novel-view mean PSNR by 0.25--0.35 dB
+and every worst view by 0.21--0.36 dB, while the exact optimizer/rebuilt-tracer
+oracle passes. Its small truth-normal and coverage regressions keep it a
+shading polish rather than a geometry claim. Cross-rendering a recognized
+volumetric Gaussian checkpoint against official 3DGRUT and the hit-window
+performance sweep remain.
 
 Acceptance gate: imported standard checkpoints match the oracle at documented
 quality and performance; transformations pass rendered-pixel tests.

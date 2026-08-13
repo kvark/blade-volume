@@ -153,6 +153,10 @@ struct Args {
     #[argh(switch)]
     render_refine_materials: bool,
 
+    /// refine Gaussian normals against complete renders from the known lights
+    #[argh(switch)]
+    render_refine_normals: bool,
+
     /// optional relightable Gaussian surface output
     #[argh(option)]
     surface_output: Option<String>,
@@ -1014,6 +1018,63 @@ fn main() {
         fitted.unseen,
         decompose_started.elapsed().as_secs_f64(),
     );
+    if args.render_refine_normals {
+        let environment_indices: Vec<usize> = (0..dataset.environments.len())
+            .filter(|&index| index != held_out_environment)
+            .collect();
+        let normal_captures: Vec<_> = environment_indices
+            .iter()
+            .map(|&index| {
+                train::inverse::capture::Capture::from_relight_dataset(&dataset, index, true)
+                    .unwrap_or_else(|error| fail(error))
+            })
+            .collect();
+        let normal_environments: Vec<_> = environment_indices
+            .iter()
+            .map(|&index| {
+                vol::io::try_load_environment(&dataset.environment_files[index])
+                    .unwrap_or_else(|error| fail(error))
+            })
+            .collect();
+        let evidence: Vec<_> = normal_captures
+            .iter()
+            .zip(&normal_environments)
+            .map(
+                |(capture, environment)| train::inverse::refine::RenderedNormalEvidence {
+                    capture,
+                    indices: &training_indices,
+                    environment,
+                },
+            )
+            .collect();
+        let stats = train::inverse::refine::refine_rendered_normals(
+            &mut fitted.scene,
+            &evidence,
+            &observations,
+            0,
+            8,
+            5.0,
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "render-refined {} normals in {} rounds ({} accepted), loss {:.7} -> {:.7}, in {:.3} s",
+            stats.normals,
+            stats.rounds,
+            stats.accepted,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
+        );
+        describe_surface_error(
+            "normal-render-refined surface",
+            &fitted.scene.model.surfels,
+            &dataset,
+            &training_indices,
+            &maps,
+            depth_options,
+        )
+        .unwrap_or_else(|error| fail(error));
+    }
     if args.render_refine_materials {
         let stats = train::inverse::refine::refine_rendered_materials(
             &mut fitted.scene,

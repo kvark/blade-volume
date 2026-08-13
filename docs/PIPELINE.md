@@ -2243,6 +2243,30 @@ Broken into sub-steps:
   current path recorder, so production training no longer relies on that
   obsolete whole-image workaround.
 
+- **M3c-5 — Complete-render Gaussian normal refinement (implemented and
+  four-cloud gated).** For calibrated captures under at least two measured
+  lights, the relightable surface can now refine every observed Gaussian normal
+  against the complete production PBR renders rather than treating overlapping
+  center samples independently. Each of eight rounds renders one deterministic
+  antithetic normal pair, uses the per-pixel error difference inside each
+  projected footprint to choose local directions, and accepts only a lower
+  full multi-light objective. Every proposal refreshes all affected TLASes:
+  surface normals rotate the finite Gaussian proxy, so a buffer-only update is
+  incorrect even when centers and radii are fixed. An analytical GPU test
+  verifies recovery toward a known normal and exact agreement with a freshly
+  rebuilt tracer.
+- On four independently trained synthetic clouds, with six training poses,
+  four known lights, two held-out poses, and `studio` entirely excluded from
+  fitting, held-light mean/worst PSNR improves 19.08/18.84→19.43/19.20,
+  20.19/19.78→20.44/20.02, 19.80/19.21→20.05/19.42, and
+  19.61/19.36→19.91/19.59 dB. The pass takes 0.72--0.75 seconds and changes no
+  shader, graph operation, shader entry/group, binding, pipeline, or model
+  format. Coverage falls 0.1--0.4 points and nearest-truth normal RMSE rises
+  0.17--0.35 degrees, so this is explicitly a rendered shading-normal polish,
+  not evidence that image-only geometry is solved. `synthetic_foam` and the
+  production `reconstruct` CLI expose it as opt-in; the latter requires a
+  paired secondary known-light capture.
+
 #### M3d — Online viewer attach
 
 - During training, periodically convert `TrainerState → PointCloudModel` and hand it

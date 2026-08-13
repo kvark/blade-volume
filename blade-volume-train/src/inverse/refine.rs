@@ -109,6 +109,25 @@ pub struct RenderedMaterialStats {
     pub seconds: f64,
 }
 
+/// One known-light capture used to refine Gaussian surface normals against
+/// complete production renders.
+#[derive(Clone, Copy)]
+pub struct RenderedNormalEvidence<'a> {
+    pub capture: &'a capture::Capture,
+    pub indices: &'a [usize],
+    pub environment: &'a vol::relight::Environment,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderedNormalStats {
+    pub normals: usize,
+    pub rounds: usize,
+    pub accepted: usize,
+    pub initial_loss: f64,
+    pub final_loss: f64,
+    pub seconds: f64,
+}
+
 fn rendered_loss(
     renderer: &mut score::Renderer,
     tracer: &mut vol::gpu::RelightTracer,
@@ -129,6 +148,195 @@ fn rendered_errors(
 ) -> Vec<f32> {
     tracer.reset_sampling();
     renderer.prepared_srgb_errors(tracer, capture, indices, cameras)
+}
+
+fn rendered_normal_errors(
+    renderer: &mut score::Renderer,
+    tracers: &mut [vol::gpu::RelightTracer],
+    evidence: &[RenderedNormalEvidence<'_>],
+    cameras: &[Vec<vol::CameraParams>],
+) -> Vec<f32> {
+    let capacity = evidence
+        .iter()
+        .map(|entry| entry.indices.len() * entry.capture.width * entry.capture.height)
+        .sum();
+    let mut errors = Vec::with_capacity(capacity);
+    for ((tracer, entry), cameras) in tracers.iter_mut().zip(evidence).zip(cameras) {
+        tracer.reset_sampling();
+        errors.extend(renderer.prepared_srgb_errors(tracer, entry.capture, entry.indices, cameras));
+    }
+    errors
+}
+
+fn update_rendered_normal_scenes(
+    renderer: &mut score::Renderer,
+    tracers: &mut [vol::gpu::RelightTracer],
+    surfels: &[vol::relight::Surfel],
+) {
+    for tracer in tracers {
+        renderer.update_prepared_surfel_geometry(tracer, surfels);
+    }
+}
+
+fn perturbation_hash(index: usize, round: usize) -> u64 {
+    let mut value = index as u64 ^ (round as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn normal_perturbation(normal: glam::Vec3, index: usize, round: usize, angle: f32) -> glam::Vec3 {
+    let tangent = tangent_to(normal);
+    let bitangent = normal.cross(tangent);
+    let phase = perturbation_hash(index, round) as f64 / u64::MAX as f64;
+    let phase = (phase * std::f64::consts::TAU) as f32;
+    let axis = phase.cos() * tangent + phase.sin() * bitangent;
+    (angle.cos() * normal + angle.sin() * axis).normalize()
+}
+
+/// Refine observed Gaussian normals against complete renders from known-light
+/// captures. Each round renders one antithetic perturbation pair, chooses a
+/// direction per projected particle from its local error difference, and only
+/// keeps a proposal that lowers the full multi-light objective. Centers,
+/// radii, materials, assignments, and illumination stay fixed.
+pub fn refine_rendered_normals(
+    scene: &mut score::Scene,
+    evidence: &[RenderedNormalEvidence<'_>],
+    observations: &decompose::Observations,
+    diffuse_samples: u32,
+    rounds: usize,
+    step_degrees: f32,
+) -> Result<RenderedNormalStats, String> {
+    if observations.surfels() != scene.model.surfels.len() {
+        return Err("rendered normal observation count does not match the model".to_string());
+    }
+    if !step_degrees.is_finite() || step_degrees <= 0.0 || step_degrees >= 45.0 {
+        return Err(
+            "rendered normal step must be finite and between zero and 45 degrees".to_string(),
+        );
+    }
+    if evidence.is_empty() || rounds == 0 || scene.model.surfels.is_empty() {
+        return Ok(RenderedNormalStats::default());
+    }
+    let width = evidence[0].capture.width;
+    let height = evidence[0].capture.height;
+    for entry in evidence {
+        if entry.capture.width != width || entry.capture.height != height {
+            return Err("rendered normal captures must have one resolution".to_string());
+        }
+        for &index in entry.indices {
+            if index >= entry.capture.views.len() {
+                return Err(format!("rendered normal view {index} is out of bounds"));
+            }
+        }
+    }
+
+    let cameras: Vec<Vec<vol::CameraParams>> = evidence
+        .iter()
+        .map(|entry| {
+            entry
+                .indices
+                .iter()
+                .map(|&index| entry.capture.views[index].camera)
+                .collect()
+        })
+        .collect();
+    let flat_cameras: Vec<vol::CameraParams> = cameras.iter().flatten().copied().collect();
+    let candidates: Vec<usize> = (0..scene.model.surfels.len())
+        .filter(|&index| !observations.of(index).is_empty())
+        .collect();
+    if candidates.is_empty() {
+        return Ok(RenderedNormalStats::default());
+    }
+
+    let mut renderer = score::Renderer::new(width, height)?;
+    let mut tracers: Vec<_> = evidence
+        .iter()
+        .map(|entry| {
+            renderer.prepare_scene(
+                &score::Scene {
+                    model: scene.model.clone(),
+                    environment: entry.environment.clone(),
+                },
+                diffuse_samples,
+                false,
+            )
+        })
+        .collect();
+    let started = std::time::Instant::now();
+    let initial_errors = rendered_normal_errors(&mut renderer, &mut tracers, evidence, &cameras);
+    let mut loss = mean_error(&initial_errors);
+    let initial_loss = loss;
+    let mut accepted = 0usize;
+    for round in 0..rounds {
+        let current = scene.model.surfels.clone();
+        let step = step_degrees.to_radians() * if round < rounds.div_ceil(2) { 1.0 } else { 0.5 };
+        let mut plus = current.clone();
+        let mut minus = current.clone();
+        for &index in &candidates {
+            let normal = glam::Vec3::from(current[index].normal).normalize_or_zero();
+            plus[index].normal = normal_perturbation(normal, index, round, step).to_array();
+            minus[index].normal = normal_perturbation(normal, index, round, -step).to_array();
+        }
+
+        update_rendered_normal_scenes(&mut renderer, &mut tracers, &plus);
+        let plus_errors = rendered_normal_errors(&mut renderer, &mut tracers, evidence, &cameras);
+        let plus_loss = mean_error(&plus_errors);
+        update_rendered_normal_scenes(&mut renderer, &mut tracers, &minus);
+        let minus_errors = rendered_normal_errors(&mut renderer, &mut tracers, evidence, &cameras);
+        let minus_loss = mean_error(&minus_errors);
+        let difference = ErrorDifference::new(&plus_errors, &minus_errors, width, height);
+
+        let mut localized = current.clone();
+        for &index in &candidates {
+            match projected_error_difference(
+                &difference,
+                evidence[0].capture,
+                &flat_cameras,
+                &current[index],
+            ) {
+                Some(value) if value < 0.0 => localized[index] = plus[index],
+                Some(value) if value > 0.0 => localized[index] = minus[index],
+                _ => {}
+            }
+        }
+        update_rendered_normal_scenes(&mut renderer, &mut tracers, &localized);
+        let localized_errors =
+            rendered_normal_errors(&mut renderer, &mut tracers, evidence, &cameras);
+        let localized_loss = mean_error(&localized_errors);
+
+        let (next, next_loss) =
+            if localized_loss < loss && localized_loss <= plus_loss && localized_loss <= minus_loss
+            {
+                (localized, localized_loss)
+            } else if plus_loss < loss && plus_loss <= minus_loss {
+                (plus, plus_loss)
+            } else if minus_loss < loss {
+                (minus, minus_loss)
+            } else {
+                (current, loss)
+            };
+        if next_loss < loss {
+            accepted += 1;
+            loss = next_loss;
+        }
+        scene.model.surfels = next;
+        update_rendered_normal_scenes(&mut renderer, &mut tracers, &scene.model.surfels);
+    }
+    for tracer in tracers {
+        renderer.destroy_prepared_scene(tracer);
+    }
+    renderer.destroy();
+    Ok(RenderedNormalStats {
+        normals: candidates.len(),
+        rounds,
+        accepted,
+        initial_loss,
+        final_loss: loss,
+        seconds: started.elapsed().as_secs_f64(),
+    })
 }
 
 /// Refine the small shared diffuse-material table against complete production
@@ -212,12 +420,7 @@ pub fn refine_rendered_materials(
 }
 
 fn perturbation_sign(index: usize, round: usize) -> f32 {
-    let mut value = index as u64 ^ (round as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-    value ^= value >> 30;
-    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value ^= value >> 27;
-    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^= value >> 31;
+    let value = perturbation_hash(index, round);
     if value & 1 == 0 {
         -1.0
     } else {
@@ -1640,5 +1843,97 @@ mod tests {
         final_renderer.destroy_prepared_scene(final_tracer);
         final_renderer.destroy();
         assert!((first_stats.final_loss - final_loss).abs() < 1.0e-8);
+    }
+
+    #[test]
+    fn complete_render_refinement_moves_a_normal_towards_known_truth() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        const SIZE: usize = 32;
+        let cameras = [
+            camera(glam::Vec3::new(0.0, 0.0, -1.2)),
+            camera(glam::Vec3::new(0.25, 0.0, -1.2)),
+        ];
+        let environment = vol::relight::Environment::sky(
+            glam::Vec3::new(-0.5, 0.3, -1.0),
+            [100.0, 80.0, 60.0],
+            0.2,
+            32,
+            16,
+        );
+        let truth_normal = -glam::Vec3::Z;
+        let truth = score::Scene {
+            model: vol::relight::RelightModel {
+                kernel: vol::relight::ParticleKernel::Gaussian,
+                surfels: vec![vol::relight::Surfel {
+                    center: [0.0; 3],
+                    radius: 0.3,
+                    normal: truth_normal.to_array(),
+                    material: 0,
+                }],
+                materials: vec![vol::relight::Material {
+                    albedo: [0.7, 0.3, 0.2],
+                    roughness: 1.0,
+                    specular_f0: [0.04; 3],
+                    _padding: 0.0,
+                }],
+            },
+            environment: environment.clone(),
+        };
+        let Ok(mut truth_renderer) = score::Renderer::new(SIZE, SIZE) else {
+            eprintln!("skipping rendered normal refinement test: no ray-tracing GPU");
+            return;
+        };
+        let rendered = truth_renderer.render_views(&truth, &cameras, 0, false);
+        truth_renderer.destroy();
+        let capture = capture::Capture {
+            width: SIZE,
+            height: SIZE,
+            views: cameras
+                .iter()
+                .enumerate()
+                .map(|(index, &camera)| capture::View {
+                    name: format!("normal-truth-{index}"),
+                    camera,
+                    pixels: rendered[index]
+                        .iter()
+                        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+                        .collect(),
+                })
+                .collect(),
+        };
+        let mut candidate = truth.clone();
+        let tilted = glam::Quat::from_rotation_y(15.0_f32.to_radians()) * truth_normal;
+        candidate.model.surfels[0].normal = tilted.to_array();
+        let observations = decompose::observe(&candidate.model, &capture, &[0, 1], -1.0);
+        let evidence = [RenderedNormalEvidence {
+            capture: &capture,
+            indices: &[0, 1],
+            environment: &environment,
+        }];
+        let stats =
+            refine_rendered_normals(&mut candidate, &evidence, &observations, 0, 24, 5.0).unwrap();
+        let refined = glam::Vec3::from(candidate.model.surfels[0].normal);
+        assert!(stats.accepted > 0, "stats={stats:?}");
+        assert!(stats.final_loss < stats.initial_loss, "stats={stats:?}");
+        assert!(
+            refined.angle_between(truth_normal) < tilted.angle_between(truth_normal),
+            "tilted={tilted:?}, refined={refined:?}, stats={stats:?}"
+        );
+        let mut final_renderer = score::Renderer::new(SIZE, SIZE).unwrap();
+        let mut final_tracer = final_renderer.prepare_scene(&candidate, 0, false);
+        let final_loss = rendered_loss(
+            &mut final_renderer,
+            &mut final_tracer,
+            &capture,
+            &[0, 1],
+            &cameras,
+        );
+        final_renderer.destroy_prepared_scene(final_tracer);
+        final_renderer.destroy();
+        assert!(
+            (stats.final_loss - final_loss).abs() < 1.0e-7,
+            "stats loss {}, rebuilt loss {final_loss}",
+            stats.final_loss,
+        );
     }
 }

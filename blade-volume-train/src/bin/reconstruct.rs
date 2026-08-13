@@ -160,6 +160,10 @@ struct Args {
     #[argh(switch)]
     render_refine_materials: bool,
 
+    /// refine Gaussian normals against complete renders from the measured lights
+    #[argh(switch)]
+    render_refine_normals: bool,
+
     /// write the reconstructed scene here
     #[argh(option)]
     output: Option<String>,
@@ -220,6 +224,11 @@ fn main() {
         }
     };
     let (train_views, test_views) = capture.split(args.test_every);
+    let normal_captures =
+        load_normal_captures(&capture, sparse, height, &args).unwrap_or_else(|message| {
+            eprintln!("cannot load normal captures: {message}");
+            std::process::exit(1);
+        });
     println!(
         "capture: {} views at {}x{} ({} train, {} test), {} sparse points, loaded in {:.1} s",
         capture.views.len(),
@@ -269,15 +278,9 @@ fn main() {
             &mut geometry,
             &capture,
             &train_views,
-            sparse,
-            height,
             known_light.as_ref().expect("known light validated above"),
-            &args,
-        )
-        .unwrap_or_else(|message| {
-            eprintln!("cannot refine normals: {message}");
-            std::process::exit(1);
-        });
+            &normal_captures,
+        );
         println!(
             "geometry: photometrically refined {} of {} supported normals from {} known lights in {:.1} s",
             stats.changed,
@@ -377,6 +380,42 @@ fn main() {
         started.elapsed().as_secs_f64()
     );
     describe_light(&fitted.scene.environment);
+
+    if args.render_refine_normals {
+        let mut evidence = vec![train::inverse::refine::RenderedNormalEvidence {
+            capture: &capture,
+            indices: &train_views,
+            environment: known_light.as_ref().expect("known light validated above"),
+        }];
+        evidence.extend(normal_captures.iter().map(|entry| {
+            train::inverse::refine::RenderedNormalEvidence {
+                capture: &entry.capture,
+                indices: &train_views,
+                environment: &entry.environment,
+            }
+        }));
+        let stats = train::inverse::refine::refine_rendered_normals(
+            &mut fitted.scene,
+            &evidence,
+            &observations,
+            args.diffuse_samples,
+            8,
+            5.0,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("cannot refine rendered normals: {error}");
+            std::process::exit(1);
+        });
+        println!(
+            "rendered normals: changed {} candidates in {} rounds ({} accepted), loss {:.7} -> {:.7}, in {:.1} s",
+            stats.normals,
+            stats.rounds,
+            stats.accepted,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
+        );
+    }
 
     if args.render_refine_materials {
         let stats = train::inverse::refine::refine_rendered_materials(
@@ -672,18 +711,65 @@ fn validate_normal_captures(args: &Args) -> Result<(), String> {
                 .to_string(),
         );
     }
+    if args.render_refine_normals && args.normal_images.is_empty() {
+        return Err(
+            "rendered normal refinement needs at least one paired secondary known-light capture"
+                .to_string(),
+        );
+    }
     Ok(())
+}
+
+struct NormalCapture {
+    capture: train::inverse::capture::Capture,
+    environment: vol::relight::Environment,
+}
+
+fn load_normal_captures(
+    primary: &train::inverse::capture::Capture,
+    sparse: &path::Path,
+    height: usize,
+    args: &Args,
+) -> Result<Vec<NormalCapture>, String> {
+    args.normal_images
+        .iter()
+        .zip(&args.normal_environment)
+        .map(|(images, environment)| {
+            let (capture, _) = train::inverse::capture::Capture::from_colmap(
+                sparse,
+                path::Path::new(images),
+                args.width,
+                height,
+                args.stride,
+            )?;
+            if capture.views.len() != primary.views.len()
+                || capture
+                    .views
+                    .iter()
+                    .zip(&primary.views)
+                    .any(|(left, right)| left.name != right.name)
+            {
+                return Err(format!(
+                    "{images} does not contain the same selected photographs as the primary capture"
+                ));
+            }
+            let environment = vol::io::try_load_environment(path::Path::new(environment))
+                .map_err(|error| format!("cannot read {environment}: {error}"))?;
+            Ok(NormalCapture {
+                capture,
+                environment,
+            })
+        })
+        .collect()
 }
 
 fn refine_normals_from_captures(
     model: &mut vol::relight::RelightModel,
     primary: &train::inverse::capture::Capture,
     train_views: &[usize],
-    sparse: &path::Path,
-    height: usize,
     primary_light: &vol::relight::Environment,
-    args: &Args,
-) -> Result<train::inverse::decompose::NormalRefinement, String> {
+    secondary: &[NormalCapture],
+) -> train::inverse::decompose::NormalRefinement {
     let mut observations = vec![train::inverse::decompose::observe(
         model,
         primary,
@@ -695,37 +781,17 @@ fn refine_normals_from_captures(
         primary_light.width,
         primary_light.height,
     )];
-    for (images, environment) in args.normal_images.iter().zip(&args.normal_environment) {
-        let (capture, _) = train::inverse::capture::Capture::from_colmap(
-            sparse,
-            path::Path::new(images),
-            args.width,
-            height,
-            args.stride,
-        )?;
-        if capture.views.len() != primary.views.len()
-            || capture
-                .views
-                .iter()
-                .zip(&primary.views)
-                .any(|(left, right)| left.name != right.name)
-        {
-            return Err(format!(
-                "{images} does not contain the same selected photographs as the primary capture"
-            ));
-        }
+    for entry in secondary {
         observations.push(train::inverse::decompose::observe(
             model,
-            &capture,
+            &entry.capture,
             train_views,
             -1.0,
         ));
-        let light = vol::io::try_load_environment(path::Path::new(environment))
-            .map_err(|error| format!("cannot read {environment}: {error}"))?;
         irradiance.push(train::relight::Irradiance::project(
-            &light.texels,
-            light.width,
-            light.height,
+            &entry.environment.texels,
+            entry.environment.width,
+            entry.environment.height,
         ));
     }
     let lights: Vec<_> = irradiance
@@ -738,9 +804,7 @@ fn refine_normals_from_captures(
             },
         )
         .collect();
-    Ok(train::inverse::decompose::refine_normals_known_lights(
-        model, &lights, 512,
-    ))
+    train::inverse::decompose::refine_normals_known_lights(model, &lights, 512)
 }
 
 /// Say what the recovered light looks like, in terms that can be checked.
@@ -854,6 +918,10 @@ mod tests {
         ]);
         assert!(validate_normal_captures(&mismatched).is_err());
 
+        let rendered_without_secondary =
+            parse(&["--environment", "east.f32", "--render-refine-normals"]);
+        assert!(validate_normal_captures(&rendered_without_secondary).is_err());
+
         let paired = parse(&[
             "--environment",
             "east.f32",
@@ -865,6 +933,7 @@ mod tests {
             "images-sky",
             "--normal-environment",
             "sky.f32",
+            "--render-refine-normals",
         ]);
         validate_normal_captures(&paired).unwrap();
         assert_eq!(paired.normal_images.len(), 2);
