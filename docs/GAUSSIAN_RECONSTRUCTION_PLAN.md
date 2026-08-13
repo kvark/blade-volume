@@ -1587,3 +1587,13 @@ model, moving a proxy toward the nearest truth surface can make the final
 renderer less correct. The next joint objective must optimize surface and
 support together; correspondence depth alone is not a sufficient target for
 the current proxy.
+
+Halving the localized rendered-center step for the last four of eight rounds
+does not provide a safer trust region. Against fresh same-binary controls, the
+five held-light mean/worst deltas are -0.03/-0.03, -0.03/-0.02,
+-0.04/-0.05, -0.04/-0.04, and -0.03/-0.03 dB. All eight proposals are still
+accepted by every training objective, while position and normal truth errors
+are mixed at the fourth decimal and hundredth of a degree. The prototype and
+its unit test are removed. The retained constant 2.5%-radius step is not merely
+overshooting late in the selected schedule; its full-size later moves contain
+novel-view signal that a generic coarse-to-fine rule discards.
