@@ -1131,3 +1131,30 @@ first later position update. On the 735,103-cell Room checkpoint this removes
 takes 13.77 seconds. Weighted-to-unweighted and other explicit topology
 overrides continue to rebuild. This is a representation-preserving lifecycle
 fix, not a new topology mode or shader path.
+
+A surface-only visual hull does not close the synthetic geometry gap. The
+missing control sampled Gaussian particles only on the boundary of the strict
+six-training-mask intersection, excluding faces caused by the finite search
+box and never constructing polygons. At a 64-cell resolution it produces
+3,174 particles, but only 273 have support from two source-depth views. The
+rest are silhouette-cone curtains at depths the masks cannot constrain.
+Against a matched known-light, no-refinement control, position RMSE changes
+0.6287→1.8447, normal RMSE 66.88°→102.37°, coverage 53.7%→44.3%, and unseen-
+light mean/worst PSNR 18.51/18.29→16.31/15.90 dB. The prototype and CLI switch
+are removed. Together with the rejected filled-hull initializer and
+post-extraction silhouette filter, this closes silhouette-only geometry as the
+next path: the independent cue must select depth, most directly through dense
+multi-view correspondence, while masks remain occupancy supervision.
+
+The existing joint production-render objective also cannot safely manufacture
+that correspondence by adding free axes. Cycling its unchanged antithetic
+probe over each particle's normal, tangent and bitangent improves all five
+synthetic unseen-light means by 0.09--0.13 dB and tails by 0.06--0.16 dB. It
+also lowers every training objective, yet Bonsai held-out mean/worst fall by
+0.02/0.15 dB and coverage by 0.1 point; Room gains 0.01/0.03 dB. Retaining the
+selected eight normal rounds and appending just one tangent and bitangent round
+still loses 0.05 dB on the Bonsai tail and 0.1 coverage point for a 0.01 dB
+Room-tail gain. The implementation and diagnostic switch are removed. Normal-
+only motion remains selected: a photometric loss can exploit tangent freedom,
+but without correspondence it does not know which neighbouring surface point
+the moved particle is meant to represent.

@@ -3863,3 +3863,86 @@ memory_events = 0
 driver_faults = 0
 artifacts = "target/audit-runs/{symmetric-depth-normal-{control,candidate},hybrid-depth-normal-candidate}-v1 (gitignored)"
 verdict = "reject and remove: strict symmetric derivatives buy small truth geometry gains by deleting support; preserving support makes truth normals mixed and catastrophically regresses two held-light gates"
+
+# Previous silhouette experiments either filled the complete visual hull or
+# filtered an already extracted density surface. Sampling only the six-mask
+# hull boundary closes that missing control while remaining a pure Gaussian
+# point cloud. Cells touching the finite search box are explicitly excluded:
+# the box is not image evidence. The remaining hull still consists mainly of
+# silhouette-cone curtains at unconstrained depths. It has very little support
+# from the trained field and fails geometry, coverage, and held-light gates.
+# The module and temporary CLI switch are removed.
+[synthetic_reconstruction.rgb_mask_foam.rejected_visual_hull_boundary]
+date = "2026-08-13"
+input_artifact = "target/audit-runs/weighted-reference-rebase-v3/model.ply"
+input_artifact_sha256 = "cbdf65d844d7749806fa8227a49990d978bb9ee2bc6226013404cfcc3955fbe8"
+training_masks = 6
+held_out_masks_used = 0
+grid_resolution = 64
+voxel = 0.3168
+occupied_cells = 10758
+boundary_particles = 3174
+control_particles = 2191
+control_position_rmse = 0.6287
+boundary_position_rmse = 1.8447
+control_normal_rmse_degrees = 66.88
+boundary_normal_rmse_degrees = 102.37
+control_particles_with_at_least_two_depth_views = 2012
+boundary_particles_with_at_least_two_depth_views = 273
+control_coverage = 0.537
+boundary_coverage = 0.443
+control_held_light_psnr = 18.51
+control_held_light_worst = 18.29
+boundary_held_light_psnr = 16.31
+boundary_held_light_worst = 15.90
+peak_memory_bytes = 149266432
+memory_swap_bytes = 0
+memory_events = 0
+driver_faults = 0
+artifacts = "target/audit-runs/silhouette-boundary-gate-v1 (gitignored)"
+verdict = "reject and remove: sampling only the visual-hull boundary avoids an opaque filled volume, but silhouettes create cone curtains rather than selecting the shared surface depth; dense correspondence is the missing independent cue"
+
+# The selected simultaneous rendered refinement perturbs particles along their
+# current normal. Giving it all three local axes needs no renderer change: the
+# same surfel/TLAS update, complete renders, localized error integral and
+# acceptance objective are reused. A nine-round round-robin schedule lowers the
+# training loss and improves all five synthetic unseen-light means and tails,
+# but replaces six normal rounds and fails Bonsai. A staged schedule retains
+# eight normal rounds, then adds one tangent and one bitangent round; that still
+# loses the strict Bonsai tail and coverage for only a neutral Room gain. Both
+# forms and the diagnostic environment switch are removed.
+[rendered_surface_refinement.simultaneous.rejected_local_xyz]
+date = "2026-08-13"
+round_robin_rounds = 9
+round_robin_axes = ["normal", "tangent", "bitangent"]
+synthetic_clouds = ["fixed", "v2", "v3", "v4", "v5"]
+normal_only_position_rmse = [0.6205, 0.5974, 0.5946, 0.5840, 0.5856]
+local_xyz_position_rmse = [0.6202, 0.5969, 0.5950, 0.5835, 0.5849]
+normal_only_held_light_psnr = [18.32, 18.95, 19.12, 18.77, 18.72]
+local_xyz_held_light_psnr = [18.44, 19.08, 19.25, 18.90, 18.81]
+normal_only_held_light_worst = [18.28, 18.83, 18.65, 18.74, 18.54]
+local_xyz_held_light_worst = [18.44, 18.94, 18.71, 18.84, 18.61]
+normal_only_coverage = [53.6, 55.9, 55.4, 55.6, 55.5]
+local_xyz_coverage = [53.5, 55.7, 55.3, 55.4, 55.4]
+bonsai_normal_only_test_psnr = [14.30, 11.93]
+bonsai_local_xyz_test_psnr = [14.28, 11.78]
+bonsai_normal_only_coverage = 91.9
+bonsai_local_xyz_coverage = 91.8
+room_normal_only_test_psnr = [14.25, 13.48]
+room_local_xyz_test_psnr = [14.26, 13.51]
+room_normal_only_coverage = 93.7
+room_local_xyz_coverage = 93.7
+staged_rounds = 10
+staged_axes = "eight normal, one tangent, one bitangent"
+staged_bonsai_normal_only_test_psnr = [14.31, 11.94]
+staged_bonsai_candidate_test_psnr = [14.31, 11.89]
+staged_bonsai_normal_only_coverage = 91.9
+staged_bonsai_candidate_coverage = 91.8
+staged_room_normal_only_test_psnr = [14.26, 13.49]
+staged_room_candidate_test_psnr = [14.26, 13.50]
+maximum_peak_memory_bytes = 777400320
+memory_swap_bytes = 0
+memory_events = 0
+driver_faults = 0
+artifacts = "target/audit-runs/rendered-surface-xyz-v1 (gitignored)"
+verdict = "reject and remove: unconstrained tangent motion fits every synthetic training objective but loses novel-view Bonsai support and its worst view; keep normal-only refinement until correspondence supplies a tangent-space target"
