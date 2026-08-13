@@ -1493,6 +1493,18 @@ to 1.58--1.74 ms. A 120-update gate produces byte-identical PLY and raw-scene
 outputs. Three rows loses the tail gain and four returns to the control late
 in the run, so two is retained in Meganeura `1b16215` and Blade `b92a1b9`.
 
+The final simplified-main integration deliberately keeps less of that stack.
+Merged Meganeura main unifies generated shaders and entry resolution, while a
+four-commit integration branch adds only Blade/Naga dependency alignment, the
+required grouped Adam diagnostic, and the already selected narrow row-scaled
+scatter mapping. Clean simplified main regressed the fixed 1,800-update
+continuation to 17.566 seconds; restoring that existing-shader work mapping
+reduces it to 15.772 seconds (10.2%) without a graph operation or
+`ShaderEntry`. The smaller two-row reduction optimization is omitted rather
+than restoring its schedule branch. Meganeura's full all-target suite and
+Blade's workspace/all-target suite pass at 10.94 GB and 3.84 GB cgroup peaks,
+respectively, with zero swap, pressure, OOM, Xid, reset, or GPU fault.
+
 Estimating a normal from the fused positions inside each voxel does not repair
 the geometric initializer. Replacing its depth normal with the least-variance
 axis of a weighted intra-voxel covariance raises the fixed held-light mean from
