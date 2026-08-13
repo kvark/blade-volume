@@ -1777,3 +1777,15 @@ about 4.1 to 5.3 seconds after the tile optimization. Staged fitting therefore
 defaults to 1,500 updates, spending one third on appearance and the rest on
 support. This changes only schedule policy; the graph and parameter set stay
 unchanged.
+
+Uniformly increasing extracted surface density is not selected. On the larger
+real gate, reducing `--voxel-factor` from 5 to 3 grows the cloud from 3,060 to
+5,783 particles and improves direct held quality from 18.26/18.22 to
+18.83/18.80 dB for 12.8 seconds of fitting. Going to factor 2 and 9,406
+particles crosses over at 18.78/18.68 dB and 16.1 seconds. The apparent real
+win does not generalize: factor 3 changes the five synthetic means by -0.27,
+-0.13, +0.22, -0.22, and +0.02 dB, with three worst views also regressing.
+Held-light PBR quality falls on four clouds and coverage drops from roughly
+53--56% to 46--49%. The existing factor-5 default remains; useful new capacity
+needs residual-guided placement or a representation improvement rather than a
+uniformly finer voxel grid.
