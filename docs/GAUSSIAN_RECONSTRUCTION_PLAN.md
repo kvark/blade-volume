@@ -1891,3 +1891,9 @@ the relightable proxy from 11.28/10.25 to 11.31/10.26 dB while coverage rises
 operation, rendering path, or point representation; it reuses the existing
 surfel estimator and stores only the COLMAP track image IDs that the loader
 previously skipped.
+
+Reducing indexed candidate recording from eight scoped workers to four is
+rejected. On the selected Room gate it preserves the exact loss and held-view
+quality but raises direct-fit time from 6.2 to 7.3 seconds. The ray work still
+dominates scoped thread creation at this batch and cloud size; eight workers
+remain simpler than introducing a persistent pool.
