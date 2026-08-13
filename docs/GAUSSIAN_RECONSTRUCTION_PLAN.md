@@ -1507,3 +1507,14 @@ seconds to the six-material synthetic pass. A deliberately sparse replay with
 only 19% coverage loses 0.58 dB where hit despite a lower training objective;
 the pass therefore remains explicit through `--render-refine-materials` rather
 than becoming an unconditional material fit.
+
+Image-edge agreement does not make localized rendered-surface updates safer.
+A host-side prototype computes forward-difference RGB edge residuals from the
+same antithetic production renders and vetoes a particle move when its edge and
+colour directions disagree. On the five independent synthetic clouds it
+changes held-light mean PSNR by -0.03, -0.03, 0.00, -0.01, and -0.06 dB; every
+worst-view score is flat or lower. It also raises the eight-round refinement
+time from 0.224--0.232 to 0.415--0.439 seconds because retaining rendered
+frames and building a second summed-area field costs more than the selected
+colour-only path. The prototype is removed. Single-scale image gradients are
+not independent geometry evidence and should not be added to this localizer.
