@@ -1744,3 +1744,21 @@ complete warm run takes 4.76 seconds and peaks at 125 MiB with no swap,
 memory-pressure, OOM, kernel, or GPU fault. Artifacts remain ignored under
 `target/audit-runs/reconstruct-direct-gaussian-bonsai-default/`; this validates
 the production path, not a full-resolution Bonsai quality claim.
+
+A larger real-input gate raises the working width to 128, uses 18 training and
+two held cameras, and fuses the same source field into 3,060 particles. The
+source RadFoam scores 12.49 dB on the exact held split; the neutral Gaussian
+surface starts at 9.80 dB. The selected 1,000 updates reach 17.81 dB mean and
+17.57 dB worst, a 5.32 dB gain over the source field. This still is not a
+full-resolution Bonsai result, but it shows that the production gain survives
+more views and twenty times the smoke-gate particles.
+
+Profiling that gate attributes only 1.02 seconds to Meganeura steps and 0.05
+seconds to ray sampling. Candidate collection/upload costs 6.21 seconds with
+16x16 screen tiles, while model readback and index rebuild cost 1.35 seconds.
+Changing the private tile size to 8x8 lowers those terms to 5.06 and 1.53
+seconds and total fit time from 9.6 to 8.5 seconds, with unchanged held scores
+and loss within the run-to-run noise. At 4x4, rebuild rises to 2.33 seconds and
+total time regresses to 8.8 seconds. Eight-pixel tiles are therefore selected.
+This is a one-constant index policy change: no operation, graph, shader, entry,
+binding, or public option is added.

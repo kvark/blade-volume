@@ -14,7 +14,7 @@ use std::{sync, thread};
 const SH_C0: f32 = 0.282_094_8;
 const MIN_SCALE: f32 = 1.0e-4;
 const MAX_ALPHA: f32 = 0.999;
-const TILE_SIZE: usize = 16;
+const TILE_SIZE: usize = 8;
 const TILE_SUPPORT_MARGIN: f32 = 1.25;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
@@ -1682,14 +1682,13 @@ mod tests {
         assert_eq!(tiled.depths, exhaustive.depths);
         assert_eq!(tiled.pixel_indices, exhaustive.pixel_indices);
 
-        let candidate_entries: usize = index
+        let candidate_entries: usize = batch
             .views
             .iter()
-            .flatten()
-            .flat_map(|grid| &grid.tiles)
-            .map(Vec::len)
+            .zip(&batch.pixels)
+            .map(|(&view, &pixel)| index.candidates(view, pixel).unwrap().len())
             .sum();
-        let exhaustive_entries = 2 * 4 * 3 * model.points.len();
+        let exhaustive_entries = batch.origins.len() * model.points.len();
         assert!(candidate_entries < exhaustive_entries / 2);
     }
 
