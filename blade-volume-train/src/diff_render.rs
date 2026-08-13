@@ -751,6 +751,7 @@ pub fn build_volumetric_graph(
             use_surface_detail: false,
             use_surface_detail_density: false,
             use_surface_detail_directional: false,
+            train_surface_detail_directional_axes: false,
         },
         use_surface_offsets,
         use_surface_color,
@@ -768,6 +769,7 @@ struct VolumetricGraphOptions {
     use_surface_detail: bool,
     use_surface_detail_density: bool,
     use_surface_detail_directional: bool,
+    train_surface_detail_directional_axes: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -840,6 +842,10 @@ fn build_volumetric_graph_with_options(
     assert!(
         !options.use_surface_detail_directional || options.use_surface_detail,
         "surface-detail directional appearance requires surface detail",
+    );
+    assert!(
+        !options.train_surface_detail_directional_axes || options.use_surface_detail_directional,
+        "training surface-detail directional axes requires directional appearance",
     );
     assert!(
         !use_spherical_voronoi || use_surface_normals,
@@ -944,8 +950,13 @@ fn build_volumetric_graph_with_options(
         }),
         directional: options.use_surface_detail_directional.then(|| {
             let width = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS * 3;
+            let axes = g.parameter("surface_detail_directional_axes", &[n_cells, width]);
             SurfaceDetailDirectionalGraph {
-                axes: g.parameter("surface_detail_directional_axes", &[n_cells, width]),
+                axes: if options.train_surface_detail_directional_axes {
+                    axes
+                } else {
+                    g.stop_gradient(axes)
+                },
                 colors: g.parameter("surface_detail_directional_colors", &[n_cells, width]),
             }
         }),
@@ -5157,7 +5168,7 @@ fn save_adam_state(
     has_spherical_voronoi: bool,
     has_point_error: bool,
 ) -> AdamSnapshot {
-    let names = per_cell_param_names_with_stride(
+    let mut names = per_cell_param_names_with_stride(
         sh_degree,
         has_radii,
         has_surface_normals,
@@ -5169,6 +5180,7 @@ fn save_adam_state(
         has_spherical_voronoi,
         has_point_error,
     );
+    names.retain(|entry| session.has_param_grad(&entry.0));
     let name_refs = names
         .iter()
         .map(|entry| entry.0.as_str())
@@ -5233,7 +5245,7 @@ fn restore_adam_state_remap(
     has_point_error: bool,
 ) {
     let n_new = new_to_old.len();
-    let names = per_cell_param_names_with_stride(
+    let mut names = per_cell_param_names_with_stride(
         sh_degree,
         has_radii,
         has_surface_normals,
@@ -5245,6 +5257,7 @@ fn restore_adam_state_remap(
         has_spherical_voronoi,
         has_point_error,
     );
+    names.retain(|entry| session.has_param_grad(&entry.0));
     let n_old = snap
         .entries
         .first()
@@ -5387,6 +5400,7 @@ fn build_train_session(
                 .surface_detail
                 .as_ref()
                 .is_some_and(|detail| detail.directional.is_some()),
+            train_surface_detail_directional_axes: surface_detail_directional_axis_lr_ratio > 0.0,
         },
         model.surface_offsets.is_some(),
         model.surface_color_coefficients.is_some(),
@@ -5446,15 +5460,15 @@ fn build_train_session(
             .as_ref()
             .is_some_and(|detail| detail.directional.is_some())
         {
-            for name in [
-                "surface_detail_directional_axes",
-                "surface_detail_directional_colors",
-            ] {
-                assert!(
-                    session.has_param_grad(name),
-                    "surface-detail directional parameter {name} has no training gradient"
-                );
-            }
+            assert!(
+                session.has_param_grad("surface_detail_directional_colors"),
+                "surface-detail directional colors have no training gradient"
+            );
+            assert_eq!(
+                session.has_param_grad("surface_detail_directional_axes"),
+                surface_detail_directional_axis_lr_ratio > 0.0,
+                "surface-detail directional axis training state does not match its learning rate"
+            );
         }
     }
     upload_model_parameters(&mut session, model, softplus_beta);
@@ -7164,7 +7178,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_detail_training_updates_tables_with_frozen_topology() {
+    fn surface_detail_training_updates_tables_with_frozen_topology_and_directional_axes() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping surface-detail training test: no GPU");
@@ -7231,7 +7245,6 @@ mod tests {
                 surface_detail_height_lr_ratio: 0.25,
                 surface_detail_color_lr_ratio: 1.0,
                 surface_detail_density_lr_ratio: 1.0,
-                surface_detail_directional_axis_lr_ratio: 0.25,
                 surface_detail_directional_color_lr_ratio: 1.0,
                 geometry_rebuild_every: 1,
                 ..AppearanceFitConfig::default()
@@ -7262,7 +7275,7 @@ mod tests {
             .colors
             .iter()
             .any(|color| color.length() > 1.0e-7));
-        assert_ne!(
+        assert_eq!(
             directional.axes,
             detail_before.directional.as_ref().unwrap().axes,
         );
@@ -9098,6 +9111,7 @@ mod tests {
                 use_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
+                train_surface_detail_directional_axes: false,
             },
             true,
             false,
@@ -9136,6 +9150,7 @@ mod tests {
                 use_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
+                train_surface_detail_directional_axes: false,
             },
             true,
             true,
@@ -9226,6 +9241,7 @@ mod tests {
                 use_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
+                train_surface_detail_directional_axes: false,
             },
             true,
             true,
@@ -10680,6 +10696,7 @@ mod tests {
                 use_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
+                train_surface_detail_directional_axes: false,
             },
             true,
             false,
@@ -11480,6 +11497,15 @@ mod tests {
             density_logits: Some(vec![0.0; detail_count]),
             directional: Some(test_directional_detail(model.points.len())),
         });
+        let directional_axes_before = model
+            .surface_detail
+            .as_ref()
+            .unwrap()
+            .directional
+            .as_ref()
+            .unwrap()
+            .axes
+            .clone();
         model.compute_adjacency_default();
         let view = ViewSupervision {
             camera: vol::CameraParams {
@@ -11508,7 +11534,6 @@ mod tests {
                 surface_detail_height_lr_ratio: 0.1,
                 surface_detail_color_lr_ratio: 0.1,
                 surface_detail_density_lr_ratio: 0.1,
-                surface_detail_directional_axis_lr_ratio: 0.1,
                 surface_detail_directional_color_lr_ratio: 0.1,
                 geometry_rebuild_every: 1,
                 densify: Some(DensifyConfig {
@@ -11539,6 +11564,14 @@ mod tests {
         let directional_count = 5 * vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
         assert_eq!(directional.axes.len(), directional_count);
         assert_eq!(directional.colors.len(), directional_count);
+        assert_eq!(
+            &directional.axes[..directional_axes_before.len()],
+            directional_axes_before,
+        );
+        assert!(directional
+            .colors
+            .iter()
+            .any(|color| color.abs().max_element() > 1.0e-7));
         assert!(detail
             .colors
             .iter()

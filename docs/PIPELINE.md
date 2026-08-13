@@ -2021,6 +2021,34 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   or device fault. `train_colmap` also reuses the existing GPU view evaluator;
   scalar CPU evaluation became disproportionately slow for the nested table.
 
+#### M2bm — Omit fixed directional-axis backward (done)
+
+- A zero directional-axis learning-rate now places the existing axis parameter
+  behind Meganeura's zero-cost `stop_gradient` alias. The axes remain ordinary
+  serialized parameters and use the same forward graph, but no axis gradient
+  or Adam state is built. Positive axis rates retain the original learned-axis
+  path. Adam snapshots used across densification now enumerate only parameters
+  that actually have gradients, so fixed axes are reloaded from the model while
+  every trainable table still inherits its optimizer state.
+- Physical-GPU tests cover fixed-axis colour learning, fixed-axis
+  densification, learned-axis training, and checkpoint resume. A checkpoint
+  produced by the earlier learned-axis graph also resumes into the fixed-axis
+  graph; its extra axis moments are ignored and its PLY axis values are kept.
+  This adds no model field, Meganeura operation, shader, shader entry/group,
+  binding, pipeline, or public option.
+- On the matched 200K-site Room screen at a 2,048-ray batch, training falls
+  from 59.704 to 44.106 seconds (-26.1%) and GPU wait from 49.411 to 34.478
+  seconds (-30.2%). The selected 4,096-ray run completes in 65.774 seconds at
+  6.37 GB peak host memory with zero swap, OOM, throttling, or GPU fault and
+  scores 26.6822/24.4125 dB train/held out. That is within 0.0022 dB of the
+  earlier learned-axis result while retaining fixed axes.
+- The first matched Bonsai screen is quality-neutral: the no-directional
+  control scores 18.1176/17.4160 dB and fixed-axis directional colour scores
+  18.1287/17.4162 dB. Directional training still takes 53.900 versus 8.383
+  seconds (6.4x), identifying the 384-float colour-table backward as the
+  remaining dominant cost. Keep full directional training opt-in and do not
+  run a long gate until that cost falls without adding backend/shader variants.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -2222,7 +2250,8 @@ manifest accidentally.
 ## Out-of-scope (for now)
 
 - A longer two-scene training gate for the full PowerFoam directional table;
-  defer it until the rejected short gate's 6× step cost is reduced.
+  the short Room/Bonsai screen is complete, but the remaining colour-table
+  backward still costs 6.4× on Bonsai.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.

@@ -2041,8 +2041,13 @@ material path.
    complete table is now nested under spatial detail and shares its existing
    shader path: the full official and Blade renders agree at 59.37 dB. A
    zero-initialized short training screen is six times slower and slightly
-   worse held out, so reducing backward cost and passing a two-scene quality
-   gate remain. Do not add backend or shader-entry variants for this work.)
+   worse held out. Fixed axes now skip their gradient and Adam state through a
+   zero-cost stop-gradient alias: the matched Room run is 26.1% faster at a
+   2,048-ray batch, and a stable 4,096-ray run scores 24.4125 dB held out. A
+   matched Bonsai screen is neutral at 17.4160→17.4162 dB but remains 6.4×
+   slower than its no-directional control. The next bounded target is therefore
+   the colour-table backward itself, followed by a longer quality gate. Do not
+   add backend or shader-entry variants for this work.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
    sweep the ray-query batch window for invariant pixels, query count, and frame
    time. The conservative triangle BLAS remains an invisible point-candidate
