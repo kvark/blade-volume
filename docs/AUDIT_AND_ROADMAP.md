@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-08-05
+Last updated: 2026-08-12
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -50,9 +50,9 @@ behind these gates:
 
 1. Match reference RadFoam training within the Stage 2 quality tolerance on a
    complete, reproducible scene. Checkpoint renderer parity is done.
-2. Gate the full spatial texel appearance model against the two-scene oriented
-   baseline. Learned radii and learned normal/offset planes already pass fixed
-   held-out ablations.
+2. Reduce full directional-table backward cost before retrying a two-scene
+   training gate. Released-checkpoint pixel parity now passes; the first
+   zero-initialized Room screens are slower and quality-negative.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.
@@ -1106,16 +1106,19 @@ At the audited revision:
   the selected trainable-radius graph by 19.2% and adds 0.11 dB all-37, but
   increases training time by 6.1%. Its scale is coupled to scene units,
   geometry rates, and Adam epsilon, so it remains opt-in rather than a default.
-- No official pretrained checkpoint is published by the reference project, so
-  cross-rendering and a matched training ablation remain outstanding.
-- The reference quaternion and per-detail-site eight-axis colour model remain
-  outstanding. Eight spatial detail sites and their height/colour semantics
-  are implemented, but three smaller directional alternatives have now failed
-  their held-out gates: a 48-float cell-level Spherical Voronoi residual, a
-  72-float per-detail-site linear direction residual, and a 24-float
-  per-detail-site camera-incidence residual. The next quality experiment
-  should target spatial density/responsibility inside the already observed
-  support, with the same explicit storage and held-out-performance gate.
+- The locally trained official checkpoint is not a vendored asset. Its geometry
+  and full appearance cross-render are complete. Blade reaches 28.3078 dB
+  versus the official 28.3432 dB, and quantized renders agree at 59.37 dB over
+  all 37 views. The local interchange and generated PLY remain ignored.
+- The released per-detail-site eight-axis colour model is now implemented as
+  an optional 384-float table nested under the eight spatial sites. It shares
+  the existing surface-detail CPU/WGSL path and uses existing Meganeura
+  operations; no shader-entry or graph-op variants were added. Three smaller
+  directional alternatives remain rejected by their held-out gates. The full
+  table also fails its first 255-step Room screen by 0.0521 dB while taking
+  6.1× longer; fixed axes lose 0.0579 dB. Its 4,096-ray graph nearly fills the
+  5070 (11.64 GiB) and needs 6.19 GiB host memory. It remains an exact import/
+  render feature, not a selected training default.
 
 ### Adjacency and traversal
 
@@ -1708,19 +1711,23 @@ with no systematic streaking from stale topology.
 3. Compute differentiable weighted-face and sphere intersections.
 4. Optimize radii together with positions and validate their gradients.
 5. Compare traversal against a brute-force bounded-power oracle.
-6. Cross-render a reference PowerFoam checkpoint.
-7. After geometry passes, add quaternion, dipole, detail-site, and
-   per-detail-site directional appearance semantics.
+6. Cross-render a reference PowerFoam checkpoint. (Done to 59.37 dB render
+   agreement over all 37 held-out views.)
+7. Gate the implemented dipole, detail-site, and released per-detail-site
+   directional appearance semantics on held-out scenes.
 
-Items 1-5 are implemented at the CPU-oracle, production-WGSL, recorder, and
+Items 1-6 are implemented at the CPU-oracle, production-WGSL, recorder, and
 training-graph levels and pass physical-GPU integration. Weighted densification
 uses the reference copied-radius split policy, and the selected real-scene
 radius trajectory reaches its 200,000-site endpoint. The dipole-normal subset
 of item 7 is implemented across IO, traversal, training, densification, and
-resume and passes a positive fixed-versus-learned Bonsai gate. A compact
-additive directional residual is implemented but fails its first quality gate.
-Item 6 and the quaternion/detail-site/per-detail-directional remainder of item
-7 remain.
+resume and passes a positive fixed-versus-learned Bonsai gate. Spatial detail
+also passes its held-out gate. The complete released per-detail directional
+table passes the official-checkpoint pixel gate, but its zero-initialized short
+training screen loses held-out quality while taking six times longer. Compact
+directional alternatives also fail their held-out gates. The remaining item 7
+work is therefore training-cost and quality improvement, not another runtime
+appearance variant.
 
 Acceptance gate: CPU, GPU, and brute-force bounded traversal agree; a reference
 checkpoint renders within a defined image tolerance; trained radii improve a
@@ -2017,7 +2024,8 @@ material path.
    appearance audit at commit `9639225` counts 412 extra floats per point and
    identifies spatial-norm and directional-kernel differences between paper
    and source, so each staged increment must name its exact contract.)
-2. Finish the reference PowerFoam pixel cross-render. (The checkpoint and
+2. Improve the released PowerFoam directional table's training efficiency and
+   quality. (The checkpoint and
    geometry gate now exist: an official-implementation Bonsai checkpoint at
    step 10,000 has 162,373 full-appearance sites and scores 28.3432 dB over all
    37 quarter-resolution held-out views. Blade's exact Rust Čech builder agrees
@@ -2027,13 +2035,14 @@ material path.
    values. Serialized-vs-fresh official topology differs by 2,709 edge
    decisions because checkpoint parameters and adjacency straddle an optimizer
    step, but native metrics are unchanged to four decimals after rebuild. Full
-   pixel parity is now isolated specifically to the unsupported 384-float
-   per-detail directional colour table: replacing it with each detail site's
-   mean colour costs 11.8969 dB in the official rasterizer, while the matched
-   mean-colour official and Blade renders agree at 59.18 dB and differ by only
-   0.0032 dB against the targets. Implement the released directional kernel as
-   one optional table nested under spatial detail, sharing its existing shader
-   path; do not add backend/shader-entry variants for it.)
+   replacing the 384-float per-detail directional colour table with each
+   detail site's mean colour costs 11.8969 dB in the official rasterizer, while
+   the matched mean-colour official and Blade renders agree at 59.18 dB. The
+   complete table is now nested under spatial detail and shares its existing
+   shader path: the full official and Blade renders agree at 59.37 dB. A
+   zero-initialized short training screen is six times slower and slightly
+   worse held out, so reducing backward cost and passing a two-scene quality
+   gate remain. Do not add backend or shader-entry variants for this work.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
    sweep the ray-query batch window for invariant pixels, query count, and frame
    time. The conservative triangle BLAS remains an invisible point-candidate

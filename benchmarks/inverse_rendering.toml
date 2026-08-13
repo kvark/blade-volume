@@ -3588,3 +3588,15 @@ official_vs_blade_render_psnr = 59.179950
 views = 37
 projection_vendored = false
 verdict = "implement the full per-detail directional colour table: it explains the 11.90 dB gap, while matched mean-direction Blade and official renders agree at 59.18 dB"
+
+[powerfoam_reference.bonsai_checkpoint_10k.full_directional_projection]
+blade_psnr = 28.3078
+official_psnr = 28.3432
+official_vs_blade_render_psnr = 59.370804
+views = 37
+blade_host_peak_bytes = 434118656
+blade_peak_vram_mib = 3372
+truncated_rays = 0
+interchange_bytes = 249404948
+checkpoint_vendored = false
+verdict = "pass released-checkpoint pixel gate: pre-spatial texel clamping closes the final semantic gap and quantized renders agree at 59.37 dB"

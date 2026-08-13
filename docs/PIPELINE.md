@@ -134,7 +134,7 @@ checkpoint's serialized adjacency differs from its own fresh rebuild by 1,443
 old-only and 1,266 fresh-only undirected edges because the reference saves
 post-optimizer parameters with pre-optimizer adjacency.
 
-The checkpoint also isolates the remaining appearance gap. Repeating each
+The checkpoint isolated the final appearance gap. Repeating each
 detail site's mean RGB across its eight directional entries changes nothing
 except directional variation and drops the official rasterizer from 28.3432
 to 16.4463 dB (-11.8969 dB). Projecting that same ablation into Blade preserves
@@ -143,17 +143,21 @@ heights, and mean site colours. On identical quantized targets the official
 and Blade mean-direction renders score 16.5035 and 16.5067 dB; the renders agree
 with each other at 59.18 dB averaged over all 37 views. Thus geometry,
 orientation, spatial detail, camera mapping, and compute traversal are already
-cross-rendered. The unsupported per-detail directional colour function, not a
-traversal defect, explains essentially the complete quality gap.
+cross-rendered. The then-unsupported per-detail directional colour function,
+not a traversal defect, explained essentially the complete quality gap. That
+released function is now represented, trained, serialized, and evaluated by
+the shared CPU/WGSL path. A Rust interchange importer now attaches the released
+table to the mean-direction PLY. The full Blade render reaches 28.3078 dB and
+agrees with the official render at 59.37 dB over all 37 views, closing the
+checkpoint pixel gate to output-quantization precision.
 
 The reference repository and project page publish no checkpoint asset. The
 native checkpoint, renders, environment, and comparison binaries therefore
 remain ignored under `target/reference/powerfoam/`; they are not vendored into
-the library or benchmark corpus. A full pixel cross-render still requires the
-remaining per-detail-site directional appearance semantics. Any eventual
-converter must remain Rust-only: consume an upstream interchange export or add
-the smallest required checkpoint reader to a tool crate. Python does not
-become a project dependency.
+the library or benchmark corpus. The checked-in Rust importer consumes a small
+documented directional interchange alongside a regular Blade PLY; producing
+that interchange remains an upstream/offline concern. Python does not become a
+project dependency.
 
 #### M2e — Differentiable weighted geometry (implemented and device-validated)
 
@@ -695,7 +699,7 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   cross-scene mean gain is causal, but several tail views regress and this
   four-term residual is not PowerFoam's full detail-site model.
 
-#### M2w — PowerFoam appearance reference audit (complete; implementation staged)
+#### M2w — PowerFoam appearance reference audit (complete; implementation complete)
 
 - The released implementation was audited at official commit `9639225`.
   It uses eight detail sites per power cell and eight spherical axes per
@@ -1976,6 +1980,47 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   and 16.8860/16.2978→16.9054/16.3098 dB on Bonsai. The implementation adds no
   model field, graph op, shader entry/group, WGSL, binding, or pipeline variant.
 
+#### M2bl — Released per-detail directional appearance (checkpoint gate passed; training rejected)
+
+- `SurfaceDetail::directional` stores eight raw axes and eight RGB residuals
+  for each of the existing eight spatial sites: the released 384-float nested
+  table, optional and absent from legacy models. Evaluation matches the
+  released chord-distance kernel rather than the older compact dot-product
+  experiment. PLY checkpoints preserve every indexed axis and colour.
+- CPU traversal and all WGSL consumers evaluate the table through the existing
+  shared surface-detail function. It adds one packed-attribute capability bit
+  but no shader entry, shader group, pipeline, bind group, binding, or
+  Meganeura operation. The standalone RadFoam, compute-splat, and scene paths
+  agree with the CPU oracle on the RTX 5070, including models that combine
+  density logits and both older compact colour residuals.
+- The training graph composes existing reductions, normalization, exponent,
+  and softmax operations. Independent axis/colour rates default to zero;
+  enabling them initializes deterministic cube axes and zero colours. Zero
+  colours add no directional residual; the released per-texel nonnegative
+  clamp remains part of the table's semantics. Densification, Adam ancestry,
+  PLY/safetensors resume, and uninterrupted-versus-segmented training are
+  covered.
+- The first full-checkpoint render exposed one material semantic missed by the
+  source audit: PowerFoam clamps each directional texel before spatial
+  interpolation. Moving that clamp into the shared CPU/WGSL/training contract
+  raises Blade's all-37 Bonsai score from 27.8508 to 28.3078 dB versus the
+  official 28.3432 dB. Quantized official and Blade renders agree at 59.37 dB.
+  The Rust-only `import_powerfoam_directional` tool attaches the 249,404,948-
+  byte released table to the already cross-rendered PLY. Assets stay ignored.
+- Zero-initialized 255-step Room screens reject training this table at the
+  measured schedule. Learned axes/colours reach 24.4147 dB held out and fixed
+  axes reach 24.4089, versus 24.4668 control. Training takes 88.4/88.6 seconds
+  versus 14.6 seconds, and the 200K-cell PLY grows 115→408 MiB. A 4,096-ray,
+  160-path graph needs 6.19 GiB host and 11.64 GiB VRAM; 2,048 rays reduce that
+  to 3.78 GiB and 4.96 GiB. Keep the table opt-in and do not run a long
+  two-scene gate until backward cost is materially lower.
+- The complete 164-test training suite now reuses one serialized physical GPU
+  context. Previously, repeated Vulkan context teardown eventually selected
+  llvmpipe and made later tests report success by skipping. Every GPU test now
+  executes on the 5070; the 6 GiB cgroup reports no OOM, pressure, swap, Xid,
+  or device fault. `train_colmap` also reuses the existing GPU view evaluator;
+  scalar CPU evaluation became disproportionately slow for the nested table.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -2176,9 +2221,8 @@ manifest accidentally.
 
 ## Out-of-scope (for now)
 
-- Full eight-detail-site displacement and per-detail-site directional
-  appearance from PowerFoam. M2v and M2x are compact spatial and directional
-  residuals; M2w records the exact remaining semantics and their storage cost.
+- A longer two-scene training gate for the full PowerFoam directional table;
+  defer it until the rejected short gate's 6× step cost is reduced.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.

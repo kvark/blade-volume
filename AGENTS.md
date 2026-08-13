@@ -64,16 +64,16 @@ The library boundary stays at `PointCloudModel` — the training crate produces 
 PowerFoam (theialab/powerfoam, arXiv 2604.24994) generalises RadFoam: Voronoi → **power diagram** (weighted Voronoi), each site carries an extra **radius/weight** parameter, and adjacency is a **Čech complex** built from overlapping balls rather than a Delaunay tetrahedralisation. The same primitives serve both a rasterizer and a ray-tracer with adjacency-walk traversal.
 
 Concrete deltas vs current RadFoam path:
-- **Per-point data**: `PointCloudModel.radii: Option<Vec<f32>>` carries the weight (done, M2a). A compact additive eight-axis Spherical Voronoi residual is implemented and tested (M2x), but its first held-out gate is negative; it is not the full per-detail-site PowerFoam appearance model.
+- **Per-point data**: `PointCloudModel.radii: Option<Vec<f32>>` carries the weight (done, M2a). `SurfaceDetail::directional` carries the released eight-axis colour function at each of eight detail sites; the older compact cell-level Spherical Voronoi residual remains a separate rejected experiment.
 - **Adjacency builder**: `adjacency::compute_cech` emits an edge `{i,j}` when `|p_i - p_j| ≤ r_i + r_j` (done, M2b). `PointCloudModel::compute_adjacency*` dispatches Čech vs Delaunay based on `radii.is_some()`. CSR storage is unchanged.
 - **Traversal**: WGSL `radfoam_trace.wgsl` uses the radical plane `shift = 0.5 + 0.5·(r_i² - r_j²)/|p_j - p_i|²` (done, M2c). The radius lives in the `.w` channel of `g_points`; unweighted clouds upload 0 and the formula degenerates to the bisector — no new bind-group entry, no fork.
-- **Oriented dipoles**: `PointCloudModel.surface_normals` optionally clips each bounded power cell to its retained surface half. PLY IO, CPU/WGSL traversal, analytical training Jacobians, PCA initialization, normal loss, densification, and resume are implemented (done, M2t). The Bonsai gate selects learned normals as opt-in but not as the default; full spatial appearance is still needed.
+- **Oriented dipoles**: `PointCloudModel.surface_normals` optionally clips each bounded power cell to its retained surface half. PLY IO, CPU/WGSL traversal, analytical training Jacobians, PCA initialization, normal loss, densification, resume, eight spatial detail sites, and their released per-site directional appearance are implemented. The Bonsai gate selects learned normals as opt-in but not as the default; the full appearance table still needs a held-out quality gate.
 - **PLY format**: per-vertex `property float radius` added to the RadFoam PLY reader/writer (done, M2a). Round-trips both binary and ASCII.
 - **Don't pull Python in**: keep PowerFoam adoption to a clean re-implementation in Rust/WGSL. Use the paper + their Warp kernels as a reference, not a dependency.
 
 Remaining work to fully cover the PowerFoam paper:
-1. Cross-validate against a PowerFoam checkpoint scene (M2d).
-2. Extend to the remaining PowerFoam appearance model (quaternion + height/detail texel sites + a directional colour function per detail site).
+1. Make training the released appearance table practical at production ray batches; the exact checkpoint render passes, but zero-initialized Room screens are quality-negative and 6× slower.
+2. Revisit a two-scene training gate only after reducing the table's backward-memory and step-time cost. Keep it opt-in meanwhile.
 
 ## Style
 
