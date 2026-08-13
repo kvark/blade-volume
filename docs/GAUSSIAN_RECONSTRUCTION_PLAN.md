@@ -1449,7 +1449,12 @@ Held-light mean PSNR changes by +0.01, +0.03, +0.13, and -0.07 dB in the
 first paired runs; repeated fourth-cloud medians narrow the last delta to
 -0.04 dB, within both kernels' observed atomic variance. A repeated-index
 physical-GPU gradient oracle is bit-exact, the complete Meganeura all-target
-suite passes, and Blade pins Meganeura `6022c11`.
+suite passes. After the shader-entry cleanup merged, the seven-commit
+performance stack rebased conflict-free onto Meganeura `db4fe42`; Blade pins
+the resulting `2e508fb`. Meganeura's complete all-target physical-GPU suite
+and Blade's workspace all-target suite pass. The fixed 1,800-update
+continuation remains at 15.54 seconds with unchanged position error and
+coverage, so the rebase preserves the selected scheduling result.
 
 The next two generic scheduling shortcuts are not selected. Packing four
 pointwise elements into each invocation initially exposed that the runtime

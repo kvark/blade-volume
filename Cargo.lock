@@ -2735,7 +2735,7 @@ dependencies = [
 [[package]]
 name = "meganeura"
 version = "0.2.0"
-source = "git+https://github.com/kvark/meganeura?rev=6022c115e201e42ae267da20206bf7e2fe64a0fd#6022c115e201e42ae267da20206bf7e2fe64a0fd"
+source = "git+https://github.com/kvark/meganeura?rev=2e508fb3a74efe66dde8cbcbc0783e54193e80d7#2e508fb3a74efe66dde8cbcbc0783e54193e80d7"
 dependencies = [
  "blade-graphics",
  "blade-macros",
