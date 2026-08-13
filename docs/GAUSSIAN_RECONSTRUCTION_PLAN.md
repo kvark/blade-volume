@@ -974,3 +974,12 @@ the fixed regression larger at 0.04/0.02 dB. Truth position changes by at most
 The implementation is removed. A photometrically better shading normal is not
 automatically the tangent plane that matches patches around a noisy layered
 center; those variables need one joint surface correspondence objective.
+
+The rendered diffuse pass should also remain in display space. Replacing its
+sRGB objective with linear-radiance MSE is 34% faster, but direct nearest-truth
+albedo RMSE improves on only two of four clouds and worsens on the other two.
+Every exact held-light mean/tail is below the selected pass, including
+0.07/0.09 dB losses on the second cloud. The decomposition itself continues
+to fit physical quantities in linear radiance; this final coordinate pass is
+explicitly selected for rendered output quality, where sRGB is the measured
+objective.
