@@ -19,8 +19,10 @@ const SIZE: [u32; 2] = [96, 72];
 /// is float precision and the sampler's interpolation against the CPU's
 /// nearest-texel fetch.
 const TOLERANCE: f32 = 0.02;
+static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 struct Harness {
+    _gpu_test_guard: std::sync::MutexGuard<'static, ()>,
     context: gpu::Context,
     encoder: gpu::CommandEncoder,
     texture: gpu::Texture,
@@ -30,6 +32,9 @@ struct Harness {
 
 impl Harness {
     fn new() -> Option<Self> {
+        let gpu_test_guard = GPU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if std::env::var("BLADE_VOLUME_DISABLE_GPU").is_ok() {
             println!("Skipping: GPU disabled by environment");
             return None;
@@ -94,6 +99,7 @@ impl Harness {
             manual_barriers: false,
         });
         Some(Self {
+            _gpu_test_guard: gpu_test_guard,
             context,
             encoder,
             texture,
