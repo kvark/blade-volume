@@ -778,3 +778,15 @@ a second full-cloud upload slot, delayed instance-buffer retirement, and a
 separate pair-render/readback path. That complexity is not justified by the
 gain, so the prototype is removed. Further acceleration has to reduce TLAS
 rebuild or render work itself rather than only one more host submission.
+
+The retained loop now avoids that second rebuild when its first coordinate
+direction already improves the complete training-render objective. Three
+alternating same-source binary pairs reduce a 300-position synthetic median
+from 3.487 to 2.594 seconds (25.6%), and position-plus-radius from 6.983 to
+5.371 seconds (23.1%). Five synthetic clouds keep every reported held-light
+mean, tail, and coverage score; truth position/normal changes stay within
+0.0004 world units and 0.04 degrees. Position-only Bonsai falls 45.7→35.2
+seconds and Room 50.7→36.6; with radii they fall 91.3→72.7 and 101.0→79.5.
+All reported real train/test quality and coverage values are unchanged. This
+is a two-branch CPU control-flow change only: it adds no shader, operation,
+buffer, bind group, or pipeline variant.

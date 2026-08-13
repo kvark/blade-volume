@@ -298,6 +298,13 @@ pub fn refine_rendered(
             if candidate < best_loss {
                 best_loss = candidate;
                 best = scene.model.surfels[index].center;
+                // This coordinate pass is a bounded final polish. Once the
+                // first direction improves its full rendered objective, keep
+                // it instead of paying another TLAS rebuild for a marginally
+                // better step on the same coordinate.
+                if sign < 0.0 {
+                    break;
+                }
             }
         }
         scene.model.surfels[index].center = best;
@@ -321,6 +328,9 @@ pub fn refine_rendered(
                 if candidate < best_loss {
                     best_loss = candidate;
                     best = scene.model.surfels[index].radius;
+                    if scale < 1.0 {
+                        break;
+                    }
                 }
             }
             scene.model.surfels[index].radius = best;

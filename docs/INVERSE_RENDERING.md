@@ -373,8 +373,10 @@ The selected refined scenes and held-out comparison images are under
 An optional final pass now optimizes the surface against the renderer that
 will actually consume it. `--render-refine N` chooses up to `N` observed
 Gaussians in deterministic cloud order, tests a fixed quarter-radius
-displacement on both sides of each current normal, and accepts only a reduction
-in joint sRGB error across every training photograph. The fitted material and
+displacement along each current normal, and accepts only a reduction in joint
+sRGB error across every training photograph. The negative direction is tried
+first; once it improves the full objective, the pass keeps it instead of
+rebuilding the TLAS to compare the opposite direction. The fitted material and
 capture light remain fixed, so geometry cannot win by immediately repainting
 itself; held cameras never enter the objective. It adds no polygonal
 intermediate and no shader variant.
@@ -401,6 +403,18 @@ This adds another 7.2% synthetic throughput (3.966 to 3.698 seconds) and
 5.4--5.7% on the two real scenes, again with byte-identical scene files. When
 shadow rays are requested, every candidate replays the same deterministic
 sample sequence so noise cannot decide whether a coordinate is accepted.
+
+First-improvement acceptance makes that retained tracer substantially cheaper.
+Across three alternating same-source binary pairs, a 300-position synthetic
+pass falls from a 3.487-second median to 2.594 seconds (25.6%), and adding the
+radius coordinate falls from 6.983 to 5.371 seconds (23.1%). Five independent
+synthetic clouds retain every reported held-light mean, worst view, and
+coverage value; truth position/normal changes stay within 0.0004 world units
+and 0.04 degrees. On real captures, position-only Bonsai falls 45.7→35.2
+seconds and Room 50.7→36.6; position-plus-radius falls 91.3→72.7 and
+101.0→79.5 seconds. Every reported train/test score and coverage value remains
+unchanged. The physical-GPU scope peaks at 317 MB with zero swap, memory event,
+or GPU fault.
 
 `--render-refine-radii` adds two support candidates, 80% and 120% of each
 current Gaussian radius, after its position decision. Twenty percent is the
