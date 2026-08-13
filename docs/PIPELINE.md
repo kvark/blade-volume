@@ -2267,6 +2267,21 @@ Broken into sub-steps:
   production `reconstruct` CLI expose it as opt-in; the latter requires a
   paired secondary known-light capture.
 
+- **M3c-6 — Preserve repeat-light view correspondence (implemented and
+  four-cloud gated).** The calibrated multi-light normal solve no longer asks
+  an average of radiance from different projected image locations to provide
+  its only correction. It retains the existing shared normal as an anchor,
+  solves each repeated camera observation across the measured lights, averages
+  those view-local directions in normal space, and applies a halfway update.
+  A deterministic outlier regression covers the distinction. Before the
+  complete-render pass, four truth-normal RMSEs improve by 0.13--0.37 degrees;
+  after it they improve by 0.01--0.42 degrees. Held-light mean/worst PSNR gains
+  0.06--0.17/0.05--0.11 dB on all four clouds, with 0.0--0.3 coverage-point
+  movement and about 0.05 seconds of added solve time. A robust 45-degree
+  inlier arm and larger 1.62-cell support are rejected by the joint geometry
+  and held-light gate. Production and synthetic calibrated-repeat paths share
+  the selected implementation; single-light capture is unchanged.
+
 #### M3d — Online viewer attach
 
 - During training, periodically convert `TrainerState → PointCloudModel` and hand it

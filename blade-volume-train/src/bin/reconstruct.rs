@@ -804,7 +804,7 @@ fn refine_normals_from_captures(
             },
         )
         .collect();
-    train::inverse::decompose::refine_normals_known_lights(model, &lights, 512)
+    train::inverse::decompose::refine_normals_known_lights_per_view(model, &lights, 512)
 }
 
 /// Say what the recovered light looks like, in terms that can be checked.

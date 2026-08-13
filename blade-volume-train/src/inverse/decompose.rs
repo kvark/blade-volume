@@ -320,17 +320,9 @@ fn irradiance_shapes_differ(
     largest > 1.0e-4
 }
 
-/// Fit one diffuse normal per Gaussian against repeated captures under known
-/// lights. Albedo is eliminated analytically for every candidate, so the fit
-/// cannot improve merely by painting one illumination into the material.
-pub fn refine_normals_known_lights(
-    model: &mut vol::relight::RelightModel,
-    lights: &[KnownLightObservations<'_>],
-    candidate_count: usize,
-) -> NormalRefinement {
-    // Per-channel light scale is absorbed exactly by the unknown albedo. Two
-    // captures with the same irradiance shape therefore provide only one
-    // normal constraint, even when their exposure or white balance differs.
+fn distinct_known_lights<'a, 'b>(
+    lights: &'a [KnownLightObservations<'b>],
+) -> Vec<&'a KnownLightObservations<'b>> {
     let mut distinct = Vec::new();
     for light in lights {
         if distinct
@@ -342,6 +334,39 @@ pub fn refine_normals_known_lights(
             distinct.push(light);
         }
     }
+    distinct
+}
+
+fn best_photometric_normal(
+    current: glam::Vec3,
+    towards: glam::Vec3,
+    readings: &[(crate::relight::Irradiance, [f32; 3])],
+    candidates: &[glam::Vec3],
+) -> (glam::Vec3, f64) {
+    let mut best = current;
+    let mut best_score = photometric_normal_score(current, towards, readings);
+    for &candidate in candidates {
+        let score = photometric_normal_score(candidate, towards, readings);
+        if score < best_score {
+            best = candidate;
+            best_score = score;
+        }
+    }
+    (best, best_score)
+}
+
+/// Fit one diffuse normal per Gaussian against repeated captures under known
+/// lights. Albedo is eliminated analytically for every candidate, so the fit
+/// cannot improve merely by painting one illumination into the material.
+pub fn refine_normals_known_lights(
+    model: &mut vol::relight::RelightModel,
+    lights: &[KnownLightObservations<'_>],
+    candidate_count: usize,
+) -> NormalRefinement {
+    // Per-channel light scale is absorbed exactly by the unknown albedo. Two
+    // captures with the same irradiance shape therefore provide only one
+    // normal constraint, even when their exposure or white balance differs.
+    let distinct = distinct_known_lights(lights);
     if distinct.len() < 2 {
         return NormalRefinement::default();
     }
@@ -375,20 +400,84 @@ pub fn refine_normals_known_lights(
         }
         stats.supported += 1;
         let current = glam::Vec3::from(model.surfels[index].normal);
-        let mut best = current;
-        let mut best_score = photometric_normal_score(current, towards, &readings);
-        for &candidate in &candidates {
-            let score = photometric_normal_score(candidate, towards, &readings);
-            if score < best_score {
-                best = candidate;
-                best_score = score;
-            }
-        }
+        let (best, _) = best_photometric_normal(current, towards, &readings, &candidates);
         if best != current {
             model.surfels[index].normal = best.to_array();
             stats.changed += 1;
         }
     }
+    stats
+}
+
+/// Refine the cross-view known-light solution with exact repeat-image
+/// correspondence. A diffuse normal is fitted independently at every camera
+/// observation, those estimates are combined in normal space, and their mean
+/// is blended halfway with the shared solution. This keeps the established
+/// multi-view constraint while preventing radiance from different image
+/// locations from being averaged before the correspondence-aware correction.
+pub fn refine_normals_known_lights_per_view(
+    model: &mut vol::relight::RelightModel,
+    lights: &[KnownLightObservations<'_>],
+    candidate_count: usize,
+) -> NormalRefinement {
+    let distinct = distinct_known_lights(lights);
+    if distinct.len() < 2 {
+        return NormalRefinement::default();
+    }
+    let original: Vec<_> = model.surfels.iter().map(|surfel| surfel.normal).collect();
+    let _ = refine_normals_known_lights(model, lights, candidate_count);
+    let candidates = normal_candidates(candidate_count.max(1));
+    let mut stats = NormalRefinement::default();
+    for index in 0..model.surfels.len() {
+        let sample_count = distinct[0].observations.of(index).len();
+        if sample_count == 0
+            || distinct
+                .iter()
+                .any(|light| light.observations.of(index).len() != sample_count)
+        {
+            continue;
+        }
+        let current = glam::Vec3::from(model.surfels[index].normal);
+        let mut estimates = Vec::with_capacity(sample_count);
+        for sample_index in 0..sample_count {
+            let first = distinct[0].observations.of(index)[sample_index];
+            let readings: Vec<_> = distinct
+                .iter()
+                .map(|light| {
+                    (
+                        light.irradiance,
+                        light.observations.of(index)[sample_index].radiance,
+                    )
+                })
+                .collect();
+            let (best, best_score) =
+                best_photometric_normal(current, first.towards, &readings, &candidates);
+            if best_score.is_finite() {
+                estimates.push(best);
+            }
+        }
+        let Some(consensus) = estimates
+            .iter()
+            .copied()
+            .sum::<glam::Vec3>()
+            .try_normalize()
+        else {
+            continue;
+        };
+        let Some(best) = (current + consensus).try_normalize() else {
+            continue;
+        };
+        stats.supported += 1;
+        if best != current {
+            model.surfels[index].normal = best.to_array();
+        }
+    }
+    stats.changed = model
+        .surfels
+        .iter()
+        .zip(original)
+        .filter(|entry| entry.0.normal != entry.1)
+        .count();
     stats
 }
 
@@ -1958,6 +2047,77 @@ mod tests {
         assert!(
             recovered.dot(truth) > 0.995,
             "normal {recovered:?} against {truth:?}"
+        );
+    }
+
+    #[test]
+    fn repeat_view_correspondence_reduces_a_cross_view_outlier() {
+        let truth = glam::Vec3::new(0.35, 0.25, 0.902_774).normalize();
+        let outlier = glam::Vec3::new(-0.65, 0.35, 0.68).normalize();
+        let albedo = [0.6, 0.4, 0.25];
+        let mut irradiance = Vec::new();
+        for (component, sign) in [(3, 1.0), (3, -1.0), (1, 1.0), (2, 1.0)] {
+            let mut light = crate::relight::Irradiance::default();
+            light.coefficients[0] = [2.0; 3];
+            light.coefficients[component] = [sign; 3];
+            irradiance.push(light);
+        }
+        let observations: Vec<_> = irradiance
+            .iter()
+            .map(|light| Observations {
+                samples: [truth, truth, outlier]
+                    .into_iter()
+                    .map(|normal| {
+                        let shade = light.shade(normal);
+                        Sample {
+                            radiance: std::array::from_fn(|channel| {
+                                albedo[channel] * shade[channel]
+                            }),
+                            towards: glam::Vec3::Z,
+                            facing: normal.z,
+                        }
+                    })
+                    .collect(),
+                offsets: vec![0, 3],
+            })
+            .collect();
+        let lights: Vec<_> = irradiance
+            .into_iter()
+            .zip(&observations)
+            .map(|(irradiance, observations)| KnownLightObservations {
+                irradiance,
+                observations,
+            })
+            .collect();
+        let initial = glam::Vec3::new(-0.5, 0.5, 0.7).normalize();
+        let make_model = || vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0; 3],
+                radius: 1.0,
+                normal: initial.to_array(),
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material::default()],
+        };
+        let mut shared = make_model();
+        refine_normals_known_lights(&mut shared, &lights, 4096);
+        let mut repeated = make_model();
+        let stats = refine_normals_known_lights_per_view(&mut repeated, &lights, 4096);
+        let shared_error = glam::Vec3::from(shared.surfels[0].normal).angle_between(truth);
+        let repeated_error = glam::Vec3::from(repeated.surfels[0].normal).angle_between(truth);
+        assert_eq!(
+            stats,
+            NormalRefinement {
+                supported: 1,
+                changed: 1,
+            }
+        );
+        assert!(
+            repeated_error < shared_error,
+            "shared error {} degrees, repeat-view error {} degrees",
+            shared_error.to_degrees(),
+            repeated_error.to_degrees(),
         );
     }
 

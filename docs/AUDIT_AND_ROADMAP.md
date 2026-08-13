@@ -1748,8 +1748,11 @@ pass. The relightable surface-Gaussian pipeline additionally has an opt-in
 complete-render normal polish for calibrated multi-light captures. Four
 synthetic clouds improve unseen-light novel-view mean PSNR by 0.25--0.35 dB
 and every worst view by 0.21--0.36 dB, while the exact optimizer/rebuilt-tracer
-oracle passes. Its small truth-normal and coverage regressions keep it a
-shading polish rather than a geometry claim. Cross-rendering a recognized
+oracle passes. Preserving exact repeat-light correspondence per camera before
+that pass then improves all four truth-normal RMSEs by 0.13--0.37 degrees and
+held-light mean/worst PSNR by another 0.06--0.17/0.05--0.11 dB. Coverage moves
+by at most 0.3 points. The large remaining 53.7--57.5 degree error keeps dense
+single-light correspondence as the geometry bottleneck. Cross-rendering a recognized
 volumetric Gaussian checkpoint against official 3DGRUT and the hit-window
 performance sweep remain.
 

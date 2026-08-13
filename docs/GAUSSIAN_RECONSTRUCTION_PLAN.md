@@ -1183,3 +1183,29 @@ The pass is therefore opt-in through `--render-refine-normals` in both the
 synthetic gate and calibrated multi-capture `reconstruct`; ordinary one-light
 phone capture remains unchanged. No shader, Meganeura operation, entry/group,
 binding, pipeline, or serialized field is added.
+
+The calibrated repeat-light solve now preserves its exact per-view
+correspondence before that rendered pass. The original solver first averages
+one Gaussian's radiance across camera views for each light; an occlusion or
+overlap error at one projected image location can therefore contaminate a
+different location before orientation is solved. The selected correction
+keeps that shared multi-view solution as an anchor, independently solves the
+same projected observation across the measured lights, averages the resulting
+view-local directions, and applies half of that normal-space correction.
+
+Against the exact four-cloud gate above, pre-render truth-normal RMSE improves
+53.96→53.66, 54.41→54.28, 56.31→56.09, and 57.56→57.19 degrees. After the
+complete-render normal and material passes it improves 54.31→53.95,
+54.68→54.67, 56.48→56.23, and 57.91→57.49 degrees. Held-light mean/worst
+PSNR improves 19.43/19.20→19.49/19.25, 20.44/20.02→20.53/20.10,
+20.05/19.42→20.22/19.53, and 19.91/19.59→20.02/19.69 dB. Coverage changes
+by 0.0, -0.3, -0.1, and -0.1 points. The correction adds about 0.05 seconds
+at this scale and is used only when aligned captures under distinct measured
+lights were already requested.
+
+A 45-degree medoid/inlier consensus is rejected: it worsens truth normals on
+three clouds and gives back output quality on two. Raising support from 1.60
+to 1.62 cells restores coverage, but weakens geometry and loses up to 0.09 dB
+of the selected gain on the third cloud. The simpler anchored mean and existing
+1.60-cell support remain. This adds no shader, graph operation, runtime field,
+or alternate point-cloud representation.

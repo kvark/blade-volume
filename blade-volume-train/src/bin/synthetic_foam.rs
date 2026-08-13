@@ -675,9 +675,7 @@ fn refine_photometric_normals(
             },
         )
         .collect();
-    Ok(train::inverse::decompose::refine_normals_known_lights(
-        model, &lights, 512,
-    ))
+    Ok(train::inverse::decompose::refine_normals_known_lights_per_view(model, &lights, 512))
 }
 
 fn main() {
