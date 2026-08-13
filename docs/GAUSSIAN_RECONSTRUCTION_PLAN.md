@@ -1815,3 +1815,17 @@ tests. The Bonsai PLY grows from 204 to 312 KiB; runtime GPU allocation does
 not grow because `GaussianGpu` already reserves the renderer's maximum 16 SH
 components. All paired runs completed in 12 GiB scopes with zero swap,
 pressure, OOM, Xid, reset, or GPU-fault events on the RTX 5070.
+
+A residual-guided split after the appearance stage is also rejected. The
+prototype attributed full training-view RGB residual to contributing
+Gaussians, moved a low-opacity child toward the weighted tangent-plane query,
+and selected only the highest-residual 5% of parents. It adds 106 particles to
+the 2,179-point fixed synthetic cloud, but changes held quality from
+20.83/19.87 to 20.82/19.79 dB and raises fit time from 5.4 to 6.3 seconds. On
+Bonsai it adds 151 particles and lowers the training objective from 0.212007
+to 0.205646, yet held quality stays 18.62/18.55 dB while fit time rises from
+12.1 to 15.6 seconds. Like the earlier opacity duplication, it creates
+training capacity rather than new multi-view evidence. The prototype is
+removed; future support must come from independent depth evidence or a
+different surface representation, not another split of the same image
+residual.
