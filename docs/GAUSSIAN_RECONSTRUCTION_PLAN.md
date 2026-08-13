@@ -1210,6 +1210,31 @@ of the selected gain on the third cloud. The simpler anchored mean and existing
 1.60-cell support remain. This adds no shader, graph operation, runtime field,
 or alternate point-cloud representation.
 
+Repeated lights do not improve the earlier center plane sweep by being treated
+as extra texture channels. On the fixed cloud, concatenating independently
+normalized patches from all known lights raises held-light mean/worst PSNR by
+0.03/0.03 dB, but position RMSE rises from 0.6204 to 0.6215 and pre/final
+normal RMSE rises from 53.66/53.95 to 54.09/54.48 degrees. Requiring the
+primary light to be textured, taking the median light cost, and encoding a
+centered per-pixel lighting signature also fail to improve geometry and output
+together. Analytically inverting the four known lights per pixel is no better:
+plane-sweeping the recovered world-normal field reaches 0.6192 position RMSE
+but regresses pre/final normal RMSE to 53.74/54.07 degrees and held-light
+mean/worst PSNR to 19.46/19.23 dB; the recovered diffuse-albedo field reaches
+0.6210, 54.00/54.37, and 19.43/19.17 respectively. The temporary capture APIs
+and benchmark switches are removed. Lighting variation is useful for fitting
+orientation at an established correspondence, as in the selected normal
+solve, but is not a reliable substitute for view-invariant spatial texture
+when establishing that correspondence.
+
+Applying the selected known-light normal solve before the original plane sweep
+does not fix this ordering problem. It reduces the fixed cloud from 259 to 207
+scorable center particles and changes position/pre-render normal RMSE only to
+0.6203/53.93 degrees, while held-light mean/worst PSNR falls to 19.37/19.19
+dB. Correcting orientation first also changes the tangent plane in which the
+radiance patch is sampled; it cannot supply the missing spatial
+correspondence. The production order and benchmark CLI remain unchanged.
+
 Extending the exact rendered-material coordinate descent across all four
 measured lights is not selected. On the fixed cloud it changes 35 of 36 albedo
 coordinates but lowers unseen-light mean/worst PSNR from the selected
@@ -1245,3 +1270,13 @@ therefore not the bottleneck; repeated render/readback synchronization is. The
 Blade changes, local dependency override, and one changed relight call are
 removed. Future exact work should reduce synchronization boundaries while
 retaining the sequential acceptance decisions.
+
+Submitting both exact center/radius directions together through two prepared
+tracers does remove one wait, but defeats the selected first-improvement exit.
+The fixed 1,170-particle center-plus-radius pass slows from 20.49 to 26.49
+seconds. Scoring both directions instead of retaining the first improvement is
+also neutral to slightly negative across all five known and held environments;
+for example, tone-mapped `studio` mean/worst changes 23.84/21.00 to
+23.83/20.99 dB. The dual-tracer host API and hidden benchmark gate are removed.
+An exact speedup must preserve early acceptance while reducing work within one
+proposal, rather than batching work the current algorithm often skips.
