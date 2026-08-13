@@ -806,3 +806,25 @@ synthetic coverage points, but gives back most of the radius path's held-light
 gain. The fixed score falls from 18.43/18.37 to 18.33/18.29 dB and the fifth
 from 18.80/18.62 to 18.66/18.49. Expansion-only is removed; the explicit radius
 option remains a final-quality rather than minimum-cost path.
+
+Re-fitting normals from only the plane-sweep particles that move, their
+32 nearest plane-consistent neighbours, and at least three shared visible
+source views does not resolve the single-light ambiguity either. A 25% blend
+repairs an analytical plane and leaves exact normals unchanged, but changes
+five synthetic truth-normal RMSEs by only -0.03 to +0.02 degrees. Against a
+same-source, same-command control, unseen-light mean/worst deltas are
++0.02/+0.02, +0.04/+0.02, -0.01/-0.01, -0.08/-0.06, and -0.01/-0.01 dB;
+coverage is unchanged or +0.1 point. Even explicit shared-view and
+tangent-plane filters therefore produce a mixed, tail-unsafe smoother without
+meaningfully improving orientation. The implementation is removed before
+running real scenes. Future normal updates need a held-independent physical
+prior or repeat lighting, not a tighter Euclidean covariance neighbourhood.
+
+A second half-sized rendered position search after each accepted quarter-radius
+move is also removed. It improves all five synthetic unseen-light means and
+tails by 0.01--0.03 dB, but makes truth-position error mixed and loses 0.1
+coverage point on one cloud while raising a 300-particle pass from about 2.6
+to 5.6 seconds. More decisively, Bonsai and Room held means, tails, and
+coverage remain unchanged at report precision even though runtime rises
+35.2→70.8 and 36.6→82.5 seconds. The lower training loss does not transfer;
+the quarter-radius coordinate is already fine enough for this objective.
