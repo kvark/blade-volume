@@ -873,3 +873,14 @@ degrees, but exact paired scoring still changes the fourth mean/tail by
 +0.0020/-0.0068 dB. All implementations are removed. Unobserved normals need
 an objective that also constrains their rendered support and appearance, not
 spatial diffusion of otherwise accurate measurements.
+
+Using those same measured lights to choose shared materials is not selected
+either. A prototype first divides each observed RGB by the diffuse irradiance
+predicted from all four lights, clusters six materials from the resulting
+albedo chromaticities, then fits the actual materials against the primary
+capture exactly as before. It improves two clouds by up to +0.02/+0.06 dB
+mean/tail, but loses 0.04/0.02 dB on the fixed cloud and 0.06/0.05 dB on the
+fourth. Its primary residual is likewise mixed. Even known illumination does
+not make that corrected colour independent evidence while orientation,
+visibility, and per-pixel Gaussian overlap remain wrong. The alternate fit API
+and albedo-observation path are removed.
