@@ -874,3 +874,14 @@ bursts do not constitute a full-power PSU stress test.
 The full-coverage arms add another 310 NVIDIA samples and peak at 94.53 W,
 61 C, and 2,138 MiB VRAM. Their largest 8 GiB scope reaches 4,268,408,832
 bytes with zero swap, pressure, OOM, or GPU-fault events.
+
+Checkpoint resume no longer recomputes topology before any point has moved.
+The finalized 735,103-cell Room checkpoint already stores adjacency for its
+exact saved positions, so the initial Qhull phase falls from 13.73--13.78
+seconds to below timer precision. A subsequent one-step position update still
+performs the configured exact rebuild in 13.77 seconds. Stored adjacency is
+reused only for `FromModel` semantics or an unweighted Qhull continuation;
+explicit representation-changing overrides still rebuild. The 8 GiB
+benchmark scope peaks at 2,892,140,544 bytes with zero swap, pressure, OOM, or
+GPU faults. Raw evidence is ignored under
+`target/audit-runs/checkpoint-adjacency-reuse-v1/`.

@@ -1329,6 +1329,25 @@ sampled_gpu_memory_peak_mib = 2138
 decision = "Smooth-L1 is selected for short Room budgets but not as the Room endpoint default: it gains 0.364 dB at step 1000, then is mean-neutral with a broad per-view redistribution at the cap and after settling; use all non-held-out cameras for complete llffhold evaluation"
 artifact_path = "target/audit-runs/room-full-coverage-loss-gate-v1"
 
+[checkpoint_adjacency_reuse]
+status = "selected"
+source_commit = "05ec961"
+cells = 735103
+stored_directed_adjacency_edges = 11303584
+baseline_l1_resume_adjacency_seconds = 13.727
+baseline_smooth_l1_resume_adjacency_seconds = 13.785
+optimized_resume_adjacency_seconds = 0.000
+subsequent_moved_geometry_rebuild_seconds = 13.766
+optimized_one_step_training_seconds = 15.556
+optimized_one_step_command_seconds = 19.799
+memory_peak_bytes = 2892140544
+memory_swap_bytes = 0
+memory_pressure_events = 0
+oom_events = 0
+gpu_faults = 0
+decision = "reuse adjacency stored in a finalized checkpoint when its representation is unchanged; later moved-geometry updates still use the configured exact backend, while explicit representation changes still rebuild"
+artifact_path = "target/audit-runs/checkpoint-adjacency-reuse-v1"
+
 [selection]
 status = "selected"
 decision_commit = "7c423a1"

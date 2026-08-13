@@ -1122,3 +1122,12 @@ convergence and remains selected for Bonsai, but it is not a robust Room
 endpoint default. The experimental beta control remains removed. The next
 quality work should target spatial appearance or sampling efficiency rather
 than add another scene-sensitive loss knob.
+
+Resume now avoids one redundant exact topology build. Training checkpoints
+are finalized with adjacency matching their stored positions, so an unchanged
+representation can upload that CSR directly; Qhull remains configured for the
+first later position update. On the 735,103-cell Room checkpoint this removes
+13.73--13.78 seconds from startup, while the forced post-update rebuild still
+takes 13.77 seconds. Weighted-to-unweighted and other explicit topology
+overrides continue to rebuild. This is a representation-preserving lifecycle
+fix, not a new topology mode or shader path.

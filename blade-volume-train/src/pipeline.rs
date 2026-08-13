@@ -739,6 +739,17 @@ fn rebuild_adjacency(
     }
 }
 
+fn can_reuse_checkpoint_adjacency(model: &vol::PointCloudModel, kind: AdjacencyKind) -> bool {
+    if model.adjacency.is_none() {
+        return false;
+    }
+    match kind {
+        AdjacencyKind::FromModel => true,
+        AdjacencyKind::DelaunayQhull => model.radii.is_none(),
+        _ => false,
+    }
+}
+
 fn initialize_surface_normals(
     model: &mut vol::PointCloudModel,
     cameras: &[vol::CameraParams],
@@ -1054,7 +1065,14 @@ pub fn train_colmap_appearance_split(
     } else {
         Vec::new()
     };
-    rebuild_adjacency(&mut model, config.adjacency, &reference_cameras);
+    if config.init_ply.is_some() && can_reuse_checkpoint_adjacency(&model, config.adjacency) {
+        log::info!(
+            "resume: reusing {} stored adjacency entries",
+            model.adjacency.as_ref().unwrap().neighbors.len(),
+        );
+    } else {
+        rebuild_adjacency(&mut model, config.adjacency, &reference_cameras);
+    }
     let adjacency_duration = t0.elapsed();
     log::info!(
         "adjacency done in {:.2}s ({} edges)",
@@ -1495,6 +1513,34 @@ mod tests {
 
         assert_eq!(model.radii.as_deref(), Some(expected.as_slice()));
         model.validate().unwrap();
+    }
+
+    #[test]
+    fn checkpoint_adjacency_reuse_preserves_semantics_and_explicit_overrides() {
+        let mut model = tiny_model_far_apart();
+        model.compute_adjacency_default();
+        assert!(can_reuse_checkpoint_adjacency(
+            &model,
+            AdjacencyKind::FromModel
+        ));
+        assert!(can_reuse_checkpoint_adjacency(
+            &model,
+            AdjacencyKind::DelaunayQhull
+        ));
+        assert!(!can_reuse_checkpoint_adjacency(
+            &model,
+            AdjacencyKind::Knn(8)
+        ));
+
+        model.radii = Some(vec![1.0; model.points.len()]);
+        assert!(can_reuse_checkpoint_adjacency(
+            &model,
+            AdjacencyKind::FromModel
+        ));
+        assert!(!can_reuse_checkpoint_adjacency(
+            &model,
+            AdjacencyKind::DelaunayQhull
+        ));
     }
 
     #[test]
