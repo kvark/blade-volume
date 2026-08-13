@@ -1597,3 +1597,36 @@ are mixed at the fourth decimal and hundredth of a degree. The prototype and
 its unit test are removed. The retained constant 2.5%-radius step is not merely
 overshooting late in the selected schedule; its full-size later moves contain
 novel-view signal that a generic coarse-to-fine rule discards.
+
+The first direct-Gaussian image-formation path is now implemented without a
+Meganeura operation, shader entry, or pre-made shader. A CPU oracle implements
+the 3DGUT unscented projection (seven sigma points at alpha=1, beta=2,
+kappa=0), exact 3D maximum response along a ray, per-ray depth sorting, and
+front-to-back alpha compositing. The training graph consumes host-recorded
+candidate indices and expresses isotropic scale, opacity, SH-0 colour, exact
+ray response, transmittance, RGB loss, and optional foreground-opacity loss
+entirely with existing Meganeura graph operations. Analytical projection and
+rotation tests, a CPU/GPU pixel check, and a two-view optimizer recovery test
+pass on the physical RTX 5070.
+
+On five independently reconstructed 2,179--2,340-particle surfaces, 500 masked
+appearance-only updates improve the direct Gaussian renderer's two held-pose
+sRGB mean PSNR from 12.28 to 16.47, 12.77 to 17.65, 12.80 to 17.62, 12.70 to
+17.45, and 12.65 to 17.48 dB. Both held views improve on every cloud. These
+values are not directly comparable to the PBR renderer's scores: this gate
+starts every extracted proxy at a deliberately flat grey and measures the new
+static light-field image formation before material decomposition. Capture
+radiance is converted from linear light at the boundary so the optimized SH
+obeys `PointCloudModel`'s display-referred sRGB contract. Geometry stays
+byte-for-byte fixed in this selected appearance gate.
+
+Freeing centres after appearance fitting is rejected for now. On the fixed
+cloud another 500 masked updates lower the training objective from 0.4013 to
+0.3411 but worsen nearest-truth position RMSE from 0.62094 to 0.62487. Direct
+rendering therefore fixes an important representation mismatch but does not by
+itself resolve multi-view depth ambiguity. The next geometry
+gate should add a surface-concentration/densification prior and screen-tile
+candidate recording while keeping the same continuous graph, then extend
+scale to anisotropic covariance. The temporary benchmark driver is removed;
+generated PLYs remain outside version control under
+`target/audit-runs/direct-gaussian-*`.
