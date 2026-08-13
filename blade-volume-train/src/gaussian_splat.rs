@@ -63,6 +63,14 @@ struct CandidateGrid {
 
 struct CandidateIndex {
     views: Vec<Option<CandidateGrid>>,
+    transforms: Vec<CandidateTransform>,
+}
+
+#[derive(Clone, Copy)]
+struct CandidateTransform {
+    mean: glam::Vec3,
+    inverse_rotation: glam::Quat,
+    scale: glam::Vec3,
 }
 
 impl CandidateIndex {
@@ -75,8 +83,20 @@ impl CandidateIndex {
         let mut views: Vec<Option<CandidateGrid>> = std::iter::repeat_with(|| None)
             .take(capture.views.len())
             .collect();
+        let transforms = model.transforms.as_ref().unwrap();
+        let transforms: Vec<CandidateTransform> = model
+            .points
+            .iter()
+            .zip(&transforms.rotations)
+            .zip(&transforms.scales)
+            .map(|((point, rotation), scale)| CandidateTransform {
+                mean: point.truncate(),
+                inverse_rotation: rotation.normalize().inverse(),
+                scale: *scale,
+            })
+            .collect();
         if min_alpha == 0.0 {
-            return Self { views };
+            return Self { views, transforms };
         }
         for &view_index in view_indices {
             views[view_index] = Some(CandidateGrid::new(
@@ -87,7 +107,7 @@ impl CandidateIndex {
                 min_alpha,
             ));
         }
-        Self { views }
+        Self { views, transforms }
     }
 
     fn candidates(&self, view: usize, pixel: usize) -> Option<&[u32]> {
@@ -483,9 +503,25 @@ pub fn ray_response(
     {
         return None;
     }
-    let inverse_rotation = rotation.normalize().inverse();
-    let gaussian_origin = (inverse_rotation * (ray_origin - mean)) / scale;
-    let gaussian_direction = (inverse_rotation * ray_direction) / scale;
+    ray_response_transformed(
+        ray_origin,
+        ray_direction,
+        CandidateTransform {
+            mean,
+            inverse_rotation: rotation.normalize().inverse(),
+            scale,
+        },
+    )
+}
+
+fn ray_response_transformed(
+    ray_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+    transform: CandidateTransform,
+) -> Option<RayResponse> {
+    let gaussian_origin =
+        (transform.inverse_rotation * (ray_origin - transform.mean)) / transform.scale;
+    let gaussian_direction = (transform.inverse_rotation * ray_direction) / transform.scale;
     let direction_squared = gaussian_direction.length_squared();
     if !direction_squared.is_finite() || direction_squared <= 0.0 {
         return None;
@@ -651,6 +687,29 @@ fn collect_candidate_hits(
     }
 }
 
+fn collect_indexed_candidate_hits(
+    model: &vol::PointCloudModel,
+    index: &CandidateIndex,
+    origin: glam::Vec3,
+    direction: glam::Vec3,
+    indices: &[u32],
+    min_alpha: f32,
+    hits: &mut Vec<(f32, u32)>,
+) {
+    hits.clear();
+    for &particle in indices {
+        let Some(hit) =
+            ray_response_transformed(origin, direction, index.transforms[particle as usize])
+        else {
+            continue;
+        };
+        let alpha = model.points[particle as usize].w * hit.response;
+        if hit.depth > 0.0 && alpha.is_finite() && alpha >= min_alpha {
+            hits.push((hit.depth, particle));
+        }
+    }
+}
+
 fn record_indexed_candidates(
     model: &vol::PointCloudModel,
     batch: &RayBatch,
@@ -744,13 +803,8 @@ fn record_indexed_candidate_range(
         .enumerate()
     {
         match index.candidates(view, pixel) {
-            Some(candidates) => collect_candidate_hits(
-                model,
-                origin,
-                direction,
-                candidates.iter().map(|&candidate| candidate as usize),
-                min_alpha,
-                &mut hits,
+            Some(candidates) => collect_indexed_candidate_hits(
+                model, index, origin, direction, candidates, min_alpha, &mut hits,
             ),
             None => collect_candidate_hits(
                 model,
@@ -1837,6 +1891,29 @@ mod tests {
         .unwrap();
         assert_close(offset.depth, 5.0, 1.0e-6);
         assert_close(offset.response, (-0.5_f32).exp(), 1.0e-6);
+    }
+
+    #[test]
+    fn cached_candidate_transform_is_bit_exact() {
+        let origin = glam::Vec3::new(0.7, -0.2, -3.0);
+        let direction = glam::Vec3::new(0.1, 0.05, 1.0).normalize();
+        let mean = glam::Vec3::new(0.2, 0.4, 2.0);
+        let rotation = glam::Quat::from_rotation_y(0.4);
+        let scale = glam::Vec3::new(0.3, 0.8, 1.1);
+        let direct = ray_response(origin, direction, mean, rotation, scale).unwrap();
+        let cached = ray_response_transformed(
+            origin,
+            direction,
+            CandidateTransform {
+                mean,
+                inverse_rotation: rotation.normalize().inverse(),
+                scale,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(cached.depth.to_bits(), direct.depth.to_bits());
+        assert_eq!(cached.response.to_bits(), direct.response.to_bits());
     }
 
     #[test]

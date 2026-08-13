@@ -1933,3 +1933,15 @@ keeps the 6.2-second fit time but lowers held direct quality from 17.70/17.16
 to 17.47/16.95 dB. At 32 candidates, quality collapses to 14.98/14.55 dB and
 time rises to 6.8 seconds. The selected 64 rows are a measured capacity floor
 for overlapping Gaussian layers at this resolution, not removable padding.
+
+The existing private candidate index now retains each particle's normalized
+inverse rotation and scale alongside its tile membership. Exact ray response
+previously normalized and inverted the same quaternion for every candidate on
+every sampled ray; those values can change only when the index is already
+rebuilt after a geometry synchronization. The indexed path remains bit-exact
+with the exhaustive oracle. Room fit time falls from 6.2 to 5.7 seconds with
+unchanged 17.70/17.15 dB held direct quality, and Bonsai falls from 5.5 to 5.2
+seconds while reaching 18.64/18.58 dB. Artifacts remain ignored under
+`target/audit-runs/gaussian-candidate-transform-v1/{room,bonsai}/`. This adds
+no public cache, dependency, graph operation, shader, or synchronization rule;
+it extends only the lifetime of arithmetic already owned by the tile index.
