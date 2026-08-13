@@ -930,3 +930,14 @@ The implementation adds one in-place material-buffer update to the existing
 relight tracer and an oracle proves its output is byte-identical to rebuilding
 the tracer. It reuses the current upload storage and changes no WGSL, shader
 entry, operation, binding, acceleration structure, or pipeline variant.
+
+Extending the existing simultaneous rendered-position search from observed
+particles to the entire cloud does not supply the missing geometry evidence.
+Across five fixed synthetic clouds it lowers held-light mean PSNR by
+0.14--0.54 dB, lowers every worst-view score by 0.10--0.43 dB, and usually
+reduces coverage. Truth position error is neutral or worse. Particles that do
+not affect a training render receive the accepted random direction of the
+joint perturbation anyway, then enter held cameras unconstrained. The one-line
+candidate-set prototype is removed without a real-scene run. A whole-render
+objective still needs training-view support or an independent prior for every
+coordinate it moves.
