@@ -73,8 +73,9 @@ training views are required; the stage is never inferred from RGB or from the
 surface renderer's own alpha.
 
 The same final surface can seed an ordinary static Gaussian light field with
-`--gaussian-output light-field.ply`. Its first half-schedule learns neutral
-SH-0 appearance; its second also learns opacity and three anisotropic scales.
+`--gaussian-output light-field.ply`. Its first third learns neutral
+SH-0 appearance; the remaining two thirds also learn opacity and three
+anisotropic scales.
 Reconstructed centres and tangent-frame rotations stay fixed. If every
 training view has an independent foreground mask, that mask also supervises
 opacity; unmasked room captures use RGB alone. This output is intentionally

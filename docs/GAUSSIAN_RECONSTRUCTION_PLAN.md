@@ -1700,7 +1700,7 @@ surfel's three-sigma finite-support radius by three to obtain the backend's
 one-sigma scale. SH-0 starts at neutral grey, so PBR materials and their
 training illumination cannot leak into the static light field.
 
-The default 1,000-update schedule spends 500 updates on SH appearance with
+The initial 1,000-update schedule spends 500 updates on SH appearance with
 fixed geometry, then 500 on SH, opacity, and three anisotropic scales. Centres
 remain fixed in both stages; the rejected free-centre experiment is also
 reflected in `FitOptions::default`. This reuses one graph and the existing
@@ -1736,10 +1736,10 @@ using the private tile index for candidate enumeration.
 
 A real-input smoke gate uses five selected Bonsai cameras at 64x42, four for
 training and one held out. Depth from an existing 57,484-cell field fuses to a
-deliberately coarse 162-particle surface. The default 1,000 updates reduce loss
-from 0.822654 to 0.538042 and then 0.351435, while held-view static-field PSNR
-improves from 9.01 to 11.38 dB. The same coarse PBR proxy scores 10.16 dB, so
-the direct field is 1.22 dB better even in this low-capacity smoke test. The
+deliberately coarse 162-particle surface. The then-default 1,000 updates reduce
+loss from 0.822654 to 0.538042 and then 0.351435, while held-view static-field
+PSNR improves from 9.01 to 11.38 dB. The same coarse PBR proxy scores 10.16 dB,
+so the direct field is 1.22 dB better even in this low-capacity smoke test. The
 complete warm run takes 4.76 seconds and peaks at 125 MiB with no swap,
 memory-pressure, OOM, kernel, or GPU fault. Artifacts remain ignored under
 `target/audit-runs/reconstruct-direct-gaussian-bonsai-default/`; this validates
@@ -1748,7 +1748,7 @@ the production path, not a full-resolution Bonsai quality claim.
 A larger real-input gate raises the working width to 128, uses 18 training and
 two held cameras, and fuses the same source field into 3,060 particles. The
 source RadFoam scores 12.49 dB on the exact held split; the neutral Gaussian
-surface starts at 9.80 dB. The selected 1,000 updates reach 17.81 dB mean and
+surface starts at 9.80 dB. The 1,000-update baseline reaches 17.81 dB mean and
 17.57 dB worst, a 5.32 dB gain over the source field. This still is not a
 full-resolution Bonsai result, but it shows that the production gain survives
 more views and twenty times the smoke-gate particles.
@@ -1762,3 +1762,18 @@ and loss within the run-to-run noise. At 4x4, rebuild rises to 2.33 seconds and
 total time regresses to 8.8 seconds. Eight-pixel tiles are therefore selected.
 This is a one-constant index policy change: no operation, graph, shader, entry,
 binding, or public option is added.
+
+The staged budget is then separated rather than simply doubled. On the same
+real gate, 1,000 appearance plus 500 support updates reaches 17.99 dB mean and
+17.53 dB worst in 13.6 seconds: extra appearance barely helps and slightly
+hurts the tail. Keeping appearance at 500 and extending support to 1,000
+reaches 18.26/18.22 dB in 11.6 seconds. A balanced 1,000+1,000 run reaches a
+higher 18.44 dB mean but a lower 18.17 dB worst and takes 17.1 seconds.
+
+The 500+1,000 schedule also improves every synthetic cloud over 500+500. Held
+mean gains are +0.51, +0.33, +0.22, +0.43, and +0.34 dB; worst-view gains are
++0.38, +0.16, +0.28, +0.27, and +0.28 dB. The fixed-cloud fit rises only from
+about 4.1 to 5.3 seconds after the tile optimization. Staged fitting therefore
+defaults to 1,500 updates, spending one third on appearance and the rest on
+support. This changes only schedule policy; the graph and parameter set stay
+unchanged.

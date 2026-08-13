@@ -158,8 +158,8 @@ struct Args {
     #[argh(option)]
     gaussian_output: Option<String>,
 
-    /// direct Gaussian updates, split evenly between appearance and support
-    #[argh(option, default = "1000")]
+    /// direct Gaussian updates, one third appearance then support (default 1500)
+    #[argh(option, default = "1500")]
     gaussian_steps: usize,
 
     /// particles to refine against all training renders (default 0). This is
@@ -1042,7 +1042,7 @@ mod tests {
         assert_eq!(defaults.surface_powerfoam_steps_per_view, 0);
         assert!(defaults.surface_powerfoam_output.is_none());
         assert!(defaults.gaussian_output.is_none());
-        assert_eq!(defaults.gaussian_steps, 1_000);
+        assert_eq!(defaults.gaussian_steps, 1_500);
 
         let known = <Args as argh::FromArgs>::from_args(
             &["reconstruct"],

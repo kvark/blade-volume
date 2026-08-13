@@ -144,8 +144,8 @@ struct Args {
     #[argh(option)]
     gaussian_output: Option<String>,
 
-    /// direct Gaussian updates, split evenly between appearance and support
-    #[argh(option, default = "1000")]
+    /// direct Gaussian updates, one third appearance then support (default 1500)
+    #[argh(option, default = "1500")]
     gaussian_steps: usize,
 
     /// retain fused depth centers instead of multi-view photo refinement
@@ -1433,6 +1433,6 @@ mod tests {
         assert_eq!(args.surface_powerfoam_steps_per_view, 0);
         assert!(args.surface_powerfoam_output.is_none());
         assert!(args.gaussian_output.is_none());
-        assert_eq!(args.gaussian_steps, 1_000);
+        assert_eq!(args.gaussian_steps, 1_500);
     }
 }

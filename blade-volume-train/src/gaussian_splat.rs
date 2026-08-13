@@ -207,10 +207,17 @@ pub struct StagedFitStats {
     pub support: FitStats,
 }
 
+fn staged_step_counts(steps: usize) -> Option<(usize, usize)> {
+    (steps >= 2).then(|| {
+        let appearance = (steps / 3).max(1);
+        (appearance, steps - appearance)
+    })
+}
+
 /// Apply the selected direct-Gaussian schedule to an established cloud.
 ///
-/// The first half learns only SH-0 appearance. The second half also learns
-/// opacity and three anisotropic scales, while keeping the reconstructed
+/// The first third learns only SH-0 appearance. The remaining updates also
+/// learn opacity and three anisotropic scales, while keeping the reconstructed
 /// centres fixed. Foreground opacity is supervised when every selected view
 /// carries a mask; ordinary scene captures continue without that optional
 /// term.
@@ -221,9 +228,9 @@ pub fn fit_staged(
     steps: usize,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<StagedFitStats, String> {
-    if steps < 2 {
+    let Some((appearance_steps, support_steps)) = staged_step_counts(steps) else {
         return Err("staged direct Gaussian fitting requires at least two updates".to_string());
-    }
+    };
     let opacity_loss_weight = if view_indices.iter().all(|&index| {
         capture
             .views
@@ -234,7 +241,6 @@ pub fn fit_staged(
     } else {
         0.0
     };
-    let appearance_steps = steps / 2;
     let appearance_options = FitOptions {
         steps: appearance_steps,
         batch_size: 512,
@@ -260,7 +266,7 @@ pub fn fit_staged(
         capture,
         view_indices,
         FitOptions {
-            steps: steps - appearance_steps,
+            steps: support_steps,
             scale_learning_rate: 0.005,
             opacity_learning_rate: 0.05,
             ..appearance_options
@@ -1432,6 +1438,13 @@ mod tests {
     #[test]
     fn selected_fit_defaults_keep_established_centres_fixed() {
         assert_eq!(FitOptions::default().position_learning_rate, 0.0);
+    }
+
+    #[test]
+    fn staged_budget_prioritizes_support_and_keeps_both_stages_nonempty() {
+        assert_eq!(staged_step_counts(1), None);
+        assert_eq!(staged_step_counts(2), Some((1, 1)));
+        assert_eq!(staged_step_counts(1_500), Some((500, 1_000)));
     }
 
     fn synthetic_capture(model: &vol::PointCloudModel) -> crate::inverse::capture::Capture {
