@@ -117,7 +117,7 @@ struct Args {
     min_views: usize,
 
     /// shared PBR materials in the reconstructed surface cloud
-    #[argh(option, default = "12")]
+    #[argh(option, default = "6")]
     materials: usize,
 
     /// hand the real capture light to the material fit as a diagnostic control
@@ -1189,5 +1189,15 @@ mod tests {
     fn fixed_or_invalid_point_budgets_are_explicit() {
         assert!(densify_config(2048, 2048).unwrap().is_none());
         assert!(densify_config(2048, 1024).is_err());
+    }
+
+    #[test]
+    fn selected_material_count_is_the_cli_default() {
+        let args = <Args as argh::FromArgs>::from_args(
+            &["synthetic_foam"],
+            &["--dataset", "capture", "--output", "model.ply"],
+        )
+        .unwrap();
+        assert_eq!(args.materials, 6);
     }
 }

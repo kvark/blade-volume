@@ -696,3 +696,24 @@ dispatches and readbacks, removes a temporary coverage image, and adds no
 shader or bind-group variant. The physical-GPU compositor oracle checks RGB
 and alpha together; the fixed synthetic cloud retains exactly 53.6% reported
 coverage after the change.
+
+Refreshing observations and re-running the material/light decomposition after
+an exact position-and-radius pass is not the missing joint update. Re-solving
+both appearance and illumination improves two fixed clouds but drops a third
+held-light score by 0.54 dB. Holding the recovered illumination fixed removes
+that collapse, but the five-cloud deltas are only +0.04, +0.01, +0.03, -0.01,
+and -0.02 dB. The prototype is removed. Geometry and appearance must share the
+rendered objective while a proposal is selected; a post-hoc decomposition only
+relabels the already chosen surface.
+
+Two apparent correctness cleanups are also rejected by the full output gate.
+Discarding the depth mode of an unbounded terminal RadFoam cell reduces extreme
+training-depth RMSE (12.29 to 2.05 world units on one cloud), but those tail
+samples almost never survive multi-view fusion and changing three retained
+surfels loses 0.93 dB under the unseen light. Replacing index-strided palette
+initialization with order-independent chromaticity quantiles is similarly
+well-motivated but loses 0.06--1.16 dB on all five clouds. The latter confirms
+that the small shared-material solve is poorly conditioned: a lower recovered
+light RMS does not imply better unseen-light rendering. Both code changes are
+removed; future decomposition work needs an explicit held-independent prior or
+joint objective, not a cosmetically more stable initializer.
