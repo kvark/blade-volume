@@ -1945,3 +1945,13 @@ seconds while reaching 18.64/18.58 dB. Artifacts remain ignored under
 `target/audit-runs/gaussian-candidate-transform-v1/{room,bonsai}/`. This adds
 no public cache, dependency, graph operation, shader, or synchronization rule;
 it extends only the lifetime of arithmetic already owned by the tile index.
+
+Reprojecting fused depth particles into their source depth maps is not selected
+as material supervision. Requiring two agreeing training cameras supplements
+1,329 otherwise-unseen Room particles and raises held PBR mean from 11.52 to
+11.64 dB, but lowers the worst view from 10.38 to 10.22 dB. Three cameras
+reach 11.75/10.27 dB; four cameras reach 11.67/10.36 dB. None improves both
+held views. The prototype is removed. Unlike sparse tracks, a fused cell centre
+is not an independently observed point: sampling its projected pixel after
+averaging source depths can cross an occlusion boundary. A future attempt must
+retain the original per-cell sample locations or model visibility explicitly.
