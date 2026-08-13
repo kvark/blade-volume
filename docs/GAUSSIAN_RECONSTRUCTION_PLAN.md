@@ -1558,3 +1558,18 @@ on a worst view, and leaves truth geometry neutral to slightly worse. Like the
 earlier split-patch test, weaker subsets discard useful evidence without
 making their shared visibility and material ambiguity independent. The
 prototype is removed without adding a control or representation variant.
+
+A correspondence-trained diagonal patch metric also fails the five-cloud
+gate. The diagnostic learns 27 reliability weights for the existing 3x3 RGB
+descriptor from 1,114 exact correspondences visible in at least four training
+cameras; it uses neither held-out poses nor the held-out light. Against paired
+same-binary controls, held-light mean/worst PSNR changes by +0.08/+0.08,
++0.08/+0.09, -0.87/-0.67, -0.27/-0.20, and +0.04/+0.05 dB. Position RMSE
+changes by at most 0.0001 and normal RMSE by at most 0.03 degrees, so the large
+appearance regressions are not buying a better surface. Three repeats of the
+first pair are identical at printed precision, ruling out GPU atomic variance.
+The estimator, synthetic truth-track adapter, tests, and option are removed;
+the production COLMAP loader remains minimal and does not retain observations
+for a metric that has no transfer case. A useful learned descriptor needs
+spatial context or nonlinear view invariance, not just rescaling the same
+normalized patch coordinates.
