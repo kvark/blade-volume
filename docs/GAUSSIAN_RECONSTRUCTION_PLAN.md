@@ -1989,3 +1989,14 @@ transport still enter the albedo. The API, unit test, benchmark switch, and
 helper are removed. A future multi-light material update must be judged through
 the complete renderer and must model indirect transport rather than adding
 another closed-form material stage.
+
+A multi-light version of the complete-render material optimizer is rejected as
+well. The temporary path prepares one existing production tracer for each of
+uniform, east-sun, west-sun, and sky-dome supervision, concatenates their
+rendered affine albedo responses, and accepts coordinate steps only against the
+combined render loss; studio remains held out. It improves that training-light
+objective from 0.0142439 to 0.0136802 in 2.46 seconds, but fixed-cloud studio PBR
+falls from 19.54/19.26 to 19.48/19.25 dB. The generalized evidence API, helper,
+and benchmark switch are removed. More known lights do not compensate for the
+renderer missing the capture's transport; optimizing their aggregate instead
+slightly moves away from the primary-light solution that generalizes best.
