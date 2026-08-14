@@ -2190,3 +2190,21 @@ mean/worst respectively, but Bonsai PBR loses 0.02/0.04 dB. The selected
 18-view floor is therefore measured rather than inferred from the coefficient
 count. A physical-GPU graph test exercises non-zero degree-two gradients, and
 promotion tests prove that DC is preserved while all new terms start at zero.
+
+Complete-render material refinement remains explicit after the SH-2 promotion.
+The combined 18-view gate raises Bonsai PBR from 13.04/12.79 to 13.51/13.36 dB,
+but Room moves from 12.56/12.29 to 12.58/12.22 dB. The lower Room tail repeats
+the existing cross-scene conflict even though the complete training-render
+loss falls on both captures. Static Gaussian fitting does not consume the PBR
+materials. There is therefore still no safe evidence for enabling
+`--render-refine-materials` by default or adding a confidence-policy branch.
+
+SH-3 at the same 18-view threshold is rejected. A temporary extension reused
+the coefficient-table graph, existing operations, and the renderer's existing
+SH-3 storage rather than adding a graph or shader variant. Room direct held
+quality falls from 18.61/18.52 to 18.14/17.81 dB and learned-support PBR falls
+from 12.56/12.29 to 12.17/11.97 dB. Bonsai direct changes from 18.81/18.63 to
+18.76/18.65 dB while PBR falls from 13.04/12.79 to 12.89/12.74 dB. Coverage
+rises, but the added support is wrong for both opaque PBR proxies. The complete
+SH-3 prototype is removed; SH-2 remains the measured expressiveness limit.
+Both gates completed under the 12 GiB cgroup without an OOM event or GPU Xid.
