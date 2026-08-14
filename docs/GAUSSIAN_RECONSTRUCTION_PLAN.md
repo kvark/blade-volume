@@ -1955,3 +1955,13 @@ held views. The prototype is removed. Unlike sparse tracks, a fused cell centre
 is not an independently observed point: sampling its projected pixel after
 averaging source depths can cross an occlusion boundary. A future attempt must
 retain the original per-cell sample locations or model visibility explicitly.
+
+Retaining those exact source pixels is tested next and still rejected. Taking
+the sharpest contributing depth sample per camera supplements 2,114 of 2,118
+otherwise-unseen Room depth particles, but reaches only 11.73/10.26 dB. A
+four-camera consensus supplements 496 and reaches 11.70/10.35 dB. Thus pixel
+reprojection is not the remaining cause: these back-layer particles are valid
+volumetric support but do not identify the first visible PBR surface. The
+temporary provenance API is removed. Further work should improve joint
+geometry/visibility or use known-light supervision rather than attach fallback
+materials to occluded foam layers.
