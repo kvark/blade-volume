@@ -374,6 +374,31 @@ pub fn from_surface(surface: &vol::relight::RelightModel) -> Result<vol::PointCl
     Ok(model)
 }
 
+/// Transfer learned Gaussian support back to the corresponding PBR surfels.
+///
+/// The direct field learns three one-sigma scales while the relightable
+/// surface stores one finite three-sigma radius. Their volume-equivalent
+/// scalar preserves the learned support budget without inventing an
+/// orientation-dependent PBR footprint.
+pub fn update_surface_radii(
+    surface: &mut vol::relight::RelightModel,
+    gaussian: &vol::PointCloudModel,
+) -> Result<(), String> {
+    surface.validate()?;
+    gaussian.validate()?;
+    if surface.surfels.len() != gaussian.points.len() {
+        return Err("Gaussian radius feedback requires matching particle counts".to_string());
+    }
+    let transforms = gaussian
+        .transforms
+        .as_ref()
+        .ok_or_else(|| "Gaussian radius feedback requires learned scales".to_string())?;
+    for (surfel, scale) in surface.surfels.iter_mut().zip(&transforms.scales) {
+        surfel.radius = 3.0 * (scale.x * scale.y * scale.z).cbrt();
+    }
+    surface.validate()
+}
+
 struct RayBatch {
     origins: Vec<glam::Vec3>,
     directions: Vec<glam::Vec3>,
@@ -1589,7 +1614,7 @@ mod tests {
 
     #[test]
     fn gaussian_surface_conversion_preserves_geometry_without_material_leakage() {
-        let surface = vol::relight::RelightModel {
+        let mut surface = vol::relight::RelightModel {
             kernel: vol::relight::ParticleKernel::Gaussian,
             surfels: vec![
                 vol::relight::Surfel {
@@ -1613,16 +1638,26 @@ mod tests {
                 },
             ],
         };
-        let model = from_surface(&surface).unwrap();
+        let mut model = from_surface(&surface).unwrap();
         assert_eq!(model.points[0], glam::Vec4::new(1.0, 2.0, 3.0, 0.5));
         assert_eq!(model.points[1], glam::Vec4::new(-1.0, 0.0, 4.0, 0.5));
         assert_eq!(model.sh_coefficients, [0.0; 6]);
-        let transforms = model.transforms.unwrap();
+        let transforms = model.transforms.as_ref().unwrap();
         assert_close(transforms.scales[0].x, 0.2, 1.0e-6);
         assert_close(transforms.scales[1].x, 0.1, 1.0e-6);
         for (rotation, surfel) in transforms.rotations.iter().zip(&surface.surfels) {
             let normal = glam::Vec3::from(surfel.normal);
             assert!((*rotation * glam::Vec3::Y).dot(normal) > 0.9999);
+        }
+        model.transforms.as_mut().unwrap().scales[0] = glam::Vec3::new(0.2, 0.4, 0.8);
+        let original = surface.surfels.clone();
+        update_surface_radii(&mut surface, &model).unwrap();
+        assert_close(surface.surfels[0].radius, 1.2, 1.0e-6);
+        assert_close(surface.surfels[1].radius, 0.3, 1.0e-6);
+        for (before, after) in original.iter().zip(&surface.surfels) {
+            assert_eq!(before.center, after.center);
+            assert_eq!(before.normal, after.normal);
+            assert_eq!(before.material, after.material);
         }
     }
 

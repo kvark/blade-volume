@@ -1241,6 +1241,9 @@ fn main() {
         );
         describe_scores("direct Gaussian held-out", &held_out_scores);
         println!("wrote {}", output.display());
+        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &gaussian)
+            .unwrap_or_else(|error| fail(error));
+        println!("updated PBR radii from learned Gaussian support");
     }
     if let Some(ref surface_output) = args.surface_output {
         let surface_path = path::Path::new(surface_output);

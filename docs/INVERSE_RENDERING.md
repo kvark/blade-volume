@@ -82,6 +82,13 @@ opacity; unmasked room captures use RGB alone. This output is intentionally
 separate from the relightable scene: it reproduces the captured illumination
 but does not claim to have separated material from light.
 
+The fitted scales do carry geometry evidence shared by both outputs. After the
+direct fit, their volume-equivalent three-sigma radius updates the corresponding
+relightable Gaussian surfel before it is scored or written. Centers, normals,
+material assignments, and PBR values remain unchanged. This happens only when
+`--gaussian-output` requests the direct fit; a PBR-only reconstruction retains
+its extracted radii.
+
 **Sparse points.** COLMAP's triangulated points, with normals from the local
 covariance and a side chosen by the cameras that can see them. Free, needs no
 training, and covers only what COLMAP could triangulate — 44 % of the frame on

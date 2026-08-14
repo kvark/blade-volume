@@ -645,6 +645,12 @@ fn main() {
             );
         }
         println!("wrote {}", output.display());
+        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &gaussian)
+            .unwrap_or_else(|error| {
+                eprintln!("cannot update PBR support from direct Gaussian field: {error}");
+                std::process::exit(1);
+            });
+        println!("updated PBR radii from learned Gaussian support");
     }
 
     if let Some(ref output) = args.output {

@@ -2028,3 +2028,38 @@ visibility construction plus decomposition falls from 3.5 to 0.1 seconds.
 Coverage is identical in each pair. The opt-in sampled path remains useful for
 captures whose transport has been independently shown to need it, but it is
 neither a quality nor a performance default for current reconstructed clouds.
+
+The selected direct Gaussian continuation now returns its learned support to
+the PBR surface. The static field and relightable model already have a one-to-
+one particle correspondence: centers and fixed rotations came from that PBR
+surface, while the direct support stage learns three one-sigma scales. The
+volume-equivalent scalar `3*cbrt(sx*sy*sz)` becomes the corresponding surfel's
+finite radius after direct fitting. No center, normal, material, assignment,
+opacity, particle count, representation, shader, graph operation, or pipeline
+changes. A checked shared function rejects missing transforms and count
+mismatches; both `synthetic_foam` and `reconstruct` call it only when
+`--gaussian-output` already requested the fit.
+
+On the fixed cloud, held-studio PBR improves from 19.54/19.26 to 21.67/21.01
+dB and coverage from 53.9% to 55.0%. A tangential-area radius reaches
+21.62/20.56 dB; maximum tangential extent over-expands to 61.7% coverage and
+falls to 19.62/18.60 dB, so both alternatives are removed. Four independently
+reconstructed variants finish at 21.49--21.76 dB means and 20.70--21.18 dB
+tails, improving every current mean and tail. The learned static fields remain
+at 22.79--24.11 dB on those held poses.
+
+The exact selected real-scene commands agree. Room retains its 17.70/17.15 dB
+static field while PBR test mean/worst improves 11.52/10.38 to 12.49/12.20 dB
+and coverage 75.6% to 79.3%. Bonsai retains 18.64/18.59 dB static quality and
+improves PBR 12.96/12.67 to 13.04/12.79 dB; its already saturated coverage
+changes 99.8% to 99.5%. Fit time is unchanged because the scale learning was
+already part of the selected direct output.
+
+Two geometry controls explain why this works where earlier cleanup did not.
+Replacing every center with its nearest training-truth surface sample collapses
+overlap support and lowers fixed PBR to 17.78/17.30 dB; replacing only normals
+reaches merely 19.67/19.24 dB. Removing the 64 particles that are both unseen
+and below refreshed two-view depth support is also neutral-negative at
+19.51/19.25 dB. Those temporary diagnostics are removed. The reconstruction
+needs a better learned footprint around its existing centers, not pointwise
+surface snapping or unsupported-layer pruning.
