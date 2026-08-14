@@ -2016,3 +2016,15 @@ the existing point-cloud visibility and bounce as an explicit option; at the
 zero default it now also skips the corresponding CPU visibility fit so training
 and rendering use one model. This changes no representation, shader, operation,
 binding, or pipeline.
+
+Two real COLMAP smokes confirm the production default rather than merely
+agreeing with the synthetic gate. On five selected 64-pixel-wide Bonsai views,
+analytic and explicit 32-sample transport both score 9.23 dB on the held view
+(13.47 dB linear), while analytic training score is 11.66 versus 11.65 dB and
+removes 1.2 seconds of visibility construction plus 3.1 seconds of
+decomposition time. On the paired Room smoke, analytic transport improves the
+held view from 12.64 to 13.11 dB and training mean from 10.09 to 10.40 dB;
+visibility construction plus decomposition falls from 3.5 to 0.1 seconds.
+Coverage is identical in each pair. The opt-in sampled path remains useful for
+captures whose transport has been independently shown to need it, but it is
+neither a quality nor a performance default for current reconstructed clouds.
