@@ -2115,3 +2115,11 @@ from 5.0 to 4.9 seconds, with unchanged 21.68/21.01, 12.49/12.20, and
 13.04/12.79 dB PBR gates respectively. The cache adds about 0.72 MiB on the
 18-view Room gate and is rebuilt with the existing index; it adds no public
 state, synchronization, operation, shader, or scheduling branch.
+
+The learned Gaussian's thinnest covariance axis is not a valid surface-normal
+feedback signal. Selecting that axis from the fixed extracted frame raises the
+fixed held-light PBR gate from 21.68/21.01 to 21.79/21.17 dB, but nearest-truth
+normal RMSE collapses from 54.73 to 78.51 degrees and median error from 35.42
+to 63.48 degrees. The apparent image gain is the relight renderer compensating
+for missing transport with incorrect geometry. The prototype is removed; PBR
+score alone cannot gate learned normal feedback.
