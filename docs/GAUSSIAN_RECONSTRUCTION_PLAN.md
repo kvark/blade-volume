@@ -2308,3 +2308,22 @@ only the separately fitted fixed-center Gaussian radii. The feedback and its
 diagnostic control are removed rather than adding a mask or confidence policy
 for a marginal, geometry-negative effect. The five-case gate peaked at 197.4
 MiB in the 12 GiB cgroup, with no memory-pressure event, OOM, or GPU Xid.
+
+The two Gaussian outputs now share their appearance-only initialization. The
+PBR cloud is an exact prefix of the static field before fitting; the first 500
+updates cannot alter positions, scales, or opacity, so their learned DC
+coefficients can initialize the common PBR particles without repeating the
+same graph session. The fixed-center and learned-center support stages remain
+independent, preserving the output-specific geometry decision above. Prefix
+geometry, transforms, and initial appearance are validated explicitly.
+
+Three paired 18-view runs retain Room at 18.73--18.74/18.70 dB static and
+exactly 12.56/12.29 dB PBR, while Bonsai retains 18.96--18.98/18.82--18.84 dB
+static and exactly 13.04/12.79 dB PBR. Median combined Gaussian fit time falls
+from 6.6 to 5.8 seconds on Room and from 6.5 to 5.3 seconds on Bonsai. The
+six-view masked synthetic gate retains 23.63/22.70 dB static and
+21.67/21.00 dB PBR while falling from about 3.6--3.8 to 3.2 seconds. The
+four-repeat real scope peaks at 427.7 MiB with no pressure, swap, OOM, or GPU
+fault. This removes 500 optimizer updates and one graph build without adding a
+graph operation, shader, entry, binding, model field, dependency, file format,
+or CLI setting.

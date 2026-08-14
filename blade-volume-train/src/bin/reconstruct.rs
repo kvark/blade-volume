@@ -612,26 +612,9 @@ fn main() {
                 eprintln!("cannot initialize PBR support Gaussian field: {error}");
                 std::process::exit(1);
             });
-        let core_started = std::time::Instant::now();
-        let core_stats = train::gaussian_splat::fit_staged(
+        let started = std::time::Instant::now();
+        let stats = train::gaussian_splat::fit_staged_outputs(
             &mut pbr_gaussian,
-            &capture,
-            &train_views,
-            args.gaussian_steps,
-            gpu.clone(),
-        )
-        .unwrap_or_else(|error| {
-            eprintln!("cannot fit PBR support Gaussian field: {error}");
-            std::process::exit(1);
-        });
-        println!(
-            "PBR support Gaussian: {} appearance and {} support updates in {:.1} s",
-            core_stats.appearance.steps,
-            core_stats.support.steps,
-            core_started.elapsed().as_secs_f64(),
-        );
-        let expanded_started = std::time::Instant::now();
-        let stats = train::gaussian_splat::fit_staged_light_field(
             &mut gaussian,
             &capture,
             &train_views,
@@ -639,9 +622,17 @@ fn main() {
             gpu,
         )
         .unwrap_or_else(|error| {
-            eprintln!("cannot fit direct Gaussian field: {error}");
+            eprintln!("cannot fit Gaussian outputs: {error}");
             std::process::exit(1);
         });
+        let fit_seconds = started.elapsed().as_secs_f64();
+        println!(
+            "Gaussian outputs: {} shared appearance, {} PBR support, and {} light-field support updates in {:.1} s",
+            stats.appearance.steps,
+            stats.pbr_support.steps,
+            stats.light_field_support.steps,
+            fit_seconds,
+        );
         let test = score_gaussian_test(&gaussian, &capture, &test_views).unwrap_or_else(|error| {
             eprintln!("cannot score direct Gaussian field: {error}");
             std::process::exit(1);
@@ -664,14 +655,14 @@ fn main() {
             std::process::exit(1);
         });
         println!(
-            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6}, in {:.1} s",
+            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} (shared-output fit {:.1} s total)",
             stats.appearance.steps,
             stats.appearance.initial_loss,
             stats.appearance.final_loss,
-            stats.support.steps,
-            stats.support.initial_loss,
-            stats.support.final_loss,
-            expanded_started.elapsed().as_secs_f64(),
+            stats.light_field_support.steps,
+            stats.light_field_support.initial_loss,
+            stats.light_field_support.final_loss,
+            fit_seconds,
         );
         if let (Some((initial_mean, initial_worst)), Some((mean, worst))) = (initial_test, test) {
             println!(

@@ -1203,15 +1203,17 @@ fn main() {
         let Some(gpu) = train::fit::try_init_gpu() else {
             fail("no supported GPU device for direct Gaussian training");
         };
-        let core_started = std::time::Instant::now();
-        let core_stats = train::gaussian_splat::fit_staged(
+        let started = std::time::Instant::now();
+        let stats = train::gaussian_splat::fit_staged_outputs(
             &mut pbr_gaussian,
+            &mut gaussian,
             &training_capture,
             &training_indices,
             args.gaussian_steps,
-            gpu.clone(),
+            gpu,
         )
         .unwrap_or_else(|error| fail(error));
+        let fit_seconds = started.elapsed().as_secs_f64();
         let core_held_out_scores = train::gaussian_splat::evaluate_views(
             &pbr_gaussian,
             &training_capture,
@@ -1222,21 +1224,13 @@ fn main() {
         )
         .unwrap_or_else(|error| fail(error));
         println!(
-            "PBR support Gaussian: {} appearance and {} support updates in {:.3} s",
-            core_stats.appearance.steps,
-            core_stats.support.steps,
-            core_started.elapsed().as_secs_f64(),
+            "Gaussian outputs: {} shared appearance, {} PBR support, and {} light-field support updates in {:.3} s",
+            stats.appearance.steps,
+            stats.pbr_support.steps,
+            stats.light_field_support.steps,
+            fit_seconds,
         );
         describe_scores("fixed-center Gaussian held-out", &core_held_out_scores);
-        let started = std::time::Instant::now();
-        let stats = train::gaussian_splat::fit_staged_light_field(
-            &mut gaussian,
-            &training_capture,
-            &training_indices,
-            args.gaussian_steps,
-            gpu,
-        )
-        .unwrap_or_else(|error| fail(error));
         let held_out_scores = train::gaussian_splat::evaluate_views(
             &gaussian,
             &training_capture,
@@ -1256,14 +1250,14 @@ fn main() {
         convert::save_ply(output, &gaussian)
             .unwrap_or_else(|error| fail(format!("cannot write {}: {error:?}", output.display())));
         println!(
-            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6}, in {:.3} s",
+            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} (shared-output fit {:.3} s total)",
             stats.appearance.steps,
             stats.appearance.initial_loss,
             stats.appearance.final_loss,
-            stats.support.steps,
-            stats.support.initial_loss,
-            stats.support.final_loss,
-            started.elapsed().as_secs_f64(),
+            stats.light_field_support.steps,
+            stats.light_field_support.initial_loss,
+            stats.light_field_support.final_loss,
+            fit_seconds,
         );
         describe_scores("direct Gaussian held-out", &held_out_scores);
         println!("wrote {}", output.display());

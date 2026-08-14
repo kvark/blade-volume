@@ -281,6 +281,14 @@ pub struct StagedFitStats {
     pub support: FitStats,
 }
 
+/// Statistics for two Gaussian outputs that share appearance initialization.
+#[derive(Clone, Copy, Debug)]
+pub struct SharedStagedFitStats {
+    pub appearance: FitStats,
+    pub pbr_support: FitStats,
+    pub light_field_support: FitStats,
+}
+
 fn staged_step_counts(steps: usize) -> Option<(usize, usize)> {
     (steps >= 2).then(|| {
         let appearance = (steps / 3).max(1);
@@ -351,6 +359,56 @@ pub fn fit_staged_light_field(
     )
 }
 
+/// Fit fixed-centre PBR support and a learned-centre static light field.
+///
+/// The light field may append particles after the PBR prefix. Appearance-only
+/// initialization is shared because neither geometry nor support changes in
+/// that stage; the two outputs then receive independent support optimization.
+pub fn fit_staged_outputs(
+    pbr: &mut vol::PointCloudModel,
+    light_field: &mut vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    steps: usize,
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<SharedStagedFitStats, String> {
+    validate_shared_prefix(pbr, light_field)?;
+    let (appearance_options, light_field_options, sh_degree) = staged_options(
+        capture,
+        view_indices,
+        steps,
+        LIGHT_FIELD_POSITION_LEARNING_RATE,
+    )?;
+    let appearance = fit(
+        light_field,
+        capture,
+        view_indices,
+        appearance_options,
+        gpu.clone(),
+    )?;
+    copy_appearance_prefix(pbr, light_field);
+    if sh_degree > 0 {
+        promote_to_sh_degree(pbr, sh_degree);
+        promote_to_sh_degree(light_field, sh_degree);
+    }
+    let pbr_support = fit(
+        pbr,
+        capture,
+        view_indices,
+        FitOptions {
+            position_learning_rate: 0.0,
+            ..light_field_options
+        },
+        gpu.clone(),
+    )?;
+    let light_field_support = fit(light_field, capture, view_indices, light_field_options, gpu)?;
+    Ok(SharedStagedFitStats {
+        appearance,
+        pbr_support,
+        light_field_support,
+    })
+}
+
 fn fit_staged_impl(
     model: &mut vol::PointCloudModel,
     capture: &crate::inverse::capture::Capture,
@@ -362,6 +420,31 @@ fn fit_staged_impl(
     if model.sh_degree != 0 {
         return Err("staged direct Gaussian fitting requires an SH-0 input model".to_string());
     }
+    let (appearance_options, support_options, sh_degree) =
+        staged_options(capture, view_indices, steps, position_learning_rate)?;
+    let appearance = fit(
+        model,
+        capture,
+        view_indices,
+        appearance_options,
+        gpu.clone(),
+    )?;
+    if sh_degree > 0 {
+        promote_to_sh_degree(model, sh_degree);
+    }
+    let support = fit(model, capture, view_indices, support_options, gpu)?;
+    Ok(StagedFitStats {
+        appearance,
+        support,
+    })
+}
+
+fn staged_options(
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    steps: usize,
+    position_learning_rate: f32,
+) -> Result<(FitOptions, FitOptions, usize), String> {
     let Some((appearance_steps, support_steps)) = staged_step_counts(steps) else {
         return Err("staged direct Gaussian fitting requires at least two updates".to_string());
     };
@@ -388,21 +471,9 @@ fn fit_staged_impl(
         opacity_loss_weight,
         background: [0.0; 3],
     };
-    let appearance = fit(
-        model,
-        capture,
-        view_indices,
-        appearance_options,
-        gpu.clone(),
-    )?;
     let sh_degree = selected_sh_degree(view_indices.len());
-    if sh_degree > 0 {
-        promote_to_sh_degree(model, sh_degree);
-    }
-    let support = fit(
-        model,
-        capture,
-        view_indices,
+    Ok((
+        appearance_options,
         FitOptions {
             steps: support_steps,
             position_learning_rate,
@@ -410,12 +481,50 @@ fn fit_staged_impl(
             opacity_learning_rate: 0.05,
             ..appearance_options
         },
-        gpu,
-    )?;
-    Ok(StagedFitStats {
-        appearance,
-        support,
-    })
+        sh_degree,
+    ))
+}
+
+fn validate_shared_prefix(
+    pbr: &vol::PointCloudModel,
+    light_field: &vol::PointCloudModel,
+) -> Result<(), String> {
+    pbr.validate()?;
+    light_field.validate()?;
+    if pbr.sh_degree != 0 || light_field.sh_degree != 0 {
+        return Err("shared staged Gaussian fitting requires SH-0 input models".to_string());
+    }
+    if pbr.points.len() > light_field.points.len()
+        || light_field.points.get(..pbr.points.len()) != Some(&pbr.points)
+        || light_field.sh_coefficients.get(..pbr.sh_coefficients.len())
+            != Some(&pbr.sh_coefficients)
+    {
+        return Err("the PBR Gaussian must be an exact prefix of the light field".to_string());
+    }
+    let Some(ref pbr_transforms) = pbr.transforms else {
+        return Err("the PBR Gaussian requires transforms".to_string());
+    };
+    let Some(ref light_field_transforms) = light_field.transforms else {
+        return Err("the light-field Gaussian requires transforms".to_string());
+    };
+    if light_field_transforms
+        .rotations
+        .get(..pbr_transforms.rotations.len())
+        != Some(&pbr_transforms.rotations)
+        || light_field_transforms
+            .scales
+            .get(..pbr_transforms.scales.len())
+            != Some(&pbr_transforms.scales)
+    {
+        return Err("the PBR Gaussian transforms must prefix the light field".to_string());
+    }
+    Ok(())
+}
+
+fn copy_appearance_prefix(pbr: &mut vol::PointCloudModel, light_field: &vol::PointCloudModel) {
+    let coefficient_count = pbr.sh_coefficients.len();
+    pbr.sh_coefficients
+        .copy_from_slice(&light_field.sh_coefficients[..coefficient_count]);
 }
 
 fn promote_to_sh_degree(model: &mut vol::PointCloudModel, degree: usize) {
@@ -1778,6 +1887,25 @@ mod tests {
     #[test]
     fn selected_fit_defaults_keep_established_centres_fixed() {
         assert_eq!(FitOptions::default().position_learning_rate, 0.0);
+    }
+
+    #[test]
+    fn shared_appearance_requires_and_updates_only_the_pbr_prefix() {
+        let first = glam::Vec4::new(1.0, 2.0, 3.0, 0.5);
+        let second = glam::Vec4::new(4.0, 5.0, 6.0, 0.5);
+        let mut pbr = model(vec![first]);
+        let mut light_field = model(vec![first, second]);
+        validate_shared_prefix(&pbr, &light_field).unwrap();
+
+        light_field
+            .sh_coefficients
+            .copy_from_slice(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+        copy_appearance_prefix(&mut pbr, &light_field);
+        assert_eq!(pbr.sh_coefficients, [0.1, 0.2, 0.3]);
+        assert_eq!(light_field.sh_coefficients[3..], [0.4, 0.5, 0.6]);
+
+        light_field.points[0].x += 1.0;
+        assert!(validate_shared_prefix(&pbr, &light_field).is_err());
     }
 
     #[test]
