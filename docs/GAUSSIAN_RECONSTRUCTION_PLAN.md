@@ -2208,3 +2208,42 @@ from 12.56/12.29 to 12.17/11.97 dB. Bonsai direct changes from 18.81/18.63 to
 rises, but the added support is wrong for both opaque PBR proxies. The complete
 SH-3 prototype is removed; SH-2 remains the measured expressiveness limit.
 Both gates completed under the 12 GiB cgroup without an OOM event or GPU Xid.
+
+Splitting the same 500 appearance updates around the 1,000 support updates is
+also rejected. The temporary schedule performs 250 SH-0 appearance updates,
+the unchanged support stage, then 250 appearance-only updates against the
+learned support. It improves Room direct held quality from 18.61/18.52 to
+18.64/18.55 dB and Bonsai from 18.81/18.63 to 18.89/18.84 dB. Room PBR also
+improves from 12.56/12.29 to 12.60/12.33 dB, but Bonsai PBR falls from
+13.04/12.79 to 13.02/12.74 dB. The exact controls use the same one-sample
+transport score; an earlier analytic-score diagnostic is not compared across
+transport settings. The original uninterrupted 500-step appearance
+initialization therefore remains the cross-scene choice. The third fit and all
+scheduling changes are removed.
+
+Partial sorting does not measurably accelerate candidate recording. A temporary
+host-only change partitions each hit list at the retained 64 candidates and
+sorts only that prefix; the total ordering makes its output identical to the
+full sort. Three complete Room and Bonsai repeats nevertheless stay inside the
+existing 3.5--4.1 second fit band. Tile culling has already reduced most lists
+enough that selection is not the remaining cost. The helper is removed rather
+than retaining an unmeasured second ordering path.
+
+Increasing the unchanged two-stage budget from 1,500 to 1,750 updates is
+rejected. Bonsai improves to 18.96/18.88 dB direct and 13.06/12.82 dB PBR, but
+Room falls to 18.56/18.44 dB direct and 12.55/12.25 dB PBR despite a lower
+training loss and 0.3 more coverage points. The fixed update budget remains
+1,500; more optimization is not a scene-independent quality improvement.
+
+The selected support-stage candidate-grid cadence is now 20 updates instead of
+10. Candidate grids are a conservative discrete superset for the continuous
+Gaussian graph, and the smaller support changes over twenty updates remain
+inside that margin. Across three Room repeats, the core fit falls from about
+3.8--4.0 to 3.2--3.3 seconds and the expanded fit to 3.4--3.5 seconds while
+retaining 18.60--18.62/18.51--18.52 dB direct and exactly 12.56/12.29 dB PBR.
+Three Bonsai runs retain 18.81--18.83/18.66--18.67 dB direct and 13.04/12.79
+dB PBR while both fits finish in 3.2--3.4 seconds. The six-view synthetic gate
+remains at 23.41/22.58 dB direct and 21.67/21.00 dB held-light PBR with 55.0%
+coverage, inside its established one-hundredth atomic band. This is a one-line
+private scheduling change: no graph operation, shader, entry, binding, model,
+dependency, or public option is added.

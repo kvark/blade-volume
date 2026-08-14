@@ -350,7 +350,7 @@ pub fn fit_staged(
         batch_size: 512,
         candidates_per_pixel: 64,
         candidate_min_alpha: 1.0e-5,
-        geometry_sync_every: 10,
+        geometry_sync_every: 20,
         position_learning_rate: 0.0,
         scale_learning_rate: 0.0,
         opacity_learning_rate: 0.0,
