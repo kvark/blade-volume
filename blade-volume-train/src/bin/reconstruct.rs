@@ -119,10 +119,10 @@ struct Args {
     #[argh(option, default = "2")]
     min_views: usize,
 
-    /// shadow rays per shading point when scoring (default 32). A scene
+    /// shadow rays per shading point when scoring (default 0). A scene
     /// fitted with shadowing has to be rendered with it, or the comparison
     /// measures two renderer settings rather than the scene.
-    #[argh(option, default = "32")]
+    #[argh(option, default = "0")]
     diffuse_samples: u32,
 
     /// fit without shadowing or indirect light
@@ -448,7 +448,7 @@ fn main() {
         );
     }
 
-    let shadows = if args.no_shadows {
+    let shadows = if args.no_shadows || args.diffuse_samples == 0 {
         None
     } else {
         let started = std::time::Instant::now();
@@ -1486,6 +1486,7 @@ mod tests {
         assert!(defaults.surface_powerfoam_output.is_none());
         assert!(defaults.gaussian_output.is_none());
         assert_eq!(defaults.gaussian_steps, 1_500);
+        assert_eq!(defaults.diffuse_samples, 0);
 
         let known = <Args as argh::FromArgs>::from_args(
             &["reconstruct"],

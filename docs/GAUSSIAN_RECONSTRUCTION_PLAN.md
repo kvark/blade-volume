@@ -2000,3 +2000,19 @@ falls from 19.54/19.26 to 19.48/19.25 dB. The generalized evidence API, helper,
 and benchmark switch are removed. More known lights do not compensate for the
 renderer missing the capture's transport; optimizing their aggregate instead
 slightly moves away from the primary-light solution that generalizes best.
+
+Production reconstruction now defaults to the selected analytic transport.
+The old `reconstruct` default computed 512 CPU shadow directions during the
+material fit and used 32 visibility-plus-bounce rays at every final-render
+shading point, even though the selected synthetic pipeline and viewer default
+to zero. On the fixed 2,179-particle reconstruction, changing only final
+scoring from zero to 32 samples lowers held-studio PBR from 19.54/19.26 to
+19.17/18.84 dB and raises 0.44 to 32.04 ms/frame. The depth upper bound agrees:
+16 sampled rays lower 26.57 to about 25.06 dB. Removing the approximate blocker
+bounce is worse still at 24.76/24.15 dB; even 64 direct-visibility samples reach
+only 25.90/25.05 dB at 38--44 ms/frame. The direct-only shader prototype and
+synthetic scoring switch are removed. `reconstruct --diffuse-samples N` keeps
+the existing point-cloud visibility and bounce as an explicit option; at the
+zero default it now also skips the corresponding CPU visibility fit so training
+and rendering use one model. This changes no representation, shader, operation,
+binding, or pipeline.

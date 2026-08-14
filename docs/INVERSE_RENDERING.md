@@ -231,6 +231,14 @@ one feature; neither is worth having alone. That matches what the forward
 renderer already says about itself, where `diffuse_samples` buys both together
 because each ray either reaches the sky or meets something.
 
+`reconstruct` nevertheless defaults `--diffuse-samples` to zero and skips the
+matching visibility fit at that setting. On reconstructed Gaussian geometry,
+approximate secondary rays currently lose both accuracy and roughly two orders
+of magnitude of rendering performance; a nonzero sample count opts into the
+visibility-plus-bounce model for captures where that trade is known to help.
+`--no-shadows` remains a diagnostic override that can decouple the material fit
+from a requested sampled render.
+
 ## Where it stands
 
 On a scene whose answer is known, the albedo/light split works: albedo
