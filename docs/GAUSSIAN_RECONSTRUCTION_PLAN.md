@@ -1965,3 +1965,27 @@ volumetric support but do not identify the first visible PBR surface. The
 temporary provenance API is removed. Further work should improve joint
 geometry/visibility or use known-light supervision rather than attach fallback
 materials to occluded foam layers.
+
+An analytical multi-light diffuse solve is also rejected without per-light
+visibility. It solves one least-squares albedo per shared material from every
+calibrated environment except the held-out one. Before rendered refinement it
+is neutral-to-negative by 0.01 dB. Applied after normals and materials settle,
+it lowers fixed-cloud held-light PBR from 19.54/19.26 to 19.25/19.04 dB. The
+extra captures contain cast-shadow and interreflection energy absent from the
+Lambertian irradiance basis, so the solver paints that energy into albedo. The
+prototype and CLI switch are removed. Multi-light material fitting must include
+visibility for each calibrated light rather than merely add observations.
+
+Adding direct-light visibility does not rescue that analytical solve. A
+temporary implementation reused the existing per-environment shadow maps and
+GGX lobe subtraction, without adding a shader or operation. Applied before the
+render-based material optimizer, all six materials move but the optimizer
+returns exactly to its control loss and 19.54/19.26 dB held-light PBR. Applied
+after it, held-light PBR falls to 18.88/18.73 dB. The full 256x128 visibility
+passes take 49-50 seconds and peak near 1 GiB under the 12 GiB cgroup, with no
+memory or GPU fault. Direct visibility is therefore necessary in isolation but
+not sufficient on reconstructed geometry: its error and unmodelled indirect
+transport still enter the albedo. The API, unit test, benchmark switch, and
+helper are removed. A future multi-light material update must be judged through
+the complete renderer and must model indirect transport rather than adding
+another closed-form material stage.
