@@ -2167,3 +2167,26 @@ finish at 3.3--3.5 seconds instead of 4.5--4.7 seconds. Room retains
 indexed-versus-exhaustive candidate tests cover the parallel construction.
 The change is private host scheduling only: no model, graph operation, shader,
 pipeline, dependency, or public setting is added.
+
+Degree-two spherical harmonics are selected for direct Gaussian captures with
+at least 18 training views. The existing coefficient-table graph now consumes
+the five standard quadratic basis terms in addition to SH-1; the CPU oracle,
+model, PLY format, and production renderer already supported them. There is no
+new Meganeura operation, shader, entry, binding, pipeline, or public option.
+Captures with 8--17 views remain SH-1 and smaller captures remain SH-0.
+
+Three-run medians on the 18-view split improve Room's direct held field from
+18.43/18.32 to 18.61/18.52 dB and its learned-support PBR result from
+12.49/12.20 to 12.56/12.29 dB, with coverage rising from 79.3% to 80.9%.
+Bonsai improves from 18.65/18.59 to 18.81/18.63 dB direct while retaining
+13.04/12.79 dB PBR; coverage rises from 99.5% to 99.6%. Room's two fits take
+about 3.8--4.0 seconds instead of 3.4--3.7, and Bonsai takes 3.5--3.9 seconds
+instead of 3.3--3.5. The binary PLYs grow by about 58%, while runtime GPU
+allocation is unchanged because it already reserves all 16 supported SH terms.
+
+A matched four-held-view control rejects promotion at 16 training views.
+SH-2 improves the Room and Bonsai direct fields by 0.30/0.40 and 0.27/0.36 dB
+mean/worst respectively, but Bonsai PBR loses 0.02/0.04 dB. The selected
+18-view floor is therefore measured rather than inferred from the coefficient
+count. A physical-GPU graph test exercises non-zero degree-two gradients, and
+promotion tests prove that DC is preserved while all new terms start at zero.

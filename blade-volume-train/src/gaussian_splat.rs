@@ -13,11 +13,19 @@ use std::{sync, thread};
 
 const SH_C0: f32 = 0.282_094_8;
 const SH_C1: f32 = 0.488_602_52;
+const SH_C2: [f32; 5] = [
+    1.092_548_5,
+    -1.092_548_5,
+    0.315_391_57,
+    -1.092_548_5,
+    0.546_274_24,
+];
 const MIN_SCALE: f32 = 1.0e-4;
 const MAX_ALPHA: f32 = 0.999;
 const TILE_SIZE: usize = 8;
 const TILE_SUPPORT_MARGIN: f32 = 1.25;
 const MIN_SH1_VIEWS: usize = 8;
+const MIN_SH2_VIEWS: usize = 18;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
 /// points. The covariance columns follow `glam::Mat2`'s column-major layout.
@@ -279,8 +287,29 @@ fn staged_step_counts(steps: usize) -> Option<(usize, usize)> {
     })
 }
 
-fn use_directional_appearance(view_count: usize) -> bool {
-    view_count >= MIN_SH1_VIEWS
+fn selected_sh_degree(view_count: usize) -> usize {
+    if view_count >= MIN_SH2_VIEWS {
+        2
+    } else if view_count >= MIN_SH1_VIEWS {
+        1
+    } else {
+        0
+    }
+}
+
+fn sh_basis(direction: glam::Vec3) -> [f32; 9] {
+    let squared = direction * direction;
+    [
+        SH_C0,
+        -SH_C1 * direction.y,
+        SH_C1 * direction.z,
+        -SH_C1 * direction.x,
+        SH_C2[0] * direction.x * direction.y,
+        SH_C2[1] * direction.y * direction.z,
+        SH_C2[2] * (3.0 * squared.z - 1.0),
+        SH_C2[3] * direction.x * direction.z,
+        SH_C2[4] * (squared.x - squared.y),
+    ]
 }
 
 /// Apply the selected direct-Gaussian schedule to an established cloud.
@@ -288,8 +317,9 @@ fn use_directional_appearance(view_count: usize) -> bool {
 /// The first third learns only view-independent appearance. The remaining
 /// updates also learn opacity and three anisotropic scales, while keeping the
 /// reconstructed centres fixed. With enough distinct training views they also
-/// promote appearance to SH-1; smaller captures remain compact SH-0 because
-/// their directional terms did not generalize in held-view gates.
+/// promote appearance to SH-1 or SH-2 according to the available view count;
+/// smaller captures remain compact because higher directional terms did not
+/// generalize in held-view gates.
 /// Foreground opacity is supervised when every selected view carries a mask;
 /// ordinary scene captures continue without that optional term.
 pub fn fit_staged(
@@ -335,8 +365,9 @@ pub fn fit_staged(
         appearance_options,
         gpu.clone(),
     )?;
-    if use_directional_appearance(view_indices.len()) {
-        promote_to_sh_degree_one(model);
+    let sh_degree = selected_sh_degree(view_indices.len());
+    if sh_degree > 0 {
+        promote_to_sh_degree(model, sh_degree);
     }
     let support = fit(
         model,
@@ -356,14 +387,17 @@ pub fn fit_staged(
     })
 }
 
-fn promote_to_sh_degree_one(model: &mut vol::PointCloudModel) {
+fn promote_to_sh_degree(model: &mut vol::PointCloudModel, degree: usize) {
     assert_eq!(model.sh_degree, 0);
-    let mut coefficients = vec![0.0; model.points.len() * 4 * 3];
+    assert!((1..=2).contains(&degree));
+    let components = vol::get_sh_component_count(degree);
+    let mut coefficients = vec![0.0; model.points.len() * components * 3];
     for (index, dc) in model.sh_coefficients.chunks_exact(3).enumerate() {
-        coefficients[index * 12..index * 12 + 3].copy_from_slice(dc);
+        let base = index * components * 3;
+        coefficients[base..base + 3].copy_from_slice(dc);
     }
     model.sh_coefficients = coefficients;
-    model.sh_degree = 1;
+    model.sh_degree = degree;
 }
 
 /// Convert an established relightable Gaussian surface into the neutral
@@ -914,7 +948,7 @@ fn record_indexed_candidate_range(
     }
 }
 
-/// Render an SH-0 or SH-1 Gaussian model with the exact CPU response oracle.
+/// Render an SH-0, SH-1, or SH-2 Gaussian model with the exact CPU response oracle.
 ///
 /// This is the quality reference for the differentiable graph and future tile
 /// culling. `candidates_per_pixel` is still a deliberate approximation to the
@@ -929,8 +963,8 @@ pub fn render_rays(
     background: [f32; 3],
 ) -> Vec<glam::Vec4> {
     assert!(
-        model.sh_degree <= 1,
-        "Gaussian CPU oracle supports SH degrees 0 and 1"
+        model.sh_degree <= 2,
+        "Gaussian CPU oracle supports SH degrees 0 through 2"
     );
     let candidates = record_candidates(
         model,
@@ -996,9 +1030,10 @@ pub fn evaluate_views(
     background: [f32; 3],
 ) -> Result<Vec<f32>, String> {
     model.validate()?;
-    if model.sh_degree > 1 || model.transforms.is_none() {
+    if model.sh_degree > 2 || model.transforms.is_none() {
         return Err(
-            "direct Gaussian evaluation requires transformed SH-0 or SH-1 Gaussians".to_string(),
+            "direct Gaussian evaluation requires transformed SH-0 through SH-2 Gaussians"
+                .to_string(),
         );
     }
     if candidates_per_pixel == 0 {
@@ -1080,7 +1115,7 @@ pub fn evaluate_views(
 ///
 /// Candidate order is a discrete input and must be refreshed by the caller as
 /// particles move. Positions, scales, opacity, SH colour, exact ray response,
-/// and front-to-back compositing are all inside the graph. SH-1 reuses the
+/// and front-to-back compositing are all inside the graph. SH-1 and SH-2 reuse the
 /// existing fused gather-times-basis reduction instead of a separate graph or
 /// shader variant.
 pub fn build_graph(
@@ -1095,7 +1130,7 @@ pub fn build_graph(
     assert!(particles > 0);
     assert!(pixels > 0);
     assert!(candidates_per_pixel > 0);
-    assert!(sh_degree <= 1);
+    assert!(sh_degree <= 2);
     assert!(opacity_loss_weight.is_finite() && opacity_loss_weight >= 0.0);
     let rows = pixels * candidates_per_pixel;
     let sh_components = vol::get_sh_component_count(sh_degree);
@@ -1270,8 +1305,10 @@ fn validate_fit(
     options: FitOptions,
 ) -> Result<(), String> {
     model.validate()?;
-    if model.sh_degree > 1 {
-        return Err("direct Gaussian fitting currently supports SH degrees 0 and 1".to_string());
+    if model.sh_degree > 2 {
+        return Err(
+            "direct Gaussian fitting currently supports SH degrees 0 through 2".to_string(),
+        );
     }
     if let Some((index, point)) = model
         .points
@@ -1527,16 +1564,7 @@ fn set_batch(
     let sh_basis: Vec<f32> = batch
         .directions
         .iter()
-        .flat_map(|direction| {
-            [
-                SH_C0,
-                -SH_C1 * direction.y,
-                SH_C1 * direction.z,
-                -SH_C1 * direction.x,
-            ]
-            .into_iter()
-            .take(sh_components)
-        })
+        .flat_map(|&direction| sh_basis(direction).into_iter().take(sh_components))
         .collect();
     session.set_input_u32("candidate_indices", &candidates.indices);
     session.set_input_u32("candidate_pixel_indices", &candidates.pixel_indices);
@@ -1562,7 +1590,7 @@ fn changes_candidate_geometry(options: FitOptions) -> bool {
 
 /// Fit a Gaussian light field directly to posed RGB images.
 ///
-/// This is intentionally the small baseline: fixed particle count, SH-0/1, and
+/// This is intentionally the small baseline: fixed particle count, SH-0/1/2, and
 /// exact CPU response testing after private screen-tile culling. It establishes
 /// whether direct Gaussian image formation improves reconstruction before
 /// learned rotations, higher-order SH, or densification add implementation
@@ -1741,8 +1769,10 @@ mod tests {
         assert_eq!(staged_step_counts(1), None);
         assert_eq!(staged_step_counts(2), Some((1, 1)));
         assert_eq!(staged_step_counts(1_500), Some((500, 1_000)));
-        assert!(!use_directional_appearance(MIN_SH1_VIEWS - 1));
-        assert!(use_directional_appearance(MIN_SH1_VIEWS));
+        assert_eq!(selected_sh_degree(MIN_SH1_VIEWS - 1), 0);
+        assert_eq!(selected_sh_degree(MIN_SH1_VIEWS), 1);
+        assert_eq!(selected_sh_degree(MIN_SH2_VIEWS - 1), 1);
+        assert_eq!(selected_sh_degree(MIN_SH2_VIEWS), 2);
     }
 
     fn synthetic_capture(model: &vol::PointCloudModel) -> crate::inverse::capture::Capture {
@@ -1848,7 +1878,7 @@ mod tests {
     fn degree_one_promotion_preserves_dc_and_zeros_directional_terms() {
         let mut model = model(vec![glam::Vec4::W, glam::Vec4::ONE]);
         model.sh_coefficients = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        promote_to_sh_degree_one(&mut model);
+        promote_to_sh_degree(&mut model, 1);
         assert_eq!(model.sh_degree, 1);
         assert_eq!(
             model.sh_coefficients,
@@ -1857,6 +1887,42 @@ mod tests {
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             ]
         );
+    }
+
+    #[test]
+    fn degree_two_promotion_preserves_dc_and_zeros_directional_terms() {
+        let mut model = model(vec![glam::Vec4::W, glam::Vec4::ONE]);
+        model.sh_coefficients = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        promote_to_sh_degree(&mut model, 2);
+        assert_eq!(model.sh_degree, 2);
+        assert_eq!(model.sh_coefficients.len(), 54);
+        assert_eq!(&model.sh_coefficients[..3], &[1.0, 2.0, 3.0]);
+        assert!(model.sh_coefficients[3..27]
+            .iter()
+            .all(|value| *value == 0.0));
+        assert_eq!(&model.sh_coefficients[27..30], &[4.0, 5.0, 6.0]);
+        assert!(model.sh_coefficients[30..]
+            .iter()
+            .all(|value| *value == 0.0));
+    }
+
+    #[test]
+    fn degree_two_basis_matches_the_point_cloud_oracle() {
+        let mut model = model(vec![glam::Vec4::W]);
+        model.sh_degree = 2;
+        model.sh_coefficients = (0..27).map(|index| 0.01 * (index as f32 - 13.0)).collect();
+        let direction = glam::Vec3::new(0.3, -0.4, 0.5).normalize();
+        let basis = sh_basis(direction);
+        let mut expected = glam::Vec3::splat(0.5);
+        for (component, value) in basis.into_iter().enumerate() {
+            for channel in 0..3 {
+                expected[channel] += value * model.sh_coefficients[component * 3 + channel];
+            }
+        }
+        let actual = vol::trace::eval_rgb_sh(&model, 0, direction);
+        for (actual, expected) in actual.to_array().into_iter().zip(expected.to_array()) {
+            assert_close(actual, expected.max(0.0), 1.0e-6);
+        }
     }
 
     #[test]
@@ -2084,14 +2150,14 @@ mod tests {
     }
 
     #[test]
-    fn anisotropic_graph_matches_oracle_and_has_position_gradient() {
+    fn anisotropic_sh2_graph_matches_oracle_and_has_position_gradient() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = crate::fit::try_init_gpu() else {
             eprintln!("skipping anisotropic Gaussian graph test: no GPU");
             return;
         };
         let mut graph = mn::Graph::new();
-        build_graph(&mut graph, 2, 1, 2, 1, 0.0, [0.0; 3]);
+        build_graph(&mut graph, 2, 1, 2, 2, 0.0, [0.0; 3]);
         let (mut session, _report) = mn::build(
             &graph,
             mn::SessionConfig {
@@ -2116,21 +2182,29 @@ mod tests {
         session.set_parameter("opacity_logits", &[0.0; 2]);
         let bright = 0.5 / SH_C0;
         let directional = 0.2 / SH_C1;
-        session.set_parameter(
-            "sh_r",
-            &[bright, 0.0, directional, 0.0, -bright, 0.0, 0.0, 0.0],
-        );
-        session.set_parameter(
-            "sh_g",
-            &[-bright, 0.0, 0.0, 0.0, bright, 0.0, -directional, 0.0],
-        );
-        session.set_parameter("sh_b", &[-bright, 0.0, 0.0, 0.0, -bright, 0.0, 0.0, 0.0]);
+        let mut sh_r = [0.0; 18];
+        sh_r[0] = bright;
+        sh_r[2] = directional;
+        sh_r[9] = -bright;
+        session.set_parameter("sh_r", &sh_r);
+        let mut sh_g = [0.0; 18];
+        sh_g[0] = -bright;
+        sh_g[9] = bright;
+        sh_g[11] = -directional;
+        session.set_parameter("sh_g", &sh_g);
+        let mut sh_b = [0.0; 18];
+        sh_b[0] = -bright;
+        sh_b[9] = -bright;
+        session.set_parameter("sh_b", &sh_b);
         session.set_input_u32("candidate_indices", &[0, 1]);
         session.set_input_u32("candidate_pixel_indices", &[0, 0]);
         session.set_input("candidate_mask", &[1.0, 1.0]);
         session.set_input("ray_origins", &[0.0, 0.0, 0.0]);
         session.set_input("ray_directions", &[0.0, 0.0, 1.0]);
-        session.set_input("sh_basis", &[SH_C0, 0.0, SH_C1, 0.0]);
+        session.set_input(
+            "sh_basis",
+            &[SH_C0, 0.0, SH_C1, 0.0, 0.0, 0.0, 2.0 * SH_C2[2], 0.0, 0.0],
+        );
         session.set_input("labels", &[0.2, 0.2, 0.1]);
         session.set_input("target_alpha", &[0.0]);
         let front_rotation = glam::Quat::from_rotation_y(0.6);
@@ -2178,10 +2252,11 @@ mod tests {
         session.read_param_grad("log_scales", &mut scale_gradient);
         assert!(scale_gradient.iter().all(|value| value.is_finite()));
         assert!(scale_gradient[..3].iter().any(|value| value.abs() > 1.0e-5));
-        let mut sh_gradient = [0.0_f32; 8];
+        let mut sh_gradient = [0.0_f32; 18];
         session.read_param_grad("sh_r", &mut sh_gradient);
         assert!(sh_gradient.iter().all(|value| value.is_finite()));
         assert!(sh_gradient[2].abs() > 1.0e-5);
+        assert!(sh_gradient[6].abs() > 1.0e-5);
     }
 
     #[test]
