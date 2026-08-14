@@ -2063,3 +2063,31 @@ and below refreshed two-view depth support is also neutral-negative at
 19.51/19.25 dB. Those temporary diagnostics are removed. The reconstruction
 needs a better learned footprint around its existing centers, not pointwise
 surface snapping or unsupported-layer pruning.
+
+Learned opacity does not improve the scalar PBR footprint. Multiplying the
+selected volume-equivalent radius by `sqrt(opacity)` preserves projected
+Gaussian energy and raises the fixed held-light gate from 21.67/21.01 to
+21.90/21.15 dB, but it fails every independent-cloud mean: 21.49 to 21.40,
+21.51 to 21.35, 21.76 to 21.66, and 21.74 to 21.63 dB. Three of the four tails
+are neutral or worse as well. A cube-root opacity factor is tied with the
+square-root factor on the fixed gate. Both are removed. The PBR compositor
+normalizes overlapping hits into one opaque surface band, so Gaussian alpha
+cannot be converted into that representation by shrinking each radius in
+isolation.
+
+Repeating complete-render material refinement after radius feedback is also
+rejected. It improves all five synthetic means and tails by 0.01--0.09 dB and
+raises Bonsai from 13.51/13.37 to 13.70/13.56 dB, but Room changes
+12.58/12.23 to 12.64/12.22 dB. Halving the second step retains the Room tail
+loss. Moving the one existing material pass after support learning instead of
+repeating it is worse on the fixed tail, Room tail, and both Bonsai scores.
+All reorder/repeat code is removed. A lower training render loss is not enough
+to resolve the mismatch between single-light material evidence and overlapping
+volumetric support.
+
+A final private recorder micro-optimization is likewise not retained. Caching
+the reciprocal Gaussian scale alongside the already cached inverse rotation
+passes the bit-exact indexed/exhaustive oracle, but three complete Room fits
+remain at 5.6 seconds, inside the established 5.6--5.7 second range. The
+compiler already eliminates enough repeated division that an additional
+cached field has no measurable production value.
