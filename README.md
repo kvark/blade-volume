@@ -42,6 +42,32 @@ paths; masked runs supervise opacity and default its loss weight to 1. See
 `docs/PIPELINE.md` for the design and `docs/MESH_TO_FOAM.md`
 for the parallel mesh-to-foam path.
 
+## Current Reconstruction Results
+
+The image-only pipeline now produces two cloud-only outputs from posed views:
+a static anisotropic Gaussian light field, and a Gaussian surface with shared
+PBR materials plus a recovered environment. No polygonal geometry enters
+either reconstructed asset.
+
+| Gate | Training / held views | Static held PSNR | PBR held PSNR | Coverage |
+| --- | ---: | ---: | ---: | ---: |
+| Synthetic (PBR unseen light) | 6 / 2 | 23.63 / 22.70 dB | 21.67 / 21.00 dB | 55.0% |
+| Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
+| Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
+
+Each PSNR cell is mean / worst held view at the 128-pixel-wide research gate.
+The static columns always use the capture light. The synthetic PBR score uses
+a held-out environment; Room and Bonsai have no relighting truth, so their PBR
+columns measure held poses under the recovered capture light. They must not be
+read as real-scene relighting accuracy.
+
+`reconstruct --gaussian-output light-field.ply --output scene.rply` writes the
+two outputs; `scene.f32` stores the recovered environment beside the PBR
+scene. Current research artifacts and complete logs are generated under
+`target/audit-runs/` and intentionally remain outside version control. The
+exact protocols, negative results, and artifact locations are recorded in
+[`docs/GAUSSIAN_RECONSTRUCTION_PLAN.md`](docs/GAUSSIAN_RECONSTRUCTION_PLAN.md).
+
 CI enforces workspace formatting, all-feature clippy with warnings denied,
 default and all-feature tests, and a RustSec dependency audit.
 The clippy policy mirrors `blade-graphics/src/lib.rs` and lives in the root `Cargo.toml`'s
@@ -131,7 +157,8 @@ This command is deliberately a depth upper bound: it fuses depth truth from
 training views only, estimates normals from the resulting cloud, and fits
 materials from radiance. It prints a matched truth-material control and never
 uses held-out camera geometry for fusion. `--truth-normals` selects the earlier
-normal upper bound; RGB-only depth remains future work.
+normal upper bound. The image-only path and its current gap to this ceiling are
+summarized above.
 
 Scored against blade's canonical path tracer over six views of `police.glb`
 under five environments, the direct-lighting path reaches **27.95 dB linear /
