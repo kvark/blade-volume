@@ -2327,3 +2327,14 @@ four-repeat real scope peaks at 427.7 MiB with no pressure, swap, OOM, or GPU
 fault. This removes 500 optimizer updates and one graph build without adding a
 graph operation, shader, entry, binding, model field, dependency, file format,
 or CLI setting.
+
+The fit loop now reuses its final synchronized model and candidate grids. A
+support stage whose last update is a scheduled geometry refresh had already
+downloaded every learned parameter and rebuilt all per-view grids; doing both
+again immediately before the audit was redundant. Appearance-only stages
+still download learned colour but retain their unchanged geometry index.
+Non-divisible schedules keep the final download and rebuild. A unit gate covers
+all three cases. Three real-scene repeats preserve the scores above while
+moving the shared-output median from 5.8 to 5.7 seconds on Room and from 5.3 to
+5.2 seconds on Bonsai. This is a private synchronization removal with no
+schedule, update, graph, shader, model, format, or API change.

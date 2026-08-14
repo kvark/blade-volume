@@ -1728,6 +1728,10 @@ fn changes_candidate_geometry(options: FitOptions) -> bool {
         || options.opacity_learning_rate > 0.0
 }
 
+fn geometry_synced_by_final_step(options: FitOptions) -> bool {
+    changes_candidate_geometry(options) && options.steps.is_multiple_of(options.geometry_sync_every)
+}
+
 /// Fit a Gaussian light field directly to posed RGB images.
 ///
 /// This is intentionally the small baseline: fixed particle count, SH-0/1/2, and
@@ -1790,11 +1794,16 @@ pub fn fit(
                 CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
         }
     }
-    download_model(&session, model);
+    let geometry_synced = geometry_synced_by_final_step(options);
+    if !geometry_synced {
+        download_model(&session, model);
+    }
 
     session.clear_optimizer();
-    candidate_index =
-        CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
+    if sync_candidate_geometry && !geometry_synced {
+        candidate_index =
+            CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
+    }
     set_batch(&mut session, model, &audit, &candidate_index, options);
     session.step();
     session.wait();
@@ -1920,6 +1929,27 @@ mod tests {
         assert!(changes_candidate_geometry(FitOptions {
             scale_learning_rate: 0.01,
             ..appearance
+        }));
+    }
+
+    #[test]
+    fn final_geometry_sync_is_reused_only_at_an_exact_refresh_boundary() {
+        let support = FitOptions {
+            steps: 100,
+            geometry_sync_every: 20,
+            scale_learning_rate: 0.01,
+            ..FitOptions::default()
+        };
+        assert!(geometry_synced_by_final_step(support));
+        assert!(!geometry_synced_by_final_step(FitOptions {
+            steps: 99,
+            ..support
+        }));
+        assert!(!geometry_synced_by_final_step(FitOptions {
+            position_learning_rate: 0.0,
+            scale_learning_rate: 0.0,
+            opacity_learning_rate: 0.0,
+            ..support
         }));
     }
 
