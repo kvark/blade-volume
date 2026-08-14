@@ -2295,3 +2295,16 @@ already required independent core and expanded fits, so the center gradient
 adds no update or graph-build cost there; each field remains in the measured
 2.7--3.5 second range. This adds no shader, operation, binding, model field,
 dependency, CLI switch, or output format.
+
+Feeding learned static-field centers back into the relightable surface is
+rejected, including when limited to particles supported by at least four
+refreshed depth maps. A 25% center blend raises held-light PBR by only
+0.00--0.02 dB on five masked synthetic reconstructions, while position RMSE
+worsens on all five; the second cloud also worsens in normal RMSE.
+Unrestricted feedback had already slightly regressed the unmasked Room
+capture. Learned centers therefore remain an output-specific light-field
+degree of freedom; PBR retains the fixed reconstructed centers and receives
+only the separately fitted fixed-center Gaussian radii. The feedback and its
+diagnostic control are removed rather than adding a mask or confidence policy
+for a marginal, geometry-negative effect. The five-case gate peaked at 197.4
+MiB in the 12 GiB cgroup, with no memory-pressure event, OOM, or GPU Xid.
