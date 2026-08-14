@@ -2247,3 +2247,14 @@ remains at 23.41/22.58 dB direct and 21.67/21.00 dB held-light PBR with 55.0%
 coverage, inside its established one-hundredth atomic band. This is a one-line
 private scheduling change: no graph operation, shader, entry, binding, model,
 dependency, or public option is added.
+
+Less frequent grid refreshes are not selected. At 40 updates, three Room runs
+still retain 18.59--18.60/18.51 dB direct and 12.56/12.29 dB PBR, and three
+Bonsai runs retain 18.80--18.81/18.64--18.65 dB direct and 13.04/12.79 dB PBR;
+fits fall further to 2.9--3.2 seconds. The independent six-view synthetic gate
+exposes stale support, however: direct quality rises to 23.50/22.67 dB while
+held-light PBR falls from 21.68/21.01 at 55.0% coverage to 21.63/20.93 dB at
+54.9%. At 80 updates, stale candidates become visible on the real gate too:
+Bonsai direct falls to 18.76/18.58 dB and its PBR mean loses 0.01 dB. Both
+cadences are removed. Twenty updates is the measured joint-quality endpoint,
+not merely the first faster value tried.
