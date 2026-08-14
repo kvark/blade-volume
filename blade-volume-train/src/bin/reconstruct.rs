@@ -19,6 +19,9 @@ use blade_volume_convert as convert;
 use blade_volume_train as train;
 use std::{collections, path};
 
+const PBR_SPARSE_CELL_POINTS: usize = 5;
+const STATIC_GAUSSIAN_SPARSE_CELL_POINTS: usize = 3;
+
 #[derive(argh::FromArgs)]
 /// Reconstruct geometry, material and light from a posed capture.
 struct Args {
@@ -284,7 +287,7 @@ fn main() {
 
     // ------------------------------------------------------------- geometry
     let started = std::time::Instant::now();
-    let (surfels, sparse_support) = match args.foam {
+    let (surfels, sparse_support, gaussian_sparse_support) = match args.foam {
         Some(ref foam) => surfels_from_foam(
             path::Path::new(foam),
             &capture,
@@ -294,6 +297,7 @@ fn main() {
         ),
         None => (
             surfels_from_sparse(&reconstruction, &capture, &args),
+            Vec::new(),
             Vec::new(),
         ),
     };
@@ -582,9 +586,15 @@ fn main() {
     }
 
     if let Some(ref output) = args.gaussian_output {
-        let started = std::time::Instant::now();
+        let mut gaussian_surface = fitted.scene.model.clone();
+        gaussian_surface
+            .surfels
+            .extend(gaussian_sparse_support.iter().copied().map(|mut surfel| {
+                surfel.material = 0;
+                surfel
+            }));
         let mut gaussian =
-            train::gaussian_splat::from_surface(&fitted.scene.model).unwrap_or_else(|error| {
+            train::gaussian_splat::from_surface(&gaussian_surface).unwrap_or_else(|error| {
                 eprintln!("cannot initialize direct Gaussian field: {error}");
                 std::process::exit(1);
             });
@@ -597,6 +607,35 @@ fn main() {
             eprintln!("cannot initialize a supported GPU for direct Gaussian training");
             std::process::exit(1);
         };
+        let pbr_gaussian = if gaussian_sparse_support.is_empty() {
+            None
+        } else {
+            let mut core =
+                train::gaussian_splat::from_surface(&fitted.scene.model).unwrap_or_else(|error| {
+                    eprintln!("cannot initialize PBR support Gaussian field: {error}");
+                    std::process::exit(1);
+                });
+            let core_started = std::time::Instant::now();
+            let stats = train::gaussian_splat::fit_staged(
+                &mut core,
+                &capture,
+                &train_views,
+                args.gaussian_steps,
+                gpu.clone(),
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("cannot fit PBR support Gaussian field: {error}");
+                std::process::exit(1);
+            });
+            println!(
+                "PBR support Gaussian: {} appearance and {} support updates in {:.1} s",
+                stats.appearance.steps,
+                stats.support.steps,
+                core_started.elapsed().as_secs_f64(),
+            );
+            Some(core)
+        };
+        let expanded_started = std::time::Instant::now();
         let stats = train::gaussian_splat::fit_staged(
             &mut gaussian,
             &capture,
@@ -637,7 +676,7 @@ fn main() {
             stats.support.steps,
             stats.support.initial_loss,
             stats.support.final_loss,
-            started.elapsed().as_secs_f64(),
+            expanded_started.elapsed().as_secs_f64(),
         );
         if let (Some((initial_mean, initial_worst)), Some((mean, worst))) = (initial_test, test) {
             println!(
@@ -645,7 +684,8 @@ fn main() {
             );
         }
         println!("wrote {}", output.display());
-        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &gaussian)
+        let feedback = pbr_gaussian.as_ref().unwrap_or(&gaussian);
+        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, feedback)
             .unwrap_or_else(|error| {
                 eprintln!("cannot update PBR support from direct Gaussian field: {error}");
                 std::process::exit(1);
@@ -754,7 +794,11 @@ fn surfels_from_foam(
     reconstruction: &train::colmap::Reconstruction,
     views: &[usize],
     args: &Args,
-) -> (Vec<vol::relight::Surfel>, Vec<SparseSupport>) {
+) -> (
+    Vec<vol::relight::Surfel>,
+    Vec<SparseSupport>,
+    Vec<vol::relight::Surfel>,
+) {
     let mut model = match vol::io::try_load(&foam.to_string_lossy()) {
         Ok(m) => m,
         Err(e) => {
@@ -848,11 +892,34 @@ fn surfels_from_foam(
         views,
         voxel,
         options.disc_radius,
+        PBR_SPARSE_CELL_POINTS,
     );
     println!(
         "geometry: added {} particles from training-only sparse tracks",
         sparse_support.len()
     );
+    let gaussian_sparse_support = if args.gaussian_output.is_some() {
+        let core_count = surfels.len();
+        let mut expanded = surfels.clone();
+        add_sparse_track_support(
+            &mut expanded,
+            reconstruction,
+            capture,
+            views,
+            voxel,
+            options.disc_radius,
+            STATIC_GAUSSIAN_SPARSE_CELL_POINTS,
+        );
+        expanded.split_off(core_count)
+    } else {
+        Vec::new()
+    };
+    if !gaussian_sparse_support.is_empty() {
+        println!(
+            "geometry: retained {} additional sparse-track particles for the static Gaussian",
+            gaussian_sparse_support.len()
+        );
+    }
     if !args.no_multi_view_refine {
         let refine_started = std::time::Instant::now();
         let refine_views: Vec<train::inverse::refine::RefinementView<'_>> = views
@@ -881,7 +948,7 @@ fn surfels_from_foam(
             refine_started.elapsed().as_secs_f64(),
         );
     }
-    (surfels, sparse_support)
+    (surfels, sparse_support, gaussian_sparse_support)
 }
 
 struct SparseCell {
@@ -911,6 +978,7 @@ fn add_sparse_track_support(
     views: &[usize],
     voxel: f32,
     radius_factor: f32,
+    minimum_cell_points: usize,
 ) -> Vec<SparseSupport> {
     if surfels.is_empty() || !voxel.is_finite() || voxel <= 0.0 {
         return Vec::new();
@@ -991,7 +1059,7 @@ fn add_sparse_track_support(
     }
     let mut points: Vec<glam::Vec3> = cells
         .values()
-        .filter(|cell| cell.count >= 5)
+        .filter(|cell| cell.count >= minimum_cell_points)
         .map(|cell| cell.position_sum / cell.count as f32)
         .collect();
     points.sort_by(|left, right| left.to_array().partial_cmp(&right.to_array()).unwrap());
@@ -1379,6 +1447,7 @@ mod tests {
             &[0, 1],
             1.0,
             1.7,
+            PBR_SPARSE_CELL_POINTS,
         );
         assert!(!added.is_empty());
         assert!(supported[1..].iter().all(|surfel| surfel.radius == 1.7));
@@ -1398,8 +1467,45 @@ mod tests {
             &[0, 1],
             1.0,
             1.7,
+            PBR_SPARSE_CELL_POINTS,
         );
         assert!(added.is_empty());
+    }
+
+    #[test]
+    fn sparse_support_respects_the_output_confidence_floor() {
+        let capture = sparse_support_capture();
+        let mut reconstruction = sparse_support_fixture(vec![10, 11]);
+        reconstruction.points.retain(|point| point.id % 5 < 3);
+        let seed = vol::relight::Surfel {
+            center: [100.0; 3],
+            radius: 1.0,
+            normal: [0.0, 0.0, 1.0],
+            material: 0,
+        };
+        let mut pbr = vec![seed];
+        let conservative = add_sparse_track_support(
+            &mut pbr,
+            &reconstruction,
+            &capture,
+            &[0, 1],
+            1.0,
+            1.7,
+            PBR_SPARSE_CELL_POINTS,
+        );
+        assert!(conservative.is_empty());
+
+        let mut static_gaussian = vec![seed];
+        let expanded = add_sparse_track_support(
+            &mut static_gaussian,
+            &reconstruction,
+            &capture,
+            &[0, 1],
+            1.0,
+            1.7,
+            STATIC_GAUSSIAN_SPARSE_CELL_POINTS,
+        );
+        assert!(!expanded.is_empty());
     }
 
     #[test]

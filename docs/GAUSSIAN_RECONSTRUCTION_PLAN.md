@@ -2123,3 +2123,33 @@ normal RMSE collapses from 54.73 to 78.51 degrees and median error from 35.42
 to 63.48 degrees. The apparent image gain is the relight renderer compensating
 for missing transport with incorrect geometry. The prototype is removed; PBR
 score alone cannot gate learned normal feedback.
+
+Sparse-track cell confidence is now output-specific. Lowering the shared
+five-point cell floor to three adds 138 Room particles and raises its direct
+held field from 17.70/17.16 to 18.43/18.31 dB, but the opaque PBR proxy's
+worst view falls from 12.20 to 12.06 dB. A floor of four still loses 0.10 dB
+on the Room tail and lowers Bonsai PBR from 13.04/12.79 to 12.97/12.68 dB.
+Both shared-threshold policies are removed.
+
+The selected path keeps five-point cells for the relightable surface and
+appends three-point cells only to the persisted static Gaussian. Individual
+COLMAP points still require sub-pixel error and tracks in at least two selected
+training cameras; held-camera-only tracks remain excluded. This contributes
+126 static-only particles on Room and 60 on Bonsai. Room direct held quality
+becomes 18.42/18.32 dB and Bonsai becomes 18.66/18.61 dB, while their PBR
+models score 12.49/12.19 and 13.04/12.79 dB respectively. The committed Room
+baseline scores 12.49/12.20 dB. An independent oracle run of the selected path
+also rounds to 12.49/12.20 dB; three ordinary repeats round to 12.49/12.19 dB.
+This one-hundredth tail band is expected from the unordered floating-point
+accumulation in Meganeura's atomic embedding gradient, not a change in the
+rendered support policy. A diagnostic CPU evaluation perturbed dispatch timing
+and restored 12.20 dB, but is removed because a timing warm-up is not an
+algorithmic fix.
+
+The two confidence sets are fitted independently so the extra radiance support
+cannot perturb the PBR radius solution. Attempts to shorten that conservative
+fit to 1,000 or 1,250 staged updates lose the Bonsai tail; 1,000 support-only
+updates lose 0.04 dB there as well. The complete core fit is retained as the
+quality oracle, adding about five seconds only when static-only support exists
+and direct Gaussian output was requested. It adds no particle type, shader,
+graph operation, dependency, or output-format field.
