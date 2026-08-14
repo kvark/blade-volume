@@ -2104,3 +2104,14 @@ PBR respectively. A unit oracle compares the composed transform with the
 original quaternion-space response, and indexed candidates remain exact
 against exhaustive recording. This changes one private cached value and adds
 no dependency, operation, shader, entry, setting, or synchronization point.
+
+The existing per-view tile index now also caches each particle's camera origin
+in Gaussian space. Every sampled ray from one view shares that origin, so
+recomputing its matrix transform for every candidate was redundant; only the
+ray direction still needs a per-hit transform. The indexed candidate table
+remains byte-exact against exhaustive recording. Three-run medians reduce the
+fixed fit from 2.71 to 2.66 seconds, Room from 5.2 to 5.1 seconds, and Bonsai
+from 5.0 to 4.9 seconds, with unchanged 21.68/21.01, 12.49/12.20, and
+13.04/12.79 dB PBR gates respectively. The cache adds about 0.72 MiB on the
+18-view Room gate and is rebuilt with the existing index; it adds no public
+state, synchronization, operation, shader, or scheduling branch.

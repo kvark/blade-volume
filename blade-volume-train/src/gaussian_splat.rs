@@ -59,6 +59,7 @@ struct CandidateGrid {
     width: usize,
     tiles_x: usize,
     tiles: Vec<Vec<u32>>,
+    gaussian_origins: Vec<glam::Vec3>,
 }
 
 struct CandidateIndex {
@@ -114,17 +115,18 @@ impl CandidateIndex {
                 capture.width,
                 capture.height,
                 min_alpha,
+                &transforms,
             ));
         }
         Self { views, transforms }
     }
 
-    fn candidates(&self, view: usize, pixel: usize) -> Option<&[u32]> {
+    fn candidates(&self, view: usize, pixel: usize) -> Option<(&[u32], &[glam::Vec3])> {
         let grid = self.views[view].as_ref()?;
         let x = pixel % grid.width;
         let y = pixel / grid.width;
         let tile = (y / TILE_SIZE) * grid.tiles_x + x / TILE_SIZE;
-        Some(&grid.tiles[tile])
+        Some((&grid.tiles[tile], &grid.gaussian_origins))
     }
 }
 
@@ -135,10 +137,16 @@ impl CandidateGrid {
         width: usize,
         height: usize,
         min_alpha: f32,
+        candidate_transforms: &[CandidateTransform],
     ) -> Self {
         let tiles_x = width.div_ceil(TILE_SIZE);
         let tiles_y = height.div_ceil(TILE_SIZE);
         let mut tiles = vec![Vec::new(); tiles_x * tiles_y];
+        let camera_origin = glam::Vec3::from(camera.cam_position);
+        let gaussian_origins = candidate_transforms
+            .iter()
+            .map(|transform| transform.world_to_gaussian * (camera_origin - transform.mean))
+            .collect();
         let transforms = model.transforms.as_ref().unwrap();
         for (index, point) in model.points.iter().enumerate() {
             if point.w < min_alpha {
@@ -173,6 +181,7 @@ impl CandidateGrid {
             width,
             tiles_x,
             tiles,
+            gaussian_origins,
         }
     }
 }
@@ -550,6 +559,14 @@ fn ray_response_transformed(
     transform: CandidateTransform,
 ) -> Option<RayResponse> {
     let gaussian_origin = transform.world_to_gaussian * (ray_origin - transform.mean);
+    ray_response_from_gaussian_origin(gaussian_origin, ray_direction, transform)
+}
+
+fn ray_response_from_gaussian_origin(
+    gaussian_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+    transform: CandidateTransform,
+) -> Option<RayResponse> {
     let gaussian_direction = transform.world_to_gaussian * ray_direction;
     let direction_squared = gaussian_direction.length_squared();
     if !direction_squared.is_finite() || direction_squared <= 0.0 {
@@ -719,22 +736,25 @@ fn collect_candidate_hits(
 fn collect_indexed_candidate_hits(
     model: &vol::PointCloudModel,
     index: &CandidateIndex,
-    origin: glam::Vec3,
     direction: glam::Vec3,
     indices: &[u32],
+    gaussian_origins: &[glam::Vec3],
     min_alpha: f32,
     hits: &mut Vec<(f32, u32)>,
 ) {
     hits.clear();
     for &particle in indices {
-        let Some(hit) =
-            ray_response_transformed(origin, direction, index.transforms[particle as usize])
-        else {
+        let particle = particle as usize;
+        let Some(hit) = ray_response_from_gaussian_origin(
+            gaussian_origins[particle],
+            direction,
+            index.transforms[particle],
+        ) else {
             continue;
         };
-        let alpha = model.points[particle as usize].w * hit.response;
+        let alpha = model.points[particle].w * hit.response;
         if hit.depth > 0.0 && alpha.is_finite() && alpha >= min_alpha {
-            hits.push((hit.depth, particle));
+            hits.push((hit.depth, particle as u32));
         }
     }
 }
@@ -832,8 +852,14 @@ fn record_indexed_candidate_range(
         .enumerate()
     {
         match index.candidates(view, pixel) {
-            Some(candidates) => collect_indexed_candidate_hits(
-                model, index, origin, direction, candidates, min_alpha, &mut hits,
+            Some((candidates, gaussian_origins)) => collect_indexed_candidate_hits(
+                model,
+                index,
+                direction,
+                candidates,
+                gaussian_origins,
+                min_alpha,
+                &mut hits,
             ),
             None => collect_candidate_hits(
                 model,
@@ -2026,7 +2052,7 @@ mod tests {
             .views
             .iter()
             .zip(&batch.pixels)
-            .map(|(&view, &pixel)| index.candidates(view, pixel).unwrap().len())
+            .map(|(&view, &pixel)| index.candidates(view, pixel).unwrap().0.len())
             .sum();
         let exhaustive_entries = batch.origins.len() * model.points.len();
         assert!(candidate_entries < exhaustive_entries / 2);
