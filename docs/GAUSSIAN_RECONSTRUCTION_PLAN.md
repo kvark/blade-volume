@@ -2153,3 +2153,17 @@ updates lose 0.04 dB there as well. The complete core fit is retained as the
 quality oracle, adding about five seconds only when static-only support exists
 and direct Gaussian output was requested. It adds no particle type, shader,
 graph operation, dependency, or output-format field.
+
+Per-view Gaussian candidate grids are now rebuilt in parallel. A temporary
+host profile of Room's 1,000-update support stage attributes 2.05--2.13 seconds
+to rebuilding the 18 independent camera grids, 1.20--1.22 seconds to candidate
+collection and upload, and only 0.46--0.51 seconds to GPU execution. Dividing
+those camera grids across at most eight scoped workers lowers rebuild time to
+0.80--0.94 seconds. Three Room runs reduce the conservative core fit from 4.7
+to 3.4 seconds and the expanded fit from 5.0 to 3.7 seconds; three Bonsai runs
+finish at 3.3--3.5 seconds instead of 4.5--4.7 seconds. Room retains
+18.42--18.43/18.32 dB static and 12.49/12.20 dB PBR quality; Bonsai retains
+18.65--18.66/18.59--18.61 dB static and 13.04/12.79 dB PBR quality. Existing
+indexed-versus-exhaustive candidate tests cover the parallel construction.
+The change is private host scheduling only: no model, graph operation, shader,
+pipeline, dependency, or public setting is added.

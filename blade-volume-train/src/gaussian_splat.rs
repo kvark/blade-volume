@@ -108,16 +108,41 @@ impl CandidateIndex {
         if min_alpha == 0.0 {
             return Self { views, transforms };
         }
-        for &view_index in view_indices {
-            views[view_index] = Some(CandidateGrid::new(
-                model,
-                &capture.views[view_index].camera,
-                capture.width,
-                capture.height,
-                min_alpha,
-                &transforms,
-            ));
-        }
+        let worker_count = thread::available_parallelism()
+            .map_or(1, |count| count.get())
+            .min(8)
+            .min(view_indices.len().max(1));
+        let chunk_views = view_indices.len().div_ceil(worker_count).max(1);
+        thread::scope(|scope| {
+            let handles: Vec<_> = view_indices
+                .chunks(chunk_views)
+                .map(|chunk| {
+                    scope.spawn(|| {
+                        chunk
+                            .iter()
+                            .map(|&view_index| {
+                                (
+                                    view_index,
+                                    CandidateGrid::new(
+                                        model,
+                                        &capture.views[view_index].camera,
+                                        capture.width,
+                                        capture.height,
+                                        min_alpha,
+                                        &transforms,
+                                    ),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            for handle in handles {
+                for (view_index, grid) in handle.join().unwrap() {
+                    views[view_index] = Some(grid);
+                }
+            }
+        });
         Self { views, transforms }
     }
 
