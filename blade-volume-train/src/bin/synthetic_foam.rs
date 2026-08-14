@@ -1197,13 +1197,39 @@ fn main() {
         .unwrap_or_else(|error| fail(error));
     }
     if let Some(ref output) = args.gaussian_output {
-        let started = std::time::Instant::now();
         let mut gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
             .unwrap_or_else(|error| fail(error));
+        let mut pbr_gaussian = gaussian.clone();
         let Some(gpu) = train::fit::try_init_gpu() else {
             fail("no supported GPU device for direct Gaussian training");
         };
-        let stats = train::gaussian_splat::fit_staged(
+        let core_started = std::time::Instant::now();
+        let core_stats = train::gaussian_splat::fit_staged(
+            &mut pbr_gaussian,
+            &training_capture,
+            &training_indices,
+            args.gaussian_steps,
+            gpu.clone(),
+        )
+        .unwrap_or_else(|error| fail(error));
+        let core_held_out_scores = train::gaussian_splat::evaluate_views(
+            &pbr_gaussian,
+            &training_capture,
+            &held_out_indices,
+            64,
+            1.0e-5,
+            [0.0; 3],
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "PBR support Gaussian: {} appearance and {} support updates in {:.3} s",
+            core_stats.appearance.steps,
+            core_stats.support.steps,
+            core_started.elapsed().as_secs_f64(),
+        );
+        describe_scores("fixed-center Gaussian held-out", &core_held_out_scores);
+        let started = std::time::Instant::now();
+        let stats = train::gaussian_splat::fit_staged_light_field(
             &mut gaussian,
             &training_capture,
             &training_indices,
@@ -1241,7 +1267,7 @@ fn main() {
         );
         describe_scores("direct Gaussian held-out", &held_out_scores);
         println!("wrote {}", output.display());
-        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &gaussian)
+        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
             .unwrap_or_else(|error| fail(error));
         println!("updated PBR radii from learned Gaussian support");
     }

@@ -2258,3 +2258,40 @@ held-light PBR falls from 21.68/21.01 at 55.0% coverage to 21.63/20.93 dB at
 Bonsai direct falls to 18.76/18.58 dB and its PBR mean loses 0.01 dB. Both
 cadences are removed. Twenty updates is the measured joint-quality endpoint,
 not merely the first faster value tried.
+
+A soft census descriptor does not improve the image-derived center sweep
+reliably. Replacing normalized RGB patches with bounded center-relative colour
+orders improves the fixed cloud's position/normal RMSE from 0.6213/54.41 to
+0.6206/54.23 and its direct held field from 23.41/22.58 to 23.45/22.67 dB.
+It also raises the second cloud's direct and held-light PBR scores, but the
+third cloud loses 0.20/0.25 dB direct and the fifth loses 0.10/0.05 dB direct
+plus 0.08/0.09 dB held-light PBR. Appending half-strength census values to the
+selected normalized descriptor is worse on the fixed gate, lowering direct by
+0.07/0.10 dB and PBR by 0.02/0.05 dB. Both private descriptor variants are
+removed. Local order statistics still share the same occlusion ambiguity as
+NCC; a future learned descriptor needs genuinely broader spatial context.
+
+Static light fields now learn centers jointly with opacity, anisotropic scale,
+and directional appearance during the existing support stage. The position
+rate is a conservative `1e-4`; particle count, rotations, schedule, candidate
+recording, and every graph operation remain unchanged. PBR support is fitted
+independently with centers frozen and returns only its volume-equivalent radius
+to the relightable surface. Thus the static field can move its proxy particles
+to reproduce images without moving the geometric surface used for relighting.
+The distinction is output-specific, like sparse support: it is not another
+particle type or runtime representation.
+
+Same-process fixed-center controls on five independently reconstructed
+synthetic clouds show direct held mean/worst gains of +0.22/+0.12,
++0.17/+0.19, +0.32/+0.33, +0.22/+0.26, and +0.33/+0.24 dB. Their PBR geometry
+and support field remain the fixed-center control by construction. Three Room
+repeats improve direct quality from 18.61/18.52 to 18.73--18.74/18.69--18.71
+dB while retaining exactly 12.56/12.29 dB PBR and 80.9% coverage. Three Bonsai
+runs improve 18.81/18.63 to 18.97/18.83 dB while retaining exactly
+13.04/12.79 dB PBR and 99.6% coverage. At 16 training views, Room improves
+14.10/10.73 to 14.24/10.93 dB and Bonsai improves 18.67/17.84 to
+18.80/17.94 dB, again with unchanged PBR scores. Existing Room/Bonsai captures
+already required independent core and expanded fits, so the center gradient
+adds no update or graph-build cost there; each field remains in the measured
+2.7--3.5 second range. This adds no shader, operation, binding, model field,
+dependency, CLI switch, or output format.

@@ -26,6 +26,7 @@ const TILE_SIZE: usize = 8;
 const TILE_SUPPORT_MARGIN: f32 = 1.25;
 const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
+const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
 /// points. The covariance columns follow `glam::Mat2`'s column-major layout.
@@ -312,7 +313,7 @@ fn sh_basis(direction: glam::Vec3) -> [f32; 9] {
     ]
 }
 
-/// Apply the selected direct-Gaussian schedule to an established cloud.
+/// Apply the fixed-centre direct-Gaussian schedule used to learn PBR support.
 ///
 /// The first third learns only view-independent appearance. The remaining
 /// updates also learn opacity and three anisotropic scales, while keeping the
@@ -327,6 +328,35 @@ pub fn fit_staged(
     capture: &crate::inverse::capture::Capture,
     view_indices: &[usize],
     steps: usize,
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<StagedFitStats, String> {
+    fit_staged_impl(model, capture, view_indices, steps, 0.0, gpu)
+}
+
+/// Apply the direct-Gaussian schedule while also learning static light-field centres.
+pub fn fit_staged_light_field(
+    model: &mut vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    steps: usize,
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<StagedFitStats, String> {
+    fit_staged_impl(
+        model,
+        capture,
+        view_indices,
+        steps,
+        LIGHT_FIELD_POSITION_LEARNING_RATE,
+        gpu,
+    )
+}
+
+fn fit_staged_impl(
+    model: &mut vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    steps: usize,
+    position_learning_rate: f32,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<StagedFitStats, String> {
     if model.sh_degree != 0 {
@@ -375,6 +405,7 @@ pub fn fit_staged(
         view_indices,
         FitOptions {
             steps: support_steps,
+            position_learning_rate,
             scale_learning_rate: 0.005,
             opacity_learning_rate: 0.05,
             ..appearance_options
