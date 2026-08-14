@@ -2091,3 +2091,16 @@ passes the bit-exact indexed/exhaustive oracle, but three complete Room fits
 remain at 5.6 seconds, inside the established 5.6--5.7 second range. The
 compiler already eliminates enough repeated division that an additional
 cached field has no measurable production value.
+
+Composing the cached inverse rotation and scale into one world-to-Gaussian
+matrix is selected. Each candidate hit now performs two matrix-vector products
+instead of two quaternion rotations and two vector divisions; the matrix is
+rebuilt only when the existing tile index is rebuilt. Three fixed-cloud
+repeats reduce median direct-fit time from 2.83 to 2.71 seconds (4.4%), while
+Room falls from 5.6 to 5.2 seconds and Bonsai from 5.2 to 5.0 seconds. The
+fixed static-field median changes from 23.40/22.59 to 23.41/22.58 dB and PBR
+remains 21.68/21.01 dB; Room and Bonsai retain 12.49/12.20 and 13.04/12.79 dB
+PBR respectively. A unit oracle compares the composed transform with the
+original quaternion-space response, and indexed candidates remain exact
+against exhaustive recording. This changes one private cached value and adds
+no dependency, operation, shader, entry, setting, or synchronization point.

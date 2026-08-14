@@ -69,8 +69,19 @@ struct CandidateIndex {
 #[derive(Clone, Copy)]
 struct CandidateTransform {
     mean: glam::Vec3,
-    inverse_rotation: glam::Quat,
+    world_to_gaussian: glam::Mat3,
+}
+
+fn candidate_transform(
+    mean: glam::Vec3,
+    rotation: glam::Quat,
     scale: glam::Vec3,
+) -> CandidateTransform {
+    let inverse_rotation = glam::Mat3::from_quat(rotation.normalize().inverse());
+    CandidateTransform {
+        mean,
+        world_to_gaussian: glam::Mat3::from_diagonal(scale.recip()) * inverse_rotation,
+    }
 }
 
 impl CandidateIndex {
@@ -89,10 +100,8 @@ impl CandidateIndex {
             .iter()
             .zip(&transforms.rotations)
             .zip(&transforms.scales)
-            .map(|((point, rotation), scale)| CandidateTransform {
-                mean: point.truncate(),
-                inverse_rotation: rotation.normalize().inverse(),
-                scale: *scale,
+            .map(|((point, rotation), scale)| {
+                candidate_transform(point.truncate(), *rotation, *scale)
             })
             .collect();
         if min_alpha == 0.0 {
@@ -531,11 +540,7 @@ pub fn ray_response(
     ray_response_transformed(
         ray_origin,
         ray_direction,
-        CandidateTransform {
-            mean,
-            inverse_rotation: rotation.normalize().inverse(),
-            scale,
-        },
+        candidate_transform(mean, rotation, scale),
     )
 }
 
@@ -544,9 +549,8 @@ fn ray_response_transformed(
     ray_direction: glam::Vec3,
     transform: CandidateTransform,
 ) -> Option<RayResponse> {
-    let gaussian_origin =
-        (transform.inverse_rotation * (ray_origin - transform.mean)) / transform.scale;
-    let gaussian_direction = (transform.inverse_rotation * ray_direction) / transform.scale;
+    let gaussian_origin = transform.world_to_gaussian * (ray_origin - transform.mean);
+    let gaussian_direction = transform.world_to_gaussian * ray_direction;
     let direction_squared = gaussian_direction.length_squared();
     if !direction_squared.is_finite() || direction_squared <= 0.0 {
         return None;
@@ -1929,7 +1933,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_candidate_transform_is_bit_exact() {
+    fn cached_candidate_transform_matches_quaternion_response() {
         let origin = glam::Vec3::new(0.7, -0.2, -3.0);
         let direction = glam::Vec3::new(0.1, 0.05, 1.0).normalize();
         let mean = glam::Vec3::new(0.2, 0.4, 2.0);
@@ -1939,16 +1943,21 @@ mod tests {
         let cached = ray_response_transformed(
             origin,
             direction,
-            CandidateTransform {
-                mean,
-                inverse_rotation: rotation.normalize().inverse(),
-                scale,
-            },
+            candidate_transform(mean, rotation, scale),
         )
         .unwrap();
 
         assert_eq!(cached.depth.to_bits(), direct.depth.to_bits());
         assert_eq!(cached.response.to_bits(), direct.response.to_bits());
+        let inverse_rotation = rotation.normalize().inverse();
+        let gaussian_origin = (inverse_rotation * (origin - mean)) / scale;
+        let gaussian_direction = (inverse_rotation * direction) / scale;
+        let expected_depth =
+            -gaussian_origin.dot(gaussian_direction) / gaussian_direction.length_squared();
+        let closest = gaussian_origin + expected_depth * gaussian_direction;
+        let expected_response = (-0.5 * closest.length_squared()).exp();
+        assert_close(cached.depth, expected_depth, 1.0e-5);
+        assert_close(cached.response, expected_response, 1.0e-6);
     }
 
     #[test]
