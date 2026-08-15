@@ -449,7 +449,7 @@ dependencies = [
 [[package]]
 name = "blade-egui"
 version = "0.8.1"
-source = "git+https://github.com/kvark/blade?rev=17b050acef753508b7842da116b3164fccc866c6#17b050acef753508b7842da116b3164fccc866c6"
+source = "git+https://github.com/kvark/blade?rev=20fcb84953dc216bbb7179bda6ce985693208736#20fcb84953dc216bbb7179bda6ce985693208736"
 dependencies = [
  "blade-graphics",
  "blade-macros",
@@ -462,7 +462,7 @@ dependencies = [
 [[package]]
 name = "blade-graphics"
 version = "0.8.4"
-source = "git+https://github.com/kvark/blade?rev=17b050acef753508b7842da116b3164fccc866c6#17b050acef753508b7842da116b3164fccc866c6"
+source = "git+https://github.com/kvark/blade?rev=20fcb84953dc216bbb7179bda6ce985693208736#20fcb84953dc216bbb7179bda6ce985693208736"
 dependencies = [
  "ash",
  "ash-window",
@@ -498,7 +498,7 @@ dependencies = [
 [[package]]
 name = "blade-macros"
 version = "0.3.0"
-source = "git+https://github.com/kvark/blade?rev=17b050acef753508b7842da116b3164fccc866c6#17b050acef753508b7842da116b3164fccc866c6"
+source = "git+https://github.com/kvark/blade?rev=20fcb84953dc216bbb7179bda6ce985693208736#20fcb84953dc216bbb7179bda6ce985693208736"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -508,7 +508,7 @@ dependencies = [
 [[package]]
 name = "blade-util"
 version = "0.4.1"
-source = "git+https://github.com/kvark/blade?rev=17b050acef753508b7842da116b3164fccc866c6#17b050acef753508b7842da116b3164fccc866c6"
+source = "git+https://github.com/kvark/blade?rev=20fcb84953dc216bbb7179bda6ce985693208736#20fcb84953dc216bbb7179bda6ce985693208736"
 dependencies = [
  "blade-graphics",
  "bytemuck",
@@ -2735,7 +2735,7 @@ dependencies = [
 [[package]]
 name = "meganeura"
 version = "0.2.0"
-source = "git+https://github.com/kvark/meganeura?rev=4bd919eb0da8600b42427fdbe121d2f1ecd080cc#4bd919eb0da8600b42427fdbe121d2f1ecd080cc"
+source = "git+https://github.com/kvark/meganeura?rev=7f87313b3222508d5d006b4355163a5666cd41a5#7f87313b3222508d5d006b4355163a5666cd41a5"
 dependencies = [
  "blade-graphics",
  "blade-macros",
@@ -2826,7 +2826,7 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "29.0.0"
-source = "git+https://github.com/kvark/wgpu?rev=cefd48f6cff61d64abe1cdb4002c4e39bfc2c728#cefd48f6cff61d64abe1cdb4002c4e39bfc2c728"
+source = "git+https://github.com/gfx-rs/wgpu?rev=78b4dfd0cb1ef5ed208fefe80ae2f855db3609bb#78b4dfd0cb1ef5ed208fefe80ae2f855db3609bb"
 dependencies = [
  "arrayvec",
  "bit-set",
