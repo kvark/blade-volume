@@ -111,9 +111,10 @@ adjacency-derived tangent-plane split ties isotropic splitting at 14.95 dB.
 Neither branch is selected. Their raw artifacts remain ignored; the compact
 measurements and paths are recorded in the manifest.
 
-Commit `2a0fd73` subsequently fixed the bare SH-DC learning-rate selector, so
-the absolute endpoint above is historical even though its same-seed causal
-gates remain useful. The fresh intended-schedule growth-overlap run reaches
+The current trainer applies the configured SH-DC learning rate to the bare
+component-zero parameter names. The absolute endpoint above predates that
+correction, although its same-seed causal gates remain useful. With the current
+schedule, the fresh growth-overlap run reaches
 17.4151/16.5247 dB train/all-37 at the practical step-20,000 endpoint with
 8,328,306 directed edges. The corrected post-cap-only control reaches
 17.4077/16.5243 dB with 9,150,448 edges. The selected model is
