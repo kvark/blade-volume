@@ -73,6 +73,16 @@ struct CandidateSlices<'a> {
     depths: &'a mut [f32],
 }
 
+struct CandidateRows {
+    indices: Vec<u32>,
+    mask: Vec<f32>,
+}
+
+struct CandidateRowSlices<'a> {
+    indices: &'a mut [u32],
+    mask: &'a mut [f32],
+}
+
 struct CandidateGrid {
     width: usize,
     tiles_x: usize,
@@ -1136,24 +1146,20 @@ fn record_indexed_candidates(
     index: &CandidateIndex,
     candidates_per_pixel: usize,
     min_alpha: f32,
-) -> FlatCandidates {
+) -> CandidateRows {
     let pixels = batch.origins.len();
     let entries = pixels * candidates_per_pixel;
     let mut indices = vec![0_u32; entries];
     let mut mask = vec![0.0_f32; entries];
-    let mut pixel_indices = vec![0_u32; entries];
-    let mut depths = vec![0.0_f32; entries];
     let worker_count = thread::available_parallelism()
         .map_or(1, |count| count.get())
         .min(8)
         .min(pixels.div_ceil(64).max(1));
     let chunk_pixels = pixels.div_ceil(worker_count);
     thread::scope(|scope| {
-        let mut remaining = CandidateSlices {
+        let mut remaining = CandidateRowSlices {
             indices: &mut indices,
             mask: &mut mask,
-            pixel_indices: &mut pixel_indices,
-            depths: &mut depths,
         };
         for worker in 0..worker_count {
             let begin = worker * chunk_pixels;
@@ -1166,10 +1172,6 @@ fn record_indexed_candidates(
             remaining.indices = rest;
             let (worker_mask, rest) = remaining.mask.split_at_mut(chunk_entries);
             remaining.mask = rest;
-            let (worker_pixel_indices, rest) = remaining.pixel_indices.split_at_mut(chunk_entries);
-            remaining.pixel_indices = rest;
-            let (worker_depths, rest) = remaining.depths.split_at_mut(chunk_entries);
-            remaining.depths = rest;
             scope.spawn(move || {
                 record_indexed_candidate_range(
                     model,
@@ -1178,27 +1180,17 @@ fn record_indexed_candidates(
                     &batch.views[begin..end],
                     &batch.pixels[begin..end],
                     index,
-                    begin,
                     candidates_per_pixel,
                     min_alpha,
-                    CandidateSlices {
+                    CandidateRowSlices {
                         indices: worker_indices,
                         mask: worker_mask,
-                        pixel_indices: worker_pixel_indices,
-                        depths: worker_depths,
                     },
                 );
             });
         }
     });
-    FlatCandidates {
-        indices,
-        mask,
-        pixel_indices,
-        depths,
-        pixels,
-        candidates_per_pixel,
-    }
+    CandidateRows { indices, mask }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1209,10 +1201,9 @@ fn record_indexed_candidate_range(
     views: &[usize],
     pixels: &[usize],
     index: &CandidateIndex,
-    first_pixel: usize,
     candidates_per_pixel: usize,
     min_alpha: f32,
-    output: CandidateSlices<'_>,
+    output: CandidateRowSlices<'_>,
 ) {
     let mut hits = Vec::new();
     let mut order: Vec<_> = (0..origins.len()).collect();
@@ -1248,17 +1239,11 @@ fn record_indexed_candidate_range(
                 .total_cmp(&right.0)
                 .then_with(|| left.1.cmp(&right.1))
         });
-        for (slot, &(depth, particle)) in hits.iter().take(candidates_per_pixel).enumerate() {
+        for (slot, &(_, particle)) in hits.iter().take(candidates_per_pixel).enumerate() {
             let flat = local_pixel * candidates_per_pixel + slot;
             output.indices[flat] = particle;
             output.mask[flat] = 1.0;
-            output.depths[flat] = depth;
         }
-        let pixel_index =
-            u32::try_from(first_pixel + local_pixel).expect("ray batch exceeds u32 pixel indices");
-        output.pixel_indices
-            [local_pixel * candidates_per_pixel..(local_pixel + 1) * candidates_per_pixel]
-            .fill(pixel_index);
     }
 }
 
@@ -1297,6 +1282,26 @@ fn render_recorded(
     candidates: &FlatCandidates,
     background: [f32; 3],
 ) -> Vec<glam::Vec4> {
+    render_candidate_rows(
+        model,
+        ray_origins,
+        ray_directions,
+        &candidates.indices,
+        &candidates.mask,
+        candidates.candidates_per_pixel,
+        background,
+    )
+}
+
+fn render_candidate_rows(
+    model: &vol::PointCloudModel,
+    ray_origins: &[glam::Vec3],
+    ray_directions: &[glam::Vec3],
+    candidate_indices: &[u32],
+    candidate_mask: &[f32],
+    candidates_per_pixel: usize,
+    background: [f32; 3],
+) -> Vec<glam::Vec4> {
     let transforms = model
         .transforms
         .as_ref()
@@ -1305,12 +1310,12 @@ fn render_recorded(
     for pixel in 0..ray_origins.len() {
         let mut radiance = glam::Vec3::ZERO;
         let mut transmittance = 1.0_f32;
-        for slot in 0..candidates.candidates_per_pixel {
-            let flat = pixel * candidates.candidates_per_pixel + slot;
-            if candidates.mask[flat] == 0.0 {
+        for slot in 0..candidates_per_pixel {
+            let flat = pixel * candidates_per_pixel + slot;
+            if candidate_mask[flat] == 0.0 {
                 continue;
             }
-            let index = candidates.indices[flat] as usize;
+            let index = candidate_indices[flat] as usize;
             let point = model.points[index];
             let response = ray_response(
                 ray_origins[pixel],
@@ -1394,11 +1399,13 @@ pub fn evaluate_views(
         };
         let candidates =
             record_indexed_candidates(model, &batch, &index, candidates_per_pixel, min_alpha);
-        let rendered = render_recorded(
+        let rendered = render_candidate_rows(
             model,
             &batch.origins,
             &batch.directions,
-            &candidates,
+            &candidates.indices,
+            &candidates.mask,
+            candidates_per_pixel,
             background,
         );
         let squared_error: f64 = rendered
@@ -1915,7 +1922,7 @@ fn prepare_candidates(
     batch_count: usize,
     index: &CandidateIndex,
     options: FitOptions,
-) -> FlatCandidates {
+) -> CandidateRows {
     let ray_count = batch_count * options.batch_size;
     let mut combined = RayBatch {
         origins: Vec::with_capacity(ray_count),
@@ -1975,10 +1982,6 @@ fn set_batch_inputs(
 ) {
     debug_assert_eq!(candidate_indices.len(), candidate_mask.len());
     debug_assert_eq!(candidate_indices.len() % batch.origins.len(), 0);
-    let candidates_per_pixel = candidate_indices.len() / batch.origins.len();
-    let pixel_indices: Vec<u32> = (0..batch.origins.len() as u32)
-        .flat_map(|pixel| std::iter::repeat_n(pixel, candidates_per_pixel))
-        .collect();
     let origins: Vec<f32> = batch
         .origins
         .iter()
@@ -1996,7 +1999,6 @@ fn set_batch_inputs(
         .flat_map(|&direction| sh_basis(direction).into_iter().take(sh_components))
         .collect();
     session.set_input_u32("candidate_indices", candidate_indices);
-    session.set_input_u32("candidate_pixel_indices", &pixel_indices);
     session.set_input("candidate_mask", candidate_mask);
     session.set_input("ray_origins", &origins);
     session.set_input("ray_directions", &directions);
@@ -2078,6 +2080,10 @@ fn fit_with_opacity_loss(
             ..Default::default()
         },
     );
+    let pixel_indices: Vec<u32> = (0..options.batch_size as u32)
+        .flat_map(|pixel| std::iter::repeat_n(pixel, options.candidates_per_pixel))
+        .collect();
+    session.set_input_u32("candidate_pixel_indices", &pixel_indices);
     set_model_parameters(&mut session, model);
     set_rotation_inputs(&mut session, model);
     let pixel_rays = capture_pixel_rays(capture);
@@ -2733,8 +2739,6 @@ mod tests {
         let tiled = record_indexed_candidates(&model, &batch, &index, 8, 1.0e-4);
         assert_eq!(tiled.indices, exhaustive.indices);
         assert_eq!(tiled.mask, exhaustive.mask);
-        assert_eq!(tiled.depths, exhaustive.depths);
-        assert_eq!(tiled.pixel_indices, exhaustive.pixel_indices);
 
         let candidate_entries: usize = batch
             .views
@@ -2794,7 +2798,6 @@ mod tests {
             let end = start + entries;
             assert_eq!(&combined_candidates.indices[start..end], individual.indices);
             assert_eq!(&combined_candidates.mask[start..end], individual.mask);
-            assert_eq!(&combined_candidates.depths[start..end], individual.depths);
         }
     }
 

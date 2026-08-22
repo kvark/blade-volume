@@ -3152,3 +3152,31 @@ seconds. Room, Bonsai, and five-cloud scopes peak at 377.5, 511.3, and 248.3
 MiB with zero swap, memory pressure, OOM, or GPU fault. This introduces no
 public API, option, graph operation, shader, model field, format, dependency,
 or training schedule.
+
+## Minimal Gaussian candidate rows (2026-08-22)
+
+The private tiled recorder used by fitting retained four arrays even though
+training consumed only two. Candidate depths are needed transiently to sort a
+row, but no downstream graph input reads them; the candidate-to-pixel map is
+fixed by the graph shape and was nevertheless rebuilt and uploaded for every
+optimizer update. The tiled hot path now keeps only its ordered indices and
+masks, and installs the invariant pixel map once when the session is created.
+The public exhaustive recorder retains its depth and pixel diagnostics, so the
+library API and its small correctness oracle do not change.
+
+Exact tiled-versus-exhaustive and grouped-versus-individual tests still match
+every candidate index and mask. The physical direct-fit oracle also converges
+with the pixel map held across steps. Persisted Room remains at 12.51/12.04 dB
+with 78.0% coverage; Bonsai remains at 14.86/14.82 dB with 85.6% coverage. A
+fresh five-cloud gate averages 23.284/22.698 dB mean/worst, 55.06% coverage,
+and 22.294 dB where hit, within the established continuation band.
+
+This is selected as allocation cleanup rather than a broad speed claim. Room
+is unchanged at 19.0 seconds and the sampled Bonsai run moves from 21.5 to
+22.7 seconds, while the smaller five-cloud fits average 4.36 seconds versus
+4.53 previously. The real-scene cgroup peaks move from 395.9 to 390.6 MB on
+Room and from 536.2 to 431.7 MB on Bonsai. The complete five-cloud process
+peaks in another reconstruction phase and rises from 260.4 to 296.2 MB, so it
+does not corroborate a global peak reduction. All scopes report zero swap,
+memory pressure, OOM, or GPU fault. The surviving code adds no option, shader,
+graph operation, model field, format, dependency, or alternate training path.
