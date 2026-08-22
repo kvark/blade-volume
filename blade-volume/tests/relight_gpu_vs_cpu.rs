@@ -480,7 +480,8 @@ fn volumetric_gaussian_pbr_matches_the_cpu_response() {
                 let squared_radius = local_position.length_squared();
                 let support_squared = 2.0 * (0.8f32 / 0.03).ln();
                 if squared_radius <= support_squared {
-                    (0.8 * (-0.5 * squared_radius).exp()).min(0.999)
+                    let response = (0.8 * (-0.5 * squared_radius).exp()).min(0.999);
+                    1.0 - (1.0 - response).powf(1.1)
                 } else {
                     0.0
                 }

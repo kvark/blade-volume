@@ -92,6 +92,11 @@ const PI: f32 = 3.14159265;
 // Matches the host proxy cutoff. Lower-response Gaussian tails are weak
 // individually but dominate overlap traversal when many particles stack.
 const GAUSSIAN_MIN_ALPHA: f32 = 0.03;
+// Removing weak tails makes traversal practical, but also removes part of the
+// learned response mass. A mild core remap recovers that lost opacity without
+// bringing the overlapping tails back. Selected on fixed synthetic clouds and
+// checked on the reduced Room and Bonsai reconstructions.
+const GAUSSIAN_OPACITY_GAIN: f32 = 1.1;
 
 // Matches `equirect_direction` on the host, inverted.
 fn direction_to_equirect(dir: vec3<f32>) -> vec2<f32> {
@@ -347,7 +352,8 @@ fn intersect_surfel(index: u32, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> Hi
         if (squared_radius > support_squared) {
             return miss;
         }
-        let alpha = min(0.999, gaussian.opacity * exp(-0.5 * squared_radius));
+        let response = min(0.999, gaussian.opacity * exp(-0.5 * squared_radius));
+        let alpha = 1.0 - pow(1.0 - response, GAUSSIAN_OPACITY_GAIN);
         return Hit(t, index, alpha);
     }
     let denominator = dot(ray_dir, surfel.normal);

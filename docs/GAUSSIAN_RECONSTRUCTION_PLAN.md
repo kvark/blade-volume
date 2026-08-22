@@ -2792,6 +2792,28 @@ behind the fixed hit window, so removing them improves quality as well as
 speed. A sweep through 0.05 confirms 0.03 as the peak rather than merely the
 most aggressive tested cutoff.
 
+The retained core now receives a mild opacity remap
+`1 - (1 - response)^1.1`. Truncation removed response mass as well as proxy
+overlap; this restores part of that opacity without widening a single proxy or
+adding traversal work. On the same five files, mean/worst averages rise again
+to 23.234/22.676 dB and coverage from 53.83% to 54.24%. Every individual mean
+and tail improves. A 1.25 exponent overcorrects two tails, while an exact
+integrated-response compensation overweights low-opacity particles and
+regresses one cloud. The conditional score over pixels above 50% alpha falls
+from 22.374 to 22.339 dB because additional boundary pixels enter that changing
+set; full-frame PSNR, worst-view PSNR, and coverage all move together and are
+the selection gate.
+
+Two newly persisted reduced production reconstructions provide the first
+full-covariance real-scene smoke. Against the identical PLYs, the core remap
+raises Room from 10.742 to 10.778 dB with 47.63%→48.90% coverage and Bonsai
+from 12.989 to 13.084 dB with 54.32%→56.13% coverage. The final volumetric
+model beats the scalar point-surface control on Room (10.78 vs 10.22 dB) but
+not Bonsai (13.08 vs 13.32 dB). Thus the remap is robust within the volumetric
+path, while full-covariance superiority on real captures remains unproven; the
+all-point scalar backend remains the production fallback rather than claiming
+the synthetic result generalizes universally.
+
 Fixed-file traversal probes reject the other obvious global changes: a 48-hit
 window helps the former long-tail path but slows the surface path by about 37%;
 96 hits loses occupancy; conservative octahedron and cube proxies create more

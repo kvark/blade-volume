@@ -4666,6 +4666,39 @@ gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/volumetric-pbr-five/support-cutoff-{00001,003}.log (gitignored)"
 verdict = "select alpha 0.03 as bounded Gaussian response support: all five clouds improve mean and worst-view quality, average covered quality also improves, and traversal is 5.95x faster; 0.05 regresses every cloud's mean from the selected cutoff"
 
+# Truncation removes weak tails but also lowers total opacity. Remapping the
+# retained response as the union of 1.1 identical fractional samples restores
+# a small part of that mass without widening support or adding traversal work.
+[direct_gaussian.selected_bounded_core_opacity]
+date = "2026-08-22"
+protocol = "same five serialized PBR Gaussian clouds and two newly persisted reduced real-scene reconstructions; studio light and two synthetic poses held out; one real pose held out"
+opacity_gain = 1.1
+control_held_light_mean = [23.259164, 23.366353, 23.128705, 23.208147, 23.087591]
+candidate_held_light_mean = [23.290703, 23.386778, 23.140707, 23.225847, 23.124720]
+control_held_light_worst = [22.702680, 22.733984, 22.527207, 22.669501, 22.696803]
+candidate_held_light_worst = [22.712283, 22.743145, 22.532057, 22.669860, 22.725071]
+control_coverage_percent = [53.4801, 53.7656, 54.1248, 53.9846, 53.7863]
+candidate_coverage_percent = [53.9261, 54.1791, 54.5016, 54.3872, 54.1860]
+control_covered_psnr = [22.498436, 22.490630, 22.227239, 22.370303, 22.283979]
+candidate_covered_psnr = [22.469395, 22.449958, 22.193094, 22.324704, 22.259083]
+control_average = [23.209992, 22.666035, 53.8283, 22.374117]
+candidate_average = [23.233751, 22.676483, 54.2360, 22.339247]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+room_control = [10.741517, 47.6311, 11.933879]
+room_candidate = [10.778222, 48.9030, 11.938274]
+bonsai_control = [12.989244, 54.3200, 12.739392]
+bonsai_candidate = [13.083805, 56.1338, 12.669697]
+real_metric_order = ["held_pose_psnr_db", "coverage_percent", "covered_psnr_db"]
+rejected_gain_1_25_worst = [22.707479, 22.738540, 22.524496, 22.653907, 22.746906]
+rejected_mass_preserving_worst = [22.700027, 22.735295, 22.521494, 22.675666, 22.706932]
+physical_gpu_parity_tests = 8
+maximum_peak_memory_bytes = 1261359104
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/volumetric-pbr-five/opacity-*.log, target/audit-runs/volumetric-pbr-{room,bonsai}-smoke, target/audit-runs/volumetric-pbr-real-*-score.log (gitignored)"
+verdict = "select a 1.1 retained-core opacity gain: every synthetic mean, tail, and coverage score improves, and exact persisted Room/Bonsai scores improve by 0.037/0.095 dB with 1.27/1.81 points more coverage; conditional covered quality falls on synthetic and Bonsai because newly covered boundary pixels enter that subset, so the unconditional image and coverage gates decide"
+
 [direct_gaussian.rejected_pbr_training_support_alignment]
 date = "2026-08-22"
 protocol = "first fixed calibrated cloud; change only PBR support-stage candidate culling from alpha 1e-5 to the selected runtime alpha 0.03; regenerate and reload the PBR Gaussian PLY; studio light and two poses held out"

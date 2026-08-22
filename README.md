@@ -54,7 +54,7 @@ either reconstructed asset.
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
 | Synthetic (predefined light, refined) | 6 / 2 | 25.15 / 24.44 dB | 21.81 / 21.48 dB | 57.0% |
 | Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 22.68 / 22.22 dB | 56.7% |
-| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.21 / 22.67 dB | 53.8% |
+| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.23 / 22.68 dB | 54.2% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -95,11 +95,16 @@ smokes remain non-regressive.
 Retaining the learned Gaussian covariance and opacity for PBR rendering
 improves all five calibrated clouds: the mean held-light score gains 0.55 dB,
 the worst view gains 0.46 dB, and covered-pixel quality gains 0.73 dB. Coverage
-drops by 3.0 percentage points. Bounding each particle where its alpha response
+drops by 2.5 percentage points. Bounding each particle where its alpha response
 falls below 0.03 removes weak overlapping tails, improving the fixed-cloud
 volumetric score by another 0.10/0.11 dB while reducing its median render time
-from 8.86 ms to 1.49 ms per 100x75 frame. The scalar surface remains faster at
-about 0.7 ms, but it is no longer the only practical interactive path.
+from 8.86 ms to 1.49 ms per 100x75 frame. A mild remap of only the retained
+core then improves every five-cloud mean and tail and recovers 0.4 coverage
+point without widening the acceleration proxies. The scalar surface remains
+faster at about 0.7 ms, but it is no longer the only practical interactive
+path. Reduced Room/Bonsai smokes confirm that the core remap improves both real
+held poses, although full covariance beats the scalar cloud only on Room; its
+real-scene advantage is not yet universal.
 
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered
