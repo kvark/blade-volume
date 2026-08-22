@@ -2967,3 +2967,51 @@ On the 169,432-particle Bonsai gate, fit time falls from 64.1 to 61.0 seconds
 14.86/14.83 dB, 85.6%-coverage PBR result. All runs use the RTX 5070 inside the
 12 GiB cgroup with zero swap, OOM, or GPU fault. This adds no dependency,
 operation, graph, shader, model field, public option, or renderer path.
+
+## Rejected direct-Gaussian depth concentration (2026-08-22)
+
+A smooth layer-concentration objective is mathematically well behaved but does
+not improve the final reconstruction. The prototype used the already sorted
+Gaussian compositing weights and exact differentiable response depths to form
+`opacity * E[t²] - E[t]²` per ray. Dividing by detached squared mean depth made
+the term scene-scale stable without rewarding particles for moving away from
+the cameras. An isolated GPU oracle confirmed zero loss for a single depth
+layer, agreement within 2e-5 after scaling all depths by two, and gradients
+that pull shallow and deep contributors together. It required no new shader,
+Meganeura operation, or public option.
+
+Fresh first-cloud production reconstructions at weights 0, 0.001, 0.003, and
+0.01 score 23.3619/22.7520, 23.3652/22.7433, 23.3586/22.7401, and
+23.3616/22.7459 dB mean/worst respectively after persist and reload. Coverage
+stays within 0.006 percentage point. The small mean changes are within the
+known atomic-gradient variation, while every nonzero setting lowers the worst
+held-light view. The prototype is therefore removed before five-cloud and
+real-scene gates. Concentrating contributors along each ray does not supply the
+missing cross-view evidence needed to decide which image-consistent layer is
+the true surface; future geometry work should improve correspondence or
+visibility evidence rather than add another undirected compactness prior.
+
+## Rejected static-field center feedback (2026-08-22)
+
+The independently optimized static light field does contain a repeatable
+synthetic center signal, but it does not transfer to real PBR geometry. The
+prototype recorded exact shared-center correspondences before either fit,
+allowing reordered and subset clouds without a nearest-neighbor guess. After
+fitting, it moved each matched PBR Gaussian by 10% of the static displacement
+tangent to the Gaussian's fixed local Y axis. Normal displacement is harmful
+on all five clouds; discarding it makes every fixed synthetic mean and worst
+view improve. Average gains are about 0.005 dB mean and 0.004 dB worst, with a
+small coverage increase. A fresh paired coefficient-zero/0.1 reconstruction
+confirms 23.3558/22.7490→23.3624/22.7535 dB after persist and reload, so this is
+not merely a fixed-file scoring artifact.
+
+The complete real gates nevertheless reject it. Room changes from
+12.5158/12.0387 dB at 77.976% coverage to 12.5137/12.0384 dB at 77.950%;
+Bonsai changes from 14.8592/14.8267 dB at 85.560% to 14.8569/14.8235 dB at
+85.555%. Covered-pixel quality also falls on both. The matching table, host
+update, constant, and analytical test are removed. Static radiance fitting can
+learn a view-consistent tangent correction on the controlled fixture while
+still absorbing texture or visibility error on photographs. It is therefore
+not independent geometry evidence; a future shared-center update needs a
+feature or correspondence objective that is invariant to appearance rather
+than a residual copied from the light-field optimizer.
