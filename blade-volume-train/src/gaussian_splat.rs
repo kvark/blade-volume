@@ -1731,19 +1731,16 @@ fn set_rotation_inputs(session: &mut mn::Session, model: &vol::PointCloudModel) 
     }
 }
 
-fn download_model(session: &mn::Session, model: &mut vol::PointCloudModel) {
+fn apply_model_geometry(
+    model: &mut vol::PointCloudModel,
+    positions: &[f32],
+    log_scales: &[f32],
+    opacity_logits: &[f32],
+) {
     let count = model.points.len();
-    let sh_components = model.sh_component_count();
-    let mut positions = vec![0.0_f32; count * 3];
-    let mut log_scales = vec![0.0_f32; count * 3];
-    let mut opacity_logits = vec![0.0_f32; count];
-    let mut sh: [Vec<f32>; 3] = std::array::from_fn(|_| vec![0.0_f32; count * sh_components]);
-    session.read_param("positions", &mut positions);
-    session.read_param("log_scales", &mut log_scales);
-    session.read_param("opacity_logits", &mut opacity_logits);
-    for (name, values) in ["sh_r", "sh_g", "sh_b"].into_iter().zip(&mut sh) {
-        session.read_param(name, values);
-    }
+    assert_eq!(positions.len(), count * 3);
+    assert_eq!(log_scales.len(), count * 3);
+    assert_eq!(opacity_logits.len(), count);
     let transforms = model.transforms.as_mut().unwrap();
     for index in 0..count {
         let position = glam::Vec3::from_slice(&positions[3 * index..3 * index + 3]);
@@ -1759,6 +1756,33 @@ fn download_model(session: &mn::Session, model: &mut vol::PointCloudModel) {
                 }
         }));
         transforms.scales[index] = scale;
+    }
+}
+
+fn download_candidate_geometry(session: &mn::Session, model: &mut vol::PointCloudModel) {
+    let [positions, log_scales, opacity_logits] = session
+        .read_params(&["positions", "log_scales", "opacity_logits"])
+        .try_into()
+        .unwrap();
+    apply_model_geometry(model, &positions, &log_scales, &opacity_logits);
+}
+
+fn download_model(session: &mn::Session, model: &mut vol::PointCloudModel) {
+    let sh_components = model.sh_component_count();
+    let [positions, log_scales, opacity_logits, sh_r, sh_g, sh_b] = session
+        .read_params(&[
+            "positions",
+            "log_scales",
+            "opacity_logits",
+            "sh_r",
+            "sh_g",
+            "sh_b",
+        ])
+        .try_into()
+        .unwrap();
+    let sh = [sh_r, sh_g, sh_b];
+    apply_model_geometry(model, &positions, &log_scales, &opacity_logits);
+    for index in 0..model.points.len() {
         for component in 0..sh_components {
             for (channel, values) in sh.iter().enumerate() {
                 let source = index * sh_components + component;
@@ -2047,7 +2071,13 @@ fn fit_with_opacity_loss(
         }
         step += batch_count;
         if sync_candidate_geometry && step % options.geometry_sync_every == 0 {
-            download_model(&session, model);
+            // Candidate grids read only position, support, and opacity. Keep
+            // the much larger SH table device-local until the final model.
+            if step == options.steps {
+                download_model(&session, model);
+            } else {
+                download_candidate_geometry(&session, model);
+            }
             candidate_index =
                 CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
         }
@@ -2207,6 +2237,32 @@ mod tests {
             scale_learning_rate: 0.01,
             ..appearance
         }));
+    }
+
+    #[test]
+    fn candidate_geometry_readback_preserves_appearance_and_rotations() {
+        let mut model = model(vec![glam::Vec4::new(0.0, 0.0, 1.0, 0.2)]);
+        model.sh_coefficients = vec![0.1, 0.2, 0.3];
+        model.transforms.as_mut().unwrap().rotations[0] = glam::Quat::from_rotation_x(0.2);
+        let appearance = model.sh_coefficients.clone();
+        let rotation = model.transforms.as_ref().unwrap().rotations[0];
+        let scale = glam::Vec3::new(0.2, 0.3, 0.4);
+        let log_scales = scale
+            .to_array()
+            .map(|value| inverse_softplus(value - MIN_SCALE));
+
+        apply_model_geometry(&mut model, &[1.0, 2.0, 3.0], &log_scales, &[1.0]);
+
+        assert_eq!(model.points[0].truncate(), glam::Vec3::new(1.0, 2.0, 3.0));
+        assert_close(
+            model.points[0].w,
+            MAX_ALPHA / (1.0 + (-1.0_f32).exp()),
+            1.0e-6,
+        );
+        let transform = model.transforms.as_ref().unwrap();
+        assert!((transform.scales[0] - scale).abs().max_element() < 1.0e-6);
+        assert_eq!(transform.rotations[0], rotation);
+        assert_eq!(model.sh_coefficients, appearance);
     }
 
     #[test]

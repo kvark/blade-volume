@@ -3015,3 +3015,37 @@ still absorbing texture or visibility error on photographs. It is therefore
 not independent geometry evidence; a future shared-center update needs a
 feature or correspondence objective that is invariant to appearance rather
 than a residual copied from the light-field optimizer.
+
+## Batched direct-Gaussian parameter readback (2026-08-22)
+
+Profiling the selected paired Gaussian fit separates a CPU synchronization
+bottleneck from training itself. On the 109,764-particle Room gate, the four
+fit stages spend only 1.6 seconds in optimizer dispatch and wait, but the two
+support stages spend 18.0 seconds reading parameters through six independent
+host-visible mappings and 7.3 seconds rebuilding their candidate grids. The
+foam trainer already uses Meganeura's cached bulk readback; the newer direct
+Gaussian path had retained its original per-parameter implementation.
+
+Each full synchronization now stages positions, log-scales, opacity logits,
+and the three SH channels in one transfer. Intermediate candidate refreshes
+stage only the first three because neither the candidate transform nor tile
+membership reads SH; the exact final boundary still downloads all six. A pure
+unit gate verifies that applying candidate geometry preserves appearance and
+fixed covariance rotations. The optimizer schedule, batches, graph, candidate
+order, model format, and public API are unchanged.
+
+On a fresh same-machine Room control, paired Gaussian fitting falls from 43.6
+to 26.1 seconds (40.1%). Bonsai falls from the selected 61.0-second baseline
+to 31.9 seconds (47.7%) at 169,432 particles. Persisted held-light Gaussian
+PBR remains 12.51/12.05 dB at 77.9% coverage on Room and 14.86/14.82 dB at
+85.6% on Bonsai. A fresh five-cloud gate averages 23.2859/22.7023 dB and
+55.071% coverage, inside the established atomic-continuation range of the
+selected 23.2893/22.7108 dB and 55.094% baseline. The scopes peak at 364.5
+MiB for Room, 497.3 MiB for Bonsai, and 258 MiB across the five-cloud run,
+with zero swap, memory pressure, OOM, or GPU fault.
+
+Two adjacent CPU changes are rejected and removed. Partially selecting the
+nearest 64 hits before sorting takes 44.9 seconds on Room because most tile
+lists already fit the cap; four-pixel tiles take 44.6 seconds because their
+extra grid construction outweighs fewer per-ray candidates. The established
+complete sort and eight-pixel tile remain.
