@@ -4765,3 +4765,47 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/gaussian-normal-refine/model-1 (gitignored)"
 verdict = "reject before five clouds and remove the Gaussian-specific update API: the full step gains only 0.007 dB mean and 0.011 dB where covered while regressing the worst view by 0.003 dB; progressively stronger blends monotonically worsen the tail"
+
+[direct_gaussian.selected_surface_sheet_grouping]
+date = "2026-08-22"
+protocol = "five fixed calibrated Gaussian PBR clouds plus complete 18-training/2-held Room and Bonsai reconstructions; exact same persisted file scored through Gaussian and scalar renderers"
+surface_band_scalar_radii = 0.5
+surface_saturation = 0.75
+control_held_light_mean = [23.290703, 23.386778, 23.140707, 23.225847, 23.124720]
+candidate_held_light_mean = [23.357490, 23.444396, 23.171366, 23.274224, 23.163601]
+control_held_light_worst = [22.712283, 22.743145, 22.532057, 22.669860, 22.725071]
+candidate_held_light_worst = [22.749825, 22.790623, 22.535645, 22.700691, 22.745559]
+control_coverage_percent = [53.9261, 54.1791, 54.5016, 54.3872, 54.1860]
+candidate_coverage_percent = [54.7936, 54.9842, 55.2811, 55.1677, 54.9373]
+control_covered_psnr = [22.469395, 22.449958, 22.193094, 22.324704, 22.259083]
+candidate_covered_psnr = [22.513195, 22.438276, 22.161186, 22.276239, 22.195713]
+control_average = [23.233751, 22.676483, 54.2360, 22.339247]
+candidate_average = [23.282215, 22.704469, 55.0328, 22.316922]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+room_gaussian = [12.492383, 12.009440, 77.6720, 13.567096]
+room_scalar = [12.489260, 12.010784, 87.3673, 13.401608]
+bonsai_gaussian = [14.855407, 14.820396, 85.1254, 14.651556]
+bonsai_scalar = [14.693998, 14.399270, 87.5491, 14.608340]
+real_metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+candidate_median_ms = [1.096, 1.231, 1.396, 1.377, 1.723]
+candidate_average_median_ms = 1.365
+rejected_full_saturation_worst = [22.746825, 22.787743, 22.526800, 22.693588, 22.743876]
+rejected_half_saturation_average = [23.275336, 22.704048, 54.7985, 22.336782]
+maximum_peak_memory_bytes = 895295488
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/volumetric-pbr-five/gaussian-group-band05-opacity075.log, target/audit-runs/volumetric-pbr-{room,bonsai}-18view, target/audit-runs/volumetric-pbr-real18-group-band05-opacity075-exact.log (gitignored)"
+verdict = "select one in-shader surface-sheet grouping rule: all five synthetic means and tails improve, coverage rises 0.80 point, complete Room reaches scalar image quality, and Gaussian beats scalar on Bonsai without a new shader entry, pipeline, binding, or asset field"
+
+[direct_gaussian.rejected_runtime_scale_expansion]
+date = "2026-08-22"
+protocol = "same fixed synthetic files and complete 18/2-view real gates; expand selected particle scales by 5% at render time"
+global_synthetic_mean = [23.284608, 23.334418, 23.084887, 23.173385, 23.119031]
+global_room_mean = 10.896220
+global_bonsai_mean = 13.249531
+low_opacity_room_mean = 10.777691
+low_opacity_bonsai_mean = 13.082339
+isotropic_room_mean = 10.813383
+isotropic_bonsai_mean = 13.075361
+verdict = "reject and remove: global expansion helps reduced real scores but substantially regresses the synthetic gate; low-opacity and isotropic subsets still lose individual synthetic tails, so learned scales remain authoritative"

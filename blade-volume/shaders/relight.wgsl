@@ -220,6 +220,13 @@ const HIT_WINDOW: u32 = 12u;
 const MIN_TRANSMITTANCE: f32 = 0.003;
 // Matches `relight::SURFACE_BAND`.
 const SURFACE_BAND: f32 = 2.0;
+// Learned ellipsoids whose maximum-response depths differ by less than half
+// the first particle's scalar support belong to one reconstructed surface
+// sheet. Preserve a quarter of their volumetric union opacity and move three
+// quarters toward the opaque-sheet sum; distinct depth layers still composite
+// front to back. Selected on five synthetic clouds and two 18-view real gates.
+const GAUSSIAN_SURFACE_BAND: f32 = 0.5;
+const GAUSSIAN_SURFACE_SATURATION: f32 = 0.75;
 
 // A hash, for turning a pixel and a sample index into a direction.
 fn hash_u32(value: u32) -> u32 {
@@ -577,12 +584,36 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
             break;
         }
         if (g_params.kernel == 2u) {
-            for (var i = 0u; i < hit_count && transmittance > MIN_TRANSMITTANCE; i += 1u) {
-                let hit = hits[i];
-                let point = ray_origin + hit.t * ray_dir;
-                let color = shade_surfel_sampled(hit.index, point, ray_dir, seed);
-                radiance += transmittance * hit.coverage * color;
-                transmittance *= 1.0 - hit.coverage;
+            // A reconstructed surface is represented by overlapping volume
+            // particles. Average the shading within a thin depth sheet, as the
+            // finite surface path does, while retaining part of the Gaussian
+            // union opacity instead of making every overlap fully opaque.
+            var i = 0u;
+            while (i < hit_count && transmittance > MIN_TRANSMITTANCE) {
+                let band = GAUSSIAN_SURFACE_BAND * g_surfels[hits[i].index].radius;
+                let limit = hits[i].t + band;
+                var sum_color = vec3<f32>(0.0);
+                var sum_weight = 0.0;
+                var group_transmittance = 1.0;
+                var j = i;
+                while (j < hit_count && hits[j].t <= limit) {
+                    let hit = hits[j];
+                    let point = ray_origin + hit.t * ray_dir;
+                    sum_color += hit.coverage
+                        * shade_surfel_sampled(hit.index, point, ray_dir, seed);
+                    sum_weight += hit.coverage;
+                    group_transmittance *= 1.0 - hit.coverage;
+                    j += 1u;
+                }
+                let union_alpha = 1.0 - group_transmittance;
+                let alpha = mix(
+                    union_alpha,
+                    min(1.0, sum_weight),
+                    GAUSSIAN_SURFACE_SATURATION,
+                );
+                radiance += transmittance * alpha * sum_color / max(sum_weight, 1.0e-6);
+                transmittance *= 1.0 - alpha;
+                i = j;
             }
         } else {
             // Surfels close together in depth are one surface and get averaged;

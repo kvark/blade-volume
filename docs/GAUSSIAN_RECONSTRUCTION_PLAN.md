@@ -2859,3 +2859,41 @@ while the worst view falls. The temporary attribute-update API is removed.
 The selected surface-proxy normal pass already captures nearly all available
 normal signal; the next fidelity work should address geometry/visibility or
 the reconstruction objective instead of adding another final-render polish.
+
+## Gaussian surface-sheet compositing (2026-08-22)
+
+The reduced real-scene smoke was not representative enough to decide whether
+full covariance transfers. Fresh production gates use 18 training and two
+held cameras at 128 pixels wide, persist and reload the PBR Gaussian, and score
+the exact same file through both renderers. Before the compositing change,
+Room scores 12.400/11.994 dB mean/worst at 74.57% coverage through the
+volumetric path versus 12.489/12.011 dB at 87.37% through the scalar control.
+Bonsai scores 14.776/14.716 dB at 79.42% versus 14.694/14.399 dB at 87.55%.
+The Gaussian image signal transfers, but overlapping particles from a single
+surface remain too transparent when composed as independent volumes.
+
+The selected renderer groups maximum-response hits no farther than half the
+first particle's scalar support in depth. It averages their PBR shading by
+coverage, computes both their ordinary union opacity and their capped opacity
+sum, and moves 75% from the union toward the capped sum. Distinct depth sheets
+still composite front to back. This stays inside the existing Gaussian runtime
+branch: there is no new backend, pipeline, bind group, shader entry, or asset
+field.
+
+Across five fixed reconstructed clouds, mean/worst/coverage averages improve
+from 23.234/22.676 dB and 54.24% to 23.282/22.704 dB and 55.03%. Every
+individual mean and tail improves. Conditional covered-pixel PSNR changes from
+22.339 to 22.317 dB because the selected set expands. On the complete real
+gates, Room reaches 12.492/12.009 dB at 77.67% coverage and Bonsai reaches
+14.855/14.820 dB at 85.13%. That makes Room image quality effectively equal
+to the scalar control and makes Bonsai clearly better, while leaving the
+remaining coverage difference visible rather than claiming it solved.
+
+Full saturation raises coverage farther but regresses one synthetic tail;
+25%, 50%, 100%, and 200% support bands do not improve the joint gate. A 50%
+saturation setting also clears every tail but gives up useful coverage. Global,
+low-opacity-only, and isotropic-only 5% runtime scale expansion are removed:
+they can help the real gates but lose synthetic means or tails, demonstrating
+that no clean particle-local scale heuristic transfers. The next support work
+belongs in the reconstruction objective or visibility model, not another
+renderer-wide radius multiplier.

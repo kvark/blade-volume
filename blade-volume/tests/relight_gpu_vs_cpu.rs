@@ -407,7 +407,7 @@ fn gpu_shading_matches_the_cpu_reference() {
 }
 
 #[test]
-fn volumetric_gaussian_pbr_matches_the_cpu_response() {
+fn volumetric_gaussian_pbr_matches_the_grouped_cpu_response() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
@@ -428,15 +428,15 @@ fn volumetric_gaussian_pbr_matches_the_cpu_response() {
     };
     let scale = glam::Vec3::new(0.45, 0.7, 0.25);
     let gaussian = vol::PointCloudModel {
-        points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 0.8)],
-        sh_coefficients: vec![0.0; 3],
+        points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 0.8); 2],
+        sh_coefficients: vec![0.0; 6],
         sh_degree: 0,
         transforms: Some(vol::Transforms {
-            rotations: vec![glam::Quat::IDENTITY],
-            scales: vec![scale],
+            rotations: vec![glam::Quat::IDENTITY; 2],
+            scales: vec![scale; 2],
             pbr: Some(vol::PbrAttributes {
-                normals: vec![glam::Vec3::NEG_Z],
-                material_indices: vec![0],
+                normals: vec![glam::Vec3::NEG_Z; 2],
+                material_indices: vec![0; 2],
                 materials: model.materials.clone(),
             }),
         }),
@@ -476,7 +476,7 @@ fn volumetric_gaussian_pbr_matches_the_cpu_response() {
             let local_direction = direction / scale;
             let t = -local_origin.dot(local_direction) / local_direction.length_squared();
             let local_position = local_origin + t * local_direction;
-            let alpha = if t > 0.0 {
+            let particle_alpha = if t > 0.0 {
                 let squared_radius = local_position.length_squared();
                 let support_squared = 2.0 * (0.8f32 / 0.03).ln();
                 if squared_radius <= support_squared {
@@ -488,6 +488,9 @@ fn volumetric_gaussian_pbr_matches_the_cpu_response() {
             } else {
                 0.0
             };
+            let union_alpha = 1.0 - (1.0 - particle_alpha) * (1.0 - particle_alpha);
+            let saturated_alpha = (2.0 * particle_alpha).min(1.0);
+            let alpha = union_alpha + 0.75 * (saturated_alpha - union_alpha);
             covered += (alpha > 0.0) as usize;
             let lit = vol::relight::shade(
                 glam::Vec3::NEG_Z,
