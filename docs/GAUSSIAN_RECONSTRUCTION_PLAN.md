@@ -3341,3 +3341,24 @@ The per-ray hit lists are already short; repeatedly sorting duplicated tile
 membership at every geometry refresh costs more than it saves. The tile order
 change is removed before Room and five-cloud gates. Future candidate work
 should reduce hit evaluation itself rather than add another persistent order.
+
+## Selected squared-distance candidate cutoff (2026-08-22)
+
+The indexed candidate recorder no longer evaluates a Gaussian exponential only
+to discard its value after thresholding. For each particle it precomputes the
+exact equivalent of `opacity * exp(-distance_squared / 2) >= min_alpha` as
+`distance_squared <= -2 * ln(min_alpha / opacity)`. The exhaustive oracle and
+the differentiable renderer still evaluate the original response; this changes
+only private host-side indexed culling and adds no operation, shader, API, or
+training schedule.
+
+The exact indexed-versus-exhaustive and grouped-versus-individual row tests
+remain green, with an additional boundary test for the algebraic cutoff. On the
+169,432-particle Bonsai gate the fit falls from 19.5--20.8 to 16.1 seconds
+(17--23%); Room falls from 17.9 to 14.3 seconds (20%). Across five fresh small
+synthetic clouds, average fit time falls from 4.341 to 4.114 seconds (5.2%).
+Their held-light average remains in the established continuation band at
+23.284/22.700 dB, 55.08% coverage, and 22.286 dB where hit, compared with
+23.284/22.698 dB, 55.06%, and 22.292 dB for the selected dependency-uprev
+baseline. The full physical-GPU workspace suite passes in the 12 GiB cgroup,
+peaking at 6.30 GB with no swap, OOM, or GPU fault.

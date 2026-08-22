@@ -93,6 +93,7 @@ struct CandidateGrid {
 struct CandidateIndex {
     views: Vec<Option<CandidateGrid>>,
     transforms: Vec<CandidateTransform>,
+    max_distance_squared: Vec<f32>,
 }
 
 #[derive(Clone, Copy)]
@@ -120,6 +121,16 @@ fn candidate_transform(
     }
 }
 
+fn candidate_max_distance_squared(opacity: f32, min_alpha: f32) -> f32 {
+    if min_alpha == 0.0 {
+        f32::INFINITY
+    } else if opacity >= min_alpha {
+        -2.0 * (min_alpha / opacity).ln()
+    } else {
+        -1.0
+    }
+}
+
 impl CandidateIndex {
     fn new(
         model: &vol::PointCloudModel,
@@ -140,8 +151,17 @@ impl CandidateIndex {
                 candidate_transform(point.truncate(), *rotation, *scale)
             })
             .collect();
+        let max_distance_squared: Vec<f32> = model
+            .points
+            .iter()
+            .map(|point| candidate_max_distance_squared(point.w, min_alpha))
+            .collect();
         if min_alpha == 0.0 {
-            return Self { views, transforms };
+            return Self {
+                views,
+                transforms,
+                max_distance_squared,
+            };
         }
         let projection_supports: Vec<_> = model
             .points
@@ -185,7 +205,11 @@ impl CandidateIndex {
                 }
             }
         });
-        Self { views, transforms }
+        Self {
+            views,
+            transforms,
+            max_distance_squared,
+        }
     }
 
     fn candidates(&self, view: usize, pixel: usize) -> Option<(&[u32], &[glam::Vec3])> {
@@ -960,6 +984,19 @@ fn ray_response_from_gaussian_origin(
     ray_direction: glam::Vec3,
     transform: CandidateTransform,
 ) -> Option<RayResponse> {
+    let (depth, distance_squared) =
+        ray_distance_squared_from_gaussian_origin(gaussian_origin, ray_direction, transform)?;
+    let response = (-0.5 * distance_squared).exp();
+    response
+        .is_finite()
+        .then_some(RayResponse { depth, response })
+}
+
+fn ray_distance_squared_from_gaussian_origin(
+    gaussian_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+    transform: CandidateTransform,
+) -> Option<(f32, f32)> {
     let gaussian_direction = transform.world_to_gaussian * ray_direction;
     let direction_squared = gaussian_direction.length_squared();
     if !direction_squared.is_finite() || direction_squared <= 0.0 {
@@ -967,8 +1004,8 @@ fn ray_response_from_gaussian_origin(
     }
     let depth = -gaussian_origin.dot(gaussian_direction) / direction_squared;
     let closest = gaussian_origin + depth * gaussian_direction;
-    let response = (-0.5 * closest.length_squared()).exp();
-    (depth.is_finite() && response.is_finite()).then_some(RayResponse { depth, response })
+    let distance_squared = closest.length_squared();
+    (depth.is_finite() && distance_squared.is_finite()).then_some((depth, distance_squared))
 }
 
 /// Record the closest exact Gaussian candidates for a ray batch.
@@ -1127,27 +1164,24 @@ fn collect_candidate_hits(
 }
 
 fn collect_indexed_candidate_hits(
-    model: &vol::PointCloudModel,
     index: &CandidateIndex,
     direction: glam::Vec3,
     indices: &[u32],
     gaussian_origins: &[glam::Vec3],
-    min_alpha: f32,
     hits: &mut Vec<(f32, u32)>,
 ) {
     hits.clear();
     for &particle in indices {
         let particle = particle as usize;
-        let Some(hit) = ray_response_from_gaussian_origin(
+        let Some((depth, distance_squared)) = ray_distance_squared_from_gaussian_origin(
             gaussian_origins[particle],
             direction,
             index.transforms[particle],
         ) else {
             continue;
         };
-        let alpha = model.points[particle].w * hit.response;
-        if hit.depth > 0.0 && alpha.is_finite() && alpha >= min_alpha {
-            hits.push((hit.depth, particle as u32));
+        if depth > 0.0 && distance_squared <= index.max_distance_squared[particle] {
+            hits.push((depth, particle as u32));
         }
     }
 }
@@ -1229,12 +1263,10 @@ fn record_indexed_candidate_range(
         let pixel = pixels[local_pixel];
         match index.candidates(view, pixel) {
             Some((candidates, gaussian_origins)) => collect_indexed_candidate_hits(
-                model,
                 index,
                 direction,
                 candidates,
                 gaussian_origins,
-                min_alpha,
                 &mut hits,
             ),
             None => collect_candidate_hits(
@@ -2661,6 +2693,19 @@ mod tests {
         .unwrap();
         assert_close(offset.depth, 5.0, 1.0e-6);
         assert_close(offset.response, (-0.5_f32).exp(), 1.0e-6);
+    }
+
+    #[test]
+    fn candidate_distance_cutoff_matches_the_alpha_threshold() {
+        for (opacity, min_alpha) in [(0.8, 1.0e-4), (0.2, 0.05), (0.05, 0.05)] {
+            let cutoff = candidate_max_distance_squared(opacity, min_alpha);
+            for distance_squared in [0.0, (cutoff - 1.0e-3).max(0.0), cutoff + 1.0e-3] {
+                let alpha = opacity * (-0.5 * distance_squared).exp();
+                assert_eq!(distance_squared <= cutoff, alpha >= min_alpha);
+            }
+        }
+        assert_eq!(candidate_max_distance_squared(0.0, 0.0), f32::INFINITY);
+        assert!(candidate_max_distance_squared(0.01, 0.02) < 0.0);
     }
 
     #[test]
