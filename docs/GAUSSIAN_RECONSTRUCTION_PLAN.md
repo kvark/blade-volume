@@ -2728,3 +2728,24 @@ inside the 12 GiB cgroup with no swap, OOM, GPU fault, or software-adapter
 fallback. The path overrides and lockfile changes were removed after the run;
 blade-volume should move directly to the merged main commits, not retain either
 temporary branch.
+
+Repeating the normalized-patch surface search after calibrated normal recovery
+does not resolve its objective mismatch. The original post-density repeat
+improves fixed-cloud position/normal RMSE from 0.5810/54.56 degrees to
+0.5805/54.30 degrees and moves the held-light tail from 21.85 to 21.88 dB, but
+the mean falls from 22.58 to 22.57 dB. Halving the search region loses more
+mean, while running before the density correction reaches a 21.93 dB tail but
+only 22.53 dB mean. All three schedules are removed. Better normals make the
+same photometric correspondence safer; they do not make normalized capture
+radiance a shared-surface target.
+
+More direct-Gaussian optimization is similarly synthetic-specific. Raising
+the independent PBR budget from 1,500 to 3,000 updates improves all five
+synthetic worst views by 0.13--0.26 dB and raises average held-light PBR from
+22.52/21.95 to 22.61/22.13 dB, at 56.8% rather than 57.0% coverage. A minimal
+implementation doubled only PBR while leaving the static field at 1,500
+updates. The reduced production gate rejects it: Bonsai improves from 13.33
+to 13.40 dB, but Room falls from 10.23 to 10.08 dB and fitting rises from
+34.6/34.7 seconds to 66.9/64.2 seconds. The implementation is removed. PBR
+support needs a better held-independent geometry/coverage objective rather
+than longer optimization of the existing image loss.
