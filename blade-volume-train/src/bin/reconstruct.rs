@@ -357,7 +357,7 @@ fn main() {
     .then(|| {
         let mut surface = geometry.clone();
         if let Some(ref source) = density_normal_source {
-            source.refine(&mut surface);
+            source.refine(&mut surface, 0.1);
         }
         surface
     });
@@ -379,7 +379,12 @@ fn main() {
         );
     }
     if let Some(source) = density_normal_source.take() {
-        let refined = source.refine(&mut geometry);
+        let blend = if args.normal_images.is_empty() {
+            0.1
+        } else {
+            0.2
+        };
+        let refined = source.refine(&mut geometry, blend);
         println!("geometry: density-gradient refined {refined} foam-surface normals");
     }
 
@@ -1162,10 +1167,11 @@ struct DensityNormalSource {
 }
 
 impl DensityNormalSource {
-    fn refine(&self, surface: &mut vol::relight::RelightModel) -> usize {
+    fn refine(&self, surface: &mut vol::relight::RelightModel, blend: f32) -> usize {
         train::inverse::surface::refine_normals_from_density(
             &mut surface.surfels[..self.surfels],
             &self.model,
+            blend,
         )
     }
 }
@@ -1629,7 +1635,7 @@ mod tests {
             surfels: vec![surfel; 2],
             materials: vec![vol::relight::Material::default()],
         };
-        assert_eq!(source.refine(&mut surface), 1);
+        assert_eq!(source.refine(&mut surface, 0.1), 1);
         assert_ne!(surface.surfels[0].normal, normal);
         assert_eq!(surface.surfels[1].normal, normal);
     }

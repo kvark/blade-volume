@@ -247,7 +247,9 @@ For foam-derived geometry, the small density-gradient prior is applied after
 this photometric solve. The independently fitted static Gaussian instead uses
 a pre-photometric snapshot with the density prior, because rotating it for PBR
 relighting would degrade the captured radiance field. Sparse-track additions
-are excluded from the density prior in both outputs.
+are excluded from the density prior in both outputs. Calibrated PBR geometry
+uses a 20% trust region because it improves every mean and worst view in the
+five-cloud gate; ordinary single-light and static outputs retain 10%.
 
 `--render-refine-materials` optionally finishes a small shared material table
 against complete production renders of every training view. It coordinate

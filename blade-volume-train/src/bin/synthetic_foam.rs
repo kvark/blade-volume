@@ -1014,7 +1014,7 @@ fn main() {
             for surfel in &mut surface.surfels {
                 surfel.radius = voxel * args.disc_radius.max(0.1);
             }
-            train::inverse::surface::refine_normals_from_density(&mut surface.surfels, &model);
+            train::inverse::surface::refine_normals_from_density(&mut surface.surfels, &model, 0.1);
             surface
         });
     if args.photometric_normals {
@@ -1043,8 +1043,12 @@ fn main() {
         depth_options,
     )
     .unwrap_or_else(|error| fail(error));
-    let changed =
-        train::inverse::surface::refine_normals_from_density(&mut geometry.surfels, &model);
+    let density_normal_blend = if args.photometric_normals { 0.2 } else { 0.1 };
+    let changed = train::inverse::surface::refine_normals_from_density(
+        &mut geometry.surfels,
+        &model,
+        density_normal_blend,
+    );
     println!("density-gradient blended {changed} normals");
     describe_surface_error(
         "density-gradient surface",

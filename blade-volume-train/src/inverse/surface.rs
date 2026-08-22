@@ -87,15 +87,15 @@ pub struct SurfaceEstimate {
 /// trained through all views at once, so its local slope supplies a weak
 /// cross-view orientation signal. Its sign is not independently meaningful;
 /// preserve the camera-facing side of the established normal and use only a
-/// small trust region.
+/// caller-selected trust region.
 pub fn refine_normals_from_density(
     surfels: &mut [vol::relight::Surfel],
     foam: &vol::PointCloudModel,
+    blend: f32,
 ) -> usize {
     const NEIGHBOURS: usize = 32;
-    const BLEND: f32 = 0.1;
 
-    if surfels.is_empty() || foam.points.len() < 4 {
+    if surfels.is_empty() || foam.points.len() < 4 || blend <= 0.0 {
         return 0;
     }
     let positions: Vec<[f32; 3]> = foam
@@ -144,7 +144,7 @@ pub fn refine_normals_from_density(
         if gradient.dot(prior) < 0.0 {
             gradient = -gradient;
         }
-        let Some(normal) = prior.lerp(gradient, BLEND).try_normalize() else {
+        let Some(normal) = prior.lerp(gradient, blend).try_normalize() else {
             continue;
         };
         surfel.normal = normal.to_array();
@@ -382,8 +382,14 @@ mod tests {
             normal: initial.to_array(),
             material: 0,
         }];
+        let unchanged = surfels[0].normal;
         assert_eq!(
-            refine_normals_from_density(&mut surfels, &density_lattice(false)),
+            refine_normals_from_density(&mut surfels, &density_lattice(false), 0.0),
+            0
+        );
+        assert_eq!(surfels[0].normal, unchanged);
+        assert_eq!(
+            refine_normals_from_density(&mut surfels, &density_lattice(false), 0.1),
             1
         );
         let refined = glam::Vec3::from(surfels[0].normal);
@@ -392,7 +398,7 @@ mod tests {
 
         let before = surfels[0].normal;
         assert_eq!(
-            refine_normals_from_density(&mut surfels, &density_lattice(true)),
+            refine_normals_from_density(&mut surfels, &density_lattice(true), 0.1),
             0
         );
         assert_eq!(surfels[0].normal, before);

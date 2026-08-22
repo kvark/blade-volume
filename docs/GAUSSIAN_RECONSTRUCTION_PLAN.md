@@ -2624,3 +2624,21 @@ foam-derived prefix is eligible, so sparse-track support is unchanged. A
 distinct-light production smoke refines all 139 supported photometric normals
 and 218 foam normals below 255 MiB, while a one-light replay remains byte-for-
 byte identical to the previous output.
+
+The density trust region can be stronger once calibrated photographs have
+removed most of the albedo/normal ambiguity. On the same five fixed clouds,
+raising only the PBR post-photometric blend from 10% to 20% improves every
+held-light mean by 0.04--0.11 dB and every worst view by 0.03--0.11 dB. Mean
+final normal RMSE falls from 54.24° to 53.35°, while average coverage changes
+from 57.10% to 57.04%. A 25% blend has a slightly better aggregate but loses
+0.03 dB on one cloud's strict tail, so it is rejected. Removing the prior or
+halving it is clearly worse on the fixed control. Ordinary single-light
+reconstruction and the independent static light field retain their already-
+gated 10% correction; only calibrated PBR geometry uses 20%.
+
+The split policy reproduces the static control within 0.01 dB and a physical
+production smoke refines all 139 supported photometric normals followed by
+218 foam normals. It completes at a 135.7 MiB cgroup peak without OOM or GPU
+faults. Artifacts are under
+`target/audit-runs/current-synthetic-v1/density-calibrated-*` and
+`target/audit-runs/density-calibrated-production-smoke/`.
