@@ -3114,3 +3114,41 @@ average 4.57 seconds. Room, Bonsai, and the five-cloud scope peak at 363.4,
 476.1, and 260.0 MiB respectively, with zero swap, memory pressure, OOM, or GPU
 fault. The selected change adds no public API, setting, graph operation,
 shader, model field, file format, dependency, or training schedule.
+
+## Shared Gaussian projection support (2026-08-22)
+
+After locality ordering, candidate-grid construction remains the largest
+separable cost. Every one of the eighteen view workers independently validated
+each Gaussian, normalized its covariance rotation, rotated the three 3DGUT
+sigma axes, and derived the same opacity-dependent support radius. Only the
+projection of those model-space terms is camera-dependent.
+
+Each geometry refresh now constructs the Gaussian mean, three rotated sigma
+axes, Gaussian cutoff radius, and conservative world radius once, then shares
+that immutable table across the existing camera workers. The public conic
+helper and candidate grid also use one sigma-axis implementation, removing a
+duplicated construction path. Each camera still projects the same seven points
+in the same order, accumulates the same covariance, applies the same near-plane
+fallback, and emits the same tile lists. Exact indexed-versus-exhaustive and
+grouped-versus-individual candidate tests continue to match every row.
+
+The final compact cache stores only the mean and three axes. A prototype that
+stored all seven world points is removed: it is at most 0.5 seconds faster in
+one noisy Bonsai run but raises peak memory from 511 to 605 MiB. Reconstructing
+the six cheap `mean ± axis` positions per view retains the expensive shared
+quaternion work without that temporary allocation.
+
+The 109,764-particle Room paired fit falls from 21.5 to 19.0 seconds, another
+11.6%, while persisted held-light PBR remains 12.51/12.04 dB at 77.9%
+coverage. The 169,432-particle Bonsai fit falls from 25.9 to 21.5 seconds,
+another 17.0%, while retaining 14.86/14.83 dB at 85.6% coverage. Relative to
+the pre-readback implementation, Room is now 56.4% faster and Bonsai 64.8%
+faster.
+
+A fresh five-cloud reconstruction and persistence gate averages
+23.2831/22.6967 dB at 55.078% coverage and 22.2880 dB where hit, within the
+established atomic-gradient continuation band. Its Gaussian fits average 4.53
+seconds. Room, Bonsai, and five-cloud scopes peak at 377.5, 511.3, and 248.3
+MiB with zero swap, memory pressure, OOM, or GPU fault. This introduces no
+public API, option, graph operation, shader, model field, format, dependency,
+or training schedule.

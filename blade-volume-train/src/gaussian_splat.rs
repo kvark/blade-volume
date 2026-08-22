@@ -91,6 +91,13 @@ struct CandidateTransform {
     world_to_gaussian: glam::Mat3,
 }
 
+struct ProjectionSupport {
+    mean: glam::Vec3,
+    axes: [glam::Vec3; 3],
+    gaussian_radius: f32,
+    world_radius: f32,
+}
+
 fn candidate_transform(
     mean: glam::Vec3,
     rotation: glam::Quat,
@@ -113,12 +120,12 @@ impl CandidateIndex {
         let mut views: Vec<Option<CandidateGrid>> = std::iter::repeat_with(|| None)
             .take(capture.views.len())
             .collect();
-        let transforms = model.transforms.as_ref().unwrap();
+        let model_transforms = model.transforms.as_ref().unwrap();
         let transforms: Vec<CandidateTransform> = model
             .points
             .iter()
-            .zip(&transforms.rotations)
-            .zip(&transforms.scales)
+            .zip(&model_transforms.rotations)
+            .zip(&model_transforms.scales)
             .map(|((point, rotation), scale)| {
                 candidate_transform(point.truncate(), *rotation, *scale)
             })
@@ -126,6 +133,15 @@ impl CandidateIndex {
         if min_alpha == 0.0 {
             return Self { views, transforms };
         }
+        let projection_supports: Vec<_> = model
+            .points
+            .iter()
+            .zip(&model_transforms.rotations)
+            .zip(&model_transforms.scales)
+            .map(|((point, rotation), scale)| {
+                ProjectionSupport::new(*point, *rotation, *scale, min_alpha)
+            })
+            .collect();
         let worker_count = thread::available_parallelism()
             .map_or(1, |count| count.get())
             .min(8)
@@ -142,12 +158,11 @@ impl CandidateIndex {
                                 (
                                     view_index,
                                     CandidateGrid::new(
-                                        model,
                                         &capture.views[view_index].camera,
                                         capture.width,
                                         capture.height,
-                                        min_alpha,
                                         &transforms,
+                                        &projection_supports,
                                     ),
                                 )
                             })
@@ -184,12 +199,11 @@ impl CandidateIndex {
 
 impl CandidateGrid {
     fn new(
-        model: &vol::PointCloudModel,
         camera: &vol::CameraParams,
         width: usize,
         height: usize,
-        min_alpha: f32,
         candidate_transforms: &[CandidateTransform],
+        projection_supports: &[Option<ProjectionSupport>],
     ) -> Self {
         let tiles_x = width.div_ceil(TILE_SIZE);
         let tiles_y = height.div_ceil(TILE_SIZE);
@@ -199,22 +213,13 @@ impl CandidateGrid {
             .iter()
             .map(|transform| transform.world_to_gaussian * (camera_origin - transform.mean))
             .collect();
-        let transforms = model.transforms.as_ref().unwrap();
         let projection = crate::inverse::capture::PixelProjection::new(camera, width, height);
-        for (index, point) in model.points.iter().enumerate() {
-            if point.w < min_alpha {
+        for (index, support) in projection_supports.iter().enumerate() {
+            let Some(ref support) = *support else {
                 continue;
-            }
-            let Some((min, max)) = projected_support_bounds(
-                &projection,
-                width,
-                height,
-                point.truncate(),
-                transforms.rotations[index],
-                transforms.scales[index],
-                point.w,
-                min_alpha,
-            ) else {
+            };
+            let Some((min, max)) = projected_support_bounds(&projection, width, height, support)
+            else {
                 continue;
             };
             let min_x = min.x.floor().max(0.0) as usize / TILE_SIZE;
@@ -774,6 +779,18 @@ fn project_conic_with(
     rotation: glam::Quat,
     scale: glam::Vec3,
 ) -> Option<ProjectedConic> {
+    project_sigma_axes(
+        projection,
+        mean,
+        gaussian_sigma_axes(mean, rotation, scale)?,
+    )
+}
+
+fn gaussian_sigma_axes(
+    mean: glam::Vec3,
+    rotation: glam::Quat,
+    scale: glam::Vec3,
+) -> Option<[glam::Vec3; 3]> {
     if !mean.is_finite()
         || !rotation.is_finite()
         || rotation.length_squared() <= 0.0
@@ -792,6 +809,14 @@ fn project_conic_with(
         rotation * (glam::Vec3::Y * scale.y * root),
         rotation * (glam::Vec3::Z * scale.z * root),
     ];
+    Some(axes)
+}
+
+fn project_sigma_axes(
+    projection: &crate::inverse::capture::PixelProjection,
+    mean: glam::Vec3,
+    axes: [glam::Vec3; 3],
+) -> Option<ProjectedConic> {
     let mut projected = [glam::Vec2::ZERO; 7];
     projected[0] = glam::Vec2::from(projection.project(mean)?.0);
     for (axis_index, axis) in axes.into_iter().enumerate() {
@@ -814,24 +839,40 @@ fn project_conic_with(
     })
 }
 
+impl ProjectionSupport {
+    fn new(
+        point: glam::Vec4,
+        rotation: glam::Quat,
+        scale: glam::Vec3,
+        min_alpha: f32,
+    ) -> Option<Self> {
+        if point.w < min_alpha {
+            return None;
+        }
+        let mean = point.truncate();
+        let axes = gaussian_sigma_axes(mean, rotation, scale)?;
+        let response_threshold = (min_alpha / point.w).clamp(f32::MIN_POSITIVE, 1.0);
+        let gaussian_radius = (-2.0 * response_threshold.ln()).sqrt() * TILE_SUPPORT_MARGIN;
+        Some(Self {
+            mean,
+            axes,
+            gaussian_radius,
+            world_radius: gaussian_radius * scale.max_element(),
+        })
+    }
+}
+
 fn projected_support_bounds(
     projection: &crate::inverse::capture::PixelProjection,
     width: usize,
     height: usize,
-    mean: glam::Vec3,
-    rotation: glam::Quat,
-    scale: glam::Vec3,
-    opacity: f32,
-    min_alpha: f32,
+    support: &ProjectionSupport,
 ) -> Option<(glam::Vec2, glam::Vec2)> {
-    let response_threshold = (min_alpha / opacity).clamp(f32::MIN_POSITIVE, 1.0);
-    let gaussian_radius = (-2.0 * response_threshold.ln()).sqrt() * TILE_SUPPORT_MARGIN;
-    let world_radius = gaussian_radius * scale.max_element();
-    let local_mean = projection.camera_space(mean);
-    if local_mean.z + world_radius <= 1.0e-6 {
+    let local_mean = projection.camera_space(support.mean);
+    if local_mean.z + support.world_radius <= 1.0e-6 {
         return None;
     }
-    if local_mean.z - world_radius <= 1.0e-6 {
+    if local_mean.z - support.world_radius <= 1.0e-6 {
         return Some((
             glam::Vec2::ZERO,
             glam::Vec2::new(
@@ -841,10 +882,12 @@ fn projected_support_bounds(
         ));
     }
 
-    let conic = project_conic_with(projection, mean, rotation, scale)?;
+    let conic = project_sigma_axes(projection, support.mean, support.axes)?;
     let conic_extent = glam::Vec2::new(
-        (gaussian_radius * gaussian_radius * conic.covariance.x_axis.x.max(0.0)).sqrt(),
-        (gaussian_radius * gaussian_radius * conic.covariance.y_axis.y.max(0.0)).sqrt(),
+        (support.gaussian_radius * support.gaussian_radius * conic.covariance.x_axis.x.max(0.0))
+            .sqrt(),
+        (support.gaussian_radius * support.gaussian_radius * conic.covariance.y_axis.y.max(0.0))
+            .sqrt(),
     );
     let min = conic.mean - conic_extent;
     let max = conic.mean + conic_extent;
