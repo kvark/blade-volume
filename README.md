@@ -54,7 +54,7 @@ either reconstructed asset.
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
 | Synthetic (predefined light, refined) | 6 / 2 | 25.15 / 24.44 dB | 21.81 / 21.48 dB | 57.0% |
 | Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 22.68 / 22.22 dB | 56.7% |
-| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.28 / 22.70 dB | 55.0% |
+| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.29 / 22.71 dB | 55.1% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -103,14 +103,15 @@ from 8.86 ms to 1.49 ms per 100x75 frame. A mild remap of only the retained
 core then improves every five-cloud mean and tail and recovers 0.4 coverage
 point without widening the acceleration proxies. Grouping overlapping hits
 from the same thin depth layer into a partially saturated surface sheet adds
-another 0.8 coverage point while improving every synthetic mean and tail.
-The scalar surface remains
-faster at about 0.7 ms, but it is no longer the only practical interactive
-path. Full 18/2-view Room and Bonsai gates put Gaussian and scalar rendering at
-12.49/12.01 versus 12.49/12.01 dB on Room, while Gaussian wins
-14.86/14.82 versus 14.69/14.40 dB on Bonsai. Real captures have no held-light
-truth, so these remain capture-light novel-view gates rather than relighting
-accuracy claims.
+another 0.8 coverage point while improving every synthetic mean and tail. A
+final 2.5% log-space residual of the already selected scalar radius refinement
+then improves all five means and tails without changing learned ellipsoid
+orientation or aspect ratio. The scalar surface remains faster at about 0.7
+ms, but it is no longer the only practical interactive path. Full 18/2-view
+Room and Bonsai gates put Gaussian and scalar rendering at 12.52/12.04 versus
+12.49/12.01 dB on Room, while Gaussian wins 14.86/14.83 versus 14.69/14.40 dB
+on Bonsai. Real captures have no held-light truth, so these remain
+capture-light novel-view gates rather than relighting accuracy claims.
 
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered

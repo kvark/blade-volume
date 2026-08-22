@@ -2897,3 +2897,33 @@ they can help the real gates but lose synthetic means or tails, demonstrating
 that no clean particle-local scale heuristic transfers. The next support work
 belongs in the reconstruction objective or visibility model, not another
 renderer-wide radius multiplier.
+
+## Gaussian support-refinement transfer (2026-08-22)
+
+The selected complete-render radius pass happened after direct Gaussian
+support fitting. It therefore improved the scalar PBR surface but did not
+affect the persisted full-covariance Gaussian. Blindly replacing the
+ellipsoid's volume-equivalent radius is not valid: on the five exact saved
+clouds it raises coverage by 3.6--4.8 points but loses 1.55--2.01 dB mean and
+1.36--1.83 dB worst-view quality. Scalar disc support and bounded Gaussian
+sheet support are related evidence, not interchangeable representations.
+
+The retained transfer preserves each fitted rotation and axis ratio, and moves
+only 2.5% of the log-radius distance toward the final renderer-refined scalar
+radius. On the five fixed clouds, mean/worst/coverage averages change from
+23.2822/22.7045 dB and 55.0328% to 23.2893/22.7108 dB and 55.0936%. Every
+individual mean and tail improves. Conditional covered PSNR changes from
+22.3169 to 22.3030 dB as the evaluated set expands. A freshly reconstructed,
+persisted, and reloaded first cloud reproduces 23.362/22.751 dB at 54.85%
+coverage, confirming that the production command applies the same correction.
+
+The complete real gates also remain positive. Room changes from
+12.492/12.009 dB at 77.67% coverage to 12.516/12.039 dB at 77.98%; Bonsai
+changes from 14.855/14.820 dB at 85.13% to 14.859/14.827 dB at 85.56%.
+Five-percent transfer already regresses one synthetic tail, and 10%, 25%, 50%,
+and 100% increasingly trade image quality for coverage, so 2.5% is a bounded
+residual rather than a claim that the scalar radius is authoritative. The
+implementation is one host-side scale update in the two reconstruction
+commands, adds no model field, graph operation, shader, pipeline, binding, or
+runtime branch, and runs only when the existing radius-refinement option is
+selected.

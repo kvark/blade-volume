@@ -843,6 +843,13 @@ fn main() {
     }
 
     if let Some(ref mut gaussian) = learned_pbr_gaussian {
+        if args.render_refine_radii {
+            train::gaussian_splat::apply_surface_radius_feedback(gaussian, &fitted.scene.model)
+                .unwrap_or_else(|error| {
+                    eprintln!("cannot apply final PBR support to Gaussian geometry: {error}");
+                    std::process::exit(1);
+                });
+        }
         train::gaussian_splat::attach_pbr(gaussian, &fitted.scene.model).unwrap_or_else(|error| {
             eprintln!("cannot attach final PBR attributes to Gaussian geometry: {error}");
             std::process::exit(1);

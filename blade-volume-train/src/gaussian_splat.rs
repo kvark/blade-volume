@@ -28,6 +28,11 @@ const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
+// Preserve learned anisotropy while carrying a small, cross-representation
+// residual from the final production-render support refinement. Full scalar
+// radius agreement over-expands the Gaussian; this log-space fraction is the
+// smallest tested joint-safe setting across five clouds and two real gates.
+const PBR_SUPPORT_FEEDBACK: f32 = 0.025;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
 /// points. The covariance columns follow `glam::Mat2`'s column-major layout.
@@ -664,6 +669,32 @@ pub fn update_surface_radii(
         surfel.radius = 3.0 * (scale.x * scale.y * scale.z).cbrt();
     }
     surface.validate()
+}
+
+/// Apply the selected residual of a scalar support refinement to corresponding
+/// Gaussian ellipsoids.
+///
+/// The Gaussian fit remains authoritative for orientation and aspect ratio.
+/// This carries only a conservative log-space fraction of the later
+/// production-render radius correction into the persisted Gaussian asset.
+pub fn apply_surface_radius_feedback(
+    gaussian: &mut vol::PointCloudModel,
+    surface: &vol::relight::RelightModel,
+) -> Result<(), String> {
+    gaussian.validate()?;
+    surface.validate()?;
+    if gaussian.points.len() != surface.surfels.len() {
+        return Err("Gaussian support feedback requires matching particle counts".to_string());
+    }
+    let transforms = gaussian
+        .transforms
+        .as_mut()
+        .ok_or_else(|| "Gaussian support feedback requires transforms".to_string())?;
+    for (scale, surfel) in transforms.scales.iter_mut().zip(&surface.surfels) {
+        let gaussian_radius = 3.0 * (scale.x * scale.y * scale.z).cbrt();
+        *scale *= (surfel.radius / gaussian_radius).powf(PBR_SUPPORT_FEEDBACK);
+    }
+    gaussian.validate()
 }
 
 /// Attach the final explicit normals and shared materials to corresponding
@@ -2029,8 +2060,21 @@ mod tests {
             assert_eq!(before.normal, after.normal);
             assert_eq!(before.material, after.material);
         }
+        surface.surfels[0].radius *= 0.5;
+        let scale_before = model.transforms.as_ref().unwrap().scales[0];
+        apply_surface_radius_feedback(&mut model, &surface).unwrap();
         attach_pbr(&mut model, &surface).unwrap();
-        let pbr = model.transforms.unwrap().pbr.unwrap();
+        let transforms = model.transforms.unwrap();
+        let multiplier = 0.5_f32.powf(PBR_SUPPORT_FEEDBACK);
+        assert_close(transforms.scales[0].x, multiplier * scale_before.x, 1.0e-6);
+        assert_close(transforms.scales[0].y, multiplier * scale_before.y, 1.0e-6);
+        assert_close(transforms.scales[0].z, multiplier * scale_before.z, 1.0e-6);
+        assert_close(
+            transforms.scales[0].y / transforms.scales[0].x,
+            scale_before.y / scale_before.x,
+            1.0e-6,
+        );
+        let pbr = transforms.pbr.unwrap();
         assert_eq!(pbr.normals, [glam::Vec3::Z, -glam::Vec3::Y]);
         assert_eq!(pbr.material_indices, [0, 1]);
         assert_eq!(pbr.materials, surface.materials);

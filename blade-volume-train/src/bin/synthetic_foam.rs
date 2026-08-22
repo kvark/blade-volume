@@ -1470,6 +1470,10 @@ fn main() {
         0,
     )[0];
     let volumetric_summaries = learned_pbr_gaussian.as_mut().map(|gaussian| {
+        if args.render_refine_radii {
+            train::gaussian_splat::apply_surface_radius_feedback(gaussian, &fitted.scene.model)
+                .unwrap_or_else(|error| fail(error));
+        }
         train::gaussian_splat::attach_pbr(gaussian, &fitted.scene.model)
             .unwrap_or_else(|error| fail(error));
         if let Some(ref output) = args.pbr_gaussian_output {
