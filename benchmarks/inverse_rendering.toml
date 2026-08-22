@@ -4111,3 +4111,25 @@ production_smoke_density_normals = 218
 production_smoke_peak_memory_bytes = 142292992
 artifacts = "target/audit-runs/current-synthetic-v1/density-calibrated-{control,none-probe,5pct-probe,20pct-five,25pct-five,selected-split}, target/audit-runs/density-calibrated-production-smoke (gitignored)"
 verdict = "keep 20% only after calibrated multi-light normals: it improves all five held-light means and tails and lowers truth-normal error; retain the previously gated 10% prior for ordinary single-light and independent static outputs"
+
+[calibrated_normals.rejected_post_prior_followups]
+date = "2026-08-22"
+protocol = "fixed synthetic cloud after the selected calibrated 20% density-normal correction"
+control_pbr_held_light_psnr = [22.58, 21.85]
+control_coverage_percent = 56.6
+control_final_normal_rmse_degrees = 55.22
+support_aware_pbr_held_light_psnr = [22.52, 21.85]
+support_aware_coverage_percent = 56.9
+support_aware_final_normal_rmse_degrees = 55.92
+post_normal_1p25_pbr_held_light_psnr = [22.51, 21.88]
+post_normal_1p25_coverage_percent = 56.9
+post_normal_1p25_final_normal_rmse_degrees = 55.17
+post_normal_5_pbr_held_light_psnr = [22.55, 21.79]
+post_normal_5_coverage_percent = 56.6
+post_normal_5_final_normal_rmse_degrees = 55.61
+extra_material_half_step_pbr_held_light_psnr = [22.58, 21.84]
+extra_material_half_step_coverage_percent = 56.6
+extra_material_half_step_training_loss = 0.0036313
+extra_material_half_step_seconds = 1.274
+artifacts = "target/audit-runs/current-synthetic-v1/density-calibrated-{support-aware-probe,post-normal-1p25-probe,post-normal-5deg-probe,material-fine-probe} (gitignored)"
+verdict = "reject and restore the selected uniform 20% prior, 2.5-degree post-support normal step, and single 0.0125 material polish: each follow-up trades mean, tail, geometry, or time rather than improving the joint gate"

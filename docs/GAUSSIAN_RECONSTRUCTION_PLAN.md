@@ -2642,3 +2642,14 @@ production smoke refines all 139 supported photometric normals followed by
 faults. Artifacts are under
 `target/audit-runs/current-synthetic-v1/density-calibrated-*` and
 `target/audit-runs/density-calibrated-production-smoke/`.
+
+Three immediate follow-ups do not improve that selected schedule. Giving only
+photometrically changed particles the 20% density correction and falling back
+to 10% elsewhere restores 0.3 coverage point but loses 0.06 dB held-light
+mean, with no tail gain and 0.70° worse final normals. Retuning the later
+normal polish from 2.5° to 1.25° similarly trades 0.07 dB mean for 0.03 dB
+tail and 0.3 coverage point; raising it to 5° loses 0.03/0.06 dB and worsens
+normal RMSE by 0.39°. Finally, another 0.00625 material coordinate pass lowers
+training loss from 0.0036352 to 0.0036313 but leaves the held mean unchanged,
+loses 0.01 dB tail, and costs 1.27 seconds. All three prototypes are removed;
+the uniform calibrated prior and existing downstream schedules remain.
