@@ -4699,3 +4699,20 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/gaussian-material-polish (gitignored)"
 verdict = "reject and remove the Gaussian-specific material API: the full step improves every mean and covered score but regresses three worst views; a quarter blend recovers only 0.005 dB mean and 0.0004 dB worst on average, which does not justify a second material pass or additional API surface"
+
+[direct_gaussian.rejected_volumetric_normal_repolish]
+date = "2026-08-22"
+protocol = "first fixed calibrated cloud; after the selected surface-proxy normal and material refinement, repeat four antithetic normal rounds through the final bounded volumetric Gaussian tracer; studio light and two poses held out"
+training_loss = [0.0049890, 0.0049636]
+control_held_light = [23.259322, 22.699545, 53.4717, 22.502843]
+quarter_blend_held_light = [23.260374, 22.699002, 53.4717, 22.504098]
+half_blend_held_light = [23.262112, 22.698497, 53.4717, 22.507112]
+candidate_held_light = [23.266351, 22.696102, 53.4717, 22.513458]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+extra_refinement_seconds = 0.208
+candidate_peak_memory_bytes = 915763200
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/gaussian-normal-refine/model-1 (gitignored)"
+verdict = "reject before five clouds and remove the Gaussian-specific update API: the full step gains only 0.007 dB mean and 0.011 dB where covered while regressing the worst view by 0.003 dB; progressively stronger blends monotonically worsen the tail"

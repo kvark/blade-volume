@@ -2817,3 +2817,13 @@ of the update changes the five-cloud average by +0.005 dB mean and +0.0004 dB
 worst while adding roughly 2.2 seconds and a Gaussian-specific refinement API.
 The prototype is removed. Material/geometry compensation exists, but another
 local albedo polish is not large or consistent enough to resolve it.
+
+Repeating normal refinement through the final volumetric response is rejected
+for the same reason. On the first fixed cloud, four accepted rounds lower the
+training objective from 0.0049890 to 0.0049636, but held-light mean/worst PSNR
+changes only 23.2593/22.6995→23.2664/22.6961 dB. Quarter and half blends show
+the same monotonic trade: mean and covered-pixel quality rise by thousandths
+while the worst view falls. The temporary attribute-update API is removed.
+The selected surface-proxy normal pass already captures nearly all available
+normal signal; the next fidelity work should address geometry/visibility or
+the reconstruction objective instead of adding another final-render polish.
