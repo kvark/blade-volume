@@ -154,7 +154,6 @@ impl CandidateIndex {
             .collect();
         let worker_count = thread::available_parallelism()
             .map_or(1, |count| count.get())
-            .min(8)
             .min(view_indices.len().max(1));
         let chunk_views = view_indices.len().div_ceil(worker_count).max(1);
         thread::scope(|scope| {

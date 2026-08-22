@@ -3231,3 +3231,12 @@ cleanup rather than a broad throughput claim. The candidate persists at
 swap, memory pressure, OOM, or GPU fault. The change adds no public API,
 setting, graph operation, shader, model field, format, dependency, or training
 schedule.
+
+The independent per-view grids now use the CPU parallelism reported by the
+process instead of stopping at eight requested workers. With 18 views, the
+old `div_ceil` partition produced six three-view workers on this 12-thread
+machine; the uncapped partition produces nine two-view workers. Two fresh Room
+runs fall further to 17.8 and 17.7 seconds, retain 12.52/12.04--12.05 dB and
+78.0% coverage, and peak below 358 MiB with zero swap, pressure, OOM, or GPU
+fault. The worker count remains bounded by the number of views, and this is a
+private scheduling change rather than a new pool or policy setting.
