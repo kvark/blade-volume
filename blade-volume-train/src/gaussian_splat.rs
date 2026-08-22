@@ -9,7 +9,7 @@
 use blade_graphics as gpu;
 use blade_volume as vol;
 use meganeura as mn;
-use std::{sync, thread};
+use std::{mem, sync, thread};
 
 const SH_C0: f32 = 0.282_094_8;
 const SH_C1: f32 = 0.488_602_52;
@@ -27,6 +27,7 @@ const TILE_SUPPORT_MARGIN: f32 = 1.25;
 const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
+const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
 const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
 // Match the selected support geometry-refresh cadence so one preparation pass
 // never crosses a point at which candidate transforms could change.
@@ -329,6 +330,14 @@ pub struct FitStats {
     pub steps: usize,
     pub initial_loss: f32,
     pub final_loss: f32,
+}
+
+/// One calibrated image capture used to separate Gaussian geometry from
+/// illumination-dependent appearance.
+#[derive(Clone, Copy)]
+pub struct KnownLightCapture<'a> {
+    pub capture: &'a crate::inverse::capture::Capture,
+    pub environment: &'a vol::relight::Environment,
 }
 
 /// Statistics for the selected appearance-then-support training schedule.
@@ -777,6 +786,96 @@ pub fn attach_pbr(
         materials: surface.materials.clone(),
     });
     gaussian.validate()
+}
+
+fn set_diffuse_appearance(
+    gaussian: &mut vol::PointCloudModel,
+    surface: &vol::relight::RelightModel,
+    environment: &vol::relight::Environment,
+) {
+    let irradiance = environment.diffuse_irradiance();
+    gaussian.sh_degree = 0;
+    gaussian.sh_coefficients = surface
+        .surfels
+        .iter()
+        .flat_map(|surfel| {
+            let material = surface.materials[surfel.material as usize];
+            let basis = vol::relight::sh9(glam::Vec3::from(surfel.normal));
+            let mut color = [0.0f32; 3];
+            for (coefficient, weight) in irradiance.iter().zip(basis) {
+                for channel in 0..3 {
+                    color[channel] += coefficient[channel] * weight * material.albedo[channel];
+                }
+            }
+            color.map(|value| (crate::inverse::capture::linear_to_srgb(value) - 0.5) / SH_C0)
+        })
+        .collect();
+}
+
+fn symmetric_light_order(count: usize) -> impl Iterator<Item = usize> {
+    (0..count).chain((0..count).rev())
+}
+
+/// Continue corresponding Gaussian positions under two or more calibrated
+/// lights while keeping support and appearance fixed.
+///
+/// Each pass predicts a diffuse color from the current PBR surface and one
+/// measured environment. The color is scratch supervision: the Gaussian's
+/// learned coefficients are restored before returning, so only particle
+/// positions persist. Visiting the lights forward and backward avoids making
+/// the last capture an order-dependent prior.
+pub fn fit_multilight_geometry(
+    gaussian: &mut vol::PointCloudModel,
+    surface: &vol::relight::RelightModel,
+    lights: &[KnownLightCapture<'_>],
+    view_indices: &[usize],
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<Vec<FitStats>, String> {
+    gaussian.validate()?;
+    surface.validate()?;
+    if gaussian.points.len() != surface.surfels.len() {
+        return Err("multi-light Gaussian geometry requires matching particle counts".to_string());
+    }
+    if lights.len() < 2 {
+        return Err("multi-light Gaussian geometry requires at least two known lights".to_string());
+    }
+
+    let saved_degree = gaussian.sh_degree;
+    let saved_appearance = mem::take(&mut gaussian.sh_coefficients);
+    let saved_positions = gaussian.points.clone();
+    let result = (|| {
+        let mut stats = Vec::with_capacity(2 * lights.len());
+        for index in symmetric_light_order(lights.len()) {
+            let light = lights[index];
+            set_diffuse_appearance(gaussian, surface, light.environment);
+            stats.push(fit(
+                gaussian,
+                light.capture,
+                view_indices,
+                FitOptions {
+                    steps: MULTI_LIGHT_GEOMETRY_STEPS,
+                    batch_size: 512,
+                    candidates_per_pixel: 64,
+                    candidate_min_alpha: 1.0e-5,
+                    geometry_sync_every: 20,
+                    position_learning_rate: LIGHT_FIELD_POSITION_LEARNING_RATE,
+                    scale_learning_rate: 0.0,
+                    opacity_learning_rate: 0.0,
+                    sh_learning_rate: 0.0,
+                    opacity_loss_weight: 0.0,
+                    background: [0.0; 3],
+                },
+                gpu.clone(),
+            )?);
+        }
+        Ok(stats)
+    })();
+    gaussian.sh_degree = saved_degree;
+    gaussian.sh_coefficients = saved_appearance;
+    if result.is_err() {
+        gaussian.points = saved_positions;
+    }
+    result
 }
 
 struct RayBatch {
@@ -2327,6 +2426,34 @@ mod tests {
     #[test]
     fn selected_fit_defaults_keep_established_centres_fixed() {
         assert_eq!(FitOptions::default().position_learning_rate, 0.0);
+    }
+
+    #[test]
+    fn multilight_geometry_uses_diffuse_scratch_appearance_symmetrically() {
+        let surface = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0; 3],
+                radius: 0.3,
+                normal: glam::Vec3::Z.to_array(),
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material {
+                albedo: [0.5, 0.25, 1.0],
+                ..vol::relight::Material::default()
+            }],
+        };
+        let mut gaussian = from_surface(&surface).unwrap();
+        let environment = vol::relight::Environment::uniform([0.4, 0.8, 0.2], 64, 32);
+        set_diffuse_appearance(&mut gaussian, &surface, &environment);
+        let expected = [0.2, 0.2, 0.2].map(crate::inverse::capture::linear_to_srgb);
+        for (actual, expected) in gaussian.sh_coefficients.iter().zip(expected) {
+            assert_close(0.5 + SH_C0 * actual, expected, 5.0e-3);
+        }
+        assert_eq!(
+            symmetric_light_order(3).collect::<Vec<_>>(),
+            [0, 1, 2, 2, 1, 0]
+        );
     }
 
     #[test]

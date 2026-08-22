@@ -1470,6 +1470,55 @@ fn main() {
         0,
     )[0];
     let volumetric_summaries = learned_pbr_gaussian.as_mut().map(|gaussian| {
+        if args.photometric_normals && args.pbr_gaussian_output.is_some() {
+            let environment_indices: Vec<_> = (0..dataset.environments.len())
+                .filter(|&index| index != held_out_environment)
+                .collect();
+            if environment_indices.len() >= 2 {
+                let captures: Vec<_> = environment_indices
+                    .iter()
+                    .map(|&index| {
+                        train::inverse::capture::Capture::from_relight_dataset(
+                            &dataset, index, true,
+                        )
+                        .unwrap_or_else(|error| fail(error))
+                    })
+                    .collect();
+                let environments: Vec<_> = environment_indices
+                    .iter()
+                    .map(|&index| {
+                        vol::io::try_load_environment(&dataset.environment_files[index])
+                            .unwrap_or_else(|error| fail(error))
+                    })
+                    .collect();
+                let lights: Vec<_> = captures
+                    .iter()
+                    .zip(&environments)
+                    .map(|(capture, environment)| train::gaussian_splat::KnownLightCapture {
+                        capture,
+                        environment,
+                    })
+                    .collect();
+                let Some(gpu) = train::fit::try_init_gpu() else {
+                    fail("no supported GPU device for multi-light Gaussian geometry");
+                };
+                let started = std::time::Instant::now();
+                let stats = train::gaussian_splat::fit_multilight_geometry(
+                    gaussian,
+                    &fitted.scene.model,
+                    &lights,
+                    &training_indices,
+                    gpu,
+                )
+                .unwrap_or_else(|error| fail(error));
+                println!(
+                    "multi-light Gaussian geometry: {} calibrated lights, {} position updates in {:.3} s",
+                    lights.len(),
+                    stats.iter().map(|stats| stats.steps).sum::<usize>(),
+                    started.elapsed().as_secs_f64(),
+                );
+            }
+        }
         if args.render_refine_radii {
             train::gaussian_splat::apply_surface_radius_feedback(gaussian, &fitted.scene.model)
                 .unwrap_or_else(|error| fail(error));

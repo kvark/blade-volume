@@ -54,7 +54,7 @@ either reconstructed asset.
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
 | Synthetic (predefined light, refined) | 6 / 2 | 25.15 / 24.44 dB | 21.81 / 21.48 dB | 57.0% |
 | Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 22.68 / 22.22 dB | 56.7% |
-| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.29 / 22.71 dB | 55.1% |
+| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.32 / 22.73 dB | 55.2% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -112,6 +112,15 @@ Room and Bonsai gates put Gaussian and scalar rendering at 12.52/12.04 versus
 12.49/12.01 dB on Room, while Gaussian wins 14.86/14.83 versus 14.69/14.40 dB
 on Bonsai. Real captures have no held-light truth, so these remain
 capture-light novel-view gates rather than relighting accuracy claims.
+
+When two or more aligned captures have measured environments, the final PBR
+Gaussian geometry also receives a short position-only continuation under each
+known light. Each pass predicts diffuse appearance from the recovered material
+and normal, then restores the pre-continuation coefficients; covariance, opacity,
+materials, and runtime representation are unchanged. A symmetric four-light
+sweep improves every held-light mean and worst view across the five fixed
+clouds, reaching 23.32/22.73 dB at 55.2% coverage. It is automatic only for a
+requested relightable Gaussian output and adds no training option or shader.
 
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered

@@ -3397,3 +3397,35 @@ sixteen reach 23.32/22.68 dB at 54.9% and 22.46 dB where hit; twenty-four reach
 explain local mixture errors, but those assignments do not remain physical
 when the learned ellipsoids overlap. The existing 12-material controlled-light
 gate remains selected and no new option or code path is added.
+
+## Selected calibrated-light Gaussian geometry continuation (2026-08-22)
+
+The relightable Gaussian now uses repeated measured-light captures for one
+final position-only continuation. For each light, the current PBR normal and
+diffuse material predict one fixed SH-0 color per corresponding particle. The
+ordinary image-formation fit then moves centers for 50 updates while keeping
+covariance, opacity, and appearance fixed. Lights are visited forward and
+backward so the final capture does not become an order prior. The scratch
+colors are discarded and the learned Gaussian coefficients restored before
+the asset is attached to PBR data and serialized. An error rolls both scratch
+appearance and partial center changes back.
+
+This reuses the existing Gaussian graph and optimizer: it adds no Meganeura
+operation, shader, bind group, model field, CLI setting, or runtime path. The
+production binary enables it only when a relightable Gaussian was requested
+and at least one aligned `--normal-images` / `--normal-environment` pair joins
+the primary measured light. A two-light Bonsai production smoke completed 200
+updates, persisted and reloaded the PBR cloud, and scored it through the normal
+viewer renderer.
+
+On the exact five fixed synthetic clouds, the prior selected result was
+23.284/22.700 dB mean/worst, 55.08% coverage, and 22.286 dB where hit. Four
+calibrated lights and 400 symmetric updates reach 23.324/22.726 dB, 55.16%,
+and 22.302 dB. Every cloud improves its mean and worst view; one newly covered
+subset trades 0.04 dB where hit while the other four and the aggregate improve.
+The continuation averages 3.094 seconds per cloud. Its 12 GiB cgroup peaks at
+291 MB with no swap, OOM, or GPU fault. The result is intentionally modest:
+nearest-truth material and normal substitutions previously showed that poor
+cross-view geometry correspondence, not a missing specular material lobe, is
+the current volumetric PBR limiter. Independent calibrated lights provide a
+genuine geometry signal without baking one light into the persisted asset.

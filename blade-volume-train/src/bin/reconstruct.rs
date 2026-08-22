@@ -843,6 +843,43 @@ fn main() {
     }
 
     if let Some(ref mut gaussian) = learned_pbr_gaussian {
+        if !normal_captures.is_empty() && args.pbr_gaussian_output.is_some() {
+            let mut lights = Vec::with_capacity(normal_captures.len() + 1);
+            lights.push(train::gaussian_splat::KnownLightCapture {
+                capture: &capture,
+                environment: known_light
+                    .as_ref()
+                    .expect("known light validated for additional captures"),
+            });
+            lights.extend(normal_captures.iter().map(|entry| {
+                train::gaussian_splat::KnownLightCapture {
+                    capture: &entry.capture,
+                    environment: &entry.environment,
+                }
+            }));
+            let Some(gpu) = train::fit::try_init_gpu() else {
+                eprintln!("cannot initialize a supported GPU for multi-light Gaussian geometry");
+                std::process::exit(1);
+            };
+            let started = std::time::Instant::now();
+            let stats = train::gaussian_splat::fit_multilight_geometry(
+                gaussian,
+                &fitted.scene.model,
+                &lights,
+                &train_views,
+                gpu,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("cannot fit multi-light Gaussian geometry: {error}");
+                std::process::exit(1);
+            });
+            println!(
+                "multi-light Gaussian geometry: {} calibrated lights, {} position updates in {:.1} s",
+                lights.len(),
+                stats.iter().map(|stats| stats.steps).sum::<usize>(),
+                started.elapsed().as_secs_f64(),
+            );
+        }
         if args.render_refine_radii {
             train::gaussian_splat::apply_surface_radius_feedback(gaussian, &fitted.scene.model)
                 .unwrap_or_else(|error| {
