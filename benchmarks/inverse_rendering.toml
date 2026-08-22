@@ -4521,6 +4521,33 @@ gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/multilight-patch-{control,candidate,sun-pair*,fallback-*} (gitignored)"
 verdict = "reject and remove: extra calibrated lights increase patch support, but neither joint scoring nor primary-only fallback improves five-cloud held-light mean and tail together; the remaining error needs a more reliable shared surface coordinate than shading-gradient correspondence"
 
+# The direct Gaussian already learns an anisotropic 3D covariance, whereas the
+# PBR conversion currently keeps only its volume-equivalent scalar support.
+# A temporary renderer path retained the learned X/Z tangent ratio as an
+# area-preserving ellipse while leaving centers, normals, materials, and scalar
+# radii fixed. The existing circular path remained bit-exact in all seven
+# physical CPU/GPU parity and update tests. The ellipse changed held-light mean
+# by only +0.01 dB, left the worst view and coverage unchanged, and reduced
+# covered-pixel quality by 0.02 dB. This does not justify doubling the surfel
+# ABI, adding another construction API, or extending the asset representation.
+# The prototype tested only tangent anisotropy, not a full volumetric Gaussian
+# with independently meaningful normal-axis thickness.
+[direct_gaussian.rejected_tangent_anisotropy_transfer]
+date = "2026-08-22"
+protocol = "fixed calibrated synthetic cloud; transfer the learned PBR Gaussian X/Z scale ratio and rotation as an area-preserving tangent ellipse; studio light and two poses held out"
+isotropic_training_light = [23.81, 23.25, 56.5, 23.22]
+elliptical_training_light = [23.83, 23.28, 56.5, 23.23]
+isotropic_held_light = [22.70, 22.15, 56.5, 21.76]
+elliptical_held_light = [22.71, 22.15, 56.5, 21.74]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+physical_gpu_parity_tests = 7
+maximum_peak_memory_bytes = 943947776
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/elliptical-pbr-probe (gitignored)"
+verdict = "reject and remove: learned tangent anisotropy is effectively neutral under held-light scoring and its tiny mean gain is contradicted by covered-pixel quality; any future covariance experiment must justify a full volumetric particle model rather than expand the surfel ABI for a tangent-only ellipse"
+
 [calibrated_normals.rejected_view_agreement_blend]
 date = "2026-08-22"
 protocol = "fixed calibrated synthetic cloud; scale only the correspondence-aware correction by the length of the mean unit-normal estimate, retaining the shared multi-light solution under disagreement"
