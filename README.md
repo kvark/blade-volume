@@ -66,7 +66,9 @@ The predefined-light row is the fixed-cloud result after the conservative
 complete-render normal and radius passes. Across five independently trained
 source clouds, the final unseen-light PBR score averages 21.67 dB, with a
 21.23 dB average worst view. This is a controlled lighting milestone rather
-than an end-to-end unknown-light result.
+than an end-to-end unknown-light result. When the optional rendered-material
+fit is also requested, a final post-support polish raises its separate
+five-cloud gate to 21.73/21.38 dB average mean/worst without changing coverage.
 
 `reconstruct --gaussian-output light-field.ply --output scene.rply` writes the
 two outputs; `scene.f32` stores the recovered environment beside the PBR

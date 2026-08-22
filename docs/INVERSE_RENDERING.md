@@ -234,7 +234,12 @@ repeats at 0.0125 to resolve values between the coarse candidates. Each
 proposal updates only the existing material buffer; it does not rebuild the
 acceleration structures or add a shader, operation, bind-group, or pipeline
 variant. This is deliberately a final pass for a small palette, not a scalable
-per-particle material optimizer and not a default.
+per-particle material optimizer and not a default. When `--gaussian-output`
+changes the PBR support afterward, the same option finishes with a finer
+coordinate-only polish against the final cloud. It deliberately retains the
+first fit instead of repeating its linear initializer: support has moved only
+slightly, while reinitializing the whole table reintroduced a held-light
+regression on one synthetic cloud.
 
 ### visibility, and why the bounce is not optional
 

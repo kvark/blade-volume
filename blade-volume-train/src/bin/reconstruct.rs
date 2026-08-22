@@ -797,6 +797,28 @@ fn main() {
             );
         }
     }
+    if args.render_refine_materials && args.gaussian_output.is_some() {
+        let stats = train::inverse::refine::polish_rendered_materials(
+            &mut fitted.scene,
+            &capture,
+            &train_views,
+            args.diffuse_samples,
+            0.0125,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("cannot polish post-support materials: {error}");
+            std::process::exit(1);
+        });
+        println!(
+            "post-support materials: changed {} of {} coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.1} s",
+            stats.changed,
+            stats.coordinates,
+            stats.proposals,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
+        );
+    }
 
     if let Some(ref output) = args.output {
         let output = path::Path::new(output);

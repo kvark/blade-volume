@@ -1321,6 +1321,26 @@ fn main() {
             .unwrap_or_else(|error| fail(error));
         }
     }
+    if args.render_refine_materials && args.gaussian_output.is_some() {
+        pbr_controls.push(("post-support material", fitted.scene.model.clone()));
+        let stats = train::inverse::refine::polish_rendered_materials(
+            &mut fitted.scene,
+            &training_capture,
+            &training_indices,
+            0,
+            0.0125,
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "post-support polished {} of {} material coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.3} s",
+            stats.changed,
+            stats.coordinates,
+            stats.proposals,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
+        );
+    }
     if let Some(ref surface_output) = args.surface_output {
         let surface_path = path::Path::new(surface_output);
         if let Some(parent) = surface_path

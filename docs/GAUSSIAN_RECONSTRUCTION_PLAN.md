@@ -2488,3 +2488,35 @@ more aggressively, but on the fixed cloud worsen normal RMSE by 0.06 and 0.94
 degrees respectively; both are rejected. The conservative pass costs about
 0.26 seconds, and its complete diagnostic artifacts remain under
 `target/audit-runs/current-synthetic-v1/post-support-normal-2p5-truth-five/`.
+
+The opt-in rendered-material path now closes the same ordering gap. Its first
+linear-plus-coordinate fit happens before learned Gaussian support is copied
+back to the PBR cloud, so the final radii and normal polish change the pixel
+mixtures that selected the material table. After those changes, a finer
+coordinate-only pass reuses the existing production-render objective and
+keeps the first fit as its initializer. Repeating the linear initializer is
+rejected: at a 0.025 step it loses 0.0145/0.0049 dB mean/worst on the second
+cloud, while simply reducing its step does not remove the conflict.
+
+Against in-process post-support controls, the selected 0.0125 coordinate
+polish changes five exact-light held means by +0.0359, -0.0001, +0.0121,
++0.0358, and +0.0547 dB; worst-view changes are +0.0442, +0.0053, +0.0018,
++0.0481, and +0.0553 dB. The effectively unchanged second mean varies by about
+0.002 dB across repeated GPU continuations, while its tail remains positive.
+Average mean/worst gains are 0.028/0.031 dB and coverage is unchanged. Reduced
+production smokes also move Room test PSNR from 10.17 to 10.23 dB and Bonsai
+from 13.18 to 13.33 dB; the final training-render losses fall in both cases.
+The extra pass takes about 1.05 seconds for twelve synthetic materials and
+0.4 seconds for six real-scene materials. It adds no shader, operation,
+binding, pipeline, dependency, or acceleration-structure rebuild. Artifacts
+remain under
+`target/audit-runs/current-synthetic-v1/post-support-material-coordinate-five/`
+and `target/audit-runs/post-support-material-{room,bonsai}-{control,smoke}/`.
+
+Unknown-light iteration count is not the next answer. Stopping the existing
+alternation at 12 rounds improves recovered-light RMS on all five clouds but
+regresses unseen-light rendering on three. Extending it from 24 to 36 rounds
+improves four means by at most 0.05 dB but loses 0.11/0.08 dB mean/worst on the
+third. Both controls are removed. The remaining light/material gap needs new
+held-independent evidence, not a different stopping point for the same
+ambiguous factorization.

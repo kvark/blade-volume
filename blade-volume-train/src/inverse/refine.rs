@@ -457,6 +457,33 @@ pub fn refine_rendered_materials(
     diffuse_samples: u32,
     step: f32,
 ) -> Result<RenderedMaterialStats, String> {
+    refine_rendered_materials_impl(scene, capture, indices, diffuse_samples, step, true)
+}
+
+/// Re-polish a rendered material fit after geometry or particle support moved.
+///
+/// Unlike [`refine_rendered_materials`], this keeps the existing material
+/// estimate as its initializer. The linear initializer is useful for the first
+/// fit, but repeating it after a small support update can needlessly replace a
+/// solution that was already selected through complete renders.
+pub fn polish_rendered_materials(
+    scene: &mut score::Scene,
+    capture: &capture::Capture,
+    indices: &[usize],
+    diffuse_samples: u32,
+    step: f32,
+) -> Result<RenderedMaterialStats, String> {
+    refine_rendered_materials_impl(scene, capture, indices, diffuse_samples, step, false)
+}
+
+fn refine_rendered_materials_impl(
+    scene: &mut score::Scene,
+    capture: &capture::Capture,
+    indices: &[usize],
+    diffuse_samples: u32,
+    step: f32,
+    initialize_linear: bool,
+) -> Result<RenderedMaterialStats, String> {
     if !step.is_finite() || step <= 0.0 || step >= 1.0 {
         return Err("rendered material step must be finite and between zero and one".to_string());
     }
@@ -478,16 +505,18 @@ pub fn refine_rendered_materials(
     let mut loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
     let initial_loss = loss;
     let initial_materials = scene.model.materials.clone();
-    if let Some(candidate_loss) = fit_rendered_linear_albedo(
-        scene,
-        &mut renderer,
-        &mut tracer,
-        capture,
-        indices,
-        &cameras,
-        loss,
-    ) {
-        loss = candidate_loss;
+    if initialize_linear {
+        if let Some(candidate_loss) = fit_rendered_linear_albedo(
+            scene,
+            &mut renderer,
+            &mut tracer,
+            capture,
+            indices,
+            &cameras,
+            loss,
+        ) {
+            loss = candidate_loss;
+        }
     }
     let mut coordinates = 0;
     let mut proposals = 0;
@@ -2127,6 +2156,20 @@ mod tests {
                 (actual - expected).abs() < 2.0e-5,
                 "albedo {actual} != {expected}; stats={stats:?}"
             );
+        }
+        recolored.model.materials[0].albedo = [0.65, 0.35, 0.2];
+        let stats = polish_rendered_materials(&mut recolored, &capture, &[0, 1], 0, 0.05)
+            .expect("material re-polish");
+        assert_eq!(stats.coordinates, 6);
+        assert_eq!(stats.proposals, 12);
+        assert_eq!(stats.changed, 2);
+        assert!(stats.final_loss < stats.initial_loss);
+        for (actual, expected) in recolored.model.materials[0]
+            .albedo
+            .iter()
+            .zip([0.7, 0.3, 0.2])
+        {
+            assert!((actual - expected).abs() < 2.0e-5);
         }
 
         let mut first = make_scene(0.075);
