@@ -2379,3 +2379,36 @@ particles but loses the direct tail and collapses PBR when applied jointly.
 Foam-derived reconstruction already builds support from training-view depth
 and is unchanged. The selected sparse path adds no CLI setting, model field,
 shader, graph operation, dependency, or runtime representation.
+
+### Fresh current-Blade control (2026-08-22)
+
+The canonical synthetic fixture was regenerated from the current Blade
+relighting harness at eight views, five environments, 200x150 pixels and 128
+paths per pixel. The selected six-view image-only foam reaches 25.59/24.68 dB
+held-view radiance before extraction. Its two cloud-only outputs reach
+25.06/24.34 dB for the static Gaussian field and 18.90/18.68 dB for PBR under
+the unseen `studio` light, with 56.4% coverage. The recovered capture light is
+64.2% relative RMS from truth after gauge. These reproducible numbers replace
+the stale synthetic README row; generated data and logs remain under
+`target/audit-runs/current-synthetic-v1/`.
+
+The substitutions locate two similarly sized gaps. Holding the capture light
+to truth raises PBR to 20.77/20.31 dB with the selected six materials, and 12
+shared materials reach 20.90/20.41 dB. Replacing only the reconstructed
+particle normals by nearest synthetic truth while retaining reconstructed
+centers and radii reaches 21.87/21.42 dB. Ground-truth geometry with fitted
+materials reaches 22.86 dB. Predefined lighting therefore removes roughly
+half the current end-to-end loss, while normal/surface reconstruction explains
+roughly half of the remainder.
+
+Three tempting local changes are rejected. Correcting material chromaticity by
+the known diffuse shade lowers held-light quality by 0.19--0.28 dB at 6--24
+materials even though its training residual falls. A strict centered depth
+derivative removes 13--15% of the fused particles and is mixed across five
+independent foam checkpoints. Retaining every forward-difference sample and
+using a centered derivative only where all four neighbors exist is still
+mixed: with exact lighting its five held means change by +0.05, -0.06, -0.03,
++0.06 and +0.08 dB, and with recovered lighting it can lose more than a
+decibel. Both stencil prototypes were removed. The next geometry step must
+couple evidence across views; another per-image derivative or material prior
+does not close the measured truth-normal gap.
