@@ -4393,3 +4393,38 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/cosine-view-normal-probe (gitignored)"
 verdict = "reject before five clouds and retain equal per-view consensus: front-facing weighting marginally improves only the late normal metric while clearly regressing the complete held-light mean and tail"
+
+[calibrated_normals.oracle_material_audit]
+date = "2026-08-22"
+protocol = "fixed calibrated synthetic cloud; classify each reconstructed surfel by the nearest authored truth sample after the selected complete-render passes"
+dielectric_f0_percent = 4
+dielectric_particles = 1949
+dielectric_normal_rmse_degrees = 44.28
+medium_f0_percent = [49, 38, 20]
+medium_f0_particles = 141
+medium_f0_normal_rmse_degrees = 63.97
+high_f0_percent = [95, 72, 35]
+high_f0_particles = 233
+high_f0_normal_rmse_degrees = 106.80
+peak_memory_bytes = 892440576
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/normal-material-audit (gitignored)"
+conclusion = "the 10% high-F0 minority contributes disproportionately to squared normal error, confirming diffuse photometric ambiguity on view-dependent materials; this is an oracle diagnosis, not an available training label"
+
+[calibrated_normals.rejected_view_agreement_blend]
+date = "2026-08-22"
+protocol = "fixed calibrated synthetic cloud; scale only the correspondence-aware correction by the length of the mean unit-normal estimate, retaining the shared multi-light solution under disagreement"
+control_render_normal_rmse_degrees = 55.11
+candidate_render_normal_rmse_degrees = 54.92
+control_pbr_held_light_psnr = [22.66, 22.16]
+candidate_pbr_held_light_psnr = [22.62, 22.13]
+control_coverage_percent = 56.6
+candidate_coverage_percent = 56.7
+candidate_peak_memory_bytes = 896872448
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/agreement-normal-probe (gitignored)"
+verdict = "reject before five clouds and restore the full correspondence correction: observable view agreement improves truth-normal RMSE and coverage but regresses both held-light image metrics, so truth-normal error remains diagnostic rather than the selection objective"
