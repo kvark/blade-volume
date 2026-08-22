@@ -191,12 +191,13 @@ impl CandidateGrid {
             .map(|transform| transform.world_to_gaussian * (camera_origin - transform.mean))
             .collect();
         let transforms = model.transforms.as_ref().unwrap();
+        let projection = crate::inverse::capture::PixelProjection::new(camera, width, height);
         for (index, point) in model.points.iter().enumerate() {
             if point.w < min_alpha {
                 continue;
             }
             let Some((min, max)) = projected_support_bounds(
-                camera,
+                &projection,
                 width,
                 height,
                 point.truncate(),
@@ -754,6 +755,16 @@ pub fn project_conic(
     rotation: glam::Quat,
     scale: glam::Vec3,
 ) -> Option<ProjectedConic> {
+    let projection = crate::inverse::capture::PixelProjection::new(camera, width, height);
+    project_conic_with(&projection, mean, rotation, scale)
+}
+
+fn project_conic_with(
+    projection: &crate::inverse::capture::PixelProjection,
+    mean: glam::Vec3,
+    rotation: glam::Quat,
+    scale: glam::Vec3,
+) -> Option<ProjectedConic> {
     if !mean.is_finite()
         || !rotation.is_finite()
         || rotation.length_squared() <= 0.0
@@ -773,15 +784,10 @@ pub fn project_conic(
         rotation * (glam::Vec3::Z * scale.z * root),
     ];
     let mut projected = [glam::Vec2::ZERO; 7];
-    projected[0] =
-        glam::Vec2::from(crate::inverse::capture::project(camera, width, height, mean)?.0);
+    projected[0] = glam::Vec2::from(projection.project(mean)?.0);
     for (axis_index, axis) in axes.into_iter().enumerate() {
-        projected[1 + axis_index] = glam::Vec2::from(
-            crate::inverse::capture::project(camera, width, height, mean + axis)?.0,
-        );
-        projected[4 + axis_index] = glam::Vec2::from(
-            crate::inverse::capture::project(camera, width, height, mean - axis)?.0,
-        );
+        projected[1 + axis_index] = glam::Vec2::from(projection.project(mean + axis)?.0);
+        projected[4 + axis_index] = glam::Vec2::from(projection.project(mean - axis)?.0);
     }
 
     // With lambda=0 the centre has zero mean weight and every outer point has
@@ -800,7 +806,7 @@ pub fn project_conic(
 }
 
 fn projected_support_bounds(
-    camera: &vol::CameraParams,
+    projection: &crate::inverse::capture::PixelProjection,
     width: usize,
     height: usize,
     mean: glam::Vec3,
@@ -812,8 +818,7 @@ fn projected_support_bounds(
     let response_threshold = (min_alpha / opacity).clamp(f32::MIN_POSITIVE, 1.0);
     let gaussian_radius = (-2.0 * response_threshold.ln()).sqrt() * TILE_SUPPORT_MARGIN;
     let world_radius = gaussian_radius * scale.max_element();
-    let camera_rotation = glam::Quat::from_array(camera.cam_orientation);
-    let local_mean = camera_rotation.inverse() * (mean - glam::Vec3::from(camera.cam_position));
+    let local_mean = projection.camera_space(mean);
     if local_mean.z + world_radius <= 1.0e-6 {
         return None;
     }
@@ -827,7 +832,7 @@ fn projected_support_bounds(
         ));
     }
 
-    let conic = project_conic(camera, width, height, mean, rotation, scale)?;
+    let conic = project_conic_with(projection, mean, rotation, scale)?;
     let conic_extent = glam::Vec2::new(
         (gaussian_radius * gaussian_radius * conic.covariance.x_axis.x.max(0.0)).sqrt(),
         (gaussian_radius * gaussian_radius * conic.covariance.y_axis.y.max(0.0)).sqrt(),
@@ -1320,18 +1325,10 @@ pub fn evaluate_views(
         let view = &capture.views[view_index];
         let origin = glam::Vec3::from(view.camera.cam_position);
         let origins = vec![origin; pixels];
+        let rays =
+            crate::inverse::capture::PixelRays::new(&view.camera, capture.width, capture.height);
         let directions: Vec<_> = (0..capture.height)
-            .flat_map(|y| {
-                (0..capture.width).map(move |x| {
-                    crate::inverse::capture::pixel_direction(
-                        &view.camera,
-                        capture.width,
-                        capture.height,
-                        x,
-                        y,
-                    )
-                })
-            })
+            .flat_map(|y| (0..capture.width).map(move |x| rays.direction(x, y)))
             .collect();
         let batch = RayBatch {
             origins,
@@ -1801,8 +1798,21 @@ fn hash(mut value: u32) -> u32 {
     value ^ (value >> 16)
 }
 
+fn capture_pixel_rays(
+    capture: &crate::inverse::capture::Capture,
+) -> Vec<crate::inverse::capture::PixelRays> {
+    capture
+        .views
+        .iter()
+        .map(|view| {
+            crate::inverse::capture::PixelRays::new(&view.camera, capture.width, capture.height)
+        })
+        .collect()
+}
+
 fn sample_rays(
     capture: &crate::inverse::capture::Capture,
+    pixel_rays: &[crate::inverse::capture::PixelRays],
     view_indices: &[usize],
     count: usize,
     sequence: u32,
@@ -1822,13 +1832,7 @@ fn sample_rays(
         let y = pixel / capture.width;
         let view = &capture.views[view_index];
         origins.push(glam::Vec3::from(view.camera.cam_position));
-        directions.push(crate::inverse::capture::pixel_direction(
-            &view.camera,
-            capture.width,
-            capture.height,
-            x,
-            y,
-        ));
+        directions.push(pixel_rays[view_index].direction(x, y));
         views.push(view_index);
         pixels.push(pixel);
         labels.extend(
@@ -1851,6 +1855,7 @@ fn sample_rays(
 fn prepare_candidates(
     model: &vol::PointCloudModel,
     capture: &crate::inverse::capture::Capture,
+    pixel_rays: &[crate::inverse::capture::PixelRays],
     view_indices: &[usize],
     first_step: usize,
     batch_count: usize,
@@ -1867,7 +1872,13 @@ fn prepare_candidates(
         alpha: Vec::with_capacity(ray_count),
     };
     for step in first_step..first_step + batch_count {
-        let batch = sample_rays(capture, view_indices, options.batch_size, step as u32);
+        let batch = sample_rays(
+            capture,
+            pixel_rays,
+            view_indices,
+            options.batch_size,
+            step as u32,
+        );
         combined.origins.extend_from_slice(&batch.origins);
         combined.directions.extend_from_slice(&batch.directions);
         combined.views.extend_from_slice(&batch.views);
@@ -2015,10 +2026,17 @@ fn fit_with_opacity_loss(
     );
     set_model_parameters(&mut session, model);
     set_rotation_inputs(&mut session, model);
+    let pixel_rays = capture_pixel_rays(capture);
     let mut candidate_index =
         CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
 
-    let audit = sample_rays(capture, view_indices, options.batch_size, u32::MAX);
+    let audit = sample_rays(
+        capture,
+        &pixel_rays,
+        view_indices,
+        options.batch_size,
+        u32::MAX,
+    );
     set_batch(&mut session, model, &audit, &candidate_index, options);
     session.step();
     session.wait();
@@ -2043,6 +2061,7 @@ fn fit_with_opacity_loss(
         let candidates = prepare_candidates(
             model,
             capture,
+            &pixel_rays,
             view_indices,
             step,
             batch_count,
@@ -2053,6 +2072,7 @@ fn fit_with_opacity_loss(
         for batch_index in 0..batch_count {
             let batch = sample_rays(
                 capture,
+                &pixel_rays,
                 view_indices,
                 options.batch_size,
                 (step + batch_index) as u32,
@@ -2652,7 +2672,8 @@ mod tests {
             .scales
             .fill(glam::Vec3::splat(0.12));
         let capture = empty_capture(64, 48);
-        let batch = sample_rays(&capture, &[0, 1], 1_024, 17);
+        let pixel_rays = capture_pixel_rays(&capture);
+        let batch = sample_rays(&capture, &pixel_rays, &[0, 1], 1_024, 17);
         let exhaustive = record_candidates(&model, &batch.origins, &batch.directions, 8, 1.0e-4);
         let index = CandidateIndex::new(&model, &capture, &[0, 1], 1.0e-4);
         let tiled = record_indexed_candidates(&model, &batch, &index, 8, 1.0e-4);
@@ -2679,6 +2700,7 @@ mod tests {
             glam::Vec4::new(0.0, -0.4, 4.0, 0.9),
         ]);
         let capture = empty_capture(32, 24);
+        let pixel_rays = capture_pixel_rays(&capture);
         let view_indices = [0, 1];
         let options = FitOptions {
             batch_size: 73,
@@ -2688,12 +2710,21 @@ mod tests {
         };
         let index =
             CandidateIndex::new(&model, &capture, &view_indices, options.candidate_min_alpha);
-        let combined_candidates =
-            prepare_candidates(&model, &capture, &view_indices, 11, 3, &index, options);
+        let combined_candidates = prepare_candidates(
+            &model,
+            &capture,
+            &pixel_rays,
+            &view_indices,
+            11,
+            3,
+            &index,
+            options,
+        );
         let entries = options.batch_size * options.candidates_per_pixel;
         for offset in 0..3 {
             let rays = sample_rays(
                 &capture,
+                &pixel_rays,
                 &view_indices,
                 options.batch_size,
                 11 + offset as u32,

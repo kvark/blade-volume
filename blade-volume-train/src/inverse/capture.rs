@@ -81,19 +81,43 @@ pub fn project(
     height: usize,
     point: glam::Vec3,
 ) -> Option<([f32; 2], f32)> {
-    let orientation = glam::Quat::from_array(camera.cam_orientation);
-    let local = orientation.inverse() * (point - glam::Vec3::from(camera.cam_position));
-    if local.z <= 1.0e-6 {
-        return None;
+    PixelProjection::new(camera, width, height).project(point)
+}
+
+/// Camera terms shared by repeated world-to-pixel projections.
+#[derive(Clone, Copy)]
+pub(crate) struct PixelProjection {
+    origin: glam::Vec3,
+    inverse_orientation: glam::Quat,
+    tan_half: glam::Vec2,
+    principal: glam::Vec2,
+    extent: glam::Vec2,
+}
+
+impl PixelProjection {
+    pub(crate) fn new(camera: &vol::CameraParams, width: usize, height: usize) -> Self {
+        Self {
+            origin: glam::Vec3::from(camera.cam_position),
+            inverse_orientation: glam::Quat::from_array(camera.cam_orientation).inverse(),
+            tan_half: glam::Vec2::new((0.5 * camera.fov[0]).tan(), (0.5 * camera.fov[1]).tan()),
+            principal: glam::Vec2::from(camera.principal),
+            extent: glam::Vec2::new(width as f32, height as f32),
+        }
     }
-    let tan_half = glam::Vec2::new((0.5 * camera.fov[0]).tan(), (0.5 * camera.fov[1]).tan());
-    let ndc = glam::Vec2::new(local.x, local.y) / (local.z * tan_half)
-        + glam::Vec2::from(camera.principal);
-    let pixel = [
-        0.5 * (ndc.x + 1.0) * width as f32,
-        0.5 * (ndc.y + 1.0) * height as f32,
-    ];
-    Some((pixel, local.z))
+
+    pub(crate) fn camera_space(&self, point: glam::Vec3) -> glam::Vec3 {
+        self.inverse_orientation * (point - self.origin)
+    }
+
+    pub(crate) fn project(&self, point: glam::Vec3) -> Option<([f32; 2], f32)> {
+        let local = self.camera_space(point);
+        if local.z <= 1.0e-6 {
+            return None;
+        }
+        let ndc = glam::Vec2::new(local.x, local.y) / (local.z * self.tan_half) + self.principal;
+        let pixel = 0.5 * (ndc + glam::Vec2::ONE) * self.extent;
+        Some((pixel.to_array(), local.z))
+    }
 }
 
 /// The direction the ray through a pixel centre travels, in world space.

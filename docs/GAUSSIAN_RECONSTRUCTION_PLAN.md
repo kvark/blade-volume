@@ -3049,3 +3049,33 @@ nearest 64 hits before sorting takes 44.9 seconds on Room because most tile
 lists already fit the cap; four-pixel tiles take 44.6 seconds because their
 extra grid construction outweighs fewer per-ray candidates. The established
 complete sort and eight-pixel tile remain.
+
+## Cached direct-Gaussian camera terms (2026-08-22)
+
+Candidate-grid construction projected every Gaussian support point through
+the same view while repeatedly reconstructing and inverting its camera
+quaternion and evaluating its field-of-view tangents. Ray sampling repeated
+the corresponding forward quaternion and tangent setup for every sampled
+pixel. The camera and capture are immutable throughout a fit, so projection
+now caches the inverse transform and pinhole constants once per grid, while
+ray generation caches the forward transform and constants once per view.
+The equations, pixel centres, support bounds, candidate order, optimizer
+schedule, graph, and persistence path are unchanged. Exact tests continue to
+match tiled candidates against exhaustive traversal and grouped candidate
+preparation against individual recording.
+
+On a fresh 109,764-particle Room reconstruction, paired Gaussian fitting falls
+from the bulk-readback baseline of 26.1 to 24.1 seconds, a further 7.7%, while
+the persisted held-light PBR Gaussian scores 12.52/12.05 dB at 78.0% coverage.
+The 169,432-particle Bonsai fit falls from 31.9 to 28.7 seconds, a further
+10.0%, and scores 14.86/14.83 dB at 85.5% coverage. Relative to the original
+pre-readback implementation, the combined reduction is 44.7% on Room and
+53.0% on Bonsai.
+
+A fresh five-cloud reconstruction and persistence gate averages
+23.2882/22.7016 dB at 55.081% coverage and 22.2954 dB where hit, equivalent to
+the selected 23.2893/22.7108 dB, 55.094% baseline. The Room, Bonsai, and
+five-cloud reconstruction scopes peak at 376.8, 487.9, and 271.7 MiB with zero
+swap, memory pressure, OOM, or GPU fault. This optimization adds no public API,
+option, shader, graph operation, model field, file-format change, dependency,
+or training schedule.
