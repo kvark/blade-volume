@@ -4375,3 +4375,21 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/background-plus-foreground-0p1-probe (gitignored)"
 verdict = "reject before five clouds: even one tenth foreground pressure fails to recover coverage and loses the worst-view gain; keep PBR visibility supervision strictly negative-only"
+
+[calibrated_normals.rejected_camera_incidence_consensus]
+date = "2026-08-22"
+protocol = "fixed calibrated synthetic cloud; weight each correspondence-aware per-view normal estimate by cosine incidence under the pre-photometric depth normal"
+control_density_normal_rmse_degrees = 54.56
+candidate_density_normal_rmse_degrees = 54.61
+control_render_normal_rmse_degrees = 55.11
+candidate_render_normal_rmse_degrees = 55.03
+control_pbr_held_light_psnr = [22.66, 22.16]
+candidate_pbr_held_light_psnr = [22.59, 22.06]
+control_coverage_percent = 56.6
+candidate_coverage_percent = 56.6
+candidate_peak_memory_bytes = 910913536
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/cosine-view-normal-probe (gitignored)"
+verdict = "reject before five clouds and retain equal per-view consensus: front-facing weighting marginally improves only the late normal metric while clearly regressing the complete held-light mean and tail"
