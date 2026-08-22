@@ -3362,3 +3362,20 @@ Their held-light average remains in the established continuation band at
 23.284/22.698 dB, 55.06%, and 22.292 dB for the selected dependency-uprev
 baseline. The full physical-GPU workspace suite passes in the 12 GiB cgroup,
 peaking at 6.30 GB with no swap, OOM, or GPU fault.
+
+## Rejected compact Gaussian transform cache (2026-08-22)
+
+After per-view Gaussian origins are built, the indexed ray loop does not read
+the mean retained in each 48-byte candidate transform. A prototype kept only
+the 36-byte inverse matrix in that hot cache while leaving the public response
+oracle and every floating-point operation unchanged. All 24 Gaussian tests,
+including exact indexed-versus-exhaustive rows, passed.
+
+Order-balanced Room fits averaged 14.55 seconds for the control and 13.95 for
+the compact cache, while Bonsai averaged 16.15 and 15.80 seconds. The effect
+does not transfer meaningfully to the production-sized synthetic gate: five
+fits average 4.094 seconds versus the selected 4.114-second control, only 0.5%.
+Real-scene cgroup peaks are inconsistent and the five-cloud peak is unchanged
+at about 281 MB. Held-light quality remains within atomic continuation noise.
+Carrying a second internal transform representation is therefore not worth a
+sub-percent production gain; the prototype is removed.
