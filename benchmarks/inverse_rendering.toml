@@ -5070,3 +5070,24 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/invariant-candidate-map-{room,bonsai}, target/audit-runs/current-synthetic-v1/invariant-candidate-map-five (gitignored)"
 verdict = "select as API-preserving allocation cleanup, not a real-scene throughput claim: exact row-equivalence tests preserve every training input, held-light quality remains in-band, Room time is unchanged and Bonsai timing is noisy, while the largest observed real-scene peak falls from 536 to 432 MB; the full five-cloud process peak occurs in another phase and does not fall"
+
+[direct_gaussian.selected_blade_meganeura_uprev]
+date = "2026-08-22"
+protocol = "move every direct Blade dependency from 88cdfc1 to Blade main dd93e63 and Meganeura from dece560 to f20a464, a three-commit descendant of Meganeura main that aligns Blade, keeps constant gradient seeds host-visible, and retains source-parallel scatter accumulation"
+blade_revision = "dd93e63899156fa2da0e8b5c01f33cd4818691e3"
+meganeura_revision = "f20a4640c9e858d445be8e96b3f1a2b9abadf0d1"
+omitted_scatter_fit_seconds = [44.287, 44.470]
+selected_fit_seconds = [4.294, 4.406, 4.394, 4.370, 4.362]
+selected_average_fit_seconds = 4.365
+five_cloud_mean = [23.36, 23.43, 23.16, 23.30, 23.17]
+five_cloud_worst = [22.75, 22.77, 22.52, 22.73, 22.72]
+five_cloud_coverage = [54.8, 55.1, 55.3, 55.2, 54.9]
+five_cloud_covered = [22.50, 22.40, 22.13, 22.28, 22.15]
+five_cloud_average = [23.284, 22.698, 55.06, 22.292]
+five_cloud_peak_memory_bytes = 253521920
+workspace_test_peak_memory_bytes = 2612723712
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/dependency-uprev-final-five, target/audit-runs/dependency-uprev-final-workspace-tests.telemetry.log (gitignored)"
+verdict = "select only with source-parallel scatter retained: the naive latest-main bridge is quality-correct but makes the small Gaussian fit about 10.2x slower; the corrected revision restores the established 4.4-second envelope, keeps held-light quality in-band, and passes both Meganeura's 206 library tests and the full blade-volume workspace"

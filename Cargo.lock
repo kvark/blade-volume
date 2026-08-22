@@ -443,7 +443,7 @@ dependencies = [
 [[package]]
 name = "blade-egui"
 version = "0.8.1"
-source = "git+https://github.com/kvark/blade?rev=88cdfc1c99abb7cd26da6673965419f3dfe052aa#88cdfc1c99abb7cd26da6673965419f3dfe052aa"
+source = "git+https://github.com/kvark/blade?rev=dd93e63899156fa2da0e8b5c01f33cd4818691e3#dd93e63899156fa2da0e8b5c01f33cd4818691e3"
 dependencies = [
  "blade-graphics",
  "blade-macros",
@@ -456,7 +456,7 @@ dependencies = [
 [[package]]
 name = "blade-graphics"
 version = "0.8.4"
-source = "git+https://github.com/kvark/blade?rev=88cdfc1c99abb7cd26da6673965419f3dfe052aa#88cdfc1c99abb7cd26da6673965419f3dfe052aa"
+source = "git+https://github.com/kvark/blade?rev=dd93e63899156fa2da0e8b5c01f33cd4818691e3#dd93e63899156fa2da0e8b5c01f33cd4818691e3"
 dependencies = [
  "ash",
  "ash-window",
@@ -492,7 +492,7 @@ dependencies = [
 [[package]]
 name = "blade-macros"
 version = "0.3.0"
-source = "git+https://github.com/kvark/blade?rev=88cdfc1c99abb7cd26da6673965419f3dfe052aa#88cdfc1c99abb7cd26da6673965419f3dfe052aa"
+source = "git+https://github.com/kvark/blade?rev=dd93e63899156fa2da0e8b5c01f33cd4818691e3#dd93e63899156fa2da0e8b5c01f33cd4818691e3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -502,7 +502,7 @@ dependencies = [
 [[package]]
 name = "blade-util"
 version = "0.4.1"
-source = "git+https://github.com/kvark/blade?rev=88cdfc1c99abb7cd26da6673965419f3dfe052aa#88cdfc1c99abb7cd26da6673965419f3dfe052aa"
+source = "git+https://github.com/kvark/blade?rev=dd93e63899156fa2da0e8b5c01f33cd4818691e3#dd93e63899156fa2da0e8b5c01f33cd4818691e3"
 dependencies = [
  "blade-graphics",
  "bytemuck",
@@ -2353,7 +2353,7 @@ dependencies = [
 [[package]]
 name = "meganeura"
 version = "0.2.0"
-source = "git+https://github.com/kvark/meganeura?rev=dece560c33fdf846e4170c4713342a7eac1319b8#dece560c33fdf846e4170c4713342a7eac1319b8"
+source = "git+https://github.com/kvark/meganeura?rev=f20a4640c9e858d445be8e96b3f1a2b9abadf0d1#f20a4640c9e858d445be8e96b3f1a2b9abadf0d1"
 dependencies = [
  "blade-graphics",
  "blade-macros",

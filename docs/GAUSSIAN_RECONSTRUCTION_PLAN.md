@@ -3180,3 +3180,31 @@ peaks in another reconstruction phase and rises from 260.4 to 296.2 MB, so it
 does not corroborate a global peak reduction. All scopes report zero swap,
 memory pressure, OOM, or GPU fault. The surviving code adds no option, shader,
 graph operation, model field, format, dependency, or alternate training path.
+
+## Current Blade and Meganeura revisions (2026-08-22)
+
+The workspace now uses Blade `dd93e63`, the current upstream main revision,
+for `blade-graphics`, `blade-macros`, and `blade-egui`. Meganeura moves from
+`dece560` to `f20a464`, a three-commit descendant of its current main that
+aligns those Blade dependencies, keeps compile-time gradient seeds host
+visible, and retains the source-parallel scatter implementation already used
+by this reconstruction branch. All Blade packages resolve to one revision.
+These are branches in the original repositories, not additional forks.
+
+The quality gate caught an important dependency-integration regression before
+selection. The first bridge omitted the final scatter commit: two identical
+small-cloud fits took 44.29 and 44.47 seconds instead of the established 4.4
+seconds. Restoring source-parallel scatter reduces the same first-cloud fit to
+4.29 seconds. The final five fits average 4.365 seconds and held-light
+volumetric Gaussian PBR averages 23.284/22.698 dB mean/worst, 55.06% coverage,
+and 22.292 dB where hit. This is inside the established quality and throughput
+band rather than merely compiling against newer APIs.
+
+Meganeura's complete 206-test library suite and blade-volume's complete
+workspace/all-target suite pass. The latter peaks at 2.61 GB; the five-cloud
+scope peaks at 253.5 MB. Both report zero swap, memory pressure, OOM, or GPU
+fault. Vulkan validation still prints the three known Blade-main diagnostics:
+workgroup `ArrayStride`, descriptor-pool sizing for binding arrays, and missing
+device-address allocation flags. Their already-isolated Blade fixes are not
+silently introduced through another dependency branch; the tests complete on
+the physical RTX 5070 without device loss or numerical failure.
