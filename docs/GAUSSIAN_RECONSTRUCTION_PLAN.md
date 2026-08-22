@@ -2689,3 +2689,42 @@ held-light mean/worst moves from 22.58/21.85 to 22.52/21.90 dB while coverage
 rises from 56.6% to 57.0%. The optimizer is again broadening a photometrically
 convenient surface rather than recovering the shared one. The wrapper, test,
 and integration are removed before a five-cloud run.
+
+Broader normalized patches do not resolve that correspondence either. On the
+fixed calibrated cloud, expanding the retained 3x3 half-radius descriptor to
+a 5x5 patch over 0.75 radius improves extracted position/normal RMSE from
+0.5810/56.73 degrees to 0.5803/56.45 degrees, but lowers direct held-view
+quality from 24.98/24.26 to 24.93/24.20 dB and held-light PBR from
+22.58/21.85 to 22.49/21.86 dB. A full-radius patch reaches slightly better
+geometry at 0.5799/56.54 degrees and improves the PBR tail and coverage, but
+still loses 0.05 dB mean PBR and 0.06/0.05 dB direct mean/tail. Concatenating
+the original descriptor with a lightly weighted full-radius 5x5 descriptor
+fails the analytical gate first: it moves 22 of 49 particles on an exact
+textured sphere by 0.0056 world units on average. All prototypes are removed.
+More samples of the same normalized radiance remain coupled to occlusion and
+proxy support; a future correspondence model needs a learned invariant or a
+joint surface/support objective rather than another patch-size sweep.
+
+The descriptor test also reproduced the earlier intermittent llvmpipe test
+fallback. Complete-render scoring created and destroyed several independent
+ray-tracing contexts in one test process; after the first physical context,
+Blade could reject a later 5070 initialization and continue to the software
+adapter. Scoring tests now share one ray-tracing context while production
+renderers retain their existing per-instance lifetime. Five repeated
+four-thread focused runs execute all 35 GPU tests on the 5070 with no skip or
+fallback, peaking at 164.1 MiB with zero swap, OOM, or GPU fault.
+
+The full current-main replay also corrects the dependency history above:
+Blade `88cdfc1` contains the device-scope memory-model fix, but not the three
+remaining validation fixes. The minimal successor branch
+`fix/reconstruction-vulkan-validation-final` contains only upstream wgpu/Naga
+`cefd48f`, the external device-address allocation flag, and descriptor-array
+pool sizing. Meganeura must use the same Naga revision because it passes
+`naga::Module` values directly into Blade; branch `deps/blade-validation-final`
+adds only that one-line alignment. There is no wgpu fork. With temporary local
+path overrides to those two branches, the complete workspace all-target suite
+passes with zero Vulkan validation errors or warnings. It peaks at 4.6 GiB
+inside the 12 GiB cgroup with no swap, OOM, GPU fault, or software-adapter
+fallback. The path overrides and lockfile changes were removed after the run;
+blade-volume should move directly to the merged main commits, not retain either
+temporary branch.

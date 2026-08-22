@@ -53,7 +53,7 @@ either reconstructed asset.
 | --- | ---: | ---: | ---: | ---: |
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
 | Synthetic (predefined light, refined) | 6 / 2 | 25.15 / 24.44 dB | 21.81 / 21.48 dB | 57.0% |
-| Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 22.44 / 21.89 dB | 57.1% |
+| Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 22.52 / 21.95 dB | 57.0% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -73,12 +73,15 @@ five clouds. This is a controlled lighting milestone rather than an end-to-end
 unknown-light result.
 
 With four aligned captures under measured lights, the same five-cloud gate
-improves unseen-light PBR quality to 22.44/21.89 dB. Photometric normals are
+improves unseen-light PBR quality to 22.52/21.95 dB. Photometric normals are
 useful for the PBR surface but not for reproducing the original photographs,
 so the static light field now keeps the pre-calibration Gaussian geometry and
 fits its appearance and support independently. That restores static quality
 from 23.62/22.95 to 24.97/24.22 dB while changing PBR by only
-+0.01/-0.01 dB on average. Both outputs remain point clouds.
++0.01/-0.01 dB on average. A conservative 20% density-gradient correction
+after the calibrated normal solve improves every one of the five held-light
+means and tails; single-light and static outputs retain their gated 10%
+correction. Both outputs remain point clouds.
 
 `reconstruct --gaussian-output light-field.ply --output scene.rply` writes the
 two outputs; `scene.f32` stores the recovered environment beside the PBR
