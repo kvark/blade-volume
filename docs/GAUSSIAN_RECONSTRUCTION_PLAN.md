@@ -3279,3 +3279,29 @@ where hit, but exchanges 0.01 dB of worst-view quality for 0.01 dB where-hit
 quality. This is below the measured continuation noise and cannot justify a
 new optimizer or runtime update API. The localizer, updater, public statistics,
 and synthetic integration are all removed; only this negative gate remains.
+
+## Rejected direct-Gaussian scheduling shortcuts (2026-08-22)
+
+A phase profile of the current 169,432-particle Bonsai fit confirms that host
+candidate work, not GPU optimization, is still dominant. Across its four fit
+stages, candidate-row preparation takes 11.4 seconds and the two support
+stages spend 7.4 seconds downloading geometry and rebuilding view grids. GPU
+dispatch and wait take 2.3 seconds total; deterministic ray sampling and input
+upload take less than 0.3 seconds. Removing the second ray-metadata generation
+would therefore optimize well under one percent of this run.
+
+Refreshing learned support every 40 updates halves the expensive grid rebuilds
+and reduces the established 18-training-view Bonsai fit to 16.5 seconds, but
+persisted Gaussian PBR coverage falls from 85.6% to 82.4%. A 25-update refresh
+is less stale and takes 18.0 seconds, yet coverage falls further to 81.8%.
+Static light-field PSNR remains within 0.03 dB and Gaussian PBR PSNR does not
+fall, showing that both variants exchange missing support for easier covered
+pixels rather than preserving the reconstruction. The selected 20-update
+cadence is restored.
+
+An adjacent attempt to remove the indexed candidate recorder's explicit
+eight-worker cap is also removed as a production no-op. The selected batch is
+512 rays and the existing minimum of 64 rays per worker independently limits
+that call to eight workers. Apparent 2--6% paired timing differences therefore
+measure scheduling noise, not the source change. The five-cloud run remains in
+the established quality band, as expected for identical worker counts.
