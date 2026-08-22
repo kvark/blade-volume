@@ -289,6 +289,9 @@ pub struct SharedStagedFitStats {
     pub light_field_support: FitStats,
 }
 
+/// Statistics for a paired PBR support and static light-field fit.
+pub type OutputFitStats = SharedStagedFitStats;
+
 fn staged_step_counts(steps: usize) -> Option<(usize, usize)> {
     (steps >= 2).then(|| {
         let appearance = (steps / 3).max(1);
@@ -406,6 +409,24 @@ pub fn fit_staged_outputs(
         appearance,
         pbr_support,
         light_field_support,
+    })
+}
+
+/// Fit PBR support and a static light field whose input geometry differs.
+pub fn fit_staged_independent_outputs(
+    pbr: &mut vol::PointCloudModel,
+    light_field: &mut vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    steps: usize,
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<OutputFitStats, String> {
+    let pbr_stats = fit_staged(pbr, capture, view_indices, steps, gpu.clone())?;
+    let light_field_stats = fit_staged_light_field(light_field, capture, view_indices, steps, gpu)?;
+    Ok(OutputFitStats {
+        appearance: light_field_stats.appearance,
+        pbr_support: pbr_stats.support,
+        light_field_support: light_field_stats.support,
     })
 }
 

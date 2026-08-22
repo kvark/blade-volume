@@ -82,6 +82,15 @@ opacity; unmasked room captures use RGB alone. This output is intentionally
 separate from the relightable scene: it reproduces the captured illumination
 but does not claim to have separated material from light.
 
+That separation also applies to geometry refinements whose evidence belongs
+only to one output. With repeated measured-light captures, photometric normals
+improve the PBR surface but make the static field's capture-light fit worse.
+The static output therefore snapshots the extracted Gaussian surface before
+that calibrated normal solve and runs its own appearance/support stages. The
+PBR fit continues from the calibrated surface and still returns only its
+learned radius to the relightable scene. No runtime representation or shader
+variant is added.
+
 The fitted scales do carry geometry evidence shared by both outputs. After the
 direct fit, their volume-equivalent three-sigma radius updates the corresponding
 relightable Gaussian surfel before it is scored or written. Centers, normals,

@@ -1008,6 +1008,15 @@ fn main() {
             started.elapsed().as_secs_f64(),
         );
     }
+    let static_gaussian_surface = (args.photometric_normals && args.gaussian_output.is_some())
+        .then(|| {
+            let mut surface = geometry.clone();
+            for surfel in &mut surface.surfels {
+                surfel.radius = voxel * args.disc_radius.max(0.1);
+            }
+            train::inverse::surface::refine_normals_from_density(&mut surface.surfels, &model);
+            surface
+        });
     if args.photometric_normals {
         let started = std::time::Instant::now();
         let stats = refine_photometric_normals(
@@ -1207,22 +1216,40 @@ fn main() {
         .unwrap_or_else(|error| fail(error));
     }
     if let Some(ref output) = args.gaussian_output {
-        let mut gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
+        let light_field_surface = static_gaussian_surface
+            .as_ref()
+            .unwrap_or(&fitted.scene.model);
+        let mut gaussian = train::gaussian_splat::from_surface(light_field_surface)
             .unwrap_or_else(|error| fail(error));
-        let mut pbr_gaussian = gaussian.clone();
+        let mut pbr_gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
+            .unwrap_or_else(|error| fail(error));
         let Some(gpu) = train::fit::try_init_gpu() else {
             fail("no supported GPU device for direct Gaussian training");
         };
         let started = std::time::Instant::now();
-        let stats = train::gaussian_splat::fit_staged_outputs(
-            &mut pbr_gaussian,
-            &mut gaussian,
-            &training_capture,
-            &training_indices,
-            args.gaussian_steps,
-            gpu,
-        )
-        .unwrap_or_else(|error| fail(error));
+        let (stats, shared_appearance) = if static_gaussian_surface.is_some() {
+            let stats = train::gaussian_splat::fit_staged_independent_outputs(
+                &mut pbr_gaussian,
+                &mut gaussian,
+                &training_capture,
+                &training_indices,
+                args.gaussian_steps,
+                gpu,
+            )
+            .unwrap_or_else(|error| fail(error));
+            (stats, false)
+        } else {
+            let stats = train::gaussian_splat::fit_staged_outputs(
+                &mut pbr_gaussian,
+                &mut gaussian,
+                &training_capture,
+                &training_indices,
+                args.gaussian_steps,
+                gpu,
+            )
+            .unwrap_or_else(|error| fail(error));
+            (stats, true)
+        };
         let fit_seconds = started.elapsed().as_secs_f64();
         let core_held_out_scores = train::gaussian_splat::evaluate_views(
             &pbr_gaussian,
@@ -1233,13 +1260,20 @@ fn main() {
             [0.0; 3],
         )
         .unwrap_or_else(|error| fail(error));
-        println!(
-            "Gaussian outputs: {} shared appearance, {} PBR support, and {} light-field support updates in {:.3} s",
-            stats.appearance.steps,
-            stats.pbr_support.steps,
-            stats.light_field_support.steps,
-            fit_seconds,
-        );
+        if shared_appearance {
+            println!(
+                "Gaussian outputs: {} shared appearance, {} PBR support, and {} light-field support updates in {:.3} s",
+                stats.appearance.steps,
+                stats.pbr_support.steps,
+                stats.light_field_support.steps,
+                fit_seconds,
+            );
+        } else {
+            println!(
+                "Gaussian outputs: independent PBR and static light-field fits in {:.3} s",
+                fit_seconds,
+            );
+        }
         describe_scores("fixed-center Gaussian held-out", &core_held_out_scores);
         let held_out_scores = train::gaussian_splat::evaluate_views(
             &gaussian,

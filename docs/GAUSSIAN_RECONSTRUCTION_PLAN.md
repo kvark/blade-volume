@@ -679,6 +679,22 @@ This is a real reusable multi-light result, but remains opt-in: ordinary phone
 video supplies one illumination, so its next milestone is still a joint
 rendered-surface objective or an observation-trained correspondence descriptor.
 
+The current five-cloud gate repeats that calibrated solve after the selected
+density and complete-render refinements. Relative to the one-light pipeline,
+four known training lights raise unseen-light PBR quality from 21.84/21.49 dB
+to 22.44/21.89 dB on average and coverage from about 56.7% to 57.1%. Sharing
+the calibrated tangent frames with the static Gaussian output is wrong,
+however: it lowers held-view capture-light quality to 23.62/22.95 dB. The
+selected path snapshots the extracted Gaussian geometry before photometric
+normal calibration and trains the static field independently. It recovers
+24.97/24.22 dB while the paired PBR result changes by +0.006/-0.010 dB and
+-0.08 coverage points, all below the observed run-to-run fitting noise. The
+extra independent fit takes 4.93--5.68 seconds versus 4.66--5.73 seconds for
+the shared-output control and peaks at 242,933,760 bytes with zero swap, OOM,
+pressure, or GPU fault. `reconstruct` follows the same output boundary when
+repeat calibrated images are supplied; a reduced Bonsai CLI smoke completes
+at a 266,240,000-byte peak.
+
 Sharing a small diffuse material table does not by itself make that one-light
 case identifiable. An alternating experiment fitted two shared materials from
 sun-east and searched 512 normal directions, with studio kept entirely unseen.

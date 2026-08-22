@@ -3997,3 +3997,26 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/sparse-training-tracks-v1/output-specific-radius15 (gitignored)"
 verdict = "keep for sparse-only static output: exclude geometry with no selected-training-camera track, preserve full PBR geometry, improve both held fields, and reduce total Gaussian fitting by 24-25%"
+
+[direct_gaussian.calibrated_output_separation]
+date = "2026-08-22"
+protocol = "five independently trained synthetic clouds; six training and two held poses; sun-east, sun-west, sky-dome, and uniform calibrate normals; studio is held out"
+shared_static_psnr = [23.59, 23.61, 23.23, 23.86, 23.79]
+shared_static_worst = [23.10, 22.91, 22.48, 23.25, 23.03]
+independent_static_psnr = [24.99, 24.91, 24.70, 25.21, 25.02]
+independent_static_worst = [24.27, 23.88, 24.24, 24.39, 24.31]
+shared_pbr_held_light_psnr = [22.48, 22.58, 22.31, 22.43, 22.39]
+shared_pbr_held_light_worst = [21.75, 22.06, 21.70, 21.90, 22.11]
+shared_pbr_coverage_percent = [57.0, 57.1, 57.1, 57.5, 57.2]
+independent_pbr_held_light_psnr = [22.48, 22.59, 22.30, 22.47, 22.38]
+independent_pbr_held_light_worst = [21.78, 22.06, 21.70, 21.87, 22.06]
+independent_pbr_coverage_percent = [57.0, 57.1, 57.1, 57.1, 57.2]
+shared_fit_seconds = [4.868, 5.156, 5.726, 4.661, 4.881]
+independent_fit_seconds = [4.930, 5.270, 5.677, 5.113, 5.133]
+maximum_peak_memory_bytes = 242933760
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+production_smoke_peak_memory_bytes = 266240000
+artifacts = "target/audit-runs/current-synthetic-v1/{current-multilight-five,independent-output-five}, target/audit-runs/static-pbr-output-production-smoke-v2 (gitignored)"
+verdict = "keep: calibrating normals for relighting must not rotate the static capture-light field; snapshot the pre-calibration Gaussian surface and fit both outputs independently"
