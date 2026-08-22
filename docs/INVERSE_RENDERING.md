@@ -89,6 +89,13 @@ material assignments, and PBR values remain unchanged. This happens only when
 `--gaussian-output` requests the direct fit; a PBR-only reconstruction retains
 its extracted radii.
 
+`--render-refine-radii` can then check that transferred support against the
+complete PBR renderer. Eight localized antithetic rounds begin at ±10% and
+halve the step for the final four rounds. The masked sRGB-plus-coverage
+objective accepts only complete-render improvements; centers, normals,
+materials, assignments, and light remain fixed. This post-transfer pass is
+separate from the older exact coordinate polish described below.
+
 **Sparse points.** COLMAP's triangulated points, with normals from the local
 covariance and a side chosen by the cameras that can see them. Free, needs no
 training, and covers only what COLMAP could triangulate — 44 % of the frame on
@@ -500,7 +507,8 @@ and 71.5 seconds, or 25--29% below the original loop. Every reported train/test
 score and coverage value remains unchanged. The physical-GPU scope peaks at
 791 MB with zero swap, memory event, or GPU fault.
 
-`--render-refine-radii` adds two support candidates, 120% and 80% of each
+During an exact `--render-refine N` coordinate pass,
+`--render-refine-radii` also adds two support candidates, 120% and 80% of each
 current Gaussian radius, after its position decision. Expansion is tested
 first so a successful support-preserving move avoids the second rebuild.
 Twenty percent is the selected point of a 5/10/20% five-cloud sweep. Relative
@@ -614,13 +622,15 @@ mean/worst, the fifth loses 0.02/0.02 dB, and the fixed radius gate loses
 remain removed: preserving an initializer's soft silhouette is not the same as
 observing the missing surface.
 
-Support radii cannot simply join the paired position schedule. Joint and
-separate radius perturbations improve every fixed synthetic cloud and Room,
-but a 64-round phase loses 0.11 dB on the worst Bonsai view and 0.2 coverage
-points. Eight and sixteen radius rounds avoid that tail loss but become neutral
-or negative on Room, while forbidding shrinkage accepts no useful changes.
-That prototype is removed; `--render-refine-radii` continues to apply only to
-the exact coordinate pass.
+Support radii could not safely join the earlier paired position schedule.
+Joint and separate perturbations before direct Gaussian support fitting were
+mixed across Room and Bonsai, and a 64-round phase lost 0.11 dB on the worst
+Bonsai view. That prototype remains removed. The selected radius pass instead
+runs after anisotropic Gaussian support has converged, keeps centers fixed, and
+uses independent foreground masks in its coverage-aware objective when they
+exist. On the five-cloud exact-light gate it improves every unseen-light mean
+and tail; the full measurements are recorded in
+`GAUSSIAN_RECONSTRUCTION_PLAN.md`.
 
 The production relight tracer now preserves accumulated Gaussian coverage in
 its output alpha. This replaces scoring's black/white background pair with one

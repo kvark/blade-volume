@@ -161,7 +161,7 @@ struct Args {
     #[argh(option, default = "0")]
     render_refine_rounds: usize,
 
-    /// also refine Gaussian radii by a gated 20% step
+    /// refine PBR Gaussian radii against complete renders
     #[argh(switch)]
     render_refine_radii: bool,
 
@@ -1263,6 +1263,34 @@ fn main() {
             .unwrap_or_else(|error| fail(error));
         println!("updated PBR radii from learned Gaussian support");
     }
+    let mut radius_control = None;
+    if args.render_refine_radii && args.gaussian_output.is_some() {
+        radius_control = Some(fitted.scene.model.clone());
+        let environment = fitted.scene.environment.clone();
+        let evidence = [train::inverse::refine::RenderedNormalEvidence {
+            capture: &training_capture,
+            indices: &training_indices,
+            environment: &environment,
+        }];
+        let stats = train::inverse::refine::refine_rendered_radii(
+            &mut fitted.scene,
+            &evidence,
+            &observations,
+            0,
+            8,
+            0.1,
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "render-refined {} radii in {} rounds ({} accepted), loss {:.7} -> {:.7}, in {:.3} s",
+            stats.radii,
+            stats.rounds,
+            stats.accepted,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
+        );
+    }
     if let Some(ref surface_output) = args.surface_output {
         let surface_path = path::Path::new(surface_output);
         if let Some(parent) = surface_path
@@ -1296,6 +1324,23 @@ fn main() {
     .unwrap_or_else(|error| fail(error));
     let mut renderer = train::inverse::score::Renderer::new(dataset.width, dataset.height)
         .unwrap_or_else(|error| fail(error));
+    if let Some(model) = radius_control {
+        let control = renderer.score_splits(
+            &train::inverse::score::Scene {
+                model,
+                environment: held_out_light.clone(),
+            },
+            &held_out_capture,
+            &[(&held_out_indices, None)],
+            0,
+        )[0];
+        println!(
+            "PBR radius control / held-out light: {:.2} dB, {:.2} worst, {:.1}% coverage",
+            control.srgb_psnr,
+            control.worst_srgb_psnr,
+            100.0 * control.coverage,
+        );
+    }
     let training_summary = renderer.score_splits(
         &train::inverse::score::Scene {
             model: fitted.scene.model.clone(),

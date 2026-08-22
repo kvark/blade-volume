@@ -177,7 +177,7 @@ struct Args {
     #[argh(option, default = "0")]
     render_refine_rounds: usize,
 
-    /// also refine Gaussian radii by a gated 20% step
+    /// refine PBR Gaussian radii against complete renders
     #[argh(switch)]
     render_refine_radii: bool,
 
@@ -744,6 +744,35 @@ fn main() {
                 std::process::exit(1);
             });
         println!("updated PBR radii from learned Gaussian support");
+    }
+    if args.render_refine_radii && args.gaussian_output.is_some() {
+        let environment = fitted.scene.environment.clone();
+        let evidence = [train::inverse::refine::RenderedNormalEvidence {
+            capture: &capture,
+            indices: &train_views,
+            environment: &environment,
+        }];
+        let stats = train::inverse::refine::refine_rendered_radii(
+            &mut fitted.scene,
+            &evidence,
+            &observations,
+            args.diffuse_samples,
+            8,
+            0.1,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("cannot refine rendered radii: {error}");
+            std::process::exit(1);
+        });
+        println!(
+            "rendered radii: changed {} candidates in {} rounds ({} accepted), loss {:.7} -> {:.7}, in {:.1} s",
+            stats.radii,
+            stats.rounds,
+            stats.accepted,
+            stats.initial_loss,
+            stats.final_loss,
+            stats.seconds,
+        );
     }
 
     if let Some(ref output) = args.output {

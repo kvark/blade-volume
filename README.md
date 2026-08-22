@@ -52,6 +52,7 @@ either reconstructed asset.
 | Gate | Training / held views | Static held PSNR | PBR held PSNR | Coverage |
 | --- | ---: | ---: | ---: | ---: |
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
+| Synthetic (predefined light, refined) | 6 / 2 | 25.13 / 24.42 dB | 21.57 / 21.11 dB | 56.4% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -60,6 +61,12 @@ The static columns always use the capture light. The synthetic PBR score uses
 a held-out environment; Room and Bonsai have no relighting truth, so their PBR
 columns measure held poses under the recovered capture light. They must not be
 read as real-scene relighting accuracy.
+
+The predefined-light row is the fixed-cloud result after the conservative
+complete-render normal and radius passes. Across five independently trained
+source clouds, the final unseen-light PBR score averages 21.58 dB, with a
+21.18 dB average worst view. This is a controlled lighting milestone rather
+than an end-to-end unknown-light result.
 
 `reconstruct --gaussian-output light-field.ply --output scene.rply` writes the
 two outputs; `scene.f32` stores the recovered environment beside the PBR

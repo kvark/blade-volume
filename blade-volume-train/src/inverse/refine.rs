@@ -132,6 +132,16 @@ pub struct RenderedNormalStats {
     pub seconds: f64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderedRadiusStats {
+    pub radii: usize,
+    pub rounds: usize,
+    pub accepted: usize,
+    pub initial_loss: f64,
+    pub final_loss: f64,
+    pub seconds: f64,
+}
+
 fn rendered_loss(
     renderer: &mut score::Renderer,
     tracer: &mut vol::gpu::RelightTracer,
@@ -154,7 +164,7 @@ fn rendered_errors(
     renderer.prepared_srgb_errors(tracer, capture, indices, cameras, 0.0)
 }
 
-fn rendered_normal_errors(
+fn rendered_evidence_errors(
     renderer: &mut score::Renderer,
     tracers: &mut [vol::gpu::RelightTracer],
     evidence: &[RenderedNormalEvidence<'_>],
@@ -178,7 +188,7 @@ fn rendered_normal_errors(
     errors
 }
 
-fn update_rendered_normal_scenes(
+fn update_rendered_geometry(
     renderer: &mut score::Renderer,
     tracers: &mut [vol::gpu::RelightTracer],
     surfels: &[vol::relight::Surfel],
@@ -206,39 +216,45 @@ fn normal_perturbation(normal: glam::Vec3, index: usize, round: usize, angle: f3
     (angle.cos() * normal + angle.sin() * axis).normalize()
 }
 
-/// Refine observed Gaussian normals against complete renders from known-light
-/// captures. Each round renders one antithetic perturbation pair, chooses a
-/// direction per projected particle from its local error difference, and only
-/// keeps a proposal that lowers the full multi-light objective. Centers,
-/// radii, materials, assignments, and illumination stay fixed.
-pub fn refine_rendered_normals(
+#[derive(Clone, Copy, Debug, Default)]
+struct RenderedParameterStats {
+    parameters: usize,
+    accepted: usize,
+    initial_loss: f64,
+    final_loss: f64,
+    seconds: f64,
+}
+
+fn refine_rendered_parameter(
     scene: &mut score::Scene,
     evidence: &[RenderedNormalEvidence<'_>],
     observations: &decompose::Observations,
     diffuse_samples: u32,
     rounds: usize,
-    step_degrees: f32,
-) -> Result<RenderedNormalStats, String> {
+    parameter: &str,
+    perturb: impl Fn(&vol::relight::Surfel, usize, usize, f32) -> vol::relight::Surfel,
+) -> Result<RenderedParameterStats, String> {
     if observations.surfels() != scene.model.surfels.len() {
-        return Err("rendered normal observation count does not match the model".to_string());
-    }
-    if !step_degrees.is_finite() || step_degrees <= 0.0 || step_degrees >= 45.0 {
-        return Err(
-            "rendered normal step must be finite and between zero and 45 degrees".to_string(),
-        );
+        return Err(format!(
+            "rendered {parameter} observation count does not match the model"
+        ));
     }
     if evidence.is_empty() || rounds == 0 || scene.model.surfels.is_empty() {
-        return Ok(RenderedNormalStats::default());
+        return Ok(RenderedParameterStats::default());
     }
     let width = evidence[0].capture.width;
     let height = evidence[0].capture.height;
     for entry in evidence {
         if entry.capture.width != width || entry.capture.height != height {
-            return Err("rendered normal captures must have one resolution".to_string());
+            return Err(format!(
+                "rendered {parameter} captures must have one resolution"
+            ));
         }
         for &index in entry.indices {
             if index >= entry.capture.views.len() {
-                return Err(format!("rendered normal view {index} is out of bounds"));
+                return Err(format!(
+                    "rendered {parameter} view {index} is out of bounds"
+                ));
             }
         }
     }
@@ -258,7 +274,7 @@ pub fn refine_rendered_normals(
         .filter(|&index| !observations.of(index).is_empty())
         .collect();
     if candidates.is_empty() {
-        return Ok(RenderedNormalStats::default());
+        return Ok(RenderedParameterStats::default());
     }
 
     let mut renderer = score::Renderer::new(width, height)?;
@@ -276,26 +292,25 @@ pub fn refine_rendered_normals(
         })
         .collect();
     let started = std::time::Instant::now();
-    let initial_errors = rendered_normal_errors(&mut renderer, &mut tracers, evidence, &cameras);
+    let initial_errors = rendered_evidence_errors(&mut renderer, &mut tracers, evidence, &cameras);
     let mut loss = mean_error(&initial_errors);
     let initial_loss = loss;
     let mut accepted = 0usize;
     for round in 0..rounds {
         let current = scene.model.surfels.clone();
-        let step = step_degrees.to_radians() * if round < rounds.div_ceil(2) { 1.0 } else { 0.5 };
         let mut plus = current.clone();
         let mut minus = current.clone();
         for &index in &candidates {
-            let normal = glam::Vec3::from(current[index].normal).normalize_or_zero();
-            plus[index].normal = normal_perturbation(normal, index, round, step).to_array();
-            minus[index].normal = normal_perturbation(normal, index, round, -step).to_array();
+            plus[index] = perturb(&current[index], index, round, 1.0);
+            minus[index] = perturb(&current[index], index, round, -1.0);
         }
 
-        update_rendered_normal_scenes(&mut renderer, &mut tracers, &plus);
-        let plus_errors = rendered_normal_errors(&mut renderer, &mut tracers, evidence, &cameras);
+        update_rendered_geometry(&mut renderer, &mut tracers, &plus);
+        let plus_errors = rendered_evidence_errors(&mut renderer, &mut tracers, evidence, &cameras);
         let plus_loss = mean_error(&plus_errors);
-        update_rendered_normal_scenes(&mut renderer, &mut tracers, &minus);
-        let minus_errors = rendered_normal_errors(&mut renderer, &mut tracers, evidence, &cameras);
+        update_rendered_geometry(&mut renderer, &mut tracers, &minus);
+        let minus_errors =
+            rendered_evidence_errors(&mut renderer, &mut tracers, evidence, &cameras);
         let minus_loss = mean_error(&minus_errors);
         let difference = ErrorDifference::new(&plus_errors, &minus_errors, width, height);
 
@@ -312,9 +327,9 @@ pub fn refine_rendered_normals(
                 _ => {}
             }
         }
-        update_rendered_normal_scenes(&mut renderer, &mut tracers, &localized);
+        update_rendered_geometry(&mut renderer, &mut tracers, &localized);
         let localized_errors =
-            rendered_normal_errors(&mut renderer, &mut tracers, evidence, &cameras);
+            rendered_evidence_errors(&mut renderer, &mut tracers, evidence, &cameras);
         let localized_loss = mean_error(&localized_errors);
 
         let (next, next_loss) =
@@ -333,19 +348,102 @@ pub fn refine_rendered_normals(
             loss = next_loss;
         }
         scene.model.surfels = next;
-        update_rendered_normal_scenes(&mut renderer, &mut tracers, &scene.model.surfels);
+        update_rendered_geometry(&mut renderer, &mut tracers, &scene.model.surfels);
     }
     for tracer in tracers {
         renderer.destroy_prepared_scene(tracer);
     }
     renderer.destroy();
-    Ok(RenderedNormalStats {
-        normals: candidates.len(),
-        rounds,
+    Ok(RenderedParameterStats {
+        parameters: candidates.len(),
         accepted,
         initial_loss,
         final_loss: loss,
         seconds: started.elapsed().as_secs_f64(),
+    })
+}
+
+/// Refine observed Gaussian normals against complete renders from known-light
+/// captures. Each round renders one antithetic perturbation pair, chooses a
+/// direction per projected particle from its local error difference, and only
+/// keeps a proposal that lowers the full multi-light objective. Centers,
+/// radii, materials, assignments, and illumination stay fixed.
+pub fn refine_rendered_normals(
+    scene: &mut score::Scene,
+    evidence: &[RenderedNormalEvidence<'_>],
+    observations: &decompose::Observations,
+    diffuse_samples: u32,
+    rounds: usize,
+    step_degrees: f32,
+) -> Result<RenderedNormalStats, String> {
+    if !step_degrees.is_finite() || step_degrees <= 0.0 || step_degrees >= 45.0 {
+        return Err(
+            "rendered normal step must be finite and between zero and 45 degrees".to_string(),
+        );
+    }
+    let step = step_degrees.to_radians();
+    let stats = refine_rendered_parameter(
+        scene,
+        evidence,
+        observations,
+        diffuse_samples,
+        rounds,
+        "normal",
+        |surfel, index, round, direction| {
+            let mut perturbed = *surfel;
+            let normal = glam::Vec3::from(surfel.normal).normalize_or_zero();
+            let scale = if round < rounds.div_ceil(2) { 1.0 } else { 0.5 };
+            perturbed.normal =
+                normal_perturbation(normal, index, round, direction * scale * step).to_array();
+            perturbed
+        },
+    )?;
+    Ok(RenderedNormalStats {
+        normals: stats.parameters,
+        rounds,
+        accepted: stats.accepted,
+        initial_loss: stats.initial_loss,
+        final_loss: stats.final_loss,
+        seconds: stats.seconds,
+    })
+}
+
+/// Refine observed Gaussian support radii against complete production renders.
+/// Centers, normals, materials, assignments, and illumination stay fixed.
+pub fn refine_rendered_radii(
+    scene: &mut score::Scene,
+    evidence: &[RenderedNormalEvidence<'_>],
+    observations: &decompose::Observations,
+    diffuse_samples: u32,
+    rounds: usize,
+    step_fraction: f32,
+) -> Result<RenderedRadiusStats, String> {
+    if !step_fraction.is_finite() || step_fraction <= 0.0 || step_fraction >= 0.5 {
+        return Err(
+            "rendered radius step must be finite and between zero and one half".to_string(),
+        );
+    }
+    let stats = refine_rendered_parameter(
+        scene,
+        evidence,
+        observations,
+        diffuse_samples,
+        rounds,
+        "radius",
+        |surfel, _index, round, direction| {
+            let mut perturbed = *surfel;
+            let scale = if round < rounds.div_ceil(2) { 1.0 } else { 0.5 };
+            perturbed.radius *= 1.0 + direction * scale * step_fraction;
+            perturbed
+        },
+    )?;
+    Ok(RenderedRadiusStats {
+        radii: stats.parameters,
+        rounds,
+        accepted: stats.accepted,
+        initial_loss: stats.initial_loss,
+        final_loss: stats.final_loss,
+        seconds: stats.seconds,
     })
 }
 
@@ -2175,6 +2273,19 @@ mod tests {
             (stats.final_loss - final_loss).abs() < 1.0e-7,
             "stats loss {}, rebuilt loss {final_loss}",
             stats.final_loss,
+        );
+
+        let mut undersized = truth.clone();
+        undersized.model.surfels[0].radius = 0.24;
+        let observations = decompose::observe(&undersized.model, &capture, &[0, 1], -1.0);
+        let stats =
+            refine_rendered_radii(&mut undersized, &evidence, &observations, 0, 24, 0.05).unwrap();
+        assert!(stats.accepted > 0, "stats={stats:?}");
+        assert!(stats.final_loss < stats.initial_loss, "stats={stats:?}");
+        assert!(
+            (undersized.model.surfels[0].radius - 0.3).abs() < 0.06,
+            "radius={}, stats={stats:?}",
+            undersized.model.surfels[0].radius,
         );
     }
 }

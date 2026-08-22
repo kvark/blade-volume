@@ -2448,3 +2448,24 @@ normal RMSE improves by 0.14--0.29 degrees before the surface pass. This
 schedule uses only the primary measured light for complete-render refinement;
 paired secondary lights remain useful for the preceding per-surfel
 photometric initializer but no longer dilute the final image-space objective.
+
+The learned Gaussian support now receives one final check from the renderer
+that actually consumes the PBR cloud. After the direct Gaussian fit transfers
+its volume-equivalent scales back to the relightable surfels, an opt-in radius
+pass uses the same masked complete-render objective and localized antithetic
+search as the normal pass. Centers, normals, materials, assignments, and light
+stay fixed. Both reconstruction commands reuse `--render-refine-radii`; no model
+field, graph operation, shader, entry point, binding, or dependency is added.
+
+On the same five exact-light, 12-material clouds, paired in-process controls
+change from 21.05/20.55, 21.30/20.93, 21.22/20.84, 21.38/21.07, and
+21.08/20.73 dB mean/worst under the unseen light to 21.57/21.11,
+21.62/21.13, 21.51/21.20, 21.70/21.27, and 21.50/21.20 dB. Every mean and tail
+improves; the five-cloud averages gain 0.37/0.36 dB. Coverage changes by
+0.0, +0.1, -0.1, +0.3, and -0.1 point. Eight rounds at a 10% initial radius
+step are selected. A 20% sweep improves the aggregate by another 0.06/0.07 dB
+but gives quality back on one cloud, while 2.5% and 5% leave consistent gains
+unused. The selected pass costs about 0.26 seconds at 1,274--1,307 observed
+particles. Its five-run scope peaks at 214 MiB with zero swap, pressure, OOM,
+or GPU fault; artifacts and logs remain under
+`target/audit-runs/current-synthetic-v1/radius-refine-10pct-five/`.
