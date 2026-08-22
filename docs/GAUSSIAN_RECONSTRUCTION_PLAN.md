@@ -3379,3 +3379,21 @@ Real-scene cgroup peaks are inconsistent and the five-cloud peak is unchanged
 at about 281 MB. Held-light quality remains within atomic continuation noise.
 Carrying a second internal transform representation is therefore not worth a
 sub-percent production gain; the prototype is removed.
+
+## Rejected larger controlled-light material palettes (2026-08-22)
+
+The selected predefined-light pipeline was screened at 12, 16, and 24 shared
+diffuse materials on the same reconstructed cloud. Geometry, calibrated normal
+passes, Gaussian support fitting, final material/radius/normal refinement, and
+the unseen `studio` evaluation light were otherwise identical. Increasing the
+palette lowers the observation-space clustering residual slightly and improves
+the scalar surface fallback from 22.69/22.13 to 22.72/22.23 dB.
+
+The durable full-covariance Gaussian result moves the other way. Twelve
+materials reach 23.36/22.75 dB at 54.8% coverage and 22.50 dB where hit;
+sixteen reach 23.32/22.68 dB at 54.9% and 22.46 dB where hit; twenty-four reach
+23.31/22.64 dB at 54.9% and 22.42 dB where hit. Peak memory also rises from
+241 to 316 MB across the screen. More clusters let the scalar initializer
+explain local mixture errors, but those assignments do not remain physical
+when the learned ellipsoids overlap. The existing 12-material controlled-light
+gate remains selected and no new option or code path is added.
