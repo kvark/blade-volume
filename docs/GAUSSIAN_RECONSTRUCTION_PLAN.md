@@ -2520,3 +2520,20 @@ improves four means by at most 0.05 dB but loses 0.11/0.08 dB mean/worst on the
 third. Both controls are removed. The remaining light/material gap needs new
 held-independent evidence, not a different stopping point for the same
 ambiguous factorization.
+
+Raising the adaptive foam capacity is also not a safe default. Five complete
+2,560-site runs improve aggregate held-light PBR by 0.04/0.13 dB mean/worst
+over the corresponding 2,048-site clouds, but two means regress and one tail
+loses 0.13 dB. At 3,072 sites the aggregate gain is 0.05/0.11 dB, yet three
+means regress and one tail loses 0.37 dB. The larger cloud does contain a real
+orientation signal: its nearest-truth normal RMSE improves on all five runs by
+0.39--3.22 degrees, while position RMSE improves on three. Static Gaussian
+held quality remains mixed, however, so more cells change which surface the
+single-light objective selects rather than monotonically resolving it.
+
+Training rises from the current roughly 16.5 seconds to 17.2--18.0 seconds;
+both five-run scopes stay below 415 MiB with no swap, pressure, OOM, or GPU
+fault. `--target-points` already exposes capacity for a scene-specific sweep,
+but choosing it from the reserved poses would contaminate the held-view gate.
+The 2,048-site default therefore remains. Artifacts are under
+`target/audit-runs/current-synthetic-v1/capacity-{2560,3072}-five/`.
