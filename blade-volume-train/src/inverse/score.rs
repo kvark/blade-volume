@@ -11,7 +11,7 @@
 use crate::inverse::capture;
 use blade_graphics as gpu;
 use blade_volume as vol;
-use std::path;
+use std::{path, sync};
 
 /// Everything a reconstruction consists of.
 #[derive(Clone)]
@@ -133,7 +133,7 @@ fn compare_coverage(
 
 /// A GPU that renders one scene at one resolution, repeatedly.
 pub struct Renderer {
-    context: gpu::Context,
+    context: sync::Arc<gpu::Context>,
     texture: gpu::Texture,
     target: gpu::TextureView,
     readback: gpu::Buffer,
@@ -150,20 +150,7 @@ impl Renderer {
         if vol::gpu::access_disabled() {
             return Err("GPU access disabled by BLADE_VOLUME_DISABLE_GPU".to_string());
         }
-        let context = unsafe {
-            gpu::Context::init(gpu::ContextDesc {
-                ray_tracing: true,
-                ..Default::default()
-            })
-        }
-        .map_err(|e| format!("no ray tracing context: {e:?}"))?;
-        let information = context.device_information();
-        if information.is_software_emulated {
-            return Err(format!(
-                "refusing to score on the software rasterizer '{}'",
-                information.device_name
-            ));
-        }
+        let context = scoring_context()?;
         let extent = gpu::Extent {
             width: width as u32,
             height: height as u32,
@@ -541,6 +528,35 @@ impl Renderer {
         self.context.destroy_texture(self.texture);
         self.context.destroy_command_encoder(&mut self.encoder);
     }
+}
+
+fn init_scoring_context() -> Result<sync::Arc<gpu::Context>, String> {
+    let context = unsafe {
+        gpu::Context::init(gpu::ContextDesc {
+            ray_tracing: true,
+            ..Default::default()
+        })
+    }
+    .map_err(|error| format!("no ray tracing context: {error:?}"))?;
+    let information = context.device_information();
+    if information.is_software_emulated {
+        return Err(format!(
+            "refusing to score on the software rasterizer '{}'",
+            information.device_name
+        ));
+    }
+    Ok(sync::Arc::new(context))
+}
+
+#[cfg(not(test))]
+fn scoring_context() -> Result<sync::Arc<gpu::Context>, String> {
+    init_scoring_context()
+}
+
+#[cfg(test)]
+fn scoring_context() -> Result<sync::Arc<gpu::Context>, String> {
+    static CONTEXT: sync::OnceLock<Result<sync::Arc<gpu::Context>, String>> = sync::OnceLock::new();
+    CONTEXT.get_or_init(init_scoring_context).clone()
 }
 
 fn srgb_error(
