@@ -3240,3 +3240,42 @@ runs fall further to 17.8 and 17.7 seconds, retain 12.52/12.04--12.05 dB and
 78.0% coverage, and peak below 358 MiB with zero swap, pressure, OOM, or GPU
 fault. The worker count remains bounded by the number of views, and this is a
 private scheduling change rather than a new pool or policy setting.
+
+## Rejected direct volumetric PBR scale refinement (2026-08-22)
+
+The final anisotropic PBR Gaussian was tested against its own exact runtime
+renderer instead of the scalar support proxy. Eight deterministic antithetic
+whole-cloud log-scale proposals perturbed the 1,202 observed particles, rebuilt
+the runtime Gaussian, and accepted only a lower masked training-view sRGB loss.
+At a 2.5% log step, two proposals are accepted and loss falls from 0.0045896 to
+0.0045774 in 7.043 seconds. The held-light result is 23.36/22.75 dB at 54.9%
+coverage and 22.49 dB where hit, versus the 23.36/22.75 dB, 54.8%, and 22.50 dB
+control. At a 5% step, one proposal reaches the same final loss in 6.842 seconds,
+but held-light quality moves to 23.34/22.75 dB at 55.0% coverage and 22.47 dB
+where hit.
+
+Lowering the final renderer's aggregate training error therefore still does not
+localize particle responsibility: the proposals broaden support without
+improving covered relighting quality. The temporary scoring API, optimizer, and
+synthetic integration are removed. A viable exact-runtime refinement needs
+localized per-particle scale responsibility and an efficient in-place Gaussian
+geometry update, rather than whole-cloud perturbations followed by renderer
+reconstruction.
+
+That localized path was then implemented and gated before selection. An
+in-place Gaussian-buffer and TLAS refresh reduced eight exact-runtime rounds
+from about seven seconds to 0.33 seconds for one light. Antithetic per-particle
+directions were inferred only from the error difference inside each projected
+ellipsoid. Nevertheless, a 2.5% step lowers training loss from 0.0045929 to
+0.0044537 while held-light quality falls to 23.33/22.70 dB, 55.1% coverage,
+and 22.45 dB where hit. A 1% step is less destructive but still reaches only
+23.36/22.74 dB, 55.0%, and 22.49 dB.
+
+Using all four non-held lighting environments does not make the signal
+geometric: at 1%, the held result is 23.35/22.73 dB, 54.9%, and 22.48 dB.
+Removing explicit mask coverage from that multi-light objective produces the
+closest trade, 23.36/22.74 dB at the control's 54.8% coverage and 22.51 dB
+where hit, but exchanges 0.01 dB of worst-view quality for 0.01 dB where-hit
+quality. This is below the measured continuation noise and cannot justify a
+new optimizer or runtime update API. The localizer, updater, public statistics,
+and synthetic integration are all removed; only this negative gate remains.

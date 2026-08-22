@@ -5091,3 +5091,41 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/dependency-uprev-final-five, target/audit-runs/dependency-uprev-final-workspace-tests.telemetry.log (gitignored)"
 verdict = "select only with source-parallel scatter retained: the naive latest-main bridge is quality-correct but makes the small Gaussian fit about 10.2x slower; the corrected revision restores the established 4.4-second envelope, keeps held-light quality in-band, and passes both Meganeura's 206 library tests and the full blade-volume workspace"
+
+[direct_gaussian.rejected_runtime_pbr_scale_refinement]
+date = "2026-08-22"
+protocol = "evaluate eight deterministic antithetic whole-cloud isotropic log-scale proposals on the 1,202 observed PBR particles with the exact final volumetric renderer and accept only lower masked training-view sRGB loss"
+control_held_light = [23.36, 22.75, 54.8, 22.50]
+log_step_025_training_loss = [0.0045896, 0.0045774]
+log_step_025_seconds = 7.043
+log_step_025_held_light = [23.36, 22.75, 54.9, 22.49]
+log_step_05_training_loss = [0.0045873, 0.0045774]
+log_step_05_seconds = 6.842
+log_step_05_held_light = [23.34, 22.75, 55.0, 22.47]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+artifacts = "target/audit-runs/current-synthetic-v1/{volumetric-scale-refine-025-probe,volumetric-scale-refine-05-probe} (gitignored)"
+verdict = "reject and remove: lower aggregate training loss comes from broader whole-cloud support, does not improve the held-light mean or covered-pixel score, and lacks localized particle responsibility"
+
+[direct_gaussian.rejected_localized_runtime_pbr_scale_refinement]
+date = "2026-08-22"
+protocol = "update Gaussian buffers and TLAS in place; render exact antithetic scale perturbations; choose each observed particle's direction from the error difference inside its projected ellipsoid; accept only a lower complete-render objective"
+control_held_light = [23.36, 22.75, 54.8, 22.50]
+single_light_step_025_loss = [0.0045929, 0.0044537]
+single_light_step_025_seconds = 0.331
+single_light_step_025_held = [23.33, 22.70, 55.1, 22.45]
+single_light_step_01_loss = [0.0045889, 0.0045105]
+single_light_step_01_seconds = 0.334
+single_light_step_01_held = [23.36, 22.74, 55.0, 22.49]
+multi_light_step_01_loss = [0.0071344, 0.0070445]
+multi_light_step_01_seconds = 1.212
+multi_light_step_01_held = [23.35, 22.73, 54.9, 22.48]
+multi_light_color_only_loss = [0.0056481, 0.0055992]
+multi_light_color_only_seconds = 1.225
+multi_light_color_only_held = [23.36, 22.74, 54.8, 22.51]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+max_peak_memory_bytes = 913414554
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/localized-volumetric-scale-{probe,01-probe,multilight-probe,color-probe} (gitignored)"
+verdict = "reject and remove: exact localized updates are fast, but single- and multi-light objectives still trade support coverage and covered color rather than improve the held-light gate; the best color-only result is a noise-scale -0.01/+0.01 dB worst/covered trade"
