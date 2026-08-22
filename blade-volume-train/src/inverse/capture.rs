@@ -109,14 +109,21 @@ impl PixelProjection {
         self.inverse_orientation * (point - self.origin)
     }
 
-    pub(crate) fn project(&self, point: glam::Vec3) -> Option<([f32; 2], f32)> {
-        let local = self.camera_space(point);
+    pub(crate) fn camera_vector(&self, vector: glam::Vec3) -> glam::Vec3 {
+        self.inverse_orientation * vector
+    }
+
+    pub(crate) fn project_camera_space(&self, local: glam::Vec3) -> Option<([f32; 2], f32)> {
         if local.z <= 1.0e-6 {
             return None;
         }
         let ndc = glam::Vec2::new(local.x, local.y) / (local.z * self.tan_half) + self.principal;
         let pixel = 0.5 * (ndc + glam::Vec2::ONE) * self.extent;
         Some((pixel.to_array(), local.z))
+    }
+
+    pub(crate) fn project(&self, point: glam::Vec3) -> Option<([f32; 2], f32)> {
+        self.project_camera_space(self.camera_space(point))
     }
 }
 
@@ -447,6 +454,24 @@ mod tests {
         let behind = glam::Vec3::from(camera.cam_position)
             - 5.0 * (glam::Quat::from_array(camera.cam_orientation) * glam::Vec3::Z);
         assert!(project(&camera, 32, 32, behind).is_none());
+    }
+
+    #[test]
+    fn camera_space_vectors_preserve_projected_endpoints() {
+        let projection = PixelProjection::new(&camera(), 320, 180);
+        let mean = glam::Vec3::new(1.4, 1.7, 4.2);
+        let axis = glam::Vec3::new(0.3, -0.2, 0.5);
+        let local_mean = projection.camera_space(mean);
+        let local_axis = projection.camera_vector(axis);
+        for sign in [-1.0, 1.0] {
+            let world = projection.project(mean + sign * axis).unwrap();
+            let local = projection
+                .project_camera_space(local_mean + sign * local_axis)
+                .unwrap();
+            assert!((world.0[0] - local.0[0]).abs() < 1.0e-4);
+            assert!((world.0[1] - local.0[1]).abs() < 1.0e-4);
+            assert!((world.1 - local.1).abs() < 1.0e-5);
+        }
     }
 
     #[test]

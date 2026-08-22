@@ -3208,3 +3208,26 @@ workgroup `ArrayStride`, descriptor-pool sizing for binding arrays, and missing
 device-address allocation flags. Their already-isolated Blade fixes are not
 silently introduced through another dependency branch; the tests complete on
 the physical RTX 5070 without device loss or numerical failure.
+
+## Camera-space Gaussian projection (2026-08-22)
+
+Candidate-grid construction projected the same 3DGUT sigma-point mean through
+the camera once for the near-plane test and another seven times while building
+the screen-space conic. A rigid camera transform is affine: the mean can be
+transformed once and each of the three sigma axes once, after which the same
+seven points are formed in camera space before the unchanged nonlinear pinhole
+projection. This reduces eight quaternion-vector transforms to four per
+Gaussian and view without replacing the unscented projection by a Jacobian or
+changing its conservative support margin. A direct oracle checks that the
+camera-space endpoint construction matches world-space projection.
+
+On the 109,764-particle, 18-training-view Room gate, two candidate runs take
+18.7 and 19.1 seconds for the paired PBR/static Gaussian fits. A same-source
+control built from the parent commit takes 19.4 seconds, while the previously
+accepted run was 19.0 seconds. This is retained as a small exact compute
+cleanup rather than a broad throughput claim. The candidate persists at
+12.51--12.52/12.04--12.05 dB with 78.0% coverage, versus 12.51/12.04 dB and
+78.0% for the paired control. All three scopes peak below 492 MiB with zero
+swap, memory pressure, OOM, or GPU fault. The change adds no public API,
+setting, graph operation, shader, model field, format, dependency, or training
+schedule.

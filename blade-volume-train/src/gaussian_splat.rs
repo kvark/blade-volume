@@ -827,11 +827,23 @@ fn project_sigma_axes(
     mean: glam::Vec3,
     axes: [glam::Vec3; 3],
 ) -> Option<ProjectedConic> {
+    let local_mean = projection.camera_space(mean);
+    let local_axes = axes.map(|axis| projection.camera_vector(axis));
+    project_camera_sigma_axes(projection, local_mean, local_axes)
+}
+
+fn project_camera_sigma_axes(
+    projection: &crate::inverse::capture::PixelProjection,
+    mean: glam::Vec3,
+    axes: [glam::Vec3; 3],
+) -> Option<ProjectedConic> {
     let mut projected = [glam::Vec2::ZERO; 7];
-    projected[0] = glam::Vec2::from(projection.project(mean)?.0);
+    projected[0] = glam::Vec2::from(projection.project_camera_space(mean)?.0);
     for (axis_index, axis) in axes.into_iter().enumerate() {
-        projected[1 + axis_index] = glam::Vec2::from(projection.project(mean + axis)?.0);
-        projected[4 + axis_index] = glam::Vec2::from(projection.project(mean - axis)?.0);
+        projected[1 + axis_index] =
+            glam::Vec2::from(projection.project_camera_space(mean + axis)?.0);
+        projected[4 + axis_index] =
+            glam::Vec2::from(projection.project_camera_space(mean - axis)?.0);
     }
 
     // With lambda=0 the centre has zero mean weight and every outer point has
@@ -892,7 +904,8 @@ fn projected_support_bounds(
         ));
     }
 
-    let conic = project_sigma_axes(projection, support.mean, support.axes)?;
+    let local_axes = support.axes.map(|axis| projection.camera_vector(axis));
+    let conic = project_camera_sigma_axes(projection, local_mean, local_axes)?;
     let conic_extent = glam::Vec2::new(
         (support.gaussian_radius * support.gaussian_radius * conic.covariance.x_axis.x.max(0.0))
             .sqrt(),
