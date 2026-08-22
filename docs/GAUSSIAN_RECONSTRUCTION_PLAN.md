@@ -3325,3 +3325,19 @@ tail. Assigning one existing contributor is more precise than forcing every
 foreground mixture, but the mask still says nothing about which depth sheet
 should own the ray. The owner table, graph input, objective, and tests are
 removed; PBR mask supervision remains negative-only.
+
+## Rejected depth-ordered Gaussian tiles (2026-08-22)
+
+The private candidate grid was tested with each view tile sorted once by
+camera-space Gaussian-centre depth. Exact maximum-response depth still sorted
+every retained ray row with the existing `(depth, particle)` tie break, so the
+23-test Gaussian suite proved candidate indices and masks identical to the
+exhaustive oracle. The intent was only to give Rust's adaptive unstable sort a
+nearly ordered input.
+
+On the exact 169,432-particle, 18-training-view Bonsai A/B, however, the paired
+fit rises from 20.8 to 25.3 seconds while static quality remains 16.84/16.54 dB.
+The per-ray hit lists are already short; repeatedly sorting duplicated tile
+membership at every geometry refresh costs more than it saves. The tile order
+change is removed before Room and five-cloud gates. Future candidate work
+should reduce hit evaluation itself rather than add another persistent order.

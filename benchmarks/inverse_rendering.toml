@@ -5177,3 +5177,24 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/owned-foreground-{probe,control,five-v2}, target/audit-runs/owned-foreground-probe (gitignored)"
 verdict = "reject and remove: localized ownership recovers only 0.08 coverage point while regressing one cloud's mean and tail by 0.03 dB and slightly lowering average mean/covered quality; a silhouette does not identify the correct depth sheet"
+
+[direct_gaussian.rejected_depth_ordered_tiles]
+date = "2026-08-22"
+protocol = "sort every private per-view tile once by Gaussian center depth at each candidate-grid rebuild; retain exact per-ray maximum-response evaluation and final (depth, particle) sort"
+particles = 169432
+training_views = 18
+control_fit_seconds = 20.8
+candidate_fit_seconds = 25.3
+slowdown_percent = 21.6
+control_static = [16.84, 16.54]
+candidate_static = [16.84, 16.54]
+control_pbr = [14.78, 14.75, 85.1, 14.56]
+candidate_pbr = [14.78, 14.75, 85.1, 14.56]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+exact_tests = "23 Gaussian tests pass, including indexed-versus-exhaustive and grouped-versus-individual candidate rows"
+maximum_peak_memory_bytes = 609873920
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/gaussian-depth-ordered-tiles (gitignored)"
+verdict = "reject and remove before broader gates: sorting duplicated tile membership at every rebuild slows Bonsai by 21.6%; existing short hit lists make the exact per-ray sort cheaper"
