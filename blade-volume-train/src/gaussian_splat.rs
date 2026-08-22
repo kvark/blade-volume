@@ -171,6 +171,15 @@ impl CandidateIndex {
         let tile = (y / TILE_SIZE) * grid.tiles_x + x / TILE_SIZE;
         Some((&grid.tiles[tile], &grid.gaussian_origins))
     }
+
+    fn locality_key(&self, view: usize, pixel: usize) -> (usize, usize) {
+        let Some(ref grid) = self.views[view] else {
+            return (view, pixel);
+        };
+        let x = pixel % grid.width;
+        let y = pixel / grid.width;
+        (view, (y / TILE_SIZE) * grid.tiles_x + x / TILE_SIZE)
+    }
 }
 
 impl CandidateGrid {
@@ -1163,13 +1172,15 @@ fn record_indexed_candidate_range(
     output: CandidateSlices<'_>,
 ) {
     let mut hits = Vec::new();
-    for (local_pixel, (((&origin, &direction), &view), &pixel)) in origins
-        .iter()
-        .zip(directions)
-        .zip(views)
-        .zip(pixels)
-        .enumerate()
-    {
+    let mut order: Vec<_> = (0..origins.len()).collect();
+    if index.views.iter().any(Option::is_some) {
+        order.sort_unstable_by_key(|&local| index.locality_key(views[local], pixels[local]));
+    }
+    for local_pixel in order {
+        let origin = origins[local_pixel];
+        let direction = directions[local_pixel];
+        let view = views[local_pixel];
+        let pixel = pixels[local_pixel];
         match index.candidates(view, pixel) {
             Some((candidates, gaussian_origins)) => collect_indexed_candidate_hits(
                 model,

@@ -3079,3 +3079,38 @@ five-cloud reconstruction scopes peak at 376.8, 487.9, and 271.7 MiB with zero
 swap, memory pressure, OOM, or GPU fault. This optimization adds no public API,
 option, shader, graph operation, model field, file-format change, dependency,
 or training schedule.
+
+## Locality-ordered Gaussian candidate preparation (2026-08-22)
+
+A temporary host profile of the current Room paired fit attributes 13.71 of
+24.0 seconds to candidate preparation and another 5.64 seconds to candidate
+grid construction. Optimizer execution takes 1.63 seconds, batch construction
+and upload 0.39 seconds, and bulk parameter readback 1.24 seconds. Regenerating
+the small ray metadata is therefore not the next bottleneck. Candidate
+preparation instead consumed its twenty deterministic batches in their random
+sample order, repeatedly moving between cameras and screen tiles even though
+nearby rays read the same tile candidate list, camera-space origins, and
+Gaussian transforms.
+
+Each existing worker now evaluates its independent rays in `(view, tile)`
+order and scatters the results back to their original rows. Worker partitions,
+candidate membership, exact maximum-response evaluation, depth sorting, and
+all optimizer inputs remain unchanged. The indexed-versus-exhaustive test
+continues to compare every candidate index, mask, and depth in original ray
+order. This is a private host locality change, not a training reorder.
+
+The 109,764-particle Room paired fit falls from 24.1 to 21.5 seconds, a further
+10.8%, while its persisted held-light PBR Gaussian remains at 12.52/12.05 dB
+and 78.0% coverage. The 169,432-particle Bonsai fit falls from 28.7 to 25.9
+seconds, a further 9.8%, while retaining 14.86/14.83 dB and 85.6% coverage.
+Together with batched readback and cached camera terms, this halves the former
+Room time (43.6 to 21.5 seconds) and reduces Bonsai by 57.5% (61.0 to 25.9
+seconds).
+
+A fresh five-cloud reconstruction and persistence gate averages
+23.2826/22.7010 dB at 55.076% coverage and 22.2868 dB where hit, inside the
+established unordered-atomic continuation range. Its small 2.2K-particle fits
+average 4.57 seconds. Room, Bonsai, and the five-cloud scope peak at 363.4,
+476.1, and 260.0 MiB respectively, with zero swap, memory pressure, OOM, or GPU
+fault. The selected change adds no public API, setting, graph operation,
+shader, model field, file format, dependency, or training schedule.
