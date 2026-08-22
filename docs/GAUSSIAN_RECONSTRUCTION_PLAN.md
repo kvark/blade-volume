@@ -2927,3 +2927,43 @@ implementation is one host-side scale update in the two reconstruction
 commands, adds no model field, graph operation, shader, pipeline, binding, or
 runtime branch, and runs only when the existing radius-refinement option is
 selected.
+
+The immediate covariance and objective follow-ups do not improve that result.
+Minimally rotating the Gaussian frame so local Y follows the final PBR normal
+helps only two of five synthetic clouds; even a quarter rotation regresses the
+other three. Uniformly scaling only the normal axis by 0.9 or 1.1 also trades
+coverage against image quality, while applying the radius residual to only the
+tangent axes, only the normal axis, only expansions, or only contractions is
+weaker than the selected small all-axis update. The frame is already aligned on
+the complete Room and Bonsai gates (below 0.04 degrees at p99), so these
+post-fit rules are removed. Freezing SH during PBR support fitting lowers the
+first fixed-cloud held-light result from 23.362/22.751 dB at 54.85% coverage to
+23.144/22.444 dB at 53.39%; replacing its RGB L1 objective with MSE reaches
+only 23.160/22.628 dB at 53.27%. Appearance/support co-adaptation remains
+necessary; neither prototype survives to the five-cloud gate.
+
+## Batched direct-Gaussian candidate preparation (2026-08-22)
+
+Direct Gaussian fitting now records the next 20 deterministic ray batches in
+one host-parallel candidate pass. Twenty is not a new training schedule: it is
+the existing support-stage geometry synchronization interval. Between those
+boundaries the CPU model, tile index, transforms, opacity, and support are
+deliberately unchanged, so recording each batch in a separate scoped thread
+group repeated setup without observing new geometry. Appearance-only fitting
+uses the same bounded group size. Optimizer steps, random ray sequence, input
+shapes, candidate sort, uploads, waits, and geometry refreshes are unchanged.
+A unit test compares every index, mask, and depth from grouped preparation with
+the same batches recorded separately across different worker partitions.
+
+On the explicitly rebuilt 109,764-particle Room gate, preparation width one
+takes 48.4 seconds for the paired PBR/static fit and scores the persisted PBR
+Gaussian at 12.51/12.03 dB with 78.0% coverage. Width twenty takes 42.8 seconds
+(11.6% faster) and scores 12.51/12.04 dB with 78.0% coverage; direct static
+quality remains 15.04/15.01 dB. The final implementation keeps one combined
+candidate table, regenerates only the cheap deterministic ray metadata per
+optimizer step, and peaks at 347.9 MiB of scoped host memory.
+On the 169,432-particle Bonsai gate, fit time falls from 64.1 to 61.0 seconds
+(4.8%) while preserving 16.84/16.53 dB static quality and the selected
+14.86/14.83 dB, 85.6%-coverage PBR result. All runs use the RTX 5070 inside the
+12 GiB cgroup with zero swap, OOM, or GPU fault. This adds no dependency,
+operation, graph, shader, model field, public option, or renderer path.

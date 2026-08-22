@@ -4840,3 +4840,49 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/gaussian-support-{sync-small-blends-fixed-five,feedback-cli}*, target/audit-runs/gaussian-support-sync-real18.telemetry.log (gitignored)"
 verdict = "select the smallest tested 2.5% log-radius residual: every fixed synthetic mean and tail improves, complete Room and Bonsai both improve, and the production persist/reload path reproduces the result; larger transfers increasingly trade quality for coverage"
+
+[direct_gaussian.rejected_covariance_followups]
+date = "2026-08-22"
+protocol = "same five persisted calibrated PBR Gaussians; post-fit frame alignment, normal-axis thickness, axis-specific radius feedback, and expansion/contraction-only feedback"
+frame_alignment_full_mean = [23.383072, 23.480011, 23.144073, 23.272160, 23.150583]
+frame_alignment_control_mean = [23.362421, 23.451010, 23.177995, 23.282115, 23.173195]
+normal_axis_scale_factors = [0.75, 0.90, 1.10]
+axis_feedback_variants = ["tangent-only", "normal-only", "expansion-only", "contraction-only"]
+artifacts = "target/audit-runs/current-synthetic-v1/gaussian-{frame-alignment,normal-thickness,axis-feedback,directional-feedback}-fixed-five* (gitignored)"
+verdict = "reject and remove: frame alignment helps only two clouds, global normal thickness trades coverage against image quality, and every restricted radius-feedback form is weaker than the selected small all-axis residual"
+
+[direct_gaussian.rejected_pbr_support_objectives]
+date = "2026-08-22"
+protocol = "fresh first fixed-cloud production reconstruction; change only PBR support appearance optimization while preserving static light-field L1 fitting"
+control_held_light = [23.362421, 22.750811, 54.8463, 22.512824]
+frozen_sh_held_light = [23.144297, 22.444255, 53.3872, 22.361889]
+mse_rgb_held_light = [23.159673, 22.627928, 53.2729, 22.586627]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+artifacts = "target/audit-runs/current-synthetic-v1/pbr-support-{frozen-sh,mse}-probe-v1 (gitignored)"
+verdict = "reject before five clouds and remove both graph changes: freezing appearance loses support and replacing L1 with MSE loses mean, tail, and coverage; PBR appearance/support co-adaptation remains necessary"
+
+[direct_gaussian.selected_batched_candidate_preparation]
+date = "2026-08-22"
+protocol = "same deterministic ray sequence and optimizer order; compare one candidate batch per scoped host pass with 20 batches per pass, matching the existing support geometry-refresh interval"
+prepared_batches = 20
+room_particles = 109764
+room_control_fit_seconds = 48.4
+room_candidate_fit_seconds = 42.8
+room_speedup_percent = 11.6
+room_control_pbr = [12.51, 12.03, 78.0]
+room_candidate_pbr = [12.51, 12.04, 78.0]
+room_static = [15.04, 15.01]
+room_candidate_peak_mib = 347.9
+bonsai_particles = 169432
+bonsai_control_fit_seconds = 64.1
+bonsai_candidate_fit_seconds = 61.0
+bonsai_speedup_percent = 4.8
+bonsai_candidate_pbr = [14.86, 14.83, 85.6]
+bonsai_static = [16.84, 16.53]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent"]
+candidate_equivalence_test = "every candidate index, mask, and depth matches individually recorded batches across different host worker partitions"
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/prepared-candidates-{room-control-v1,room-final-v3,bonsai-18view}, target/audit-runs/current-synthetic-v1/prepared-candidates-final-v2 (gitignored)"
+verdict = "select: removes repeated scoped-thread setup at an already-established geometry-staleness boundary, improves both real fit times without changing quality, and adds no public option, graph operation, shader, model field, or dependency"

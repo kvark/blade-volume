@@ -28,6 +28,9 @@ const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
+// Match the selected support geometry-refresh cadence so one preparation pass
+// never crosses a point at which candidate transforms could change.
+const PREPARED_CANDIDATE_BATCHES: usize = 20;
 // Preserve learned anisotropy while carrying a small, cross-representation
 // residual from the final production-render support refinement. Full scalar
 // radius agreement over-expands the Gaussian; this log-space fraction is the
@@ -1821,6 +1824,42 @@ fn sample_rays(
     }
 }
 
+fn prepare_candidates(
+    model: &vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    first_step: usize,
+    batch_count: usize,
+    index: &CandidateIndex,
+    options: FitOptions,
+) -> FlatCandidates {
+    let ray_count = batch_count * options.batch_size;
+    let mut combined = RayBatch {
+        origins: Vec::with_capacity(ray_count),
+        directions: Vec::with_capacity(ray_count),
+        views: Vec::with_capacity(ray_count),
+        pixels: Vec::with_capacity(ray_count),
+        labels: Vec::with_capacity(3 * ray_count),
+        alpha: Vec::with_capacity(ray_count),
+    };
+    for step in first_step..first_step + batch_count {
+        let batch = sample_rays(capture, view_indices, options.batch_size, step as u32);
+        combined.origins.extend_from_slice(&batch.origins);
+        combined.directions.extend_from_slice(&batch.directions);
+        combined.views.extend_from_slice(&batch.views);
+        combined.pixels.extend_from_slice(&batch.pixels);
+        combined.labels.extend_from_slice(&batch.labels);
+        combined.alpha.extend_from_slice(&batch.alpha);
+    }
+    record_indexed_candidates(
+        model,
+        &combined,
+        index,
+        options.candidates_per_pixel,
+        options.candidate_min_alpha,
+    )
+}
+
 fn set_batch(
     session: &mut mn::Session,
     model: &vol::PointCloudModel,
@@ -1835,6 +1874,22 @@ fn set_batch(
         options.candidates_per_pixel,
         options.candidate_min_alpha,
     );
+    set_batch_inputs(session, model, batch, &candidates.indices, &candidates.mask);
+}
+
+fn set_batch_inputs(
+    session: &mut mn::Session,
+    model: &vol::PointCloudModel,
+    batch: &RayBatch,
+    candidate_indices: &[u32],
+    candidate_mask: &[f32],
+) {
+    debug_assert_eq!(candidate_indices.len(), candidate_mask.len());
+    debug_assert_eq!(candidate_indices.len() % batch.origins.len(), 0);
+    let candidates_per_pixel = candidate_indices.len() / batch.origins.len();
+    let pixel_indices: Vec<u32> = (0..batch.origins.len() as u32)
+        .flat_map(|pixel| std::iter::repeat_n(pixel, candidates_per_pixel))
+        .collect();
     let origins: Vec<f32> = batch
         .origins
         .iter()
@@ -1851,9 +1906,9 @@ fn set_batch(
         .iter()
         .flat_map(|&direction| sh_basis(direction).into_iter().take(sh_components))
         .collect();
-    session.set_input_u32("candidate_indices", &candidates.indices);
-    session.set_input_u32("candidate_pixel_indices", &candidates.pixel_indices);
-    session.set_input("candidate_mask", &candidates.mask);
+    session.set_input_u32("candidate_indices", candidate_indices);
+    session.set_input_u32("candidate_pixel_indices", &pixel_indices);
+    session.set_input("candidate_mask", candidate_mask);
     session.set_input("ray_origins", &origins);
     session.set_input("ray_directions", &directions);
     session.set_input("sh_basis", &sh_basis);
@@ -1951,12 +2006,47 @@ fn fit_with_opacity_loss(
     session.set_lr_multiplier("opacity_logits", options.opacity_learning_rate);
     session.set_lr_multiplier("sh_", options.sh_learning_rate);
     let sync_candidate_geometry = changes_candidate_geometry(options);
-    for step in 0..options.steps {
-        let batch = sample_rays(capture, view_indices, options.batch_size, step as u32);
-        set_batch(&mut session, model, &batch, &candidate_index, options);
-        session.step();
-        session.wait();
-        if sync_candidate_geometry && (step + 1) % options.geometry_sync_every == 0 {
+    let mut step = 0;
+    while step < options.steps {
+        let until_geometry_sync = if sync_candidate_geometry {
+            options.geometry_sync_every - step % options.geometry_sync_every
+        } else {
+            PREPARED_CANDIDATE_BATCHES
+        };
+        let batch_count = PREPARED_CANDIDATE_BATCHES
+            .min(until_geometry_sync)
+            .min(options.steps - step);
+        let candidates = prepare_candidates(
+            model,
+            capture,
+            view_indices,
+            step,
+            batch_count,
+            &candidate_index,
+            options,
+        );
+        let entries = options.batch_size * options.candidates_per_pixel;
+        for batch_index in 0..batch_count {
+            let batch = sample_rays(
+                capture,
+                view_indices,
+                options.batch_size,
+                (step + batch_index) as u32,
+            );
+            let start = batch_index * entries;
+            let end = start + entries;
+            set_batch_inputs(
+                &mut session,
+                model,
+                &batch,
+                &candidates.indices[start..end],
+                &candidates.mask[start..end],
+            );
+            session.step();
+            session.wait();
+        }
+        step += batch_count;
+        if sync_candidate_geometry && step % options.geometry_sync_every == 0 {
             download_model(&session, model);
             candidate_index =
                 CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
@@ -2523,6 +2613,48 @@ mod tests {
             .sum();
         let exhaustive_entries = batch.origins.len() * model.points.len();
         assert!(candidate_entries < exhaustive_entries / 2);
+    }
+
+    #[test]
+    fn prepared_candidate_batches_match_individual_recording() {
+        let model = model(vec![
+            glam::Vec4::new(-0.3, 0.0, 3.0, 0.8),
+            glam::Vec4::new(0.2, 0.1, 3.5, 0.7),
+            glam::Vec4::new(0.0, -0.4, 4.0, 0.9),
+        ]);
+        let capture = empty_capture(32, 24);
+        let view_indices = [0, 1];
+        let options = FitOptions {
+            batch_size: 73,
+            candidates_per_pixel: 3,
+            candidate_min_alpha: 1.0e-4,
+            ..FitOptions::default()
+        };
+        let index =
+            CandidateIndex::new(&model, &capture, &view_indices, options.candidate_min_alpha);
+        let combined_candidates =
+            prepare_candidates(&model, &capture, &view_indices, 11, 3, &index, options);
+        let entries = options.batch_size * options.candidates_per_pixel;
+        for offset in 0..3 {
+            let rays = sample_rays(
+                &capture,
+                &view_indices,
+                options.batch_size,
+                11 + offset as u32,
+            );
+            let individual = record_indexed_candidates(
+                &model,
+                &rays,
+                &index,
+                options.candidates_per_pixel,
+                options.candidate_min_alpha,
+            );
+            let start = offset * entries;
+            let end = start + entries;
+            assert_eq!(&combined_candidates.indices[start..end], individual.indices);
+            assert_eq!(&combined_candidates.mask[start..end], individual.mask);
+            assert_eq!(&combined_candidates.depths[start..end], individual.depths);
+        }
     }
 
     #[test]
