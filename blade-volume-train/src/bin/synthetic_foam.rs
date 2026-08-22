@@ -1263,9 +1263,9 @@ fn main() {
             .unwrap_or_else(|error| fail(error));
         println!("updated PBR radii from learned Gaussian support");
     }
-    let mut radius_control = None;
+    let mut pbr_controls = Vec::new();
     if args.render_refine_radii && args.gaussian_output.is_some() {
-        radius_control = Some(fitted.scene.model.clone());
+        pbr_controls.push(("radius", fitted.scene.model.clone()));
         let environment = fitted.scene.environment.clone();
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
             capture: &training_capture,
@@ -1290,6 +1290,36 @@ fn main() {
             stats.final_loss,
             stats.seconds,
         );
+        if args.render_refine_normals {
+            pbr_controls.push(("post-support normal", fitted.scene.model.clone()));
+            let stats = train::inverse::refine::refine_rendered_normals(
+                &mut fitted.scene,
+                &evidence,
+                &observations,
+                0,
+                8,
+                2.5,
+            )
+            .unwrap_or_else(|error| fail(error));
+            println!(
+                "post-support refined {} normals in {} rounds ({} accepted), loss {:.7} -> {:.7}, in {:.3} s",
+                stats.normals,
+                stats.rounds,
+                stats.accepted,
+                stats.initial_loss,
+                stats.final_loss,
+                stats.seconds,
+            );
+            describe_surface_error(
+                "post-support-normal surface",
+                &fitted.scene.model.surfels,
+                &dataset,
+                &training_indices,
+                &maps,
+                depth_options,
+            )
+            .unwrap_or_else(|error| fail(error));
+        }
     }
     if let Some(ref surface_output) = args.surface_output {
         let surface_path = path::Path::new(surface_output);
@@ -1324,7 +1354,7 @@ fn main() {
     .unwrap_or_else(|error| fail(error));
     let mut renderer = train::inverse::score::Renderer::new(dataset.width, dataset.height)
         .unwrap_or_else(|error| fail(error));
-    if let Some(model) = radius_control {
+    for (name, model) in pbr_controls {
         let control = renderer.score_splits(
             &train::inverse::score::Scene {
                 model,
@@ -1335,7 +1365,7 @@ fn main() {
             0,
         )[0];
         println!(
-            "PBR radius control / held-out light: {:.2} dB, {:.2} worst, {:.1}% coverage",
+            "PBR {name} control / held-out light: {:.2} dB, {:.2} worst, {:.1}% coverage",
             control.srgb_psnr,
             control.worst_srgb_psnr,
             100.0 * control.coverage,

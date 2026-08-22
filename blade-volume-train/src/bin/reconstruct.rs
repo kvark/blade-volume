@@ -773,6 +773,29 @@ fn main() {
             stats.final_loss,
             stats.seconds,
         );
+        if args.render_refine_normals {
+            let stats = train::inverse::refine::refine_rendered_normals(
+                &mut fitted.scene,
+                &evidence,
+                &observations,
+                args.diffuse_samples,
+                8,
+                2.5,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("cannot refine post-support normals: {error}");
+                std::process::exit(1);
+            });
+            println!(
+                "post-support normals: changed {} candidates in {} rounds ({} accepted), loss {:.7} -> {:.7}, in {:.1} s",
+                stats.normals,
+                stats.rounds,
+                stats.accepted,
+                stats.initial_loss,
+                stats.final_loss,
+                stats.seconds,
+            );
+        }
     }
 
     if let Some(ref output) = args.output {

@@ -95,6 +95,11 @@ halve the step for the final four rounds. The masked sRGB-plus-coverage
 objective accepts only complete-render improvements; centers, normals,
 materials, assignments, and light remain fixed. This post-transfer pass is
 separate from the older exact coordinate polish described below.
+When `--render-refine-normals` is also enabled, the same conservative normal
+search runs once more after support settles. This alternating step is useful
+because changing overlapping footprints changes the complete-render normal
+objective; it remains a shading-normal fit and does not claim to improve the
+underlying surface coordinate.
 
 **Sparse points.** COLMAP's triangulated points, with normals from the local
 covariance and a side chosen by the cameras that can see them. Free, needs no

@@ -2469,3 +2469,22 @@ unused. The selected pass costs about 0.26 seconds at 1,274--1,307 observed
 particles. Its five-run scope peaks at 214 MiB with zero swap, pressure, OOM,
 or GPU fault; artifacts and logs remain under
 `target/audit-runs/current-synthetic-v1/radius-refine-10pct-five/`.
+
+Because support changes the same overlapping mixture that supplied the first
+normal gradient, the selected joint path performs one more conservative normal
+pass after radius refinement when `--render-refine-normals` is also present.
+It reuses the existing eight-round, 2.5-degree search and adds no optimizer or
+option. Against exact paired post-radius controls, the five held-light
+mean/worst scores change from 21.58/21.11, 21.62/21.14, 21.52/21.19,
+21.70/21.27, and 21.49/21.21 dB to 21.70/21.19, 21.72/21.15,
+21.59/21.25, 21.78/21.32, and 21.56/21.25 dB. Every mean and tail is
+non-negative; averages gain another 0.09/0.05 dB, and coverage changes only
+-0.1, 0.0, 0.0, 0.0, and 0.0 point.
+
+This remains a renderer-facing shading-normal polish, not a geometry claim:
+nearest-truth normal RMSE changes by -0.11, +0.01, +0.02, -0.05, and +0.07
+degrees across the five clouds. Five- and ten-degree repeats improve images
+more aggressively, but on the fixed cloud worsen normal RMSE by 0.06 and 0.94
+degrees respectively; both are rejected. The conservative pass costs about
+0.26 seconds, and its complete diagnostic artifacts remain under
+`target/audit-runs/current-synthetic-v1/post-support-normal-2p5-truth-five/`.
