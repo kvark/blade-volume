@@ -4020,3 +4020,30 @@ gpu_faults = 0
 production_smoke_peak_memory_bytes = 266240000
 artifacts = "target/audit-runs/current-synthetic-v1/{current-multilight-five,independent-output-five}, target/audit-runs/static-pbr-output-production-smoke-v2 (gitignored)"
 verdict = "keep: calibrating normals for relighting must not rotate the static capture-light field; snapshot the pre-calibration Gaussian surface and fit both outputs independently"
+
+[rendered_surface_refinement.rejected_post_support_center_split]
+date = "2026-08-22"
+protocol = "fixed synthetic cloud, four calibrated training lights, studio held out; same eight total simultaneous center rounds"
+control_round_split = [8, 0]
+candidate_round_split = [6, 2]
+control_position_rmse = 0.5817
+candidate_position_rmse = 0.5809
+control_pbr_held_light_psnr = [22.48, 21.76]
+candidate_pbr_held_light_psnr = [22.50, 21.70]
+control_coverage_percent = 57.0
+candidate_coverage_percent = 56.7
+artifacts = "target/audit-runs/current-synthetic-v1/post-support-center-{control,probe} (gitignored)"
+verdict = "reject and restore 8+0: refreshed post-support rounds lower training loss and truth-position error but regress the novel-view tail and coverage"
+
+[direct_gaussian.rejected_pbr_opacity_multiplier]
+date = "2026-08-22"
+protocol = "fixed synthetic cloud, independent static/PBR Gaussian fits; multiplier applies only to masked PBR support optimization"
+control_multiplier = 1.0
+control_pbr_held_light_psnr = [22.48, 21.76]
+control_coverage_percent = 57.0
+multiplier_2_pbr_held_light_psnr = [22.48, 21.69]
+multiplier_2_coverage_percent = 56.8
+multiplier_4_pbr_held_light_psnr = [22.37, 21.75]
+multiplier_4_coverage_percent = 57.3
+artifacts = "target/audit-runs/current-synthetic-v1/pbr-opacity-x{2,4}-probe (gitignored)"
+verdict = "reject and restore 1x: stronger silhouette supervision trades mean or tail relighting quality for inconsistent coverage instead of improving support jointly"

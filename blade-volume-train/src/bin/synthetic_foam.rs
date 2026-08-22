@@ -1294,7 +1294,7 @@ fn main() {
         convert::save_ply(output, &gaussian)
             .unwrap_or_else(|error| fail(format!("cannot write {}: {error:?}", output.display())));
         println!(
-            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} (shared-output fit {:.3} s total)",
+            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} ({:.3} s total Gaussian fitting)",
             stats.appearance.steps,
             stats.appearance.initial_loss,
             stats.appearance.final_loss,

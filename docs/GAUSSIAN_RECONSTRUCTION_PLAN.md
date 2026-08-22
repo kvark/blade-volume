@@ -2586,3 +2586,20 @@ dependency, or runtime representation. Complete artifacts remain under
 `target/audit-runs/current-synthetic-v1/density-gradient-32-{twentieth,tenth,quarter,half}-five/`,
 `target/audit-runs/current-synthetic-v1/density-gradient-final-check/`, and
 `target/audit-runs/density-gradient-production-smoke/`.
+
+Two follow-up geometry schedules do not improve that calibrated result. First,
+splitting the existing eight complete-render center rounds into six before and
+two after Gaussian support fitting lowers the post-support training loss from
+0.0038207 to 0.0037877 and position RMSE from 0.5817 to 0.5809. The immediate
+same-machine control nevertheless reaches 22.48/21.76 dB held-light PBR at
+57.0% coverage, while the split reaches 22.50/21.70 dB at 56.7%. The lower
+training loss and slightly truer centers do not compensate for the worse
+novel-view tail and support; the original eight-before schedule is restored.
+
+Second, multiplying only the PBR Gaussian support stage's foreground-opacity
+loss leaves the independently fitted static field unchanged but does not make
+better relightable support. A 2x multiplier reaches 22.48/21.69 dB at 56.8%
+coverage; 4x reaches 22.37/21.75 dB at 57.3%, versus the same 22.48/21.76 dB,
+57.0% control. More silhouette pressure trades radiance-supported interior
+geometry for boundary coverage rather than improving both. Both multipliers
+and the extra fitting policy are removed.
