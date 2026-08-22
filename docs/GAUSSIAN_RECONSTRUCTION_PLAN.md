@@ -2412,3 +2412,25 @@ mixed: with exact lighting its five held means change by +0.05, -0.06, -0.03,
 decibel. Both stencil prototypes were removed. The next geometry step must
 couple evidence across views; another per-image derivative or material prior
 does not close the measured truth-normal gap.
+
+A primary-light-only use of the existing rendered-normal search is promising
+but not selected. With the capture environment fixed to truth and 12 shared
+materials, eight antithetic five-degree rounds improve unseen-light means on
+all five independent foams by +0.23, +0.10, +0.34, +0.24, and +0.23 dB.
+Normal RMSE improves by 0.08--0.20 degrees before the subsequent surface
+pass. One held-view tail nevertheless loses 0.07 dB and coverage falls by
+0.1--0.4 point on every cloud. The benchmark-only single-light substitution
+is removed; a smaller trust region or coverage-aware acceptance needs a new
+five-cloud gate before this can serve ordinary controlled captures.
+
+The dependency uprev also exposed a severe Meganeura regression before it
+could be accepted as a production baseline. Its column-parallel scatter
+kernel assigned one invocation to each narrow parameter column and made that
+invocation walk every source row. The unchanged 1,500-update dual-Gaussian
+fit rose from about 3.0 to 42.6--42.8 seconds. Current Blade already enables
+Vulkan memory-model device scope, so Meganeura `83cca97` restores the existing
+float-CAS kernel and source-parallel mappings without adding an operation,
+shader group, entry, or variant. The same current-main fit returns to
+3.8--3.9 seconds, its physical-GPU scatter oracle passes without the atomic
+VUID, and Meganeura's full all-feature suite passes at an 11.5 GiB cgroup
+peak with zero swap, pressure, OOM, or GPU fault.
