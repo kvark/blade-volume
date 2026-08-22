@@ -278,6 +278,33 @@ impl Renderer {
         )
     }
 
+    fn gaussian_tracer(
+        &mut self,
+        scene: &Scene,
+        gaussian: &vol::PointCloudModel,
+        diffuse_samples: u32,
+        show_environment: bool,
+    ) -> vol::gpu::RelightTracer {
+        assert!(!self.geometry_update_pending);
+        let specular = vol::relight::SpecularEnvironment::prefilter(
+            &scene.environment,
+            scene.environment.width,
+            scene.environment.height,
+        );
+        vol::gpu::RelightTracer::new_gaussian(
+            gaussian,
+            &scene.environment,
+            &specular,
+            vol::gpu::RelightSettings {
+                background_rgb: [0.0; 3],
+                diffuse_samples,
+                show_environment,
+            },
+            &self.context,
+            &mut self.encoder,
+        )
+    }
+
     /// Draw a scene from a set of poses, with no reference to compare against.
     ///
     /// This is how a capture with known truth is made: the scene is the truth,
@@ -473,6 +500,30 @@ impl Renderer {
         }
         let mut tracer = self.tracer(scene, diffuse_samples, false);
 
+        let summaries = splits
+            .iter()
+            .map(|&(indices, dump)| self.score_with_tracer(&mut tracer, capture, indices, dump))
+            .collect();
+        tracer.deinit(&self.context);
+        summaries
+    }
+
+    /// Score explicit PBR appearance using a corresponding learned Gaussian
+    /// cloud for volumetric geometry and opacity.
+    pub fn score_gaussian_splits(
+        &mut self,
+        scene: &Scene,
+        gaussian: &vol::PointCloudModel,
+        capture: &capture::Capture,
+        splits: &[(&[usize], Option<&path::Path>)],
+        diffuse_samples: u32,
+    ) -> Vec<Summary> {
+        assert_eq!(capture.width, self.width);
+        assert_eq!(capture.height, self.height);
+        if splits.is_empty() {
+            return Vec::new();
+        }
+        let mut tracer = self.gaussian_tracer(scene, gaussian, diffuse_samples, false);
         let summaries = splits
             .iter()
             .map(|&(indices, dump)| self.score_with_tracer(&mut tracer, capture, indices, dump))

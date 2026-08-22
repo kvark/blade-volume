@@ -287,6 +287,12 @@ fn convert_rub_rdf(model: &mut crate::PointCloudModel) {
         for rotation in transforms.rotations.iter_mut() {
             *rotation = glam::Quat::from_xyzw(rotation.x, -rotation.y, -rotation.z, rotation.w);
         }
+        if let Some(ref mut pbr) = transforms.pbr {
+            for normal in pbr.normals.iter_mut() {
+                normal.y = -normal.y;
+                normal.z = -normal.z;
+            }
+        }
     }
     // Real-SH sign changes for the standard 3DGS basis, excluding DC.
     const SIGNS: [f32; 15] = [
@@ -383,6 +389,7 @@ mod tests {
             transforms: Some(crate::Transforms {
                 rotations: vec![glam::Quat::from_xyzw(0.1, 0.2, -0.3, 0.9).normalize()],
                 scales: vec![glam::Vec3::new(1.0, 2.0, 3.0)],
+                pbr: None,
             }),
             adjacency: None,
             radii: None,

@@ -209,6 +209,7 @@ fn allocate_model(header: &Header) -> Result<crate::PointCloudModel, LoadError> 
         transforms: Some(crate::Transforms {
             rotations: allocate_vec(count, glam::Quat::IDENTITY, "rotation")?,
             scales: allocate_vec(count, glam::Vec3::ONE, "scale")?,
+            pbr: None,
         }),
         adjacency: None,
         radii: None,

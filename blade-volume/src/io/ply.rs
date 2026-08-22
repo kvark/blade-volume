@@ -13,6 +13,14 @@ struct Schema {
     opacity: usize,
     dc: [usize; 3],
     sh_rest: Vec<usize>,
+    pbr: Option<PbrSchema>,
+}
+
+struct PbrSchema {
+    normal: [usize; 3],
+    albedo: [usize; 3],
+    roughness: usize,
+    f0: [usize; 3],
 }
 
 #[derive(Default)]
@@ -25,6 +33,10 @@ struct PendingSchema {
     opacity: Option<usize>,
     dc: [Option<usize>; 3],
     sh_rest: Vec<(usize, usize)>,
+    normal: [Option<usize>; 3],
+    pbr_albedo: [Option<usize>; 3],
+    pbr_roughness: Option<usize>,
+    pbr_f0: [Option<usize>; 3],
 }
 
 fn set_once(slot: &mut Option<usize>, offset: usize, name: &str) -> Result<(), LoadError> {
@@ -90,6 +102,25 @@ fn finish_schema(mut pending: PendingSchema) -> Result<Schema, LoadError> {
         })?;
     debug_assert_eq!(component_count, crate::get_sh_component_count(degree));
 
+    let has_pbr = pending.pbr_albedo.iter().any(Option::is_some)
+        || pending.pbr_roughness.is_some()
+        || pending.pbr_f0.iter().any(Option::is_some);
+    let pbr = if has_pbr {
+        Some(PbrSchema {
+            normal: require_offsets(pending.normal, ["nx", "ny", "nz"])?,
+            albedo: require_offsets(
+                pending.pbr_albedo,
+                ["pbr_albedo_0", "pbr_albedo_1", "pbr_albedo_2"],
+            )?,
+            roughness: pending.pbr_roughness.ok_or_else(|| {
+                LoadError::invalid("Gaussian PLY PBR data is missing 'pbr_roughness'")
+            })?,
+            f0: require_offsets(pending.pbr_f0, ["pbr_f0_0", "pbr_f0_1", "pbr_f0_2"])?,
+        })
+    } else {
+        None
+    };
+
     Ok(Schema {
         count,
         stride: pending.stride,
@@ -99,6 +130,7 @@ fn finish_schema(mut pending: PendingSchema) -> Result<Schema, LoadError> {
         opacity,
         dc,
         sh_rest: pending.sh_rest.into_iter().map(|entry| entry.1).collect(),
+        pbr,
     })
 }
 
@@ -195,6 +227,16 @@ fn parse_header(file: &mut io::BufReader<fs::File>) -> Result<Schema, LoadError>
                     "rot_1" => set_once(&mut pending.rotation[1], offset, name)?,
                     "rot_2" => set_once(&mut pending.rotation[2], offset, name)?,
                     "rot_3" => set_once(&mut pending.rotation[3], offset, name)?,
+                    "nx" => set_once(&mut pending.normal[0], offset, name)?,
+                    "ny" => set_once(&mut pending.normal[1], offset, name)?,
+                    "nz" => set_once(&mut pending.normal[2], offset, name)?,
+                    "pbr_albedo_0" => set_once(&mut pending.pbr_albedo[0], offset, name)?,
+                    "pbr_albedo_1" => set_once(&mut pending.pbr_albedo[1], offset, name)?,
+                    "pbr_albedo_2" => set_once(&mut pending.pbr_albedo[2], offset, name)?,
+                    "pbr_roughness" => set_once(&mut pending.pbr_roughness, offset, name)?,
+                    "pbr_f0_0" => set_once(&mut pending.pbr_f0[0], offset, name)?,
+                    "pbr_f0_1" => set_once(&mut pending.pbr_f0[1], offset, name)?,
+                    "pbr_f0_2" => set_once(&mut pending.pbr_f0[2], offset, name)?,
                     other => {
                         if let Some(suffix) = other.strip_prefix("f_rest_") {
                             let index = suffix.parse::<usize>().map_err(|_| {
@@ -291,6 +333,9 @@ pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
     let mut rotations = Vec::new();
     let mut scales = Vec::new();
     let mut sh_coefficients = Vec::new();
+    let mut pbr_normals = Vec::new();
+    let mut pbr_material_indices = Vec::new();
+    let mut pbr_materials = Vec::new();
     points.try_reserve_exact(schema.count).map_err(|error| {
         LoadError::invalid(format!("Gaussian point allocation failed: {error}"))
     })?;
@@ -334,6 +379,29 @@ pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
             .exp(),
         );
 
+        if let Some(ref pbr) = schema.pbr {
+            let stored_normal = glam::Vec3::new(
+                read_f32(&row, pbr.normal[0]),
+                read_f32(&row, pbr.normal[1]),
+                read_f32(&row, pbr.normal[2]),
+            );
+            pbr_normals.push(ply_rotation * stored_normal);
+            let material = crate::relight::Material {
+                albedo: pbr.albedo.map(|offset| read_f32(&row, offset)),
+                roughness: read_f32(&row, pbr.roughness),
+                specular_f0: pbr.f0.map(|offset| read_f32(&row, offset)),
+                _padding: 0.0,
+            };
+            let material_index = pbr_materials
+                .iter()
+                .position(|candidate| *candidate == material)
+                .unwrap_or_else(|| {
+                    pbr_materials.push(material);
+                    pbr_materials.len() - 1
+                });
+            pbr_material_indices.push(material_index as u32);
+        }
+
         for &offset in &schema.dc {
             sh_coefficients.push(read_f32(&row, offset));
         }
@@ -349,7 +417,15 @@ pub fn try_load(file_path: &str) -> Result<crate::PointCloudModel, LoadError> {
         points,
         sh_coefficients,
         sh_degree,
-        transforms: Some(crate::Transforms { rotations, scales }),
+        transforms: Some(crate::Transforms {
+            rotations,
+            scales,
+            pbr: schema.pbr.map(|_| crate::PbrAttributes {
+                normals: pbr_normals,
+                material_indices: pbr_material_indices,
+                materials: pbr_materials,
+            }),
+        }),
         adjacency: None,
         radii: None,
         surface_normals: None,
@@ -445,6 +521,19 @@ mod tests {
             Err(LoadError::InvalidData(_))
         ));
         fs::remove_file(truncated).unwrap();
+    }
+
+    #[test]
+    fn partial_pbr_schema_is_rejected() {
+        let path = path("partial-pbr");
+        let header = b"ply\nformat binary_little_endian 1.0\nelement vertex 0\nproperty float x\nproperty float y\nproperty float z\nproperty float nx\nproperty float ny\nproperty float nz\nproperty float f_dc_0\nproperty float f_dc_1\nproperty float f_dc_2\nproperty float opacity\nproperty float scale_0\nproperty float scale_1\nproperty float scale_2\nproperty float rot_0\nproperty float rot_1\nproperty float rot_2\nproperty float rot_3\nproperty float pbr_albedo_0\nend_header\n";
+        fs::write(&path, header).unwrap();
+        let error = match try_load(path.to_str().unwrap()) {
+            Ok(_) => panic!("partial PBR schema unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("pbr_albedo_1"));
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

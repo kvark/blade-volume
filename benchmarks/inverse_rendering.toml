@@ -4581,3 +4581,52 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/upper-trim-normal-probe (gitignored)"
 verdict = "reject before five clouds and restore mean radiance: suppressing additive view-dependent highlights improves truth normals and the fitted training residual but regresses both held-light image metrics"
+
+# The tangent-only covariance transfer above discarded the learned thickness
+# and opacity that make the Gaussian a volumetric particle. Keeping the complete
+# learned covariance instead improves every cloud in the calibrated five-cloud
+# gate. The renderer mutates the existing relight shader at runtime and adds no
+# shader entry point or backend variant. Its PLY was reloaded before the final
+# fixed-cloud score, and the existing seven surfel parity/update tests remained
+# unchanged alongside a new analytic volumetric response test.
+[direct_gaussian.selected_volumetric_pbr]
+date = "2026-08-22"
+protocol = "fixed five calibrated synthetic density clouds; learned Gaussian center, covariance, and opacity; final explicit normals and 12-material table; studio light and two poses held out"
+isotropic_held_light_mean = [22.70, 22.79, 22.56, 22.73, 22.51]
+isotropic_held_light_worst = [22.13, 22.25, 22.08, 22.36, 22.22]
+isotropic_coverage_percent = [56.5, 56.8, 56.7, 57.0, 57.0]
+isotropic_covered_psnr = [21.75, 21.73, 21.55, 21.70, 21.47]
+volumetric_held_light_mean = [23.19, 23.23, 22.99, 23.13, 23.03]
+volumetric_held_light_worst = [22.63, 22.59, 22.36, 22.57, 22.61]
+volumetric_coverage_percent = [54.1, 54.4, 54.6, 54.5, 54.2]
+volumetric_covered_psnr = [22.50, 22.44, 22.19, 22.33, 22.21]
+isotropic_average = [22.658, 22.208, 56.8, 21.64]
+volumetric_average = [23.114, 22.552, 54.36, 22.334]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+fixed_cloud_reloaded_ply = [23.20, 22.64, 54.1, 22.50]
+physical_gpu_parity_tests = 8
+fixed_cloud_isotropic_ms = 0.70
+fixed_cloud_volumetric_ms = 7.68
+maximum_peak_memory_bytes = 992567296
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/{volumetric-pbr-five,volumetric-pbr-persistence} (gitignored)"
+verdict = "select full learned Gaussian geometry for the durable relightable asset: it improves mean, worst-view, and covered-pixel quality on all five clouds; retain the isotropic renderer as the speed control while optimizing exact volumetric traversal"
+
+[direct_gaussian.rejected_global_pbr_traversal_tuning]
+date = "2026-08-22"
+protocol = "one freshly serialized fixed PBR Gaussian and matching isotropic surfel cloud; five repeated two-view held-light scores per candidate on RTX 5070"
+hit_window_12_volumetric_ms = [7.744, 7.674, 7.647, 7.604, 7.643]
+hit_window_12_surface_ms = [0.710, 0.748, 0.705, 0.760, 0.720]
+hit_window_48_volumetric_ms = [6.708, 6.403, 6.489, 6.457, 6.477]
+hit_window_48_surface_ms = [0.976, 0.969, 0.971, 1.014, 0.983]
+hit_window_96_volumetric_ms = [7.602, 7.258, 7.281, 7.209, 7.287]
+octahedron_proxy_volumetric_ms = [10.884, 10.676, 10.739, 10.652, 11.005]
+cube_proxy_volumetric_ms = [10.538, 10.306, 10.201, 10.065, 10.214]
+early_duplicate_rejection_verdict = "noise-level neutral"
+precomputed_inverse_transform_verdict = "noise-level neutral"
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+verdict = "reject and restore the shared 12-hit icosahedron path: a 48-hit window helps volumetric traversal but regresses the established surface path by roughly 37%; simpler proxies increase false candidates; duplicating traversal solely to specialize the window is not justified"

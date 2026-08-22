@@ -10,7 +10,7 @@
 //! triangle circumscribes the disc rather than being it, so the shader still
 //! has to reject the corners; that is what keeps a surfel round.
 
-use crate::{relight, shaders, CameraParams};
+use crate::{relight, shaders, CameraParams, PointCloudModel};
 use blade_graphics as gpu;
 use std::{mem, ptr, slice};
 
@@ -20,6 +20,29 @@ use std::{mem, ptr, slice};
 /// midpoint of each edge, which puts the vertices at radius two and the edge
 /// midpoints at radius one.
 const CIRCUMSCRIBED: f32 = 1.732_050_8; // sqrt(3)
+const GAUSSIAN_MIN_OPACITY: f32 = 1.0e-5;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct PbrGaussian {
+    rotation: [f32; 4],
+    scale: [f32; 3],
+    opacity: f32,
+}
+
+struct PreparedGeometry {
+    surfels: Vec<relight::Surfel>,
+    gaussians: Vec<PbrGaussian>,
+    materials: Vec<relight::Material>,
+    instances: Vec<gpu::AccelerationStructureInstance>,
+    kernel: u32,
+}
+
+#[derive(Clone, Copy)]
+enum GeometrySource<'a> {
+    Surface(&'a relight::RelightModel),
+    Gaussian(&'a PointCloudModel),
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct RelightSettings {
@@ -72,6 +95,7 @@ struct RelightData {
     g_params: RelightParams,
     g_tlas: gpu::AccelerationStructure,
     g_surfels: gpu::BufferPiece,
+    g_gaussians: gpu::BufferPiece,
     g_materials: gpu::BufferPiece,
     g_alias: gpu::BufferPiece,
     g_specular: gpu::TextureView,
@@ -84,6 +108,7 @@ pub struct RelightTracer {
     params: RelightParams,
     mesh_buf: gpu::Buffer,
     surfel_buf: gpu::Buffer,
+    gaussian_buf: gpu::Buffer,
     material_buf: gpu::Buffer,
     alias_buf: gpu::Buffer,
     instance_buf: gpu::Buffer,
@@ -137,6 +162,83 @@ fn make_instances(surfels: &[relight::Surfel]) -> Vec<gpu::AccelerationStructure
         .collect()
 }
 
+fn prepare_geometry(source: GeometrySource<'_>) -> PreparedGeometry {
+    let GeometrySource::Gaussian(gaussian) = source else {
+        let GeometrySource::Surface(model) = source else {
+            unreachable!()
+        };
+        model.validate().expect("invalid relightable model");
+        return PreparedGeometry {
+            surfels: model.surfels.clone(),
+            gaussians: vec![PbrGaussian {
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+                opacity: 0.0,
+            }],
+            materials: model.materials.clone(),
+            instances: make_instances(&model.surfels),
+            kernel: model.kernel as u32,
+        };
+    };
+    gaussian
+        .validate()
+        .unwrap_or_else(|error| panic!("invalid PBR Gaussian model: {error}"));
+    let transforms = gaussian.transforms.as_ref().unwrap();
+    let pbr = transforms
+        .pbr
+        .as_ref()
+        .expect("PBR Gaussian model requires explicit PBR attributes");
+
+    let mut surfels = Vec::new();
+    let mut gaussians = Vec::new();
+    let mut instances = Vec::new();
+    for (index, &point) in gaussian.points.iter().enumerate() {
+        if point.w <= GAUSSIAN_MIN_OPACITY {
+            continue;
+        }
+        let rotation = transforms.rotations[index];
+        let scale = transforms.scales[index];
+        let surfel = relight::Surfel {
+            center: point.truncate().to_array(),
+            radius: 3.0 * (scale.x * scale.y * scale.z).cbrt(),
+            normal: pbr.normals[index].to_array(),
+            material: pbr.material_indices[index],
+        };
+        surfels.push(surfel);
+        gaussians.push(PbrGaussian {
+            rotation: rotation.into(),
+            scale: scale.into(),
+            opacity: point.w,
+        });
+
+        let support = (2.0 * (point.w / GAUSSIAN_MIN_OPACITY).ln()).sqrt();
+        let matrix = glam::Mat3::from_quat(rotation) * glam::Mat3::from_diagonal(support * scale);
+        instances.push(gpu::AccelerationStructureInstance {
+            acceleration_structure_index: 0,
+            transform: mint::ColumnMatrix3x4 {
+                x: matrix.x_axis.into(),
+                y: matrix.y_axis.into(),
+                z: matrix.z_axis.into(),
+                w: point.truncate().into(),
+            }
+            .into(),
+            mask: 0xFF,
+            custom_index: 0,
+        });
+    }
+    assert!(
+        !surfels.is_empty(),
+        "PBR Gaussian geometry has no particles above opacity {GAUSSIAN_MIN_OPACITY}"
+    );
+    PreparedGeometry {
+        surfels,
+        gaussians,
+        materials: pbr.materials.clone(),
+        instances,
+        kernel: 2,
+    }
+}
+
 impl RelightTracer {
     /// The prefiltered ladder as one array texture, a layer per roughness.
     fn create_specular(
@@ -180,7 +282,49 @@ impl RelightTracer {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Self {
-        model.validate().expect("invalid relightable model");
+        Self::new_impl(
+            GeometrySource::Surface(model),
+            environment,
+            specular,
+            settings,
+            context,
+            encoder,
+        )
+    }
+
+    /// Render learned anisotropic Gaussian geometry with explicit PBR surface
+    /// normals and materials. Particle correspondence is by index; transparent
+    /// Gaussians are omitted from the acceleration structure.
+    pub fn new_gaussian(
+        model: &PointCloudModel,
+        environment: &relight::Environment,
+        specular: &relight::SpecularEnvironment,
+        settings: RelightSettings,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) -> Self {
+        assert_eq!(
+            settings.diffuse_samples, 0,
+            "volumetric PBR Gaussians currently support analytic direct lighting only"
+        );
+        Self::new_impl(
+            GeometrySource::Gaussian(model),
+            environment,
+            specular,
+            settings,
+            context,
+            encoder,
+        )
+    }
+
+    fn new_impl(
+        source: GeometrySource<'_>,
+        environment: &relight::Environment,
+        specular: &relight::SpecularEnvironment,
+        settings: RelightSettings,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) -> Self {
         assert!(
             specular.levels.len() == relight::SPECULAR_LEVELS as usize,
             "expected {} prefiltered levels, got {}",
@@ -188,9 +332,9 @@ impl RelightTracer {
             specular.levels.len()
         );
 
-        let source = shaders::compose(shaders::RELIGHT);
+        let shader_source = shaders::compose(shaders::RELIGHT);
         let shader = context.create_shader(gpu::ShaderDesc {
-            source: &source,
+            source: &shader_source,
             naga_module: None,
         });
         let layout = <RelightData as gpu::ShaderData>::layout();
@@ -200,28 +344,51 @@ impl RelightTracer {
             compute: shader.at("trace_main"),
         });
 
-        // One triangle, in the XY plane, circumscribing the unit disc.
-        let vertices: [[f32; 3]; 3] = [
-            [0.0, 2.0, 0.0],
-            [-CIRCUMSCRIBED, -1.0, 0.0],
-            [CIRCUMSCRIBED, -1.0, 0.0],
-        ];
-        let indices: [[u32; 3]; 1] = [[0, 1, 2]];
-        let vertex_size = mem::size_of_val(&vertices) as u64;
-        let index_size = mem::size_of_val(&indices) as u64;
+        let geometry = prepare_geometry(source);
+        // Surface particles use the original circumscribed triangle. A full
+        // Gaussian needs a closed conservative proxy, so use the same
+        // circumscribed icosahedron as the appearance renderer.
+        let (vertices, indices) = if geometry.kernel == 2 {
+            let shape = crate::Icosahedron::new(1.0);
+            (
+                shape.vertices.to_vec(),
+                shape
+                    .triangles
+                    .iter()
+                    .map(|triangle| triangle.map(u32::from))
+                    .collect(),
+            )
+        } else {
+            (
+                vec![
+                    [0.0, 2.0, 0.0],
+                    [-CIRCUMSCRIBED, -1.0, 0.0],
+                    [CIRCUMSCRIBED, -1.0, 0.0],
+                ],
+                vec![[0, 1, 2]],
+            )
+        };
+        let vertex_size = mem::size_of_val(vertices.as_slice()) as u64;
+        let index_size = mem::size_of_val(indices.as_slice()) as u64;
         let mesh_buf = context.create_buffer(gpu::BufferDesc {
             name: "relight-primitive",
             size: vertex_size + index_size,
             memory: gpu::Memory::Device,
         });
 
-        let surfel_size = (model.surfels.len() * mem::size_of::<relight::Surfel>()) as u64;
+        let surfel_size = mem::size_of_val(geometry.surfels.as_slice()) as u64;
         let surfel_buf = context.create_buffer(gpu::BufferDesc {
             name: "relight-surfels",
             size: surfel_size,
             memory: gpu::Memory::Device,
         });
-        let material_size = (model.materials.len() * mem::size_of::<relight::Material>()) as u64;
+        let gaussian_size = mem::size_of_val(geometry.gaussians.as_slice()) as u64;
+        let gaussian_buf = context.create_buffer(gpu::BufferDesc {
+            name: "relight-gaussians",
+            size: gaussian_size,
+            memory: gpu::Memory::Device,
+        });
+        let material_size = mem::size_of_val(geometry.materials.as_slice()) as u64;
         let material_buf = context.create_buffer(gpu::BufferDesc {
             name: "relight-materials",
             size: material_size,
@@ -258,10 +425,9 @@ impl RelightTracer {
             size: blas_sizes.data,
         });
 
-        let instances = make_instances(&model.surfels);
         let instance_buf =
-            context.create_acceleration_structure_instance_buffer(&instances, &[blas]);
-        let count = model.surfels.len() as u32;
+            context.create_acceleration_structure_instance_buffer(&geometry.instances, &[blas]);
+        let count = geometry.surfels.len() as u32;
         let tlas_sizes = context.get_top_level_acceleration_structure_sizes(count);
         let tlas = context.create_acceleration_structure(gpu::AccelerationStructureDesc {
             name: "relight-tlas",
@@ -294,7 +460,8 @@ impl RelightTracer {
         });
 
         let level_size = specular.level_bytes() as u64;
-        let stage_size = vertex_size + index_size + surfel_size + material_size + alias_size;
+        let stage_size =
+            vertex_size + index_size + surfel_size + gaussian_size + material_size + alias_size;
         let stage = context.create_buffer(gpu::BufferDesc {
             name: "relight-stage",
             size: stage_size,
@@ -306,30 +473,42 @@ impl RelightTracer {
             memory: gpu::Memory::Upload,
         });
         unsafe {
-            ptr::copy_nonoverlapping(vertices.as_ptr(), stage.data() as *mut [f32; 3], 3);
+            ptr::copy_nonoverlapping(
+                vertices.as_ptr(),
+                stage.data() as *mut [f32; 3],
+                vertices.len(),
+            );
             ptr::copy_nonoverlapping(
                 indices.as_ptr(),
                 stage.data().add(vertex_size as usize) as *mut [u32; 3],
-                1,
+                indices.len(),
             );
             let surfels = slice::from_raw_parts_mut(
                 stage.data().add((vertex_size + index_size) as usize) as *mut relight::Surfel,
-                model.surfels.len(),
+                geometry.surfels.len(),
             );
-            surfels.copy_from_slice(&model.surfels);
-            let materials = slice::from_raw_parts_mut(
+            surfels.copy_from_slice(&geometry.surfels);
+            let gaussians = slice::from_raw_parts_mut(
                 stage
                     .data()
                     .add((vertex_size + index_size + surfel_size) as usize)
-                    as *mut relight::Material,
-                model.materials.len(),
+                    as *mut PbrGaussian,
+                geometry.gaussians.len(),
             );
-            materials.copy_from_slice(&model.materials);
-            let alias = slice::from_raw_parts_mut(
+            gaussians.copy_from_slice(&geometry.gaussians);
+            let materials = slice::from_raw_parts_mut(
                 stage
                     .data()
-                    .add((vertex_size + index_size + surfel_size + material_size) as usize)
-                    as *mut relight::AliasEntry,
+                    .add((vertex_size + index_size + surfel_size + gaussian_size) as usize)
+                    as *mut relight::Material,
+                geometry.materials.len(),
+            );
+            materials.copy_from_slice(&geometry.materials);
+            let alias = slice::from_raw_parts_mut(
+                stage.data().add(
+                    (vertex_size + index_size + surfel_size + gaussian_size + material_size)
+                        as usize,
+                ) as *mut relight::AliasEntry,
                 sampler_table.entries.len(),
             );
             alias.copy_from_slice(&sampler_table.entries);
@@ -354,11 +533,16 @@ impl RelightTracer {
             );
             pass.copy_buffer_to_buffer(
                 stage.at(vertex_size + index_size + surfel_size),
+                gaussian_buf.at(0),
+                gaussian_size,
+            );
+            pass.copy_buffer_to_buffer(
+                stage.at(vertex_size + index_size + surfel_size + gaussian_size),
                 material_buf.at(0),
                 material_size,
             );
             pass.copy_buffer_to_buffer(
-                stage.at(vertex_size + index_size + surfel_size + material_size),
+                stage.at(vertex_size + index_size + surfel_size + gaussian_size + material_size),
                 alias_buf.at(0),
                 alias_size,
             );
@@ -404,11 +588,12 @@ impl RelightTracer {
                 show_environment: settings.show_environment as u32,
                 env_width: environment.width as u32,
                 env_height: environment.height as u32,
-                kernel: model.kernel as u32,
+                kernel: geometry.kernel,
                 pad: [0; 2],
             },
             mesh_buf,
             surfel_buf,
+            gaussian_buf,
             material_buf,
             alias_buf,
             instance_buf,
@@ -420,7 +605,7 @@ impl RelightTracer {
             blas,
             tlas,
             surfel_stage_offset: vertex_size + index_size,
-            material_stage_offset: vertex_size + index_size + surfel_size,
+            material_stage_offset: vertex_size + index_size + surfel_size + gaussian_size,
             tlas_scratch_offset,
         }
     }
@@ -485,6 +670,10 @@ impl RelightTracer {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) {
+        assert_ne!(
+            self.params.kernel, 2,
+            "update the learned Gaussian geometry rather than its staging surfels"
+        );
         let surfel_size = mem::size_of_val(surfels) as u64;
         assert_eq!(
             surfel_size,
@@ -679,6 +868,7 @@ impl RelightTracer {
                 g_params: self.params,
                 g_tlas: self.tlas,
                 g_surfels: self.surfel_buf.at(0),
+                g_gaussians: self.gaussian_buf.at(0),
                 g_materials: self.material_buf.at(0),
                 g_alias: self.alias_buf.at(0),
                 g_specular: self.specular_view,
@@ -701,6 +891,7 @@ impl RelightTracer {
         context.destroy_buffer(self.instance_buf);
         context.destroy_buffer(self.alias_buf);
         context.destroy_buffer(self.material_buf);
+        context.destroy_buffer(self.gaussian_buf);
         context.destroy_buffer(self.surfel_buf);
         context.destroy_buffer(self.mesh_buf);
     }
@@ -721,6 +912,7 @@ mod tests {
     fn a_surfel_is_eight_floats() {
         assert_eq!(mem::size_of::<relight::Surfel>(), 32);
         assert_eq!(mem::size_of::<relight::Material>(), 32);
+        assert_eq!(mem::size_of::<PbrGaussian>(), 32);
     }
 
     #[test]

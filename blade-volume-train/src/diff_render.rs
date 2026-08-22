@@ -4910,6 +4910,7 @@ fn prune_and_densify(
     let mut new_transforms = model.transforms.as_ref().map(|_| vol::Transforms {
         rotations: Vec::with_capacity(n_new),
         scales: Vec::with_capacity(n_new),
+        pbr: None,
     });
     let mut new_to_old = Vec::with_capacity(n_new);
     for &oi in &survivors {
@@ -8854,6 +8855,7 @@ mod tests {
             transforms: Some(vol::Transforms {
                 rotations: vec![glam::Quat::IDENTITY; points.len()],
                 scales: vec![glam::Vec3::ONE; points.len()],
+                pbr: None,
             }),
             adjacency: Some(vol::Adjacency {
                 neighbors: vec![1, 0, 2, 1, 3, 2],

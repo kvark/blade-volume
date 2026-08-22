@@ -243,6 +243,7 @@ mod tests {
             transforms: Some(crate::Transforms {
                 rotations: vec![glam::Quat::IDENTITY; points.len()],
                 scales: vec![glam::Vec3::ONE; points.len()],
+                pbr: None,
             }),
             adjacency: None,
             radii: None,

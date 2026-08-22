@@ -627,6 +627,7 @@ pub fn from_surface(surface: &vol::relight::RelightModel) -> Result<vol::PointCl
                 .iter()
                 .map(|surfel| glam::Vec3::splat(surfel.radius / 3.0))
                 .collect(),
+            pbr: None,
         }),
         adjacency: None,
         radii: None,
@@ -663,6 +664,37 @@ pub fn update_surface_radii(
         surfel.radius = 3.0 * (scale.x * scale.y * scale.z).cbrt();
     }
     surface.validate()
+}
+
+/// Attach the final explicit normals and shared materials to corresponding
+/// learned Gaussian geometry.
+pub fn attach_pbr(
+    gaussian: &mut vol::PointCloudModel,
+    surface: &vol::relight::RelightModel,
+) -> Result<(), String> {
+    gaussian.validate()?;
+    surface.validate()?;
+    if gaussian.points.len() != surface.surfels.len() {
+        return Err("PBR attachment requires matching particle counts".to_string());
+    }
+    let transforms = gaussian
+        .transforms
+        .as_mut()
+        .ok_or_else(|| "PBR attachment requires Gaussian transforms".to_string())?;
+    transforms.pbr = Some(vol::PbrAttributes {
+        normals: surface
+            .surfels
+            .iter()
+            .map(|surfel| glam::Vec3::from(surfel.normal))
+            .collect(),
+        material_indices: surface
+            .surfels
+            .iter()
+            .map(|surfel| surfel.material)
+            .collect(),
+        materials: surface.materials.clone(),
+    });
+    gaussian.validate()
 }
 
 struct RayBatch {
@@ -1938,6 +1970,7 @@ mod tests {
             transforms: Some(vol::Transforms {
                 rotations: vec![glam::Quat::IDENTITY; count],
                 scales: vec![glam::Vec3::ONE; count],
+                pbr: None,
             }),
             adjacency: None,
             radii: None,
@@ -1996,6 +2029,11 @@ mod tests {
             assert_eq!(before.normal, after.normal);
             assert_eq!(before.material, after.material);
         }
+        attach_pbr(&mut model, &surface).unwrap();
+        let pbr = model.transforms.unwrap().pbr.unwrap();
+        assert_eq!(pbr.normals, [glam::Vec3::Z, -glam::Vec3::Y]);
+        assert_eq!(pbr.material_indices, [0, 1]);
+        assert_eq!(pbr.materials, surface.materials);
     }
 
     #[test]

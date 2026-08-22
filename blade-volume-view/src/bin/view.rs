@@ -58,27 +58,27 @@ struct Arguments {
     /// override format detection: "gaussian", "radfoam" or "surfel"
     #[argh(option)]
     kind: Option<String>,
-    /// environment maps to light relightable surfels with, comma separated.
+    /// environment maps to light relightable point clouds with, comma separated.
     /// Float planes as written by blade's relight_data. Without this the
     /// viewer builds a sky and moves the sun around it.
     #[argh(option)]
     environment: Option<String>,
-    /// multiply radiance by this before the display curve (surfel only).
+    /// multiply relightable radiance by this before the display curve.
     /// Without it the viewer picks one from the environment's average
     /// radiance, which is in whatever units the capture used.
     #[argh(option)]
     exposure: Option<f32>,
-    /// rays per shading point for shadowing and one bounce (surfel only).
+    /// rays per surfel for shadowing and one bounce (surfel only).
     /// Zero keeps the analytic path, which is noise free and seven times
     /// faster, and measures closer to a path traced reference than shadows
     /// without a bounce do.
     #[argh(option, default = "0")]
     diffuse_samples: u32,
     /// equirectangular width the specular ladder is prefiltered at, per
-    /// environment (surfel only). Seconds of CPU work, once per light.
+    /// environment. Seconds of CPU work, once per light.
     #[argh(option, default = "256")]
     specular_size: usize,
-    /// which environment to open under, by name or index (surfel only).
+    /// which environment to open under, by name or index (relightable only).
     /// `L` cycles through the rest.
     #[argh(option)]
     light: Option<String>,
@@ -422,6 +422,55 @@ impl Example {
             }
         );
 
+        if model
+            .transforms
+            .as_ref()
+            .and_then(|transforms| transforms.pbr.as_ref())
+            .is_some()
+        {
+            let environments = load_environments(args.environment.as_deref());
+            let initial = match args.light {
+                Some(ref wanted) => resolve_light(wanted, &environments),
+                None => 0,
+            };
+            let exposure = args
+                .exposure
+                .unwrap_or_else(|| exposure_for(&environments[initial]));
+            let backend = view::RenderBackend::Relight(view::RelightBackend::new_gaussian(
+                &model,
+                environments,
+                view::RelightSettings {
+                    diffuse_samples: args.diffuse_samples,
+                    show_environment: true,
+                    exposure,
+                    specular_width: args.specular_size,
+                    initial_environment: initial,
+                },
+                &context,
+                &mut command_encoder,
+                surface_info.format,
+                size,
+            ));
+            return Self {
+                camera,
+                backend,
+                command_encoder,
+                prev_sync_point: None,
+                window_size,
+                surface,
+                context,
+                debug_mode: view::DebugMode::Off,
+                input_file: args.input_file,
+
+                ui_ctx,
+                ui_state,
+                ui_painter,
+                ui_show,
+
+                frame_times: VecDeque::with_capacity(FRAME_TIME_HISTORY_SIZE),
+            };
+        }
+
         let debug_mode = if args.debug {
             view::DebugMode::ParticleDensity
         } else {
@@ -560,7 +609,7 @@ impl Example {
                                 ui.label("RadFoam compute");
                             }
                             view::RenderBackend::Relight(_) => {
-                                ui.label("Relightable surfels");
+                                ui.label("Relightable point cloud");
                             }
                         }
                     });
@@ -616,18 +665,22 @@ impl Example {
                                     .logarithmic(true)
                                     .text("Exposure"),
                             );
-                            ui.add(
-                                ui::Slider::new(backend.diffuse_samples_mut(), 0..=64)
-                                    .text("Shadow rays"),
-                            );
-                            // Said plainly, because the slider above looks
-                            // like a quality control and is not one: it buys
-                            // shadows and one bounce, at seven times the cost,
-                            // and against a path traced reference it scores
-                            // worse than leaving both out.
-                            ui.small(
-                                "0 is analytic: no shadows, no noise, and closer to a path trace",
-                            );
+                            if backend.supports_shadow_rays() {
+                                ui.add(
+                                    ui::Slider::new(backend.diffuse_samples_mut(), 0..=64)
+                                        .text("Shadow rays"),
+                                );
+                                // Said plainly, because the slider above looks
+                                // like a quality control and is not one: it buys
+                                // shadows and one bounce, at seven times the cost,
+                                // and against a path traced reference it scores
+                                // worse than leaving both out.
+                                ui.small(
+                                    "0 is analytic: no shadows, no noise, and closer to a path trace",
+                                );
+                            } else {
+                                ui.small("Volumetric Gaussians currently use analytic lighting");
+                            }
                             let mut show = backend.show_environment();
                             if ui.checkbox(&mut show, "Show the environment").changed() {
                                 backend.set_show_environment(show);

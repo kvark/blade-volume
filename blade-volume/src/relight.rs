@@ -74,7 +74,7 @@ pub struct Surfel {
 
 /// What a surface is made of, shared by every surfel that points at it.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Material {
     /// Diffuse albedo. Zero for a metal, which has no diffuse response.
     pub albedo: [f32; 3],

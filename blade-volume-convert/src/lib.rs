@@ -254,6 +254,7 @@ pub enum ConvertError {
     MissingMeshData,
     UnsupportedPrimitiveMode,
     MissingOutputData,
+    InvalidModel(String),
     Adjacency(vol::AdjacencyError),
     /// [`Topology::Qhull`] was requested from a build without the feature.
     QhullUnavailable,
@@ -955,7 +956,11 @@ pub fn convert_gltf(
 
     match options.output {
         OutputKind::Gaussian => {
-            model.transforms = Some(vol::Transforms { rotations, scales });
+            model.transforms = Some(vol::Transforms {
+                rotations,
+                scales,
+                pbr: None,
+            });
         }
         OutputKind::RadFoam => {
             model.adjacency = Some(match options.topology {
@@ -1015,6 +1020,7 @@ pub fn save_ply_with_options(
     model: &vol::PointCloudModel,
     options: &SaveOptions,
 ) -> Result<(), ConvertError> {
+    model.validate().map_err(ConvertError::InvalidModel)?;
     if model.transforms.is_some() {
         match options.format {
             PlyFormat::Ascii => write_gaussian_ply_ascii(path.as_ref(), model)?,
@@ -1638,6 +1644,15 @@ fn write_gaussian_ply_binary(
     writeln!(file, "property float nx")?;
     writeln!(file, "property float ny")?;
     writeln!(file, "property float nz")?;
+    if transforms.pbr.is_some() {
+        writeln!(file, "property float pbr_albedo_0")?;
+        writeln!(file, "property float pbr_albedo_1")?;
+        writeln!(file, "property float pbr_albedo_2")?;
+        writeln!(file, "property float pbr_roughness")?;
+        writeln!(file, "property float pbr_f0_0")?;
+        writeln!(file, "property float pbr_f0_1")?;
+        writeln!(file, "property float pbr_f0_2")?;
+    }
     writeln!(file, "property float f_dc_0")?;
     writeln!(file, "property float f_dc_1")?;
     writeln!(file, "property float f_dc_2")?;
@@ -1661,6 +1676,12 @@ fn write_gaussian_ply_binary(
         let scale = transforms.scales[i].max(glam::Vec3::splat(1e-6));
         let log_scale = glam::Vec3::new(scale.x.ln(), scale.y.ln(), scale.z.ln());
         let opacity = logit(point.w);
+        let pbr = transforms.pbr.as_ref().map(|pbr| {
+            (
+                inv_rotation * pbr.normals[i],
+                pbr.materials[pbr.material_indices[i] as usize],
+            )
+        });
 
         let base = i * sh_component_count * 3;
         let f_dc = [
@@ -1672,9 +1693,19 @@ fn write_gaussian_ply_binary(
         file.write_all(&position.x.to_le_bytes())?;
         file.write_all(&position.y.to_le_bytes())?;
         file.write_all(&position.z.to_le_bytes())?;
-        file.write_all(&0.0f32.to_le_bytes())?;
-        file.write_all(&0.0f32.to_le_bytes())?;
-        file.write_all(&0.0f32.to_le_bytes())?;
+        let normal = pbr.map_or(glam::Vec3::ZERO, |value| value.0);
+        file.write_all(&normal.x.to_le_bytes())?;
+        file.write_all(&normal.y.to_le_bytes())?;
+        file.write_all(&normal.z.to_le_bytes())?;
+        if let Some((_, material)) = pbr {
+            for value in material.albedo {
+                file.write_all(&value.to_le_bytes())?;
+            }
+            file.write_all(&material.roughness.to_le_bytes())?;
+            for value in material.specular_f0 {
+                file.write_all(&value.to_le_bytes())?;
+            }
+        }
         file.write_all(&f_dc[0].to_le_bytes())?;
         file.write_all(&f_dc[1].to_le_bytes())?;
         file.write_all(&f_dc[2].to_le_bytes())?;
@@ -1727,6 +1758,15 @@ fn write_gaussian_ply_ascii(
     writeln!(file, "property float nx")?;
     writeln!(file, "property float ny")?;
     writeln!(file, "property float nz")?;
+    if transforms.pbr.is_some() {
+        writeln!(file, "property float pbr_albedo_0")?;
+        writeln!(file, "property float pbr_albedo_1")?;
+        writeln!(file, "property float pbr_albedo_2")?;
+        writeln!(file, "property float pbr_roughness")?;
+        writeln!(file, "property float pbr_f0_0")?;
+        writeln!(file, "property float pbr_f0_1")?;
+        writeln!(file, "property float pbr_f0_2")?;
+    }
     writeln!(file, "property float f_dc_0")?;
     writeln!(file, "property float f_dc_1")?;
     writeln!(file, "property float f_dc_2")?;
@@ -1750,6 +1790,12 @@ fn write_gaussian_ply_ascii(
         let scale = transforms.scales[i].max(glam::Vec3::splat(1e-6));
         let log_scale = glam::Vec3::new(scale.x.ln(), scale.y.ln(), scale.z.ln());
         let opacity = logit(point.w);
+        let pbr = transforms.pbr.as_ref().map(|pbr| {
+            (
+                inv_rotation * pbr.normals[i],
+                pbr.materials[pbr.material_indices[i] as usize],
+            )
+        });
 
         let base = i * sh_component_count * 3;
         let f_dc = [
@@ -1758,15 +1804,28 @@ fn write_gaussian_ply_ascii(
             model.sh_coefficients[base + 2],
         ];
 
+        let normal = pbr.map_or(glam::Vec3::ZERO, |value| value.0);
         write!(
             file,
-            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
-            position.x,
-            position.y,
-            position.z,
-            0.0f32,
-            0.0f32,
-            0.0f32,
+            "{} {} {} {} {} {}",
+            position.x, position.y, position.z, normal.x, normal.y, normal.z,
+        )?;
+        if let Some((_, material)) = pbr {
+            write!(
+                file,
+                " {} {} {} {} {} {} {}",
+                material.albedo[0],
+                material.albedo[1],
+                material.albedo[2],
+                material.roughness,
+                material.specular_f0[0],
+                material.specular_f0[1],
+                material.specular_f0[2],
+            )?;
+        }
+        write!(
+            file,
+            " {} {} {} {} {} {} {} {} {} {} {}",
             f_dc[0],
             f_dc[1],
             f_dc[2],
@@ -1777,7 +1836,7 @@ fn write_gaussian_ply_ascii(
             rotation.w,
             rotation.x,
             rotation.y,
-            rotation.z
+            rotation.z,
         )?;
 
         for property in 0..sh_rest_count {
@@ -2749,6 +2808,7 @@ mod tests {
         let transforms = vol::Transforms {
             rotations: vec![glam::Quat::IDENTITY; points.len()],
             scales: vec![glam::Vec3::splat(0.25); points.len()],
+            pbr: None,
         };
         let model = vol::PointCloudModel {
             points,
@@ -2781,6 +2841,7 @@ mod tests {
         let transforms = vol::Transforms {
             rotations: vec![glam::Quat::from_rotation_x(0.3)],
             scales: vec![glam::Vec3::new(0.1, 0.2, 0.3)],
+            pbr: None,
         };
         let model = vol::PointCloudModel {
             points,
@@ -2804,6 +2865,67 @@ mod tests {
         assert_eq!(loaded.sh_coefficients, sh_coefficients);
         assert!((loaded.points[0].w - model.points[0].w).abs() < 1e-6);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn gaussian_ply_roundtrip_preserves_shared_pbr_attributes() {
+        let materials = vec![
+            vol::relight::Material {
+                albedo: [0.7, 0.2, 0.1],
+                roughness: 0.35,
+                specular_f0: [0.04; 3],
+                _padding: 0.0,
+            },
+            vol::relight::Material {
+                albedo: [0.0; 3],
+                roughness: 0.1,
+                specular_f0: [0.9, 0.6, 0.2],
+                _padding: 0.0,
+            },
+        ];
+        let normals = vec![
+            glam::Vec3::new(0.2, 0.9, -0.3).normalize(),
+            glam::Vec3::new(-0.4, 0.1, 0.8).normalize(),
+            glam::Vec3::new(0.2, 0.9, -0.3).normalize(),
+        ];
+        let model = vol::PointCloudModel {
+            points: vec![
+                glam::Vec4::new(0.0, 0.0, 0.0, 0.8),
+                glam::Vec4::new(1.0, -0.5, 0.2, 0.6),
+                glam::Vec4::new(-0.3, 0.7, 1.2, 0.4),
+            ],
+            sh_coefficients: vec![0.0; 9],
+            sh_degree: 0,
+            transforms: Some(vol::Transforms {
+                rotations: vec![glam::Quat::IDENTITY; 3],
+                scales: vec![glam::Vec3::new(0.1, 0.2, 0.3); 3],
+                pbr: Some(vol::PbrAttributes {
+                    normals: normals.clone(),
+                    material_indices: vec![0, 1, 0],
+                    materials: materials.clone(),
+                }),
+            }),
+            adjacency: None,
+            radii: None,
+            surface_normals: None,
+            surface_offsets: None,
+            surface_detail: None,
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+        };
+        let path = std::env::temp_dir().join(format!(
+            "blade-volume-pbr-gaussian-{}.ply",
+            std::process::id()
+        ));
+        save_ply(&path, &model).unwrap();
+        let loaded = vol::io::try_load_gaussian(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let loaded_pbr = loaded.transforms.unwrap().pbr.unwrap();
+        assert_eq!(loaded_pbr.material_indices, [0, 1, 0]);
+        assert_eq!(loaded_pbr.materials, materials);
+        for (actual, expected) in loaded_pbr.normals.iter().zip(normals) {
+            assert!((*actual - expected).length() < 1.0e-6);
+        }
     }
 
     fn assert_radfoam_sh3_roundtrip(format: PlyFormat) {

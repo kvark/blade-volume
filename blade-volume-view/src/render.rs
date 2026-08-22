@@ -405,11 +405,11 @@ impl RadFoamBackend {
 pub enum RenderBackend {
     Gaussian(GaussianBackend),
     RadFoam(RadFoamBackend),
-    /// Relightable surfels. Reached through [`RelightBackend::new`] rather
+    /// Relightable point clouds. Reached through [`RelightBackend`] rather
     /// than through [`RenderBackend::new_for_model`], because it is built from
     /// a different model and needs a light as well as geometry.
     ///
-    /// [`RelightBackend::new`]: ../relight_render/struct.RelightBackend.html
+    /// [`RelightBackend`]: ../relight_render/struct.RelightBackend.html
     /// [`RenderBackend::new_for_model`]: #method.new_for_model
     Relight(crate::RelightBackend),
 }

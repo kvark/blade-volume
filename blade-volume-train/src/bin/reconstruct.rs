@@ -162,6 +162,10 @@ struct Args {
     #[argh(option)]
     gaussian_output: Option<String>,
 
+    /// optional relightable anisotropic Gaussian PLY output
+    #[argh(option)]
+    pbr_gaussian_output: Option<String>,
+
     /// direct Gaussian updates, one third appearance then support (default 1500)
     #[argh(option, default = "1500")]
     gaussian_steps: usize,
@@ -201,6 +205,7 @@ struct Args {
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
+    let fit_gaussians = args.gaussian_output.is_some() || args.pbr_gaussian_output.is_some();
 
     if let Err(message) = validate_normal_captures(&args) {
         eprintln!("{message}");
@@ -262,12 +267,12 @@ fn main() {
         eprintln!("--surface-powerfoam-output requires --surface-powerfoam-steps-per-view");
         std::process::exit(1);
     }
-    if args.gaussian_output.is_some() && args.gaussian_steps < 2 {
-        eprintln!("--gaussian-output requires at least two --gaussian-steps");
+    if fit_gaussians && args.gaussian_steps < 2 {
+        eprintln!("Gaussian output requires at least two --gaussian-steps");
         std::process::exit(1);
     }
-    if args.gaussian_output.is_some() && args.compact_kernel {
-        eprintln!("--gaussian-output requires Gaussian particles");
+    if fit_gaussians && args.compact_kernel {
+        eprintln!("Gaussian output requires Gaussian particles");
         std::process::exit(1);
     }
     let normal_captures =
@@ -621,7 +626,8 @@ fn main() {
         );
     }
 
-    if let Some(ref output) = args.gaussian_output {
+    let mut learned_pbr_gaussian = None;
+    if fit_gaussians {
         let gaussian_surface = if let Some(ref surfels) = sparse_gaussian_surface {
             vol::relight::RelightModel {
                 kernel: vol::relight::ParticleKernel::Gaussian,
@@ -718,23 +724,26 @@ fn main() {
             eprintln!("cannot score direct Gaussian field: {error}");
             std::process::exit(1);
         });
-        let output = path::Path::new(output);
-        if let Some(parent) = output
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            std::fs::create_dir_all(parent).unwrap_or_else(|error| {
-                eprintln!("cannot create {}: {error}", parent.display());
+        if let Some(ref output) = args.gaussian_output {
+            let output = path::Path::new(output);
+            if let Some(parent) = output
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent).unwrap_or_else(|error| {
+                    eprintln!("cannot create {}: {error}", parent.display());
+                    std::process::exit(1);
+                });
+            }
+            convert::save_ply(output, &gaussian).unwrap_or_else(|error| {
+                eprintln!(
+                    "cannot write direct Gaussian {}: {error:?}",
+                    output.display()
+                );
                 std::process::exit(1);
             });
+            println!("wrote {}", output.display());
         }
-        convert::save_ply(output, &gaussian).unwrap_or_else(|error| {
-            eprintln!(
-                "cannot write direct Gaussian {}: {error:?}",
-                output.display()
-            );
-            std::process::exit(1);
-        });
         println!(
             "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} ({:.1} s total Gaussian fitting)",
             stats.appearance.steps,
@@ -750,15 +759,15 @@ fn main() {
                 "direct Gaussian test: {initial_mean:.2} -> {mean:.2} dB mean, {initial_worst:.2} -> {worst:.2} dB worst"
             );
         }
-        println!("wrote {}", output.display());
         train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
             .unwrap_or_else(|error| {
                 eprintln!("cannot update PBR support from direct Gaussian field: {error}");
                 std::process::exit(1);
             });
+        learned_pbr_gaussian = Some(pbr_gaussian);
         println!("updated PBR radii from learned Gaussian support");
     }
-    if args.render_refine_radii && args.gaussian_output.is_some() {
+    if args.render_refine_radii && fit_gaussians {
         let environment = fitted.scene.environment.clone();
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
             capture: &capture,
@@ -810,7 +819,7 @@ fn main() {
             );
         }
     }
-    if args.render_refine_materials && args.gaussian_output.is_some() {
+    if args.render_refine_materials && fit_gaussians {
         let stats = train::inverse::refine::polish_rendered_materials(
             &mut fitted.scene,
             &capture,
@@ -831,6 +840,52 @@ fn main() {
             stats.final_loss,
             stats.seconds,
         );
+    }
+
+    if let Some(ref mut gaussian) = learned_pbr_gaussian {
+        train::gaussian_splat::attach_pbr(gaussian, &fitted.scene.model).unwrap_or_else(|error| {
+            eprintln!("cannot attach final PBR attributes to Gaussian geometry: {error}");
+            std::process::exit(1);
+        });
+        if let Some(ref output) = args.pbr_gaussian_output {
+            let output = path::Path::new(output);
+            if let Some(parent) = output
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent).unwrap_or_else(|error| {
+                    eprintln!("cannot create {}: {error}", parent.display());
+                    std::process::exit(1);
+                });
+            }
+            convert::save_ply(output, gaussian).unwrap_or_else(|error| {
+                eprintln!(
+                    "cannot write relightable Gaussian {}: {error:?}",
+                    output.display()
+                );
+                std::process::exit(1);
+            });
+            *gaussian = vol::io::try_load_gaussian(output.to_str().unwrap_or_else(|| {
+                eprintln!("output path is not UTF-8: {}", output.display());
+                std::process::exit(1);
+            }))
+            .unwrap_or_else(|error| {
+                eprintln!(
+                    "cannot reload written relightable Gaussian {}: {error}",
+                    output.display()
+                );
+                std::process::exit(1);
+            });
+            println!("wrote and reloaded {}", output.display());
+            let environment = output.with_extension("f32");
+            vol::io::try_save_environment(&environment, &fitted.scene.environment).unwrap_or_else(
+                |error| {
+                    eprintln!("cannot write {}: {error}", environment.display());
+                    std::process::exit(1);
+                },
+            );
+            println!("wrote {}", environment.display());
+        }
     }
 
     if let Some(ref output) = args.output {
@@ -887,6 +942,27 @@ fn main() {
             100.0 * summary.coverage,
             summary.covered_srgb_psnr
         );
+    }
+    if let Some(ref gaussian) = learned_pbr_gaussian {
+        let summaries =
+            renderer.score_gaussian_splits(&fitted.scene, gaussian, &capture, &splits, 0);
+        for ((name, indices), summary) in [("g-train", &train_views), ("g-test", &test_views)]
+            .into_iter()
+            .zip(summaries)
+        {
+            if indices.is_empty() {
+                continue;
+            }
+            println!(
+                "{name:<8}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{:>12.2}",
+                summary.views,
+                summary.srgb_psnr,
+                summary.worst_srgb_psnr,
+                summary.linear_psnr,
+                100.0 * summary.coverage,
+                summary.covered_srgb_psnr
+            );
+        }
     }
     renderer.destroy();
 }
@@ -1893,6 +1969,7 @@ mod tests {
         assert_eq!(defaults.surface_powerfoam_steps_per_view, 0);
         assert!(defaults.surface_powerfoam_output.is_none());
         assert!(defaults.gaussian_output.is_none());
+        assert!(defaults.pbr_gaussian_output.is_none());
         assert_eq!(defaults.gaussian_steps, 1_500);
         assert_eq!(defaults.diffuse_samples, 0);
 
@@ -1929,6 +2006,23 @@ mod tests {
         .unwrap();
         assert_eq!(args.gaussian_output.as_deref(), Some("light-field.ply"));
         assert_eq!(args.gaussian_steps, 800);
+    }
+
+    #[test]
+    fn relightable_gaussian_output_is_opt_in() {
+        let args = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--pbr-gaussian-output",
+                "relightable.ply",
+            ],
+        )
+        .unwrap();
+        assert_eq!(args.pbr_gaussian_output.as_deref(), Some("relightable.ply"));
     }
 
     #[test]

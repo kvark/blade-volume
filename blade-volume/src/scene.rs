@@ -676,6 +676,7 @@ mod tests {
             transforms: Some(crate::Transforms {
                 rotations: vec![glam::Quat::IDENTITY],
                 scales: vec![glam::Vec3::new(2.0, 1.0, 0.5)],
+                pbr: None,
             }),
             adjacency: None,
             radii: None,

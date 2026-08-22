@@ -407,6 +407,113 @@ fn gpu_shading_matches_the_cpu_reference() {
 }
 
 #[test]
+fn volumetric_gaussian_pbr_matches_the_cpu_response() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let model = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Gaussian,
+        surfels: vec![vol::relight::Surfel {
+            center: [0.0; 3],
+            radius: 1.0,
+            normal: [0.0, 0.0, -1.0],
+            material: 0,
+        }],
+        materials: vec![vol::relight::Material {
+            albedo: [0.7, 0.35, 0.2],
+            roughness: 0.7,
+            specular_f0: [0.04; 3],
+            _padding: 0.0,
+        }],
+    };
+    let scale = glam::Vec3::new(0.45, 0.7, 0.25);
+    let gaussian = vol::PointCloudModel {
+        points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 0.8)],
+        sh_coefficients: vec![0.0; 3],
+        sh_degree: 0,
+        transforms: Some(vol::Transforms {
+            rotations: vec![glam::Quat::IDENTITY],
+            scales: vec![scale],
+            pbr: Some(vol::PbrAttributes {
+                normals: vec![glam::Vec3::NEG_Z],
+                material_indices: vec![0],
+                materials: model.materials.clone(),
+            }),
+        }),
+        adjacency: None,
+        radii: None,
+        surface_normals: None,
+        surface_offsets: None,
+        surface_detail: None,
+        surface_color_coefficients: None,
+        spherical_voronoi: None,
+    };
+    let environment = vol::relight::Environment::uniform([0.6, 0.8, 0.4], 64, 32);
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 64, 32);
+    let background = [0.02, 0.03, 0.05];
+    let mut tracer = vol::gpu::RelightTracer::new_gaussian(
+        &gaussian,
+        &environment,
+        &specular,
+        vol::gpu::RelightSettings {
+            background_rgb: background,
+            diffuse_samples: 0,
+            show_environment: false,
+        },
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let camera = camera(4.0);
+    let rendered = harness.render(&mut tracer, camera);
+    let irradiance = environment.diffuse_irradiance();
+    let origin = glam::Vec3::from(camera.cam_position);
+    let mut covered = 0usize;
+    let mut worst = 0.0f32;
+    for y in 0..SIZE[1] {
+        for x in 0..SIZE[0] {
+            let direction = ray_direction(&camera, x, y);
+            let local_origin = origin / scale;
+            let local_direction = direction / scale;
+            let t = -local_origin.dot(local_direction) / local_direction.length_squared();
+            let local_position = local_origin + t * local_direction;
+            let alpha = if t > 0.0 {
+                let squared_radius = local_position.length_squared();
+                let support_squared = 2.0 * (0.8f32 / 1.0e-5).ln();
+                if squared_radius <= support_squared {
+                    (0.8 * (-0.5 * squared_radius).exp()).min(0.999)
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            covered += (alpha > 0.0) as usize;
+            let lit = vol::relight::shade(
+                glam::Vec3::NEG_Z,
+                -direction,
+                &model.materials[0],
+                &irradiance,
+                &specular,
+            );
+            let actual = rendered[(y * SIZE[0] + x) as usize];
+            for channel in 0..3 {
+                let expected = alpha * lit[channel] + (1.0 - alpha) * background[channel];
+                worst = worst.max((actual[channel] - expected).abs());
+            }
+            worst = worst.max((actual[3] - alpha).abs());
+        }
+    }
+    assert!(covered > 1000, "the Gaussian covered only {covered} pixels");
+    assert!(
+        worst < TOLERANCE,
+        "GPU volumetric PBR differs from the CPU by {worst:.4}"
+    );
+
+    tracer.deinit(&harness.context);
+    harness.destroy();
+}
+
+#[test]
 fn relighting_changes_the_image_and_nothing_else_has_to() {
     let Some(mut harness) = Harness::new() else {
         return;

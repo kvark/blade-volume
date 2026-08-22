@@ -137,6 +137,7 @@ fn gaussian_model(color: glam::Vec3, scale: glam::Vec3) -> vol::PointCloudModel 
         transforms: Some(vol::Transforms {
             rotations: vec![glam::Quat::IDENTITY],
             scales: vec![scale],
+            pbr: None,
         }),
         adjacency: None,
         radii: None,

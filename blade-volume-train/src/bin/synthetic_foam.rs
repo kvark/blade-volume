@@ -144,6 +144,10 @@ struct Args {
     #[argh(option)]
     gaussian_output: Option<String>,
 
+    /// optional relightable anisotropic Gaussian PLY output
+    #[argh(option)]
+    pbr_gaussian_output: Option<String>,
+
     /// direct Gaussian updates, one third appearance then support (default 1500)
     #[argh(option, default = "1500")]
     gaussian_steps: usize,
@@ -1219,7 +1223,9 @@ fn main() {
         )
         .unwrap_or_else(|error| fail(error));
     }
-    if let Some(ref output) = args.gaussian_output {
+    let mut learned_pbr_gaussian = None;
+    let fit_gaussians = args.gaussian_output.is_some() || args.pbr_gaussian_output.is_some();
+    if fit_gaussians {
         let light_field_surface = static_gaussian_surface
             .as_ref()
             .unwrap_or(&fitted.scene.model);
@@ -1288,15 +1294,6 @@ fn main() {
             [0.0; 3],
         )
         .unwrap_or_else(|error| fail(error));
-        let output = path::Path::new(output);
-        if let Some(parent) = output
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            std::fs::create_dir_all(parent).unwrap_or_else(|error| fail(error));
-        }
-        convert::save_ply(output, &gaussian)
-            .unwrap_or_else(|error| fail(format!("cannot write {}: {error:?}", output.display())));
         println!(
             "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} ({:.3} s total Gaussian fitting)",
             stats.appearance.steps,
@@ -1308,13 +1305,26 @@ fn main() {
             fit_seconds,
         );
         describe_scores("direct Gaussian held-out", &held_out_scores);
-        println!("wrote {}", output.display());
+        if let Some(ref output) = args.gaussian_output {
+            let output = path::Path::new(output);
+            if let Some(parent) = output
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent).unwrap_or_else(|error| fail(error));
+            }
+            convert::save_ply(output, &gaussian).unwrap_or_else(|error| {
+                fail(format!("cannot write {}: {error:?}", output.display()))
+            });
+            println!("wrote {}", output.display());
+        }
         train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
             .unwrap_or_else(|error| fail(error));
+        learned_pbr_gaussian = Some(pbr_gaussian);
         println!("updated PBR radii from learned Gaussian support");
     }
     let mut pbr_controls = Vec::new();
-    if args.render_refine_radii && args.gaussian_output.is_some() {
+    if args.render_refine_radii && fit_gaussians {
         pbr_controls.push(("radius", fitted.scene.model.clone()));
         let environment = fitted.scene.environment.clone();
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
@@ -1371,7 +1381,7 @@ fn main() {
             .unwrap_or_else(|error| fail(error));
         }
     }
-    if args.render_refine_materials && args.gaussian_output.is_some() {
+    if args.render_refine_materials && fit_gaussians {
         pbr_controls.push(("post-support material", fitted.scene.model.clone()));
         let stats = train::inverse::refine::polish_rendered_materials(
             &mut fitted.scene,
@@ -1444,7 +1454,7 @@ fn main() {
     let training_summary = renderer.score_splits(
         &train::inverse::score::Scene {
             model: fitted.scene.model.clone(),
-            environment: fitted.scene.environment,
+            environment: fitted.scene.environment.clone(),
         },
         &training_capture,
         &[(&held_out_indices, None)],
@@ -1452,16 +1462,73 @@ fn main() {
     )[0];
     let relight_summary = renderer.score_splits(
         &train::inverse::score::Scene {
-            model: fitted.scene.model,
-            environment: held_out_light,
+            model: fitted.scene.model.clone(),
+            environment: held_out_light.clone(),
         },
         &held_out_capture,
         &[(&held_out_indices, None)],
         0,
     )[0];
+    let volumetric_summaries = learned_pbr_gaussian.as_mut().map(|gaussian| {
+        train::gaussian_splat::attach_pbr(gaussian, &fitted.scene.model)
+            .unwrap_or_else(|error| fail(error));
+        if let Some(ref output) = args.pbr_gaussian_output {
+            let output = path::Path::new(output);
+            if let Some(parent) = output
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent).unwrap_or_else(|error| fail(error));
+            }
+            convert::save_ply(output, gaussian).unwrap_or_else(|error| {
+                fail(format!("cannot write {}: {error:?}", output.display()))
+            });
+            println!("wrote {}", output.display());
+            *gaussian = vol::io::try_load_gaussian(output.to_str().unwrap_or_else(|| {
+                fail(format!("output path is not UTF-8: {}", output.display()))
+            }))
+            .unwrap_or_else(|error| {
+                fail(format!(
+                    "cannot reload written PBR Gaussian {}: {error}",
+                    output.display()
+                ))
+            });
+            println!("reloaded {} for scoring", output.display());
+            let environment = output.with_extension("f32");
+            vol::io::try_save_environment(&environment, &fitted.scene.environment).unwrap_or_else(
+                |error| fail(format!("cannot write {}: {error}", environment.display())),
+            );
+            println!("wrote {}", environment.display());
+        }
+        let training = renderer.score_gaussian_splits(
+            &train::inverse::score::Scene {
+                model: fitted.scene.model.clone(),
+                environment: fitted.scene.environment.clone(),
+            },
+            gaussian,
+            &training_capture,
+            &[(&held_out_indices, None)],
+            0,
+        )[0];
+        let held = renderer.score_gaussian_splits(
+            &train::inverse::score::Scene {
+                model: fitted.scene.model.clone(),
+                environment: held_out_light.clone(),
+            },
+            gaussian,
+            &held_out_capture,
+            &[(&held_out_indices, None)],
+            0,
+        )[0];
+        (training, held)
+    });
     renderer.destroy();
     describe_relight_score("PBR training light / held-out poses", training_summary);
     describe_relight_score("PBR held-out light / held-out poses", relight_summary);
+    if let Some((training, held)) = volumetric_summaries {
+        describe_relight_score("volumetric Gaussian PBR training light", training);
+        describe_relight_score("volumetric Gaussian PBR held-out light", held);
+    }
 
     let output = path::Path::new(&args.output);
     if let Some(parent) = output

@@ -77,6 +77,20 @@ pub struct Transforms {
     pub rotations: Vec<glam::Quat>,
     /// Scale per point (in log-space from PLY, exponentiated for use).
     pub scales: Vec<glam::Vec3>,
+    /// Optional explicit PBR appearance for these Gaussian particles.
+    pub pbr: Option<PbrAttributes>,
+}
+
+/// Explicit relightable appearance attached to Gaussian point geometry.
+///
+/// Normals and material assignments are point-major. Materials stay shared so
+/// a reconstructed patch has one BRDF rather than an independently fitted
+/// value at every particle.
+#[derive(Clone, Debug)]
+pub struct PbrAttributes {
+    pub normals: Vec<glam::Vec3>,
+    pub material_indices: Vec<u32>,
+    pub materials: Vec<relight::Material>,
 }
 
 /// CSR adjacency structure for Voronoi cell traversal.
@@ -147,7 +161,8 @@ pub struct SurfaceDetailDirectional {
 /// - `sh_degree`: SH basis degree (0-3)
 ///
 /// Optional extensions:
-/// - `transforms`: rotation + scale for Gaussian ellipsoids
+/// - `transforms`: rotation + scale and optional explicit PBR appearance for
+///   Gaussian ellipsoids
 /// - `adjacency`: CSR adjacency for RadFoam Voronoi traversal
 /// - `radii`: per-point weight/radius for Power-Foam-style power diagrams
 /// - `surface_normals`: oriented PowerFoam faces; the normal-facing half is empty
@@ -274,6 +289,48 @@ impl PointCloudModel {
                     .any(|scale| !scale.is_finite() || scale.min_element() <= 0.0)
             {
                 return Err("transforms must have finite rotations and positive scales".to_string());
+            }
+        }
+        if let Some(pbr) = self
+            .transforms
+            .as_ref()
+            .and_then(|value| value.pbr.as_ref())
+        {
+            if pbr.normals.len() != count || pbr.material_indices.len() != count {
+                return Err(format!(
+                    "PBR lengths are normals={} material_indices={}, expected {count}",
+                    pbr.normals.len(),
+                    pbr.material_indices.len(),
+                ));
+            }
+            if pbr.materials.is_empty() {
+                return Err("PBR attributes require at least one material".to_string());
+            }
+            if pbr
+                .normals
+                .iter()
+                .any(|normal| !normal.is_finite() || (normal.length() - 1.0).abs() > 1.0e-3)
+            {
+                return Err("PBR normals must be finite and unit length".to_string());
+            }
+            if let Some((point, &material)) = pbr
+                .material_indices
+                .iter()
+                .enumerate()
+                .find(|&(_, &material)| material as usize >= pbr.materials.len())
+            {
+                return Err(format!(
+                    "PBR point {point} refers to material {material} of {}",
+                    pbr.materials.len()
+                ));
+            }
+            if pbr.materials.iter().any(|material| {
+                !material.roughness.is_finite()
+                    || !(0.0..=1.0).contains(&material.roughness)
+                    || material.albedo.iter().any(|value| !value.is_finite())
+                    || material.specular_f0.iter().any(|value| !value.is_finite())
+            }) {
+                return Err("PBR materials must be finite with roughness in [0, 1]".to_string());
             }
         }
         if let Some(ref radii) = self.radii {

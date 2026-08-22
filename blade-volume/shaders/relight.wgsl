@@ -40,7 +40,8 @@ struct Parameters {
     // Dimensions of the environment the alias table was built over.
     env_width: u32,
     env_height: u32,
-    // Relightable particle footprint: zero compact, one Gaussian.
+    // Relightable particle footprint: zero compact surfel, one surface
+    // Gaussian, two learned volumetric Gaussian.
     kernel: u32,
     // Two scalars of tail, so the block lands on a multiple of sixteen and
     // matches what the host lays out.
@@ -56,6 +57,12 @@ struct Surfel {
     material: u32,
 }
 
+struct PbrGaussian {
+    rotation: vec4<f32>,
+    scale: vec3<f32>,
+    opacity: f32,
+}
+
 struct Material {
     albedo: vec3<f32>,
     roughness: f32,
@@ -65,6 +72,7 @@ struct Material {
 
 var g_tlas: acceleration_structure;
 var<storage> g_surfels: array<Surfel>;
+var<storage> g_gaussians: array<PbrGaussian>;
 var<storage> g_materials: array<Material>;
 // The environment convolved with the GGX lobe, roughness ascending by layer.
 struct AliasEntry {
@@ -320,6 +328,25 @@ fn coverage_of(normalized_radius_squared: f32) -> f32 {
 fn intersect_surfel(index: u32, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> Hit {
     var miss = Hit(0.0, index, 0.0);
     let surfel = g_surfels[index];
+    if (g_params.kernel == 2u) {
+        let gaussian = g_gaussians[index];
+        let local_origin = qrot(qinv(gaussian.rotation), ray_origin - surfel.center)
+            / gaussian.scale;
+        let local_direction = qrot(qinv(gaussian.rotation), ray_dir) / gaussian.scale;
+        let t = -dot(local_origin, local_direction)
+            / dot(local_direction, local_direction);
+        if (t <= 0.0) {
+            return miss;
+        }
+        let local_position = local_origin + t * local_direction;
+        let squared_radius = dot(local_position, local_position);
+        let support_squared = 2.0 * log(gaussian.opacity / 1.0e-5);
+        if (squared_radius > support_squared) {
+            return miss;
+        }
+        let alpha = min(0.999, gaussian.opacity * exp(-0.5 * squared_radius));
+        return Hit(t, index, alpha);
+    }
     let denominator = dot(ray_dir, surfel.normal);
     if (abs(denominator) < 1.0e-8) {
         return miss;
@@ -515,6 +542,13 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
             if (cursor_valid && !hit_less(cursor, candidate)) {
                 continue;
             }
+            var duplicate = false;
+            for (var i = 0u; i < hit_count; i += 1u) {
+                duplicate = duplicate || hits[i].index == candidate.index;
+            }
+            if (duplicate) {
+                continue;
+            }
             // Insertion sort, so the window holds the nearest few in order
             // whatever order the traversal produced them in.
             for (var i = 0u; i < hit_count; i += 1u) {
@@ -533,37 +567,47 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
         if (hit_count == 0u) {
             break;
         }
-        // Surfels close together in depth are one surface and get averaged;
-        // the next group along the ray is behind it and occludes instead.
-        // Compositing all of them alike lets whichever disc happens to be in
-        // front carry the pixel, which is exactly what makes its flat normal
-        // visible as a facet.
-        var i = 0u;
-        while (i < hit_count && transmittance > MIN_TRANSMITTANCE) {
-            let band = SURFACE_BAND * g_surfels[hits[i].index].radius;
-            let limit = hits[i].t + band;
-            var sum_color = vec3<f32>(0.0);
-            var sum_weight = 0.0;
-            var j = i;
-            while (j < hit_count && hits[j].t <= limit) {
-                let hit = hits[j];
+        if (g_params.kernel == 2u) {
+            for (var i = 0u; i < hit_count && transmittance > MIN_TRANSMITTANCE; i += 1u) {
+                let hit = hits[i];
                 let point = ray_origin + hit.t * ray_dir;
-                sum_color += hit.coverage
-                    * shade_surfel_sampled(hit.index, point, ray_dir, seed);
-                sum_weight += hit.coverage;
-                j += 1u;
+                let color = shade_surfel_sampled(hit.index, point, ray_dir, seed);
+                radiance += transmittance * hit.coverage * color;
+                transmittance *= 1.0 - hit.coverage;
             }
-            // Coverage weights the average; it does not decide opacity.
-            // Compositing the weights instead leaves the interior of a surface
-            // partly transparent wherever a ray happens to pass near the rim
-            // of every disc covering it, and the background bleeding through
-            // there is far worse than the facets this is meant to remove.
-            // Saturating the sum keeps the inside solid and still lets a
-            // silhouette, where only a sliver of one disc is left, go soft.
-            let alpha = min(1.0, sum_weight);
-            radiance += transmittance * alpha * sum_color / max(sum_weight, 1.0e-6);
-            transmittance *= 1.0 - alpha;
-            i = j;
+        } else {
+            // Surfels close together in depth are one surface and get averaged;
+            // the next group along the ray is behind it and occludes instead.
+            // Compositing all of them alike lets whichever disc happens to be in
+            // front carry the pixel, which is exactly what makes its flat normal
+            // visible as a facet.
+            var i = 0u;
+            while (i < hit_count && transmittance > MIN_TRANSMITTANCE) {
+                let band = SURFACE_BAND * g_surfels[hits[i].index].radius;
+                let limit = hits[i].t + band;
+                var sum_color = vec3<f32>(0.0);
+                var sum_weight = 0.0;
+                var j = i;
+                while (j < hit_count && hits[j].t <= limit) {
+                    let hit = hits[j];
+                    let point = ray_origin + hit.t * ray_dir;
+                    sum_color += hit.coverage
+                        * shade_surfel_sampled(hit.index, point, ray_dir, seed);
+                    sum_weight += hit.coverage;
+                    j += 1u;
+                }
+                // Coverage weights the average; it does not decide opacity.
+                // Compositing the weights instead leaves the interior of a surface
+                // partly transparent wherever a ray happens to pass near the rim
+                // of every disc covering it, and the background bleeding through
+                // there is far worse than the facets this is meant to remove.
+                // Saturating the sum keeps the inside solid and still lets a
+                // silhouette, where only a sliver of one disc is left, go soft.
+                let alpha = min(1.0, sum_weight);
+                radiance += transmittance * alpha * sum_color / max(sum_weight, 1.0e-6);
+                transmittance *= 1.0 - alpha;
+                i = j;
+            }
         }
         if (transmittance <= MIN_TRANSMITTANCE || hit_count < HIT_WINDOW) {
             break;

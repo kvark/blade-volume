@@ -890,6 +890,7 @@ mod gaussian_tests {
                     glam::Vec3::new(1.0, 1.0, 1.0),
                     glam::Vec3::new(1.0, 1.0, 0.1),
                 ],
+                pbr: None,
             }),
             adjacency: None,
             radii: None,

@@ -54,6 +54,7 @@ either reconstructed asset.
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
 | Synthetic (predefined light, refined) | 6 / 2 | 25.15 / 24.44 dB | 21.81 / 21.48 dB | 57.0% |
 | Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 22.68 / 22.22 dB | 56.7% |
+| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.11 / 22.55 dB | 54.4% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -91,9 +92,17 @@ the calibrated five-cloud PBR average from 22.52/21.95 to 22.68/22.22 dB
 mean/worst, with 56.7% rather than 57.0% coverage; reduced Room and Bonsai
 smokes remain non-regressive.
 
-`reconstruct --gaussian-output light-field.ply --output scene.rply` writes the
-two outputs; `scene.f32` stores the recovered environment beside the PBR
-scene. Current research artifacts and complete logs are generated under
+Retaining the learned Gaussian covariance and opacity for PBR rendering
+improves all five calibrated clouds: the mean held-light score gains 0.46 dB,
+the worst view gains 0.34 dB, and covered-pixel quality gains 0.69 dB. Coverage
+drops by 2.4 percentage points, and the exact volumetric traversal currently
+costs about 7.7 ms rather than 0.7 ms per 100x75 frame, so performance is the
+next gate rather than another surface approximation.
+
+`reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
+writes the two durable cloud outputs. `relightable.f32` stores the recovered
+environment beside the PBR Gaussian. The writer reloads that PLY before its
+final score, so reported quality includes serialization. Current research artifacts and complete logs are generated under
 `target/audit-runs/` and intentionally remain outside version control. The
 exact protocols, negative results, and artifact locations are recorded in
 [`docs/GAUSSIAN_RECONSTRUCTION_PLAN.md`](docs/GAUSSIAN_RECONSTRUCTION_PLAN.md).
@@ -129,7 +138,7 @@ cargo run -p blade-volume-view -- <path_to_file.ply> --kind=gaussian
 | Mouse wheel | Adjust fly speed |
 | I | Print info (camera pose, GPU timings) |
 | Tab | Toggle debug mode (particle density visualization) |
-| L | Next environment (relightable surfels) |
+| L | Next environment (relightable point clouds) |
 | Escape | Exit |
 
 ### Options
@@ -142,14 +151,14 @@ cargo run -p blade-volume-view -- <path_to_file.ply> --kind=gaussian
   --weight-threshold <F>   Stop when transmittance <= threshold (RadFoam only, default: 0.001)
   --min-opacity <F>        Minimum opacity for Gaussian rendering (default: 0.01)
   --min-transmittance <F>  Minimum transmittance for Gaussian rendering (default: 0.01)
-  --environment <a.f32,b.f32> Lights for a .surfel asset; without it the viewer
+  --environment <a.f32,b.f32> Lights for a relightable asset; without it the viewer
                            builds a sky and moves the sun around it
-  --light <name|index>     Environment to open under (surfel only); L cycles
-  --exposure <F>           Multiply radiance before the display curve (surfel
-                           only). Without it, chosen from the environment's
+  --light <name|index>     Environment to open under (relightable only); L cycles
+  --exposure <F>           Multiply radiance before the display curve. Without
+                           it, the value is chosen from the environment's
                            photographic key, so any capture's units render
   --diffuse-samples <N>    Shadow rays per shading point (surfel only, default: 0)
-  --specular-size <N>      Prefiltered environment width (surfel only, default: 256)
+  --specular-size <N>      Prefiltered environment width (relightable, default: 256)
   --debug                  Start in debug mode (particle density visualization)
 ```
 

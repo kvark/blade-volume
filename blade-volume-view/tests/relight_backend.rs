@@ -368,3 +368,55 @@ fn tone_mapping_keeps_bright_things_apart() {
     backend.destroy(&harness.context);
     harness.destroy();
 }
+
+#[test]
+fn relightable_gaussian_model_reaches_the_existing_backend() {
+    let _gpu_test_guard = GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(sync::PoisonError::into_inner);
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let cloud = vol::PointCloudModel {
+        points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 0.9)],
+        sh_coefficients: vec![0.0; 3],
+        sh_degree: 0,
+        transforms: Some(vol::Transforms {
+            rotations: vec![glam::Quat::IDENTITY],
+            scales: vec![glam::Vec3::splat(0.5)],
+            pbr: Some(vol::PbrAttributes {
+                normals: vec![-glam::Vec3::Z],
+                material_indices: vec![0],
+                materials: model().materials,
+            }),
+        }),
+        adjacency: None,
+        radii: None,
+        surface_normals: None,
+        surface_offsets: None,
+        surface_detail: None,
+        surface_color_coefficients: None,
+        spherical_voronoi: None,
+    };
+    let mut backend = view::RelightBackend::new_gaussian(
+        &cloud,
+        vec![view::NamedEnvironment::new(
+            "uniform",
+            vol::relight::Environment::uniform([0.6; 3], 32, 16),
+        )],
+        view::RelightSettings {
+            specular_width: 32,
+            show_environment: false,
+            ..Default::default()
+        },
+        &harness.context,
+        &mut harness.encoder,
+        FORMAT,
+        SIZE,
+    );
+
+    assert!(!backend.supports_shadow_rays());
+    assert!(mean(&harness.render(&mut backend)) > 1.0);
+    backend.destroy(&harness.context);
+    harness.destroy();
+}

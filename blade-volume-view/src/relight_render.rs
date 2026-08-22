@@ -99,7 +99,8 @@ pub struct RelightBackend {
     environments: Vec<NamedEnvironment>,
     current: usize,
     specular_width: usize,
-    surfels: usize,
+    supports_shadow_rays: bool,
+    particles: usize,
     materials: usize,
 }
 
@@ -138,6 +139,21 @@ fn ensure_prefiltered(entry: &mut NamedEnvironment, width: usize) {
     );
 }
 
+fn prepare_environments(
+    environments: &mut [NamedEnvironment],
+    initial: usize,
+    width: usize,
+) -> (usize, usize) {
+    assert!(
+        !environments.is_empty(),
+        "a relightable model needs at least one environment to be lit by"
+    );
+    let width = width.max(8);
+    let current = initial.min(environments.len() - 1);
+    ensure_prefiltered(&mut environments[current], width);
+    (current, width)
+}
+
 impl RelightBackend {
     pub fn new(
         model: &vol::relight::RelightModel,
@@ -148,13 +164,11 @@ impl RelightBackend {
         surface_format: gpu::TextureFormat,
         size: RenderSize,
     ) -> Self {
-        assert!(
-            !environments.is_empty(),
-            "a relightable model needs at least one environment to be lit by"
+        let (current, specular_width) = prepare_environments(
+            &mut environments,
+            settings.initial_environment,
+            settings.specular_width,
         );
-        let specular_width = settings.specular_width.max(8);
-        let current = settings.initial_environment.min(environments.len() - 1);
-        ensure_prefiltered(&mut environments[current], specular_width);
 
         let tracer = vol::gpu::RelightTracer::new(
             model,
@@ -169,6 +183,81 @@ impl RelightBackend {
             encoder,
         );
 
+        Self::finish(
+            tracer,
+            model.surfels.len(),
+            model.materials.len(),
+            environments,
+            current,
+            specular_width,
+            true,
+            settings,
+            context,
+            surface_format,
+            size,
+        )
+    }
+
+    pub fn new_gaussian(
+        model: &vol::PointCloudModel,
+        mut environments: Vec<NamedEnvironment>,
+        settings: RelightSettings,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+        surface_format: gpu::TextureFormat,
+        size: RenderSize,
+    ) -> Self {
+        let (current, specular_width) = prepare_environments(
+            &mut environments,
+            settings.initial_environment,
+            settings.specular_width,
+        );
+        let pbr = model
+            .transforms
+            .as_ref()
+            .and_then(|transforms| transforms.pbr.as_ref())
+            .expect("relightable Gaussian model requires PBR attributes");
+        let tracer = vol::gpu::RelightTracer::new_gaussian(
+            model,
+            &environments[current].environment,
+            environments[current].specular.as_ref().unwrap(),
+            vol::gpu::RelightSettings {
+                background_rgb: [0.0; 3],
+                diffuse_samples: settings.diffuse_samples,
+                show_environment: settings.show_environment,
+            },
+            context,
+            encoder,
+        );
+        Self::finish(
+            tracer,
+            model.len(),
+            pbr.materials.len(),
+            environments,
+            current,
+            specular_width,
+            false,
+            settings,
+            context,
+            surface_format,
+            size,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish(
+        tracer: vol::gpu::RelightTracer,
+        particles: usize,
+        materials: usize,
+        environments: Vec<NamedEnvironment>,
+        current: usize,
+        specular_width: usize,
+        supports_shadow_rays: bool,
+        settings: RelightSettings,
+        context: &gpu::Context,
+        surface_format: gpu::TextureFormat,
+        size: RenderSize,
+    ) -> Self {
         let (hdr_tex, hdr_view) = Self::create_hdr_target(context, size);
         let sampler = context.create_sampler(gpu::SamplerDesc {
             name: "relight-present",
@@ -211,8 +300,9 @@ impl RelightBackend {
             environments,
             current,
             specular_width,
-            surfels: model.surfels.len(),
-            materials: model.materials.len(),
+            supports_shadow_rays,
+            particles,
+            materials,
         }
     }
 
@@ -320,6 +410,10 @@ impl RelightBackend {
         self.tracer.diffuse_samples()
     }
 
+    pub fn supports_shadow_rays(&self) -> bool {
+        self.supports_shadow_rays
+    }
+
     pub fn show_environment(&self) -> bool {
         self.tracer.show_environment()
     }
@@ -369,7 +463,7 @@ impl RelightBackend {
 
     pub fn print_info(&self) {
         println!("Relight Params:");
-        println!("\tsurfels: {}", self.surfels);
+        println!("\tparticles: {}", self.particles);
         println!("\tmaterials: {}", self.materials);
         println!(
             "\tenvironment: {} ({} of {})",
