@@ -4413,6 +4413,41 @@ gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/normal-material-audit (gitignored)"
 conclusion = "the 10% high-F0 minority contributes disproportionately to squared normal error, confirming diffuse photometric ambiguity on view-dependent materials; this is an oracle diagnosis, not an available training label"
 
+# The four measured calibration lights are stronger evidence than the failed
+# single-light lobe fit. A temporary CPU solver compared one rough dielectric
+# against every discrete metal roughness, requiring a 15% squared-residual
+# margin across all four captures. The shared 12-colour palette found no metal
+# hypothesis better than diffuse at all. Independent surfels occasionally did,
+# but nearest authored material truth shows that this observable is far too
+# sparse: among primary-capture-visible surfels it identifies 8 of 242 metals
+# and also produces 6 false positives. Jointly replacing the diffuse palette
+# with its multi-light least-squares values changes no material to metal and
+# loses 0.43/0.37 dB held-light mean/tail. The solver and synthetic truth
+# instrumentation were removed.
+[calibrated_materials.rejected_multilight_metal_classifier]
+date = "2026-08-22"
+protocol = "fixed calibrated synthetic cloud; sun-east, sun-west, sky-dome, and uniform are measured training lights; studio remains held out"
+material_hypotheses = "rough dielectric versus coloured metal at all eight renderer roughness levels"
+required_residual_gain_percent = 15
+shared_materials = 12
+shared_metal_candidates = 0
+shared_best_metal_gain_percent = 0.0
+primary_visible_surfels = 1202
+truth_metal_surfels = 242
+per_surfel_true_positives = 8
+per_surfel_false_positives = 6
+per_surfel_false_negatives = 234
+per_surfel_precision_percent = 57.1
+per_surfel_recall_percent = 3.3
+control_pbr_held_light_psnr = [22.66, 22.10]
+joint_diffuse_pbr_held_light_psnr = [22.23, 21.73]
+maximum_peak_memory_bytes = 240635904
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/{multilight-metal-probe,multilight-metal-classifier-probe,multilight-metal-surfel-audit,multilight-metal-truth-audit} (gitignored)"
+verdict = "reject and remove: measured-light metal evidence is absent at palette scale and only 3.3%-recall per surfel; jointly refitting diffuse albedo also sharply regresses held-light fidelity"
+
 [calibrated_normals.rejected_view_agreement_blend]
 date = "2026-08-22"
 protocol = "fixed calibrated synthetic cloud; scale only the correspondence-aware correction by the length of the mean unit-normal estimate, retaining the shared multi-light solution under disagreement"
