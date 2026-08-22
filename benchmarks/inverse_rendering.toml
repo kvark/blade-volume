@@ -5155,3 +5155,25 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/gaussian-{phase-profile,sync25-bonsai-selected,sync40-profile,sync40-bonsai-selected}, target/audit-runs/current-synthetic-v1/indexed-candidate-workers-five (gitignored)"
 verdict = "reject and remove: longer refresh cadences save host rebuild time by dropping Gaussian support coverage, while removing the indexed-worker cap cannot affect the selected 512-ray batch; retain the 20-update refresh and existing bounded worker expression"
+
+[direct_gaussian.rejected_localized_foreground_ownership]
+date = "2026-08-22"
+protocol = "for masked foreground rays below 50% current opacity, apply a 0.1 missing-opacity loss only to the candidate with the largest current front-to-back compositing weight; retain selected negative-only background loss and ordinary colour fitting"
+control_mean = [23.36, 23.43, 23.16, 23.30, 23.17]
+candidate_mean = [23.37, 23.44, 23.13, 23.30, 23.16]
+control_worst = [22.75, 22.77, 22.52, 22.73, 22.72]
+candidate_worst = [22.76, 22.80, 22.49, 22.73, 22.73]
+control_coverage = [54.8, 55.1, 55.3, 55.2, 54.9]
+candidate_coverage = [54.9, 55.1, 55.4, 55.3, 55.0]
+control_covered = [22.50, 22.40, 22.13, 22.28, 22.15]
+candidate_covered = [22.53, 22.42, 22.07, 22.28, 22.14]
+control_average = [23.284, 22.698, 55.06, 22.292]
+candidate_average = [23.280, 22.702, 55.14, 22.288]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+analytical_tests = "strongest composited candidate owns an uncovered foreground ray; physical-GPU graph loss equals the expected owner-only opacity penalty"
+peak_memory_bytes = 247115776
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/owned-foreground-{probe,control,five-v2}, target/audit-runs/owned-foreground-probe (gitignored)"
+verdict = "reject and remove: localized ownership recovers only 0.08 coverage point while regressing one cloud's mean and tail by 0.03 dB and slightly lowering average mean/covered quality; a silhouette does not identify the correct depth sheet"

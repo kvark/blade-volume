@@ -3305,3 +3305,23 @@ eight-worker cap is also removed as a production no-op. The selected batch is
 that call to eight workers. Apparent 2--6% paired timing differences therefore
 measure scheduling noise, not the source change. The five-cloud run remains in
 the established quality band, as expected for identical worker counts.
+
+## Rejected localized foreground ownership (2026-08-22)
+
+Foreground masks were tested as a localized support signal instead of the
+already rejected whole-ray opacity target. At each candidate refresh, a masked
+training ray below the final renderer's 50% coverage threshold assigned its
+missing-opacity loss only to the particle with the largest current
+front-to-back compositing weight. Already covered foreground rays, background
+supervision, colour loss, candidate order, and the static light field remained
+unchanged. CPU and physical-GPU oracles verified the owner choice and exact
+loss contribution without adding a Meganeura operation or shader path.
+
+The paired first-cloud result raises volumetric coverage by 0.1 point with
+identical 23.37/22.75 dB held-light quality. Across five clouds, however, mean
+and covered-pixel PSNR each fall by 0.004 dB while coverage rises only 0.08
+point. The third cloud loses 0.03/0.03 dB mean/worst and the fourth loses its
+tail. Assigning one existing contributor is more precise than forcing every
+foreground mixture, but the mask still says nothing about which depth sheet
+should own the ray. The owner table, graph input, objective, and tests are
+removed; PBR mask supervision remains negative-only.
