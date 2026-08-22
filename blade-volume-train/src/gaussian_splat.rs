@@ -27,6 +27,7 @@ const TILE_SUPPORT_MARGIN: f32 = 1.25;
 const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
+const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
 /// points. The covariance columns follow `glam::Mat2`'s column-major layout.
@@ -292,6 +293,12 @@ pub struct SharedStagedFitStats {
 /// Statistics for a paired PBR support and static light-field fit.
 pub type OutputFitStats = SharedStagedFitStats;
 
+#[derive(Clone, Copy)]
+enum OpacityLoss {
+    Mask,
+    BackgroundOnly,
+}
+
 fn staged_step_counts(steps: usize) -> Option<(usize, usize)> {
     (steps >= 2).then(|| {
         let appearance = (steps / 3).max(1);
@@ -332,8 +339,10 @@ fn sh_basis(direction: glam::Vec3) -> [f32; 9] {
 /// promote appearance to SH-1 or SH-2 according to the available view count;
 /// smaller captures remain compact because higher directional terms did not
 /// generalize in held-view gates.
-/// Foreground opacity is supervised when every selected view carries a mask;
-/// ordinary scene captures continue without that optional term.
+/// Known background rays penalize contradictory PBR support when every selected
+/// view carries a mask; ordinary scene captures continue without that optional
+/// term. Static light fields retain full-mask supervision because foreground
+/// opacity is directly part of that output.
 pub fn fit_staged(
     model: &mut vol::PointCloudModel,
     capture: &crate::inverse::capture::Capture,
@@ -341,7 +350,15 @@ pub fn fit_staged(
     steps: usize,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<StagedFitStats, String> {
-    fit_staged_impl(model, capture, view_indices, steps, 0.0, gpu)
+    fit_staged_impl(
+        model,
+        capture,
+        view_indices,
+        steps,
+        0.0,
+        OpacityLoss::BackgroundOnly,
+        gpu,
+    )
 }
 
 /// Apply the direct-Gaussian schedule while also learning static light-field centres.
@@ -358,6 +375,7 @@ pub fn fit_staged_light_field(
         view_indices,
         steps,
         LIGHT_FIELD_POSITION_LEARNING_RATE,
+        OpacityLoss::Mask,
         gpu,
     )
 }
@@ -394,7 +412,7 @@ pub fn fit_staged_outputs(
         promote_to_sh_degree(pbr, sh_degree);
         promote_to_sh_degree(light_field, sh_degree);
     }
-    let pbr_support = fit(
+    let pbr_support = fit_with_opacity_loss(
         pbr,
         capture,
         view_indices,
@@ -402,6 +420,7 @@ pub fn fit_staged_outputs(
             position_learning_rate: 0.0,
             ..light_field_options
         },
+        OpacityLoss::BackgroundOnly,
         gpu.clone(),
     )?;
     let light_field_support = fit(light_field, capture, view_indices, light_field_options, gpu)?;
@@ -436,6 +455,7 @@ fn fit_staged_impl(
     view_indices: &[usize],
     steps: usize,
     position_learning_rate: f32,
+    opacity_loss: OpacityLoss,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<StagedFitStats, String> {
     if model.sh_degree != 0 {
@@ -443,17 +463,25 @@ fn fit_staged_impl(
     }
     let (appearance_options, support_options, sh_degree) =
         staged_options(capture, view_indices, steps, position_learning_rate)?;
-    let appearance = fit(
+    let appearance = fit_with_opacity_loss(
         model,
         capture,
         view_indices,
         appearance_options,
+        opacity_loss,
         gpu.clone(),
     )?;
     if sh_degree > 0 {
         promote_to_sh_degree(model, sh_degree);
     }
-    let support = fit(model, capture, view_indices, support_options, gpu)?;
+    let support = fit_with_opacity_loss(
+        model,
+        capture,
+        view_indices,
+        support_options,
+        opacity_loss,
+        gpu,
+    )?;
     Ok(StagedFitStats {
         appearance,
         support,
@@ -1288,6 +1316,29 @@ pub fn build_graph(
     opacity_loss_weight: f32,
     background: [f32; 3],
 ) -> GaussianGraph {
+    build_graph_with_opacity_loss(
+        g,
+        particles,
+        pixels,
+        candidates_per_pixel,
+        sh_degree,
+        opacity_loss_weight,
+        background,
+        OpacityLoss::Mask,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_graph_with_opacity_loss(
+    g: &mut mn::Graph,
+    particles: usize,
+    pixels: usize,
+    candidates_per_pixel: usize,
+    sh_degree: usize,
+    opacity_loss_weight: f32,
+    background: [f32; 3],
+    opacity_loss: OpacityLoss,
+) -> GaussianGraph {
     assert!(particles > 0);
     assert!(pixels > 0);
     assert!(candidates_per_pixel > 0);
@@ -1424,7 +1475,17 @@ pub fn build_graph(
     let loss = if opacity_loss_weight == 0.0 {
         color_loss
     } else {
-        let opacity_loss = g.mse_loss(accumulated_opacity, target_alpha);
+        let opacity_loss = match opacity_loss {
+            OpacityLoss::Mask => g.mse_loss(accumulated_opacity, target_alpha),
+            OpacityLoss::BackgroundOnly => {
+                let ones = g.constant(vec![1.0_f32; pixels], &[pixels, 1]);
+                let negative_target_alpha = g.neg(target_alpha);
+                let background_weight = g.add(ones, negative_target_alpha);
+                let opacity_squared = g.mul(accumulated_opacity, accumulated_opacity);
+                let background_error = g.mul(opacity_squared, background_weight);
+                g.mean_all(background_error)
+            }
+        };
         let scale = g.constant(vec![opacity_loss_weight], &[1]);
         let scaled_opacity_loss = g.mul(opacity_loss, scale);
         g.add(color_loss, scaled_opacity_loss)
@@ -1768,16 +1829,39 @@ pub fn fit(
     options: FitOptions,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<FitStats, String> {
+    fit_with_opacity_loss(
+        model,
+        capture,
+        view_indices,
+        options,
+        OpacityLoss::Mask,
+        gpu,
+    )
+}
+
+fn fit_with_opacity_loss(
+    model: &mut vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    options: FitOptions,
+    opacity_loss: OpacityLoss,
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<FitStats, String> {
     validate_fit(model, capture, view_indices, options)?;
+    let opacity_loss_weight = match opacity_loss {
+        OpacityLoss::Mask => options.opacity_loss_weight,
+        OpacityLoss::BackgroundOnly => options.opacity_loss_weight * BACKGROUND_ONLY_OPACITY_SCALE,
+    };
     let mut graph = mn::Graph::new();
-    build_graph(
+    build_graph_with_opacity_loss(
         &mut graph,
         model.points.len(),
         options.batch_size,
         options.candidates_per_pixel,
         model.sh_degree,
-        options.opacity_loss_weight,
+        opacity_loss_weight,
         options.background,
+        opacity_loss,
     );
     let (mut session, _report) = mn::build(
         &graph,
@@ -2367,7 +2451,16 @@ mod tests {
             return;
         };
         let mut graph = mn::Graph::new();
-        build_graph(&mut graph, 2, 1, 2, 2, 0.0, [0.0; 3]);
+        build_graph_with_opacity_loss(
+            &mut graph,
+            2,
+            1,
+            2,
+            2,
+            1.5,
+            [0.0; 3],
+            OpacityLoss::BackgroundOnly,
+        );
         let (mut session, _report) = mn::build(
             &graph,
             mn::SessionConfig {
@@ -2467,6 +2560,21 @@ mod tests {
         assert!(sh_gradient.iter().all(|value| value.is_finite()));
         assert!(sh_gradient[2].abs() > 1.0e-5);
         assert!(sh_gradient[6].abs() > 1.0e-5);
+
+        let mut background_loss = [0.0_f32];
+        let mut opacity = [0.0_f32];
+        session.read_output_by_index(0, &mut background_loss);
+        session.read_output_by_index(4, &mut opacity);
+        session.set_input("target_alpha", &[1.0]);
+        session.step();
+        session.wait();
+        let mut foreground_loss = [0.0_f32];
+        session.read_output_by_index(0, &mut foreground_loss);
+        assert_close(
+            background_loss[0] - foreground_loss[0],
+            1.5 * opacity[0] * opacity[0],
+            2.0e-5,
+        );
     }
 
     #[test]
