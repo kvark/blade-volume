@@ -2800,3 +2800,20 @@ transforms are noise-level neutral. The shared 12-hit icosahedron traversal
 remains selected without a new shader entry or backend variant. Raw models,
 logs, and telemetry are under
 `target/audit-runs/current-synthetic-v1/{volumetric-pbr-five,volumetric-pbr-persistence}`.
+
+Using the same 0.03 threshold for differentiable PBR support training is not
+equivalent and is rejected. On the first fixed cloud it lowers held-light
+quality from 23.259/22.703 to 23.030/22.409 dB, while covered-pixel quality
+falls from 22.498 to 22.193 dB and coverage is unchanged. Runtime clipping
+bounds a completed continuous response; training candidate selection is
+discrete, so clipping there removes the gradients that would let a particle
+grow across its current boundary. Training therefore retains conservative
+1e-5 candidates even though the final relight renderer uses bounded support.
+
+Repeating material coordinate descent through the final volumetric response is
+also too small to keep. It improves mean and covered-pixel PSNR on all five
+clouds, but the full step regresses three worst views. Blending only a quarter
+of the update changes the five-cloud average by +0.005 dB mean and +0.0004 dB
+worst while adding roughly 2.2 seconds and a Gaussian-specific refinement API.
+The prototype is removed. Material/geometry compensation exists, but another
+local albedo polish is not large or consistent enough to resolve it.

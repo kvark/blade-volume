@@ -4665,3 +4665,37 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/volumetric-pbr-five/support-cutoff-{00001,003}.log (gitignored)"
 verdict = "select alpha 0.03 as bounded Gaussian response support: all five clouds improve mean and worst-view quality, average covered quality also improves, and traversal is 5.95x faster; 0.05 regresses every cloud's mean from the selected cutoff"
+
+[direct_gaussian.rejected_pbr_training_support_alignment]
+date = "2026-08-22"
+protocol = "first fixed calibrated cloud; change only PBR support-stage candidate culling from alpha 1e-5 to the selected runtime alpha 0.03; regenerate and reload the PBR Gaussian PLY; studio light and two poses held out"
+control_held_light = [23.259164, 22.702680, 53.4801, 22.498436]
+candidate_held_light = [23.030140, 22.408559, 53.4774, 22.193120]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+candidate_peak_memory_bytes = 1125007360
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/pbr-support-aligned/model-1 (gitignored)"
+verdict = "reject before five clouds and restore 1e-5 training candidates: the runtime cutoff is a safe final response bound, but applying it to discrete candidate selection removes gradients outside the current support and regresses every held-light quality measure"
+
+[direct_gaussian.rejected_volumetric_material_repolish]
+date = "2026-08-22"
+protocol = "five fixed calibrated clouds; after the selected isotropic material polish, repeat its two-scale 144-proposal coordinate search through the final volumetric Gaussian tracer; studio light and two poses held out"
+control_held_light_mean = [23.255827, 23.345951, 23.114129, 23.230442, 23.088314]
+control_held_light_worst = [22.700232, 22.713324, 22.498477, 22.694692, 22.679986]
+full_step_held_light_mean = [23.273263, 23.373546, 23.119497, 23.231063, 23.105983]
+full_step_held_light_worst = [22.702378, 22.721343, 22.483238, 22.675026, 22.678077]
+quarter_blend_held_light_mean = [23.262997, 23.354636, 23.117411, 23.232612, 23.094225]
+quarter_blend_held_light_worst = [22.703237, 22.716791, 22.496230, 22.691573, 22.680763]
+control_average = [23.206933, 22.657342, 53.8134, 22.371331]
+full_step_average = [23.220670, 22.652012, 53.8134, 22.391473]
+quarter_blend_average = [23.212376, 22.657719, 53.8134, 22.379161]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+extra_polish_seconds = [1.923, 2.288, 2.482, 2.038, 2.276]
+maximum_peak_memory_bytes = 891604992
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/gaussian-material-polish (gitignored)"
+verdict = "reject and remove the Gaussian-specific material API: the full step improves every mean and covered score but regresses three worst views; a quarter blend recovers only 0.005 dB mean and 0.0004 dB worst on average, which does not justify a second material pass or additional API surface"
