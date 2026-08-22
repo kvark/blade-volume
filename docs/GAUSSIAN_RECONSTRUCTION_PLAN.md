@@ -2603,3 +2603,24 @@ coverage; 4x reaches 22.37/21.75 dB at 57.3%, versus the same 22.48/21.76 dB,
 57.0% control. More silhouette pressure trades radiance-supported interior
 geometry for boundary coverage rather than improving both. Both multipliers
 and the extra fitting policy are removed.
+
+Changing the calibrated normal search is not the next improvement either. On
+an immediate fixed-cloud control, 512 equal-weight directions plus the current
+half consensus correction reaches 22.48/21.76 dB held-light mean/worst at
+57.0% coverage in 0.088 seconds. Reducing the grid to 256 directions is faster
+but reaches only 22.44/21.65 dB; expanding it to 2,048 takes 0.275 seconds and
+reaches 22.37/21.66 dB. Quarter or three-quarter consensus corrections and
+inverse-residual view weights all regress the tail as well. These variants are
+removed and the simple 512-direction equal-weight solve remains.
+
+That audit exposed one real production mismatch. Synthetic gates apply the
+photometric calibrated-normal solve before the trusted 10% density-gradient
+correction, while production previously did the reverse. Reversing the
+synthetic order loses 0.10/0.13 dB, so production now follows the selected
+schedule. The independently fitted static Gaussian snapshots the original
+surface and receives its density correction directly; the PBR surface first
+uses all calibrated photographs and then receives the correction. Only the
+foam-derived prefix is eligible, so sparse-track support is unchanged. A
+distinct-light production smoke refines all 139 supported photometric normals
+and 218 foam normals below 255 MiB, while a one-light replay remains byte-for-
+byte identical to the previous output.

@@ -288,7 +288,6 @@ fn main() {
 
     // ------------------------------------------------------------- geometry
     let started = std::time::Instant::now();
-    let foam_geometry = args.foam.is_some();
     let mut sparse_gaussian_surface = if args.foam.is_none() && args.gaussian_output.is_some() {
         Some(surfels_from_training_sparse(
             &reconstruction,
@@ -299,20 +298,30 @@ fn main() {
     } else {
         None
     };
-    let (surfels, sparse_support, gaussian_sparse_support) = match args.foam {
-        Some(ref foam) => surfels_from_foam(
-            path::Path::new(foam),
-            &capture,
-            &reconstruction,
-            &train_views,
-            &args,
-        ),
-        None => (
-            surfels_from_sparse(&reconstruction, &capture, &args),
-            Vec::new(),
-            Vec::new(),
-        ),
-    };
+    let (surfels, sparse_support, gaussian_sparse_support, mut density_normal_source) =
+        match args.foam {
+            Some(ref foam) => {
+                let (surfels, sparse_support, gaussian_sparse_support, source) = surfels_from_foam(
+                    path::Path::new(foam),
+                    &capture,
+                    &reconstruction,
+                    &train_views,
+                    &args,
+                );
+                (
+                    surfels,
+                    sparse_support,
+                    gaussian_sparse_support,
+                    Some(source),
+                )
+            }
+            None => (
+                surfels_from_sparse(&reconstruction, &capture, &args),
+                Vec::new(),
+                Vec::new(),
+                None,
+            ),
+        };
     let kernel = if args.compact_kernel {
         vol::relight::ParticleKernel::Compact
     } else {
@@ -342,9 +351,16 @@ fn main() {
         std::process::exit(1);
     }
 
-    let static_gaussian_surface =
-        (foam_geometry && !args.normal_images.is_empty() && args.gaussian_output.is_some())
-            .then(|| geometry.clone());
+    let static_gaussian_surface = (density_normal_source.is_some()
+        && !args.normal_images.is_empty()
+        && args.gaussian_output.is_some())
+    .then(|| {
+        let mut surface = geometry.clone();
+        if let Some(ref source) = density_normal_source {
+            source.refine(&mut surface);
+        }
+        surface
+    });
     if !args.normal_images.is_empty() {
         let started = std::time::Instant::now();
         let stats = refine_normals_from_captures(
@@ -361,6 +377,10 @@ fn main() {
             args.normal_images.len() + 1,
             started.elapsed().as_secs_f64(),
         );
+    }
+    if let Some(source) = density_normal_source.take() {
+        let refined = source.refine(&mut geometry);
+        println!("geometry: density-gradient refined {refined} foam-surface normals");
     }
 
     if args.surface_powerfoam_steps_per_view > 0 {
@@ -973,6 +993,7 @@ fn surfels_from_foam(
     Vec<vol::relight::Surfel>,
     Vec<SparseSupport>,
     Vec<vol::relight::Surfel>,
+    DensityNormalSource,
 ) {
     let mut model = match vol::io::try_load(&foam.to_string_lossy()) {
         Ok(m) => m,
@@ -1124,12 +1145,29 @@ fn surfels_from_foam(
             refine_started.elapsed().as_secs_f64(),
         );
     }
-    let refined = train::inverse::surface::refine_normals_from_density(
-        &mut surfels[..foam_surface_count],
-        &model,
-    );
-    println!("geometry: density-gradient refined {refined} foam-surface normals");
-    (surfels, sparse_support, gaussian_sparse_support)
+    (
+        surfels,
+        sparse_support,
+        gaussian_sparse_support,
+        DensityNormalSource {
+            model,
+            surfels: foam_surface_count,
+        },
+    )
+}
+
+struct DensityNormalSource {
+    model: vol::PointCloudModel,
+    surfels: usize,
+}
+
+impl DensityNormalSource {
+    fn refine(&self, surface: &mut vol::relight::RelightModel) -> usize {
+        train::inverse::surface::refine_normals_from_density(
+            &mut surface.surfels[..self.surfels],
+            &self.model,
+        )
+    }
 }
 
 struct SparseCell {
@@ -1551,6 +1589,50 @@ fn describe_light(environment: &vol::relight::Environment) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn density_source_refines_only_foam_surface_prefix() {
+        let points: Vec<_> = (0..2)
+            .flat_map(|z| {
+                (0..2).flat_map(move |y| {
+                    (0..2).map(move |x| {
+                        glam::Vec3::new(x as f32, y as f32, z as f32).extend(y as f32)
+                    })
+                })
+            })
+            .collect();
+        let source = DensityNormalSource {
+            model: vol::PointCloudModel {
+                sh_coefficients: vec![0.0; points.len() * 3],
+                sh_degree: 0,
+                points,
+                transforms: None,
+                adjacency: None,
+                radii: None,
+                surface_normals: None,
+                surface_offsets: None,
+                surface_detail: None,
+                surface_color_coefficients: None,
+                spherical_voronoi: None,
+            },
+            surfels: 1,
+        };
+        let normal = glam::Vec3::new(0.6, 0.8, 0.0).normalize().to_array();
+        let surfel = vol::relight::Surfel {
+            center: [0.5; 3],
+            radius: 0.2,
+            normal,
+            material: 0,
+        };
+        let mut surface = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![surfel; 2],
+            materials: vec![vol::relight::Material::default()],
+        };
+        assert_eq!(source.refine(&mut surface), 1);
+        assert_ne!(surface.surfels[0].normal, normal);
+        assert_eq!(surface.surfels[1].normal, normal);
+    }
 
     #[test]
     fn static_gaussian_surface_discards_source_material_references() {

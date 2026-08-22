@@ -243,6 +243,11 @@ image directory with `--normal-images` and its light with
 `--environment` too. The solver eliminates diffuse albedo while choosing one
 normal per particle across the known lights, then fits the primary capture's
 materials with those normals. Photograph names and selected poses must match.
+For foam-derived geometry, the small density-gradient prior is applied after
+this photometric solve. The independently fitted static Gaussian instead uses
+a pre-photometric snapshot with the density prior, because rotating it for PBR
+relighting would degrade the captured radiance field. Sparse-track additions
+are excluded from the density prior in both outputs.
 
 `--render-refine-materials` optionally finishes a small shared material table
 against complete production renders of every training view. It coordinate

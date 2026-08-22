@@ -4047,3 +4047,41 @@ multiplier_4_pbr_held_light_psnr = [22.37, 21.75]
 multiplier_4_coverage_percent = 57.3
 artifacts = "target/audit-runs/current-synthetic-v1/pbr-opacity-x{2,4}-probe (gitignored)"
 verdict = "reject and restore 1x: stronger silhouette supervision trades mean or tail relighting quality for inconsistent coverage instead of improving support jointly"
+
+[calibrated_normals.rejected_direction_search_variants]
+date = "2026-08-22"
+protocol = "fixed synthetic cloud, four calibrated training lights, studio held out"
+control_candidates = 512
+control_fit_seconds = 0.088
+control_pbr_held_light_psnr = [22.48, 21.76]
+control_coverage_percent = 57.0
+candidates_256_fit_seconds = 0.054
+candidates_256_pbr_held_light_psnr = [22.44, 21.65]
+candidates_256_coverage_percent = 56.7
+candidates_2048_fit_seconds = 0.275
+candidates_2048_pbr_held_light_psnr = [22.37, 21.66]
+candidates_2048_coverage_percent = 57.1
+consensus_25_percent_pbr_held_light_psnr = [22.35, 21.55]
+consensus_25_percent_coverage_percent = 57.1
+consensus_75_percent_pbr_held_light_psnr = [22.47, 21.75]
+consensus_75_percent_coverage_percent = 57.0
+residual_weighted_pbr_held_light_psnr = [22.35, 21.65]
+residual_weighted_coverage_percent = 57.1
+artifacts = "target/audit-runs/current-synthetic-v1/{normal-directions-{256,2048}-probe,per-view-normal-{25,75}-probe,per-view-normal-residual-weight-probe} (gitignored)"
+verdict = "reject and retain 512 equal-weight candidates with a half consensus correction: neither search resolution, stronger/weaker consensus, nor residual weighting improves held-light mean and tail together"
+
+[calibrated_normals.production_density_order]
+date = "2026-08-22"
+protocol = "fixed synthetic cloud plus reduced production reconstruction smokes"
+photometric_then_density_pbr_held_light_psnr = [22.48, 21.76]
+photometric_then_density_coverage_percent = 57.0
+density_then_photometric_pbr_held_light_psnr = [22.38, 21.63]
+density_then_photometric_coverage_percent = 57.1
+production_refined_normals = 218
+production_distinct_light_supported_normals = 139
+production_distinct_light_changed_normals = 139
+production_peak_memory_bytes = 266502144
+single_light_control_scene_sha256 = "1e2156042cdb47bf3c8c6e76c22793e870b751d8451a735b8b1067fd3344833f"
+single_light_selected_scene_sha256 = "1e2156042cdb47bf3c8c6e76c22793e870b751d8451a735b8b1067fd3344833f"
+artifacts = "target/audit-runs/{density-before-photometric-probe,density-photometric-order-production-smoke,density-order-single-light-replay} (gitignored)"
+verdict = "keep: fit calibrated PBR normals photometrically before the small density correction; refine the independent static snapshot directly from density and exclude sparse support from both density passes"
