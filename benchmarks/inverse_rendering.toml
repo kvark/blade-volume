@@ -4428,3 +4428,21 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/agreement-normal-probe (gitignored)"
 verdict = "reject before five clouds and restore the full correspondence correction: observable view agreement improves truth-normal RMSE and coverage but regresses both held-light image metrics, so truth-normal error remains diagnostic rather than the selection objective"
+
+[calibrated_normals.rejected_upper_trimmed_radiance]
+date = "2026-08-22"
+protocol = "fixed calibrated synthetic cloud; for each surfel and known light, omit the brightest camera observation from the shared photometric solve when at least three are available, then retain the selected correspondence correction"
+control_render_normal_rmse_degrees = 55.11
+candidate_render_normal_rmse_degrees = 54.84
+control_material_residual = 0.03987
+candidate_material_residual = 0.03539
+control_pbr_held_light_psnr = [22.66, 22.16]
+candidate_pbr_held_light_psnr = [22.59, 22.10]
+control_coverage_percent = 56.6
+candidate_coverage_percent = 56.6
+candidate_peak_memory_bytes = 901345280
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/upper-trim-normal-probe (gitignored)"
+verdict = "reject before five clouds and restore mean radiance: suppressing additive view-dependent highlights improves truth normals and the fitted training residual but regresses both held-light image metrics"
