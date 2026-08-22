@@ -2677,3 +2677,15 @@ the full gate, and increase the radius pass from 0.30 seconds to 0.95--1.15
 seconds. They are rejected before a five-cloud run and the synthetic path is
 restored exactly. Extra lighting currently exposes the same inconsistent
 surface under more appearances; it does not add new silhouette information.
+
+Moving centers with the extra lights confirms the deeper limitation. A
+physical-GPU oracle first verifies that the temporary normal-axis center
+primitive repairs a known displaced Gaussian and retains its loss after a
+fresh tracer build. Appending two such calibrated rounds to the selected
+primary-light schedule lowers the four-light training loss from 0.0137116 to
+0.0134029 in 0.27 seconds. On the fixed reconstructed cloud, however, position
+RMSE worsens from 0.5819 to 0.5837 and normal RMSE from 55.11° to 55.17°;
+held-light mean/worst moves from 22.58/21.85 to 22.52/21.90 dB while coverage
+rises from 56.6% to 57.0%. The optimizer is again broadening a photometrically
+convenient surface rather than recovering the shared one. The wrapper, test,
+and integration are removed before a five-cloud run.

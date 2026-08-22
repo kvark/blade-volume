@@ -4172,3 +4172,22 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/calibrated-multilight-radius-{probe,primary2-probe} (gitignored)"
 verdict = "reject before five clouds and restore primary-only radius refinement: secondary lights trade 0.02 dB mean for tail and coverage instead of improving all three, while making the pass 3.2-3.9x slower"
+
+[calibrated_geometry.rejected_post_primary_multilight_centers]
+date = "2026-08-22"
+protocol = "fixed synthetic cloud; two multi-light normal-axis center rounds after the selected eight-round primary-light center schedule"
+control_position_rmse = 0.5819
+control_normal_rmse_degrees = 55.11
+control_pbr_held_light_psnr = [22.58, 21.85]
+control_coverage_percent = 56.6
+candidate_training_loss = [0.0137116, 0.0134029]
+candidate_position_rmse = 0.5837
+candidate_normal_rmse_degrees = 55.17
+candidate_pbr_held_light_psnr = [22.52, 21.90]
+candidate_coverage_percent = 57.0
+candidate_seconds = 0.266
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/calibrated-multilight-center-2round-probe (gitignored)"
+verdict = "reject before five clouds and remove the center API: the all-light objective lowers its own training loss but moves centers and normals away from truth and trades held mean for tail and coverage"
