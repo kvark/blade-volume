@@ -20,7 +20,11 @@ use std::{mem, ptr, slice};
 /// midpoint of each edge, which puts the vertices at radius two and the edge
 /// midpoints at radius one.
 const CIRCUMSCRIBED: f32 = 1.732_050_8; // sqrt(3)
-const GAUSSIAN_MIN_OPACITY: f32 = 1.0e-5;
+
+// Responses below this are both visually negligible and expensive: retaining
+// their 4-5 sigma proxy tails multiplies ray-query candidates. This cutoff is
+// selected by the fixed five-cloud held-light gate.
+const GAUSSIAN_MIN_ALPHA: f32 = 3.0e-2;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -193,7 +197,7 @@ fn prepare_geometry(source: GeometrySource<'_>) -> PreparedGeometry {
     let mut gaussians = Vec::new();
     let mut instances = Vec::new();
     for (index, &point) in gaussian.points.iter().enumerate() {
-        if point.w <= GAUSSIAN_MIN_OPACITY {
+        if point.w <= GAUSSIAN_MIN_ALPHA {
             continue;
         }
         let rotation = transforms.rotations[index];
@@ -211,7 +215,7 @@ fn prepare_geometry(source: GeometrySource<'_>) -> PreparedGeometry {
             opacity: point.w,
         });
 
-        let support = (2.0 * (point.w / GAUSSIAN_MIN_OPACITY).ln()).sqrt();
+        let support = (2.0 * (point.w / GAUSSIAN_MIN_ALPHA).ln()).sqrt();
         let matrix = glam::Mat3::from_quat(rotation) * glam::Mat3::from_diagonal(support * scale);
         instances.push(gpu::AccelerationStructureInstance {
             acceleration_structure_index: 0,
@@ -228,7 +232,7 @@ fn prepare_geometry(source: GeometrySource<'_>) -> PreparedGeometry {
     }
     assert!(
         !surfels.is_empty(),
-        "PBR Gaussian geometry has no particles above opacity {GAUSSIAN_MIN_OPACITY}"
+        "PBR Gaussian geometry has no particles above alpha {GAUSSIAN_MIN_ALPHA}"
     );
     PreparedGeometry {
         surfels,
@@ -901,6 +905,42 @@ impl RelightTracer {
 mod tests {
     use super::*;
 
+    fn pbr_gaussian_with_opacities(opacities: &[f32]) -> PointCloudModel {
+        let points = opacities
+            .iter()
+            .enumerate()
+            .map(|(index, &opacity)| glam::Vec4::new(index as f32, 0.0, 0.0, opacity))
+            .collect::<Vec<_>>();
+        PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: Some(crate::Transforms {
+                rotations: vec![glam::Quat::IDENTITY; points.len()],
+                scales: vec![glam::Vec3::ONE; points.len()],
+                pbr: Some(crate::PbrAttributes {
+                    normals: vec![glam::Vec3::Z; points.len()],
+                    material_indices: (0..points.len() as u32).collect(),
+                    materials: (0..points.len())
+                        .map(|index| relight::Material {
+                            albedo: [index as f32; 3],
+                            roughness: 0.5,
+                            specular_f0: [0.04; 3],
+                            _padding: 0.0,
+                        })
+                        .collect(),
+                }),
+            }),
+            adjacency: None,
+            radii: None,
+            surface_normals: None,
+            surface_offsets: None,
+            surface_detail: None,
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+            points,
+        }
+    }
+
     #[test]
     fn the_uniform_layout_matches_the_shader() {
         // `vec4` arrays pack tight, and everything after them is padded out to
@@ -913,6 +953,23 @@ mod tests {
         assert_eq!(mem::size_of::<relight::Surfel>(), 32);
         assert_eq!(mem::size_of::<relight::Material>(), 32);
         assert_eq!(mem::size_of::<PbrGaussian>(), 32);
+    }
+
+    #[test]
+    fn bounded_gaussian_support_preserves_filtered_particle_order() {
+        let model =
+            pbr_gaussian_with_opacities(&[GAUSSIAN_MIN_ALPHA, GAUSSIAN_MIN_ALPHA.next_up(), 0.8]);
+        let geometry = prepare_geometry(GeometrySource::Gaussian(&model));
+
+        assert_eq!(geometry.surfels.len(), 2);
+        assert_eq!(geometry.gaussians.len(), 2);
+        assert_eq!(geometry.instances.len(), 2);
+        assert_eq!(geometry.surfels[0].center, [1.0, 0.0, 0.0]);
+        assert_eq!(geometry.surfels[1].center, [2.0, 0.0, 0.0]);
+        assert_eq!(geometry.surfels[0].material, 1);
+        assert_eq!(geometry.surfels[1].material, 2);
+        assert_eq!(geometry.gaussians[0].opacity, GAUSSIAN_MIN_ALPHA.next_up());
+        assert_eq!(geometry.gaussians[1].opacity, 0.8);
     }
 
     #[test]

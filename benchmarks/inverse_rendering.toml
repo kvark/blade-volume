@@ -4630,3 +4630,38 @@ memory_swap_bytes = 0
 oom_events = 0
 gpu_faults = 0
 verdict = "reject and restore the shared 12-hit icosahedron path: a 48-hit window helps volumetric traversal but regresses the established surface path by roughly 37%; simpler proxies increase false candidates; duplicating traversal solely to specialize the window is not justified"
+
+# The original 1e-5 alpha support extends an opacity-0.8 particle to 4.75
+# standard deviations. Those weak tails dominate TLAS overlap and can fill the
+# fixed hit window before a meaningful particle is retained. The same five
+# serialized PBR Gaussian PLYs were scored three times at each cutoff; timing is
+# the median per cloud and quality is deterministic across repeats.
+[direct_gaussian.selected_bounded_pbr_support]
+date = "2026-08-22"
+protocol = "same five serialized PBR Gaussian clouds; studio light and two poses held out; three render repeats per cloud on RTX 5070"
+baseline_min_alpha = 1.0e-5
+selected_min_alpha = 0.03
+baseline_held_light_mean = [23.197726, 23.244549, 22.990350, 23.116008, 23.018241]
+baseline_held_light_worst = [22.636584, 22.610044, 22.360689, 22.562285, 22.616212]
+baseline_coverage_percent = [54.0582, 54.3240, 54.5859, 54.5394, 54.3059]
+baseline_covered_psnr = [22.501569, 22.461500, 22.196126, 22.327043, 22.266172]
+baseline_median_ms = [7.653, 9.316, 9.730, 8.638, 8.955]
+selected_held_light_mean = [23.259164, 23.366353, 23.128705, 23.208147, 23.087591]
+selected_held_light_worst = [22.702680, 22.733984, 22.527207, 22.669501, 22.696803]
+selected_coverage_percent = [53.4801, 53.7656, 54.1248, 53.9846, 53.7863]
+selected_covered_psnr = [22.498436, 22.490630, 22.227239, 22.370303, 22.283979]
+selected_median_ms = [1.087, 1.288, 1.543, 1.532, 2.002]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+baseline_average = [23.113375, 22.557163, 54.3627, 22.350482]
+selected_average = [23.209992, 22.666035, 53.8283, 22.374117]
+baseline_average_median_ms = 8.858
+selected_average_median_ms = 1.490
+speedup = 5.95
+rejected_min_alpha_005_mean = [23.217248, 23.362468, 23.111160, 23.189766, 23.052031]
+baseline_peak_memory_bytes = 906588160
+selected_peak_memory_bytes = 876969984
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/volumetric-pbr-five/support-cutoff-{00001,003}.log (gitignored)"
+verdict = "select alpha 0.03 as bounded Gaussian response support: all five clouds improve mean and worst-view quality, average covered quality also improves, and traversal is 5.95x faster; 0.05 regresses every cloud's mean from the selected cutoff"

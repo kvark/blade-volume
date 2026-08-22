@@ -89,6 +89,9 @@ var g_sampler: sampler;
 var g_out: texture_storage_2d<rgba16float, write>;
 
 const PI: f32 = 3.14159265;
+// Matches the host proxy cutoff. Lower-response Gaussian tails are weak
+// individually but dominate overlap traversal when many particles stack.
+const GAUSSIAN_MIN_ALPHA: f32 = 0.03;
 
 // Matches `equirect_direction` on the host, inverted.
 fn direction_to_equirect(dir: vec3<f32>) -> vec2<f32> {
@@ -340,7 +343,7 @@ fn intersect_surfel(index: u32, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> Hi
         }
         let local_position = local_origin + t * local_direction;
         let squared_radius = dot(local_position, local_position);
-        let support_squared = 2.0 * log(gaussian.opacity / 1.0e-5);
+        let support_squared = 2.0 * log(gaussian.opacity / GAUSSIAN_MIN_ALPHA);
         if (squared_radius > support_squared) {
             return miss;
         }

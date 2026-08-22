@@ -2767,9 +2767,9 @@ discarded the learned normal-axis thickness and opacity. A CPU oracle retaining
 the complete direct-Gaussian covariance raised the fixed-cloud held-light score
 from 22.68/22.13 to 23.14/22.52 dB. The production GPU implementation confirms
 the result across five independently trained density clouds: mean/worst PBR
-averages improve from 22.658/22.208 to 23.114/22.552 dB, and covered-pixel
-quality from 21.640 to 22.334 dB. Every cloud improves all three image-quality
-measures. Mean coverage falls from 56.80% to 54.36%, so support remains a
+averages improve from 22.658/22.208 to 23.210/22.666 dB, and covered-pixel
+quality from 21.640 to 22.374 dB. Every cloud improves all three image-quality
+measures. Mean coverage falls from 56.80% to 53.83%, so support remains a
 separate objective rather than being hidden inside PSNR.
 
 The implementation keeps one relight shader and one backend enum variant. A
@@ -2783,14 +2783,20 @@ load. Both `synthetic_foam` and the COLMAP `reconstruct` command reload a
 requested `--pbr-gaussian-output` before the final score, and the viewer routes
 such a PLY through the existing relight backend automatically.
 
-The exact path is currently about 7.7 ms per 100x75 frame versus 0.7 ms for the
-scalar surface. Fixed-file traversal probes reject the obvious global changes:
-a 48-hit window improves the volumetric path to roughly 6.46 ms but slows the
-surface path by about 37%; 96 hits loses occupancy; conservative octahedron and
-cube proxies create enough false candidates to take 10--11 ms; early duplicate
-rejection and host-precomputed inverse transforms are noise-level neutral. The
-shared 12-hit icosahedron traversal remains selected. The next performance work
-should compact surviving rays or otherwise reduce repeated full TLAS walks,
-not fork shader entries or duplicate the traversal solely to tune an array
-size. Raw models, logs, and telemetry are under
+The learned response is now bounded at alpha 0.03 instead of retaining
+4--5-sigma proxy tails down to 1e-5. On the same five serialized clouds this
+raises mean/worst quality from 23.113/22.557 to 23.210/22.666 dB and reduces
+the average per-cloud median from 8.86 to 1.49 ms per 100x75 frame. The weaker
+tails consumed ray-query candidates and could hide meaningful intersections
+behind the fixed hit window, so removing them improves quality as well as
+speed. A sweep through 0.05 confirms 0.03 as the peak rather than merely the
+most aggressive tested cutoff.
+
+Fixed-file traversal probes reject the other obvious global changes: a 48-hit
+window helps the former long-tail path but slows the surface path by about 37%;
+96 hits loses occupancy; conservative octahedron and cube proxies create more
+false candidates; early duplicate rejection and host-precomputed inverse
+transforms are noise-level neutral. The shared 12-hit icosahedron traversal
+remains selected without a new shader entry or backend variant. Raw models,
+logs, and telemetry are under
 `target/audit-runs/current-synthetic-v1/{volumetric-pbr-five,volumetric-pbr-persistence}`.
