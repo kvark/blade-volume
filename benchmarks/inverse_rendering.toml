@@ -4361,3 +4361,17 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/{background-only-opacity-probe,background-only-pbr-probe,background-only-pbr-five,background-only-pbr-weight1-probe,background-only-pbr-weight1-five}, target/audit-runs/background-only-pbr-{room-smoke,bonsai-smoke,weight1-room-smoke,weight1-bonsai-smoke} (gitignored)"
 verdict = "select weight 1.0 for PBR support only: all five synthetic means and tails improve, both real scenes are non-regressive, static light-field supervision stays unchanged, and the reliable negative mask evidence no longer forces ambiguous foreground ownership"
+
+[direct_gaussian.rejected_weak_foreground_after_visibility]
+date = "2026-08-22"
+protocol = "fixed calibrated synthetic cloud; add foreground missing-opacity squared error at 0.1 relative weight to the selected background-only PBR objective"
+selected_pbr_held_light_psnr = [22.66, 22.16]
+candidate_pbr_held_light_psnr = [22.65, 22.10]
+selected_coverage_percent = 56.6
+candidate_coverage_percent = 56.5
+candidate_peak_memory_bytes = 899792896
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/background-plus-foreground-0p1-probe (gitignored)"
+verdict = "reject before five clouds: even one tenth foreground pressure fails to recover coverage and loses the worst-view gain; keep PBR visibility supervision strictly negative-only"
