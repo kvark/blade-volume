@@ -4691,6 +4691,8 @@ bonsai_candidate = [13.083805, 56.1338, 12.669697]
 real_metric_order = ["held_pose_psnr_db", "coverage_percent", "covered_psnr_db"]
 rejected_gain_1_25_worst = [22.707479, 22.738540, 22.524496, 22.653907, 22.746906]
 rejected_mass_preserving_worst = [22.700027, 22.735295, 22.521494, 22.675666, 22.706932]
+rejected_quadratic_mean = [23.286733, 23.383740, 23.139118, 23.222998, 23.120496]
+rejected_quadratic_worst = [22.711607, 22.742141, 22.532010, 22.668805, 22.721893]
 physical_gpu_parity_tests = 8
 maximum_peak_memory_bytes = 1261359104
 memory_swap_bytes = 0
@@ -4698,6 +4700,20 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/volumetric-pbr-five/opacity-*.log, target/audit-runs/volumetric-pbr-{room,bonsai}-smoke, target/audit-runs/volumetric-pbr-real-*-score.log (gitignored)"
 verdict = "select a 1.1 retained-core opacity gain: every synthetic mean, tail, and coverage score improves, and exact persisted Room/Bonsai scores improve by 0.037/0.095 dB with 1.27/1.81 points more coverage; conditional covered quality falls on synthetic and Bonsai because newly covered boundary pixels enter that subset, so the unconditional image and coverage gates decide"
+
+[direct_gaussian.rejected_pbr_core_opacity_alignment]
+date = "2026-08-22"
+protocol = "first fixed calibrated cloud; apply the selected 1.1 retained-core remap inside both PBR appearance and support training using existing Meganeura log/exp operations; reload the result and score with the matched production renderer"
+control_held_light = [23.290703, 22.712283, 53.9261, 22.469395]
+candidate_held_light = [23.237989, 22.670582, 53.5911, 22.439841]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+candidate_fit_seconds = 4.804
+maximum_peak_memory_bytes = 875593728
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/pbr-opacity-matched/model-1 (gitignored)"
+verdict = "reject before five clouds and remove the graph change: matching the bounded-core calibration during continuous training lets the optimizer lower learned opacity, cancelling the runtime coverage gain and regressing every held-light measure"
 
 [direct_gaussian.rejected_pbr_training_support_alignment]
 date = "2026-08-22"

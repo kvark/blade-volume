@@ -2814,6 +2814,16 @@ path, while full-covariance superiority on real captures remains unproven; the
 all-point scalar backend remains the production fallback rather than claiming
 the synthetic result generalizes universally.
 
+The remap deliberately remains a final-render calibration. Expressing the
+exact same exponent in PBR training needs no Meganeura extension—the existing
+log and exp nodes implement `1-exp(1.1*log(1-alpha))`—but the matched first-cloud
+run regresses 23.291/22.712→23.238/22.671 dB and
+53.93%→53.59% coverage. The optimizer lowers learned opacity and cancels the
+benefit. A cheaper endpoint-preserving quadratic is also rejected: it improves
+almost every fixed-file measure but is consistently weaker than the exponent
+and misses one cloud's tail by 0.0007 dB. Both prototypes are removed; no new
+Meganeura operation or permanent training branch is introduced.
+
 Fixed-file traversal probes reject the other obvious global changes: a 48-hit
 window helps the former long-tail path but slows the surface path by about 37%;
 96 hits loses occupancy; conservative octahedron and cube proxies create more
