@@ -1076,9 +1076,7 @@ fn main() {
         decompose_started.elapsed().as_secs_f64(),
     );
     if args.render_refine_normals {
-        let environment_indices: Vec<usize> = (0..dataset.environments.len())
-            .filter(|&index| index != held_out_environment)
-            .collect();
+        let environment_indices = [environment];
         let normal_captures: Vec<_> = environment_indices
             .iter()
             .map(|&index| {
@@ -1110,7 +1108,7 @@ fn main() {
             &observations,
             0,
             8,
-            5.0,
+            2.5,
         )
         .unwrap_or_else(|error| fail(error));
         println!(

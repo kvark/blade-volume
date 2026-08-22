@@ -185,7 +185,7 @@ struct Args {
     #[argh(switch)]
     render_refine_materials: bool,
 
-    /// refine Gaussian normals against complete renders from the measured lights
+    /// refine Gaussian normals against complete renders from the primary measured light
     #[argh(switch)]
     render_refine_normals: bool,
 
@@ -512,25 +512,18 @@ fn main() {
     describe_light(&fitted.scene.environment);
 
     if args.render_refine_normals {
-        let mut evidence = vec![train::inverse::refine::RenderedNormalEvidence {
+        let evidence = [train::inverse::refine::RenderedNormalEvidence {
             capture: &capture,
             indices: &train_views,
             environment: known_light.as_ref().expect("known light validated above"),
         }];
-        evidence.extend(normal_captures.iter().map(|entry| {
-            train::inverse::refine::RenderedNormalEvidence {
-                capture: &entry.capture,
-                indices: &train_views,
-                environment: &entry.environment,
-            }
-        }));
         let stats = train::inverse::refine::refine_rendered_normals(
             &mut fitted.scene,
             &evidence,
             &observations,
             args.diffuse_samples,
             8,
-            5.0,
+            2.5,
         )
         .unwrap_or_else(|error| {
             eprintln!("cannot refine rendered normals: {error}");
@@ -1350,11 +1343,8 @@ fn validate_normal_captures(args: &Args) -> Result<(), String> {
                 .to_string(),
         );
     }
-    if args.render_refine_normals && args.normal_images.is_empty() {
-        return Err(
-            "rendered normal refinement needs at least one paired secondary known-light capture"
-                .to_string(),
-        );
+    if args.render_refine_normals && args.environment.is_none() {
+        return Err("rendered normal refinement needs --environment".to_string());
     }
     Ok(())
 }
@@ -1861,7 +1851,10 @@ mod tests {
 
         let rendered_without_secondary =
             parse(&["--environment", "east.f32", "--render-refine-normals"]);
-        assert!(validate_normal_captures(&rendered_without_secondary).is_err());
+        validate_normal_captures(&rendered_without_secondary).unwrap();
+
+        let rendered_without_environment = parse(&["--render-refine-normals"]);
+        assert!(validate_normal_captures(&rendered_without_environment).is_err());
 
         let paired = parse(&[
             "--environment",

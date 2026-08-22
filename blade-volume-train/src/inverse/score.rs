@@ -426,19 +426,22 @@ impl Renderer {
         capture: &capture::Capture,
         indices: &[usize],
         cameras: &[vol::CameraParams],
+        coverage_weight: f32,
     ) -> Vec<f32> {
         let frame_pixels = capture.width * capture.height;
         let pixels = self.render_prepared_flat(tracer, cameras);
         let mut errors = Vec::with_capacity(pixels.len());
         for (frame, &index) in pixels.chunks(frame_pixels).zip(indices) {
-            for (rendered, reference) in frame.iter().zip(&capture.views[index].pixels) {
-                let mut error = 0.0f32;
-                for channel in 0..3 {
-                    let difference = capture::linear_to_srgb(rendered[channel])
-                        - capture::linear_to_srgb(reference[channel]);
-                    error += difference * difference;
-                }
-                errors.push(error / 3.0);
+            for (pixel, (rendered, reference)) in
+                frame.iter().zip(&capture.views[index].pixels).enumerate()
+            {
+                let reference_coverage = capture.views[index].mask.as_ref().map(|mask| mask[pixel]);
+                errors.push(srgb_error(
+                    rendered,
+                    reference,
+                    reference_coverage,
+                    coverage_weight,
+                ));
             }
         }
         errors
@@ -540,6 +543,27 @@ impl Renderer {
     }
 }
 
+fn srgb_error(
+    rendered: &[f32; 4],
+    reference: &[f32; 3],
+    reference_coverage: Option<f32>,
+    coverage_weight: f32,
+) -> f32 {
+    let color = (0..3)
+        .map(|channel| {
+            let difference = capture::linear_to_srgb(rendered[channel])
+                - capture::linear_to_srgb(reference[channel]);
+            difference * difference
+        })
+        .sum::<f32>()
+        / 3.0;
+    let coverage = reference_coverage.map_or(0.0, |reference| {
+        let difference = rendered[3] - reference;
+        coverage_weight * difference * difference
+    });
+    color + coverage
+}
+
 pub fn save_rgba(path: &path::Path, pixels: &[[f32; 4]], width: usize, height: usize) {
     let mut image = image::RgbImage::new(width as u32, height as u32);
     for (index, texel) in pixels.iter().enumerate() {
@@ -592,6 +616,14 @@ mod tests {
         let score = compare_coverage(&rendered, &reference, None);
         assert!((score.coverage - 0.5).abs() < 1.0e-6);
         assert!(score.covered_srgb_psnr > 90.0);
+    }
+
+    #[test]
+    fn masked_render_error_penalizes_wrong_coverage() {
+        let rendered = [0.2, 0.3, 0.4, 0.25];
+        let reference = [0.2, 0.3, 0.4];
+        assert_eq!(srgb_error(&rendered, &reference, None, 0.1), 0.0);
+        assert!((srgb_error(&rendered, &reference, Some(0.75), 0.1) - 0.025).abs() < 1.0e-6);
     }
 
     #[test]

@@ -10,6 +10,8 @@ use crate::inverse::{capture, decompose, depth, score};
 use blade_volume as vol;
 use std::thread;
 
+const RENDERED_NORMAL_COVERAGE_WEIGHT: f32 = 0.1;
+
 /// One photograph used by [`refine`].
 #[derive(Clone, Copy)]
 pub struct RefinementView<'a> {
@@ -149,7 +151,7 @@ fn rendered_errors(
     cameras: &[vol::CameraParams],
 ) -> Vec<f32> {
     tracer.reset_sampling();
-    renderer.prepared_srgb_errors(tracer, capture, indices, cameras)
+    renderer.prepared_srgb_errors(tracer, capture, indices, cameras, 0.0)
 }
 
 fn rendered_normal_errors(
@@ -165,7 +167,13 @@ fn rendered_normal_errors(
     let mut errors = Vec::with_capacity(capacity);
     for ((tracer, entry), cameras) in tracers.iter_mut().zip(evidence).zip(cameras) {
         tracer.reset_sampling();
-        errors.extend(renderer.prepared_srgb_errors(tracer, entry.capture, entry.indices, cameras));
+        errors.extend(renderer.prepared_srgb_errors(
+            tracer,
+            entry.capture,
+            entry.indices,
+            cameras,
+            RENDERED_NORMAL_COVERAGE_WEIGHT,
+        ));
     }
     errors
 }
@@ -1963,7 +1971,7 @@ mod tests {
             truth_renderer.prepared_srgb_loss(&mut scored, &capture, &[0, 1], &cameras);
         scored.reset_sampling();
         let pixel_errors =
-            truth_renderer.prepared_srgb_errors(&mut scored, &capture, &[0, 1], &cameras);
+            truth_renderer.prepared_srgb_errors(&mut scored, &capture, &[0, 1], &cameras, 0.0);
         assert!((scalar_loss - mean_error(&pixel_errors)).abs() < 1.0e-8);
         truth_renderer.destroy_prepared_scene(scored);
         truth_renderer.destroy();

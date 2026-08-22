@@ -2419,9 +2419,8 @@ materials, eight antithetic five-degree rounds improve unseen-light means on
 all five independent foams by +0.23, +0.10, +0.34, +0.24, and +0.23 dB.
 Normal RMSE improves by 0.08--0.20 degrees before the subsequent surface
 pass. One held-view tail nevertheless loses 0.07 dB and coverage falls by
-0.1--0.4 point on every cloud. The benchmark-only single-light substitution
-is removed; a smaller trust region or coverage-aware acceptance needs a new
-five-cloud gate before this can serve ordinary controlled captures.
+0.1--0.4 point on every cloud. That five-degree substitution was removed and
+motivated the smaller, coverage-aware gate below.
 
 The dependency uprev also exposed a severe Meganeura regression before it
 could be accepted as a production baseline. Its column-parallel scatter
@@ -2434,3 +2433,18 @@ shader group, entry, or variant. The same current-main fit returns to
 3.8--3.9 seconds, its physical-GPU scatter oracle passes without the atomic
 VUID, and Meganeura's full all-feature suite passes at an 11.5 GiB cgroup
 peak with zero swap, pressure, OOM, or GPU fault.
+
+The primary-light normal search becomes tail-safe when its trust region is
+halved to 2.5 degrees and its per-pixel objective includes `0.1 * (alpha -
+mask)^2` whenever a capture mask exists. Against the same five independent
+foams, exact capture lighting, 12 shared materials, and the same downstream
+eight-round surface pass, held-light mean/worst PSNR changes from
+20.90/20.41, 21.17/20.77, 21.06/20.76, 21.29/21.02, and 20.98/20.62 dB to
+21.06/20.55, 21.30/20.93, 21.22/20.84, 21.38/21.06, and 21.08/20.73 dB.
+Thus every cloud improves both scores; the five-cloud averages improve by
+0.13/0.11 dB. Coverage changes by only -0.1, -0.1, 0.0, -0.1, and 0.0 point,
+instead of falling by as much as 0.4 point at five degrees, and nearest-truth
+normal RMSE improves by 0.14--0.29 degrees before the surface pass. This
+schedule uses only the primary measured light for complete-render refinement;
+paired secondary lights remain useful for the preceding per-surfel
+photometric initializer but no longer dilute the final image-space objective.
