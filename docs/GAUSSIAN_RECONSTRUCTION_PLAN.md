@@ -2749,3 +2749,12 @@ to 13.40 dB, but Room falls from 10.23 to 10.08 dB and fitting rises from
 34.6/34.7 seconds to 66.9/64.2 seconds. The implementation is removed. PBR
 support needs a better held-independent geometry/coverage objective rather
 than longer optimization of the existing image loss.
+
+Simple foreground balancing is not that objective. Giving foreground mask
+errors twice the background weight uses only existing graph arithmetic and
+raises fixed-cloud coverage from 56.6% to 57.1%, but static held quality falls
+from 25.00/24.33 to 24.71/23.95 dB and PBR from 22.58/21.85 to 22.44/21.76
+dB. The prototype is removed before a five-cloud run. Treating every
+foreground pixel as missing support broadens overlapping Gaussians without
+identifying which surface should own the ray; future coverage evidence must be
+localized to geometry or visibility rather than reweighted globally.

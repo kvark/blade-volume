@@ -4315,3 +4315,19 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/{gaussian-steps-{1875,2250,3000}-five,gaussian-steps-{2250,3000}-probe,independent-pbr-2x-implementation-check}, target/audit-runs/independent-pbr-2x-{room-smoke,bonsai-smoke} (gitignored)"
 verdict = "reject and restore 1500 updates: extra fixed-centre PBR optimization improves every synthetic tail but nearly doubles production fit time and regresses Room; the next support improvement needs a better objective, not more iterations"
+
+[direct_gaussian.rejected_foreground_balanced_opacity]
+date = "2026-08-22"
+protocol = "fixed calibrated synthetic cloud; foreground mask squared error weighted 2x while background keeps the selected global opacity weight"
+control_static_held_psnr = [25.00, 24.33]
+candidate_static_held_psnr = [24.71, 23.95]
+control_pbr_held_light_psnr = [22.58, 21.85]
+candidate_pbr_held_light_psnr = [22.44, 21.76]
+control_coverage_percent = 56.6
+candidate_coverage_percent = 57.1
+candidate_peak_memory_bytes = 995860480
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/foreground-balanced-opacity-probe (gitignored)"
+verdict = "reject before five clouds and restore ordinary mask MSE: foreground weighting buys support by broadening incorrect Gaussian mixtures and sharply regresses both output images"
