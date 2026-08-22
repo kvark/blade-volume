@@ -1034,6 +1034,18 @@ fn main() {
         depth_options,
     )
     .unwrap_or_else(|error| fail(error));
+    let changed =
+        train::inverse::surface::refine_normals_from_density(&mut geometry.surfels, &model);
+    println!("density-gradient blended {changed} normals");
+    describe_surface_error(
+        "density-gradient surface",
+        &geometry.surfels,
+        &dataset,
+        &training_indices,
+        &maps,
+        depth_options,
+    )
+    .unwrap_or_else(|error| fail(error));
     let observe_started = std::time::Instant::now();
     let observations = train::inverse::decompose::observe(
         &geometry,

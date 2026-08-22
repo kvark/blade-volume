@@ -52,7 +52,7 @@ either reconstructed asset.
 | Gate | Training / held views | Static held PSNR | PBR held PSNR | Coverage |
 | --- | ---: | ---: | ---: | ---: |
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
-| Synthetic (predefined light, refined) | 6 / 2 | 25.13 / 24.42 dB | 21.70 / 21.19 dB | 56.3% |
+| Synthetic (predefined light, refined) | 6 / 2 | 25.15 / 24.44 dB | 21.81 / 21.48 dB | 57.0% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -62,13 +62,14 @@ a held-out environment; Room and Bonsai have no relighting truth, so their PBR
 columns measure held poses under the recovered capture light. They must not be
 read as real-scene relighting accuracy.
 
-The predefined-light row is the fixed-cloud result after the conservative
-complete-render normal and radius passes. Across five independently trained
-source clouds, the final unseen-light PBR score averages 21.67 dB, with a
-21.23 dB average worst view. This is a controlled lighting milestone rather
-than an end-to-end unknown-light result. When the optional rendered-material
-fit is also requested, a final post-support polish raises its separate
-five-cloud gate to 21.73/21.38 dB average mean/worst without changing coverage.
+The predefined-light row is the fixed-cloud result after learned-density
+normal initialization and the conservative complete-render normal, radius,
+and material passes. Across five independently trained source clouds, the
+final unseen-light PBR score averages 21.84/21.49 dB mean/worst at 56.7%
+coverage. The density signal alone adds 0.11/0.11 dB over the otherwise
+identical post-support pipeline and improves nearest-truth normal RMSE on all
+five clouds. This is a controlled lighting milestone rather than an end-to-end
+unknown-light result.
 
 `reconstruct --gaussian-output light-field.ply --output scene.rply` writes the
 two outputs; `scene.f32` stores the recovered environment beside the PBR

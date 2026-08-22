@@ -81,6 +81,78 @@ pub struct SurfaceEstimate {
     pub spacing: f32,
 }
 
+/// Blend camera-derived surface normals towards a local density-field slope.
+///
+/// Depth derivatives estimate each view independently. The density field was
+/// trained through all views at once, so its local slope supplies a weak
+/// cross-view orientation signal. Its sign is not independently meaningful;
+/// preserve the camera-facing side of the established normal and use only a
+/// small trust region.
+pub fn refine_normals_from_density(
+    surfels: &mut [vol::relight::Surfel],
+    foam: &vol::PointCloudModel,
+) -> usize {
+    const NEIGHBOURS: usize = 32;
+    const BLEND: f32 = 0.1;
+
+    if surfels.is_empty() || foam.points.len() < 4 {
+        return 0;
+    }
+    let positions: Vec<[f32; 3]> = foam
+        .points
+        .iter()
+        .map(|point| point.truncate().to_array())
+        .collect();
+    let tree = kiddo::ImmutableKdTree::new_from_slice(&positions);
+    let want = std::num::NonZero::new(NEIGHBOURS.min(foam.points.len())).unwrap();
+    let mut changed = 0;
+    for surfel in surfels {
+        let hits = tree.nearest_n::<kiddo::SquaredEuclidean>(&surfel.center, want);
+        let mut mean_position = glam::Vec3::ZERO;
+        let mut mean_density = 0.0f32;
+        let mut weight = 0.0f32;
+        for hit in &hits {
+            let point = foam.points[hit.item as usize];
+            let sample_weight = 1.0 / hit.distance.max(1.0e-6).sqrt();
+            mean_position += point.truncate() * sample_weight;
+            mean_density += point.w * sample_weight;
+            weight += sample_weight;
+        }
+        mean_position /= weight;
+        mean_density /= weight;
+
+        let mut covariance = glam::Mat3::ZERO;
+        let mut right = glam::Vec3::ZERO;
+        for hit in &hits {
+            let point = foam.points[hit.item as usize];
+            let sample_weight = 1.0 / hit.distance.max(1.0e-6).sqrt();
+            let offset = point.truncate() - mean_position;
+            covariance +=
+                glam::Mat3::from_cols(offset * offset.x, offset * offset.y, offset * offset.z)
+                    * sample_weight;
+            right += offset * ((point.w - mean_density) * sample_weight);
+        }
+        let trace = covariance.x_axis.x + covariance.y_axis.y + covariance.z_axis.z;
+        covariance += glam::Mat3::IDENTITY * (trace * 1.0e-4).max(1.0e-8);
+        if covariance.determinant().abs() <= 1.0e-12 {
+            continue;
+        }
+        let Some(mut gradient) = (covariance.inverse() * right).try_normalize() else {
+            continue;
+        };
+        let prior = glam::Vec3::from(surfel.normal);
+        if gradient.dot(prior) < 0.0 {
+            gradient = -gradient;
+        }
+        let Some(normal) = prior.lerp(gradient, BLEND).try_normalize() else {
+            continue;
+        };
+        surfel.normal = normal.to_array();
+        changed += 1;
+    }
+    changed
+}
+
 /// Estimate an oriented local surface around every point.
 ///
 /// A missing entry is an outlier or a neighbourhood that does not define a
@@ -236,6 +308,33 @@ pub fn orient_towards_views(
 mod tests {
     use super::*;
 
+    fn density_lattice(constant: bool) -> vol::PointCloudModel {
+        let mut points = Vec::new();
+        for z in 0..4 {
+            for y in 0..4 {
+                for x in 0..4 {
+                    let position =
+                        0.1 * glam::Vec3::new(x as f32 - 1.5, y as f32 - 1.5, z as f32 - 1.5);
+                    let density = if constant { 1.0 } else { 1.0 + position.y };
+                    points.push(position.extend(density));
+                }
+            }
+        }
+        vol::PointCloudModel {
+            sh_coefficients: vec![0.0; points.len() * 3],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: None,
+            radii: None,
+            surface_normals: None,
+            surface_offsets: None,
+            surface_detail: None,
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+            points,
+        }
+    }
+
     fn plane_cloud(normal: glam::Vec3, extent: usize) -> Vec<glam::Vec3> {
         let tangent = if normal.z.abs() < 0.9 {
             glam::Vec3::Z.cross(normal).normalize()
@@ -272,6 +371,31 @@ mod tests {
             );
             assert!(surfel.radius > 0.0);
         }
+    }
+
+    #[test]
+    fn density_gradient_supplies_a_conservative_normal_correction() {
+        let initial = glam::Vec3::new(0.6, 0.8, 0.0).normalize();
+        let mut surfels = vec![vol::relight::Surfel {
+            center: [0.0; 3],
+            radius: 0.2,
+            normal: initial.to_array(),
+            material: 0,
+        }];
+        assert_eq!(
+            refine_normals_from_density(&mut surfels, &density_lattice(false)),
+            1
+        );
+        let refined = glam::Vec3::from(surfels[0].normal);
+        assert!(refined.dot(glam::Vec3::Y) > initial.dot(glam::Vec3::Y));
+        assert!(refined.dot(initial) > 0.99);
+
+        let before = surfels[0].normal;
+        assert_eq!(
+            refine_normals_from_density(&mut surfels, &density_lattice(true)),
+            0
+        );
+        assert_eq!(surfels[0].normal, before);
     }
 
     #[test]

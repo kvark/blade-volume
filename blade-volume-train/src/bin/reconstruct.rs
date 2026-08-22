@@ -1064,6 +1064,7 @@ fn surfels_from_foam(
         "geometry: merged at a cell size of {voxel:.4} world units in {:.1} s",
         fuse_started.elapsed().as_secs_f64(),
     );
+    let foam_surface_count = surfels.len();
     let sparse_support = add_sparse_track_support(
         &mut surfels,
         reconstruction,
@@ -1127,6 +1128,11 @@ fn surfels_from_foam(
             refine_started.elapsed().as_secs_f64(),
         );
     }
+    let refined = train::inverse::surface::refine_normals_from_density(
+        &mut surfels[..foam_surface_count],
+        &model,
+    );
+    println!("geometry: density-gradient refined {refined} foam-surface normals");
     (surfels, sparse_support, gaussian_sparse_support)
 }
 

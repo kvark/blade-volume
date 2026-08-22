@@ -113,7 +113,7 @@ on Room and Bonsai. A trained-foam reconstruction is unchanged.
 
 **A trained foam.** Trace every training view through this repo's own
 reconstruction and take where each ray was absorbed. This covers the frame,
-and getting a usable surface out of it took four corrections:
+and getting a usable surface out of it took five corrections:
 
 1. **Where along the ray.** A density field trained on photographs has long
    thin tails. The *mean* absorption depth sits out in them, and two views of
@@ -139,6 +139,15 @@ and getting a usable surface out of it took four corrections:
    weights the center and normal: a sharply localized mode is better evidence
    than one that barely cleared the haze threshold. That adds another 0.06 dB
    held out without changing coverage.
+5. **A cross-view normal signal.** Finite differences still estimate a normal
+   independently in each depth map. The learned foam density is shared by all
+   training views, so a weighted least-squares density slope over the nearest
+   32 cells supplies complementary orientation evidence. Its sign is aligned
+   to the established camera-facing normal and only 10% is blended in. The
+   correction applies to foam-derived surfels, not sparse-track support. It
+   improves truth-normal RMSE on five independent synthetic clouds and adds
+   0.11/0.11 dB mean/worst under an unseen light without adding another model,
+   shader, graph operation, dependency, or command-line choice.
 
 ### decompose
 
