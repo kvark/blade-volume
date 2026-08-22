@@ -2338,3 +2338,44 @@ all three cases. Three real-scene repeats preserve the scores above while
 moving the shared-output median from 5.8 to 5.7 seconds on Room and from 5.3 to
 5.2 seconds on Bonsai. This is a private synchronization removal with no
 schedule, update, graph, shader, model, format, or API change.
+
+Learning a Gaussian covariance rotation around each fixed surface normal is
+rejected. The temporary graph represented the angle as a normalized cosine/
+sine pair and passed an isolated physical-GPU recovery test, but the added
+image-space freedom overfits the training views. On matched sparse-only
+128-pixel-wide, 18-training-view gates, Room held quality falls from
+13.39/13.34 to 12.88/12.11 dB mean/worst and Bonsai falls from 13.27 to
+13.20 dB. Training objectives improve in both cases. PBR rotations remain
+fixed and its scores are unchanged within noise, confirming that the failure
+is isolated to the static field. The parameter, optimizer setting, graph
+nodes, and test are removed. All four runs completed in a 12 GiB cgroup; the
+largest host-memory peak was 511.0 MB, with no swap, OOM, or GPU fault.
+
+Raising private candidate-grid construction from eight to twelve host workers
+is not selected. On the same 109,764-particle Room reconstruction, three
+eight-worker fits take 57.8, 57.0, and 53.9 seconds; three twelve-worker fits
+take 55.9, 56.8, and 53.9 seconds. The 1.9% median difference is smaller than
+the overlapping run-to-run range, while held quality stays inside the normal
+atomic-gradient band. The existing eight-worker cap is restored rather than
+claiming a scheduling win from noise.
+
+Sparse-only reconstruction now gives its static Gaussian an output-specific
+training-track cloud. The former path included every COLMAP point, including
+points tracked only by held or unselected cameras: Room trained 109,764
+particles although only 39,295 input points had a selected-training-camera
+track, and Bonsai trained 169,432 instead of 74,796 surviving tracked
+particles. The static field now requires one such track. Its local spacing is
+sparser, so a measured 15/14 radius correction restores overlap. The complete
+sparse cloud remains the PBR geometry and receives an independent fixed-centre
+support fit; no static centre, appearance, or radius feeds back into it.
+
+On the 128-pixel, 18-training-view Room gate, static held quality improves from
+13.39/13.34 to 15.07/15.02 dB mean/worst and total Gaussian fitting falls from
+a 57.0-second control median to 43.4 seconds. PBR remains 13.42/12.94 dB with
+78.0% coverage. On Bonsai, static held quality improves from 13.27 to 13.48 dB
+and fitting falls from 84.1 to 63.4 seconds; PBR remains 13.00 dB with 86.2%
+coverage. A stricter two-track filter is rejected: it cuts Room to 11,110
+particles but loses the direct tail and collapses PBR when applied jointly.
+Foam-derived reconstruction already builds support from training-view depth
+and is unchanged. The selected sparse path adds no CLI setting, model field,
+shader, graph operation, dependency, or runtime representation.

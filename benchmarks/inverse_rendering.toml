@@ -3946,3 +3946,54 @@ memory_events = 0
 driver_faults = 0
 artifacts = "target/audit-runs/rendered-surface-xyz-v1 (gitignored)"
 verdict = "reject and remove: unconstrained tangent motion fits every synthetic training objective but loses novel-view Bonsai support and its worst view; keep normal-only refinement until correspondence supplies a tangent-space target"
+
+[direct_gaussian.rejected_tangent_covariance_rotation]
+date = "2026-08-22"
+protocol = "sparse-only COLMAP reconstruction, width 128, 18 training views"
+room_control_test_psnr = [13.39, 13.34]
+room_candidate_test_psnr = [12.88, 12.11]
+bonsai_control_test_psnr = [13.27, 13.27]
+bonsai_candidate_test_psnr = [13.20, 13.20]
+maximum_peak_memory_bytes = 511008768
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/tangent-rotation-v1 (gitignored)"
+verdict = "reject and remove: a learned in-plane covariance angle lowers training loss but regresses held views on both real scenes"
+
+[direct_gaussian.rejected_candidate_grid_workers_12]
+date = "2026-08-22"
+scene = "Room sparse-only"
+particles = 109764
+worker_8_fit_seconds = [57.8, 57.0, 53.9]
+worker_12_fit_seconds = [55.9, 56.8, 53.9]
+worker_8_median_seconds = 57.0
+worker_12_median_seconds = 55.9
+verdict = "reject and restore eight workers: ranges overlap and the 1.9% median change is below run-to-run noise"
+
+[direct_gaussian.sparse_training_track_support]
+date = "2026-08-22"
+protocol = "sparse-only COLMAP reconstruction, width 128, 18 training views"
+radius_scale = 1.0714286
+room_control_particles = 109764
+room_selected_particles = 38462
+room_control_test_psnr = [13.39, 13.34]
+room_selected_test_psnr = [15.07, 15.02]
+room_control_fit_seconds = 57.0
+room_selected_fit_seconds = 43.4
+room_pbr_test_psnr = [13.42, 12.94]
+room_pbr_coverage = 0.780
+bonsai_control_particles = 169432
+bonsai_selected_particles = 74796
+bonsai_control_test_psnr = [13.27, 13.27]
+bonsai_selected_test_psnr = [13.48, 13.48]
+bonsai_control_fit_seconds = 84.1
+bonsai_selected_fit_seconds = 63.4
+bonsai_pbr_test_psnr = [13.00, 13.00]
+bonsai_pbr_coverage = 0.862
+maximum_peak_memory_bytes = 382955520
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/sparse-training-tracks-v1/output-specific-radius15 (gitignored)"
+verdict = "keep for sparse-only static output: exclude geometry with no selected-training-camera track, preserve full PBR geometry, improve both held fields, and reduce total Gaussian fitting by 24-25%"

@@ -92,7 +92,12 @@ its extracted radii.
 **Sparse points.** COLMAP's triangulated points, with normals from the local
 covariance and a side chosen by the cameras that can see them. Free, needs no
 training, and covers only what COLMAP could triangulate — 44 % of the frame on
-bonsai.
+bonsai. When this source also writes a static Gaussian, that output keeps only
+points tracked by at least one selected training camera; points known only to
+held or unused cameras are not valid radiance support. The full sparse cloud
+still supplies the relightable geometry, and its Gaussian support is fitted
+independently. The thinner static cloud uses a 15/14 support correction measured
+on Room and Bonsai. A trained-foam reconstruction is unchanged.
 
 **A trained foam.** Trace every training view through this repo's own
 reconstruction and take where each ray was absorbed. This covers the frame,

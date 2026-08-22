@@ -21,6 +21,7 @@ use std::{collections, path};
 
 const PBR_SPARSE_CELL_POINTS: usize = 5;
 const STATIC_GAUSSIAN_SPARSE_CELL_POINTS: usize = 3;
+const STATIC_SPARSE_RADIUS_SCALE: f32 = 15.0 / 14.0;
 
 #[derive(argh::FromArgs)]
 /// Reconstruct geometry, material and light from a posed capture.
@@ -287,6 +288,16 @@ fn main() {
 
     // ------------------------------------------------------------- geometry
     let started = std::time::Instant::now();
+    let mut sparse_gaussian_surface = if args.foam.is_none() && args.gaussian_output.is_some() {
+        Some(surfels_from_training_sparse(
+            &reconstruction,
+            &capture,
+            &train_views,
+            &args,
+        ))
+    } else {
+        None
+    };
     let (surfels, sparse_support, gaussian_sparse_support) = match args.foam {
         Some(ref foam) => surfels_from_foam(
             path::Path::new(foam),
@@ -315,6 +326,9 @@ fn main() {
         let flipped =
             train::inverse::surface::orient_towards_views(&mut geometry.surfels, &capture);
         println!("geometry: {flipped} normals turned round to face the cameras");
+        if let Some(ref mut surfels) = sparse_gaussian_surface {
+            train::inverse::surface::orient_towards_views(surfels, &capture);
+        }
     }
     println!(
         "geometry: {} {:?} particles in {:.1} s",
@@ -586,13 +600,29 @@ fn main() {
     }
 
     if let Some(ref output) = args.gaussian_output {
-        let mut gaussian_surface = fitted.scene.model.clone();
-        gaussian_surface
-            .surfels
-            .extend(gaussian_sparse_support.iter().copied().map(|mut surfel| {
-                surfel.material = 0;
-                surfel
-            }));
+        let gaussian_surface = if let Some(ref surfels) = sparse_gaussian_surface {
+            vol::relight::RelightModel {
+                kernel: vol::relight::ParticleKernel::Gaussian,
+                surfels: surfels
+                    .iter()
+                    .copied()
+                    .map(|mut surfel| {
+                        surfel.material = 0;
+                        surfel
+                    })
+                    .collect(),
+                materials: vec![vol::relight::Material::default()],
+            }
+        } else {
+            let mut surface = fitted.scene.model.clone();
+            surface
+                .surfels
+                .extend(gaussian_sparse_support.iter().copied().map(|mut surfel| {
+                    surfel.material = 0;
+                    surfel
+                }));
+            surface
+        };
         let mut gaussian =
             train::gaussian_splat::from_surface(&gaussian_surface).unwrap_or_else(|error| {
                 eprintln!("cannot initialize direct Gaussian field: {error}");
@@ -613,26 +643,71 @@ fn main() {
                 std::process::exit(1);
             });
         let started = std::time::Instant::now();
-        let stats = train::gaussian_splat::fit_staged_outputs(
-            &mut pbr_gaussian,
-            &mut gaussian,
-            &capture,
-            &train_views,
-            args.gaussian_steps,
-            gpu,
-        )
-        .unwrap_or_else(|error| {
-            eprintln!("cannot fit Gaussian outputs: {error}");
-            std::process::exit(1);
-        });
+        let (appearance, pbr_support, light_field_support, shared_appearance) =
+            if sparse_gaussian_surface.is_some() {
+                let pbr = train::gaussian_splat::fit_staged(
+                    &mut pbr_gaussian,
+                    &capture,
+                    &train_views,
+                    args.gaussian_steps,
+                    gpu.clone(),
+                )
+                .unwrap_or_else(|error| {
+                    eprintln!("cannot fit PBR Gaussian support: {error}");
+                    std::process::exit(1);
+                });
+                let light_field = train::gaussian_splat::fit_staged_light_field(
+                    &mut gaussian,
+                    &capture,
+                    &train_views,
+                    args.gaussian_steps,
+                    gpu,
+                )
+                .unwrap_or_else(|error| {
+                    eprintln!("cannot fit static Gaussian field: {error}");
+                    std::process::exit(1);
+                });
+                (
+                    light_field.appearance,
+                    pbr.support,
+                    light_field.support,
+                    false,
+                )
+            } else {
+                let stats = train::gaussian_splat::fit_staged_outputs(
+                    &mut pbr_gaussian,
+                    &mut gaussian,
+                    &capture,
+                    &train_views,
+                    args.gaussian_steps,
+                    gpu,
+                )
+                .unwrap_or_else(|error| {
+                    eprintln!("cannot fit Gaussian outputs: {error}");
+                    std::process::exit(1);
+                });
+                (
+                    stats.appearance,
+                    stats.pbr_support,
+                    stats.light_field_support,
+                    true,
+                )
+            };
         let fit_seconds = started.elapsed().as_secs_f64();
-        println!(
-            "Gaussian outputs: {} shared appearance, {} PBR support, and {} light-field support updates in {:.1} s",
-            stats.appearance.steps,
-            stats.pbr_support.steps,
-            stats.light_field_support.steps,
-            fit_seconds,
-        );
+        if shared_appearance {
+            println!(
+                "Gaussian outputs: {} shared appearance, {} PBR support, and {} light-field support updates in {:.1} s",
+                appearance.steps,
+                pbr_support.steps,
+                light_field_support.steps,
+                fit_seconds,
+            );
+        } else {
+            println!(
+                "Gaussian outputs: independent PBR and training-track light-field fits in {:.1} s",
+                fit_seconds,
+            );
+        }
         let test = score_gaussian_test(&gaussian, &capture, &test_views).unwrap_or_else(|error| {
             eprintln!("cannot score direct Gaussian field: {error}");
             std::process::exit(1);
@@ -655,13 +730,13 @@ fn main() {
             std::process::exit(1);
         });
         println!(
-            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} (shared-output fit {:.1} s total)",
-            stats.appearance.steps,
-            stats.appearance.initial_loss,
-            stats.appearance.final_loss,
-            stats.light_field_support.steps,
-            stats.light_field_support.initial_loss,
-            stats.light_field_support.final_loss,
+            "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} ({:.1} s total Gaussian fitting)",
+            appearance.steps,
+            appearance.initial_loss,
+            appearance.final_loss,
+            light_field_support.steps,
+            light_field_support.initial_loss,
+            light_field_support.final_loss,
             fit_seconds,
         );
         if let (Some((initial_mean, initial_worst)), Some((mean, worst))) = (initial_test, test) {
@@ -770,6 +845,58 @@ fn surfels_from_sparse(
         points.len()
     );
     surfels
+}
+
+fn surfels_from_training_sparse(
+    reconstruction: &train::colmap::Reconstruction,
+    capture: &train::inverse::capture::Capture,
+    views: &[usize],
+    args: &Args,
+) -> Vec<vol::relight::Surfel> {
+    let image_ids: collections::HashMap<&str, u32> = reconstruction
+        .images
+        .iter()
+        .map(|image| (image.name.as_str(), image.id))
+        .collect();
+    let training_images: collections::HashSet<u32> = views
+        .iter()
+        .filter_map(|&index| image_ids.get(capture.views[index].name.as_str()).copied())
+        .collect();
+    let points: Vec<glam::Vec3> = reconstruction
+        .points
+        .iter()
+        .filter(|point| has_training_track(&point.track_image_ids, &training_images))
+        .map(|p| glam::Vec3::new(p.xyz[0] as f32, p.xyz[1] as f32, p.xyz[2] as f32))
+        .collect();
+    let cameras: Vec<glam::Vec3> = capture
+        .views
+        .iter()
+        .map(|v| glam::Vec3::from(v.camera.cam_position))
+        .collect();
+    let (surfels, dropped) = train::inverse::surface::surfels_from_points(
+        &points,
+        &cameras,
+        train::inverse::surface::SurfaceOptions {
+            radius_factor: args.radius_factor * STATIC_SPARSE_RADIUS_SCALE,
+            ..Default::default()
+        },
+    );
+    println!(
+        "geometry: retained {} of {} sparse points with a training track for the static Gaussian; {} retained points dropped as outliers",
+        points.len(),
+        reconstruction.points.len(),
+        dropped,
+    );
+    surfels
+}
+
+fn has_training_track(
+    track_image_ids: &[u32],
+    training_images: &collections::HashSet<u32>,
+) -> bool {
+    track_image_ids
+        .iter()
+        .any(|image| training_images.contains(image))
 }
 
 /// Discs from where a trained density field absorbed each ray.
@@ -1455,6 +1582,14 @@ mod tests {
             PBR_SPARSE_CELL_POINTS,
         );
         assert!(added.is_empty());
+    }
+
+    #[test]
+    fn static_sparse_support_requires_a_training_track() {
+        let training_images = collections::HashSet::from([10, 11]);
+        assert!(has_training_track(&[9, 10, 12], &training_images));
+        assert!(!has_training_track(&[9, 12], &training_images));
+        assert!(!has_training_track(&[], &training_images));
     }
 
     #[test]
