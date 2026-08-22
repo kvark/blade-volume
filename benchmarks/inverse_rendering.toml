@@ -4448,6 +4448,45 @@ gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/{multilight-metal-probe,multilight-metal-classifier-probe,multilight-metal-surfel-audit,multilight-metal-truth-audit} (gitignored)"
 verdict = "reject and remove: measured-light metal evidence is absent at palette scale and only 3.3%-recall per surfel; jointly refitting diffuse albedo also sharply regresses held-light fidelity"
 
+# The direct PBR Gaussian learns one view-independent sRGB radiance per final
+# particle before it learns support. That is an attractive ownership signal:
+# unlike projected-centre observations, it was optimized through the exact
+# Gaussian mixture. Dividing it by measured sun-east irradiance, however,
+# treats shadows, residual view dependence, and geometry compensation as
+# albedo. Full transfer loses 0.82/0.80 dB. A 10% blend is indistinguishable
+# from control and 25% loses 0.05/0.05 dB, so the signal has no gated material
+# value even when used weakly. All candidates preserve the fitted F0 and
+# roughness; only diffuse albedo changes.
+#
+# Nearest-authored-component substitutions explain why. On the final support,
+# replacing only normals or materials with the nearest training-view truth
+# makes held-light output worse, and moving centers to those nearest samples is
+# worse again. These are deliberately diagnostics, not upper bounds: a nearest
+# truth point is not a correspondence. Their failure proves that the fitted
+# normals/materials compensate for particle ownership and center error, so
+# independently making a component more truth-like is not a valid objective.
+[calibrated_materials.rejected_gaussian_radiance_transfer]
+date = "2026-08-22"
+protocol = "fixed calibrated synthetic cloud; final PBR Gaussian SH-0 appearance divided by measured sun-east diffuse irradiance; studio held out"
+control_pbr_held_light_psnr = [22.69, 22.14]
+full_transfer_pbr_held_light_psnr = [21.87, 21.34]
+blend_10_control_pbr_held_light_psnr = [22.69, 22.13]
+blend_10_candidate_pbr_held_light_psnr = [22.69, 22.13]
+blend_25_control_pbr_held_light_psnr = [22.67, 22.19]
+blend_25_candidate_pbr_held_light_psnr = [22.62, 22.14]
+coverage_percent = 56.5
+nearest_truth_diagnostic_control = [22.67, 22.12, 56.5]
+nearest_truth_normal = [22.36, 21.86, 55.3]
+nearest_truth_material = [20.80, 19.88, 56.5]
+nearest_truth_normal_material = [20.98, 20.23, 55.3]
+nearest_truth_center_normal_material = [19.16, 18.99, 54.2]
+maximum_peak_memory_bytes = 242180096
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/{final-component-oracles,gaussian-radiance-material-probe,gaussian-radiance-material-blend10-probe,gaussian-radiance-material-blend25-probe} (gitignored)"
+verdict = "reject and remove: learned Gaussian radiance contains primary-light and geometry compensation rather than transferable albedo; resolve cross-view particle correspondence before changing physical components independently"
+
 [calibrated_normals.rejected_view_agreement_blend]
 date = "2026-08-22"
 protocol = "fixed calibrated synthetic cloud; scale only the correspondence-aware correction by the length of the mean unit-normal estimate, retaining the shared multi-light solution under disagreement"
