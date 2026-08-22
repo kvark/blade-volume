@@ -4154,3 +4154,21 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/calibrated-multilight-material-{probe,primary2-probe,primary2-five} (gitignored)"
 verdict = "reject and remove the multi-tracer material API: extra calibrated lights expose inconsistent geometry, regress mean and tail on two clouds, reduce aggregate coverage, and make the polish 4.9x slower"
+
+[calibrated_geometry.rejected_multilight_radius_refinement]
+date = "2026-08-22"
+protocol = "fixed synthetic cloud after calibrated normals; all non-studio measured lights refine support radii; downstream normal and material passes remain primary-only"
+control_pbr_held_light_psnr = [22.58, 21.85]
+control_coverage_percent = 56.6
+control_radius_seconds = 0.295
+equal_weight_pbr_held_light_psnr = [22.56, 21.91]
+equal_weight_coverage_percent = 56.8
+equal_weight_radius_seconds = 0.945
+primary_twice_pbr_held_light_psnr = [22.56, 21.89]
+primary_twice_coverage_percent = 56.8
+primary_twice_radius_seconds = 1.150
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/calibrated-multilight-radius-{probe,primary2-probe} (gitignored)"
+verdict = "reject before five clouds and restore primary-only radius refinement: secondary lights trade 0.02 dB mean for tail and coverage instead of improving all three, while making the pass 3.2-3.9x slower"

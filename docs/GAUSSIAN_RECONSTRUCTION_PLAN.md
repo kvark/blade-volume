@@ -2667,3 +2667,13 @@ shared surface is consistent under every light, extra illumination makes the
 material table absorb geometry disagreement rather than identify a better
 BRDF. Artifacts are under
 `target/audit-runs/current-synthetic-v1/calibrated-multilight-material-*`.
+
+Support radii do not become a joint winner from the extra lights either. On
+the fixed cloud, refining radii against all four measured captures moves
+held-light mean/worst from 22.58/21.85 to 22.56/21.91 dB and coverage from
+56.6% to 56.8%. Counting the primary light twice reaches 22.56/21.89 dB at the
+same coverage. Both trade 0.02 dB mean for tail/support rather than improving
+the full gate, and increase the radius pass from 0.30 seconds to 0.95--1.15
+seconds. They are rejected before a five-cloud run and the synthetic path is
+restored exactly. Extra lighting currently exposes the same inconsistent
+surface under more appearances; it does not add new silhouette information.
