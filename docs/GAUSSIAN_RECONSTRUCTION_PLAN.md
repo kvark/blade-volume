@@ -2653,3 +2653,17 @@ normal RMSE by 0.39°. Finally, another 0.00625 material coordinate pass lowers
 training loss from 0.0036352 to 0.0036313 but leaves the held mean unchanged,
 loses 0.01 dB tail, and costs 1.27 seconds. All three prototypes are removed;
 the uniform calibrated prior and existing downstream schedules remain.
+
+Using all calibrated lights for the shared material table is geometry-limited
+as well. A temporary extension reused the existing complete-render coordinate
+objective with one prepared tracer per measured environment; its one-light
+path was bit-identical and added no shader or pipeline variant. Equal weighting
+on the fixed cloud trades 0.05 dB mean for 0.03 dB tail and 0.3 coverage point.
+Counting the primary capture twice wins 0.02/0.02 dB on that cloud, but the
+five-cloud gate regresses both mean and tail on two clouds and lowers aggregate
+coverage from 57.04% to 56.92%. Material-polish time rises from 1.29 to 6.33
+seconds on average. The added API and implementation are removed: until the
+shared surface is consistent under every light, extra illumination makes the
+material table absorb geometry disagreement rather than identify a better
+BRDF. Artifacts are under
+`target/audit-runs/current-synthetic-v1/calibrated-multilight-material-*`.
