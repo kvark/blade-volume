@@ -4487,6 +4487,40 @@ gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/{final-component-oracles,gaussian-radiance-material-probe,gaussian-radiance-material-blend10-probe,gaussian-radiance-material-blend25-probe} (gitignored)"
 verdict = "reject and remove: learned Gaussian radiance contains primary-light and geometry compensation rather than transferable albedo; resolve cross-view particle correspondence before changing physical components independently"
 
+# Repeated calibrated-light captures can expose spatial shading gradients where
+# the primary photograph is locally textureless. A temporary extension of the
+# selected normal-axis 3x3 plane sweep concatenated aligned-light patches before
+# normalization. It recovered a known displaced plane that the textureless
+# primary could not score, but the complete reconstruction gate did not carry
+# that analytic result. Using all four training lights regressed the first
+# cloud. Restricting the descriptor to the opposing sun pair was neutral on
+# five clouds, and consulting that pair only when the primary was unscorable
+# recovered more support but still regressed held-light mean quality. The API,
+# synthetic light-name policy, and analytic-only test were removed.
+[surface_refinement.multi_view.rejected_calibrated_light_patches]
+date = "2026-08-22"
+protocol = "fixed five calibrated synthetic density clouds; normal-axis 3x3 normalized spatial patches; sun-east primary, aligned sun-west auxiliary; studio light and two poses held out"
+control_pbr_held_light_mean = [22.70, 22.79, 22.56, 22.74, 22.60]
+control_pbr_held_light_worst = [22.15, 22.26, 22.06, 22.36, 22.25]
+control_pbr_coverage_percent = [56.5, 56.8, 56.8, 57.1, 56.5]
+joint_sun_pair_pbr_held_light_mean = [22.67, 22.84, 22.64, 22.70, 22.55]
+joint_sun_pair_pbr_held_light_worst = [22.16, 22.27, 22.14, 22.32, 22.30]
+joint_sun_pair_coverage_percent = [56.5, 56.6, 56.7, 57.1, 56.9]
+primary_fallback_pbr_held_light_mean = [22.71, 22.78, 22.56, 22.77, 22.52]
+primary_fallback_pbr_held_light_worst = [22.20, 22.29, 22.03, 22.37, 22.20]
+primary_fallback_coverage_percent = [56.7, 56.7, 56.8, 57.0, 56.9]
+control_average = [22.678, 22.216, 56.74]
+joint_sun_pair_average = [22.680, 22.238, 56.76]
+primary_fallback_average = [22.668, 22.218, 56.82]
+four_light_first_cloud_control = [22.67, 22.11, 56.5]
+four_light_first_cloud_candidate = [22.59, 22.13, 56.6]
+maximum_peak_memory_bytes = 895754240
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-patch-{control,candidate,sun-pair*,fallback-*} (gitignored)"
+verdict = "reject and remove: extra calibrated lights increase patch support, but neither joint scoring nor primary-only fallback improves five-cloud held-light mean and tail together; the remaining error needs a more reliable shared surface coordinate than shading-gradient correspondence"
+
 [calibrated_normals.rejected_view_agreement_blend]
 date = "2026-08-22"
 protocol = "fixed calibrated synthetic cloud; scale only the correspondence-aware correction by the length of the mean unit-normal estimate, retaining the shared multi-light solution under disagreement"
