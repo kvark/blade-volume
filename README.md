@@ -54,7 +54,7 @@ either reconstructed asset.
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
 | Synthetic (predefined light, refined) | 6 / 2 | 25.15 / 24.44 dB | 21.81 / 21.48 dB | 57.0% |
 | Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 22.68 / 22.22 dB | 56.7% |
-| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.37 / 22.80 dB | 55.3% |
+| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.39 / 22.81 dB | 55.2% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -118,13 +118,14 @@ Gaussian geometry also receives a short position-only continuation under each
 known light. One optimizer interleaves paired rays from every light while
 swapping fixed diffuse appearance predicted from the recovered material and
 normal, then restores the pre-continuation coefficients; covariance, opacity,
-materials, and runtime representation are unchanged. A weak 12.5%
-opacity-conditioned foreground residual prevents center motion from repairing
-errors in frozen transmittance; background and maskless captures retain the
-ordinary color residual. The four-light joint fit improves or ties every
-held-light mean and worst view across the five fixed clouds, reaching
-23.37/22.80 dB at 55.3% coverage. It is automatic only for a requested
-relightable Gaussian output and adds no training option or shader.
+materials, and runtime representation are unchanged. A weak foreground
+residual conditions at most 50% of the color loss in proportion to detached
+predicted opacity. This prevents well-covered center motion from repairing
+errors in frozen transmittance while poorly covered, background, and maskless
+rays retain the ordinary coverage-driving residual. The four-light joint fit
+reaches 23.39/22.81 dB at 55.2% coverage across the five fixed clouds. It is
+automatic only for a requested relightable Gaussian output and adds no
+training option or shader.
 
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered

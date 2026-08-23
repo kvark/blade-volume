@@ -5431,8 +5431,9 @@ verdict = "select: every cloud's held-light mean and worst view improves or ties
 
 [direct_gaussian.selected_opacity_conditioned_multilight_color]
 date = "2026-08-23"
-protocol = "selected single-session four-light center continuation on five fixed Gaussian clouds; keep opacity frozen; blend 12.5% foreground RGB against target times detached accumulated opacity and 87.5% ordinary RGB; preserve ordinary background loss; persist and reload before unseen-studio-light scoring"
-opacity_conditioned_color_weight = 0.125
+protocol = "selected single-session four-light center continuation on five fixed Gaussian clouds; keep opacity frozen; condition up to 50% of foreground RGB in proportion to detached accumulated opacity; preserve ordinary coverage-driving and background loss; persist and reload before unseen-studio-light scoring"
+fixed_opacity_conditioned_color_weight = 0.125
+adaptive_opacity_conditioned_color_ceiling = 0.5
 screen_weights = [1.0, 0.5, 0.25, 0.125]
 screen_first_cloud = [
     [23.47, 22.94, 54.7, 22.60],
@@ -5440,20 +5441,28 @@ screen_first_cloud = [
     [23.46, 22.89, 55.0, 22.56],
     [23.47, 22.89, 55.0, 22.57],
 ]
-control_mean = [23.45, 23.50, 23.19, 23.41, 23.21]
-candidate_mean = [23.46, 23.51, 23.20, 23.43, 23.24]
-control_worst = [22.87, 22.86, 22.53, 22.86, 22.77]
-candidate_worst = [22.89, 22.88, 22.54, 22.89, 22.80]
-control_coverage = [55.0, 55.3, 55.6, 55.4, 55.2]
-candidate_coverage = [55.0, 55.3, 55.5, 55.4, 55.2]
-control_covered = [22.56, 22.45, 22.07, 22.36, 22.17]
-candidate_covered = [22.56, 22.46, 22.08, 22.37, 22.20]
-control_average = [23.352, 22.778, 55.30, 22.322]
-candidate_average = [23.368, 22.800, 55.28, 22.334]
+fixed_selected_average = [23.368, 22.800, 55.28, 22.334]
+adaptive_screen_ceiling = [0.25, 0.5, 1.0]
+adaptive_screen_first_cloud = [
+    [23.46, 22.89, 55.0, 22.56],
+    [23.47, 22.91, 55.0, 22.57],
+    [23.48, 22.92, 54.9, 22.57],
+]
+adaptive_squared_first_cloud = [23.47, 22.90, 54.9, 22.57]
+control_mean = [23.46, 23.51, 23.19, 23.43, 23.23]
+candidate_mean = [23.47, 23.52, 23.23, 23.46, 23.25]
+control_worst = [22.89, 22.89, 22.53, 22.87, 22.78]
+candidate_worst = [22.91, 22.88, 22.56, 22.91, 22.80]
+control_coverage = [55.0, 55.3, 55.5, 55.4, 55.2]
+candidate_coverage = [55.0, 55.2, 55.5, 55.3, 55.1]
+control_covered = [22.57, 22.46, 22.06, 22.37, 22.19]
+candidate_covered = [22.56, 22.47, 22.10, 22.39, 22.21]
+control_average = [23.364, 22.792, 55.28, 22.330]
+candidate_average = [23.386, 22.812, 55.22, 22.346]
 metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
-continuation_seconds = [0.903, 1.059, 1.003, 0.952, 0.974]
-average_continuation_seconds = 0.9782
-maximum_peak_memory_bytes = 242835456
+continuation_seconds = [0.892, 0.952, 0.964, 0.935, 0.969]
+average_continuation_seconds = 0.9424
+maximum_peak_memory_bytes = 246575104
 memory_swap_bytes = 0
 oom_events = 0
 gpu_faults = 0
@@ -5462,8 +5471,8 @@ production_smoke_masked = false
 production_smoke_seconds = 0.6
 production_smoke_gaussian = [11.35, 11.13, 22.9, 12.89]
 production_maximum_peak_memory_bytes = 389623808
-artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-opacity-conditioned-{probe,half-probe,quarter-probe,quarter-five,eighth-probe,eighth-five}, target/audit-runs/multilight-gaussian-opacity-conditioned-eighth-production (gitignored)"
-verdict = "select eighth blend: all five held-light means, tails, and covered-pixel scores improve or tie while aggregate coverage changes by only -0.02 point; stronger blends trade too much coverage or covered quality; maskless captures reduce exactly to the old loss; adds no operation, shader, model field, API, or CLI option"
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-opacity-{conditioned-*,adaptive-quarter-probe,adaptive-half-probe,adaptive-half-five,adaptive-full-probe,adaptive-squared-probe}, target/audit-runs/multilight-gaussian-opacity-conditioned-eighth-production (gitignored)"
+verdict = "select opacity-adaptive half ceiling: the fresh five-cloud aggregate gains 0.022/0.020 dB mean/tail and 0.016 dB where hit for -0.06 coverage point; all means improve, four tails improve and one changes by -0.01 dB; fixed stronger blends and opacity-squared weighting trade more coverage; maskless captures reduce exactly to the old loss; adds no operation, shader, model field, API, or CLI option"
 
 [direct_gaussian.rejected_joint_light_gradient_accumulation]
 date = "2026-08-23"

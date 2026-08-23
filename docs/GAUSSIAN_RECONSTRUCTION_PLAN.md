@@ -3554,22 +3554,31 @@ The selected continuation now weakly conditions foreground color supervision
 on the frozen accumulated opacity. Ordinary premultiplied RGB can otherwise
 move a center to repair an opacity-magnitude error when the scratch PBR color
 is imperfect, even though opacity itself deliberately remains under the
-dedicated support fit. For a masked foreground ray, 12.5% of the color loss
-instead compares the render against `target * stop_gradient(opacity)`; the
-remaining 87.5% is the ordinary residual. Known background rays keep their
-ordinary residual exactly. With no masks, `target_alpha` is zero and the two
-terms algebraically collapse to the original loss, so real capture behavior is
-unchanged.
+dedicated support fit. For a masked foreground ray, the conditioned share is
+`0.5 * stop_gradient(opacity)` and compares the render against
+`target * stop_gradient(opacity)`; the rest is the ordinary residual. Poorly
+covered pixels therefore keep most of the coverage-driving objective. Known
+background rays keep their ordinary residual exactly. With no masks,
+`target_alpha` is zero and the two terms algebraically collapse to the original
+loss, so real capture behavior is unchanged.
 
-Full, half, quarter, and eighth-conditioned first-cloud screens reach
-23.47/22.94, 23.48/22.93, 23.46/22.89, and 23.47/22.89 dB respectively.
-Stronger conditioning trades coverage and covered-pixel quality for the tail;
-the eighth blend is the balanced choice. Across the definitive five fixed
-clouds it reaches 23.368/22.800 dB, 55.28% coverage, and 22.334 dB where hit,
-from 23.352/22.778 dB, 55.30%, and 22.322 dB. Every cloud's mean, worst view,
-and covered-pixel score improves or ties; only cloud 3 loses a rounded 0.1
-coverage point. Continuation averages 0.978 seconds and peaks at 243 MB with
-no swap, OOM, or GPU fault. A two-light maskless Bonsai production smoke
-reproduces the previous 11.35/11.13 dB, 22.9%, and 12.89 dB where-hit result,
-as required by the loss identity. This changes no model field, public option,
-Meganeura operation, shader, or runtime representation.
+A fixed conditioned share was first screened at full, half, quarter, and
+eighth strength, reaching 23.47/22.94, 23.48/22.93, 23.46/22.89, and
+23.47/22.89 dB on the first cloud. The eighth blend was the first balanced
+selection and reached 23.368/22.800 dB, 55.28% coverage, and 22.334 dB where
+hit over five clouds. Scaling the share by detached opacity improves that
+balance. Ceilings of 0.25, 0.5, and 1.0 reach 23.46/22.89 at 55.0% and 22.56
+where hit, 23.47/22.91 at 55.0% and 22.57, and 23.48/22.92 at 54.9% and 22.57.
+Squaring opacity reaches only 23.47/22.90 at 54.9% and adds another graph node,
+so both stronger shapes are rejected.
+
+The selected 0.5 ceiling reaches 23.386/22.812 dB, 55.22% coverage, and
+22.346 dB where hit over the definitive five clouds. A fresh fixed-eighth
+control reaches 23.364/22.792 dB, 55.28%, and 22.330 dB. All five means
+improve; four tails improve and one changes by -0.01 dB. Against the original
+fixed five-cloud selection, every mean, tail, and covered-pixel score improves
+or ties. Continuation averages 0.942 seconds and peaks at 247 MB with no swap,
+OOM, or GPU fault. The earlier two-light maskless Bonsai production smoke
+remains an exact loss identity at 11.35/11.13 dB, 22.9%, and 12.89 dB where
+hit. This changes no model field, public option, Meganeura operation, shader,
+or runtime representation.

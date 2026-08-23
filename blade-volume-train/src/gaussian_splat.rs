@@ -29,7 +29,7 @@ const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
 const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 2.0e-4;
-const MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT: f32 = 0.125;
+const MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING: f32 = 0.5;
 const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
 // Match the selected support geometry-refresh cadence so one preparation pass
 // never crosses a point at which candidate transforms could change.
@@ -909,7 +909,7 @@ fn fit_joint_multilight_positions(
         0.0,
         options.background,
         OpacityLoss::Mask,
-        MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT,
+        MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING,
     );
     let (mut session, _report) = mn::build(
         &graph,
@@ -1752,15 +1752,15 @@ fn build_graph_with_losses(
     opacity_loss_weight: f32,
     background: [f32; 3],
     opacity_loss: OpacityLoss,
-    opacity_conditioned_color_weight: f32,
+    opacity_conditioned_color_ceiling: f32,
 ) -> GaussianGraph {
     assert!(particles > 0);
     assert!(pixels > 0);
     assert!(candidates_per_pixel > 0);
     assert!(sh_degree <= 2);
     assert!(opacity_loss_weight.is_finite() && opacity_loss_weight >= 0.0);
-    assert!(opacity_conditioned_color_weight.is_finite());
-    assert!((0.0..=1.0).contains(&opacity_conditioned_color_weight));
+    assert!(opacity_conditioned_color_ceiling.is_finite());
+    assert!((0.0..=1.0).contains(&opacity_conditioned_color_ceiling));
     let rows = pixels * candidates_per_pixel;
     let sh_components = vol::get_sh_component_count(sh_degree);
 
@@ -1884,11 +1884,14 @@ fn build_graph_with_losses(
     let label_g = g.reshape(label_g, &[pixels, 1]);
     let label_b = g.split_b(label_gb, pixels as u32, 1, 1, 1);
     let label_b = g.reshape(label_b, &[pixels, 1]);
-    let opacity_condition = (opacity_conditioned_color_weight > 0.0).then(|| {
+    let opacity_condition = (opacity_conditioned_color_ceiling > 0.0).then(|| {
         let detached_opacity = g.stop_gradient(accumulated_opacity);
-        let conditioned_weight =
-            g.constant(vec![opacity_conditioned_color_weight; pixels], &[pixels, 1]);
+        let conditioned_weight = g.constant(
+            vec![opacity_conditioned_color_ceiling; pixels],
+            &[pixels, 1],
+        );
         let conditioned_weight = g.mul(target_alpha, conditioned_weight);
+        let conditioned_weight = g.mul(detached_opacity, conditioned_weight);
         let negative_conditioned_weight = g.neg(conditioned_weight);
         let ones = g.constant(vec![1.0_f32; pixels], &[pixels, 1]);
         let ordinary_weight = g.add(ones, negative_conditioned_weight);
@@ -3381,7 +3384,7 @@ mod tests {
             0.0,
             [0.0; 3],
             OpacityLoss::Mask,
-            MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT,
+            MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING,
         );
         let (mut session, _report) = mn::build(
             &graph,
@@ -3417,9 +3420,9 @@ mod tests {
         let alpha = 0.5 * MAX_ALPHA;
         let ordinary = (alpha * 0.8 - 0.6).abs();
         let conditioned = alpha * (0.8 - 0.6);
-        let expected_foreground = 3.0
-            * (MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT * conditioned
-                + (1.0 - MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT) * ordinary);
+        let conditioned_weight = MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING * alpha;
+        let expected_foreground =
+            3.0 * (conditioned_weight * conditioned + (1.0 - conditioned_weight) * ordinary);
         session.set_input("target_alpha", &[1.0]);
         session.step();
         session.wait();
