@@ -4428,3 +4428,12 @@ hit. The intermediate 0.75 ceiling fails the first-cloud screen at
 23.59/23.05 dB and 22.72 dB, while normal RMSE worsens from 53.69 to 53.73
 degrees. Both one-line batch scalings are removed. Runs remain under
 `target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-{full-opacity,three-quarter}-*`.
+
+Resetting Adam at the contrast boundary is rejected too. Zeroing only the
+normal first/second moments and restarting bias correction after centers are
+frozen reaches 23.59/23.05 dB and 22.71 dB where hit on the first cloud, while
+nearest-truth normal RMSE worsens to 53.76 degrees. The selected inherited
+state reaches 23.59/23.05 dB, 22.72 dB where hit, and 53.69 degrees. Its second
+moment therefore supplies useful damping despite the loss transition. The
+three reset calls are removed; the diagnostic is under
+`target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-reset-first/`.
