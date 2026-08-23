@@ -2141,8 +2141,14 @@ material path.
    accumulation, CPU-SGD, checkpoint, and all-target gates pass. Constant
    parameter gradients remain shared because the session initializes constants
    from the host; regressions cover this rare dual-role buffer and the
-   downstream oriented-surface graph that exposed it. The remaining bounded
-   target is now the actual per-ray colour function, followed by a longer
+   downstream oriented-surface graph that exposed it. Blade now also omits
+   gradients and Adam state for every optional surface field whose rate is
+   zero, and wholly frozen oriented geometry no longer records a surface
+   tangent. A matched 98,831-site directional-colour continuation falls from
+   354 to 262 graph passes and from 75.03 to 68.88 ms (-8.2%) at unchanged
+   21.2093/20.4618 dB train/next-view quality. This remains a generic
+   stop-gradient cleanup with no new operation or shader variant. The remaining
+   bounded target is the actual per-ray colour function, followed by a longer
    quality gate.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
    sweep the ray-query batch window for invariant pixels, query count, and frame

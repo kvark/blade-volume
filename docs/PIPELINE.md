@@ -2139,6 +2139,40 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   tests also pass under a 12 GB cgroup. That scope peaks at 4.791 GB with zero
   limit, swap, OOM, kill, or GPU-fault events on the RTX 5070.
 
+#### M2bq — Omit every frozen surface-field gradient (done)
+
+- The directional-only graph still differentiated all optional surface
+  parameters except its axes, even when their learning-rate ratios were zero.
+  Normals, plane offsets, spatial colour/detail tables, density logits, and
+  both Spherical Voronoi tables now use the same zero-cost `stop_gradient`
+  contract as fixed directional axes. They remain ordinary named parameters
+  for PLY/safetensors upload and readback. Checkpoint state already enumerates
+  only parameters that actually have gradients, so old extra moments remain
+  safely ignored and enabling a formerly fixed field starts its moments at
+  zero.
+- A wholly frozen oriented geometry now consumes the recorder's exact interval
+  directly and requests no surface Jacobian buffers. When positions or radii
+  move, the full tangent still retains the fixed surface-plane term: the
+  recorder includes it in its reference tangent, so it must be evaluated to
+  cancel exactly even though no gradient reaches the fixed normal or offset.
+  Surface queries remain available independently for spatial detail.
+- On a matched 98,831-site Room directional-colour continuation at
+  4,096 rays × 160 path entries, the fixed-geometry training graph falls from
+  354 to 262 passes and its steady GPU time falls from 75.03 to 68.88 ms
+  (-8.2%). Four-step GPU wait falls from 0.349 to 0.328 seconds. The control
+  and candidate both score 21.2093 dB on four training views and 20.4618 dB on
+  the next view. With the `radfoam-v1` moving-position schedule, the graph
+  still falls from 424 to 377 passes, setup from 19.630 to 5.838 seconds, and
+  peak host memory from 6.876 to 5.774 GB; the required full tangent limits
+  steady improvement to 111.87→108.67 ms (-2.9%). Its 20.1748/19.7137 dB
+  scores are unchanged.
+- The complete 520-test all-feature workspace gate, warning-denied all-target
+  clippy, and formatting pass under 12 GB cgroups on the RTX 5070. Tests peak
+  at 3.776 GB and clippy at 0.976 GB, with zero swap, OOM, throttling, Xid, or
+  GPU fault. This adds no public option, model field, graph operation, shader,
+  shader entry/group, binding, pipeline, backend variant, or dependency. The
+  remaining cost is the required released directional colour function itself.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

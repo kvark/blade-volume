@@ -134,7 +134,8 @@ pub struct WeightedPathGraph {
     /// Softplus pre-image of each rendered support radius.
     pub log_radii: mn::NodeId,
     /// Reference tangent for the differential streams retained by this graph.
-    /// Geometry-frozen oriented training contains only the surface-plane term.
+    /// Fully frozen weighted geometry uses the recorder's exact intervals and
+    /// needs no tangent stream.
     pub dt_reference_tangent: Option<mn::NodeId>,
     pub previous_cell_indices: Option<mn::NodeId>,
     pub dt_grad_previous: Option<mn::NodeId>,
@@ -754,10 +755,10 @@ pub fn build_volumetric_graph(
             use_surface_normal_loss: use_surface_normals,
             train_positions: true,
             train_radii: true,
+            surface_trainability: SurfaceTrainability::ALL,
             use_surface_detail: false,
             use_surface_detail_density: false,
             use_surface_detail_directional: false,
-            train_surface_detail_directional_axes: false,
             differentiate_surface_detail_directional_weights: false,
         },
         use_surface_offsets,
@@ -773,11 +774,75 @@ struct VolumetricGraphOptions {
     use_surface_normal_loss: bool,
     train_positions: bool,
     train_radii: bool,
+    surface_trainability: SurfaceTrainability,
     use_surface_detail: bool,
     use_surface_detail_density: bool,
     use_surface_detail_directional: bool,
-    train_surface_detail_directional_axes: bool,
     differentiate_surface_detail_directional_weights: bool,
+}
+
+#[derive(Clone, Copy)]
+struct SurfaceTrainability {
+    normals: bool,
+    offsets: bool,
+    color: bool,
+    detail_offsets: bool,
+    detail_heights: bool,
+    detail_colors: bool,
+    detail_density: bool,
+    detail_directional_axes: bool,
+    detail_directional_colors: bool,
+    spherical_axes: bool,
+    spherical_colors: bool,
+}
+
+impl SurfaceTrainability {
+    #[cfg(test)]
+    const NONE: Self = Self {
+        normals: false,
+        offsets: false,
+        color: false,
+        detail_offsets: false,
+        detail_heights: false,
+        detail_colors: false,
+        detail_density: false,
+        detail_directional_axes: false,
+        detail_directional_colors: false,
+        spherical_axes: false,
+        spherical_colors: false,
+    };
+
+    const ALL: Self = Self {
+        normals: true,
+        offsets: true,
+        color: true,
+        detail_offsets: true,
+        detail_heights: true,
+        detail_colors: true,
+        detail_density: true,
+        detail_directional_axes: true,
+        detail_directional_colors: true,
+        spherical_axes: true,
+        spherical_colors: true,
+    };
+
+    fn geometry(self) -> bool {
+        self.normals || self.offsets || self.detail_offsets || self.detail_heights
+    }
+}
+
+fn parameter_with_gradient(
+    g: &mut mn::Graph,
+    name: &str,
+    shape: &[usize],
+    train: bool,
+) -> mn::NodeId {
+    let parameter = g.parameter(name, shape);
+    if train {
+        parameter
+    } else {
+        g.stop_gradient(parameter)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -852,10 +917,6 @@ fn build_volumetric_graph_with_options(
         "surface-detail directional appearance requires surface detail",
     );
     assert!(
-        !options.train_surface_detail_directional_axes || options.use_surface_detail_directional,
-        "training surface-detail directional axes requires directional appearance",
-    );
-    assert!(
         !options.differentiate_surface_detail_directional_weights
             || options.use_surface_detail_directional,
         "differentiating surface-detail directional weights requires directional appearance",
@@ -875,7 +936,14 @@ fn build_volumetric_graph_with_options(
     let mask = g.input("mask", &[pl]);
     let use_geometry_jacobians =
         use_recorded_dt && (options.train_positions || options.train_radii);
-    let use_surface_jacobians = use_recorded_dt && use_surface_normals;
+    // Full weighted-geometry tangents include the fixed oriented-plane term
+    // in their reference value. Retain that stream whenever geometry moves so
+    // the unchanged surface term cancels exactly, even if its own parameter is
+    // frozen. With wholly frozen geometry the recorder's exact dt needs no
+    // tangent reconstruction at all.
+    let use_surface_jacobians = use_recorded_dt
+        && use_surface_normals
+        && (use_geometry_jacobians || options.surface_trainability.geometry());
     let use_any_jacobians = use_geometry_jacobians || use_surface_jacobians;
     let dt_reference_tangent = use_any_jacobians.then(|| g.input("dt_reference_tangent", &[pl]));
     let previous_cell_indices =
@@ -932,45 +1000,72 @@ fn build_volumetric_graph_with_options(
     let log_density = g.parameter("log_density", &[n_cells, 1]);
     let positions = g.parameter("positions", &[n_cells, 3]);
     let log_radii = use_recorded_dt.then(|| g.parameter("log_radii", &[n_cells, 1]));
-    let surface_normals =
-        use_surface_normals.then(|| g.parameter("surface_normals", &[n_cells, 3]));
-    let surface_offsets =
-        use_surface_offsets.then(|| g.parameter("surface_offsets", &[n_cells, 1]));
+    let surface_normals = use_surface_normals.then(|| {
+        parameter_with_gradient(
+            g,
+            "surface_normals",
+            &[n_cells, 3],
+            options.surface_trainability.normals,
+        )
+    });
+    let surface_offsets = use_surface_offsets.then(|| {
+        parameter_with_gradient(
+            g,
+            "surface_offsets",
+            &[n_cells, 1],
+            options.surface_trainability.offsets,
+        )
+    });
     let surface_color_coefficients = use_surface_color.then(|| {
-        g.parameter(
+        parameter_with_gradient(
+            g,
             "surface_color_coefficients",
             &[n_cells, vol::SURFACE_COLOR_COMPONENTS * 3],
+            options.surface_trainability.color,
         )
     });
     let surface_detail = options.use_surface_detail.then(|| SurfaceDetailGraph {
-        offsets: g.parameter(
+        offsets: parameter_with_gradient(
+            g,
             "surface_detail_offsets",
             &[n_cells, vol::SURFACE_DETAIL_SITES * 3],
+            options.surface_trainability.detail_offsets,
         ),
-        heights: g.parameter(
+        heights: parameter_with_gradient(
+            g,
             "surface_detail_heights",
             &[n_cells, vol::SURFACE_DETAIL_SITES],
+            options.surface_trainability.detail_heights,
         ),
-        colors: g.parameter(
+        colors: parameter_with_gradient(
+            g,
             "surface_detail_colors",
             &[n_cells, vol::SURFACE_DETAIL_SITES * 3],
+            options.surface_trainability.detail_colors,
         ),
         density_logits: options.use_surface_detail_density.then(|| {
-            g.parameter(
+            parameter_with_gradient(
+                g,
                 "surface_detail_density_logits",
                 &[n_cells, vol::SURFACE_DETAIL_SITES],
+                options.surface_trainability.detail_density,
             )
         }),
         directional: options.use_surface_detail_directional.then(|| {
             let width = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS * 3;
-            let axes = g.parameter("surface_detail_directional_axes", &[n_cells, width]);
             SurfaceDetailDirectionalGraph {
-                axes: if options.train_surface_detail_directional_axes {
-                    axes
-                } else {
-                    g.stop_gradient(axes)
-                },
-                colors: g.parameter("surface_detail_directional_colors", &[n_cells, width]),
+                axes: parameter_with_gradient(
+                    g,
+                    "surface_detail_directional_axes",
+                    &[n_cells, width],
+                    options.surface_trainability.detail_directional_axes,
+                ),
+                colors: parameter_with_gradient(
+                    g,
+                    "surface_detail_directional_colors",
+                    &[n_cells, width],
+                    options.surface_trainability.detail_directional_colors,
+                ),
             }
         }),
         surface_queries: surface_queries.unwrap(),
@@ -978,13 +1073,17 @@ fn build_volumetric_graph_with_options(
         surface_query_grad_current,
     });
     let spherical_voronoi = use_spherical_voronoi.then(|| SphericalVoronoiGraph {
-        axes: g.parameter(
+        axes: parameter_with_gradient(
+            g,
             "spherical_voronoi_axes",
             &[n_cells, vol::SPHERICAL_VORONOI_SITES * 3],
+            options.surface_trainability.spherical_axes,
         ),
-        colors: g.parameter(
+        colors: parameter_with_gradient(
+            g,
             "spherical_voronoi_colors",
             &[n_cells, vol::SPHERICAL_VORONOI_SITES * 3],
+            options.surface_trainability.spherical_colors,
         ),
     });
     let normalized_surface_normals = surface_normals.map(|normals| {
@@ -1256,6 +1355,7 @@ fn build_volumetric_graph_with_options(
                     None => surface_term,
                 })
             }
+            (Some(_), _, None, geometry_terms) => geometry_terms,
             (None, None, None, geometry_terms) => geometry_terms,
             _ => unreachable!("oriented path graph inputs must be declared together"),
         };
@@ -5410,13 +5510,25 @@ fn build_train_session(
             use_surface_normal_loss,
             train_positions,
             train_radii,
+            surface_trainability: SurfaceTrainability {
+                normals: surface_normal_lr_ratio > 0.0,
+                offsets: surface_offset_lr_ratio > 0.0,
+                color: surface_color_lr_ratio > 0.0,
+                detail_offsets: surface_detail_offset_lr_ratio > 0.0,
+                detail_heights: surface_detail_height_lr_ratio > 0.0,
+                detail_colors: surface_detail_color_lr_ratio > 0.0,
+                detail_density: surface_detail_density_lr_ratio > 0.0,
+                detail_directional_axes: surface_detail_directional_axis_lr_ratio > 0.0,
+                detail_directional_colors: surface_detail_directional_color_lr_ratio > 0.0,
+                spherical_axes: spherical_voronoi_axis_lr_ratio > 0.0,
+                spherical_colors: spherical_voronoi_color_lr_ratio > 0.0,
+            },
             use_surface_detail: model.surface_detail.is_some(),
             use_surface_detail_density: model
                 .surface_detail
                 .as_ref()
                 .is_some_and(|detail| detail.density_logits.is_some()),
             use_surface_detail_directional,
-            train_surface_detail_directional_axes: surface_detail_directional_axis_lr_ratio > 0.0,
             differentiate_surface_detail_directional_weights: use_surface_detail_directional
                 && (surface_detail_directional_axis_lr_ratio > 0.0
                     || train_positions
@@ -5468,14 +5580,26 @@ fn build_train_session(
         session.set_profiling(true);
     }
     if model.surface_detail.is_some() {
-        for name in [
-            "surface_detail_offsets",
-            "surface_detail_heights",
-            "surface_detail_colors",
+        for (name, ratio) in [
+            ("surface_detail_offsets", surface_detail_offset_lr_ratio),
+            ("surface_detail_heights", surface_detail_height_lr_ratio),
+            ("surface_detail_colors", surface_detail_color_lr_ratio),
         ] {
-            assert!(
+            assert_eq!(
                 session.has_param_grad(name),
-                "surface-detail parameter {name} has no training gradient"
+                ratio > 0.0,
+                "surface-detail parameter {name} training state does not match its learning rate"
+            );
+        }
+        if model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.density_logits.is_some())
+        {
+            assert_eq!(
+                session.has_param_grad("surface_detail_density_logits"),
+                surface_detail_density_lr_ratio > 0.0,
+                "surface-detail density training state does not match its learning rate"
             );
         }
         if model
@@ -5483,9 +5607,10 @@ fn build_train_session(
             .as_ref()
             .is_some_and(|detail| detail.directional.is_some())
         {
-            assert!(
+            assert_eq!(
                 session.has_param_grad("surface_detail_directional_colors"),
-                "surface-detail directional colors have no training gradient"
+                surface_detail_directional_color_lr_ratio > 0.0,
+                "surface-detail directional-color training state does not match its learning rate"
             );
             assert_eq!(
                 session.has_param_grad("surface_detail_directional_axes"),
@@ -5516,9 +5641,13 @@ fn build_train_session(
             .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
     }
     if model.radii.is_some() {
+        let train_surface_geometry = surface_normal_lr_ratio > 0.0
+            || surface_offset_lr_ratio > 0.0
+            || surface_detail_offset_lr_ratio > 0.0
+            || surface_detail_height_lr_ratio > 0.0;
         let expected_jacobians = if train_positions || train_radii {
             vol::gpu::PathJacobianMode::Full
-        } else if model.surface_normals.is_some() {
+        } else if train_surface_geometry {
             vol::gpu::PathJacobianMode::Surface
         } else {
             vol::gpu::PathJacobianMode::None
@@ -5557,7 +5686,8 @@ fn build_train_session(
                     .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
             }
         }
-        if model.surface_normals.is_some() {
+        if model.surface_normals.is_some() && expected_jacobians != vol::gpu::PathJacobianMode::None
+        {
             assert!(
                 path_bufs.has_surface_jacobians(),
                 "oriented weighted graph requires recorded surface Jacobians"
@@ -5967,9 +6097,13 @@ fn fit_appearance_pixel_batched(
         || config.lr_schedule == LrSchedule::RadFoamV1;
     let train_radii = densify.is_some()
         || (config.radius_lr_ratio > 0.0 && config.lr_schedule != LrSchedule::RadFoamV1);
+    let train_surface_geometry = config.surface_normal_lr_ratio > 0.0
+        || config.surface_offset_lr_ratio > 0.0
+        || config.surface_detail_offset_lr_ratio > 0.0
+        || config.surface_detail_height_lr_ratio > 0.0;
     let path_jacobian_mode = if train_positions || train_radii {
         vol::gpu::PathJacobianMode::Full
-    } else if model.surface_normals.is_some() {
+    } else if train_surface_geometry {
         vol::gpu::PathJacobianMode::Surface
     } else {
         vol::gpu::PathJacobianMode::None
@@ -9136,10 +9270,10 @@ mod tests {
                 use_surface_normal_loss: false,
                 train_positions: true,
                 train_radii: true,
+                surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
-                train_surface_detail_directional_axes: false,
                 differentiate_surface_detail_directional_weights: false,
             },
             true,
@@ -9176,10 +9310,10 @@ mod tests {
                 use_surface_normal_loss: true,
                 train_positions: false,
                 train_radii: false,
+                surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
-                train_surface_detail_directional_axes: false,
                 differentiate_surface_detail_directional_weights: false,
             },
             true,
@@ -9268,10 +9402,10 @@ mod tests {
                 use_surface_normal_loss: false,
                 train_positions: false,
                 train_radii: false,
+                surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
-                train_surface_detail_directional_axes: false,
                 differentiate_surface_detail_directional_weights: false,
             },
             true,
@@ -9346,6 +9480,79 @@ mod tests {
         assert!(session.has_param_grad("surface_normals"));
         assert!(session.has_param_grad("surface_offsets"));
         assert!(session.has_param_grad("surface_color_coefficients"));
+    }
+
+    #[test]
+    fn directional_color_only_graph_omits_frozen_surface_gradients() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping frozen surface-detail graph test: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        let mut trainability = SurfaceTrainability::NONE;
+        trainability.detail_directional_colors = true;
+        let vg = build_volumetric_graph_with_options(
+            &mut graph,
+            4,
+            1,
+            2,
+            0,
+            1,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            10.0,
+            [0.0; 3],
+            true,
+            true,
+            VolumetricGraphOptions {
+                use_surface_normal_loss: false,
+                train_positions: false,
+                train_radii: false,
+                surface_trainability: trainability,
+                use_surface_detail: true,
+                use_surface_detail_density: true,
+                use_surface_detail_directional: true,
+                differentiate_surface_detail_directional_weights: false,
+            },
+            true,
+            false,
+            false,
+            false,
+            ColorLoss::SmoothL1,
+        );
+        let weighted = vg.weighted_path.unwrap();
+        assert!(weighted.dt_reference_tangent.is_none());
+        assert!(weighted.dt_grad_surface_normal.is_none());
+        let (session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+
+        for name in [
+            "positions",
+            "log_radii",
+            "surface_normals",
+            "surface_offsets",
+            "surface_detail_offsets",
+            "surface_detail_heights",
+            "surface_detail_colors",
+            "surface_detail_density_logits",
+            "surface_detail_directional_axes",
+        ] {
+            assert!(
+                !session.has_param_grad(name),
+                "unexpected gradient for {name}"
+            );
+        }
+        assert!(session.has_param_grad("surface_detail_directional_colors"));
     }
 
     #[test]
@@ -10724,10 +10931,10 @@ mod tests {
                 use_surface_normal_loss: false,
                 train_positions: false,
                 train_radii: false,
+                surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
-                train_surface_detail_directional_axes: false,
                 differentiate_surface_detail_directional_weights: false,
             },
             true,
