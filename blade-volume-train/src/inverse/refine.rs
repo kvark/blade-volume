@@ -710,20 +710,29 @@ fn fit_rendered_linear_albedo(
     renderer.update_prepared_materials(tracer, &scene.model.materials);
     let base = rendered_linear_rgb(renderer, tracer, cameras);
     let mut responses = Vec::with_capacity(coordinates);
-    for coordinate in 0..coordinates {
-        let material = coordinate / 3;
-        let channel = coordinate % 3;
-        scene.model.materials[material].albedo[channel] = 1.0;
+    for material in 0..original.len() {
+        // Diffuse transport is diagonal in RGB, so one white-albedo render
+        // supplies the three independent coordinate responses.
+        scene.model.materials[material].albedo = [1.0; 3];
         renderer.update_prepared_materials(tracer, &scene.model.materials);
         let rendered = rendered_linear_rgb(renderer, tracer, cameras);
-        responses.push(
-            rendered
-                .iter()
-                .zip(&base)
-                .map(|(value, base)| value - base)
-                .collect::<Vec<_>>(),
-        );
-        scene.model.materials[material].albedo[channel] = 0.0;
+        for channel in 0..3 {
+            responses.push(
+                rendered
+                    .iter()
+                    .zip(&base)
+                    .enumerate()
+                    .map(|(index, (value, base))| {
+                        if index % 3 == channel {
+                            value - base
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        scene.model.materials[material].albedo = [0.0; 3];
     }
     let target: Vec<f32> = indices
         .iter()

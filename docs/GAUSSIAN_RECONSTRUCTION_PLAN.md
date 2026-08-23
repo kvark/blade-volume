@@ -3958,3 +3958,48 @@ workers stream large per-particle projection tables, so logical-thread
 occupancy is not the right target on the six-core test CPU. The balanced
 partition is removed before a Bonsai gate; its diagnostic remains under
 `target/audit-runs/balanced-view-grid-workers/`.
+
+Repeating the ridge-regularized affine albedo solve at the final exact-Gaussian
+material pass is rejected. The existing solve is valuable before scalar
+render refinement, but at this later point the table has already survived two
+complete-render coordinate passes and the final Gaussian geometry differs only
+slightly. Over the five fixed clouds, repeating the solve before the selected
+two coordinate steps reaches approximately 23.498/22.934 dB, 55.30% coverage,
+and 22.484 dB where hit, versus 23.496/22.926 dB, 55.28%, and 22.486 dB for
+coordinate polish alone. The tiny aggregate tail change is mixed: cloud 4
+loses mean and covered-pixel quality, and cloud 2 loses covered-pixel quality.
+The pass also grows from roughly 1.5--1.8 to 2.1--2.5 seconds. Lower exact
+training loss is not enough to select another initializer at the final
+ordering boundary, so the one-boolean prototype is removed. Logs remain under
+`target/audit-runs/current-synthetic-v1/final-gaussian-linear-init-probe/`.
+
+Adding a worst-training-view term to the final Gaussian material objective is
+rejected too. At 25% weight, the five-cloud aggregate is effectively tied at
+approximately 23.500/22.930 dB, 55.28% coverage, and 22.486 dB where hit, but
+cloud 2 regresses in mean, tail, and covered-pixel quality and cloud 3 loses
+its tail. Reducing the term to 10% does not recover the discriminating second
+cloud: it reaches only 23.61/23.00 dB and 22.56 dB where hit, below the
+selected 23.64/23.02 dB and 22.62 dB. Balancing the known-light training
+cameras is not a proxy for unseen-light novel-pose robustness. The alternate
+loss, private parameter, and call branches are removed; logs remain under
+`target/audit-runs/current-synthetic-v1/final-gaussian-view-balance-{quarter,tenth}-probe/`.
+
+## Grouped RGB basis for rendered material fitting (2026-08-23)
+
+The accepted affine material initializer now renders one white diffuse basis
+per shared material instead of one basis per RGB coordinate. PBR diffuse
+transport is channel-diagonal: the red albedo affects only red radiance, and
+likewise for green and blue. Splitting the three channels of one `[1,1,1]`
+render therefore produces the same three response columns while reducing the
+12-material basis from 36 production renders to 12. The intercept, normal
+equations, ridge, exact sRGB acceptance, and following coordinate descent are
+unchanged.
+
+The physical runtime recovery test still reaches the known albedo. On the
+first fixed cloud, the grouped and scalar bases report identical material
+losses (`0.0069934 -> 0.0063249`) and the complete held-light result remains
+23.58/23.03 dB at 55.0% coverage and 22.71 dB where hit. In reverse order, the
+accepted rendered-material stage takes 1.420 seconds versus 1.487 seconds for
+the scalar control, a 4.5% reduction. The change adds no API, option, shader,
+operation, binding, pipeline, model field, format, or dependency. Logs remain
+under `target/audit-runs/current-synthetic-v1/rendered-material-rgb-basis-{probe,control-after}/`.
