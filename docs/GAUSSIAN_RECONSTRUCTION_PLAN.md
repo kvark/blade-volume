@@ -4298,3 +4298,23 @@ test exercises the masked path, and a Bonsai production smoke preserves the
 maskless fallback exactly. Benchmark artifacts and cgroup telemetry remain
 under `target/audit-runs/current-synthetic-v1/joint-center-normal-*` and
 `target/audit-runs/joint-center-normal-production-fallback/`.
+
+## Rejected calibrated-normal anchor prior (2026-08-23)
+
+A normalized chord-distance prior does not make the stronger calibrated-light
+normal update generalize. The prototype raised the joint normal rate from the
+selected `5e-4` to `1e-3` and penalized mean squared distance from each
+pre-continuation unit normal in the same graph. It kept the renderer, center
+rate, ray schedule, calibrated environments, material polish, and 400-update
+budget unchanged.
+
+On the first fixed cloud, anchor weight 0.1 limits nearest-truth normal RMSE to
+54.23 degrees rather than the unanchored high-rate result's 53.05 degrees, but
+held-light output still falls to the same 23.56/23.00 dB and 22.67 dB where
+hit. Weight 1.0 further limits motion and reaches 54.91 degrees, yet only
+recovers 23.58/23.04 dB and 22.70 dB where hit. Both remain below the selected
+low-rate result's 23.59/23.05 dB, 22.71 dB where hit, and 54.03-degree normal
+RMSE. The harmful high-rate direction is therefore not explained by excessive
+angular displacement from the previous normal. The extra graph input, loss,
+constant, and higher rate are removed. Runs and capped telemetry remain under
+`target/audit-runs/current-synthetic-v1/joint-center-normal-anchor-{01,1}-first/`.
