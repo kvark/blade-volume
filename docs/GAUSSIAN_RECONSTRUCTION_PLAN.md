@@ -4039,3 +4039,29 @@ dependency. Logs remain under
 `target/audit-runs/rendered-material-incremental-basis-{room,bonsai}/` and
 their `-control-after` siblings; the fixed-cloud gate is under
 `target/audit-runs/current-synthetic-v1/rendered-material-compact-basis-five/`.
+
+## Rejected Gaussian support splitting (2026-08-23)
+
+Three private point-cloud densification variants are rejected. Splitting the
+largest observation-weighted tangent supports by half an extent, shrinking
+their footprint, and conserving coincident opacity lowers the first fixed
+cloud from the selected roughly 23.58/23.03 dB at 55.0% coverage to
+23.53/22.97 dB at 54.7%. Replacing that heuristic with the conventional
+multi-light `position-gradient magnitude * tangent extent` signal and
+splitting the top 10% around the midpoint of the existing 400-update budget is
+worse at 23.41/22.92 dB and 54.3% coverage. A zero-split midpoint graph-rebuild
+control reaches 23.57/23.04 dB and 55.0%, isolating the loss to the split rather
+than the Adam restart.
+
+A conservative split preserves scale, combined opacity, and almost the same
+rendered field by separating the two children only 0.1 tangent sigma. Across
+the five fixed clouds it reaches approximately 23.512/22.928 dB and 55.88%
+coverage, versus the selected 23.496/22.926 dB and 55.28%. That apparent
+coverage gain is blur: quality where both images hit falls from 22.486 to
+22.330 dB, and the persisted particle count and frame cost both rise by about
+10%. The split primitive, gradient readback, graph rebuild, synthetic-only
+call path, and tests are removed. Future densification needs a child
+initialization that preserves both footprint and local detail, plus an
+independent pruning or opacity continuation stage; adding overlapping copies
+is not geometry recovery. Logs remain under
+`target/audit-runs/current-synthetic-v1/densify-{25-first,gradient-10-first,rebuild-control-first,gradient-gentle-first,gradient-gentle-five}/`.
