@@ -4215,3 +4215,48 @@ fault. The complete 511-test workspace/all-target physical-GPU gate passes at
 a 3,408,805,888-byte cgroup peak; formatting and warnings-as-errors clippy also
 pass. Validation logs remain under
 `target/audit-runs/static-powerfoam-output-isolation-validation/`.
+
+## Rejected calibrated-light Gaussian specular polish (2026-08-23)
+
+Exact-render coordinate refinement of the shared Gaussian roughness/F0 table
+is rejected. The prototype kept final centers, covariance, opacity, normals,
+material assignments, diffuse albedo, and all four calibrated environments
+fixed. It prepared one production Gaussian tracer per aligned light and
+coordinate-descended twelve shared roughness values plus three F0 channels per
+material at two step sizes. Thus it tested whether multi-light evidence makes
+specular parameters identifiable without changing geometry or adding a
+training approximation.
+
+The four-light training loss falls from 0.0054151 to 0.0052844 and 32 of 96
+visited coordinates change in 7.27 seconds. Held-light output nevertheless
+falls from the selected roughly 23.58/23.03 dB and 22.70 dB where hit to
+23.51/22.99 dB and 22.64 dB where hit, at the same 55.0% coverage. An isolated
+roughness arm, with F0 effectively frozen, lowers its training loss from
+0.0054127 to 0.0053660 but is an exact held-quality identity at reported
+precision while still taking 7.30 seconds. F0 therefore compensates known-light
+errors actively, and roughness adds cost without demonstrated generalization.
+At the current roughly 55-degree normal error, calibrated repeats still do not
+make the specular lobe durable. The optimizer, evidence reload, call path, and
+about 170 lines of API/plumbing are removed; production retains the selected
+rough-dielectric prior. Logs remain under
+`target/audit-runs/current-synthetic-v1/multilight-gaussian-{specular,roughness}-first/`.
+
+## Rejected final-normal Gaussian covariance alignment (2026-08-23)
+
+The learned Gaussian covariance frame is not forcibly rotated onto the final
+explicit PBR normal. Direct Gaussian training starts from the extracted
+surface frame and then freezes covariance rotation while later support-aware
+surface refinement changes the shading normal. A prototype preserved all
+learned axis lengths and rotated each covariance as a whole so that its local
+Y axis matched that final normal before attaching PBR data. This removes a
+semantic frame mismatch without introducing another learned parameter.
+
+On the first fixed cloud it changes 1,202 supported covariance frames. The
+selected held-light volumetric Gaussian result is roughly 23.58/23.03 dB
+mean/worst, 55.0% coverage, and 22.70 dB where hit. Alignment produces
+23.58/23.02 dB, the same 55.0% coverage, and 22.70 dB where hit. The slight
+worst-view regression and otherwise exact identity do not justify mutating
+geometry after its image-space optimization, so the helper, call path, and
+test are removed without expanding the run to five clouds. The complete run
+and cgroup telemetry remain under
+`target/audit-runs/current-synthetic-v1/covariance-normal-alignment-first/`.
