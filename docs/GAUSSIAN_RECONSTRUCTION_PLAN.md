@@ -3679,6 +3679,18 @@ first cloud lowers its tail from 23.00 to 22.97 dB while reaching only 22.62
 dB where hit. The signed scratch path, paired labels, validation branch, and
 tests are removed; the selected continuation keeps ordinary per-light RGB.
 
+Refreshing shading normals from the continued Gaussian centers is rejected.
+After the selected position updates, a point-cloud-only PCA fit used twelve
+nearest centers, aligned each fitted plane to the established photometric
+normal, and applied only a 10% normalized blend before PBR attachment. It did
+not rotate covariance or change positions, support, materials, or the scalar
+surface. On the first fixed cloud the held-light result falls from
+23.53/23.00 dB and 22.60 dB where hit to 23.51/22.97 dB and 22.57 dB, with
+coverage unchanged at 55.1%. The moved volumetric centers still contain
+overlapping depth sheets, so Euclidean neighbours do not define a cleaner
+surface manifold than the existing multi-view normal. The helper is removed
+without tuning a smaller blend toward an identity.
+
 ## Validation-clean dependency stack (2026-08-23)
 
 The workspace now pins Blade `3d01645`, current `main` plus three isolated
