@@ -51,6 +51,11 @@ struct Args {
     #[argh(option, default = "0")]
     geometry_steps_per_view: usize,
 
+    /// position rate for --geometry-images, relative to its learning rate
+    /// (the exact radfoam-v1 schedule supplies its own absolute rate)
+    #[argh(option, default = "0.01")]
+    geometry_position_lr_ratio: f32,
+
     /// optional foreground-mask directory mirroring the image paths
     #[argh(option)]
     masks: Option<String>,
@@ -552,9 +557,11 @@ fn build_evaluation_views(
 fn geometry_continuation_config(
     config: &pipeline::PipelineConfig,
     steps_per_view: usize,
+    position_lr_ratio: f32,
 ) -> pipeline::PipelineConfig {
     let mut continuation = config.clone();
     continuation.fit.steps_per_view = steps_per_view;
+    continuation.fit.position_lr_ratio = position_lr_ratio;
     continuation.fit.densify = None;
     continuation.fit.resume_step = 0;
     continuation.fit.stop_after_steps = None;
@@ -567,12 +574,15 @@ fn geometry_continuation_config(
 fn validate_geometry_continuation_args(
     images: Option<&str>,
     steps_per_view: usize,
+    position_lr_ratio: f32,
 ) -> Result<(), &'static str> {
-    if images.is_some() == (steps_per_view > 0) {
-        Ok(())
-    } else {
-        Err("--geometry-images and --geometry-steps-per-view must be supplied together")
+    if images.is_some() != (steps_per_view > 0) {
+        return Err("--geometry-images and --geometry-steps-per-view must be supplied together");
     }
+    if images.is_some() && (!position_lr_ratio.is_finite() || position_lr_ratio < 0.0) {
+        return Err("--geometry-position-lr-ratio must be finite and non-negative");
+    }
+    Ok(())
 }
 
 fn main() {
@@ -582,6 +592,7 @@ fn main() {
     if let Err(message) = validate_geometry_continuation_args(
         args.geometry_images.as_deref(),
         args.geometry_steps_per_view,
+        args.geometry_position_lr_ratio,
     ) {
         eprintln!("{message}");
         std::process::exit(2);
@@ -1071,8 +1082,11 @@ fn main() {
             args.test_views,
             args.test_every,
         );
-        let continuation_config =
-            geometry_continuation_config(&config, args.geometry_steps_per_view);
+        let continuation_config = geometry_continuation_config(
+            &config,
+            args.geometry_steps_per_view,
+            args.geometry_position_lr_ratio,
+        );
         let views = build_evaluation_views(
             &outcome.reconstruction,
             geometry_images,
@@ -1372,6 +1386,7 @@ mod tests {
         assert!(default.masks.is_none());
         assert!(default.geometry_images.is_none());
         assert_eq!(default.geometry_steps_per_view, 0);
+        assert_eq!(default.geometry_position_lr_ratio, 0.01);
         assert_eq!(default.opacity_weight, None);
         assert_eq!(resolve_opacity_weight(default.opacity_weight, false), 0.0);
         assert_eq!(
@@ -1443,6 +1458,8 @@ mod tests {
                 "aligned",
                 "--geometry-steps-per-view",
                 "200",
+                "--geometry-position-lr-ratio",
+                "0.005",
                 "--output",
                 "model.ply",
             ],
@@ -1450,14 +1467,17 @@ mod tests {
         .unwrap();
         assert_eq!(geometry.geometry_images.as_deref(), Some("aligned"));
         assert_eq!(geometry.geometry_steps_per_view, 200);
+        assert_eq!(geometry.geometry_position_lr_ratio, 0.005);
     }
 
     #[test]
     fn geometry_continuation_is_paired_and_starts_a_fresh_fixed_topology_fit() {
-        assert!(validate_geometry_continuation_args(None, 0).is_ok());
-        assert!(validate_geometry_continuation_args(Some("aligned"), 200).is_ok());
-        assert!(validate_geometry_continuation_args(Some("aligned"), 0).is_err());
-        assert!(validate_geometry_continuation_args(None, 200).is_err());
+        assert!(validate_geometry_continuation_args(None, 0, 0.01).is_ok());
+        assert!(validate_geometry_continuation_args(Some("aligned"), 200, 0.01).is_ok());
+        assert!(validate_geometry_continuation_args(Some("aligned"), 0, 0.01).is_err());
+        assert!(validate_geometry_continuation_args(None, 200, 0.01).is_err());
+        assert!(validate_geometry_continuation_args(Some("aligned"), 200, -0.01).is_err());
+        assert!(validate_geometry_continuation_args(Some("aligned"), 200, f32::NAN).is_err());
 
         let mut primary = pipeline::PipelineConfig::default();
         primary.fit.steps_per_view = 1_000;
@@ -1467,8 +1487,9 @@ mod tests {
         primary.fit.resume_state_path = Some(path::PathBuf::from("resume.bin"));
         primary.fit.checkpoint_path = Some(path::PathBuf::from("checkpoint.ply"));
 
-        let continuation = geometry_continuation_config(&primary, 200);
+        let continuation = geometry_continuation_config(&primary, 200, 0.01);
         assert_eq!(continuation.fit.steps_per_view, 200);
+        assert_eq!(continuation.fit.position_lr_ratio, 0.01);
         assert!(continuation.fit.densify.is_none());
         assert_eq!(continuation.fit.resume_step, 0);
         assert!(continuation.fit.stop_after_steps.is_none());

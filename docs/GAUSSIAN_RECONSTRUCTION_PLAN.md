@@ -4731,9 +4731,13 @@ gate. Production `train_colmap` accepts an aligned directory through
 `--geometry-images DIR --geometry-steps-per-view 200`; both options must be
 present together. The selected training cameras are matched by their existing
 COLMAP relative filenames, missing aligned views are an error, and the same
-masks apply. Resume/checkpoint state and densification are cleared for this
-fresh fixed-topology phase. No graph operation, shader, model field, file
-format, or dependency is added.
+masks apply. The continuation has its own selected `0.01` position-rate ratio,
+so primary COLMAP training remains fixed by default while the aligned light can
+move sites; `--geometry-position-lr-ratio 0` explicitly requests density and
+appearance only under constant/cosine schedules. The exact `radfoam-v1`
+schedule retains its own absolute position rate. Resume/checkpoint state and
+densification are cleared for this fresh fixed-topology phase. No graph
+operation, shader, model field, file format, or dependency is added.
 
 The explicit first-cloud rerun reaches 24.03/23.20 dB mean/worst at 55.1%
 coverage and 22.90 dB where hit, consistent with the selected gain under normal

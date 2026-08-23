@@ -41,8 +41,12 @@ above. Add `--masks masks/` for a foreground directory mirroring the image
 paths; masked runs supervise opacity and default its loss weight to 1. When a
 second capture has the same cameras and filenames but different illumination,
 add `--geometry-images aligned-light/ --geometry-steps-per-view 200` for a
-short fixed-topology continuation before saving the foam. The ordinary
-single-capture path is unchanged. See `docs/PIPELINE.md` for the design and
+short fixed-topology continuation before saving the foam. Its position rate
+defaults to the selected `0.01` ratio and can be overridden with
+`--geometry-position-lr-ratio` for constant/cosine schedules (the exact
+`radfoam-v1` schedule keeps its absolute position rate); the ordinary
+single-capture path is unchanged.
+See `docs/PIPELINE.md` for the design and
 `docs/MESH_TO_FOAM.md` for the parallel mesh-to-foam path.
 
 ## Current Reconstruction Results
