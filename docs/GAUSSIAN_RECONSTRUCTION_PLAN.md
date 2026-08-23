@@ -3300,11 +3300,11 @@ pixels rather than preserving the reconstruction. The selected 20-update
 cadence is restored.
 
 An adjacent attempt to remove the indexed candidate recorder's explicit
-eight-worker cap is also removed as a production no-op. The selected batch is
-512 rays and the existing minimum of 64 rays per worker independently limits
-that call to eight workers. Apparent 2--6% paired timing differences therefore
-measure scheduling noise, not the source change. The five-cloud run remains in
-the established quality band, as expected for identical worker counts.
+eight-worker cap was initially removed as a no-op for an individual 512-ray
+batch: the existing minimum of 64 rays per worker independently limits that
+call to eight workers. That conclusion applies to the individual audit and
+final-loss batches, but not to the later grouped candidate preparation; the
+grouped case is revisited below.
 
 ## Rejected localized foreground ownership (2026-08-22)
 
@@ -3899,3 +3899,54 @@ invalid `copy_nonoverlapping`. This is deterministic inside the 12 GB cgroup
 on the stable RTX 5070 and is not a power-supply failure. The two remaining
 heads therefore cannot be removed merely by repinning to the already-merged
 integration revisions.
+
+## Rejected Gaussian candidate micro-optimizations (2026-08-23)
+
+Two further private candidate-recorder changes are deliberately not retained.
+Preallocating every screen tile to the active-particle count divided by the
+tile count removes some small-vector growth, but fresh 109,764-particle Room
+and 169,432-particle Bonsai fits remain exactly 14.6 and 16.0 seconds, the same
+as their paired controls. It also reserves storage for off-screen supports and
+for tiles that receive fewer than the view average. The extra allocation policy
+has no measured return.
+
+Precomputing each camera-space Gaussian origin's squared length and evaluating
+the minimum ray distance as `|o|² + dot(o,d) * depth` also fails the gate. The
+exact indexed-versus-exhaustive and grouped-versus-individual candidate-row
+tests pass, but Room changes only from 14.6 to 14.5 seconds and Bonsai from
+16.0 to 15.9 seconds. More importantly, the algebraically equivalent form has
+different floating-point rounding at the support boundary and changes the
+Bonsai continuation enough to move held-view quality and coverage. This is not
+a lossless hot-loop cleanup. Both prototypes are removed; their cgrouped logs
+remain under `target/audit-runs/candidate-grid-reserve/` and
+`target/audit-runs/gaussian-quadratic-distance/`.
+
+## Full-CPU grouped Gaussian candidate preparation (2026-08-23)
+
+Grouped direct-Gaussian preparation now uses the process's available CPU
+parallelism instead of retaining the recorder's older eight-worker ceiling.
+The minimum of 64 rays per worker still bounds small calls: the individual
+512-ray audit and final-loss batches remain at eight workers. The production
+path, however, prepares twenty unchanged 512-ray training batches together,
+so its 10,240 independent rays can use all twelve hardware threads on the test
+machine. Candidate membership, per-ray locality order, exact hit arithmetic,
+row scatter, optimizer inputs, and training order do not change.
+
+Reverse-order controls confirm that this is not a warm-run effect. The
+109,764-particle Room paired fit falls from 14.6--15.4 seconds to 12.4 seconds
+(15--19%), and the 169,432-particle Bonsai fit falls from 16.0--16.5 seconds to
+14.1 seconds (12--15%). The exact grouped-versus-individual candidate-row test
+continues to match every index and mask. Persisted Room held-view Gaussian PBR
+remains approximately 14.04/12.91 dB with 78.8% coverage, and Bonsai remains
+12.38/9.98 dB with 85.2% coverage, within the controls' existing atomic-update
+variation. The cgroup scopes peak at 336.5 MiB and 487.5 MiB with no swap, OOM,
+GPU fault, validation warning, or Xid. The selected implementation removes one
+private scheduling cap and adds no API, option, dependency, graph operation,
+shader, binding, model field, or format.
+
+The five fixed synthetic clouds average 23.496/22.924 dB, 55.28% coverage,
+and 22.484 dB where hit after the complete calibrated-light continuation and
+persist/reload gate, matching the selected 23.496/22.926 dB, 55.28%, and
+22.486 dB baseline. Their smaller paired fits average 4.225 seconds; the extra
+workers target high-particle production captures rather than changing the
+small-scene schedule.

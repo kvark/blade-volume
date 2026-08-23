@@ -1447,7 +1447,6 @@ fn record_indexed_candidates(
     let mut mask = vec![0.0_f32; entries];
     let worker_count = thread::available_parallelism()
         .map_or(1, |count| count.get())
-        .min(8)
         .min(pixels.div_ceil(64).max(1));
     let chunk_pixels = pixels.div_ceil(worker_count);
     thread::scope(|scope| {
