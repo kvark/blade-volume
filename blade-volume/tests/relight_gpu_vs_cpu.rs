@@ -135,7 +135,9 @@ impl Harness {
         let halves =
             unsafe { std::slice::from_raw_parts(self.readback.data() as *const u16, count * 4) };
         halves
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|texel| {
                 let mut out = [0.0f32; 4];
                 for (value, half) in out.iter_mut().zip(texel) {

@@ -4132,7 +4132,7 @@ fn next_parameter(readback: &mut ParameterReadback, expected: &str) -> Vec<f32> 
 fn apply_model_surface_planes(model: &mut vol::PointCloudModel, readback: &mut ParameterReadback) {
     if let Some(ref mut normals) = model.surface_normals {
         let out_normals = next_parameter(readback, "surface_normals");
-        for (normal, values) in normals.iter_mut().zip(out_normals.chunks_exact(3)) {
+        for (normal, values) in normals.iter_mut().zip(out_normals.as_chunks::<3>().0) {
             *normal = glam::Vec3::from_slice(values).normalize_or_zero();
             if *normal == glam::Vec3::ZERO {
                 *normal = glam::Vec3::Z;
@@ -4145,7 +4145,7 @@ fn apply_model_surface_planes(model: &mut vol::PointCloudModel, readback: &mut P
     if let Some(ref mut detail) = model.surface_detail {
         let offsets = next_parameter(readback, "surface_detail_offsets");
         detail.heights = next_parameter(readback, "surface_detail_heights");
-        for (offset, values) in detail.offsets.iter_mut().zip(offsets.chunks_exact(3)) {
+        for (offset, values) in detail.offsets.iter_mut().zip(offsets.as_chunks::<3>().0) {
             *offset = glam::Vec3::from_slice(values);
         }
     }
@@ -7116,7 +7116,7 @@ mod tests {
         for (offset, raw) in detail
             .offsets
             .iter()
-            .zip(raw_detail_offsets.chunks_exact(3))
+            .zip(raw_detail_offsets.as_chunks::<3>().0)
         {
             assert_eq!(*offset, glam::Vec3::from_slice(raw));
         }
@@ -9622,12 +9622,12 @@ mod tests {
             .edge_a
             .iter()
             .zip(first.edge_b.iter())
-            .zip(first.edge_direction.chunks_exact(3))
+            .zip(first.edge_direction.as_chunks::<3>().0)
         {
             let expected = (model.points[a as usize] - model.points[b as usize])
                 .truncate()
                 .normalize();
-            assert_eq!(direction, expected.to_array());
+            assert_eq!(*direction, expected.to_array());
         }
     }
 
@@ -10656,7 +10656,7 @@ mod tests {
         let mut moved_offsets = model.surface_offsets.clone().unwrap();
         moved_offsets[0] += 0.2;
         let mut moved_normals = vec![0.0_f32; n_cells * 3];
-        for values in moved_normals.chunks_exact_mut(3) {
+        for values in moved_normals.as_chunks_mut::<3>().0 {
             values.copy_from_slice(glam::Vec3::Z.as_ref());
         }
         moved_normals[..3].copy_from_slice(moved_normal.as_ref());
@@ -10773,7 +10773,7 @@ mod tests {
 
         let moved_normal = glam::Vec3::new(0.3, 0.0, 1.0).normalize();
         let mut moved_normals = vec![0.0_f32; model.points.len() * 3];
-        for normal in moved_normals.chunks_exact_mut(3) {
+        for normal in moved_normals.as_chunks_mut::<3>().0 {
             normal.copy_from_slice(glam::Vec3::Z.as_ref());
         }
         moved_normals[..3].copy_from_slice(moved_normal.as_ref());
@@ -10863,7 +10863,7 @@ mod tests {
         let facing_camera = session.read_loss();
 
         let mut normals = vec![0.0_f32; model.points.len() * 3];
-        for values in normals.chunks_exact_mut(3) {
+        for values in normals.as_chunks_mut::<3>().0 {
             values.copy_from_slice(&glam::Vec3::Z.to_array());
         }
         session.set_parameter("surface_normals", &normals);
@@ -11206,7 +11206,7 @@ mod tests {
         for point in initial.points.iter_mut() {
             point.w = 1.0;
         }
-        for coefficients in initial.sh_coefficients.chunks_exact_mut(3) {
+        for coefficients in initial.sh_coefficients.as_chunks_mut::<3>().0 {
             coefficients.fill(-0.5 / SH_C0);
         }
         let camera = vol::CameraParams {

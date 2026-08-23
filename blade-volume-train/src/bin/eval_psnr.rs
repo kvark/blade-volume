@@ -126,8 +126,10 @@ fn top_error_pixels(
     assert_eq!(target.len() % 3, 0);
     let mut errors = Vec::with_capacity(target.len() / 3);
     for (pixel, (target_rgb, prediction_rgb)) in target
-        .chunks_exact(3)
-        .zip(prediction.chunks_exact(3))
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(prediction.as_chunks::<3>().0)
         .enumerate()
     {
         let mut score = 0.0_f32;

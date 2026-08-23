@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(pixels.len(), 16 * 16 * 4);
         assert!(pixels.iter().all(|p| p.is_finite()));
         // Alpha must be in [0, 1].
-        for px in pixels.chunks_exact(4) {
+        for px in pixels.as_chunks::<4>().0 {
             assert!((0.0..=1.0).contains(&px[3]));
         }
     }
@@ -254,7 +254,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let any_alpha = pixels.chunks_exact(4).any(|px| px[3] > 0.0);
+        let any_alpha = pixels.as_chunks::<4>().0.iter().any(|px| px[3] > 0.0);
         assert!(any_alpha, "render produced an entirely transparent image");
     }
 

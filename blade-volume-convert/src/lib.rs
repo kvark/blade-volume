@@ -75,7 +75,9 @@ pub fn load_powerfoam_directional(
 
     let decode = |bytes: &[u8]| -> io::Result<Vec<glam::Vec3>> {
         bytes
-            .chunks_exact(12)
+            .as_chunks::<12>()
+            .0
+            .iter()
             .map(|chunk| {
                 let value = glam::Vec3::new(
                     f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
@@ -1102,7 +1104,7 @@ fn gather_node_triangles(
                 return Err(ConvertError::MissingMeshData);
             }
 
-            for tri in indices.chunks_exact(3) {
+            for tri in indices.as_chunks::<3>().0 {
                 let i0 = tri[0] as usize;
                 let i1 = tri[1] as usize;
                 let i2 = tri[2] as usize;
@@ -1521,12 +1523,16 @@ fn rgba8_from_gltf_image(image: &gltf::image::Data) -> Vec<u8> {
         gltf::image::Format::R8G8B8A8 => image.pixels.clone(),
         gltf::image::Format::R8G8B8 => image
             .pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|c| [c[0], c[1], c[2], 255])
             .collect(),
         gltf::image::Format::R8G8 => image
             .pixels
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|c| [c[0], c[0], c[0], c[1]])
             .collect(),
         gltf::image::Format::R8 => image
@@ -1536,7 +1542,9 @@ fn rgba8_from_gltf_image(image: &gltf::image::Data) -> Vec<u8> {
             .collect(),
         gltf::image::Format::R16 => image
             .pixels
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|c| {
                 let value = unorm16(c);
                 [value, value, value, 255]
@@ -1544,7 +1552,9 @@ fn rgba8_from_gltf_image(image: &gltf::image::Data) -> Vec<u8> {
             .collect(),
         gltf::image::Format::R16G16 => image
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|c| {
                 let value = unorm16(&c[..2]);
                 [value, value, value, unorm16(&c[2..])]
@@ -1552,12 +1562,16 @@ fn rgba8_from_gltf_image(image: &gltf::image::Data) -> Vec<u8> {
             .collect(),
         gltf::image::Format::R16G16B16 => image
             .pixels
-            .chunks_exact(6)
+            .as_chunks::<6>()
+            .0
+            .iter()
             .flat_map(|c| [unorm16(&c[..2]), unorm16(&c[2..4]), unorm16(&c[4..]), 255])
             .collect(),
         gltf::image::Format::R16G16B16A16 => image
             .pixels
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .flat_map(|c| {
                 [
                     unorm16(&c[..2]),
@@ -1569,12 +1583,16 @@ fn rgba8_from_gltf_image(image: &gltf::image::Data) -> Vec<u8> {
             .collect(),
         gltf::image::Format::R32G32B32FLOAT => image
             .pixels
-            .chunks_exact(12)
+            .as_chunks::<12>()
+            .0
+            .iter()
             .flat_map(|c| [float32(&c[..4]), float32(&c[4..8]), float32(&c[8..]), 255])
             .collect(),
         gltf::image::Format::R32G32B32A32FLOAT => image
             .pixels
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .flat_map(|c| {
                 [
                     float32(&c[..4]),

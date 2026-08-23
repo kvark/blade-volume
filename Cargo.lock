@@ -443,7 +443,7 @@ dependencies = [
 [[package]]
 name = "blade-egui"
 version = "0.8.1"
-source = "git+https://github.com/kvark/blade?rev=3d01645c1f83083ad863f11d0d3571cdf004e149#3d01645c1f83083ad863f11d0d3571cdf004e149"
+source = "git+https://github.com/kvark/blade?rev=a6ae6a73219762f63efb4e5be4550fbc0d301b2f#a6ae6a73219762f63efb4e5be4550fbc0d301b2f"
 dependencies = [
  "blade-graphics",
  "blade-macros",
@@ -456,7 +456,7 @@ dependencies = [
 [[package]]
 name = "blade-graphics"
 version = "0.8.4"
-source = "git+https://github.com/kvark/blade?rev=3d01645c1f83083ad863f11d0d3571cdf004e149#3d01645c1f83083ad863f11d0d3571cdf004e149"
+source = "git+https://github.com/kvark/blade?rev=a6ae6a73219762f63efb4e5be4550fbc0d301b2f#a6ae6a73219762f63efb4e5be4550fbc0d301b2f"
 dependencies = [
  "ash",
  "ash-window",
@@ -492,7 +492,7 @@ dependencies = [
 [[package]]
 name = "blade-macros"
 version = "0.3.0"
-source = "git+https://github.com/kvark/blade?rev=3d01645c1f83083ad863f11d0d3571cdf004e149#3d01645c1f83083ad863f11d0d3571cdf004e149"
+source = "git+https://github.com/kvark/blade?rev=a6ae6a73219762f63efb4e5be4550fbc0d301b2f#a6ae6a73219762f63efb4e5be4550fbc0d301b2f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -502,7 +502,7 @@ dependencies = [
 [[package]]
 name = "blade-util"
 version = "0.4.1"
-source = "git+https://github.com/kvark/blade?rev=3d01645c1f83083ad863f11d0d3571cdf004e149#3d01645c1f83083ad863f11d0d3571cdf004e149"
+source = "git+https://github.com/kvark/blade?rev=a6ae6a73219762f63efb4e5be4550fbc0d301b2f#a6ae6a73219762f63efb4e5be4550fbc0d301b2f"
 dependencies = [
  "blade-graphics",
  "bytemuck",
@@ -1434,7 +1434,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2353,7 +2353,7 @@ dependencies = [
 [[package]]
 name = "meganeura"
 version = "0.2.0"
-source = "git+https://github.com/kvark/meganeura?rev=52f5cc6a54cc071044bfbd6bc0a17fde59119ffa#52f5cc6a54cc071044bfbd6bc0a17fde59119ffa"
+source = "git+https://github.com/kvark/meganeura?rev=b2cc25638127c64944f96c2aeea7bf8e5c124691#b2cc25638127c64944f96c2aeea7bf8e5c124691"
 dependencies = [
  "blade-graphics",
  "blade-macros",
@@ -3611,7 +3611,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4619,7 +4619,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

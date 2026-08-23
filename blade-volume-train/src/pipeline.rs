@@ -390,7 +390,9 @@ fn build_views_from_optional_masks<'a>(
                 load_and_rectify_image(&mask_path, config.resolution.0, config.resolution.1, camera)
                     .map_err(|error| format!("cannot read mask {}: {error}", mask_path.display()))
                     .map(|rgb| {
-                        rgb.chunks_exact(3)
+                        rgb.as_chunks::<3>()
+                            .0
+                            .iter()
                             .map(|pixel| pixel[0].clamp(0.0, 1.0))
                             .collect::<Vec<_>>()
                     })
@@ -398,7 +400,9 @@ fn build_views_from_optional_masks<'a>(
             .transpose()?;
         let target_rgb = if let Some(ref alpha) = target_alpha {
             target_rgb
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .zip(alpha)
                 .flat_map(|(rgb, &coverage)| {
                     std::array::from_fn::<f32, 3, _>(|channel| {
@@ -2119,7 +2123,7 @@ mod tests {
         let pixels = load_and_downsample_image(&path, 2, 2).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(pixels.len(), 2 * 2 * 3);
-        for px in pixels.chunks_exact(3) {
+        for px in pixels.as_chunks::<3>().0 {
             assert!((px[0] - 1.0).abs() < 1e-6, "red should be 1.0");
             assert!(px[1].abs() < 1e-6);
             assert!(px[2].abs() < 1e-6);

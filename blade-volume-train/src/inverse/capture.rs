@@ -114,7 +114,9 @@ pub fn linear_to_srgb(value: f32) -> f32 {
 
 fn decode_pixels(encoded: &[f32], mask: Option<&[f32]>) -> Vec<[f32; 3]> {
     encoded
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .enumerate()
         .map(|(index, rgb)| {
             let coverage = mask.map_or(1.0, |mask| mask[index]);
@@ -395,7 +397,9 @@ impl Capture {
                                     })
                                     .map(|encoded| {
                                         encoded
-                                            .chunks_exact(3)
+                                            .as_chunks::<3>()
+                                            .0
+                                            .iter()
                                             .map(|rgb| rgb[0].clamp(0.0, 1.0))
                                             .collect::<Vec<_>>()
                                     })

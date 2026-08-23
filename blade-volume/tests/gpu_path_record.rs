@@ -1377,9 +1377,11 @@ fn gpu_powerfoam_splats_cross_disconnected_cech_components() {
     let rays = rays_for_pixels(&camera, &pixels, 64, 64);
     let cpu = cpu_record(&model, &rays, 0, 16, 100.0);
     assert!(
-        cpu.mask
-            .chunks_exact(16)
-            .any(|row| row.iter().filter(|&&mask| mask > 0.0).count() > 1),
+        cpu.mask.as_chunks::<16>().0.iter().any(|row| row
+            .iter()
+            .filter(|&&mask| mask > 0.0)
+            .count()
+            > 1),
         "fixture must require crossing disconnected supports",
     );
 

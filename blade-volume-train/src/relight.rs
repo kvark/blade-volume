@@ -335,9 +335,9 @@ impl Dataset {
             ));
         }
         let mut out = Vec::with_capacity(self.pixel_count());
-        for texel in bytes.chunks_exact(16) {
+        for texel in bytes.as_chunks::<16>().0 {
             let mut values = [0.0f32; 4];
-            for (index, chunk) in texel.chunks_exact(4).enumerate() {
+            for (index, chunk) in texel.as_chunks::<4>().0.iter().enumerate() {
                 values[index] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             }
             out.push(values);
@@ -413,9 +413,9 @@ pub fn read_environment_plane(path: &path::Path) -> Result<(Vec<[f32; 3]>, usize
             ));
         }
         let mut texels = Vec::with_capacity(texel_count);
-        for texel in bytes.chunks_exact(16) {
+        for texel in bytes.as_chunks::<16>().0 {
             let mut rgb = [0.0f32; 3];
-            for (channel, chunk) in texel.chunks_exact(4).take(3).enumerate() {
+            for (channel, chunk) in texel.as_chunks::<4>().0.iter().take(3).enumerate() {
                 rgb[channel] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             }
             texels.push(rgb);
