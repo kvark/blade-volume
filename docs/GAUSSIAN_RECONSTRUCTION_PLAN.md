@@ -3505,3 +3505,13 @@ reloads the Gaussian PBR asset, and improves its training score from
 11.30/11.09 to 11.35/11.13 dB. Where-hit quality rises from 11.69 to 12.89 dB;
 coverage changes from 23.0% to 22.9%. The continuation itself falls from
 1.4--1.5 seconds to 0.5 seconds. This replaces the sequential implementation.
+
+Native gradient accumulation across all lights is tested and rejected. Four
+corresponding-light micro-batches are averaged before each Adam update, with a
+fourfold global rate preserving approximately the same total displacement.
+This is a true simultaneous light objective and needs no new graph operation,
+but the five-cloud result is mixed: 23.356/22.778 dB, 55.30% coverage, and
+22.318 dB where hit. Mean rises by 0.004 dB while hit-region quality loses
+0.004 dB; cloud 2 regresses in mean, worst view, and where-hit quality. Runtime
+only falls from 0.920 to 0.889 seconds. The temporary accumulation schedule is
+removed, retaining per-light Adam updates in the shared session.

@@ -5428,3 +5428,23 @@ production_control_gaussian = [11.30, 11.09, 23.0, 11.69]
 production_candidate_gaussian = [11.35, 11.13, 22.9, 12.89]
 artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-joint-{session-probe,session-five,unique-probe,unique-five}, target/audit-runs/multilight-gaussian-production-joint (gitignored)"
 verdict = "select: every cloud's held-light mean and worst view improves or ties, every aggregate improves, five-cloud continuation is 3.33x faster, and the persisted real Bonsai smoke improves mean, tail, and where-hit quality in 0.5 seconds; reuses one existing graph and adds no Meganeura op, shader, model field, or option"
+
+[direct_gaussian.rejected_joint_light_gradient_accumulation]
+date = "2026-08-23"
+protocol = "selected single-session paired-light schedule on five fixed clouds; average the four corresponding-light gradients with Meganeura native temporal accumulation; apply Adam once per four micro-batches at fourfold global rate; same 400 backward batches and unseen-light persisted scoring"
+control_average = [23.352, 22.778, 55.30, 22.322]
+candidate_average = [23.356, 22.778, 55.30, 22.318]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+candidate_mean = [23.46, 23.49, 23.20, 23.41, 23.22]
+candidate_worst = [22.88, 22.84, 22.54, 22.86, 22.77]
+candidate_coverage = [55.0, 55.3, 55.6, 55.4, 55.2]
+candidate_covered = [22.56, 22.44, 22.06, 22.35, 22.18]
+control_average_seconds = 0.9202
+candidate_seconds = [0.858, 0.890, 0.932, 0.874, 0.892]
+candidate_average_seconds = 0.8892
+maximum_peak_memory_bytes = 247508992
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-accumulate4-{probe,five} (gitignored)"
+verdict = "reject and remove: +0.004 dB mean and 0.031 seconds saved trade -0.004 dB where-hit quality; cloud 2 regresses across mean, worst, and hit-region quality in the definitive run"
