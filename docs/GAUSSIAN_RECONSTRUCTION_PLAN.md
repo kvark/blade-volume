@@ -4114,3 +4114,24 @@ imperfect center correspondence, so changing one field through a nearest
 spatial match breaks the represented surface rather than measuring its
 independent error. Future component bounds need the particle's actual
 multi-view surface correspondence; nearest truth is no longer admissible.
+
+## Rejected alternating Gaussian normal refresh (2026-08-23)
+
+Alternating calibrated-light center fitting with a moved-center normal refresh
+is rejected. The prototype split the existing 400 position updates into four
+equal rounds. After each round it copied the moved Gaussian centers into the
+surface model, re-observed every calibrated-light capture there, and ran the
+existing 512-candidate per-view normal solver. This kept the total center
+optimization budget fixed and refreshed 1,398 normals on the first fixed
+cloud.
+
+The result falls to 23.30/22.73 dB, 54.9% coverage, and 22.41 dB where hit,
+from the selected approximately 23.59/23.05 dB, 55.0%, and 22.71 dB where
+hit. It also takes about 1.98 seconds instead of roughly 0.9 seconds for the
+ordinary center pass. Moving centers changes which observed surface sample a
+particle represents; refreshing only normals at the new coordinates breaks
+the jointly fitted appearance/material correspondence. The prototype is
+removed before a five-cloud gate. A future alternating method must update the
+whole coupled surface state from explicit multi-view correspondences, not
+re-sample one attribute independently. The rejected output remains under
+`target/audit-runs/current-synthetic-v1/alternating-center-normal-first/`.
