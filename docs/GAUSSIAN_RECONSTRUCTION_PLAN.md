@@ -3746,6 +3746,24 @@ disappears. The prototype is removed, and the established sRGB support
 objective remains under the later masked-linear, frozen-support geometry
 continuation. Its diagnostic log is under
 `target/audit-runs/current-synthetic-v1/pbr-support-linear-probe/`.
+Even a 5% interpolation from sRGB toward linear is negative on the first
+cloud: final volumetric quality falls from the selected approximately
+23.53/23.03 dB, 55.0% coverage, and 22.62 dB where hit to 23.50/22.99 dB,
+54.7%, and 22.60 dB. The temporary blended sampler is removed too; smaller
+weights would converge toward the selected identity, while this arm provides
+no evidence that the trade reverses. Its log is under
+`target/audit-runs/current-synthetic-v1/pbr-support-linear-blend-5pct-probe/`.
+
+Foreground importance sampling does not make the final center continuation
+more efficient. A private deterministic sampler reserved one quarter of each
+512-ray batch for pixels that are foreground in every calibrated capture and
+left the other three quarters on the exact selected uniform sequence. On the
+first cloud it falls to 23.47/22.96 dB, 55.3% coverage, and 22.55 dB where hit,
+from approximately 23.53/23.03 dB, 55.0%, and 22.62 dB. The extra silhouette
+interior updates weaken background/spill control and change the objective's
+measure rather than adding independent correspondence. The sampler, common-
+foreground table, and constants are removed. Its log is under
+`target/audit-runs/current-synthetic-v1/multilight-linear-foreground-quarter-probe/`.
 
 Anchoring that continuation to its initial centers is rejected. A private
 mean-squared displacement term at weight one reaches approximately
