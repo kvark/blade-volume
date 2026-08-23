@@ -3665,6 +3665,20 @@ cloud it falls from 23.53/23.00 dB, 55.1% coverage, and 22.60 dB where hit to
 boundary weakens the interior multi-view correspondence without recovering
 support. The sampler and its test are removed before a five-cloud gate.
 
+An aligned-light contrast objective is also rejected. The private scratch
+renderer stayed in the same graph but subtracted 25% of the next calibrated
+light's predicted diffuse appearance and matching RGB capture from every
+ordinary target. This cancels part of the light-independent material and
+opacity residual while retaining 75% of the original signal. Across five
+clouds it reaches exactly the selected 23.428 dB mean, but changes the worst
+view from 22.874 to 22.866 dB, coverage from 55.34% to 55.30%, and where-hit
+quality from 22.366 to 22.382 dB. Clouds 3 and 4 regress in both mean and tail;
+the aggregate covered-region gain is therefore another mixed trade rather
+than a robust geometry improvement. Raising the reference share to 50% on the
+first cloud lowers its tail from 23.00 to 22.97 dB while reaching only 22.62
+dB where hit. The signed scratch path, paired labels, validation branch, and
+tests are removed; the selected continuation keeps ordinary per-light RGB.
+
 ## Validation-clean dependency stack (2026-08-23)
 
 The workspace now pins Blade `3d01645`, current `main` plus three isolated
