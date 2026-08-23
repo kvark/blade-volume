@@ -4543,3 +4543,36 @@ to 23.29/22.74 dB and 22.34 dB where hit. A learned volumetric center remains
 a mixture parameter rather than a new one-to-one surface correspondence. The
 late re-observation and material fit are removed; the capped run remains under
 `target/audit-runs/current-synthetic-v1/post-center-coupled-material-first/`.
+
+## Rejected foam-depth-owned Gaussian support (2026-08-23)
+
+The independent foam reconstruction's modal depth does not provide a safe
+owner for missing Gaussian opacity. The private prototype selected, for each
+foreground training ray with a confident foam hit, the Gaussian candidate
+nearest that strongest-absorption depth and routed a small one-sided opacity deficit only
+to that candidate. It reused the existing graph operations and Gaussian
+candidates; no backend operation, shader, entry point, dispatch, binding, or
+model field was added.
+
+At weight `0.1`, limiting the target to opacity below `0.5` produces five-cloud
+held-light mean/worst PSNR of 23.60/23.05, 23.67/23.07, 23.40/22.77,
+23.63/23.10, and 23.39/22.92 dB. Coverage remains 55.0%, 55.3%, 55.5%, 55.4%,
+and 55.2%, and where-hit quality is 22.72, 22.63, 22.29, 22.63, and 22.39 dB.
+Those aggregates look positive, but an immediate paired first-cloud control
+reaches 23.60/23.06 dB and 22.73 dB where hit: the candidate loses both strict
+tail measures under the same executable and machine state.
+
+Weakening the full-deficit term to `0.05` only moves the failure. It ties the
+paired first-cloud control at 23.60/23.06 dB and 22.73 dB where hit, but cloud
+4 reaches 23.60/23.07 dB and 22.58 dB where hit instead of the selected
+23.61/23.07 dB and 22.61 dB. The unthresholded `0.1` form likewise helps the
+first two clouds and regresses clouds 3--5. A single foam depth mode collapses
+a multi-surface ray distribution and cannot reliably identify the
+Gaussian mixture component that owns a silhouette deficit.
+
+The depth input, candidate-depth storage, owner mask, graph loss, API surface,
+and synthetic wiring are removed. A future ownership signal must retain
+multiple depth modes or establish cross-view particle correspondence rather
+than selecting the candidate nearest one modal depth. All capped runs and
+telemetry remain under
+`target/audit-runs/current-synthetic-v1/depth-owned-pbr-support-*`.
