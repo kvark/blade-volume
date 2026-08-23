@@ -4884,3 +4884,43 @@ rather than merely absorbing exposure. All score prototypes are removed.
 Runs and 12 GiB cgroup telemetry remain under
 `target/audit-runs/current-synthetic-v1/photometric-normal-{log-*,unbounded-albedo}/`;
 the maximum host-memory peak is 256.8 MiB with zero swap, OOM, or GPU fault.
+
+## Denser-capture audit and rejected PBR rate scaling (2026-08-23)
+
+A new twelve-camera Blade capture exercises nine training and three held-out
+poses with the same five environments, 200x150 resolution, 128 paths per pixel,
+and direct lighting as the established eight-camera fixture. The complete
+cloud-only pipeline trains the primary foam for 2,700 updates, continues it for
+1,800 updates under the aligned secondary light, and fuses 2,880 Gaussian
+surface particles. Its final nearest-truth normal RMSE is 49.22 degrees, versus
+roughly 53 degrees on the earlier six-training-view reconstructions. The static
+Gaussian reaches 25.99/23.91 dB mean/worst held-pose quality. The relightable
+volumetric Gaussian reaches 22.52/20.91 dB under the unseen light, while its
+scalar surface control reaches 23.31/22.36 dB. The larger capture therefore
+provides useful geometry evidence but exposes a remaining volumetric PBR
+handoff gap.
+
+This is not evidence that adding cameras itself lowers Gaussian quality.
+Blade's fixture spaces `RELIGHT_VIEWS` uniformly over the camera arc, so
+changing the count changes every interior pose; the eight- and twelve-camera
+sets share only their endpoints. Their held-pose sets also differ. A valid
+density study needs nested training cameras and a fixed evaluation set rather
+than comparing these two aggregate scores directly.
+
+Increasing only the fixed-centre PBR support rates by 1.5 at nine or more
+training views is rejected. On the exact persisted twelve-view foam it changes
+the volumetric held-light result from 22.59/20.94 dB, 57.1% coverage, and 21.20
+dB where hit to 22.62/20.95 dB, 57.2%, and 21.23 dB. The independently fitted
+static field remains 25.99/23.92 dB, confirming that the experiment is isolated
+to PBR support. The small synthetic movement does not transfer: matched Room
+quality falls from 14.35/12.89 to 14.12/12.77 dB, and Bonsai falls from
+12.48/10.68 to 12.42/10.59 dB. Room's extra coverage is lower-fidelity overlap,
+not recovered geometry. The view-count branch and rate plumbing are removed;
+the fixed selected schedule remains unchanged.
+
+All runs used a separate 12 GiB cgroup. The paired real controls peak at 602.1
+MiB and the candidate at 492.5 MiB; the fixed synthetic candidate peaks at
+292.4 MiB. There is no swap, OOM, validation error, Xid, or GPU fault. Data and
+logs remain outside version control under
+`target/audit-runs/current-synthetic-v1/dataset-12/` and
+`target/audit-runs/dense-pbr-rate-{control,candidate}/`.
