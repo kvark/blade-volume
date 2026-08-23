@@ -4094,3 +4094,23 @@ with no swap, OOM, validation error, Xid, or GPU fault. The change adds no
 option, shader, graph operation, binding, format field, or dependency. Logs
 remain under `target/audit-runs/opacity-prune-{five,005-room,005-bonsai}/` and
 `target/audit-runs/current-synthetic-v1/opacity-prune-005-five/`.
+
+The same threshold is deliberately not applied to the static light field.
+It improves every fixed synthetic mean and tail while removing 3.5--4.2% of
+those SH-0 clouds, but the exact paired SH-2 Room field loses 0.056 dB mean and
+0.092 dB worst-view quality when 17.4% is removed. A 0.025 threshold still
+loses 0.015/0.031 dB while removing 6.7%. At 0.01, Room and Bonsai are
+quality-neutral to 0.001 dB, but only 1.2% and 0.1% of their particles are
+removed. That negligible cross-scene saving does not justify a second output
+policy. Static fields retain their low-opacity directional tails; only the
+independently gated PBR cloud is compacted.
+
+A refreshed nearest-truth component substitution is also rejected as a
+quality diagnostic for the final joint model. On the first current cloud,
+replacing only centers, normals, or materials by the Euclidean-nearest
+training-truth sample lowers the 23.59 dB baseline to 20.40, 23.52, and
+22.37 dB respectively. The fitted fields compensate one another around an
+imperfect center correspondence, so changing one field through a nearest
+spatial match breaks the represented surface rather than measuring its
+independent error. Future component bounds need the particle's actual
+multi-view surface correspondence; nearest truth is no longer admissible.
