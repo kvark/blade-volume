@@ -3746,6 +3746,51 @@ or CLI option. The definitive logs are under
 `target/audit-runs/current-synthetic-v1/post-continuation-gaussian-material-025-five/`
 and `target/audit-runs/post-continuation-gaussian-material-production/`.
 
+Extending that final polish to all four calibrated training lights is
+rejected. A prototype kept one exact Gaussian tracer per aligned capture and
+minimized their pixel-count-weighted sRGB loss while changing the same shared
+diffuse table. Across the five fixed clouds it reaches approximately
+23.436/22.880 dB, 55.28% coverage, and 22.410 dB where hit, below the selected
+single-light polish at 23.496/22.926 dB, 55.28%, and 22.486 dB where hit.
+Every mean falls, and four of five tails and covered-pixel scores fall. The
+joint objective also takes 5.99--7.28 seconds instead of 1.54--1.84 seconds.
+The auxiliary lights are valuable for geometry because their changing
+shading disambiguates position, but averaging them into the final small
+diffuse palette pulls that deliberately low-capacity appearance model away
+from the unseen-light solution. The extra evidence type, tracers, and joint
+loss are removed. Logs remain under
+`target/audit-runs/current-synthetic-v1/joint-final-gaussian-material-five/`.
+
+Linear radiance is also rejected for the final single-light Gaussian material
+polish, even when every selected view has a mask. Geometry and support are
+fixed here, so it does not reproduce the earlier coverage collapse, but the
+first fixed cloud still falls from the selected 23.59/23.03 dB and 22.71 dB
+where hit to 23.51/22.97 dB and 22.61 dB where hit at the same 55.0% coverage.
+Its own linear training loss falls from 0.0023666 to 0.0023314, confirming that
+the regression is objective choice rather than a failed optimizer. The sRGB
+objective's extra emphasis on low radiance remains useful for the final
+appearance table, unlike the independently masked center continuation. The
+temporary linear scorer and dispatch are removed. The diagnostic log is under
+`target/audit-runs/current-synthetic-v1/final-gaussian-material-linear-probe/`.
+
+Reversing the coordinate order only for the half-step Gaussian polish is an
+identity at the first-cloud gate: 23.58/23.03 dB, 55.0% coverage, and 22.71 dB
+where hit, equal to the selected forward schedule at reported precision. It
+changes 32 rather than 30 coordinates without improving held-light output or
+runtime. The symmetric-order prototype is removed before a five-cloud gate;
+the simpler one-order loop remains shared with scalar material refinement.
+Its log is under
+`target/audit-runs/current-synthetic-v1/final-gaussian-material-reverse-half-isolated-probe/`.
+
+Restricting final material error to independently masked foreground pixels is
+rejected as well. On the first fixed cloud it reaches 23.54/23.00 dB and
+22.65 dB where hit, below the selected 23.59/23.03 dB and 22.71 dB, with the
+same 55.0% coverage. Although geometry is frozen, background pixels still
+constrain the colour carried by low-opacity Gaussian tails at the silhouette;
+discarding them weakens rather than cleans the material signal. The masked
+scorer is removed before a five-cloud gate. Its log is under
+`target/audit-runs/current-synthetic-v1/final-gaussian-material-foreground-probe/`.
+
 Re-enabling anisotropic scale learning under that new objective remains a
 mixed trade. At scale rates `1e-4` and `2e-4`, the five-cloud aggregates reach
 approximately 23.442/22.908 dB, 55.28% coverage, and 22.382 dB where hit, and
