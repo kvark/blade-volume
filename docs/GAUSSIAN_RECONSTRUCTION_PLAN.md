@@ -3453,3 +3453,10 @@ The `4e-4` schedule averages 22.790 dB worst, 55.38%, and 22.330 dB, while
 clouds 2 and 5 lose mean quality and cloud 5 loses worst-view quality. These
 noise-sized aggregate gains do not justify a less robust default; `2e-4`
 remains selected.
+
+A balanced consensus alternative is also rejected before a five-cloud run.
+It fits every calibrated light from the same round baseline and averages the
+independent center deltas, eliminating sequential ordering without changing
+the graph. On the first fixed cloud it falls to 23.40/22.79 dB at 54.9%
+coverage, versus the selected 23.43/22.87 dB at 55.0%. Averaging removes too
+much of the useful cumulative geometry update; the prototype is removed.
