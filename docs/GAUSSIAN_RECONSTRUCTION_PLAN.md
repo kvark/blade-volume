@@ -3527,3 +3527,14 @@ hit, versus 23.45/22.87 dB, 55.0%, and 22.56 dB for the selected uncalibrated
 scratch table. Both prototypes are removed. Real exposure calibration needs
 capture metadata or a calibrated reference, rather than a render-space scalar
 that is not identifiable separately from volumetric opacity and transport.
+
+Updating opacity in the joint calibrated-light continuation is rejected too.
+The corrected probe enables the existing opacity logits at a conservative
+`1e-3` rate, leaving the preceding support fit and every other setting equal.
+On the first fixed cloud it reaches 23.45/22.86 dB, 55.2% coverage, and
+22.54 dB where hit, versus 23.45/22.87 dB, 55.0%, and 22.56 dB with frozen
+opacity. Extra coverage comes at the expense of tail and covered-pixel
+fidelity: calibrated RGB residuals can still change transmittance to compensate
+imperfect material, normal, and transport predictions. The temporary rate is
+removed before a five-cloud gate; the dedicated single-light support stage
+remains authoritative for opacity.
