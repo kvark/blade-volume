@@ -4741,3 +4741,41 @@ optimizer variation. A two-view Bonsai smoke exercises the production path and
 serialization. Runs and cgroup telemetry remain under
 `target/audit-runs/current-synthetic-v1/geometry-light-continuation-*` and
 `target/audit-runs/geometry-continuation-colmap-smoke/`.
+
+## Rejected additional foam-light stages and rate changes (2026-08-23)
+
+The selected sun-west continuation remains one stage at the inherited `0.01`
+position-rate ratio. Adding 50 updates per view under sky-dome at the same rate
+improves the first cloud, but the five-cloud aggregate is mixed: held-light
+volumetric Gaussian PBR reaches 24.046/23.376 dB mean/worst, 55.34% coverage,
+and 22.882 dB where hit, versus the selected 24.070/23.340 dB, 55.42%, and
+22.886 dB. Three clouds lose mean quality and coverage falls. Uniform light,
+a return to sun-east, 25/100-step sky-dome schedules, and both orders of a
+uniform-plus-sky sequence are also inferior or mixed on the first cloud.
+
+Halving only the auxiliary sky-dome position rate improves four clouds and the
+rounded aggregate to 24.13/23.45 dB and 22.97 dB where hit, but the strongest
+cloud regresses from 24.27/23.52 to 24.22/23.45 dB, loses 0.1 coverage point,
+and falls from 23.22 to 23.06 dB where hit. A quarter rate still leaves that
+cloud at 24.23/23.52 dB and 23.16 dB where hit. This is not a robust default.
+
+Two training-only selectors are rejected with the schedule. Comparing moving
+positions with a density-only auxiliary fit correctly rejects the regressing
+cloud but cannot decide whether the density update itself should run. Restoring
+the prior SH table and scoring a withheld camera under the prior light rejects
+both the regressing cloud and a second cloud whose final held-light mean and
+tail improve. That camera was already used by the preceding prior-light fit,
+so the comparison is biased toward the baseline. Neither selector sees the
+held-out novel poses, but neither predicts their decision reliably enough to
+ship. The temporary options and branches are removed.
+
+Finally, changing the selected sun-west stage itself to half or double the
+position rate lowers the first cloud to 24.04/23.22 and 24.17/23.42 dB,
+respectively, from 24.27/23.52 dB. The existing `0.01` rate is therefore also
+the screened knee. Temporarily constraining the continuation to SH-0 or SH-1,
+then restoring the durable SH-2 table before extraction, lowers the same cloud
+to 24.07/23.22 and 23.96/23.15 dB. Directional appearance capacity is helping
+separate view dependence from geometry rather than merely hiding useful center
+gradients, so the temporary degree option is removed too. Artifacts and cgroup
+telemetry remain under
+`target/audit-runs/current-synthetic-v1/geometry-light-{sequential,position-rate,primary-rate,frozen-position,sunwest,validation,prior-validation,sh}*`.
