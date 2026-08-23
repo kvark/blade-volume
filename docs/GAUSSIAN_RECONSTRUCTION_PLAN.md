@@ -3654,3 +3654,30 @@ again to 23.51/22.98 dB and 22.58 dB where hit, without changing coverage.
 Both constants and the graph connection are removed before the five-cloud
 gate. The dedicated support fit remains responsible for masks; the later
 center pass remains color-only and opacity-conditioned.
+
+Deterministically oversampling the same silhouette evidence is rejected as
+well. A private sampler devoted one eighth of each aligned calibrated-light
+batch to the two-sided four-neighbour mask boundary while leaving the other
+seven eighths on the selected uniform sequence. It reused the existing RGB
+objective, and maskless captures were exactly unchanged. On the first fixed
+cloud it falls from 23.53/23.00 dB, 55.1% coverage, and 22.60 dB where hit to
+23.48/22.94 dB, 55.1%, and 22.58 dB. Concentrating updates on a narrow image
+boundary weakens the interior multi-view correspondence without recovering
+support. The sampler and its test are removed before a five-cloud gate.
+
+## Validation-clean dependency stack (2026-08-23)
+
+The workspace now pins Blade `3d01645`, current `main` plus three isolated
+Vulkan fixes: valid Naga workgroup layouts, the device-address allocation
+flag for external memory, and descriptor-pool counts that include binding
+arrays. Meganeura `52f5cc6` is current `main` plus Blade/Naga alignment,
+constant-gradient host visibility, and source-parallel scatter accumulation.
+All Blade crates resolve to the same revision and Naga resolves once.
+
+Blade's focused graphics suite, Meganeura's 206 library tests plus optimizer
+and training integration tests, and blade-volume's full workspace/all-target
+suite pass on the RTX 5070. The blade-volume suite peaks at 5.5 GB inside its
+12 GB cgroup and reports no swap, OOM, GPU fault, Vulkan validation warning,
+or VUID. Three superseded Blade validation branches were deleted. The one
+final Blade branch and one Meganeura dependency branch remain necessary until
+these commits are merged into their respective `main` branches.
