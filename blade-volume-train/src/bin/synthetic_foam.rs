@@ -698,6 +698,18 @@ fn refine_photometric_normals(
     Ok(train::inverse::decompose::refine_normals_known_lights_per_view(model, &lights, 512))
 }
 
+fn prepare_static_gaussian_surface(
+    mut surface: vol::relight::RelightModel,
+    density: &vol::PointCloudModel,
+    radius: f32,
+) -> vol::relight::RelightModel {
+    for surfel in &mut surface.surfels {
+        surfel.radius = radius;
+    }
+    train::inverse::surface::refine_normals_from_density(&mut surface.surfels, density, 0.1);
+    surface
+}
+
 fn main() {
     env_logger::init();
     let args: Args = argh::from_env();
@@ -975,21 +987,54 @@ fn main() {
         surfels,
         materials: vec![vol::relight::Material::default()],
     };
-    let mut powerfoam_surface = None;
+    let make_static_surface = |surface| {
+        prepare_static_gaussian_surface(surface, &model, voxel * args.disc_radius.max(0.1))
+    };
+    let mut static_gaussian_surface = (args.gaussian_output.is_some()
+        && (args.photometric_normals || args.surface_powerfoam_steps_per_view > 0))
+        .then(|| make_static_surface(geometry.clone()));
     if args.surface_powerfoam_steps_per_view > 0 {
         let started = std::time::Instant::now();
         let Some(gpu) = train::fit::try_init_gpu() else {
             fail("no supported GPU device for surface PowerFoam continuation");
+        };
+        let options = train::inverse::powerfoam::ContinueOptions {
+            steps_per_view: args.surface_powerfoam_steps_per_view,
+            ..Default::default()
+        };
+        let selection = if args.gaussian_output.is_some() && training_indices.len() >= 4 {
+            let (&validation_view, fit_views) = training_indices.split_last().unwrap();
+            let mut probe_surface = geometry.clone();
+            train::inverse::powerfoam::continue_surface(
+                &mut probe_surface,
+                &training_capture,
+                fit_views,
+                options,
+                gpu.clone(),
+            )
+            .unwrap_or_else(|error| fail(error));
+            let probe_surface = make_static_surface(probe_surface);
+            Some(
+                train::gaussian_splat::validate_static_surface_continuation(
+                    static_gaussian_surface.as_ref().unwrap(),
+                    &probe_surface,
+                    &training_capture,
+                    fit_views,
+                    validation_view,
+                    args.gaussian_steps,
+                    gpu.clone(),
+                )
+                .unwrap_or_else(|error| fail(error)),
+            )
+        } else {
+            None
         };
         let mut surface = geometry.clone();
         let outcome = train::inverse::powerfoam::continue_surface(
             &mut surface,
             &training_capture,
             &training_indices,
-            train::inverse::powerfoam::ContinueOptions {
-                steps_per_view: args.surface_powerfoam_steps_per_view,
-                ..Default::default()
-            },
+            options,
             gpu,
         )
         .unwrap_or_else(|error| fail(error));
@@ -1013,18 +1058,24 @@ fn main() {
             outcome.stats.final_loss,
             started.elapsed().as_secs_f64(),
         );
-        powerfoam_surface = Some(surface);
-    }
-    let static_gaussian_surface = (args.gaussian_output.is_some()
-        && (args.photometric_normals || powerfoam_surface.is_some()))
-    .then(|| {
-        let mut surface = powerfoam_surface.as_ref().unwrap_or(&geometry).clone();
-        for surfel in &mut surface.surfels {
-            surfel.radius = voxel * args.disc_radius.max(0.1);
+        if let Some(selection) = selection {
+            println!(
+                "static Gaussian continuation: {} at {:.2} -> {:.2} dB on withheld training view",
+                if selection.use_continued {
+                    "selected"
+                } else {
+                    "rejected"
+                },
+                selection.baseline_validation_psnr,
+                selection.continued_validation_psnr,
+            );
+            if selection.use_continued {
+                static_gaussian_surface = Some(make_static_surface(surface));
+            }
+        } else if args.gaussian_output.is_some() {
+            static_gaussian_surface = Some(make_static_surface(surface));
         }
-        train::inverse::surface::refine_normals_from_density(&mut surface.surfels, &model, 0.1);
-        surface
-    });
+    }
     if args.photometric_normals {
         let started = std::time::Instant::now();
         let stats = refine_photometric_normals(

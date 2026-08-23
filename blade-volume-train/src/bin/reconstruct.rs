@@ -400,15 +400,58 @@ fn main() {
             eprintln!("cannot initialize a supported GPU for surface PowerFoam continuation");
             std::process::exit(1);
         };
+        let options = train::inverse::powerfoam::ContinueOptions {
+            steps_per_view: args.surface_powerfoam_steps_per_view,
+            ..Default::default()
+        };
+        let baseline_surface = static_gaussian_surface
+            .clone()
+            .unwrap_or_else(|| geometry.clone());
+        let selection = if args.gaussian_output.is_some()
+            && sparse_gaussian_surface.is_none()
+            && train_views.len() >= 4
+        {
+            let (&validation_view, fit_views) = train_views.split_last().unwrap();
+            let mut probe_surface = baseline_surface.clone();
+            train::inverse::powerfoam::continue_surface(
+                &mut probe_surface,
+                &capture,
+                fit_views,
+                options,
+                gpu.clone(),
+            )
+            .unwrap_or_else(|message| {
+                eprintln!("cannot validate the surface continuation: {message}");
+                std::process::exit(1);
+            });
+            let baseline_probe =
+                static_surface_with_sparse(baseline_surface.clone(), &gaussian_sparse_support);
+            let continued_probe =
+                static_surface_with_sparse(probe_surface, &gaussian_sparse_support);
+            Some(
+                train::gaussian_splat::validate_static_surface_continuation(
+                    &baseline_probe,
+                    &continued_probe,
+                    &capture,
+                    fit_views,
+                    validation_view,
+                    args.gaussian_steps,
+                    gpu.clone(),
+                )
+                .unwrap_or_else(|message| {
+                    eprintln!("cannot validate the static Gaussian continuation: {message}");
+                    std::process::exit(1);
+                }),
+            )
+        } else {
+            None
+        };
         let surface = static_continuation_surface(&mut static_gaussian_surface, &geometry);
         let outcome = train::inverse::powerfoam::continue_surface(
             surface,
             &capture,
             &train_views,
-            train::inverse::powerfoam::ContinueOptions {
-                steps_per_view: args.surface_powerfoam_steps_per_view,
-                ..Default::default()
-            },
+            options,
             gpu,
         )
         .unwrap_or_else(|message| {
@@ -432,6 +475,21 @@ fn main() {
             stats.final_loss,
             started.elapsed().as_secs_f64(),
         );
+        if let Some(selection) = selection {
+            println!(
+                "static Gaussian continuation: {} at {:.2} -> {:.2} dB on withheld training view",
+                if selection.use_continued {
+                    "selected"
+                } else {
+                    "rejected"
+                },
+                selection.baseline_validation_psnr,
+                selection.continued_validation_psnr,
+            );
+            if !selection.use_continued {
+                static_gaussian_surface = Some(baseline_surface);
+            }
+        }
     }
 
     // ---------------------------------------------------- material and light
@@ -644,18 +702,12 @@ fn main() {
                 materials: vec![vol::relight::Material::default()],
             }
         } else {
-            let mut surface = neutral_static_surface(
+            static_surface_with_sparse(
                 static_gaussian_surface
                     .clone()
                     .unwrap_or_else(|| fitted.scene.model.clone()),
-            );
-            surface
-                .surfels
-                .extend(gaussian_sparse_support.iter().copied().map(|mut surfel| {
-                    surfel.material = 0;
-                    surfel
-                }));
-            surface
+                &gaussian_sparse_support,
+            )
         };
         let mut gaussian =
             train::gaussian_splat::from_surface(&gaussian_surface).unwrap_or_else(|error| {
@@ -1135,6 +1187,20 @@ fn neutral_static_surface(mut surface: vol::relight::RelightModel) -> vol::relig
         surfel.material = 0;
     }
     surface.materials = vec![vol::relight::Material::default()];
+    surface
+}
+
+fn static_surface_with_sparse(
+    surface: vol::relight::RelightModel,
+    sparse: &[vol::relight::Surfel],
+) -> vol::relight::RelightModel {
+    let mut surface = neutral_static_surface(surface);
+    surface
+        .surfels
+        .extend(sparse.iter().copied().map(|mut surfel| {
+            surfel.material = 0;
+            surfel
+        }));
     surface
 }
 

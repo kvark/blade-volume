@@ -2326,6 +2326,14 @@ Broken into sub-steps:
   session, so plan dumps, dispatch serialization, alias controls, and GPU
   timing can diagnose this production graph instead of silently using the
   defaults.
+  The static Gaussian consumer now keeps the full continuation only when a
+  Gaussian fitted without the last training camera beats the corresponding
+  baseline by at least 0.05 dB on that camera. The full five-cloud gate selects
+  clouds 1--4 and rejects cloud 5, matching the direction of every true
+  held-out result. Selected static mean/worst PSNR is 25.17/24.35 dB versus
+  24.97/24.22 without continuation. This is orchestration around the existing
+  PowerFoam and Gaussian fits; it adds no shader, operation, entry point,
+  binding, model field, format, or dependency.
   Packing a second independent row into each invocation is retained: it keeps
   the portable 256-thread workgroup and exact scalar order while amortizing
   scheduling. On the same 5070 it lowers the warm graph from 5.14--5.33 ms to

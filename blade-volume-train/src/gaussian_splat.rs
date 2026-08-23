@@ -42,6 +42,7 @@ const PREPARED_CANDIDATE_BATCHES: usize = 20;
 // smallest tested joint-safe setting across five clouds and two real gates.
 const PBR_SUPPORT_FEEDBACK: f32 = 0.025;
 const PBR_MIN_PERSISTED_OPACITY: f32 = 0.05;
+const STATIC_CONTINUATION_MIN_VALIDATION_GAIN_DB: f32 = 0.05;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
 /// points. The covariance columns follow `glam::Mat2`'s column-major layout.
@@ -360,8 +361,81 @@ pub struct SharedStagedFitStats {
     pub light_field_support: FitStats,
 }
 
+/// Training-only evidence for choosing an optional static-surface continuation.
+#[derive(Clone, Copy, Debug)]
+pub struct StaticSurfaceSelection {
+    pub use_continued: bool,
+    pub baseline_validation_psnr: f32,
+    pub continued_validation_psnr: f32,
+}
+
 /// Statistics for a paired PBR support and static light-field fit.
 pub type OutputFitStats = SharedStagedFitStats;
+
+fn static_continuation_wins(baseline: f32, continued: f32) -> bool {
+    continued >= baseline + STATIC_CONTINUATION_MIN_VALIDATION_GAIN_DB
+}
+
+/// Choose between two static Gaussian surfaces on one withheld training camera.
+///
+/// Both probes learn appearance and support from `fit_views`; the validation
+/// camera is never passed to either optimizer. The continued surface must win
+/// by a small margin so atomic-gradient noise cannot select a more expensive
+/// path. The caller can then fit the selected surface normally on every
+/// training view.
+pub fn validate_static_surface_continuation(
+    baseline: &vol::relight::RelightModel,
+    continued: &vol::relight::RelightModel,
+    capture: &crate::inverse::capture::Capture,
+    fit_views: &[usize],
+    validation_view: usize,
+    steps: usize,
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<StaticSurfaceSelection, String> {
+    if fit_views.contains(&validation_view) {
+        return Err("static continuation validation view must be withheld from fitting".into());
+    }
+    if validation_view >= capture.views.len() {
+        return Err(format!(
+            "static continuation validation view {validation_view} is outside {} available views",
+            capture.views.len()
+        ));
+    }
+    let mut baseline_gaussian = from_surface(baseline)?;
+    let mut continued_gaussian = from_surface(continued)?;
+    fit_staged_light_field(
+        &mut baseline_gaussian,
+        capture,
+        fit_views,
+        steps,
+        gpu.clone(),
+    )?;
+    fit_staged_light_field(&mut continued_gaussian, capture, fit_views, steps, gpu)?;
+    let baseline_validation_psnr = evaluate_views(
+        &baseline_gaussian,
+        capture,
+        &[validation_view],
+        64,
+        1.0e-5,
+        [0.0; 3],
+    )?[0];
+    let continued_validation_psnr = evaluate_views(
+        &continued_gaussian,
+        capture,
+        &[validation_view],
+        64,
+        1.0e-5,
+        [0.0; 3],
+    )?[0];
+    Ok(StaticSurfaceSelection {
+        use_continued: static_continuation_wins(
+            baseline_validation_psnr,
+            continued_validation_psnr,
+        ),
+        baseline_validation_psnr,
+        continued_validation_psnr,
+    })
+}
 
 struct MultilightFit {
     stats: FitStats,
@@ -3186,6 +3260,13 @@ mod tests {
         assert_eq!(selected_sh_degree(MIN_SH1_VIEWS), 1);
         assert_eq!(selected_sh_degree(MIN_SH2_VIEWS - 1), 1);
         assert_eq!(selected_sh_degree(MIN_SH2_VIEWS), 2);
+    }
+
+    #[test]
+    fn static_continuation_requires_a_validation_margin() {
+        assert!(!static_continuation_wins(24.0, 24.049));
+        assert!(static_continuation_wins(24.0, 24.05));
+        assert!(!static_continuation_wins(24.0, 23.9));
     }
 
     fn synthetic_capture(model: &vol::PointCloudModel) -> crate::inverse::capture::Capture {

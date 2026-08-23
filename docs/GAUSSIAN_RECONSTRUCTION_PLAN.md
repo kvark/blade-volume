@@ -4452,3 +4452,44 @@ features that identify glossy normals, while its approximate magnitude still
 biases the diffuse solution. The reflection graph, SH tables, inputs, helper
 refactor, and tests are removed. The capped run remains under
 `target/audit-runs/current-synthetic-v1/specular-sh-normal-first/`.
+
+## Rejected rank-augmented plane-sweep correspondence (2026-08-23)
+
+An illumination-order descriptor does not improve the final reconstruction.
+The prototype augmented the normalized plane-sweep patch with a half-weight
+ternary rank descriptor, preserving the original descriptor and all geometry,
+fusion, Gaussian, and PBR stages. Analytical plane and sphere correspondence
+tests passed. On the first fixed cloud, extracted position RMSE changes only
+from 0.5810 to 0.5807 world units, while held-light volumetric Gaussian output
+falls from 23.59/23.05 dB and 22.72 dB where hit to 23.44/22.86 dB and 22.49
+dB where hit. The descriptor and its tests are removed without a five-cloud
+expansion. The capped diagnostic remains under
+`target/audit-runs/current-synthetic-v1/rank-correspondence-first/`.
+
+## Selected validation-gated static continuation (2026-08-23)
+
+The optional masked PowerFoam surface continuation is now admitted to the
+static Gaussian output only by an internal holdout. The last training camera
+is excluded from both a baseline Gaussian fit and a continued-surface Gaussian
+fit. Continuation must improve that camera by at least 0.05 dB; the chosen
+surface is then fitted normally using every training camera. The production
+and synthetic paths share the selector. The complete PowerFoam output still
+uses all views and is always written when requested, so this gate changes only
+its use as initialization for the separate static Gaussian asset.
+
+Validation deltas on the five fixed clouds are +0.085, +0.178, +0.403,
++0.133, and -0.069 dB. The selector therefore retains the full continuation
+for clouds 1--4 and the baseline for cloud 5, exactly matching the sign of the
+true held-out-pose result in every case. Selected static mean/worst PSNR is
+25.16/24.41, 25.09/24.12, 25.26/24.28, 25.32/24.64, and 25.02/24.31 dB,
+raising the aggregate from 24.97/24.22 to 25.17/24.35 dB without using either
+test pose for selection. The selected held-light PBR gate remains
+23.59/23.06, 23.67/23.06, 23.40/22.77, 23.61/23.07, and 23.38/22.91 dB.
+
+Each integrated run takes about 46.4 seconds because the opt-in path adds a
+five-view continuation and two validation Gaussian fits before the full
+six-view continuation. All five runs completed in 12 GiB cgroups with zero
+OOM events and 271--317 MiB host-memory peaks. The implementation adds no
+shader, graph operation, shader group or entry, binding, model field, file
+format, dependency, or public CLI flag. Artifacts and telemetry remain under
+`target/audit-runs/current-synthetic-v1/static-powerfoam-validation-integrated/`.
