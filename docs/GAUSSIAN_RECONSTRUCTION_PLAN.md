@@ -4860,3 +4860,27 @@ that exactly cancels colored multiplicative albedo is also rejected before a
 five-cloud run: it lowers the fifth cloud from 24.03/23.22 to 23.97/23.19 dB.
 Artifacts remain under
 `target/audit-runs/current-synthetic-v1/{post-gaussian-response-probe,photometric-response-rgb-strict}/`.
+
+## Rejected log-response photometric normals (2026-08-23)
+
+Centered log light responses do not replace the existing bounded linear
+least-squares score in the discrete calibrated-normal initializer. The idea
+cancels multiplicative albedo exactly and passed an isolated fixed-cloud
+screen, but the paired five-cloud gate is not robust. Aggregate volumetric
+Gaussian held-light mean/worst/where-hit quality rises from
+24.006/23.252/22.834 dB to 24.052/23.296/22.906 dB, yet clouds two and three
+lose 0.04--0.13 dB mean and 0.10--0.15 dB worst-view quality. Raising the log
+floor to 0.02 and using scalar luminance instead of RGB both leave those
+failures. The initializer therefore retains its linear per-channel score;
+the already selected log-luminance descriptor remains limited to aligned
+cross-view geometry correspondence, where it passed every tail.
+
+The analytic scratch albedo's physical 0.8 upper bound is also retained.
+Removing only that bound lowers the first fixed cloud from
+24.04/23.26/22.90 dB mean/worst/where-hit quality to
+23.94/23.17/22.68 dB and loses 0.1 coverage point. Unbounded gain lets
+highlights and overlapping-mixture error select non-transferable normals
+rather than merely absorbing exposure. All score prototypes are removed.
+Runs and 12 GiB cgroup telemetry remain under
+`target/audit-runs/current-synthetic-v1/photometric-normal-{log-*,unbounded-albedo}/`;
+the maximum host-memory peak is 256.8 MiB with zero swap, OOM, or GPU fault.

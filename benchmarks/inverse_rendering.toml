@@ -5685,3 +5685,39 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/post-gaussian-response-probe (gitignored)"
 verdict = "reject and remove: clouds three and four regress and aggregate mean, tail, and coverage are slightly negative; the response sweep helps before mixture fitting but conflicts with the center optimum chosen by calibrated Gaussian compositing"
+
+[calibrated_normals.rejected_centered_log_response]
+date = "2026-08-23"
+protocol = "five fixed post-secondary-light foams; replace only the per-channel bounded linear least-squares score in the discrete four-light normal initializer with centered log RGB responses; retain every later material, Gaussian support, joint center/normal, persistence, and unseen-studio-light stage"
+control_mean = [24.04, 24.06, 24.06, 23.85, 24.02]
+candidate_mean = [24.07, 24.02, 23.93, 24.13, 24.11]
+control_worst = [23.26, 23.33, 23.42, 23.10, 23.15]
+candidate_worst = [23.31, 23.23, 23.27, 23.34, 23.33]
+control_coverage = [55.3, 55.3, 55.3, 55.5, 55.6]
+candidate_coverage = [55.4, 55.2, 55.3, 55.7, 55.6]
+control_covered = [22.90, 22.91, 23.00, 22.55, 22.81]
+candidate_covered = [22.91, 22.90, 22.85, 22.92, 22.95]
+control_average = [24.006, 23.252, 55.40, 22.834]
+candidate_average = [24.052, 23.296, 55.44, 22.906]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+dark_response_floor_002_clouds_2_3 = [[24.01, 23.23, 55.2, 22.90], [23.98, 23.30, 55.3, 22.88]]
+luminance_only_floor_002_clouds_2_3 = [[24.05, 23.25, 55.2, 22.93], [23.98, 23.30, 55.3, 22.88]]
+maximum_peak_memory_mb = 256.8
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/photometric-normal-log-{isolated-*,five-*,floor02,luminance} (gitignored)"
+verdict = "reject and restore the bounded linear score: aggregate quality rises, but clouds two and three regress by 0.04--0.13 dB mean and 0.10--0.15 dB worst-view quality; suppressing dark responses and collapsing RGB to luminance do not repair both failures"
+
+[calibrated_normals.rejected_unbounded_scratch_albedo]
+date = "2026-08-23"
+protocol = "first fixed post-secondary-light foam; remove only the 0.8 upper bound from the analytic per-channel scratch albedo used to rank discrete normal candidates"
+control = [24.04, 23.26, 55.3, 22.90]
+candidate = [23.94, 23.17, 55.2, 22.68]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+maximum_peak_memory_mb = 250.6
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/photometric-normal-unbounded-albedo (gitignored)"
+verdict = "reject before five clouds and restore the physical diffuse bound: unconstrained gain lets highlight and mixture error choose non-transferable normals, regressing every held-light measure"
