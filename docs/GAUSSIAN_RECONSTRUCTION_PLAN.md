@@ -4437,3 +4437,18 @@ state reaches 23.59/23.05 dB, 22.72 dB where hit, and 53.69 degrees. Its second
 moment therefore supplies useful damping despite the loss transition. The
 three reset calls are removed; the diagnostic is under
 `target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-reset-first/`.
+
+A differentiable SH-2 specular approximation is rejected before a five-cloud
+expansion. The private graph evaluated each candidate's reflection direction,
+looked up three particle-indexed prefiltered SH tables, and added a fixed
+roughness/F0 split-sum approximation to the existing diffuse prediction. It
+reused existing normalize, embedding, multiply, and reduction operations, but
+still required candidate-level reflection tensors and three new graph inputs.
+On the first cloud it reaches 23.59/23.06 dB and 22.71 dB where hit, versus the
+selected repeat's 23.59/23.05 dB and 22.72 dB. Normal RMSE worsens from 53.69
+to 53.96 degrees, and the release joint pass grows from about 1.01 to 1.11
+seconds. A nine-coefficient lobe cannot represent the concentrated environment
+features that identify glossy normals, while its approximate magnitude still
+biases the diffuse solution. The reflection graph, SH tables, inputs, helper
+refactor, and tests are removed. The capped run remains under
+`target/audit-runs/current-synthetic-v1/specular-sh-normal-first/`.
