@@ -29,6 +29,7 @@ const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
 const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 2.0e-4;
+const MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT: f32 = 0.125;
 const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
 // Match the selected support geometry-refresh cadence so one preparation pass
 // never crosses a point at which candidate transforms could change.
@@ -831,9 +832,12 @@ fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
 /// Each pass predicts a diffuse color from the current PBR surface and one
 /// measured environment. The color is scratch supervision: the Gaussian's
 /// learned coefficients are restored before returning, so only particle
-/// positions persist. One optimizer interleaves paired rays from the lights in
-/// forward/reverse order, avoiding an order prior while retaining joint Adam
-/// state and compiling the image-formation graph only once.
+/// positions persist. On masked foreground rays, a weak opacity-conditioned
+/// target keeps center motion from compensating for frozen transmittance;
+/// background and maskless captures retain the ordinary color residual. One
+/// optimizer interleaves paired rays from the lights in forward/reverse order,
+/// avoiding an order prior while retaining joint Adam state and compiling the
+/// image-formation graph only once.
 pub fn fit_multilight_geometry(
     gaussian: &mut vol::PointCloudModel,
     surface: &vol::relight::RelightModel,
@@ -896,7 +900,7 @@ fn fit_joint_multilight_positions(
     set_diffuse_appearance(gaussian, surface, lights[0].environment);
 
     let mut graph = mn::Graph::new();
-    build_graph(
+    build_graph_with_losses(
         &mut graph,
         gaussian.points.len(),
         options.batch_size,
@@ -904,6 +908,8 @@ fn fit_joint_multilight_positions(
         gaussian.sh_degree,
         0.0,
         options.background,
+        OpacityLoss::Mask,
+        MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT,
     );
     let (mut session, _report) = mn::build(
         &graph,
@@ -1723,7 +1729,7 @@ pub fn build_graph(
     opacity_loss_weight: f32,
     background: [f32; 3],
 ) -> GaussianGraph {
-    build_graph_with_opacity_loss(
+    build_graph_with_losses(
         g,
         particles,
         pixels,
@@ -1732,11 +1738,12 @@ pub fn build_graph(
         opacity_loss_weight,
         background,
         OpacityLoss::Mask,
+        0.0,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_graph_with_opacity_loss(
+fn build_graph_with_losses(
     g: &mut mn::Graph,
     particles: usize,
     pixels: usize,
@@ -1745,12 +1752,15 @@ fn build_graph_with_opacity_loss(
     opacity_loss_weight: f32,
     background: [f32; 3],
     opacity_loss: OpacityLoss,
+    opacity_conditioned_color_weight: f32,
 ) -> GaussianGraph {
     assert!(particles > 0);
     assert!(pixels > 0);
     assert!(candidates_per_pixel > 0);
     assert!(sh_degree <= 2);
     assert!(opacity_loss_weight.is_finite() && opacity_loss_weight >= 0.0);
+    assert!(opacity_conditioned_color_weight.is_finite());
+    assert!((0.0..=1.0).contains(&opacity_conditioned_color_weight));
     let rows = pixels * candidates_per_pixel;
     let sh_components = vol::get_sh_component_count(sh_degree);
 
@@ -1874,8 +1884,33 @@ fn build_graph_with_opacity_loss(
     let label_g = g.reshape(label_g, &[pixels, 1]);
     let label_b = g.split_b(label_gb, pixels as u32, 1, 1, 1);
     let label_b = g.reshape(label_b, &[pixels, 1]);
+    let opacity_condition = (opacity_conditioned_color_weight > 0.0).then(|| {
+        let detached_opacity = g.stop_gradient(accumulated_opacity);
+        let conditioned_weight =
+            g.constant(vec![opacity_conditioned_color_weight; pixels], &[pixels, 1]);
+        let conditioned_weight = g.mul(target_alpha, conditioned_weight);
+        let negative_conditioned_weight = g.neg(conditioned_weight);
+        let ones = g.constant(vec![1.0_f32; pixels], &[pixels, 1]);
+        let ordinary_weight = g.add(ones, negative_conditioned_weight);
+        (detached_opacity, conditioned_weight, ordinary_weight)
+    });
     for (&pixel, target) in rendered.iter().zip([label_r, label_g, label_b]) {
-        losses.push(g.l1_loss(pixel, target));
+        if let Some((detached_opacity, conditioned_weight, ordinary_weight)) = opacity_condition {
+            let foreground_target = g.mul(target, detached_opacity);
+            let negative_foreground_target = g.neg(foreground_target);
+            let foreground_error = g.add(pixel, negative_foreground_target);
+            let foreground_error = g.abs(foreground_error);
+
+            let negative_target = g.neg(target);
+            let ordinary_error = g.add(pixel, negative_target);
+            let ordinary_error = g.abs(ordinary_error);
+            let conditioned_error = g.mul(foreground_error, conditioned_weight);
+            let ordinary_error = g.mul(ordinary_error, ordinary_weight);
+            let error = g.add(conditioned_error, ordinary_error);
+            losses.push(g.mean_all(error));
+        } else {
+            losses.push(g.l1_loss(pixel, target));
+        }
     }
     let rg_loss = g.add(losses[0], losses[1]);
     let color_loss = g.add(rg_loss, losses[2]);
@@ -2349,7 +2384,7 @@ fn fit_with_opacity_loss(
         OpacityLoss::BackgroundOnly => options.opacity_loss_weight * BACKGROUND_ONLY_OPACITY_SCALE,
     };
     let mut graph = mn::Graph::new();
-    build_graph_with_opacity_loss(
+    build_graph_with_losses(
         &mut graph,
         model.points.len(),
         options.batch_size,
@@ -2358,6 +2393,7 @@ fn fit_with_opacity_loss(
         opacity_loss_weight,
         options.background,
         opacity_loss,
+        0.0,
     );
     let (mut session, _report) = mn::build(
         &graph,
@@ -3201,7 +3237,7 @@ mod tests {
             return;
         };
         let mut graph = mn::Graph::new();
-        build_graph_with_opacity_loss(
+        build_graph_with_losses(
             &mut graph,
             2,
             1,
@@ -3210,6 +3246,7 @@ mod tests {
             1.5,
             [0.0; 3],
             OpacityLoss::BackgroundOnly,
+            0.0,
         );
         let (mut session, _report) = mn::build(
             &graph,
@@ -3325,6 +3362,76 @@ mod tests {
             1.5 * opacity[0] * opacity[0],
             2.0e-5,
         );
+    }
+
+    #[test]
+    fn opacity_conditioned_color_loss_matches_formula() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping opacity-conditioned Gaussian loss test: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        build_graph_with_losses(
+            &mut graph,
+            1,
+            1,
+            1,
+            0,
+            0.0,
+            [0.0; 3],
+            OpacityLoss::Mask,
+            MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT,
+        );
+        let (mut session, _report) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        session.set_parameter("positions", &[0.0, 0.0, 2.0]);
+        let scale = inverse_softplus(1.0 - MIN_SCALE);
+        session.set_parameter("log_scales", &[scale; 3]);
+        session.set_parameter("opacity_logits", &[0.0]);
+        let coefficient = (0.8 - 0.5) / SH_C0;
+        for name in ["sh_r", "sh_g", "sh_b"] {
+            session.set_parameter(name, &[coefficient]);
+        }
+        session.set_input_u32("candidate_indices", &[0]);
+        session.set_input_u32("candidate_pixel_indices", &[0]);
+        session.set_input("candidate_mask", &[1.0]);
+        session.set_input("ray_origins", &[0.0, 0.0, 0.0]);
+        session.set_input("ray_directions", &[0.0, 0.0, 1.0]);
+        session.set_input("sh_basis", &[SH_C0]);
+        session.set_input("labels", &[0.6; 3]);
+        for (name, axis) in [
+            ("rotation_x", glam::Vec3::X),
+            ("rotation_y", glam::Vec3::Y),
+            ("rotation_z", glam::Vec3::Z),
+        ] {
+            session.set_input(name, &axis.to_array());
+        }
+
+        let alpha = 0.5 * MAX_ALPHA;
+        let ordinary = (alpha * 0.8 - 0.6).abs();
+        let conditioned = alpha * (0.8 - 0.6);
+        let expected_foreground = 3.0
+            * (MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT * conditioned
+                + (1.0 - MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_WEIGHT) * ordinary);
+        session.set_input("target_alpha", &[1.0]);
+        session.step();
+        session.wait();
+        let mut loss = [0.0];
+        session.read_output_by_index(0, &mut loss);
+        assert_close(loss[0], expected_foreground, 2.0e-5);
+
+        session.set_input("target_alpha", &[0.0]);
+        session.step();
+        session.wait();
+        session.read_output_by_index(0, &mut loss);
+        assert_close(loss[0], 3.0 * ordinary, 2.0e-5);
     }
 
     #[test]

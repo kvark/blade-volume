@@ -3549,3 +3549,27 @@ when the older scalar observer does not assign their projected center to two
 views. The rollback prototype is removed; future confidence must be measured
 from the Gaussian responsibilities themselves, not borrowed from a different
 renderer.
+
+The selected continuation now weakly conditions foreground color supervision
+on the frozen accumulated opacity. Ordinary premultiplied RGB can otherwise
+move a center to repair an opacity-magnitude error when the scratch PBR color
+is imperfect, even though opacity itself deliberately remains under the
+dedicated support fit. For a masked foreground ray, 12.5% of the color loss
+instead compares the render against `target * stop_gradient(opacity)`; the
+remaining 87.5% is the ordinary residual. Known background rays keep their
+ordinary residual exactly. With no masks, `target_alpha` is zero and the two
+terms algebraically collapse to the original loss, so real capture behavior is
+unchanged.
+
+Full, half, quarter, and eighth-conditioned first-cloud screens reach
+23.47/22.94, 23.48/22.93, 23.46/22.89, and 23.47/22.89 dB respectively.
+Stronger conditioning trades coverage and covered-pixel quality for the tail;
+the eighth blend is the balanced choice. Across the definitive five fixed
+clouds it reaches 23.368/22.800 dB, 55.28% coverage, and 22.334 dB where hit,
+from 23.352/22.778 dB, 55.30%, and 22.322 dB. Every cloud's mean, worst view,
+and covered-pixel score improves or ties; only cloud 3 loses a rounded 0.1
+coverage point. Continuation averages 0.978 seconds and peaks at 243 MB with
+no swap, OOM, or GPU fault. A two-light maskless Bonsai production smoke
+reproduces the previous 11.35/11.13 dB, 22.9%, and 12.89 dB where-hit result,
+as required by the loss identity. This changes no model field, public option,
+Meganeura operation, shader, or runtime representation.
