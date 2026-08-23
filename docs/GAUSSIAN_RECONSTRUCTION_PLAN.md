@@ -3642,3 +3642,15 @@ hundredth of a decibel between global and hit-region scores, while the stronger
 gate is non-positive. The temporary collector and rollback are removed before
 a five-cloud gate; responsibility is descriptive here, not reliable enough to
 justify another production heuristic.
+
+Foreground-mask supervision during calibrated-light center continuation is
+also rejected. Unlike the preceding RGB objective, the silhouette is
+lighting-independent, and keeping opacity frozen initially appeared to make
+it clean geometry evidence. It does not make ownership unique among
+overlapping particles. On the first fixed cloud, adding mask MSE at weight
+`0.01` changes the selected 23.53/23.00 dB, 55.1% coverage, and 22.60 dB
+where-hit result to 23.52/22.99 dB, 55.1%, and 22.59 dB. Weight `0.1` falls
+again to 23.51/22.98 dB and 22.58 dB where hit, without changing coverage.
+Both constants and the graph connection are removed before the five-cloud
+gate. The dedicated support fit remains responsible for masks; the later
+center pass remains color-only and opacity-conditioned.
