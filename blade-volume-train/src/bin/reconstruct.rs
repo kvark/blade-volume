@@ -843,6 +843,7 @@ fn main() {
     }
 
     if let Some(ref mut gaussian) = learned_pbr_gaussian {
+        let mut multilight_geometry_fitted = false;
         if !normal_captures.is_empty() && args.pbr_gaussian_output.is_some() {
             let mut lights = Vec::with_capacity(normal_captures.len() + 1);
             lights.push(train::gaussian_splat::KnownLightCapture {
@@ -879,6 +880,7 @@ fn main() {
                 stats.iter().map(|stats| stats.steps).sum::<usize>(),
                 started.elapsed().as_secs_f64(),
             );
+            multilight_geometry_fitted = true;
         }
         if args.render_refine_radii {
             train::gaussian_splat::apply_surface_radius_feedback(gaussian, &fitted.scene.model)
@@ -891,6 +893,28 @@ fn main() {
             eprintln!("cannot attach final PBR attributes to Gaussian geometry: {error}");
             std::process::exit(1);
         });
+        if args.render_refine_materials && multilight_geometry_fitted {
+            let stats = train::inverse::refine::polish_gaussian_materials(
+                &fitted.scene,
+                gaussian,
+                &capture,
+                &train_views,
+                0.025,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("cannot polish final Gaussian materials: {error}");
+                std::process::exit(1);
+            });
+            println!(
+                "final Gaussian materials: changed {} of {} coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.1} s",
+                stats.changed,
+                stats.coordinates,
+                stats.proposals,
+                stats.initial_loss,
+                stats.final_loss,
+                stats.seconds,
+            );
+        }
         if let Some(ref output) = args.pbr_gaussian_output {
             let output = path::Path::new(output);
             if let Some(parent) = output

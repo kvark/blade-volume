@@ -3720,6 +3720,32 @@ vocabulary are unchanged. The five-cloud logs are under
 maskless replay is under
 `target/audit-runs/multilight-masked-linear-production/`.
 
+The existing rendered-material opt-in now closes the final ordering gap with
+one Gaussian-specific polish after calibrated-light center continuation and
+scalar-radius feedback. It attaches the final PBR attributes, builds the exact
+volumetric Gaussian tracer, then coordinate-descends only the shared diffuse
+albedo table at steps 0.025 and 0.0125. The earlier observation/linear solve
+and scalar-render polish remain its initializer; repeating either would
+discard an already selected solution. The helper updates the tracer's existing
+material buffer in place and copies the accepted table only into the Gaussian
+model, leaving the independently fitted surface output unchanged.
+
+Across the five fixed clouds this raises held-light quality from approximately
+23.438/22.904 dB and 22.386 dB where hit to 23.496/22.926 dB and 22.486 dB
+where hit. Every cloud improves its mean, worst view, and covered-pixel score;
+coverage remains exactly 55.28% because geometry, opacity, and assignments are
+fixed. The pass lowers its exact Gaussian training objective on every cloud
+and takes 1.54--1.84 seconds for twelve materials. Steps 0.00625 and 0.0125 are
+positive but leave gains unused; 0.05 lowers the first-cloud tail from the
+selected 23.04 to 23.02 dB. The repeated-image maskless production smoke also
+improves from 12.04/11.73 dB, 22.9% coverage, and 12.44 dB where hit to
+12.06/11.74 dB, 23.2%, and 12.53 dB. The pass runs only when both the existing
+material-refinement opt-in and calibrated-light Gaussian continuation are
+active. It adds no shader, graph operation, binding, model field, file format,
+or CLI option. The definitive logs are under
+`target/audit-runs/current-synthetic-v1/post-continuation-gaussian-material-025-five/`
+and `target/audit-runs/post-continuation-gaussian-material-production/`.
+
 Re-enabling anisotropic scale learning under that new objective remains a
 mixed trade. At scale rates `1e-4` and `2e-4`, the five-cloud aggregates reach
 approximately 23.442/22.908 dB, 55.28% coverage, and 22.382 dB where hit, and

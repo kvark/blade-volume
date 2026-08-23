@@ -457,7 +457,7 @@ pub fn refine_rendered_materials(
     diffuse_samples: u32,
     step: f32,
 ) -> Result<RenderedMaterialStats, String> {
-    refine_rendered_materials_impl(scene, capture, indices, diffuse_samples, step, true)
+    refine_rendered_materials_impl(scene, None, capture, indices, diffuse_samples, step, true)
 }
 
 /// Re-polish a rendered material fit after geometry or particle support moved.
@@ -473,11 +473,54 @@ pub fn polish_rendered_materials(
     diffuse_samples: u32,
     step: f32,
 ) -> Result<RenderedMaterialStats, String> {
-    refine_rendered_materials_impl(scene, capture, indices, diffuse_samples, step, false)
+    refine_rendered_materials_impl(scene, None, capture, indices, diffuse_samples, step, false)
+}
+
+/// Re-polish shared diffuse materials through the exact learned-Gaussian PBR
+/// renderer after its geometry and support have reached their final values.
+pub fn polish_gaussian_materials(
+    scene: &score::Scene,
+    gaussian: &mut vol::PointCloudModel,
+    capture: &capture::Capture,
+    indices: &[usize],
+    step: f32,
+) -> Result<RenderedMaterialStats, String> {
+    gaussian.validate()?;
+    let material_count = gaussian
+        .transforms
+        .as_ref()
+        .and_then(|transforms| transforms.pbr.as_ref())
+        .ok_or_else(|| "Gaussian material polish requires PBR attributes".to_string())?
+        .materials
+        .len();
+    if material_count != scene.model.materials.len() {
+        return Err("Gaussian and surface material tables must have matching lengths".to_string());
+    }
+    let mut gaussian_scene = scene.clone();
+    let stats = refine_rendered_materials_impl(
+        &mut gaussian_scene,
+        Some(gaussian),
+        capture,
+        indices,
+        0,
+        step,
+        false,
+    )?;
+    gaussian
+        .transforms
+        .as_mut()
+        .unwrap()
+        .pbr
+        .as_mut()
+        .unwrap()
+        .materials
+        .clone_from(&gaussian_scene.model.materials);
+    Ok(stats)
 }
 
 fn refine_rendered_materials_impl(
     scene: &mut score::Scene,
+    gaussian: Option<&vol::PointCloudModel>,
     capture: &capture::Capture,
     indices: &[usize],
     diffuse_samples: u32,
@@ -500,7 +543,11 @@ fn refine_rendered_materials_impl(
         .map(|&index| capture.views[index].camera)
         .collect();
     let mut renderer = score::Renderer::new(capture.width, capture.height)?;
-    let mut tracer = renderer.prepare_scene(scene, diffuse_samples, false);
+    let mut tracer = if let Some(gaussian) = gaussian {
+        renderer.prepare_gaussian_scene(scene, gaussian, false)
+    } else {
+        renderer.prepare_scene(scene, diffuse_samples, false)
+    };
     let started = std::time::Instant::now();
     let mut loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
     let initial_loss = loss;
@@ -2165,6 +2212,67 @@ mod tests {
         assert_eq!(stats.changed, 2);
         assert!(stats.final_loss < stats.initial_loss);
         for (actual, expected) in recolored.model.materials[0]
+            .albedo
+            .iter()
+            .zip([0.7, 0.3, 0.2])
+        {
+            assert!((actual - expected).abs() < 2.0e-5);
+        }
+
+        let gaussian_truth = make_scene(0.0);
+        let mut truth_gaussian =
+            crate::gaussian_splat::from_surface(&gaussian_truth.model).unwrap();
+        crate::gaussian_splat::attach_pbr(&mut truth_gaussian, &gaussian_truth.model).unwrap();
+        let mut gaussian_renderer = score::Renderer::new(SIZE, SIZE).unwrap();
+        let mut gaussian_tracer =
+            gaussian_renderer.prepare_gaussian_scene(&gaussian_truth, &truth_gaussian, false);
+        let rendered = gaussian_renderer.render_prepared_views(&mut gaussian_tracer, &cameras);
+        gaussian_renderer.destroy_prepared_scene(gaussian_tracer);
+        gaussian_renderer.destroy();
+        let gaussian_capture = capture::Capture {
+            width: SIZE,
+            height: SIZE,
+            views: cameras
+                .iter()
+                .enumerate()
+                .map(|(index, &camera)| capture::View {
+                    name: format!("gaussian-truth-{index}"),
+                    camera,
+                    pixels: rendered[index]
+                        .iter()
+                        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+                        .collect(),
+                    mask: None,
+                })
+                .collect(),
+        };
+        let mut gaussian_recolored = make_scene(0.0);
+        gaussian_recolored.model.materials[0].albedo = [0.6, 0.4, 0.2];
+        let mut gaussian = crate::gaussian_splat::from_surface(&gaussian_recolored.model).unwrap();
+        crate::gaussian_splat::attach_pbr(&mut gaussian, &gaussian_recolored.model).unwrap();
+        let stats = polish_gaussian_materials(
+            &gaussian_recolored,
+            &mut gaussian,
+            &gaussian_capture,
+            &[0, 1],
+            0.1,
+        )
+        .expect("Gaussian material re-polish");
+        assert_eq!(stats.coordinates, 6);
+        assert_eq!(stats.changed, 2);
+        assert!(stats.final_loss < stats.initial_loss);
+        assert_eq!(
+            gaussian_recolored.model.materials[0].albedo,
+            [0.6, 0.4, 0.2]
+        );
+        for (actual, expected) in gaussian
+            .transforms
+            .as_ref()
+            .unwrap()
+            .pbr
+            .as_ref()
+            .unwrap()
+            .materials[0]
             .albedo
             .iter()
             .zip([0.7, 0.3, 0.2])

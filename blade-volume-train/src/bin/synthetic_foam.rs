@@ -1470,6 +1470,7 @@ fn main() {
         0,
     )[0];
     let volumetric_summaries = learned_pbr_gaussian.as_mut().map(|gaussian| {
+        let mut multilight_geometry_fitted = false;
         if args.photometric_normals && args.pbr_gaussian_output.is_some() {
             let environment_indices: Vec<_> = (0..dataset.environments.len())
                 .filter(|&index| index != held_out_environment)
@@ -1517,6 +1518,7 @@ fn main() {
                     stats.iter().map(|stats| stats.steps).sum::<usize>(),
                     started.elapsed().as_secs_f64(),
                 );
+                multilight_geometry_fitted = true;
             }
         }
         if args.render_refine_radii {
@@ -1525,6 +1527,25 @@ fn main() {
         }
         train::gaussian_splat::attach_pbr(gaussian, &fitted.scene.model)
             .unwrap_or_else(|error| fail(error));
+        if args.render_refine_materials && multilight_geometry_fitted {
+            let stats = train::inverse::refine::polish_gaussian_materials(
+                &fitted.scene,
+                gaussian,
+                &training_capture,
+                &training_indices,
+                0.025,
+            )
+            .unwrap_or_else(|error| fail(error));
+            println!(
+                "final Gaussian materials: changed {} of {} coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.3} s",
+                stats.changed,
+                stats.coordinates,
+                stats.proposals,
+                stats.initial_loss,
+                stats.final_loss,
+                stats.seconds,
+            );
+        }
         if let Some(ref output) = args.pbr_gaussian_output {
             let output = path::Path::new(output);
             if let Some(parent) = output

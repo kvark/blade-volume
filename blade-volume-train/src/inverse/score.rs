@@ -333,6 +333,15 @@ impl Renderer {
         self.tracer(scene, diffuse_samples, show_environment)
     }
 
+    pub(crate) fn prepare_gaussian_scene(
+        &mut self,
+        scene: &Scene,
+        gaussian: &vol::PointCloudModel,
+        show_environment: bool,
+    ) -> vol::gpu::RelightTracer {
+        self.gaussian_tracer(scene, gaussian, 0, show_environment)
+    }
+
     pub(crate) fn update_prepared_surfels(&mut self, surfels: &[vol::relight::Surfel]) {
         self.staged_surfels.clear();
         self.staged_surfels.extend_from_slice(surfels);
