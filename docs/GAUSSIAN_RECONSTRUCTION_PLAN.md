@@ -3701,6 +3701,45 @@ first fixed cloud the continuation takes 0.866 seconds and retains
 atomic support-fit variation. This removes no training signal and adds no
 shader, Meganeura operation, model field, or public option.
 
+The selected calibrated-light continuation now compares radiance in linear
+space when every selected view has a foreground mask. Those masks provide an
+independent coverage constraint, so the residual no longer needs sRGB's extra
+weight near black. Across the five fixed clouds this reaches approximately
+23.438/22.904 dB, 55.28% coverage, and 22.386 dB where hit, versus
+23.428/22.874 dB, 55.34%, and 22.366 dB for the display-referred control.
+Every cloud's tail and covered-pixel score improves; every mean improves or
+ties, while aggregate coverage changes by -0.06 percentage point. Maskless or
+mixed captures deliberately retain the established sRGB residual because
+they have no independent alpha evidence. The repeated-image Bonsai stability
+smoke therefore preserves its exact 12.04/11.73 dB, 22.9% coverage, and 12.44
+dB where-hit result over 200 updates. This changes only the private scratch
+appearance and labels used by the position continuation; the durable
+appearance, model, renderer, public API, shaders, and Meganeura graph
+vocabulary are unchanged. The five-cloud logs are under
+`target/audit-runs/current-synthetic-v1/multilight-linear-five/`, and the
+maskless replay is under
+`target/audit-runs/multilight-masked-linear-production/`.
+
+Anchoring that continuation to its initial centers is rejected. A private
+mean-squared displacement term at weight one reaches approximately
+23.422/22.868 dB, 55.32% coverage, and 22.356 dB where hit over the five fixed
+clouds, slightly below the selected 23.428/22.874 dB, 55.34%, and 22.366 dB
+on every aggregate. Raising the weight to ten lowers the first cloud to
+23.51/22.97 dB and 55.0% coverage. The initial centers still contain genuine
+cross-view error, so a global trust region suppresses useful corrections
+before it distinguishes photometric drift. The graph input and loss are
+removed; a future geometric constraint needs particle-specific confidence or
+independent correspondence evidence.
+
+Privately pre-fitting one disposable SH-0 appearance table per calibrated
+light is rejected too. Fifty frozen-geometry updates per light leave the
+first-cloud held-light mean and tail at the selected 23.53/23.00 dB, but lower
+covered-pixel quality from 22.60 to 22.58 dB and raise continuation time from
+roughly 0.87 to 1.05 seconds. The nuisance fit absorbs part of the same
+cross-view residual needed to move centers; the PBR-predicted diffuse tables
+remain the stronger geometry supervision. The prefit loop and temporary
+tables are removed before a five-cloud gate.
+
 ## Validation-clean dependency stack (2026-08-23)
 
 The workspace now pins Blade `3d01645`, current `main` plus three isolated

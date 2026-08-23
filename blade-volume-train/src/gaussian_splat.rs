@@ -794,6 +794,7 @@ fn set_diffuse_appearance(
     gaussian: &mut vol::PointCloudModel,
     surface: &vol::relight::RelightModel,
     environment: &vol::relight::Environment,
+    encode_srgb: bool,
 ) {
     let irradiance = environment.diffuse_irradiance();
     gaussian.sh_degree = 0;
@@ -809,9 +810,22 @@ fn set_diffuse_appearance(
                     color[channel] += coefficient[channel] * weight * material.albedo[channel];
                 }
             }
-            color.map(|value| (crate::inverse::capture::linear_to_srgb(value) - 0.5) / SH_C0)
+            color.map(|value| {
+                let value = if encode_srgb {
+                    crate::inverse::capture::linear_to_srgb(value)
+                } else {
+                    value
+                };
+                (value - 0.5) / SH_C0
+            })
         })
         .collect();
+}
+
+fn capture_has_masks(capture: &crate::inverse::capture::Capture, view_indices: &[usize]) -> bool {
+    view_indices
+        .iter()
+        .all(|&view_index| capture.views[view_index].mask.is_some())
 }
 
 fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
@@ -836,9 +850,11 @@ fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
 /// positions persist. On masked foreground rays, a weak opacity-conditioned
 /// target keeps center motion from compensating for frozen transmittance;
 /// background and maskless captures retain the ordinary color residual. One
-/// optimizer interleaves paired rays from the lights in forward/reverse order,
-/// avoiding an order prior while retaining joint Adam state and compiling the
-/// image-formation graph only once.
+/// optimizer compares masked captures in linear radiance, while maskless or
+/// mixed captures retain their display-referred residual for low-radiance
+/// coverage. It interleaves paired rays from the lights in forward/reverse
+/// order, avoiding an order prior while retaining joint Adam state and
+/// compiling the image-formation graph only once.
 pub fn fit_multilight_geometry(
     gaussian: &mut vol::PointCloudModel,
     surface: &vol::relight::RelightModel,
@@ -888,7 +904,7 @@ fn fit_joint_multilight_positions(
         opacity_loss_weight: 0.0,
         background: [0.0; 3],
     };
-    set_diffuse_appearance(gaussian, surface, lights[0].environment);
+    set_diffuse_appearance(gaussian, surface, lights[0].environment, true);
     for light in lights {
         validate_fit(gaussian, light.capture, view_indices, options)?;
         if !captures_are_aligned(lights[0].capture, light.capture) {
@@ -897,13 +913,17 @@ fn fit_joint_multilight_positions(
             );
         }
     }
+    let encode_srgb = !lights
+        .iter()
+        .all(|light| capture_has_masks(light.capture, view_indices));
+    set_diffuse_appearance(gaussian, surface, lights[0].environment, encode_srgb);
 
     let mut appearances = Vec::with_capacity(lights.len());
     for light in lights {
-        set_diffuse_appearance(gaussian, surface, light.environment);
+        set_diffuse_appearance(gaussian, surface, light.environment, encode_srgb);
         appearances.push(sh_parameters(gaussian));
     }
-    set_diffuse_appearance(gaussian, surface, lights[0].environment);
+    set_diffuse_appearance(gaussian, surface, lights[0].environment, encode_srgb);
 
     let mut graph = mn::Graph::new();
     build_graph_with_losses(
@@ -939,12 +959,13 @@ fn fit_joint_multilight_positions(
         view_indices,
         options.candidate_min_alpha,
     );
-    let audit = sample_rays(
+    let audit = sample_rays_with_color_space(
         lights[0].capture,
         &pixel_rays,
         view_indices,
         options.batch_size,
         u32::MAX,
+        encode_srgb,
     );
     set_batch(&mut session, gaussian, &audit, &candidate_index, options);
     session.step();
@@ -968,12 +989,13 @@ fn fit_joint_multilight_positions(
         }
         let (light_index, sequence) = multilight_sample(lights.len(), step);
         set_sh_parameters(&mut session, &appearances[light_index]);
-        let batch = sample_rays(
+        let batch = sample_rays_with_color_space(
             lights[light_index].capture,
             &pixel_rays,
             view_indices,
             options.batch_size,
             sequence,
+            encode_srgb,
         );
         set_batch(&mut session, gaussian, &batch, &candidate_index, options);
         session.step();
@@ -2199,12 +2221,13 @@ fn captures_are_aligned(
             .all(|(first, second)| cameras_are_aligned(&first.camera, &second.camera))
 }
 
-fn sample_rays(
+fn sample_rays_with_color_space(
     capture: &crate::inverse::capture::Capture,
     pixel_rays: &[crate::inverse::capture::PixelRays],
     view_indices: &[usize],
     count: usize,
     sequence: u32,
+    encode_srgb: bool,
 ) -> RayBatch {
     let mut origins = Vec::with_capacity(count);
     let mut directions = Vec::with_capacity(count);
@@ -2224,11 +2247,13 @@ fn sample_rays(
         directions.push(pixel_rays[view_index].direction(x, y));
         views.push(view_index);
         pixels.push(pixel);
-        labels.extend(
-            view.pixels[pixel]
-                .into_iter()
-                .map(crate::inverse::capture::linear_to_srgb),
-        );
+        labels.extend(view.pixels[pixel].into_iter().map(|value| {
+            if encode_srgb {
+                crate::inverse::capture::linear_to_srgb(value)
+            } else {
+                value
+            }
+        }));
         alpha.push(view.mask.as_ref().map_or(0.0, |mask| mask[pixel]));
     }
     RayBatch {
@@ -2239,6 +2264,16 @@ fn sample_rays(
         labels,
         alpha,
     }
+}
+
+fn sample_rays(
+    capture: &crate::inverse::capture::Capture,
+    pixel_rays: &[crate::inverse::capture::PixelRays],
+    view_indices: &[usize],
+    count: usize,
+    sequence: u32,
+) -> RayBatch {
+    sample_rays_with_color_space(capture, pixel_rays, view_indices, count, sequence, true)
 }
 
 fn prepare_candidates(
@@ -2631,7 +2666,11 @@ mod tests {
         };
         let mut gaussian = from_surface(&surface).unwrap();
         let environment = vol::relight::Environment::uniform([0.4, 0.8, 0.2], 64, 32);
-        set_diffuse_appearance(&mut gaussian, &surface, &environment);
+        set_diffuse_appearance(&mut gaussian, &surface, &environment, false);
+        for (actual, expected) in gaussian.sh_coefficients.iter().zip([0.2; 3]) {
+            assert_close(0.5 + SH_C0 * actual, expected, 5.0e-3);
+        }
+        set_diffuse_appearance(&mut gaussian, &surface, &environment, true);
         let expected = [0.2, 0.2, 0.2].map(crate::inverse::capture::linear_to_srgb);
         for (actual, expected) in gaussian.sh_coefficients.iter().zip(expected) {
             assert_close(0.5 + SH_C0 * actual, expected, 5.0e-3);
@@ -2662,6 +2701,11 @@ mod tests {
         let first = synthetic_capture(&truth);
         let mut second = synthetic_capture(&truth);
         assert!(captures_are_aligned(&first, &second));
+        assert!(!capture_has_masks(&second, &[0, 1]));
+        for view in &mut second.views {
+            view.mask = Some(vec![1.0; second.width * second.height]);
+        }
+        assert!(capture_has_masks(&second, &[0, 1]));
 
         second.views[1].camera.principal[0] += 0.01;
         assert!(!captures_are_aligned(&first, &second));
@@ -2843,7 +2887,7 @@ mod tests {
         };
         let environment = vol::relight::Environment::uniform([0.8, 0.6, 0.4], 64, 32);
         let mut truth = from_surface(&surface).unwrap();
-        set_diffuse_appearance(&mut truth, &surface, &environment);
+        set_diffuse_appearance(&mut truth, &surface, &environment, true);
         let capture = synthetic_capture(&truth);
         let mut candidate = truth.clone();
         candidate.sh_coefficients.fill(-0.25);
