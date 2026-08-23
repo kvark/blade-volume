@@ -54,7 +54,7 @@ either reconstructed asset.
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
 | Synthetic (predefined light, refined) | 6 / 2 | 25.15 / 24.44 dB | 21.81 / 21.48 dB | 57.0% |
 | Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 22.68 / 22.22 dB | 56.7% |
-| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.50 / 22.93 dB | 55.3% |
+| Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 24.97 / 24.22 dB | 23.52 / 22.96 dB | 55.3% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -114,22 +114,24 @@ on Bonsai. Real captures have no held-light truth, so these remain
 capture-light novel-view gates rather than relighting accuracy claims.
 
 When two or more aligned captures have measured environments, the final PBR
-Gaussian geometry also receives a short position-only continuation under each
-known light. One optimizer interleaves paired rays from every light while
-swapping fixed diffuse appearance predicted from the recovered material and
-normal, then restores the pre-continuation coefficients; covariance, opacity,
-materials, and runtime representation are unchanged. A weak foreground
-residual conditions at most 50% of the color loss in proportion to detached
-predicted opacity. This prevents well-covered center motion from repairing
-errors in frozen transmittance while poorly covered, background, and maskless
-rays retain the ordinary coverage-driving residual. The four-light joint fit
-uses linear-radiance residuals when every selected view has a mask, while
-maskless or mixed captures retain the display-referred residual needed for
-low-radiance coverage. It reaches 23.44/22.90 dB at 55.3% coverage across the
-five fixed clouds. A final exact-render material polish then accounts for the
-changed overlapping Gaussian mixtures, reaching 23.50/22.93 dB with unchanged
-coverage. Both passes are automatic only for a requested relightable Gaussian
-output under calibrated lights and add no training option or shader.
+Gaussian geometry also receives a short continuation under each known light.
+One optimizer interleaves paired rays from every light while restoring the
+pre-continuation appearance coefficients afterward. When every capture has a
+mask, the same graph jointly updates particle centers and explicit diffuse
+normals through the exact nine-term irradiance basis in linear radiance;
+maskless or mixed captures retain the previous display-referred,
+position-only path needed for low-radiance coverage. Covariance, opacity,
+support, materials, durable SH, and the runtime representation stay fixed
+during this continuation. A weak foreground residual conditions at most 50%
+of the color loss in proportion to detached predicted opacity, preventing
+well-covered motion from repairing errors in frozen transmittance while
+poorly covered and background rays retain the coverage-driving residual. The
+existing exact-render material polish then accounts for changed overlapping
+mixtures. Joint normal fitting improves every five-cloud mean, tail, and
+where-hit score, raising the selected aggregate from 23.50/22.93 to
+23.52/22.96 dB at the same 55.3% coverage. Both passes are automatic only for
+a requested relightable Gaussian output under calibrated lights and add no
+training option or shader.
 
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered
