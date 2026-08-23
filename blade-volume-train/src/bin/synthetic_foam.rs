@@ -132,11 +132,11 @@ struct Args {
     #[argh(switch)]
     photometric_normals: bool,
 
-    /// masked PowerFoam updates per view after Gaussian surface extraction
+    /// masked PowerFoam updates per view for the static light-field branch
     #[argh(option, default = "0")]
     surface_powerfoam_steps_per_view: usize,
 
-    /// optional trained surface-PowerFoam light-field PLY output
+    /// optional trained PowerFoam static-light-field PLY output
     #[argh(option)]
     surface_powerfoam_output: Option<String>,
 
@@ -975,13 +975,15 @@ fn main() {
         surfels,
         materials: vec![vol::relight::Material::default()],
     };
+    let mut powerfoam_surface = None;
     if args.surface_powerfoam_steps_per_view > 0 {
         let started = std::time::Instant::now();
         let Some(gpu) = train::fit::try_init_gpu() else {
             fail("no supported GPU device for surface PowerFoam continuation");
         };
+        let mut surface = geometry.clone();
         let outcome = train::inverse::powerfoam::continue_surface(
-            &mut geometry,
+            &mut surface,
             &training_capture,
             &training_indices,
             train::inverse::powerfoam::ContinueOptions {
@@ -1011,16 +1013,18 @@ fn main() {
             outcome.stats.final_loss,
             started.elapsed().as_secs_f64(),
         );
+        powerfoam_surface = Some(surface);
     }
-    let static_gaussian_surface = (args.photometric_normals && args.gaussian_output.is_some())
-        .then(|| {
-            let mut surface = geometry.clone();
-            for surfel in &mut surface.surfels {
-                surfel.radius = voxel * args.disc_radius.max(0.1);
-            }
-            train::inverse::surface::refine_normals_from_density(&mut surface.surfels, &model, 0.1);
-            surface
-        });
+    let static_gaussian_surface = (args.gaussian_output.is_some()
+        && (args.photometric_normals || powerfoam_surface.is_some()))
+    .then(|| {
+        let mut surface = powerfoam_surface.as_ref().unwrap_or(&geometry).clone();
+        for surfel in &mut surface.surfels {
+            surfel.radius = voxel * args.disc_radius.max(0.1);
+        }
+        train::inverse::surface::refine_normals_from_density(&mut surface.surfels, &model, 0.1);
+        surface
+    });
     if args.photometric_normals {
         let started = std::time::Instant::now();
         let stats = refine_photometric_normals(

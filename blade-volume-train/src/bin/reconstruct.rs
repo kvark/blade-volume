@@ -150,11 +150,11 @@ struct Args {
     #[argh(switch)]
     compact_kernel: bool,
 
-    /// masked PowerFoam updates per view after Gaussian surface extraction
+    /// masked PowerFoam updates per view for the static light-field branch
     #[argh(option, default = "0")]
     surface_powerfoam_steps_per_view: usize,
 
-    /// optional trained surface-PowerFoam light-field PLY output
+    /// optional trained PowerFoam static-light-field PLY output
     #[argh(option)]
     surface_powerfoam_output: Option<String>,
 
@@ -356,16 +356,17 @@ fn main() {
         std::process::exit(1);
     }
 
-    let static_gaussian_surface = (density_normal_source.is_some()
+    let mut static_gaussian_surface = ((density_normal_source.is_some()
         && !args.normal_images.is_empty()
         && args.gaussian_output.is_some())
-    .then(|| {
-        let mut surface = geometry.clone();
-        if let Some(ref source) = density_normal_source {
-            source.refine(&mut surface, 0.1);
-        }
-        surface
-    });
+        || args.surface_powerfoam_steps_per_view > 0)
+        .then(|| {
+            let mut surface = geometry.clone();
+            if let Some(ref source) = density_normal_source {
+                source.refine(&mut surface, 0.1);
+            }
+            surface
+        });
     if !args.normal_images.is_empty() {
         let started = std::time::Instant::now();
         let stats = refine_normals_from_captures(
@@ -399,8 +400,9 @@ fn main() {
             eprintln!("cannot initialize a supported GPU for surface PowerFoam continuation");
             std::process::exit(1);
         };
+        let surface = static_continuation_surface(&mut static_gaussian_surface, &geometry);
         let outcome = train::inverse::powerfoam::continue_surface(
-            &mut geometry,
+            surface,
             &capture,
             &train_views,
             train::inverse::powerfoam::ContinueOptions {
@@ -1136,6 +1138,13 @@ fn neutral_static_surface(mut surface: vol::relight::RelightModel) -> vol::relig
     surface
 }
 
+fn static_continuation_surface<'a>(
+    static_surface: &'a mut Option<vol::relight::RelightModel>,
+    pbr_surface: &vol::relight::RelightModel,
+) -> &'a mut vol::relight::RelightModel {
+    static_surface.get_or_insert_with(|| pbr_surface.clone())
+}
+
 /// Discs from where a trained density field absorbed each ray.
 fn surfels_from_foam(
     foam: &path::Path,
@@ -1809,6 +1818,32 @@ mod tests {
         train::gaussian_splat::from_surface(&surface).unwrap();
         assert_eq!(surface.surfels[0].material, 0);
         assert_eq!(surface.materials.len(), 1);
+    }
+
+    #[test]
+    fn static_continuation_does_not_mutate_the_pbr_surface() {
+        let pbr = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [1.0, 2.0, 3.0],
+                radius: 0.5,
+                normal: [0.0, 1.0, 0.0],
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material::default()],
+        };
+        let mut seed = pbr.clone();
+        seed.surfels[0].center = [4.0, 5.0, 6.0];
+        let mut static_surface = Some(seed);
+        let continued = static_continuation_surface(&mut static_surface, &pbr);
+        continued.surfels[0].radius = 2.0;
+        continued.surfels[0].normal = [1.0, 0.0, 0.0];
+
+        assert_eq!(pbr.surfels[0].radius, 0.5);
+        assert_eq!(pbr.surfels[0].normal, [0.0, 1.0, 0.0]);
+        let continued = &static_surface.unwrap().surfels[0];
+        assert_eq!(continued.center, [4.0, 5.0, 6.0]);
+        assert_eq!(continued.radius, 2.0);
     }
 
     fn sparse_support_fixture(track_image_ids: Vec<u32>) -> train::colmap::Reconstruction {

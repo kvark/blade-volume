@@ -4135,3 +4135,83 @@ removed before a five-cloud gate. A future alternating method must update the
 whole coupled surface state from explicit multi-view correspondences, not
 re-sample one attribute independently. The rejected output remains under
 `target/audit-runs/current-synthetic-v1/alternating-center-normal-first/`.
+
+## Rejected post-continuation patch correspondence (2026-08-23)
+
+Re-running the existing point-cloud patch matcher after calibrated-light
+Gaussian center continuation is rejected. The prototype moved the complete
+corresponding surface state, rather than refreshing normals independently: it
+started each patch search at the final Gaussian center, retained source-depth
+visibility, searched one quarter of the particle radius along its established
+normal, then copied accepted centers back before PBR attachment and final
+material polish. No truth geometry or held-out view entered the pass.
+
+Only 154 of 2,323 particles carry four sufficiently textured,
+depth-consistent training views. The ordinary 2% acceptance threshold moves
+121 of them and lowers the first fixed cloud from the selected approximately
+23.59/23.03 dB and 22.71 dB where hit to 23.57/22.97 dB and 22.69 dB where
+hit. Requiring a 10% patch-cost reduction still moves 97 centers, with a 23.5%
+average reduction among scored particles, but reaches only 23.57/22.97 dB and
+22.70 dB where hit. Coverage stays at 55.0%. Thus even strong local patch
+agreement does not identify the correct center of an overlapping volumetric
+mixture: the matcher assumes one tangent surface sheet. The prototype is
+removed rather than tuned toward an identity. Logs remain under
+`target/audit-runs/current-synthetic-v1/post-center-correspondence-{first,strict-first}/`.
+
+## Rejected coarse-to-fine calibrated-light continuation (2026-08-23)
+
+A half-resolution warm start for the final calibrated-light Gaussian center
+fit is rejected. The prototype area-averaged every aligned RGB capture and
+mask, rebuilt the exact projected Gaussian candidate index at that resolution,
+and spent the first quarter of the unchanged 400-update budget there before
+returning to full resolution. It retained one graph, optimizer, light schedule,
+support, opacity, and appearance, so only the spatial scale of the first 100
+targets changed.
+
+On the first fixed cloud it reaches 23.58/23.02 dB, 55.1% coverage, and
+22.68 dB where hit, versus the selected approximately 23.59/23.03 dB, 55.0%,
+and 22.71 dB where hit. Coarse supervision marginally broadens support but
+weakens the relit covered surface; the following 300 full-resolution updates
+do not recover that detail. The downsampler, second ray table, second candidate
+index, and schedule branch are removed. The diagnostic remains under
+`target/audit-runs/current-synthetic-v1/multilight-coarse-quarter-first/`.
+
+## Independent static PowerFoam continuation (2026-08-23)
+
+The optional masked surface-PowerFoam continuation now belongs only to the
+static light-field branch. Both production `reconstruct` and the synthetic
+gate clone the established Gaussian surface before the continuation; learned
+radii and normals seed the direct static Gaussian, while learned density and
+SH remain in the optional PowerFoam static output. The PBR surface keeps its
+independently selected photometric normals, materials, and support path. The
+old orchestration mutated the shared surface in production
+and therefore changed PBR geometry while the direct static Gaussian could keep
+an earlier clone—the opposite of the option's intended output ownership.
+
+On the five current fixed clouds, 300 updates per view raise direct-Gaussian
+held-view mean PSNR from 24.98/24.90/24.70/25.21/25.02 dB to
+25.15/25.08/25.26/25.32/25.01 dB. Worst-view PSNR changes from
+24.26/23.87/24.24/24.39/24.31 to 24.40/24.11/24.29/24.64/24.21 dB. The
+aggregate gains are 0.202 dB mean and 0.168 dB worst-view. The separately
+persisted/reloaded PBR outputs remain at approximately 23.50/22.93 dB,
+55.3% coverage, and 22.48 dB where hit in aggregate; per-cloud movements are
+at the established atomic-fit scale because their inputs and code path are
+unchanged.
+
+The continuation remains opt-in rather than becoming a default. Cloud 5 loses
+0.01 dB mean and 0.10 dB worst-view static quality. Halving the schedule to
+150 updates per view is worse at 24.96/24.13 dB on that cloud; doubling it to
+600 reaches only 24.99/24.21 despite a substantially lower training loss.
+Training convergence therefore cannot safely select the continued field for
+every scene. Explicit users receive the strong static improvement without the
+former PBR side effect; the ordinary default remains unchanged. A focused
+orchestration test proves mutating the selected static continuation target
+does not mutate the PBR surface. Five-cloud logs and 0.30 GB peak-memory
+telemetry remain under
+`target/audit-runs/current-synthetic-v1/surface-powerfoam-static-only-{first,five}/`;
+the schedule probes are under the neighboring `-150-cloud5` and `-600-cloud5`
+directories. All scopes report zero swap, OOM, validation error, Xid, or GPU
+fault. The complete 511-test workspace/all-target physical-GPU gate passes at
+a 3,408,805,888-byte cgroup peak; formatting and warnings-as-errors clippy also
+pass. Validation logs remain under
+`target/audit-runs/static-powerfoam-output-isolation-validation/`.
