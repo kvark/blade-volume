@@ -28,6 +28,14 @@ struct Args {
     #[argh(option, default = "String::from(\"sun-east\")")]
     environment: String,
 
+    /// optional aligned-light capture used to continue foam geometry
+    #[argh(option)]
+    geometry_environment: Option<String>,
+
+    /// adam updates per view for the aligned-light geometry continuation
+    #[argh(option, default = "200")]
+    geometry_steps_per_view: usize,
+
     /// environment reserved for relighting evaluation (default: studio)
     #[argh(option, default = "String::from(\"studio\")")]
     held_out_environment: String,
@@ -736,6 +744,20 @@ fn main() {
                 args.held_out_environment
             ))
         });
+    let geometry_environment = args.geometry_environment.as_ref().map(|requested| {
+        let index = dataset
+            .environments
+            .iter()
+            .position(|name| name == requested)
+            .unwrap_or_else(|| fail(format!("no environment named '{requested}'")));
+        if index == held_out_environment {
+            fail("the held-out environment cannot continue geometry");
+        }
+        if args.geometry_steps_per_view == 0 {
+            fail("--geometry-environment requires --geometry-steps-per-view > 0");
+        }
+        index
+    });
     let (training_indices, held_out_indices) = split_views(
         dataset.views.len(),
         args.held_out_stride,
@@ -785,7 +807,7 @@ fn main() {
         densify,
         ..train::diff_render::AppearanceFitConfig::default()
     };
-    let model = match args.input {
+    let mut model = match args.input {
         Some(ref input) => vol::io::try_load(input)
             .unwrap_or_else(|error| fail(format!("cannot read {input}: {error}"))),
         None => {
@@ -822,6 +844,37 @@ fn main() {
             model
         }
     };
+    if let Some(geometry_environment) = geometry_environment {
+        let continuation = supervision(
+            &dataset,
+            geometry_environment,
+            &training_indices,
+            args.width,
+            args.height,
+        )
+        .unwrap_or_else(|error| fail(error));
+        let mut continuation_config = config.clone();
+        continuation_config.steps_per_view = args.geometry_steps_per_view;
+        continuation_config.densify = None;
+        let started = std::time::Instant::now();
+        let losses = train::diff_render::fit_appearance_multi_view(
+            &mut model,
+            &continuation,
+            args.width,
+            args.height,
+            args.max_steps,
+            continuation_config,
+            gpu.clone(),
+        );
+        println!(
+            "geometry-light continuation '{}': {} updates in {:.3} s, loss {:.6} -> {:.6}",
+            dataset.environments[geometry_environment],
+            losses.len(),
+            started.elapsed().as_secs_f64(),
+            losses.first().copied().unwrap_or(f32::NAN),
+            losses.last().copied().unwrap_or(f32::NAN),
+        );
+    }
     model.validate().unwrap_or_else(|error| fail(error));
     let mut densities: Vec<f32> = model.points.iter().map(|point| point.w).collect();
     densities.sort_by(f32::total_cmp);
@@ -1801,9 +1854,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(args.materials, 6);
+        assert!(args.geometry_environment.is_none());
+        assert_eq!(args.geometry_steps_per_view, 200);
         assert_eq!(args.surface_powerfoam_steps_per_view, 0);
         assert!(args.surface_powerfoam_output.is_none());
         assert!(args.gaussian_output.is_none());
         assert_eq!(args.gaussian_steps, 1_500);
+    }
+
+    #[test]
+    fn geometry_light_continuation_is_explicit() {
+        let args = <Args as argh::FromArgs>::from_args(
+            &["synthetic_foam"],
+            &[
+                "--dataset",
+                "capture",
+                "--output",
+                "model.ply",
+                "--geometry-environment",
+                "sun-west",
+                "--geometry-steps-per-view",
+                "300",
+            ],
+        )
+        .unwrap();
+        assert_eq!(args.geometry_environment.as_deref(), Some("sun-west"));
+        assert_eq!(args.geometry_steps_per_view, 300);
     }
 }

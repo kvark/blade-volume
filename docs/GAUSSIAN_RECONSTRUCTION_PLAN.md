@@ -4712,3 +4712,32 @@ absolute-light and contrast-tail batching orchestration. The helper, loop
 rewrites, and expanded test are removed under the project's minimality rule.
 Artifacts remain under
 `target/audit-runs/current-synthetic-v1/grouped-multilight-candidates-{first,five}/`.
+
+## Secondary-light foam geometry continuation (2026-08-23)
+
+A short continuation of the already trained sun-east foam against the same six
+cameras under sun-west is selected. It stays in the original optimization
+basin, disables densification, and runs 200 updates per view before the existing
+surface extraction and Gaussian stages. Across five independently trained
+clouds, volumetric Gaussian PBR held-light mean/worst PSNR improves from
+23.53/22.97 to 24.07/23.34 dB. Every cloud improves both measures. Coverage
+moves from 55.28% to about 55.42%, and where-hit PSNR from 22.52 to 22.89 dB.
+The continuation costs about 8.0 seconds per cloud. A 300-update schedule
+overfits; separately trained uniform, sky-dome, and sun-west foams are either
+mixed or strongly negative, so they are not retained.
+
+`synthetic_foam --geometry-environment sun-west` exposes the truth-controlled
+gate. Production `train_colmap` accepts an aligned directory through
+`--geometry-images DIR --geometry-steps-per-view 200`; both options must be
+present together. The selected training cameras are matched by their existing
+COLMAP relative filenames, missing aligned views are an error, and the same
+masks apply. Resume/checkpoint state and densification are cleared for this
+fresh fixed-topology phase. No graph operation, shader, model field, file
+format, or dependency is added.
+
+The explicit first-cloud rerun reaches 24.03/23.20 dB mean/worst at 55.1%
+coverage and 22.90 dB where hit, consistent with the selected gain under normal
+optimizer variation. A two-view Bonsai smoke exercises the production path and
+serialization. Runs and cgroup telemetry remain under
+`target/audit-runs/current-synthetic-v1/geometry-light-continuation-*` and
+`target/audit-runs/geometry-continuation-colmap-smoke/`.

@@ -20,8 +20,10 @@
 //!    downsamples to `(--width, --height)`, and uses it as a training view.
 //! 5. Runs multi-view point-cloud training (Adam, L1 against per-pixel RGB).
 //!    Geometry is fixed unless position optimisation is explicitly enabled.
-//! 6. Saves the trained model as a RadFoam PLY at `--output`.
-//! 7. Renders the trained model from a *novel* pose interpolated between
+//! 6. Optionally continues the same geometry against an aligned capture under
+//!    another light using `--geometry-images`.
+//! 7. Saves the trained model as a RadFoam PLY at `--output`.
+//! 8. Renders the trained model from a *novel* pose interpolated between
 //!    the first two training cameras and saves it as `--novel-out`.
 
 use argh::FromArgs;
@@ -40,6 +42,14 @@ struct Args {
     /// path to the COLMAP images directory
     #[argh(option)]
     images: String,
+
+    /// optional aligned capture used for a final shared-geometry continuation
+    #[argh(option)]
+    geometry_images: Option<String>,
+
+    /// adam updates per view for --geometry-images (default 0 = disabled)
+    #[argh(option, default = "0")]
+    geometry_steps_per_view: usize,
 
     /// optional foreground-mask directory mirroring the image paths
     #[argh(option)]
@@ -539,10 +549,43 @@ fn build_evaluation_views(
     }
 }
 
+fn geometry_continuation_config(
+    config: &pipeline::PipelineConfig,
+    steps_per_view: usize,
+) -> pipeline::PipelineConfig {
+    let mut continuation = config.clone();
+    continuation.fit.steps_per_view = steps_per_view;
+    continuation.fit.densify = None;
+    continuation.fit.resume_step = 0;
+    continuation.fit.stop_after_steps = None;
+    continuation.fit.resume_state_path = None;
+    continuation.fit.resume_training_state = None;
+    continuation.fit.checkpoint_path = None;
+    continuation
+}
+
+fn validate_geometry_continuation_args(
+    images: Option<&str>,
+    steps_per_view: usize,
+) -> Result<(), &'static str> {
+    if images.is_some() == (steps_per_view > 0) {
+        Ok(())
+    } else {
+        Err("--geometry-images and --geometry-steps-per-view must be supplied together")
+    }
+}
+
 fn main() {
     env_logger::init();
     let command_start = std::time::Instant::now();
     let args: Args = argh::from_env();
+    if let Err(message) = validate_geometry_continuation_args(
+        args.geometry_images.as_deref(),
+        args.geometry_steps_per_view,
+    ) {
+        eprintln!("{message}");
+        std::process::exit(2);
+    }
     let densify_schedule = match args.densify_schedule.as_str() {
         "fixed" => diff_render::DensifySchedule::Fixed,
         "radfoam-v1" => diff_render::DensifySchedule::RadFoamV1,
@@ -977,6 +1020,16 @@ fn main() {
         eprintln!("image directory does not exist: {}", images.display());
         std::process::exit(2);
     }
+    if let Some(ref geometry_images) = args.geometry_images {
+        let geometry_images = path::Path::new(geometry_images);
+        if !geometry_images.is_dir() {
+            eprintln!(
+                "geometry image directory does not exist: {}",
+                geometry_images.display()
+            );
+            std::process::exit(2);
+        }
+    }
     if let Some(masks) = masks {
         if !masks.is_dir() {
             eprintln!("mask directory does not exist: {}", masks.display());
@@ -988,7 +1041,7 @@ fn main() {
         std::process::exit(2);
     };
     let pipeline_start = std::time::Instant::now();
-    let outcome = if let Some(masks) = masks {
+    let mut outcome = if let Some(masks) = masks {
         pipeline::train_colmap_appearance_split_with_masks(
             sparse,
             images,
@@ -1009,6 +1062,57 @@ fn main() {
             gpu.clone(),
         )
     };
+    if let Some(ref geometry_images) = args.geometry_images {
+        let geometry_images = path::Path::new(geometry_images);
+        let (train_images, _) = pipeline::split_train_test(
+            &outcome.reconstruction,
+            images,
+            config.max_views,
+            args.test_views,
+            args.test_every,
+        );
+        let continuation_config =
+            geometry_continuation_config(&config, args.geometry_steps_per_view);
+        let views = build_evaluation_views(
+            &outcome.reconstruction,
+            geometry_images,
+            masks,
+            &continuation_config,
+            &train_images,
+        )
+        .unwrap_or_else(|message| {
+            eprintln!("cannot load aligned geometry views: {message}");
+            std::process::exit(2);
+        });
+        if views.len() != train_images.len() {
+            eprintln!(
+                "aligned geometry capture supplies {} of {} selected training views",
+                views.len(),
+                train_images.len(),
+            );
+            std::process::exit(2);
+        }
+        let started = std::time::Instant::now();
+        let losses = diff_render::fit_appearance_multi_view(
+            &mut outcome.model,
+            &views,
+            continuation_config.resolution.0,
+            continuation_config.resolution.1,
+            continuation_config.max_steps,
+            continuation_config.fit,
+            gpu.clone(),
+        );
+        println!(
+            "geometry-light continuation: {} updates over {} aligned views in {:.1} s, loss {:.6} -> {:.6}",
+            losses.len(),
+            views.len(),
+            started.elapsed().as_secs_f64(),
+            losses.first().copied().unwrap_or(f32::NAN),
+            losses.last().copied().unwrap_or(f32::NAN),
+        );
+        outcome.training_loss.extend(losses);
+        outcome.endpoint_checkpoint = None;
+    }
     let pipeline_duration = pipeline_start.elapsed();
 
     let output = path::Path::new(&args.output);
@@ -1266,6 +1370,8 @@ mod tests {
         assert_eq!(default.views_per_batch, 0);
         assert!(!default.skip_eval);
         assert!(default.masks.is_none());
+        assert!(default.geometry_images.is_none());
+        assert_eq!(default.geometry_steps_per_view, 0);
         assert_eq!(default.opacity_weight, None);
         assert_eq!(resolve_opacity_weight(default.opacity_weight, false), 0.0);
         assert_eq!(
@@ -1325,6 +1431,50 @@ mod tests {
         assert_eq!(masked.masks.as_deref(), Some("masks"));
         assert_eq!(resolve_opacity_weight(masked.opacity_weight, true), 1.0);
         assert_eq!(resolve_opacity_weight(Some(0.25), true), 0.25);
+
+        let geometry = <Args as argh::FromArgs>::from_args(
+            &["train_colmap"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--geometry-images",
+                "aligned",
+                "--geometry-steps-per-view",
+                "200",
+                "--output",
+                "model.ply",
+            ],
+        )
+        .unwrap();
+        assert_eq!(geometry.geometry_images.as_deref(), Some("aligned"));
+        assert_eq!(geometry.geometry_steps_per_view, 200);
+    }
+
+    #[test]
+    fn geometry_continuation_is_paired_and_starts_a_fresh_fixed_topology_fit() {
+        assert!(validate_geometry_continuation_args(None, 0).is_ok());
+        assert!(validate_geometry_continuation_args(Some("aligned"), 200).is_ok());
+        assert!(validate_geometry_continuation_args(Some("aligned"), 0).is_err());
+        assert!(validate_geometry_continuation_args(None, 200).is_err());
+
+        let mut primary = pipeline::PipelineConfig::default();
+        primary.fit.steps_per_view = 1_000;
+        primary.fit.densify = Some(diff_render::DensifyConfig::default());
+        primary.fit.resume_step = 400;
+        primary.fit.stop_after_steps = Some(500);
+        primary.fit.resume_state_path = Some(path::PathBuf::from("resume.bin"));
+        primary.fit.checkpoint_path = Some(path::PathBuf::from("checkpoint.ply"));
+
+        let continuation = geometry_continuation_config(&primary, 200);
+        assert_eq!(continuation.fit.steps_per_view, 200);
+        assert!(continuation.fit.densify.is_none());
+        assert_eq!(continuation.fit.resume_step, 0);
+        assert!(continuation.fit.stop_after_steps.is_none());
+        assert!(continuation.fit.resume_state_path.is_none());
+        assert!(continuation.fit.resume_training_state.is_none());
+        assert!(continuation.fit.checkpoint_path.is_none());
     }
 
     #[test]

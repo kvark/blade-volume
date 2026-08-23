@@ -38,9 +38,12 @@ cargo run --release -p blade-volume-train --bin train_colmap -- \
 Outputs a binary RadFoam PLY plus a 5-frame interpolated-camera strip
 (`novel_00.png` … `novel_04.png`). The PLY can be opened with the viewer
 above. Add `--masks masks/` for a foreground directory mirroring the image
-paths; masked runs supervise opacity and default its loss weight to 1. See
-`docs/PIPELINE.md` for the design and `docs/MESH_TO_FOAM.md`
-for the parallel mesh-to-foam path.
+paths; masked runs supervise opacity and default its loss weight to 1. When a
+second capture has the same cameras and filenames but different illumination,
+add `--geometry-images aligned-light/ --geometry-steps-per-view 200` for a
+short fixed-topology continuation before saving the foam. The ordinary
+single-capture path is unchanged. See `docs/PIPELINE.md` for the design and
+`docs/MESH_TO_FOAM.md` for the parallel mesh-to-foam path.
 
 ## Current Reconstruction Results
 
@@ -55,6 +58,7 @@ either reconstructed asset.
 | Synthetic (predefined light, refined) | 6 / 2 | 25.15 / 24.44 dB | 21.81 / 21.48 dB | 57.0% |
 | Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 25.17 / 24.35 dB | 22.68 / 22.22 dB | 56.7% |
 | Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 25.17 / 24.35 dB | 23.53 / 22.97 dB | 55.3% |
+| Synthetic (secondary-light foam continuation, five-cloud average) | 6 / 2 | 25.91 / 24.90 dB | 24.07 / 23.34 dB | 55.4% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -136,6 +140,14 @@ improves every five-cloud mean and worst view, raising the selected aggregate
 from 23.50/22.93 to 23.53/22.97 dB at the same 55.3% coverage. Both passes are
 automatic only for a requested relightable Gaussian output under calibrated
 lights and add no training option or shader.
+
+Before surface extraction, a 200-update-per-view continuation of the same foam
+under one aligned secondary light improves all five independently trained
+clouds. The volumetric Gaussian PBR aggregate rises from 23.53/22.97 to
+24.07/23.34 dB mean/worst held-light PSNR, with coverage moving from 55.3% to
+55.4% and covered-pixel quality from 22.52 to 22.89 dB. It is explicit because
+it requires a separately captured, camera-aligned image directory. It adds no
+shader, graph operation, model field, format, or dependency.
 
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered
