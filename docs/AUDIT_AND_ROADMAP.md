@@ -595,6 +595,30 @@ At the audited revision:
   proxy for the distributed far/background residual; the next sampler gate
   must use an explicit residual or visibility signal and preserve an unbiased
   loss estimate.
+- Full residual attribution rules out literal empty-ray holes at the current
+  growth checkpoints. For each scene, all of the worst 512 overpredicted and
+  512 underpredicted held-out pixels hit a peak cell. Median opacity is 1.0000
+  in Bonsai and at least 0.9996 in Room. The errors span 403/419 unique
+  Bonsai cells and 276/273 unique Room cells; their median training-view
+  support is 46/65 and 62/82 for over/underprediction. Missing support is not
+  the dominant failure at this resolution.
+- Replacing RadFoam's position-gradient densification score with the existing
+  per-cell photometric-responsibility EMA confirms that distinction. From the
+  exact step-6,000 state it improves Bonsai selected-eight/all-37 PSNR by
+  0.16/0.06 dB at the 200,000-cell step-8,000 boundary. From Room's exact
+  step-4,000 state it instead lowers selected-eight PSNR by 0.27 dB at step
+  6,000. Applying PowerFoam's established 99th-percentile cap still loses
+  0.21 dB. Both forms keep the existing cell-radius weighting and add no new
+  operation or shader, but they replace a geometry signal with a scene-mixed
+  appearance signal. A matched Room score dump also removes the rationale for
+  a tuned blend: the existing gradient already puts 58.3%/79.1% of unique
+  held-out over/underprediction cells in its top 15%, versus 57.4%/84.7% for
+  the residual. Their rank correlation is 0.58, but their top-10% sets overlap
+  only 32.7%; photometric scoring mostly reorders already-visible error sites
+  instead of finding missing ones. The prototype and dump instrumentation are
+  removed. Before changing support again, compare complete per-cell training
+  and held-view errors to separate appearance underfit from geometry that
+  fails to generalize.
 
 ### Remaining PowerFoam gaps
 
