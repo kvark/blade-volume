@@ -215,6 +215,31 @@ fn split_views(count: usize, stride: usize, offset: usize) -> (Vec<usize>, Vec<u
     (training, held_out)
 }
 
+fn photometric_descriptor_capture(
+    dataset: &train::relight::Dataset,
+    held_out_environment: usize,
+) -> Result<train::inverse::capture::Capture, String> {
+    let environment_indices: Vec<_> = (0..dataset.environments.len())
+        .filter(|&index| index != held_out_environment)
+        .collect();
+    if environment_indices.len() < 4 {
+        return Err(format!(
+            "photometric descriptors need four known lights, found {}",
+            environment_indices.len()
+        ));
+    }
+    let captures: Vec<_> = environment_indices
+        .iter()
+        .map(|&index| train::inverse::capture::Capture::from_relight_dataset(dataset, index, true))
+        .collect::<Result<_, _>>()?;
+    train::inverse::capture::photometric_response([
+        &captures[0],
+        &captures[1],
+        &captures[2],
+        &captures[3],
+    ])
+}
+
 fn camera_focus(cameras: &[vol::CameraParams]) -> glam::Vec3 {
     let mut system = glam::Mat3::ZERO;
     let mut right = glam::Vec3::ZERO;
@@ -1005,18 +1030,18 @@ fn main() {
     let training_capture =
         train::inverse::capture::Capture::from_relight_dataset(&dataset, environment, true)
             .unwrap_or_else(|error| fail(error));
+    let refinement_views: Vec<_> = training_indices
+        .iter()
+        .zip(&maps)
+        .map(
+            |(&capture_index, entry)| train::inverse::refine::RefinementView {
+                capture_index,
+                depth: Some(&entry.1),
+            },
+        )
+        .collect();
     if !args.no_refine {
         let refine_started = std::time::Instant::now();
-        let refinement_views: Vec<_> = training_indices
-            .iter()
-            .zip(&maps)
-            .map(
-                |(&capture_index, entry)| train::inverse::refine::RefinementView {
-                    capture_index,
-                    depth: Some(&entry.1),
-                },
-            )
-            .collect();
         let stats = train::inverse::refine::refine(
             &mut surfels,
             &training_capture,
@@ -1030,6 +1055,29 @@ fn main() {
             stats.mean_absolute_offset / voxel,
             100.0 * stats.mean_relative_improvement,
             refine_started.elapsed().as_secs_f64(),
+        );
+    }
+    if args.photometric_normals && !args.no_refine {
+        let descriptor_capture = photometric_descriptor_capture(&dataset, held_out_environment)
+            .unwrap_or_else(|error| fail(error));
+        let started = std::time::Instant::now();
+        let stats = train::inverse::refine::refine(
+            &mut surfels,
+            &descriptor_capture,
+            &refinement_views,
+            train::inverse::refine::RefineOptions {
+                search_radius_factor: 0.25,
+                min_improvement: 0.1,
+                ..train::inverse::refine::RefineOptions::default()
+            },
+        );
+        println!(
+            "photometric-response refined {} of {} scored particles by {:.3} cells ({:.1}% lower cost) in {:.3} s",
+            stats.moved,
+            stats.scored,
+            stats.mean_absolute_offset / voxel,
+            100.0 * stats.mean_relative_improvement,
+            started.elapsed().as_secs_f64(),
         );
     }
     for surfel in surfels.iter_mut() {

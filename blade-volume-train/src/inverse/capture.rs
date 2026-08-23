@@ -34,6 +34,63 @@ pub struct Capture {
     pub views: Vec<View>,
 }
 
+/// Encode four aligned lighting observations as a scalar-gain-insensitive image.
+///
+/// The log response of each pixel is centered across lights. Multiplying all
+/// four luminances by the same material or exposure gain changes none of the
+/// three stored coordinates; the omitted fourth coordinate is implied because
+/// the four centered responses sum to zero.
+pub fn photometric_response(captures: [&Capture; 4]) -> Result<Capture, String> {
+    let primary = captures[0];
+    for capture in captures.iter().skip(1) {
+        if capture.width != primary.width
+            || capture.height != primary.height
+            || capture.views.len() != primary.views.len()
+        {
+            return Err("photometric response captures are not aligned".to_string());
+        }
+    }
+    let mut views = Vec::with_capacity(primary.views.len());
+    for view_index in 0..primary.views.len() {
+        let source = &primary.views[view_index];
+        let pixel_count = source.pixels.len();
+        if captures
+            .iter()
+            .any(|capture| capture.views[view_index].pixels.len() != pixel_count)
+        {
+            return Err(format!(
+                "photometric response view {view_index} has inconsistent image sizes"
+            ));
+        }
+        let mut pixels = Vec::with_capacity(pixel_count);
+        for pixel_index in 0..pixel_count {
+            let mut responses = [0.0f32; 4];
+            for (response, capture) in responses.iter_mut().zip(captures) {
+                let rgb = capture.views[view_index].pixels[pixel_index];
+                let luminance = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+                *response = luminance.max(1.0e-4).ln();
+            }
+            let mean = responses.iter().sum::<f32>() / responses.len() as f32;
+            pixels.push([
+                responses[0] - mean,
+                responses[1] - mean,
+                responses[2] - mean,
+            ]);
+        }
+        views.push(View {
+            name: format!("{}-photometric-response", source.name),
+            camera: source.camera,
+            pixels,
+            mask: source.mask.clone(),
+        });
+    }
+    Ok(Capture {
+        width: primary.width,
+        height: primary.height,
+        views,
+    })
+}
+
 /// The display transfer function, and its inverse.
 ///
 /// sRGB, not a 2.2 power law: the linear toe near black is where a dark
@@ -503,5 +560,32 @@ mod tests {
         };
         assert!(!view.is_foreground(0));
         assert!(view.is_foreground(1));
+    }
+
+    #[test]
+    fn photometric_response_cancels_multiplicative_scalar_gain() {
+        let response = [0.2f32, 0.5, 1.0, 2.0];
+        let captures: Vec<_> = response
+            .iter()
+            .map(|&light| Capture {
+                width: 2,
+                height: 1,
+                views: vec![View {
+                    name: "aligned".to_string(),
+                    camera: camera(),
+                    pixels: vec![[light; 3], [0.4 * light; 3]],
+                    mask: Some(vec![1.0; 2]),
+                }],
+            })
+            .collect();
+        let descriptor =
+            photometric_response([&captures[0], &captures[1], &captures[2], &captures[3]]).unwrap();
+        for channel in 0..3 {
+            assert!(
+                (descriptor.views[0].pixels[0][channel] - descriptor.views[0].pixels[1][channel])
+                    .abs()
+                    < 1.0e-6
+            );
+        }
     }
 }

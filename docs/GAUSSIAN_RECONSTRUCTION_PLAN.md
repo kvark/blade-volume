@@ -4813,3 +4813,34 @@ are no longer jointly calibrated.
 
 All private switches and orchestration are removed. Runs and telemetry remain
 under `target/audit-runs/current-synthetic-v1/geometry-light-{same-primary,joint,joint-secondary4,alternating-20,global-rate,density-only,rebuild,opacity}-first/`.
+
+## Scalar-gain-invariant aligned-light correspondence (2026-08-23)
+
+Four camera-aligned lighting captures now provide a small independent center
+signal before PBR decomposition. At each pixel, the pass takes log luminance
+under the four known lights, subtracts their per-pixel mean, and stores three
+coordinates (the fourth is implied by their zero sum). A multiplicative
+intensity, scalar material, or exposure gain therefore cancels before the
+existing normalized tangent-patch matcher compares views. The pass reuses the
+CPU normal-axis sweep with a quarter-radius search and accepts only a
+ten-percent patch-cost reduction; it adds no shader, graph operation,
+dependency, model field, or file format.
+
+A paired gate starts each arm from the exact same five persisted post-
+continuation foams. Control held-light volumetric Gaussian PBR is
+24.018/23.268 dB mean/worst, 55.40% coverage, and 22.818 dB where hit. The
+response pass reaches 24.064/23.330 dB, the same 55.40% aggregate coverage,
+and 22.894 dB where hit. Every cloud improves its worst view; four improve
+mean quality and the fifth ties at printed precision. It moves 57--74 of
+160--204 scored particles per cloud and costs 2--3 milliseconds. The looser
+two-percent threshold has a similar aggregate but regresses the fifth cloud's
+covered score more strongly. A two-light log ratio is also rejected: it is
+not reliable on the first and fifth clouds.
+
+`reconstruct` applies the selected pass automatically when foam geometry, the
+primary measured capture, and at least three aligned `--normal-images`
+captures are present. It uses only training cameras and the first four known
+lights; held-out poses and the held-out synthetic environment remain outside
+the decision. The synthetic gate runs automatically with photometric normals.
+Artifacts and 12 GB cgroup telemetry remain under
+`target/audit-runs/current-synthetic-v1/photometric-response-{isolated-five,strict,selected-five}/`.

@@ -321,6 +321,7 @@ fn main() {
                     &capture,
                     &reconstruction,
                     &train_views,
+                    &normal_captures,
                     &args,
                     compute_gpu.clone(),
                 );
@@ -1229,6 +1230,7 @@ fn surfels_from_foam(
     capture: &train::inverse::capture::Capture,
     reconstruction: &train::colmap::Reconstruction,
     views: &[usize],
+    normal_captures: &[NormalCapture],
     args: &Args,
     gpu: Option<sync::Arc<gpu::Context>>,
 ) -> (
@@ -1383,6 +1385,38 @@ fn surfels_from_foam(
             stats.mean_views,
             refine_started.elapsed().as_secs_f64(),
         );
+        if normal_captures.len() >= 3 {
+            let response = train::inverse::capture::photometric_response([
+                capture,
+                &normal_captures[0].capture,
+                &normal_captures[1].capture,
+                &normal_captures[2].capture,
+            ])
+            .unwrap_or_else(|message| {
+                eprintln!("cannot build aligned-light response: {message}");
+                std::process::exit(1);
+            });
+            let response_started = std::time::Instant::now();
+            let stats = train::inverse::refine::refine(
+                &mut surfels,
+                &response,
+                &refine_views,
+                train::inverse::refine::RefineOptions {
+                    search_radius_factor: 0.25,
+                    min_improvement: 0.1,
+                    ..train::inverse::refine::RefineOptions::default()
+                },
+            );
+            println!(
+                "geometry: aligned-light responses scored {} and moved {} surfels by {:.3} cells on average ({:.1}% lower cost, {:.1} views) in {:.1} s",
+                stats.scored,
+                stats.moved,
+                stats.mean_absolute_offset / voxel,
+                100.0 * stats.mean_relative_improvement,
+                stats.mean_views,
+                response_started.elapsed().as_secs_f64(),
+            );
+        }
     }
     (
         surfels,

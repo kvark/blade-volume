@@ -96,6 +96,17 @@ density-gradient correction after the calibrated normal solve improves every
 one of the five held-light means and tails; single-light and static outputs
 retain their gated 10% correction. Both outputs remain point clouds.
 
+The same four aligned captures also supply a scalar-gain-normalized
+correspondence image: per-pixel log responses are centered across lights, so a
+multiplicative intensity, scalar reflectance, or exposure gain cancels before
+the existing multi-view patch sweep. On an exact paired replay of five
+post-continuation foams, this improves held-light Gaussian PBR by 0.05/0.06 dB
+mean/worst and 0.08 dB where hit at unchanged aggregate coverage. `reconstruct`
+enables it automatically for foam geometry when the primary measured capture
+and at least three repeated
+`--normal-images`/`--normal-environment` pairs are supplied. It remains a
+cloud-only CPU refinement and adds no shader or model variant.
+
 The PBR support fit uses masks only as negative visibility evidence: predicted
 opacity is penalized on known background rays, but a foreground mask does not
 force one of several overlapping particles to own that ray. The static light
