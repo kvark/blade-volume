@@ -3420,12 +3420,20 @@ viewer renderer.
 
 On the exact five fixed synthetic clouds, the prior selected result was
 23.284/22.700 dB mean/worst, 55.08% coverage, and 22.286 dB where hit. Four
-calibrated lights and 400 symmetric updates reach 23.324/22.726 dB, 55.16%,
-and 22.302 dB. Every cloud improves its mean and worst view; one newly covered
-subset trades 0.04 dB where hit while the other four and the aggregate improve.
-The continuation averages 3.094 seconds per cloud. Its 12 GiB cgroup peaks at
-291 MB with no swap, OOM, or GPU fault. The result is intentionally modest:
-nearest-truth material and normal substitutions previously showed that poor
-cross-view geometry correspondence, not a missing specular material lobe, is
-the current volumetric PBR limiter. Independent calibrated lights provide a
-genuine geometry signal without baking one light into the persisted asset.
+calibrated lights and 400 symmetric updates at a `2e-4` position rate reach
+23.344/22.770 dB, 55.26%, and 22.320 dB. Every cloud improves or ties its mean
+and worst view; one newly covered subset trades 0.02 dB where hit while the
+other four and the aggregate improve. The continuation averages 3.067 seconds
+per cloud. Its 12 GiB cgroup peaks at 248 MB with no swap, OOM, or GPU fault.
+The result is intentionally modest: nearest-truth material and normal
+substitutions previously showed that poor cross-view geometry correspondence,
+not a missing specular material lobe, is the current volumetric PBR limiter.
+Independent calibrated lights provide a genuine geometry signal without
+baking one light into the persisted asset.
+
+A production dependency check also matters for this path. Meganeura `main`'s
+column-parallel scatter takes 3.6--3.7 seconds for the same 200-update Bonsai
+smoke; its source-parallel CAS path takes 1.4--1.5 seconds and preserves the
+same output scores. The retained Meganeura branch is therefore current `main`
+plus only Blade revision alignment, constant-gradient host visibility, and
+source-parallel scatter accumulation.

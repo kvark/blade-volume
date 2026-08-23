@@ -28,6 +28,7 @@ const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
+const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 2.0e-4;
 const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
 // Match the selected support geometry-refresh cadence so one preparation pass
 // never crosses a point at which candidate transforms could change.
@@ -858,7 +859,7 @@ pub fn fit_multilight_geometry(
                     candidates_per_pixel: 64,
                     candidate_min_alpha: 1.0e-5,
                     geometry_sync_every: 20,
-                    position_learning_rate: LIGHT_FIELD_POSITION_LEARNING_RATE,
+                    position_learning_rate: MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE,
                     scale_learning_rate: 0.0,
                     opacity_learning_rate: 0.0,
                     sh_learning_rate: 0.0,
