@@ -635,6 +635,21 @@ At the audited revision:
   sampling with inverse-probability weights, preserving the existing loss in
   expectation. The one-off attribution implementation is removed; complete
   generated logs remain under `target/audit-runs/cell-residual-attribution/`.
+- A fixed initial-residual pixel distribution with exact inverse-probability
+  loss weights does not pass the cross-scene gate. A 50% uniform mixture
+  improves Bonsai train/all-37 PSNR from 24.0121/23.3282 to
+  24.2762/23.5440 dB and improves 35/37 held views. On Room it changes
+  23.7792/23.0983 to 23.7745/23.1035 dB, improves 25/39 views, but loses
+  1.67 dB on one held view. A safer 75% uniform mixture instead lowers Room
+  train/all-39 quality to 23.7548/23.0179 dB. The full-view residual prepass
+  also raises matched pipeline time by 39.7% on Room and 22.8% on Bonsai.
+  All three 12 GiB scopes stay at or below 1.5 GB host memory with zero swap,
+  OOM, or GPU faults. The prototype weighted color, opacity, distortion,
+  quantile, normal, and densification terms without adding an operation or
+  shader, but the large topology-dependent Room variance means unbiasedness
+  in expectation is not enough for a finite training trajectory. The CLI,
+  graph inputs, and sampler are removed; generated artifacts remain under
+  `target/audit-runs/residual-importance-sampling/`.
 
 ### Remaining PowerFoam gaps
 
