@@ -4783,3 +4783,33 @@ separate view dependence from geometry rather than merely hiding useful center
 gradients, so the temporary degree option is removed too. Artifacts and cgroup
 telemetry remain under
 `target/audit-runs/current-synthetic-v1/geometry-light-{sequential,position-rate,primary-rate,frozen-position,sunwest,validation,prior-validation,sh}*`.
+
+## Rejected secondary-light continuation substitutes (2026-08-23)
+
+The selected secondary-light continuation is not merely extra optimizer time.
+On the same strongest cloud, another 1,200 updates under the original
+`sun-east` capture reach 24.05/23.28 dB mean/worst held-light PBR, versus
+24.27/23.52 dB under `sun-west`. A position-frozen `sun-west` continuation is
+lower again at 23.80/23.14 dB. The aligned light and actual site motion are
+both necessary parts of the selected gain.
+
+Combining the two captures in one fit does not improve it. Equal shared-SH
+supervision reaches 24.08/23.26 dB; an 80/20 secondary/primary mixture reaches
+24.08/23.24 dB. Keeping independent persistent SH tables and alternating five
+short fits per light reaches 24.10/23.36 dB, but repeatedly resets optimizer
+state and raises continuation time from 8.05 to 12.74 seconds. Separate
+appearance removes the direct radiance conflict, yet short alternating
+geometry steps remain inferior to one coherent secondary-light trajectory.
+
+The selected continuation settings are also locally bounded. Changing the
+global learning rate from `0.1` to `0.05` or `0.125` reaches 24.03/23.27 and
+24.02/23.19 dB. Rebuilding topology every 50 or 200 updates instead of 100
+reaches 24.03/23.21 and 24.00/23.18 dB; the slower cadence saves only 0.3
+seconds. Halving repeated opacity-mask supervision improves nearest-truth
+surface position RMSE from 0.5728 to 0.5657 world units, but lowers the final
+render to 23.98/23.11 dB. A geometrically nearer finite-support proxy is not
+necessarily a better Gaussian mixture when opacity, visibility, and overlap
+are no longer jointly calibrated.
+
+All private switches and orchestration are removed. Runs and telemetry remain
+under `target/audit-runs/current-synthetic-v1/geometry-light-{same-primary,joint,joint-secondary4,alternating-20,global-rate,density-only,rebuild,opacity}-first/`.
