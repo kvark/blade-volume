@@ -4982,3 +4982,66 @@ version control under `target/audit-runs/nested-camera-v1/`,
 `target/audit-runs/pbr-opacity025-{five,nine-view,isolated}/`, and
 `target/audit-runs/pbr-opacity-view-threshold/`. All report zero swap, OOM,
 validation error, Xid, or GPU fault.
+
+## Selected dense calibrated-light opacity continuation (2026-08-23)
+
+A component oracle first bounds the next dense-view target on the persisted
+nine-view PBR Gaussian. Replacing every reconstructed normal with its nearest
+training-view G-buffer normal changes held-light quality from 24.152/22.971 to
+24.198/23.349 dB mean/worst, while covered quality changes only from 22.949 to
+22.965 dB. Replacing nearest materials lowers mean quality to 22.183 dB, and
+replacing centers, normals, and materials together lowers it to 20.411 dB.
+The learned finite mixture is compensating for geometric correspondence error;
+independent truth-component substitution is not a useful optimizer target.
+
+Sampled visibility is also rejected. The existing Gaussian intersection path
+was temporarily allowed through the sampled surfel lighting code without a
+shader change. One, four, sixteen, sixty-four, and 256 rays reach 18.164,
+20.165, 22.797, 23.648, and 23.869 dB respectively, all below the analytic
+24.152 dB result. Visibility plus one bounce converges, but reconstruction
+error makes it less accurate as well as much slower. The analytic-only guard
+is restored.
+
+Simple scheduling does not transfer across dense captures. Raising the
+calibrated center/normal pass from 400 to 600 or 800 main updates improves the
+nine-view result to 24.20/23.00 and 24.22/23.03 dB, but the 800-update schedule
+lowers a separate eleven-view fixed-pose result from 23.28 to 23.20 dB.
+Doubling only the normals-only contrast tail reaches 24.14/22.96 dB and is
+rejected at the first gate. Raising only independent PBR fitting from 1,500 to
+2,250 updates reaches 24.28/23.08 dB on nine views but lowers the eleven-view
+result to 23.26 dB; the intermediate 1,875 updates still reaches only 23.27 dB
+and loses covered quality. Static fitting is especially sensitive: applying
+2,250 updates to both outputs lowers its held-pose result from 26.03 to 24.50
+dB. Every step-count branch is removed.
+
+The selected change instead lets the existing calibrated-light graph update
+opacity at a conservative `0.005` rate when every capture has a mask and at
+least eight camera views are selected. Positions and normals keep their
+established rates; covariance, material parameters, and scratch/durable
+appearance stay fixed. Opacity is frozen again for the aligned-light contrast
+tail. On nine views, held-light Gaussian PBR moves from 24.15/22.97 dB, 54.4%
+coverage, and 22.95 dB where hit to 24.28/23.08 dB, 55.1%, and 22.95 dB. On
+the independent eleven-view fixture it moves from 23.28 to 23.36 dB and 52.2%
+to 52.7% coverage; covered quality changes from 21.71 to 21.69 dB.
+
+The view/mask gate is required rather than decorative. A paired five-cloud
+six-view run with the same opacity rate changes aggregate mean/worst/coverage/
+where-hit quality from approximately 23.98/23.24 dB, 55.46%, and 22.78 dB to
+24.04/23.36 dB, 55.56%, and 22.89 dB, but cloud 2 loses 0.05/0.03/0.06 dB in
+mean/worst/covered quality and cloud 3 loses 0.06 dB mean. Halving the rate
+again repairs cloud 3 but worsens cloud 2 to 24.02/23.40/22.91 dB, versus its
+paired 24.16/23.49/23.03 dB control. Six-view opacity therefore remains
+exactly frozen. Maskless captures also retain the prior path because the
+selected evidence depends on physical diffuse normals and foreground masks.
+
+The implementation adds one scalar schedule constant and reuses the opacity
+parameter, sigmoid, optimizer, candidate refresh, graph, and shader already in
+the continuation. It adds no operation, shader entry, bind group, model field,
+format, dependency, or public option. Runs and capped telemetry remain under
+`target/audit-runs/{oracle-component-bound,multilight-normal-gate,high-view-gaussian-steps,multilight-support}/`.
+
+Final integration follows the merged validation stack at Blade `a6ae6a7` and
+Meganeura `b2cc256`. The Rust 1.98 format and Clippy gates pass, as do all 517
+workspace tests under the 12 GiB cgroup. The final cached suite peaks at 3.75
+GiB and reports no swap, OOM, Vulkan validation message, Xid, or GPU fault;
+logs are under `target/audit-runs/merged-stack-opacity/`.

@@ -29,6 +29,7 @@ const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
 const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 4.0e-4;
+const HIGH_VIEW_MULTI_LIGHT_OPACITY_LEARNING_RATE: f32 = 5.0e-3;
 const MULTI_LIGHT_NORMAL_LEARNING_RATE: f32 = 5.0e-4;
 const MULTI_LIGHT_NORMAL_CONTRAST_STEPS: usize = 25;
 const MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING: f32 = 0.5;
@@ -737,7 +738,7 @@ fn promote_to_sh_degree(model: &mut vol::PointCloudModel, degree: usize) {
     assert!((1..=2).contains(&degree));
     let components = vol::get_sh_component_count(degree);
     let mut coefficients = vec![0.0; model.points.len() * components * 3];
-    for (index, dc) in model.sh_coefficients.chunks_exact(3).enumerate() {
+    for (index, dc) in model.sh_coefficients.as_chunks::<3>().0.iter().enumerate() {
         let base = index * components * 3;
         coefficients[base..base + 3].copy_from_slice(dc);
     }
@@ -1009,9 +1010,18 @@ fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
     (light, (step / light_count) as u32)
 }
 
+fn multilight_opacity_learning_rate(view_count: usize, learn_normals: bool) -> f32 {
+    if learn_normals && view_count >= MIN_SH1_VIEWS {
+        HIGH_VIEW_MULTI_LIGHT_OPACITY_LEARNING_RATE
+    } else {
+        0.0
+    }
+}
+
 /// Continue corresponding Gaussian positions under two or more calibrated
-/// lights with exactly aligned cameras while keeping support and appearance
-/// fixed.
+/// lights with exactly aligned cameras while keeping covariance and appearance
+/// fixed. Fully masked captures with at least eight views also receive a weak
+/// opacity update so the physical light response can recalibrate the volume.
 ///
 /// Each pass predicts a diffuse color from the current PBR surface and one
 /// measured environment. The color is scratch supervision: the Gaussian's
@@ -1019,7 +1029,7 @@ fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
 /// also update explicit diffuse shading normals in the same graph; maskless
 /// captures retain their established position-only path. On masked foreground
 /// rays, a weak opacity-conditioned
-/// target keeps center motion from compensating for frozen transmittance;
+/// target keeps center motion from compensating for transmittance error;
 /// background and maskless captures retain the ordinary color residual. One
 /// optimizer compares masked captures in linear radiance, while maskless or
 /// mixed captures retain their display-referred residual for low-radiance
@@ -1078,6 +1088,7 @@ fn fit_joint_multilight_positions(
     learn_normals: bool,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<MultilightFit, String> {
+    let opacity_learning_rate = multilight_opacity_learning_rate(view_indices.len(), learn_normals);
     let options = FitOptions {
         steps: MULTI_LIGHT_GEOMETRY_STEPS * 2 * lights.len(),
         batch_size: 512,
@@ -1086,7 +1097,7 @@ fn fit_joint_multilight_positions(
         geometry_sync_every: 20,
         position_learning_rate: MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE,
         scale_learning_rate: 0.0,
-        opacity_learning_rate: 0.0,
+        opacity_learning_rate,
         sh_learning_rate: 0.0,
         opacity_loss_weight: 0.0,
         background: [0.0; 3],
@@ -1207,7 +1218,7 @@ fn fit_joint_multilight_positions(
     session.set_adam(1.0, 0.9, 0.999, 1.0e-8);
     session.set_lr_multiplier("positions", options.position_learning_rate);
     session.set_lr_multiplier("log_scales", 0.0);
-    session.set_lr_multiplier("opacity_logits", 0.0);
+    session.set_lr_multiplier("opacity_logits", options.opacity_learning_rate);
     session.set_lr_multiplier("sh_", 0.0);
     if learn_normals {
         session.set_lr_multiplier("surface_normals", MULTI_LIGHT_NORMAL_LEARNING_RATE);
@@ -1253,6 +1264,7 @@ fn fit_joint_multilight_positions(
         // subtracts their labels while leaving the same Gaussian weights.
         // Freeze centers so this tail can only debias shading normals.
         session.set_lr_multiplier("positions", 0.0);
+        session.set_lr_multiplier("opacity_logits", 0.0);
         for step in 0..contrast_steps {
             let (light_index, sequence) = multilight_sample(lights.len(), step);
             let reference_index = (light_index + 1) % lights.len();
@@ -1299,7 +1311,9 @@ fn fit_joint_multilight_positions(
         apply_model_geometry(gaussian, &positions, &log_scales, &opacity_logits);
         Some(
             normals
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .zip(&surface.surfels)
                 .map(|(normal, surfel)| {
                     glam::Vec3::from_slice(normal)
@@ -2465,7 +2479,7 @@ fn sh_parameters(model: &vol::PointCloudModel) -> [Vec<f32>; 3] {
     let sh_components = model.sh_component_count();
     let mut sh: [Vec<f32>; 3] =
         std::array::from_fn(|_| Vec::with_capacity(model.points.len() * sh_components));
-    for coefficients in model.sh_coefficients.chunks_exact(3) {
+    for coefficients in model.sh_coefficients.as_chunks::<3>().0 {
         for channel in 0..3 {
             sh[channel].push(coefficients[channel]);
         }
@@ -3197,6 +3211,12 @@ mod tests {
                 (1, 3),
                 (0, 3),
             ]
+        );
+        assert_eq!(multilight_opacity_learning_rate(7, true), 0.0);
+        assert_eq!(multilight_opacity_learning_rate(8, false), 0.0);
+        assert_eq!(
+            multilight_opacity_learning_rate(8, true),
+            HIGH_VIEW_MULTI_LIGHT_OPACITY_LEARNING_RATE,
         );
     }
 
