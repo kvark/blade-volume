@@ -4493,3 +4493,53 @@ OOM events and 271--317 MiB host-memory peaks. The implementation adds no
 shader, graph operation, shader group or entry, binding, model field, file
 format, dependency, or public CLI flag. Artifacts and telemetry remain under
 `target/audit-runs/current-synthetic-v1/static-powerfoam-validation-integrated/`.
+
+## Rejected calibrated-normal contrast variants (2026-08-23)
+
+Using every unordered light pair does not improve the selected cyclic
+normals-only contrast tail. It preserves the 100-update budget and reuses the
+same graph, but the second fixed cloud falls from 23.67/23.06 to 23.65/23.05
+dB mean/worst while covered-pixel quality moves from 22.62 to 22.64 dB. The
+first cloud is effectively tied. Global light-pair completeness is therefore
+not a substitute for a transferable differential direction, and the pair
+table is removed. Runs remain under
+`target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-all-pairs-*`.
+
+Foreground-focused sampling is mixed as well. Spending the entire contrast
+tail on masked foreground rays improves clouds 1 and 2, including normal RMSE,
+but regresses every tail on clouds 3--5 by 0.01--0.03 dB. Forcing only one
+quarter of lanes repairs cloud 4 to 23.63/23.10 dB and 22.64 dB where hit, yet
+clouds 3 and 5 still lose about 0.01 dB. At one lane in eight, cloud 3 retains
+its mean and where-hit score but still loses 0.01 dB tail. Background
+light-difference samples therefore provide useful silhouette-tail
+regularization even with frozen centers. All sampling branches are removed;
+artifacts remain under
+`target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-foreground-*`.
+
+## Rejected robust and nuisance-variable normal fits (2026-08-23)
+
+A `0.05` smooth-L1 residual in the discrete calibrated photometric-normal
+initializer reduces the influence of unmodelled highlights, but lowers the
+first fixed cloud from the selected 23.59/23.06 dB and 22.72 dB where hit to
+23.54/22.93 dB and 22.66 dB where hit. Final normal RMSE improves from about
+53.69 to 53.56 degrees, again showing that nearest-surface normal error does
+not preserve an overlapping particle mixture. The L2 candidate score is
+restored. The diagnostic remains under
+`target/audit-runs/current-synthetic-v1/photometric-normal-smooth-l1-first/`.
+
+Allowing a temporary per-particle diffuse albedo to absorb material error in
+the differentiable center/normal pass is also rejected. Training it for the
+whole center phase gives cloud 1 a 0.01 dB mean gain but costs cloud 2
+0.02/0.01 dB mean/tail. Restricting it to the first quarter recovers cloud 2
+and raises its where-hit quality by 0.03 dB, but cloud 1 falls below the
+selected tail and where-hit reference. The scratch parameter, optimizer state,
+and schedule branch are removed. Runs remain under
+`target/audit-runs/current-synthetic-v1/joint-center-normal-scratch-albedo-*`.
+
+Finally, treating learned Gaussian centers as refreshed surfel locations and
+re-running observation/material assignment is strongly invalid. On the first
+cloud, unseen particles rise from 1,121 to 1,846 and held-light quality falls
+to 23.29/22.74 dB and 22.34 dB where hit. A learned volumetric center remains
+a mixture parameter rather than a new one-to-one surface correspondence. The
+late re-observation and material fit are removed; the capped run remains under
+`target/audit-runs/current-synthetic-v1/post-center-coupled-material-first/`.
