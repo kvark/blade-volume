@@ -3918,6 +3918,33 @@ The foreground term is removed and PBR masks remain negative-only. Artifacts
 are under
 `target/audit-runs/current-synthetic-v1/pbr-foreground-undercoverage-5pct-{first,five}/`.
 
+## Refreshed truth-surface bound and roughness gate (2026-08-23)
+
+The current Blade fixture's exact-surface relighting bound invalidates the old
+component-substitution interpretation without making nearest-truth particle
+matches admissible again. Fitting diffuse albedo and the specular lobe on
+133,924 actual multi-view surface samples reaches 22.86 dB under held-out
+`studio`; exact albedo plus the true lobe reaches 23.01 dB, and fitting only
+albedo with true roughness and F0 reaches 22.92 dB. A uniform one-degree normal
+tilt already lowers the fitted result to 22.29 dB, and two degrees reaches
+21.32 dB. Normal accuracy is therefore still high leverage, but the final
+Gaussian's 23.53 dB whole-image mean at only 55.28% volumetric coverage is not
+directly comparable with the fully covered truth surface; its 22.52 dB
+covered-pixel score is the honest local reference. The complete bound is under
+`target/audit-runs/current-synthetic-v1/relight-bound-refresh/`.
+
+A forward-identical attempt to keep unmodelled highlights from steering the
+joint normal fit is rejected. It scaled only the normal gradient by each
+particle's fitted roughness squared, leaving fully rough gradients, center
+gradients, rendered colors, operations, and optimizer budget unchanged. Across
+five clouds, coverage is identical and mean/covered-pixel PSNR are neutral to
+0.002 dB, but average worst-view PSNR falls by 0.006 dB. The fourth cloud loses
+0.02/0.01 dB mean/worst and 0.04 dB where hit. Fitted roughness is itself
+coupled to approximate normals and shared material clusters, so it is not a
+reliable confidence signal. The graph input and gradient filter are removed;
+artifacts remain under
+`target/audit-runs/current-synthetic-v1/roughness-weighted-normal-{first,five}/`.
+
 ## Rejected Gaussian candidate micro-optimizations (2026-08-23)
 
 Two further private candidate-recorder changes are deliberately not retained.
