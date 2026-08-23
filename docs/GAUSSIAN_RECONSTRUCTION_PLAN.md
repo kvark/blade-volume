@@ -3444,3 +3444,12 @@ coverage, and 22.308 dB where hit: the mean changes by only +0.002 dB while
 worst-view and hit-region quality regress. The second cloud alone loses
 0.02/0.01/0.02 dB in mean/worst/hit-region quality. The temporary scale update
 is removed; calibrated lights continue to refine centers only.
+
+Stronger center rates are screened and rejected too. Rates of `3e-4` and
+`4e-4` both reach 23.354 dB mean over five clouds, but trade quality between
+clouds. The `3e-4` schedule averages 22.788 dB worst, 55.30% coverage, and
+22.330 dB where hit, yet cloud 2 repeatedly loses mean and hit-region quality.
+The `4e-4` schedule averages 22.790 dB worst, 55.38%, and 22.330 dB, while
+clouds 2 and 5 lose mean quality and cloud 5 loses worst-view quality. These
+noise-sized aggregate gains do not justify a less robust default; `2e-4`
+remains selected.
