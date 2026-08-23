@@ -3628,3 +3628,17 @@ before the five-cloud gate. This closes missing directional scratch appearance
 as the immediate error source: the next geometry investigation should measure
 responsibility in the Gaussian compositor itself, where overlapping particles
 share each residual.
+
+That compositor-responsibility follow-up is measured and rejected as a center
+rollback gate. Over 10,240 deterministic training rays, a particle counts as
+responsible in a view when its exact front-to-back compositing weight reaches
+1%. The first cloud has median/p90/p99 support of 3/6/6 training views and
+responsibility-mass quantiles of 0.32/5.53/27.88. Restoring the pre-continuation
+centers of the 719 particles with zero responsible views changes the held-light
+result from 23.53/23.00 dB, 55.1%, and 22.59 dB where hit to 23.52/22.99 dB,
+55.1%, and 22.60 dB. Requiring two views restores 864 centers and reaches
+23.52/22.99 dB, 55.1%, and 22.59 dB. The one-view boundary merely exchanges a
+hundredth of a decibel between global and hit-region scores, while the stronger
+gate is non-positive. The temporary collector and rollback are removed before
+a five-cloud gate; responsibility is descriptive here, not reliable enough to
+justify another production heuristic.

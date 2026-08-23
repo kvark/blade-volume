@@ -5602,3 +5602,23 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/multilight-pbr-scratch-{probe,view-fit-probe} (gitignored)"
 verdict = "reject before five-cloud gate and remove: exact directional PBR scratch appearance is neutral at rounded held-light precision while making center continuation about 2.7 times slower through environment prefiltering and SH fitting; retain the minimal diffuse SH-0 scratch and investigate Gaussian compositing responsibility instead"
+
+[direct_gaussian.rejected_compositor_responsibility_rollback]
+date = "2026-08-23"
+protocol = "first fixed Gaussian cloud; collect exact front-to-back particle weights over 10240 deterministic training rays after the selected joint continuation; call a particle responsible in a view when its maximum weight is at least 0.01; restore its pre-continuation center below one- and two-view thresholds"
+responsible_view_quantiles = [3, 6, 6]
+responsibility_mass_quantiles = [0.317, 5.530, 27.877]
+quantile_order = ["p50", "p90", "p99"]
+control = [23.53, 23.00, 55.1, 22.59]
+minimum_one_view_candidate = [23.52, 22.99, 55.1, 22.60]
+minimum_two_views_candidate = [23.52, 22.99, 55.1, 22.59]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+particles = 2323
+zero_view_particles_restored = 719
+fewer_than_two_view_particles_restored = 864
+maximum_runtime_peak_memory_mb = 233.3
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/gaussian-responsibility-{probe,min1-probe,min2-probe} (gitignored)"
+verdict = "reject before five-cloud gate and remove: the one-view gate only trades 0.01 dB mean/tail for 0.01 dB where-hit quality, while the two-view gate is non-positive; exact compositor responsibility is informative but does not justify another center-rollback heuristic"
