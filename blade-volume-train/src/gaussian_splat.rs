@@ -28,7 +28,7 @@ const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
-const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 2.0e-4;
+const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 4.0e-4;
 const MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING: f32 = 0.5;
 const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
 // Match the selected support geometry-refresh cadence so one preparation pass

@@ -3582,3 +3582,24 @@ OOM, or GPU fault. The earlier two-light maskless Bonsai production smoke
 remains an exact loss identity at 11.35/11.13 dB, 22.9%, and 12.89 dB where
 hit. This changes no model field, public option, Meganeura operation, shader,
 or runtime representation.
+
+The cleaner objective also changes the center-rate gate. At `3e-4`, every
+five-cloud mean and tail improves over `2e-4`, reaching 23.408/22.848 dB,
+55.30% coverage, and the same 22.346 dB where hit. The selected `4e-4` rate
+then improves every mean, every tail, every coverage value, and every
+covered-pixel value relative to `3e-4`; it reaches 23.428/22.874 dB, 55.34%,
+and 22.366 dB. First-cloud probes continue upward through `6e-4` and `1e-3`,
+but the `1e-3` five-cloud gate regresses cloud 3 by 0.04/0.05 dB mean/tail
+against `4e-4`; a repeat reaches the same 23.22/22.55 dB boundary. At `2e-3`,
+the first-cloud mean and covered score also turn downward. The robust `4e-4`
+knee is retained rather than the slightly higher aggregate but scene-mixed
+`1e-3` result.
+
+The repeated-image Bonsai integration smoke remains intentionally unsuitable
+as a fidelity gate because its second environment is paired with the same RGB
+capture. At `4e-4` it nevertheless completes 200 maskless updates, persists
+and reloads the asset, and changes training-view output from 11.35/11.13 dB,
+22.9%, and 12.89 dB where hit to 12.04/11.73 dB, 22.9%, and 12.44 dB. This is
+reported as a stability check and explicit covered-region trade, not evidence
+of real-scene relighting quality. Runtime remains 0.6 seconds and peaks at
+243 MB with no swap, OOM, or GPU fault.

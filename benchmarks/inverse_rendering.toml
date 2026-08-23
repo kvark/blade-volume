@@ -5431,7 +5431,7 @@ verdict = "select: every cloud's held-light mean and worst view improves or ties
 
 [direct_gaussian.selected_opacity_conditioned_multilight_color]
 date = "2026-08-23"
-protocol = "selected single-session four-light center continuation on five fixed Gaussian clouds; keep opacity frozen; condition up to 50% of foreground RGB in proportion to detached accumulated opacity; preserve ordinary coverage-driving and background loss; persist and reload before unseen-studio-light scoring"
+protocol = "selected single-session four-light center continuation on five fixed Gaussian clouds; keep opacity frozen; condition up to 50% of foreground RGB in proportion to detached accumulated opacity; update centers at the robust 4e-4 rate; preserve ordinary coverage-driving and background loss; persist and reload before unseen-studio-light scoring"
 fixed_opacity_conditioned_color_weight = 0.125
 adaptive_opacity_conditioned_color_ceiling = 0.5
 screen_weights = [1.0, 0.5, 0.25, 0.125]
@@ -5449,30 +5449,45 @@ adaptive_screen_first_cloud = [
     [23.48, 22.92, 54.9, 22.57],
 ]
 adaptive_squared_first_cloud = [23.47, 22.90, 54.9, 22.57]
-control_mean = [23.46, 23.51, 23.19, 23.43, 23.23]
-candidate_mean = [23.47, 23.52, 23.23, 23.46, 23.25]
-control_worst = [22.89, 22.89, 22.53, 22.87, 22.78]
-candidate_worst = [22.91, 22.88, 22.56, 22.91, 22.80]
-control_coverage = [55.0, 55.3, 55.5, 55.4, 55.2]
-candidate_coverage = [55.0, 55.2, 55.5, 55.3, 55.1]
-control_covered = [22.57, 22.46, 22.06, 22.37, 22.19]
-candidate_covered = [22.56, 22.47, 22.10, 22.39, 22.21]
-control_average = [23.364, 22.792, 55.28, 22.330]
-candidate_average = [23.386, 22.812, 55.22, 22.346]
+adaptive_2e4_average = [23.386, 22.812, 55.22, 22.346]
+rate_screen = [0.0002, 0.0003, 0.0004, 0.0006, 0.001, 0.002]
+rate_screen_first_cloud = [
+    [23.47, 22.91, 55.0, 22.57],
+    [23.50, 22.95, 55.0, 22.58],
+    [23.52, 23.00, 55.1, 22.59],
+    [23.55, 23.05, 55.1, 22.59],
+    [23.60, 23.13, 55.3, 22.66],
+    [23.56, 23.16, 55.4, 22.60],
+]
+rate_3e4_average = [23.408, 22.848, 55.30, 22.346]
+rate_1e3_average = [23.436, 22.904, 55.56, 22.370]
+rate_1e3_repeat_cloud_3 = [23.22, 22.55, 55.8, 22.10]
+position_learning_rate = 0.0004
+control_mean = [23.47, 23.52, 23.23, 23.46, 23.25]
+candidate_mean = [23.53, 23.55, 23.25, 23.53, 23.28]
+control_worst = [22.91, 22.88, 22.56, 22.91, 22.80]
+candidate_worst = [22.99, 22.94, 22.60, 22.99, 22.85]
+control_coverage = [55.0, 55.2, 55.5, 55.3, 55.1]
+candidate_coverage = [55.1, 55.4, 55.6, 55.4, 55.2]
+control_covered = [22.56, 22.47, 22.10, 22.39, 22.21]
+candidate_covered = [22.60, 22.46, 22.08, 22.47, 22.22]
+control_average = [23.386, 22.812, 55.22, 22.346]
+candidate_average = [23.428, 22.874, 55.34, 22.366]
 metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
-continuation_seconds = [0.892, 0.952, 0.964, 0.935, 0.969]
-average_continuation_seconds = 0.9424
-maximum_peak_memory_bytes = 246575104
+continuation_seconds = [0.899, 0.971, 0.951, 0.921, 0.930]
+average_continuation_seconds = 0.9344
+maximum_peak_memory_bytes = 245575680
 memory_swap_bytes = 0
 oom_events = 0
 gpu_faults = 0
 production_smoke_lights = 2
 production_smoke_masked = false
 production_smoke_seconds = 0.6
-production_smoke_gaussian = [11.35, 11.13, 22.9, 12.89]
-production_maximum_peak_memory_bytes = 389623808
-artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-opacity-{conditioned-*,adaptive-quarter-probe,adaptive-half-probe,adaptive-half-five,adaptive-full-probe,adaptive-squared-probe}, target/audit-runs/multilight-gaussian-opacity-conditioned-eighth-production (gitignored)"
-verdict = "select opacity-adaptive half ceiling: the fresh five-cloud aggregate gains 0.022/0.020 dB mean/tail and 0.016 dB where hit for -0.06 coverage point; all means improve, four tails improve and one changes by -0.01 dB; fixed stronger blends and opacity-squared weighting trade more coverage; maskless captures reduce exactly to the old loss; adds no operation, shader, model field, API, or CLI option"
+production_2e4_gaussian = [11.35, 11.13, 22.9, 12.89]
+production_smoke_gaussian = [12.04, 11.73, 22.9, 12.44]
+production_maximum_peak_memory_bytes = 242864128
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-opacity-{conditioned-*,adaptive-*-probe,adaptive-half-five,adaptive-half-lr*-five,adaptive-half-lr10-repeat3}, target/audit-runs/multilight-gaussian-opacity-{conditioned-eighth-production,adaptive-half-lr4-production} (gitignored)"
+verdict = "select opacity-adaptive half ceiling at 4e-4: versus adaptive 2e-4, all five means, tails, and coverage values improve and aggregate covered quality rises; 1e-3 has slightly higher aggregates but repeatedly regresses cloud 3 by 0.04/0.05 dB; fixed stronger blends, opacity-squared weighting, and 2e-3 trade covered quality; maskless captures retain the ordinary loss and the repeated-image Bonsai run is only an integration smoke; adds no operation, shader, model field, API, or CLI option"
 
 [direct_gaussian.rejected_joint_light_gradient_accumulation]
 date = "2026-08-23"
