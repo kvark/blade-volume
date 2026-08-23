@@ -813,8 +813,16 @@ fn set_diffuse_appearance(
         .collect();
 }
 
-fn symmetric_light_order(count: usize) -> impl Iterator<Item = usize> {
-    (0..count).chain((0..count).rev())
+fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
+    assert!(light_count != 0);
+    let period = 2 * light_count;
+    let slot = step % period;
+    let light = if slot < light_count {
+        slot
+    } else {
+        period - 1 - slot
+    };
+    (light, (step / light_count) as u32)
 }
 
 /// Continue corresponding Gaussian positions under two or more calibrated
@@ -823,8 +831,9 @@ fn symmetric_light_order(count: usize) -> impl Iterator<Item = usize> {
 /// Each pass predicts a diffuse color from the current PBR surface and one
 /// measured environment. The color is scratch supervision: the Gaussian's
 /// learned coefficients are restored before returning, so only particle
-/// positions persist. Visiting the lights forward and backward avoids making
-/// the last capture an order-dependent prior.
+/// positions persist. One optimizer interleaves paired rays from the lights in
+/// forward/reverse order, avoiding an order prior while retaining joint Adam
+/// state and compiling the image-formation graph only once.
 pub fn fit_multilight_geometry(
     gaussian: &mut vol::PointCloudModel,
     surface: &vol::relight::RelightModel,
@@ -844,39 +853,169 @@ pub fn fit_multilight_geometry(
     let saved_degree = gaussian.sh_degree;
     let saved_appearance = mem::take(&mut gaussian.sh_coefficients);
     let saved_positions = gaussian.points.clone();
-    let result = (|| {
-        let mut stats = Vec::with_capacity(2 * lights.len());
-        for index in symmetric_light_order(lights.len()) {
-            let light = lights[index];
-            set_diffuse_appearance(gaussian, surface, light.environment);
-            stats.push(fit(
-                gaussian,
-                light.capture,
-                view_indices,
-                FitOptions {
-                    steps: MULTI_LIGHT_GEOMETRY_STEPS,
-                    batch_size: 512,
-                    candidates_per_pixel: 64,
-                    candidate_min_alpha: 1.0e-5,
-                    geometry_sync_every: 20,
-                    position_learning_rate: MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE,
-                    scale_learning_rate: 0.0,
-                    opacity_learning_rate: 0.0,
-                    sh_learning_rate: 0.0,
-                    opacity_loss_weight: 0.0,
-                    background: [0.0; 3],
-                },
-                gpu.clone(),
-            )?);
-        }
-        Ok(stats)
-    })();
+    let result = fit_joint_multilight_positions(gaussian, surface, lights, view_indices, gpu)
+        .map(|stats| vec![stats]);
     gaussian.sh_degree = saved_degree;
     gaussian.sh_coefficients = saved_appearance;
     if result.is_err() {
         gaussian.points = saved_positions;
     }
     result
+}
+
+fn fit_joint_multilight_positions(
+    gaussian: &mut vol::PointCloudModel,
+    surface: &vol::relight::RelightModel,
+    lights: &[KnownLightCapture<'_>],
+    view_indices: &[usize],
+    gpu: sync::Arc<gpu::Context>,
+) -> Result<FitStats, String> {
+    let options = FitOptions {
+        steps: MULTI_LIGHT_GEOMETRY_STEPS * 2 * lights.len(),
+        batch_size: 512,
+        candidates_per_pixel: 64,
+        candidate_min_alpha: 1.0e-5,
+        geometry_sync_every: 20,
+        position_learning_rate: MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE,
+        scale_learning_rate: 0.0,
+        opacity_learning_rate: 0.0,
+        sh_learning_rate: 0.0,
+        opacity_loss_weight: 0.0,
+        background: [0.0; 3],
+    };
+    set_diffuse_appearance(gaussian, surface, lights[0].environment);
+    for light in lights {
+        validate_fit(gaussian, light.capture, view_indices, options)?;
+    }
+
+    let mut appearances = Vec::with_capacity(lights.len());
+    for light in lights {
+        set_diffuse_appearance(gaussian, surface, light.environment);
+        appearances.push(sh_parameters(gaussian));
+    }
+    set_diffuse_appearance(gaussian, surface, lights[0].environment);
+
+    let mut graph = mn::Graph::new();
+    build_graph(
+        &mut graph,
+        gaussian.points.len(),
+        options.batch_size,
+        options.candidates_per_pixel,
+        gaussian.sh_degree,
+        0.0,
+        options.background,
+    );
+    let (mut session, _report) = mn::build(
+        &graph,
+        mn::SessionConfig {
+            mode: mn::Mode::Training,
+            gpu: Some(gpu),
+            ..Default::default()
+        },
+    );
+    let pixel_indices: Vec<u32> = (0..options.batch_size as u32)
+        .flat_map(|pixel| std::iter::repeat_n(pixel, options.candidates_per_pixel))
+        .collect();
+    session.set_input_u32("candidate_pixel_indices", &pixel_indices);
+    set_model_parameters(&mut session, gaussian);
+    set_rotation_inputs(&mut session, gaussian);
+
+    let pixel_rays: Vec<_> = lights
+        .iter()
+        .map(|light| capture_pixel_rays(light.capture))
+        .collect();
+    let mut candidate_indices: Vec<_> = lights
+        .iter()
+        .map(|light| {
+            CandidateIndex::new(
+                gaussian,
+                light.capture,
+                view_indices,
+                options.candidate_min_alpha,
+            )
+        })
+        .collect();
+    let audit = sample_rays(
+        lights[0].capture,
+        &pixel_rays[0],
+        view_indices,
+        options.batch_size,
+        u32::MAX,
+    );
+    set_batch(
+        &mut session,
+        gaussian,
+        &audit,
+        &candidate_indices[0],
+        options,
+    );
+    session.step();
+    session.wait();
+    let initial_loss = read_loss(&session);
+
+    session.set_adam(1.0, 0.9, 0.999, 1.0e-8);
+    session.set_lr_multiplier("positions", options.position_learning_rate);
+    session.set_lr_multiplier("log_scales", 0.0);
+    session.set_lr_multiplier("opacity_logits", 0.0);
+    session.set_lr_multiplier("sh_", 0.0);
+    for step in 0..options.steps {
+        if step != 0 && step.is_multiple_of(options.geometry_sync_every) {
+            download_candidate_geometry(&session, gaussian);
+            candidate_indices = lights
+                .iter()
+                .map(|light| {
+                    CandidateIndex::new(
+                        gaussian,
+                        light.capture,
+                        view_indices,
+                        options.candidate_min_alpha,
+                    )
+                })
+                .collect();
+        }
+        let (light_index, sequence) = multilight_sample(lights.len(), step);
+        set_sh_parameters(&mut session, &appearances[light_index]);
+        let batch = sample_rays(
+            lights[light_index].capture,
+            &pixel_rays[light_index],
+            view_indices,
+            options.batch_size,
+            sequence,
+        );
+        set_batch(
+            &mut session,
+            gaussian,
+            &batch,
+            &candidate_indices[light_index],
+            options,
+        );
+        session.step();
+        session.wait();
+    }
+    download_model(&session, gaussian);
+
+    session.clear_optimizer();
+    let final_index = CandidateIndex::new(
+        gaussian,
+        lights[0].capture,
+        view_indices,
+        options.candidate_min_alpha,
+    );
+    set_sh_parameters(&mut session, &appearances[0]);
+    set_batch(&mut session, gaussian, &audit, &final_index, options);
+    session.step();
+    session.wait();
+    let final_loss = read_loss(&session);
+    if !initial_loss.is_finite() || !final_loss.is_finite() {
+        return Err(format!(
+            "joint multi-light Gaussian fit produced a non-finite loss ({initial_loss} -> {final_loss})"
+        ));
+    }
+    Ok(FitStats {
+        steps: options.steps,
+        initial_loss,
+        final_loss,
+    })
 }
 
 struct RayBatch {
@@ -1886,6 +2025,11 @@ fn model_parameters(model: &vol::PointCloudModel) -> [Vec<f32>; 6] {
             (activated / (1.0 - activated)).ln()
         })
         .collect();
+    let [sh_r, sh_g, sh_b] = sh_parameters(model);
+    [positions, log_scales, opacity_logits, sh_r, sh_g, sh_b]
+}
+
+fn sh_parameters(model: &vol::PointCloudModel) -> [Vec<f32>; 3] {
     let sh_components = model.sh_component_count();
     let mut sh: [Vec<f32>; 3] =
         std::array::from_fn(|_| Vec::with_capacity(model.points.len() * sh_components));
@@ -1894,14 +2038,13 @@ fn model_parameters(model: &vol::PointCloudModel) -> [Vec<f32>; 6] {
             sh[channel].push(coefficients[channel]);
         }
     }
-    [
-        positions,
-        log_scales,
-        opacity_logits,
-        std::mem::take(&mut sh[0]),
-        std::mem::take(&mut sh[1]),
-        std::mem::take(&mut sh[2]),
-    ]
+    sh
+}
+
+fn set_sh_parameters(session: &mut mn::Session, sh: &[Vec<f32>; 3]) {
+    for (name, values) in ["sh_r", "sh_g", "sh_b"].into_iter().zip(sh) {
+        session.set_parameter(name, values);
+    }
 }
 
 fn set_model_parameters(session: &mut mn::Session, model: &vol::PointCloudModel) {
@@ -2430,7 +2573,7 @@ mod tests {
     }
 
     #[test]
-    fn multilight_geometry_uses_diffuse_scratch_appearance_symmetrically() {
+    fn multilight_geometry_uses_paired_diffuse_scratch_appearance() {
         let surface = vol::relight::RelightModel {
             kernel: vol::relight::ParticleKernel::Gaussian,
             surfels: vec![vol::relight::Surfel {
@@ -2451,9 +2594,23 @@ mod tests {
         for (actual, expected) in gaussian.sh_coefficients.iter().zip(expected) {
             assert_close(0.5 + SH_C0 * actual, expected, 5.0e-3);
         }
+        let schedule: Vec<_> = (0..12).map(|step| multilight_sample(3, step)).collect();
         assert_eq!(
-            symmetric_light_order(3).collect::<Vec<_>>(),
-            [0, 1, 2, 2, 1, 0]
+            schedule,
+            [
+                (0, 0),
+                (1, 0),
+                (2, 0),
+                (2, 1),
+                (1, 1),
+                (0, 1),
+                (0, 2),
+                (1, 2),
+                (2, 2),
+                (2, 3),
+                (1, 3),
+                (0, 3),
+            ]
         );
     }
 
@@ -2609,6 +2766,56 @@ mod tests {
             height,
             views,
         }
+    }
+
+    #[test]
+    fn joint_multilight_fit_restores_durable_appearance() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping joint multi-light Gaussian fit test: no GPU");
+            return;
+        };
+        let surface = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0, 0.0, 4.0],
+                radius: 0.5,
+                normal: glam::Vec3::Z.to_array(),
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material {
+                albedo: [0.7, 0.5, 0.3],
+                ..vol::relight::Material::default()
+            }],
+        };
+        let environment = vol::relight::Environment::uniform([0.8, 0.6, 0.4], 64, 32);
+        let mut truth = from_surface(&surface).unwrap();
+        set_diffuse_appearance(&mut truth, &surface, &environment);
+        let capture = synthetic_capture(&truth);
+        let mut candidate = truth.clone();
+        candidate.sh_coefficients.fill(-0.25);
+        let durable_appearance = candidate.sh_coefficients.clone();
+        let lights = [
+            KnownLightCapture {
+                capture: &capture,
+                environment: &environment,
+            },
+            KnownLightCapture {
+                capture: &capture,
+                environment: &environment,
+            },
+        ];
+
+        let stats =
+            fit_multilight_geometry(&mut candidate, &surface, &lights, &[0, 1], gpu).unwrap();
+
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].steps, 200);
+        assert!(stats[0].initial_loss.is_finite());
+        assert!(stats[0].final_loss.is_finite());
+        assert_eq!(candidate.sh_degree, 0);
+        assert_eq!(candidate.sh_coefficients, durable_appearance);
+        candidate.validate().unwrap();
     }
 
     #[test]

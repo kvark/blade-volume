@@ -3474,3 +3474,34 @@ fixed cloud falls to 23.38/22.78 dB at 54.9% coverage from 23.43/22.87 dB at
 55.0%. The fused initializer contains meaningful lateral correspondence error,
 so unrestricted three-dimensional center motion remains necessary. The
 temporary host-side projection is removed.
+
+## Selected joint calibrated-light Gaussian fit (2026-08-23)
+
+The calibrated-light continuation now compiles one image-formation graph and
+keeps one Adam state for all lights. Every update swaps only the fixed SH-0
+table predicted by that light's environment, then feeds the corresponding RGB
+capture and camera rays. A forward/reverse light schedule removes an endpoint
+prior. Each sequence number is used exactly once by every light, so aligned
+captures supervise matching random rays without repeating the old two-pass
+batches. Candidate grids remain private per capture and refresh together every
+20 center updates. Learned appearance is still restored on exit and the public
+asset/API is unchanged.
+
+This is simpler at the system boundary than eight independent fits: one graph,
+one optimizer, no new Meganeura operation or shader, no bind group, no model
+field, and no CLI option. The explicit schedule helper is unit-tested. The
+first prototype accidentally repeated each ray sequence twice; it tied mean
+quality but lost 0.01 dB where hit and is superseded by unique paired batches.
+
+On the same five fixed clouds, the selected sequential control is
+23.344/22.770 dB, 55.26% coverage, and 22.320 dB where hit. The joint fit reaches
+23.352/22.778 dB, 55.30%, and 22.322 dB. Every cloud's mean and worst view
+improves or ties. Continuation time falls from 3.067 to 0.920 seconds on
+average, a 3.33x speedup, while peak memory remains 248 MB with no swap, OOM,
+or GPU fault.
+
+The real two-light Bonsai smoke also completes 200 updates, persists and
+reloads the Gaussian PBR asset, and improves its training score from
+11.30/11.09 to 11.35/11.13 dB. Where-hit quality rises from 11.69 to 12.89 dB;
+coverage changes from 23.0% to 22.9%. The continuation itself falls from
+1.4--1.5 seconds to 0.5 seconds. This replaces the sequential implementation.
