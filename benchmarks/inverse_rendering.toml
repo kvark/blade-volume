@@ -5489,6 +5489,33 @@ production_maximum_peak_memory_bytes = 242864128
 artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-opacity-{conditioned-*,adaptive-*-probe,adaptive-half-five,adaptive-half-lr*-five,adaptive-half-lr10-repeat3}, target/audit-runs/multilight-gaussian-opacity-{conditioned-eighth-production,adaptive-half-lr4-production} (gitignored)"
 verdict = "select opacity-adaptive half ceiling at 4e-4: versus adaptive 2e-4, all five means, tails, and coverage values improve and aggregate covered quality rises; 1e-3 has slightly higher aggregates but repeatedly regresses cloud 3 by 0.04/0.05 dB; fixed stronger blends, opacity-squared weighting, and 2e-3 trade covered quality; maskless captures retain the ordinary loss and the repeated-image Bonsai run is only an integration smoke; adds no operation, shader, model field, API, or CLI option"
 
+[direct_gaussian.rejected_longer_opacity_conditioned_continuation]
+date = "2026-08-23"
+protocol = "selected opacity-adaptive four-light center continuation at 4e-4; compare 50, 75, and 100 steps per light; persist and reload before unseen-studio-light scoring"
+control_steps_per_light = 50
+candidate_steps_per_light = 75
+boundary_steps_per_light = 100
+control_mean = [23.53, 23.55, 23.25, 23.53, 23.28]
+candidate_mean = [23.54, 23.55, 23.24, 23.54, 23.29]
+control_worst = [22.99, 22.94, 22.60, 22.99, 22.85]
+candidate_worst = [23.04, 22.96, 22.56, 23.02, 22.85]
+control_coverage = [55.1, 55.4, 55.6, 55.4, 55.2]
+candidate_coverage = [55.2, 55.5, 55.7, 55.5, 55.4]
+control_covered = [22.60, 22.46, 22.08, 22.47, 22.22]
+candidate_covered = [22.59, 22.48, 22.08, 22.45, 22.17]
+control_average = [23.428, 22.874, 55.34, 22.366]
+candidate_average = [23.432, 22.886, 55.46, 22.354]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+candidate_continuation_seconds = [1.190, 1.252, 1.284, 1.223, 1.242]
+candidate_average_seconds = 1.2382
+boundary_first_cloud = [23.54, 23.01, 55.3, 22.57]
+maximum_peak_memory_bytes = 246153216
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-opacity-adaptive-half-lr4-steps{75-probe,75-five,100-probe} (gitignored)"
+verdict = "reject and remove: 75 steps gains only 0.004/0.012 dB mean/tail and 0.12 coverage point while losing 0.012 dB covered quality; cloud 3 regresses in mean/tail and cloud 5 loses 0.05 dB where hit; 100 steps turns the first-cloud mean, tail, and covered score downward; retain 50 steps"
+
 [direct_gaussian.rejected_joint_light_gradient_accumulation]
 date = "2026-08-23"
 protocol = "selected single-session paired-light schedule on five fixed clouds; average the four corresponding-light gradients with Meganeura native temporal accumulation; apply Adam once per four micro-batches at fourfold global rate; same 400 backward batches and unseen-light persisted scoring"

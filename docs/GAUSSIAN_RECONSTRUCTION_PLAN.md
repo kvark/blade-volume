@@ -3603,3 +3603,14 @@ and reloads the asset, and changes training-view output from 11.35/11.13 dB,
 reported as a stability check and explicit covered-region trade, not evidence
 of real-scene relighting quality. Runtime remains 0.6 seconds and peaks at
 243 MB with no swap, OOM, or GPU fault.
+
+Longer calibrated-light continuation is rejected after the rate retune. On the
+first cloud, 75 steps per light reaches 23.55/23.05 dB, 55.2% coverage, and
+22.60 dB where hit, while 100 steps turns downward to 23.54/23.01 dB and
+22.57 dB where hit despite another 0.1 coverage point. Across five clouds, 75
+steps reaches 23.432/22.886 dB, 55.46%, and 22.354 dB where hit, versus
+23.428/22.874 dB, 55.34%, and 22.366 dB for 50 steps. The noise-sized
+mean/tail gains trade covered fidelity, cloud 3 regresses by 0.01/0.04 dB, and
+cloud 5 loses 0.05 dB where hit. Continuation time also rises from 0.934 to
+1.238 seconds. The temporary 75/100-step constants are removed and the robust
+50-step schedule remains selected.
