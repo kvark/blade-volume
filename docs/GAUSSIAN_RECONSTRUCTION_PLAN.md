@@ -3900,6 +3900,24 @@ on the stable RTX 5070 and is not a power-supply failure. The two remaining
 heads therefore cannot be removed merely by repinning to the already-merged
 integration revisions.
 
+## Rejected weak aggregate foreground undercoverage (2026-08-23)
+
+A weak one-sided foreground term does not close the remaining Gaussian PBR
+coverage gap cleanly. The private prototype added 5% of squared missing
+aggregate opacity on masked foreground rays to the selected background-only
+support loss. It did not penalize excess foreground opacity, choose an owning
+particle, add a graph operation, or change the static light field.
+
+Across the five calibrated synthetic clouds, average volumetric coverage rises
+from 55.28% to 55.42%, but held-light mean and worst-view quality fall by
+0.006 and 0.008 dB, and covered-pixel quality falls by 0.036 dB. The third
+cloud loses 0.05/0.06 dB mean/worst and the fourth loses 0.02/0.02 dB. The
+extra support therefore admits marginal pixels without reconstructing them
+better, consistent with the earlier rejected localized-ownership experiment.
+The foreground term is removed and PBR masks remain negative-only. Artifacts
+are under
+`target/audit-runs/current-synthetic-v1/pbr-foreground-undercoverage-5pct-{first,five}/`.
+
 ## Rejected Gaussian candidate micro-optimizations (2026-08-23)
 
 Two further private candidate-recorder changes are deliberately not retained.
