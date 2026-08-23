@@ -867,7 +867,7 @@ fn main() {
             let started = std::time::Instant::now();
             let stats = train::gaussian_splat::fit_multilight_geometry(
                 gaussian,
-                &fitted.scene.model,
+                &mut fitted.scene.model,
                 &lights,
                 &train_views,
                 gpu,

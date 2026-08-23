@@ -29,6 +29,7 @@ const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
 const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 4.0e-4;
+const MULTI_LIGHT_NORMAL_LEARNING_RATE: f32 = 5.0e-4;
 const MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING: f32 = 0.5;
 const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
 // Match the selected support geometry-refresh cadence so one preparation pass
@@ -360,6 +361,11 @@ pub struct SharedStagedFitStats {
 
 /// Statistics for a paired PBR support and static light-field fit.
 pub type OutputFitStats = SharedStagedFitStats;
+
+struct MultilightFit {
+    stats: FitStats,
+    normals: Option<Vec<[f32; 3]>>,
+}
 
 #[derive(Clone, Copy)]
 enum OpacityLoss {
@@ -916,8 +922,10 @@ fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
 ///
 /// Each pass predicts a diffuse color from the current PBR surface and one
 /// measured environment. The color is scratch supervision: the Gaussian's
-/// learned coefficients are restored before returning, so only particle
-/// positions persist. On masked foreground rays, a weak opacity-conditioned
+/// learned coefficients are restored before returning. Fully masked captures
+/// also update explicit diffuse shading normals in the same graph; maskless
+/// captures retain their established position-only path. On masked foreground
+/// rays, a weak opacity-conditioned
 /// target keeps center motion from compensating for frozen transmittance;
 /// background and maskless captures retain the ordinary color residual. One
 /// optimizer compares masked captures in linear radiance, while maskless or
@@ -927,7 +935,7 @@ fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
 /// compiling the image-formation graph only once.
 pub fn fit_multilight_geometry(
     gaussian: &mut vol::PointCloudModel,
-    surface: &vol::relight::RelightModel,
+    surface: &mut vol::relight::RelightModel,
     lights: &[KnownLightCapture<'_>],
     view_indices: &[usize],
     gpu: sync::Arc<gpu::Context>,
@@ -944,14 +952,27 @@ pub fn fit_multilight_geometry(
     let saved_degree = gaussian.sh_degree;
     let saved_appearance = mem::take(&mut gaussian.sh_coefficients);
     let saved_positions = gaussian.points.clone();
-    let result = fit_joint_multilight_positions(gaussian, surface, lights, view_indices, gpu)
-        .map(|stats| vec![stats]);
+    let learn_normals = lights
+        .iter()
+        .all(|light| capture_has_masks(light.capture, view_indices));
+    let result =
+        fit_joint_multilight_positions(gaussian, surface, lights, view_indices, learn_normals, gpu);
     gaussian.sh_degree = saved_degree;
     gaussian.sh_coefficients = saved_appearance;
-    if result.is_err() {
-        gaussian.points = saved_positions;
+    match result {
+        Ok(fit) => {
+            if let Some(normals) = fit.normals {
+                for (surfel, normal) in surface.surfels.iter_mut().zip(normals) {
+                    surfel.normal = normal;
+                }
+            }
+            Ok(vec![fit.stats])
+        }
+        Err(error) => {
+            gaussian.points = saved_positions;
+            Err(error)
+        }
     }
-    result
 }
 
 fn fit_joint_multilight_positions(
@@ -959,8 +980,9 @@ fn fit_joint_multilight_positions(
     surface: &vol::relight::RelightModel,
     lights: &[KnownLightCapture<'_>],
     view_indices: &[usize],
+    learn_normals: bool,
     gpu: sync::Arc<gpu::Context>,
-) -> Result<FitStats, String> {
+) -> Result<MultilightFit, String> {
     let options = FitOptions {
         steps: MULTI_LIGHT_GEOMETRY_STEPS * 2 * lights.len(),
         batch_size: 512,
@@ -986,14 +1008,31 @@ fn fit_joint_multilight_positions(
     let encode_srgb = !lights
         .iter()
         .all(|light| capture_has_masks(light.capture, view_indices));
-    set_diffuse_appearance(gaussian, surface, lights[0].environment, encode_srgb);
-
-    let mut appearances = Vec::with_capacity(lights.len());
-    for light in lights {
-        set_diffuse_appearance(gaussian, surface, light.environment, encode_srgb);
-        appearances.push(sh_parameters(gaussian));
+    if learn_normals && encode_srgb {
+        return Err(
+            "joint multi-light Gaussian normals require masks on every selected view".to_string(),
+        );
     }
     set_diffuse_appearance(gaussian, surface, lights[0].environment, encode_srgb);
+
+    let appearances = if learn_normals {
+        Vec::new()
+    } else {
+        let mut appearances = Vec::with_capacity(lights.len());
+        for light in lights {
+            set_diffuse_appearance(gaussian, surface, light.environment, encode_srgb);
+            appearances.push(sh_parameters(gaussian));
+        }
+        set_diffuse_appearance(gaussian, surface, lights[0].environment, encode_srgb);
+        appearances
+    };
+    let normal_albedo = learn_normals.then(|| diffuse_albedo(surface));
+    let normal_irradiance = learn_normals.then(|| {
+        lights
+            .iter()
+            .map(|light| diffuse_irradiance(light.environment))
+            .collect::<Vec<_>>()
+    });
 
     let mut graph = mn::Graph::new();
     build_graph_with_losses(
@@ -1006,6 +1045,7 @@ fn fit_joint_multilight_positions(
         options.background,
         OpacityLoss::Mask,
         MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING,
+        learn_normals,
     );
     let (mut session, _report) = mn::build(
         &graph,
@@ -1019,7 +1059,20 @@ fn fit_joint_multilight_positions(
         .flat_map(|pixel| std::iter::repeat_n(pixel, options.candidates_per_pixel))
         .collect();
     session.set_input_u32("candidate_pixel_indices", &pixel_indices);
-    set_model_parameters(&mut session, gaussian);
+    if learn_normals {
+        let [positions, log_scales, opacity_logits, _, _, _] = model_parameters(gaussian);
+        session.set_parameter("positions", &positions);
+        session.set_parameter("log_scales", &log_scales);
+        session.set_parameter("opacity_logits", &opacity_logits);
+        set_surface_normal_parameters(&mut session, surface);
+        session.set_input("diffuse_albedo", normal_albedo.as_ref().unwrap());
+        session.set_input(
+            "diffuse_irradiance",
+            &normal_irradiance.as_ref().unwrap()[0],
+        );
+    } else {
+        set_model_parameters(&mut session, gaussian);
+    }
     set_rotation_inputs(&mut session, gaussian);
 
     let pixel_rays = capture_pixel_rays(lights[0].capture);
@@ -1047,6 +1100,9 @@ fn fit_joint_multilight_positions(
     session.set_lr_multiplier("log_scales", 0.0);
     session.set_lr_multiplier("opacity_logits", 0.0);
     session.set_lr_multiplier("sh_", 0.0);
+    if learn_normals {
+        session.set_lr_multiplier("surface_normals", MULTI_LIGHT_NORMAL_LEARNING_RATE);
+    }
     for step in 0..options.steps {
         if step != 0 && step.is_multiple_of(options.geometry_sync_every) {
             download_candidate_geometry(&session, gaussian);
@@ -1058,7 +1114,14 @@ fn fit_joint_multilight_positions(
             );
         }
         let (light_index, sequence) = multilight_sample(lights.len(), step);
-        set_sh_parameters(&mut session, &appearances[light_index]);
+        if learn_normals {
+            session.set_input(
+                "diffuse_irradiance",
+                &normal_irradiance.as_ref().unwrap()[light_index],
+            );
+        } else {
+            set_sh_parameters(&mut session, &appearances[light_index]);
+        }
         let batch = sample_rays_with_color_space(
             lights[light_index].capture,
             &pixel_rays,
@@ -1071,7 +1134,33 @@ fn fit_joint_multilight_positions(
         session.step();
         session.wait();
     }
-    download_model(&session, gaussian);
+    let normals = if learn_normals {
+        let [positions, log_scales, opacity_logits, normals] = session
+            .read_params(&[
+                "positions",
+                "log_scales",
+                "opacity_logits",
+                "surface_normals",
+            ])
+            .try_into()
+            .unwrap();
+        apply_model_geometry(gaussian, &positions, &log_scales, &opacity_logits);
+        Some(
+            normals
+                .chunks_exact(3)
+                .zip(&surface.surfels)
+                .map(|(normal, surfel)| {
+                    glam::Vec3::from_slice(normal)
+                        .try_normalize()
+                        .unwrap_or_else(|| glam::Vec3::from(surfel.normal))
+                        .to_array()
+                })
+                .collect(),
+        )
+    } else {
+        download_model(&session, gaussian);
+        None
+    };
 
     session.clear_optimizer();
     let final_index = CandidateIndex::new(
@@ -1080,7 +1169,14 @@ fn fit_joint_multilight_positions(
         view_indices,
         options.candidate_min_alpha,
     );
-    set_sh_parameters(&mut session, &appearances[0]);
+    if learn_normals {
+        session.set_input(
+            "diffuse_irradiance",
+            &normal_irradiance.as_ref().unwrap()[0],
+        );
+    } else {
+        set_sh_parameters(&mut session, &appearances[0]);
+    }
     set_batch(&mut session, gaussian, &audit, &final_index, options);
     session.step();
     session.wait();
@@ -1090,10 +1186,13 @@ fn fit_joint_multilight_positions(
             "joint multi-light Gaussian fit produced a non-finite loss ({initial_loss} -> {final_loss})"
         ));
     }
-    Ok(FitStats {
-        steps: options.steps,
-        initial_loss,
-        final_loss,
+    Ok(MultilightFit {
+        stats: FitStats {
+            steps: options.steps,
+            initial_loss,
+            final_loss,
+        },
+        normals,
     })
 }
 
@@ -1811,7 +1910,72 @@ pub fn build_graph(
         background,
         OpacityLoss::Mask,
         0.0,
+        false,
     )
+}
+
+fn build_diffuse_normal_colors(g: &mut mn::Graph, particles: usize) -> [mn::NodeId; 3] {
+    let normals = g.parameter("surface_normals", &[particles, 3]);
+    let unit_scale = 1.0 / 3.0_f32.sqrt();
+    let weight = g.constant(vec![unit_scale; 3], &[3]);
+    let unit = g.rms_norm(normals, weight, 1.0e-12);
+    let unit = g.reshape(unit, &[particles * 3]);
+
+    let x = g.split_a(unit, particles as u32, 1, 2, 1);
+    let yz = g.split_b(unit, particles as u32, 1, 2, 1);
+    let y = g.split_a(yz, particles as u32, 1, 1, 1);
+    let z = g.split_b(yz, particles as u32, 1, 1, 1);
+    let constant = |g: &mut mn::Graph, value: f32| g.constant(vec![value; particles], &[particles]);
+    let b0 = constant(g, 0.282_095);
+    let c1 = constant(g, 0.488_603);
+    let b1 = g.mul(y, c1);
+    let b2 = g.mul(z, c1);
+    let b3 = g.mul(x, c1);
+    let xy = g.mul(x, y);
+    let yz = g.mul(y, z);
+    let xz = g.mul(x, z);
+    let x2 = g.mul(x, x);
+    let y2 = g.mul(y, y);
+    let z2 = g.mul(z, z);
+    let c2 = constant(g, 1.092_548);
+    let b4 = g.mul(xy, c2);
+    let b5 = g.mul(yz, c2);
+    let three = constant(g, 3.0);
+    let one = constant(g, 1.0);
+    let three_z2 = g.mul(z2, three);
+    let negative_one = g.neg(one);
+    let b6_inner = g.add(three_z2, negative_one);
+    let b6_scale = constant(g, 0.315_392);
+    let b6 = g.mul(b6_inner, b6_scale);
+    let b7 = g.mul(xz, c2);
+    let negative_y2 = g.neg(y2);
+    let b8_inner = g.add(x2, negative_y2);
+    let b8_scale = constant(g, 0.546_274);
+    let b8 = g.mul(b8_inner, b8_scale);
+    let basis01 = g.concat(b0, b1, particles as u32, 1, 1, 1);
+    let basis23 = g.concat(b2, b3, particles as u32, 1, 1, 1);
+    let basis03 = g.concat(basis01, basis23, particles as u32, 2, 2, 1);
+    let basis45 = g.concat(b4, b5, particles as u32, 1, 1, 1);
+    let basis67 = g.concat(b6, b7, particles as u32, 1, 1, 1);
+    let basis47 = g.concat(basis45, basis67, particles as u32, 2, 2, 1);
+    let basis07 = g.concat(basis03, basis47, particles as u32, 4, 4, 1);
+    let basis = g.concat(basis07, b8, particles as u32, 8, 1, 1);
+    let basis = g.reshape(basis, &[particles, 9]);
+
+    let irradiance = g.input("diffuse_irradiance", &[9, 3]);
+    let albedo = g.input("diffuse_albedo", &[particles, 3]);
+    let lighting = g.matmul(basis, irradiance);
+    let color = g.mul(lighting, albedo);
+    let color = g.reshape(color, &[particles * 3]);
+    let r = g.split_a(color, particles as u32, 1, 2, 1);
+    let r = g.reshape(r, &[particles, 1]);
+    let gb = g.split_b(color, particles as u32, 1, 2, 1);
+    let gb = g.reshape(gb, &[particles, 2]);
+    let g_channel = g.split_a(gb, particles as u32, 1, 1, 1);
+    let g_channel = g.reshape(g_channel, &[particles, 1]);
+    let b = g.split_b(gb, particles as u32, 1, 1, 1);
+    let b = g.reshape(b, &[particles, 1]);
+    [r, g_channel, b]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1825,6 +1989,7 @@ fn build_graph_with_losses(
     background: [f32; 3],
     opacity_loss: OpacityLoss,
     opacity_conditioned_color_ceiling: f32,
+    diffuse_normals: bool,
 ) -> GaussianGraph {
     assert!(particles > 0);
     assert!(pixels > 0);
@@ -1851,6 +2016,7 @@ fn build_graph_with_losses(
     let log_scales = g.parameter("log_scales", &[particles, 3]);
     let opacity_logits = g.parameter("opacity_logits", &[particles, 1]);
     let sh = ["sh_r", "sh_g", "sh_b"].map(|name| g.parameter(name, &[particles, sh_components]));
+    let diffuse_colors = diffuse_normals.then(|| build_diffuse_normal_colors(g, particles));
 
     let centers = g.embedding(candidate_indices, positions);
     let origins = g.embedding(pixel_indices, ray_origins);
@@ -1930,12 +2096,16 @@ fn build_graph_with_losses(
     };
     let mut rendered = Vec::with_capacity(3);
     let mut losses = Vec::with_capacity(3);
-    for (channel, background) in sh.into_iter().zip(background) {
-        let coefficients = g.embedding(candidate_indices, channel);
-        let terms = g.mul(coefficients, basis);
-        let value = g.sum_inner(terms);
-        let color = g.add(value, bias);
-        let color = g.relu(color);
+    for (channel_index, (&channel, background)) in sh.iter().zip(background).enumerate() {
+        let color = if let Some(ref diffuse_colors) = diffuse_colors {
+            g.embedding(candidate_indices, diffuse_colors[channel_index])
+        } else {
+            let coefficients = g.embedding(candidate_indices, channel);
+            let terms = g.mul(coefficients, basis);
+            let value = g.sum_inner(terms);
+            let color = g.add(value, bias);
+            g.relu(color)
+        };
         let color_2d = g.reshape(color, &[pixels, candidates_per_pixel]);
         let weighted = g.mul(weight, color_2d);
         let pixel = g.sum_inner(weighted);
@@ -2155,6 +2325,31 @@ fn set_sh_parameters(session: &mut mn::Session, sh: &[Vec<f32>; 3]) {
     for (name, values) in ["sh_r", "sh_g", "sh_b"].into_iter().zip(sh) {
         session.set_parameter(name, values);
     }
+}
+
+fn set_surface_normal_parameters(session: &mut mn::Session, surface: &vol::relight::RelightModel) {
+    let values: Vec<f32> = surface
+        .surfels
+        .iter()
+        .flat_map(|surfel| surfel.normal)
+        .collect();
+    session.set_parameter("surface_normals", &values);
+}
+
+fn diffuse_albedo(surface: &vol::relight::RelightModel) -> Vec<f32> {
+    surface
+        .surfels
+        .iter()
+        .flat_map(|surfel| surface.materials[surfel.material as usize].albedo)
+        .collect()
+}
+
+fn diffuse_irradiance(environment: &vol::relight::Environment) -> Vec<f32> {
+    environment
+        .diffuse_irradiance()
+        .into_iter()
+        .flat_map(|coefficient| coefficient.into_iter().take(3))
+        .collect()
 }
 
 fn set_model_parameters(session: &mut mn::Session, model: &vol::PointCloudModel) {
@@ -2504,6 +2699,7 @@ fn fit_with_opacity_loss(
         options.background,
         opacity_loss,
         0.0,
+        false,
     );
     let (mut session, _report) = mn::build(
         &graph,
@@ -3001,7 +3197,7 @@ mod tests {
             eprintln!("skipping joint multi-light Gaussian fit test: no GPU");
             return;
         };
-        let surface = vol::relight::RelightModel {
+        let mut surface = vol::relight::RelightModel {
             kernel: vol::relight::ParticleKernel::Gaussian,
             surfels: vec![vol::relight::Surfel {
                 center: [0.0, 0.0, 4.0],
@@ -3017,7 +3213,21 @@ mod tests {
         let environment = vol::relight::Environment::uniform([0.8, 0.6, 0.4], 64, 32);
         let mut truth = from_surface(&surface).unwrap();
         set_diffuse_appearance(&mut truth, &surface, &environment, true);
-        let capture = synthetic_capture(&truth);
+        let mut capture = synthetic_capture(&truth);
+        for view in &mut capture.views {
+            view.mask = Some(
+                view.pixels
+                    .iter()
+                    .map(|pixel| {
+                        if pixel.iter().any(|value| *value > 0.0) {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect(),
+            );
+        }
         let mut candidate = truth.clone();
         candidate.sh_coefficients.fill(-0.25);
         let durable_appearance = candidate.sh_coefficients.clone();
@@ -3033,7 +3243,7 @@ mod tests {
         ];
 
         let stats =
-            fit_multilight_geometry(&mut candidate, &surface, &lights, &[0, 1], gpu).unwrap();
+            fit_multilight_geometry(&mut candidate, &mut surface, &lights, &[0, 1], gpu).unwrap();
 
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].steps, 200);
@@ -3042,6 +3252,43 @@ mod tests {
         assert_eq!(candidate.sh_degree, 0);
         assert_eq!(candidate.sh_coefficients, durable_appearance);
         candidate.validate().unwrap();
+    }
+
+    #[test]
+    fn diffuse_normal_graph_has_a_finite_gradient() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping diffuse-normal graph test: no GPU");
+            return;
+        };
+        let mut graph = mn::Graph::new();
+        let colors = build_diffuse_normal_colors(&mut graph, 1);
+        let loss = graph.mean_all(colors[0]);
+        graph.set_outputs(vec![loss, colors[0], colors[1], colors[2]]);
+        let (mut session, _report) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        session.set_parameter("surface_normals", &[0.0, 0.0, 1.0]);
+        session.set_input("diffuse_albedo", &[0.7, 0.5, 0.3]);
+        session.set_input("diffuse_irradiance", &[0.1; 27]);
+        session.set_adam(1.0, 0.9, 0.999, 1.0e-8);
+        session.set_lr_multiplier("surface_normals", 1.0e-3);
+        session.step();
+        session.wait();
+        assert!(session.read_output(1)[0].is_finite());
+        let irradiance = 0.1 * vol::relight::sh9(glam::Vec3::Z).into_iter().sum::<f32>();
+        for (output, albedo) in (1..=3).zip([0.7, 0.5, 0.3]) {
+            let mut actual = [0.0];
+            session.read_output_by_index(output, &mut actual);
+            assert_close(actual[0], irradiance * albedo, 1.0e-5);
+        }
+        let updated = session.read_params(&["surface_normals"]);
+        assert_ne!(updated[0], [0.0, 0.0, 1.0]);
     }
 
     #[test]
@@ -3437,6 +3684,7 @@ mod tests {
             [0.0; 3],
             OpacityLoss::BackgroundOnly,
             0.0,
+            false,
         );
         let (mut session, _report) = mn::build(
             &graph,
@@ -3572,6 +3820,7 @@ mod tests {
             [0.0; 3],
             OpacityLoss::Mask,
             MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING,
+            false,
         );
         let (mut session, _report) = mn::build(
             &graph,

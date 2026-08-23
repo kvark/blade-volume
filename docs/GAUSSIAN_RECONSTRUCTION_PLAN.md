@@ -4260,3 +4260,41 @@ geometry after its image-space optimization, so the helper, call path, and
 test are removed without expanding the run to five clouds. The complete run
 and cgroup telemetry remain under
 `target/audit-runs/current-synthetic-v1/covariance-normal-alignment-first/`.
+
+## Joint calibrated-light Gaussian normal fit (2026-08-23)
+
+The selected calibrated-light Gaussian continuation now optimizes explicit
+diffuse shading normals together with particle centers when every aligned
+capture supplies a foreground mask. The existing anisotropic compositor
+evaluates the exact nine-term diffuse-irradiance basis from normalized learned
+normals, fixed shared albedos, and each known environment. It compares linear
+radiance, retains the established forward/reverse light schedule and Adam
+state, and keeps support, opacity, covariance, materials, and durable Gaussian
+appearance fixed. The learned SH field is still restored after continuation;
+only centers and normalized PBR normals persist. Maskless captures continue
+through the previous display-referred position-only path.
+
+At the selected `5e-4` normal rate, the five fixed clouds change held-light
+volumetric Gaussian mean PSNR from 23.58/23.63/23.33/23.58/23.36 dB to
+23.59/23.66/23.37/23.59/23.38 dB. Worst-view PSNR changes from
+23.03/23.02/22.67/23.03/22.88 to 23.05/23.05/22.74/23.05/22.90 dB, and
+where-hit quality changes from 22.70/22.58/22.21/22.56/22.35 to
+22.72/22.62/22.26/22.58/22.37 dB. Thus every cloud improves all three quality
+measures; aggregate gains are approximately +0.022/+0.032/+0.030 dB while
+coverage is effectively unchanged. On a fresh first-cloud replay,
+nearest-truth normal RMSE falls from 55.18 to 54.03 degrees and the joint pass
+takes 0.886 seconds, matching the old position-only runtime after caching
+albedo and irradiance inputs.
+
+A `1e-3` normal rate is rejected despite lowering first-cloud normal RMSE to
+53.05 degrees: it overfits the calibrated lights and lowers held-light output
+to 23.56/23.00 dB and 22.67 dB where hit. The selected conservative rate is
+therefore an image-quality choice rather than a truth-normal oracle. The
+implementation adds no Meganeura operation, shader, shader group, entry
+variant, bind group, model field, file property, dependency, or public option;
+it folds into the existing multi-light entry point. A physical-GPU graph test
+checks the SH-2 diffuse value and its finite normal gradient, an integration
+test exercises the masked path, and a Bonsai production smoke preserves the
+maskless fallback exactly. Benchmark artifacts and cgroup telemetry remain
+under `target/audit-runs/current-synthetic-v1/joint-center-normal-*` and
+`target/audit-runs/joint-center-normal-production-fallback/`.

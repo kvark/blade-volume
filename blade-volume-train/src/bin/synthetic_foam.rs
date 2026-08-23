@@ -1510,7 +1510,7 @@ fn main() {
                 let started = std::time::Instant::now();
                 let stats = train::gaussian_splat::fit_multilight_geometry(
                     gaussian,
-                    &fitted.scene.model,
+                    &mut fitted.scene.model,
                     &lights,
                     &training_indices,
                     gpu,
@@ -1522,6 +1522,15 @@ fn main() {
                     stats.iter().map(|stats| stats.steps).sum::<usize>(),
                     started.elapsed().as_secs_f64(),
                 );
+                describe_surface_error(
+                    "joint-center-normal",
+                    &fitted.scene.model.surfels,
+                    &dataset,
+                    &training_indices,
+                    &maps,
+                    depth_options,
+                )
+                .unwrap_or_else(|error| fail(error));
                 multilight_geometry_fitted = true;
             }
         }
