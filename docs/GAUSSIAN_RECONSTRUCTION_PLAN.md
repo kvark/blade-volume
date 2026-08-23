@@ -3791,6 +3791,23 @@ discarding them weakens rather than cleans the material signal. The masked
 scorer is removed before a five-cloud gate. Its log is under
 `target/audit-runs/current-synthetic-v1/final-gaussian-material-foreground-probe/`.
 
+An exact-render normal continuation after the final Gaussian center move is
+also rejected. The prototype added a shading-record-only Gaussian upload and
+reused the existing antithetic, locally projected normal search over all four
+calibrated lights. At 2.5 degrees the first cloud lowers its training
+objective in all eight rounds but regresses to 23.57/23.02 dB and 22.68 dB
+where hit. Halving the step to 1.25 degrees reaches approximately
+23.504/22.934 dB, 55.28% coverage, and 22.496 dB where hit over five clouds,
+versus 23.496/22.926 dB, 55.28%, and 22.486 dB for the selected model. Those
+roughly 0.01 dB aggregate gains are mixed: cloud 4 regresses in mean, tail,
+and covered-pixel quality, and cloud 1 loses mean. The pass also takes
+1.14--1.36 seconds. This does not justify a new renderer update API and about
+two hundred lines of optimizer plumbing, so the API, continuation, and call
+sites are removed. The five-cloud logs remain under
+`target/audit-runs/current-synthetic-v1/post-center-gaussian-normal-125-five/`;
+the larger-step diagnostic is under
+`target/audit-runs/current-synthetic-v1/post-center-gaussian-normal-probe/`.
+
 Re-enabling anisotropic scale learning under that new objective remains a
 mixed trade. At scale rates `1e-4` and `2e-4`, the five-cloud aggregates reach
 approximately 23.442/22.908 dB, 55.28% coverage, and 22.382 dB where hit, and
