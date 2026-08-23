@@ -3460,3 +3460,10 @@ independent center deltas, eliminating sequential ordering without changing
 the graph. On the first fixed cloud it falls to 23.40/22.79 dB at 54.9%
 coverage, versus the selected 23.43/22.87 dB at 55.0%. Averaging removes too
 much of the useful cumulative geometry update; the prototype is removed.
+
+Doubling the light-switch frequency at fixed work is rejected as well. Sixteen
+25-update fits over four forward/reverse passes score 23.41/22.85 dB at 54.9%
+coverage on the first cloud, below the selected 23.43/22.87 dB at 55.0%.
+Repeated graph/session construction also raises continuation time from about
+3.1 to 5.5 seconds. The selected eight 50-update fits remain both faster and
+more accurate.

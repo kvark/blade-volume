@@ -5366,3 +5366,17 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-consensus-probe (gitignored)"
 verdict = "reject before five-cloud gate and remove: independent delta averaging loses 0.03/0.08 dB mean/worst and 0.1% coverage; retain cumulative symmetric light order"
+
+[direct_gaussian.rejected_tighter_calibrated_light_interleave]
+date = "2026-08-23"
+protocol = "first fixed Gaussian cloud; preserve 400 total center updates but replace eight 50-step fits over one forward/reverse pass with sixteen 25-step fits over two forward/reverse passes"
+control = [23.43, 22.87, 55.0, 22.54]
+candidate = [23.41, 22.85, 54.9, 22.55]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+control_continuation_seconds = 3.047
+candidate_continuation_seconds = 5.503
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-interleave-probe (gitignored)"
+verdict = "reject before five-cloud gate and remove: mean, worst-view, and coverage regress while repeated graph/session construction makes the same update count about 80% slower"
