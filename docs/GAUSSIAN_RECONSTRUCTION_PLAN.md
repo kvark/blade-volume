@@ -4416,3 +4416,15 @@ separation overemphasizes a less transferable differential direction. The
 selector is removed without a five-cloud expansion. Its capped diagnostic is
 under
 `target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-farthest-first/`.
+
+Stronger opacity conditioning in the normals-only contrast tail is rejected.
+The ordinary joint pass retains its selected 0.5 ceiling, while the tail can
+raise it without moving centers, covariance, opacity, or coverage. A full 1.0
+ceiling ties the selected five-cloud mean and covered-pixel aggregates exactly,
+keeps every coverage value identical, and lowers average worst-view PSNR by
+0.002 dB. Clouds 3 and 4 regress; cloud 4 loses 0.01 dB tail and 0.03 dB where
+hit. The intermediate 0.75 ceiling fails the first-cloud screen at
+23.59/23.05 dB and 22.71 dB where hit, versus the selected repeat's
+23.59/23.05 dB and 22.72 dB, while normal RMSE worsens from 53.69 to 53.73
+degrees. Both one-line batch scalings are removed. Runs remain under
+`target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-{full-opacity,three-quarter}-*`.
