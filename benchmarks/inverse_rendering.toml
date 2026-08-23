@@ -5482,3 +5482,19 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-joint-opacity-1e3-probe (gitignored)"
 verdict = "reject before five-cloud gate and remove: +0.2 coverage points trade -0.01 dB worst-view and -0.02 dB where-hit fidelity; preserve opacity from the dedicated support fit rather than let calibrated RGB residuals alter transmittance"
+
+[direct_gaussian.rejected_scalar_observation_center_gate]
+date = "2026-08-23"
+protocol = "first fixed Gaussian cloud; after the selected joint calibrated-light continuation, restore each center with fewer than two observations under the scalar projected-center observer"
+particles = 2323
+retained_centers = 320
+restored_centers = 2003
+control = [23.45, 22.87, 55.0, 22.56]
+candidate = [23.41, 22.84, 54.9, 22.54]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+continuation_seconds = 0.922
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-support2-centers-probe (gitignored)"
+verdict = "reject before five-cloud gate and remove: every held-light metric regresses because scalar projected-center ownership misses useful overlapping-Gaussian responsibilities; do not transfer confidence between the two renderers"

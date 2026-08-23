@@ -3538,3 +3538,14 @@ fidelity: calibrated RGB residuals can still change transmittance to compensate
 imperfect material, normal, and transport predictions. The temporary rate is
 removed before a five-cloud gate; the dedicated single-light support stage
 remains authoritative for opacity.
+
+Scalar projected-center observation counts are not a safe confidence gate for
+the volumetric continuation. Restoring centers with fewer than two primary-
+capture observations keeps only 320 of 2,323 learned displacements on the
+first cloud and lowers held-light output to 23.41/22.84 dB, 54.9% coverage,
+and 22.54 dB where hit. The control reaches 23.45/22.87 dB, 55.0%, and
+22.56 dB. Finite overlapping Gaussians receive useful mixture gradients even
+when the older scalar observer does not assign their projected center to two
+views. The rollback prototype is removed; future confidence must be measured
+from the Gaussian responsibilities themselves, not borrowed from a different
+renderer.
