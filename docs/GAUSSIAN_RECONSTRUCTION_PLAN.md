@@ -4633,3 +4633,46 @@ diffuse albedo with conservative rough-dielectric specular defaults. Runs and
 telemetry remain under
 `target/audit-runs/current-synthetic-v1/multilight-gaussian-pbr-first/` and
 `target/audit-runs/current-synthetic-v1/multilight-gaussian-roughness-{first,half-first}/`.
+
+## Shared compute-context lifetime (2026-08-23)
+
+The sequential compute stages now retain one Blade context instead of creating
+a new device for foam-depth tracing, direct Gaussian fitting, and calibrated
+multi-light geometry. The ray-traced scoring renderer remains separate because
+it requires a ray-tracing-capable context while Meganeura deliberately creates
+its compute context with ray tracing disabled. No shader, graph operation,
+binding, model field, dependency, file format, or public option changes.
+
+The ordinary paired five-cloud synthetic gate reduces compute-context creation
+from three devices to one. Wall time falls from 17.890 to 16.486 seconds
+(`-7.8%`) and cgroup memory peak from 260.3 to 254.5 MiB. The volumetric
+Gaussian held-light result is unchanged at the reported precision:
+23.59/23.05 dB mean/worst, 55.0% coverage, and 22.71 dB where hit. The control
+and candidate remain under
+`target/audit-runs/current-synthetic-v1/shared-compute-context-{paired-control,first}/`.
+
+PowerFoam needs a more careful handoff. Retaining the initial density context
+alongside a fresh continuation context changed the validation decision on the
+first cloud. The selected lifecycle therefore releases the density context,
+creates a fresh context for the validation/full continuation pair, and retains
+that context for later Gaussian stages. This reduces four compute contexts to
+two while preserving the fresh validation allocation state. Against an exact
+old-lifecycle control, wall time falls from 46.331 to 44.854 seconds (`-3.2%`).
+The continuation remains selected at 22.30 -> 22.35 dB rather than
+22.29 -> 22.36 dB, and held-light Gaussian PBR is 23.60/23.06 dB with 55.0%
+coverage and 22.73 dB where hit, matching or improving every reported rounded
+quality measure. Peak memory rises from 267.2 to 326.3 MiB, still far below the
+12 GiB limit with zero swap or OOM. Runs remain under
+`target/audit-runs/current-synthetic-v1/shared-compute-context-powerfoam-{paired-control,handoff-first}/`.
+
+Production smokes exercise the same lifetimes. Foam depth plus calibrated
+Gaussian fitting creates one compute context and completes in 2.157 seconds at
+233.8 MiB. A four-view masked PowerFoam run creates exactly two compute
+contexts, completes continuation, Gaussian fitting, serialization, and scoring
+in 5.356 seconds at 220.2 MiB, and reports no swap or OOM. That smoke also
+exposed that the static pre-decomposition surface inherited per-surfel material
+indices while owning only one default material. Static-surface preparation now
+neutralizes those indices before PowerFoam validation; the PBR surface keeps
+its independent indices for the later material solve. The successful artifacts
+and telemetry are under `target/audit-runs/shared-compute-context-production-v2/`
+and `target/audit-runs/shared-compute-context-production-powerfoam-v4/`.

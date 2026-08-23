@@ -14,14 +14,22 @@
 //! Usage:
 //!   reconstruct --sparse etc/data/bonsai/sparse/0 --images etc/data/bonsai/images
 
+use blade_graphics as gpu;
 use blade_volume as vol;
 use blade_volume_convert as convert;
 use blade_volume_train as train;
-use std::{collections, path};
+use std::{collections, path, sync};
 
 const PBR_SPARSE_CELL_POINTS: usize = 5;
 const STATIC_GAUSSIAN_SPARSE_CELL_POINTS: usize = 3;
 const STATIC_SPARSE_RADIUS_SCALE: f32 = 15.0 / 14.0;
+
+fn require_compute_gpu(purpose: &str) -> sync::Arc<gpu::Context> {
+    train::fit::try_init_gpu().unwrap_or_else(|| {
+        eprintln!("cannot initialize a supported GPU for {purpose}");
+        std::process::exit(1);
+    })
+}
 
 #[derive(argh::FromArgs)]
 /// Reconstruct geometry, material and light from a posed capture.
@@ -275,6 +283,8 @@ fn main() {
         eprintln!("Gaussian output requires Gaussian particles");
         std::process::exit(1);
     }
+    let mut compute_gpu =
+        (args.foam.is_some() && !args.cpu_depth).then(|| require_compute_gpu("depth tracing"));
     let normal_captures =
         load_normal_captures(&capture, sparse, height, &args).unwrap_or_else(|message| {
             eprintln!("cannot load normal captures: {message}");
@@ -312,6 +322,7 @@ fn main() {
                     &reconstruction,
                     &train_views,
                     &args,
+                    compute_gpu.clone(),
                 );
                 (
                     surfels,
@@ -360,13 +371,7 @@ fn main() {
         && !args.normal_images.is_empty()
         && args.gaussian_output.is_some())
         || args.surface_powerfoam_steps_per_view > 0)
-        .then(|| {
-            let mut surface = geometry.clone();
-            if let Some(ref source) = density_normal_source {
-                source.refine(&mut surface, 0.1);
-            }
-            surface
-        });
+        .then(|| prepare_static_surface(geometry.clone(), density_normal_source.as_ref()));
     if !args.normal_images.is_empty() {
         let started = std::time::Instant::now();
         let stats = refine_normals_from_captures(
@@ -396,10 +401,8 @@ fn main() {
 
     if args.surface_powerfoam_steps_per_view > 0 {
         let started = std::time::Instant::now();
-        let Some(gpu) = train::fit::try_init_gpu() else {
-            eprintln!("cannot initialize a supported GPU for surface PowerFoam continuation");
-            std::process::exit(1);
-        };
+        drop(compute_gpu.take());
+        let powerfoam_gpu = require_compute_gpu("surface PowerFoam continuation");
         let options = train::inverse::powerfoam::ContinueOptions {
             steps_per_view: args.surface_powerfoam_steps_per_view,
             ..Default::default()
@@ -418,7 +421,7 @@ fn main() {
                 &capture,
                 fit_views,
                 options,
-                gpu.clone(),
+                powerfoam_gpu.clone(),
             )
             .unwrap_or_else(|message| {
                 eprintln!("cannot validate the surface continuation: {message}");
@@ -436,7 +439,7 @@ fn main() {
                     fit_views,
                     validation_view,
                     args.gaussian_steps,
-                    gpu.clone(),
+                    powerfoam_gpu.clone(),
                 )
                 .unwrap_or_else(|message| {
                     eprintln!("cannot validate the static Gaussian continuation: {message}");
@@ -452,7 +455,7 @@ fn main() {
             &capture,
             &train_views,
             options,
-            gpu,
+            powerfoam_gpu.clone(),
         )
         .unwrap_or_else(|message| {
             eprintln!("cannot continue the extracted surface: {message}");
@@ -475,6 +478,7 @@ fn main() {
             stats.final_loss,
             started.elapsed().as_secs_f64(),
         );
+        compute_gpu = Some(powerfoam_gpu);
         if let Some(selection) = selection {
             println!(
                 "static Gaussian continuation: {} at {:.2} -> {:.2} dB on withheld training view",
@@ -719,10 +723,9 @@ fn main() {
                 eprintln!("cannot score direct Gaussian field: {error}");
                 std::process::exit(1);
             });
-        let Some(gpu) = train::fit::try_init_gpu() else {
-            eprintln!("cannot initialize a supported GPU for direct Gaussian training");
-            std::process::exit(1);
-        };
+        let gpu = compute_gpu
+            .get_or_insert_with(|| require_compute_gpu("direct Gaussian training"))
+            .clone();
         let mut pbr_gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
             .unwrap_or_else(|error| {
                 eprintln!("cannot initialize PBR support Gaussian field: {error}");
@@ -912,10 +915,9 @@ fn main() {
                     environment: &entry.environment,
                 }
             }));
-            let Some(gpu) = train::fit::try_init_gpu() else {
-                eprintln!("cannot initialize a supported GPU for multi-light Gaussian geometry");
-                std::process::exit(1);
-            };
+            let gpu = compute_gpu
+                .get_or_insert_with(|| require_compute_gpu("multi-light Gaussian geometry"))
+                .clone();
             let started = std::time::Instant::now();
             let stats = train::gaussian_splat::fit_multilight_geometry(
                 gaussian,
@@ -1190,6 +1192,16 @@ fn neutral_static_surface(mut surface: vol::relight::RelightModel) -> vol::relig
     surface
 }
 
+fn prepare_static_surface(
+    mut surface: vol::relight::RelightModel,
+    density_normal_source: Option<&DensityNormalSource>,
+) -> vol::relight::RelightModel {
+    if let Some(source) = density_normal_source {
+        source.refine(&mut surface, 0.1);
+    }
+    neutral_static_surface(surface)
+}
+
 fn static_surface_with_sparse(
     surface: vol::relight::RelightModel,
     sparse: &[vol::relight::Surfel],
@@ -1218,6 +1230,7 @@ fn surfels_from_foam(
     reconstruction: &train::colmap::Reconstruction,
     views: &[usize],
     args: &Args,
+    gpu: Option<sync::Arc<gpu::Context>>,
 ) -> (
     Vec<vol::relight::Surfel>,
     Vec<SparseSupport>,
@@ -1267,10 +1280,7 @@ fn surfels_from_foam(
             options.max_steps,
         )
     } else {
-        let Some(gpu) = train::fit::try_init_gpu() else {
-            eprintln!("cannot initialize a supported GPU for depth tracing");
-            std::process::exit(1);
-        };
+        let gpu = gpu.expect("GPU depth tracing context was not initialized");
         match train::inverse::depth::trace_depths_gpu(
             &model,
             &requests,
@@ -1879,7 +1889,7 @@ mod tests {
                 vol::relight::Material::default(),
             ],
         };
-        surface = neutral_static_surface(surface);
+        surface = prepare_static_surface(surface, None);
         surface.validate().unwrap();
         train::gaussian_splat::from_surface(&surface).unwrap();
         assert_eq!(surface.surfels[0].material, 0);

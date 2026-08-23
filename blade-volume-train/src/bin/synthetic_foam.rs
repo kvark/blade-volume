@@ -765,7 +765,7 @@ fn main() {
         args.height
     );
 
-    let Some(gpu) = train::fit::try_init_gpu() else {
+    let Some(mut gpu) = train::fit::try_init_gpu() else {
         fail("no supported GPU device");
     };
     let densify =
@@ -909,7 +909,7 @@ fn main() {
         dataset.width,
         dataset.height,
         depth_options.max_steps,
-        gpu,
+        gpu.clone(),
     )
     .unwrap_or_else(|error| fail(error));
     println!(
@@ -995,7 +995,8 @@ fn main() {
         .then(|| make_static_surface(geometry.clone()));
     if args.surface_powerfoam_steps_per_view > 0 {
         let started = std::time::Instant::now();
-        let Some(gpu) = train::fit::try_init_gpu() else {
+        drop(gpu);
+        let Some(powerfoam_gpu) = train::fit::try_init_gpu() else {
             fail("no supported GPU device for surface PowerFoam continuation");
         };
         let options = train::inverse::powerfoam::ContinueOptions {
@@ -1010,7 +1011,7 @@ fn main() {
                 &training_capture,
                 fit_views,
                 options,
-                gpu.clone(),
+                powerfoam_gpu.clone(),
             )
             .unwrap_or_else(|error| fail(error));
             let probe_surface = make_static_surface(probe_surface);
@@ -1022,7 +1023,7 @@ fn main() {
                     fit_views,
                     validation_view,
                     args.gaussian_steps,
-                    gpu.clone(),
+                    powerfoam_gpu.clone(),
                 )
                 .unwrap_or_else(|error| fail(error)),
             )
@@ -1035,7 +1036,7 @@ fn main() {
             &training_capture,
             &training_indices,
             options,
-            gpu,
+            powerfoam_gpu.clone(),
         )
         .unwrap_or_else(|error| fail(error));
         if let Some(ref output) = args.surface_powerfoam_output {
@@ -1058,6 +1059,7 @@ fn main() {
             outcome.stats.final_loss,
             started.elapsed().as_secs_f64(),
         );
+        gpu = powerfoam_gpu;
         if let Some(selection) = selection {
             println!(
                 "static Gaussian continuation: {} at {:.2} -> {:.2} dB on withheld training view",
@@ -1288,9 +1290,7 @@ fn main() {
             .unwrap_or_else(|error| fail(error));
         let mut pbr_gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
             .unwrap_or_else(|error| fail(error));
-        let Some(gpu) = train::fit::try_init_gpu() else {
-            fail("no supported GPU device for direct Gaussian training");
-        };
+        let gpu = gpu.clone();
         let started = std::time::Instant::now();
         let (stats, shared_appearance) = if static_gaussian_surface.is_some() {
             let stats = train::gaussian_splat::fit_staged_independent_outputs(
@@ -1555,9 +1555,6 @@ fn main() {
                         environment,
                     })
                     .collect();
-                let Some(gpu) = train::fit::try_init_gpu() else {
-                    fail("no supported GPU device for multi-light Gaussian geometry");
-                };
                 let started = std::time::Instant::now();
                 let stats = train::gaussian_splat::fit_multilight_geometry(
                     gaussian,
