@@ -827,7 +827,8 @@ fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
 }
 
 /// Continue corresponding Gaussian positions under two or more calibrated
-/// lights while keeping support and appearance fixed.
+/// lights with exactly aligned cameras while keeping support and appearance
+/// fixed.
 ///
 /// Each pass predicts a diffuse color from the current PBR surface and one
 /// measured environment. The color is scratch supervision: the Gaussian's
@@ -890,6 +891,11 @@ fn fit_joint_multilight_positions(
     set_diffuse_appearance(gaussian, surface, lights[0].environment);
     for light in lights {
         validate_fit(gaussian, light.capture, view_indices, options)?;
+        if !captures_are_aligned(lights[0].capture, light.capture) {
+            return Err(
+                "multi-light Gaussian geometry requires captures with aligned cameras".to_string(),
+            );
+        }
     }
 
     let mut appearances = Vec::with_capacity(lights.len());
@@ -926,35 +932,21 @@ fn fit_joint_multilight_positions(
     set_model_parameters(&mut session, gaussian);
     set_rotation_inputs(&mut session, gaussian);
 
-    let pixel_rays: Vec<_> = lights
-        .iter()
-        .map(|light| capture_pixel_rays(light.capture))
-        .collect();
-    let mut candidate_indices: Vec<_> = lights
-        .iter()
-        .map(|light| {
-            CandidateIndex::new(
-                gaussian,
-                light.capture,
-                view_indices,
-                options.candidate_min_alpha,
-            )
-        })
-        .collect();
+    let pixel_rays = capture_pixel_rays(lights[0].capture);
+    let mut candidate_index = CandidateIndex::new(
+        gaussian,
+        lights[0].capture,
+        view_indices,
+        options.candidate_min_alpha,
+    );
     let audit = sample_rays(
         lights[0].capture,
-        &pixel_rays[0],
+        &pixel_rays,
         view_indices,
         options.batch_size,
         u32::MAX,
     );
-    set_batch(
-        &mut session,
-        gaussian,
-        &audit,
-        &candidate_indices[0],
-        options,
-    );
+    set_batch(&mut session, gaussian, &audit, &candidate_index, options);
     session.step();
     session.wait();
     let initial_loss = read_loss(&session);
@@ -967,34 +959,23 @@ fn fit_joint_multilight_positions(
     for step in 0..options.steps {
         if step != 0 && step.is_multiple_of(options.geometry_sync_every) {
             download_candidate_geometry(&session, gaussian);
-            candidate_indices = lights
-                .iter()
-                .map(|light| {
-                    CandidateIndex::new(
-                        gaussian,
-                        light.capture,
-                        view_indices,
-                        options.candidate_min_alpha,
-                    )
-                })
-                .collect();
+            candidate_index = CandidateIndex::new(
+                gaussian,
+                lights[0].capture,
+                view_indices,
+                options.candidate_min_alpha,
+            );
         }
         let (light_index, sequence) = multilight_sample(lights.len(), step);
         set_sh_parameters(&mut session, &appearances[light_index]);
         let batch = sample_rays(
             lights[light_index].capture,
-            &pixel_rays[light_index],
+            &pixel_rays,
             view_indices,
             options.batch_size,
             sequence,
         );
-        set_batch(
-            &mut session,
-            gaussian,
-            &batch,
-            &candidate_indices[light_index],
-            options,
-        );
+        set_batch(&mut session, gaussian, &batch, &candidate_index, options);
         session.step();
         session.wait();
     }
@@ -2196,6 +2177,28 @@ fn capture_pixel_rays(
         .collect()
 }
 
+fn cameras_are_aligned(first: &vol::CameraParams, second: &vol::CameraParams) -> bool {
+    first.cam_position == second.cam_position
+        && first.depth == second.depth
+        && first.cam_orientation == second.cam_orientation
+        && first.fov == second.fov
+        && first.principal == second.principal
+}
+
+fn captures_are_aligned(
+    first: &crate::inverse::capture::Capture,
+    second: &crate::inverse::capture::Capture,
+) -> bool {
+    first.width == second.width
+        && first.height == second.height
+        && first.views.len() == second.views.len()
+        && first
+            .views
+            .iter()
+            .zip(&second.views)
+            .all(|(first, second)| cameras_are_aligned(&first.camera, &second.camera))
+}
+
 fn sample_rays(
     capture: &crate::inverse::capture::Capture,
     pixel_rays: &[crate::inverse::capture::PixelRays],
@@ -2651,6 +2654,17 @@ mod tests {
                 (0, 3),
             ]
         );
+    }
+
+    #[test]
+    fn multilight_capture_alignment_compares_image_geometry() {
+        let truth = model(vec![glam::Vec4::new(0.0, 0.0, 4.0, 0.8)]);
+        let first = synthetic_capture(&truth);
+        let mut second = synthetic_capture(&truth);
+        assert!(captures_are_aligned(&first, &second));
+
+        second.views[1].camera.principal[0] += 0.01;
+        assert!(!captures_are_aligned(&first, &second));
     }
 
     #[test]

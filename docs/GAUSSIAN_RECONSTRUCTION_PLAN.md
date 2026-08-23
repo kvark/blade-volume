@@ -3691,6 +3691,16 @@ overlapping depth sheets, so Euclidean neighbours do not define a cleaner
 surface manifold than the existing multi-view normal. The helper is removed
 without tuning a smaller blend toward an identity.
 
+Aligned calibrated-light captures now share one pixel-ray table and one
+Gaussian candidate index. Candidate membership depends on particle geometry
+and camera calibration, not captured radiance or illumination, so rebuilding
+the same structure four times was redundant. The entry point now checks the
+documented alignment invariant exactly before sharing either cache. On the
+first fixed cloud the continuation takes 0.866 seconds and retains
+23.52/22.99 dB, 55.1% coverage, and 22.59 dB where hit, within the established
+atomic support-fit variation. This removes no training signal and adds no
+shader, Meganeura operation, model field, or public option.
+
 ## Validation-clean dependency stack (2026-08-23)
 
 The workspace now pins Blade `3d01645`, current `main` plus three isolated
@@ -3707,3 +3717,13 @@ suite pass on the RTX 5070. The blade-volume suite peaks at 5.5 GB inside its
 or VUID. Three superseded Blade validation branches were deleted. The one
 final Blade branch and one Meganeura dependency branch remain necessary until
 these commits are merged into their respective `main` branches.
+
+The earlier integration pull requests are merged, but they predate these
+August 23 fixes. A direct retest of Blade `20fcb84` (the merged integration
+revision) with Meganeura `3dc9621` compiles, then reports invalid workgroup
+`ArrayStride`, undersized descriptor pools, and missing device-address
+allocation flags before Meganeura aborts a surface-only graph test on an
+invalid `copy_nonoverlapping`. This is deterministic inside the 12 GB cgroup
+on the stable RTX 5070 and is not a power-supply failure. The two remaining
+heads therefore cannot be removed merely by repinning to the already-merged
+integration revisions.
