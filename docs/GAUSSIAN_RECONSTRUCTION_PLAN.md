@@ -4676,3 +4676,39 @@ neutralizes those indices before PowerFoam validation; the PBR surface keeps
 its independent indices for the later material solve. The successful artifacts
 and telemetry are under `target/audit-runs/shared-compute-context-production-v2/`
 and `target/audit-runs/shared-compute-context-production-powerfoam-v4/`.
+
+## Rejected marginal Gaussian scheduling cleanups (2026-08-23)
+
+Three exact or near-exact lifecycle cleanups are deliberately not retained.
+First, rebuilding the Gaussian candidate index at the boundary between the
+400-update absolute-light geometry pass and the 100-update normals-only light
+contrast tail makes the latter see centers from the final update rather than
+the preceding refresh boundary. On a paired first-cloud screen it improves
+nearest-truth normal RMSE from 53.72 to 53.66 degrees, but held-light mean PSNR
+falls from 23.60 to 23.59 dB. Worst-view PSNR, 55.0% coverage, and 22.72 dB
+where-hit quality are unchanged. Correcting a stale private index is not useful
+when its only measurable image movement is negative, so the extra readback and
+grid build are removed. Artifacts remain under
+`target/audit-runs/current-synthetic-v1/contrast-boundary-refresh-{control,candidate}/`.
+
+Second, the appearance phase of each staged direct-Gaussian fit cannot change
+position, scale, or opacity, so its per-view candidate index can technically be
+retained for the following support phase. A production-sized 109,764-particle
+Room A/B changes the complete paired Gaussian fit only from 13.9 to 13.8
+seconds. Held-view Gaussian PBR remains 12.52/12.04--12.05 dB at roughly 78%
+coverage, within the existing atomic support-fit variation. Saving one of many
+geometry rebuilds does not justify threading private index state through every
+staged-fit entry point; that refactor is removed. Logs remain under
+`target/audit-runs/staged-index-reuse-room-{control,candidate}/`.
+
+Finally, preparing each 20-update calibrated-light candidate window as one
+10,240-ray CPU job passes an exact grouped-versus-individual row oracle and
+uses all available host threads. Across the five fixed clouds it reduces the
+500-update joint geometry stage from roughly 1.01 to 0.948 seconds on average.
+The complete held-light result remains in the selected band at 23.53/22.97 dB
+mean/worst, 55.28% coverage, and 22.52 dB where hit. This saves only about 60
+milliseconds in an end-to-end reconstruction while duplicating substantial
+absolute-light and contrast-tail batching orchestration. The helper, loop
+rewrites, and expanded test are removed under the project's minimality rule.
+Artifacts remain under
+`target/audit-runs/current-synthetic-v1/grouped-multilight-candidates-{first,five}/`.
