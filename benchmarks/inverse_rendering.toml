@@ -5585,3 +5585,20 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-support2-centers-probe (gitignored)"
 verdict = "reject before five-cloud gate and remove: every held-light metric regresses because scalar projected-center ownership misses useful overlapping-Gaussian responsibilities; do not transfer confidence between the two renderers"
+
+[direct_gaussian.rejected_directional_pbr_scratch_appearance]
+date = "2026-08-23"
+protocol = "first fixed Gaussian cloud; replace each calibrated light's selected diffuse SH-0 scratch appearance with exact CPU PBR shading, first projected from 64 spherical directions into SH-2 and then least-squares fit at the actual training views into SH-1; keep the selected 400-update joint center continuation otherwise unchanged"
+control = [23.53, 22.99, 55.1, 22.60]
+global_sh2_candidate = [23.52, 23.00, 55.1, 22.59]
+view_fit_sh1_candidate = [23.52, 22.99, 55.1, 22.59]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+control_continuation_seconds = 0.899
+global_sh2_continuation_seconds = 2.490
+view_fit_sh1_continuation_seconds = 2.448
+maximum_runtime_peak_memory_mb = 228.9
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/multilight-pbr-scratch-{probe,view-fit-probe} (gitignored)"
+verdict = "reject before five-cloud gate and remove: exact directional PBR scratch appearance is neutral at rounded held-light precision while making center continuation about 2.7 times slower through environment prefiltering and SH fitting; retain the minimal diffuse SH-0 scratch and investigate Gaussian compositing responsibility instead"

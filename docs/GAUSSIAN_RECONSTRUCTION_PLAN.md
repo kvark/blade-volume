@@ -3614,3 +3614,17 @@ mean/tail gains trade covered fidelity, cloud 3 regresses by 0.01/0.04 dB, and
 cloud 5 loses 0.05 dB where hit. Continuation time also rises from 0.934 to
 1.238 seconds. The temporary 75/100-step constants are removed and the robust
 50-step schedule remains selected.
+
+Replacing the diffuse scratch table with directional PBR appearance is also
+rejected. The first prototype evaluates the exact CPU PBR model over 64 sphere
+directions and projects it into degree-2 SH. On the first fixed cloud it
+reaches the same rounded 23.52/23.00 dB, 55.1% coverage, and 22.59 dB where-hit
+result as the selected diffuse continuation, but position fitting grows from
+about 0.9 to 2.490 seconds. A smaller prototype fits degree-1 SH only at the
+actual training-view directions; it reaches 23.52/22.99 dB, 55.1%, and
+22.59 dB in 2.448 seconds. Both pay for specular environment prefiltering and
+extra SH fitting without improving the held-light result. They are removed
+before the five-cloud gate. This closes missing directional scratch appearance
+as the immediate error source: the next geometry investigation should measure
+responsibility in the Gaussian compositor itself, where overlapping particles
+share each residual.
