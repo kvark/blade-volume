@@ -41,6 +41,7 @@ const PREPARED_CANDIDATE_BATCHES: usize = 20;
 // radius agreement over-expands the Gaussian; this log-space fraction is the
 // smallest tested joint-safe setting across five clouds and two real gates.
 const PBR_SUPPORT_FEEDBACK: f32 = 0.025;
+const HIGH_VIEW_PBR_INITIAL_OPACITY: f32 = 0.25;
 const PBR_MIN_PERSISTED_OPACITY: f32 = 0.05;
 const STATIC_CONTINUATION_MIN_VALIDATION_GAIN_DB: f32 = 0.05;
 
@@ -488,6 +489,10 @@ fn sh_basis(direction: glam::Vec3) -> [f32; 9] {
 /// promote appearance to SH-1 or SH-2 according to the available view count;
 /// smaller captures remain compact because higher directional terms did not
 /// generalize in held-view gates.
+/// With at least eight training views, PBR support starts at quarter opacity
+/// so overlapping reconstructed surface samples retain useful transmittance
+/// gradients. Smaller captures and static light fields keep the half-opacity
+/// initialization selected for direct image reproduction.
 /// Known background rays penalize contradictory PBR support when every selected
 /// view carries a mask; ordinary scene captures continue without that optional
 /// term. Static light fields retain full-mask supervision because foreground
@@ -499,6 +504,8 @@ pub fn fit_staged(
     steps: usize,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<StagedFitStats, String> {
+    model.validate()?;
+    initialize_pbr_opacity(model, view_indices.len());
     fit_staged_impl(
         model,
         capture,
@@ -788,6 +795,17 @@ pub fn from_surface(surface: &vol::relight::RelightModel) -> Result<vol::PointCl
     };
     model.validate()?;
     Ok(model)
+}
+
+fn initialize_pbr_opacity(model: &mut vol::PointCloudModel, view_count: usize) {
+    let opacity = if view_count >= MIN_SH1_VIEWS {
+        HIGH_VIEW_PBR_INITIAL_OPACITY
+    } else {
+        0.5
+    };
+    for point in &mut model.points {
+        point.w = opacity;
+    }
 }
 
 /// Transfer learned Gaussian support back to the corresponding PBR surfels.
@@ -3041,6 +3059,34 @@ mod tests {
         assert_eq!(pbr.normals, [glam::Vec3::Z, -glam::Vec3::Y]);
         assert_eq!(pbr.material_indices, [0, 1]);
         assert_eq!(pbr.materials, surface.materials);
+    }
+
+    #[test]
+    fn pbr_schedule_opacity_preserves_particle_geometry() {
+        let mut gaussian = model(vec![
+            glam::Vec4::new(1.0, 2.0, 3.0, 0.5),
+            glam::Vec4::new(-1.0, 4.0, 2.0, 0.8),
+        ]);
+        let positions: Vec<_> = gaussian
+            .points
+            .iter()
+            .map(|point| point.truncate())
+            .collect();
+        initialize_pbr_opacity(&mut gaussian, MIN_SH1_VIEWS);
+        assert!(gaussian
+            .points
+            .iter()
+            .all(|point| point.w == HIGH_VIEW_PBR_INITIAL_OPACITY));
+        assert_eq!(
+            gaussian
+                .points
+                .iter()
+                .map(|point| point.truncate())
+                .collect::<Vec<_>>(),
+            positions,
+        );
+        initialize_pbr_opacity(&mut gaussian, MIN_SH1_VIEWS - 1);
+        assert!(gaussian.points.iter().all(|point| point.w == 0.5));
     }
 
     #[test]

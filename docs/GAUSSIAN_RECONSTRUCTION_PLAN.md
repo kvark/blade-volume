@@ -4924,3 +4924,61 @@ MiB and the candidate at 492.5 MiB; the fixed synthetic candidate peaks at
 logs remain outside version control under
 `target/audit-runs/current-synthetic-v1/dataset-12/` and
 `target/audit-runs/dense-pbr-rate-{control,candidate}/`.
+
+## Selected high-view PBR opacity initialization (2026-08-23)
+
+A nested Blade capture separates camera density from camera placement for the
+first time. Its first eight views and HDR files are bit-for-bit identical to
+the canonical fixture; four interleaved midpoint cameras are appended. With
+one original pose held fixed, moving from seven to eleven training cameras
+raises foam held radiance from 23.80 to 25.56 dB and the scalar PBR result from
+22.53 to 22.61 dB. The former Gaussian schedule nevertheless collapses: static
+quality falls from 25.25 to 22.53 dB and volumetric held-light PBR from 23.02
+to 20.79 dB. The eleven-view support loss barely changes from 0.1378 to 0.1343.
+Forcing SH-0 recovers only 0.51 dB static and 0.18 dB PBR, proving that the
+eight-view SH transition contributes but does not cause the failure.
+
+The fixed-centre PBR fit now starts at 0.25 rather than 0.5 peak opacity when
+there are at least eight training cameras. More cameras expose and fuse more
+overlapping surface samples; starting each at half opacity puts their combined
+transmittance close to saturation and couples opacity to the newly enabled
+directional appearance basin. Quarter opacity retains useful gradients. It is
+reset immediately before the independently fitted PBR schedule and changes no
+particle position, covariance, material, model field, shader, graph operation,
+dependency, format, or public option. The static light field remains at the
+selected half opacity.
+
+On the exact eleven-view nested cloud, the isolated policy raises fixed-centre
+Gaussian quality from 22.23 to 24.82 dB and final unseen-light volumetric PBR
+from 20.79 to 23.28 dB. Static quality remains independently fitted and
+unchanged. The separate nine-training/three-held capture gives the strongest
+matched gate: fixed-centre quality rises from 23.66/22.11 to 26.58/25.31 dB,
+and final held-light Gaussian PBR rises from 22.59/20.94 to 24.15/22.97 dB.
+Coverage changes from 57.1% to 54.4%, but full-frame PSNR, worst-view PSNR,
+and where-hit quality all rise; the latter moves from 21.20 to 22.95 dB. Its
+static field remains 26.03/23.95 dB.
+
+The real gates agree on image quality while keeping static fits unchanged.
+Room Gaussian PBR changes from 14.35/12.89 to 14.87/13.22 dB and where-hit
+quality from 13.70 to 13.93 dB; coverage falls from 78.7% to 69.2%. Bonsai
+changes from 12.48/10.68 to 12.86/11.42 dB and 12.47 to 12.74 dB where hit,
+with coverage moving from 91.5% to 88.5%. Because full-frame mean, tail, and
+covered fidelity improve together, the lower coverage is removal of weak
+overlap rather than a PSNR gain obtained by hiding bad covered pixels.
+
+The view threshold is measured rather than global. Applying quarter opacity
+to the five six-view clouds lowers aggregate held-light Gaussian PBR from
+about 24.00 dB to 23.81 dB; four means regress. Those captures and the tested
+seven-view case therefore retain half opacity exactly. A 0.375 dense-view
+probe reaches only 21.69 dB PBR, showing a sharp saturation basin rather than
+a smooth preference for smaller alpha. Finally, resetting opacity after a
+shared half-opacity appearance fit changes the nine-view shared-path result
+from 22.94/21.92 to 22.91/21.86 dB, so the shared path also stays unchanged.
+Only the independently fitted high-view PBR support receives the selected
+initialization.
+
+Every run used a separate 12 GiB cgroup. Artifacts and telemetry remain outside
+version control under `target/audit-runs/nested-camera-v1/`,
+`target/audit-runs/pbr-opacity025-{five,nine-view,isolated}/`, and
+`target/audit-runs/pbr-opacity-view-threshold/`. All report zero swap, OOM,
+validation error, Xid, or GPU fault.
