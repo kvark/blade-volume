@@ -3515,3 +3515,15 @@ but the five-cloud result is mixed: 23.356/22.778 dB, 55.30% coverage, and
 0.004 dB; cloud 2 regresses in mean, worst view, and where-hit quality. Runtime
 only falls from 0.920 to 0.889 seconds. The temporary accumulation schedule is
 removed, retaining per-light Adam updates in the shared session.
+
+Per-light RGB gain fitting for the fixed scratch appearance is also rejected.
+A deterministic 4,096-ray least-squares probe first fit the premultiplied
+Gaussian render to each measured capture. Its gains of roughly 1.05 improved
+the first cloud's worst view by 0.01 dB but reduced where-hit quality by
+0.02 dB, showing that the scalar was compensating opacity as well as exposure.
+Fitting unpremultiplied color reduced the gains to 1.01--1.03, but the same
+cloud still reached only 23.45/22.87 dB, 55.0% coverage, and 22.55 dB where
+hit, versus 23.45/22.87 dB, 55.0%, and 22.56 dB for the selected uncalibrated
+scratch table. Both prototypes are removed. Real exposure calibration needs
+capture metadata or a calibrated reference, rather than a render-space scalar
+that is not identifiable separately from volumetric opacity and transport.

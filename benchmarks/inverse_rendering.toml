@@ -5448,3 +5448,23 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-accumulate4-{probe,five} (gitignored)"
 verdict = "reject and remove: +0.004 dB mean and 0.031 seconds saved trade -0.004 dB where-hit quality; cloud 2 regresses across mean, worst, and hit-region quality in the definitive run"
+
+[direct_gaussian.rejected_scratch_appearance_gain]
+date = "2026-08-23"
+protocol = "first fixed Gaussian cloud; fit one bounded RGB least-squares gain per calibrated light from 4096 deterministic rays before the selected joint center continuation; compare premultiplied and alpha-normalized render colors"
+control = [23.45, 22.87, 55.0, 22.56]
+premultiplied_candidate = [23.45, 22.88, 55.0, 22.54]
+alpha_normalized_candidate = [23.45, 22.87, 55.0, 22.55]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+alpha_normalized_gains = [
+    [1.0169255, 1.0182858, 1.0174598],
+    [1.0142893, 1.0162646, 1.0160812],
+    [1.0203366, 1.0205942, 1.0179199],
+    [1.0293568, 1.0308927, 1.0310339],
+]
+continuation_seconds = 0.916
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-gain-{probe,unpremult-probe} (gitignored)"
+verdict = "reject before five-cloud gate and remove: premultiplied fitting absorbs opacity and trades +0.01 dB tail for -0.02 dB hit quality; alpha-normalized fitting still loses 0.01 dB where hit with no compensating metric gain; require capture-side exposure evidence instead"
