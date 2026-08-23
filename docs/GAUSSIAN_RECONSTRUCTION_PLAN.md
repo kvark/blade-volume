@@ -3720,6 +3720,33 @@ vocabulary are unchanged. The five-cloud logs are under
 maskless replay is under
 `target/audit-runs/multilight-masked-linear-production/`.
 
+Re-enabling anisotropic scale learning under that new objective remains a
+mixed trade. At scale rates `1e-4` and `2e-4`, the five-cloud aggregates reach
+approximately 23.442/22.908 dB, 55.28% coverage, and 22.382 dB where hit, and
+23.444/22.908 dB, 55.26%, and 22.366 dB respectively. The center-only control
+reaches 23.438/22.904 dB, 55.28%, and 22.386 dB. Thus the tiny mean/tail gains
+come with weaker covered-pixel fidelity, and the stronger rate also loses
+coverage. Projecting every particle's learned log-scale delta to preserve its
+initial volume is much worse on the first cloud, falling to 23.22/22.67 dB,
+54.5%, and 22.49 dB where hit. Shape and support are not separable in the
+overlapping compositor. All scale updates and the projection helper are
+removed; logs remain under
+`target/audit-runs/current-synthetic-v1/multilight-linear-scale-lr1e4-five/`,
+`target/audit-runs/current-synthetic-v1/multilight-linear-scale-lr2e4-five/`,
+and `target/audit-runs/current-synthetic-v1/multilight-linear-scale-shape-lr2e4-probe/`.
+
+Linear radiance is deliberately not extended backward into the Gaussian PBR
+support fit. That stage still has to discover opacity from foreground RGB;
+the masks contribute only negative background evidence so that overlapping
+particles are not all forced opaque. A first-cloud prototype that trained its
+appearance, opacity, and scales entirely in linear space collapsed volumetric
+coverage from about 55% to 32.4% and held-light quality to 19.42/19.28 dB.
+Covered pixels rise to 23.50 dB only because the difficult low-opacity region
+disappears. The prototype is removed, and the established sRGB support
+objective remains under the later masked-linear, frozen-support geometry
+continuation. Its diagnostic log is under
+`target/audit-runs/current-synthetic-v1/pbr-support-linear-probe/`.
+
 Anchoring that continuation to its initial centers is rejected. A private
 mean-squared displacement term at weight one reaches approximately
 23.422/22.868 dB, 55.32% coverage, and 22.356 dB where hit over the five fixed
