@@ -3950,3 +3950,11 @@ persist/reload gate, matching the selected 23.496/22.926 dB, 55.28%, and
 22.486 dB baseline. Their smaller paired fits average 4.225 seconds; the extra
 workers target high-particle production captures rather than changing the
 small-scene schedule.
+
+Balancing the separate 18-view grid rebuild across all twelve reported threads
+is rejected. Replacing the existing nine two-view chunks with six two-view and
+six one-view chunks raises the same Room fit from 12.4 to 14.4 seconds. These
+workers stream large per-particle projection tables, so logical-thread
+occupancy is not the right target on the six-core test CPU. The balanced
+partition is removed before a Bonsai gate; its diagnostic remains under
+`target/audit-runs/balanced-view-grid-workers/`.
