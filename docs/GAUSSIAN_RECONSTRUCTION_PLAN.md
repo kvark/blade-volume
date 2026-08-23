@@ -4360,3 +4360,14 @@ every other calibrated capture, removing capture-order dependence at the same
 rather than 53.69 degrees. The additional reference samples and averaging are
 removed without a five-cloud expansion. The capped diagnostic remains under
 `target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-mean-first/`.
+
+Choosing each light's most distant diffuse-irradiance reference is rejected as
+well. It retains one reference and the selected runtime, but replaces cyclic
+pairing with the environment having the largest squared SH-2 irradiance
+distance. The first fixed cloud ties mean/tail at 23.59/23.05 dB, while
+where-hit quality falls to 22.71 dB and normal RMSE worsens to 53.86 degrees;
+the cyclic repeat reaches 22.72 dB and 53.69 degrees. Maximizing global light
+separation overemphasizes a less transferable differential direction. The
+selector is removed without a five-cloud expansion. Its capped diagnostic is
+under
+`target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-farthest-first/`.
