@@ -4350,3 +4350,13 @@ Twelve updates per light are rejected: the first-cloud normal RMSE reaches
 screened duration that preserves the fixed-cloud image gate. Runs and capped
 telemetry remain under
 `target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-*`.
+
+A symmetric mean-of-other-lights reference is rejected. It replaces the
+cyclic partner with the average diffuse irradiance and aligned labels from
+every other calibrated capture, removing capture-order dependence at the same
+100-update budget. On the first fixed cloud it reaches 23.59/23.04 dB and
+22.71 dB where hit, below the retained cyclic repeat's 23.59/23.05 dB and
+22.72 dB where hit. Nearest-truth normal RMSE is also slightly worse at 53.75
+rather than 53.69 degrees. The additional reference samples and averaging are
+removed without a five-cloud expansion. The capped diagnostic remains under
+`target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-mean-first/`.
