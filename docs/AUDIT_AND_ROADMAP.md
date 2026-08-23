@@ -619,6 +619,22 @@ At the audited revision:
   removed. Before changing support again, compare complete per-cell training
   and held-view errors to separate appearance underfit from geometry that
   fails to generalize.
+- The complete per-cell comparison now closes that question at the sampled
+  checkpoints. Every 128x128 pixel in all 272/39 Room and 255/37 Bonsai
+  train/held views was rendered on the GPU and independently traced to its
+  peak cell with the CPU oracle. Shared train-visible cells own 99.73% of
+  Room's and 99.43% of Bonsai's held residual mass. Among cells hit in at
+  least two views on each side, log-mean train/held squared-error correlation
+  is 0.7999/0.7494, and 61.06%/51.44% of held top-decile cells are also in the
+  training top decile. The exact passes cover 5,095,424 Room and 4,784,128
+  Bonsai rays; all have a peak-cell attribution. They finish in 16/29 minutes
+  with 192/172 MB host peaks and zero swap, OOM, or GPU fault events. This
+  rules out view-exclusive cell ownership as the main residual source, but
+  does not by itself distinguish appearance capacity from systematic geometry
+  error on shared cells. The bounded next gate is residual-aware pixel
+  sampling with inverse-probability weights, preserving the existing loss in
+  expectation. The one-off attribution implementation is removed; complete
+  generated logs remain under `target/audit-runs/cell-residual-attribution/`.
 
 ### Remaining PowerFoam gaps
 
