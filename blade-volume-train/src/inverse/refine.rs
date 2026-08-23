@@ -103,7 +103,7 @@ pub struct RenderedStats {
 pub struct RenderedMaterialStats {
     /// Scalar albedo coordinates visited.
     pub coordinates: usize,
-    /// Distinct lower/upper proposals rendered.
+    /// Distinct lower/upper proposals scored.
     pub proposals: usize,
     /// Coordinates whose final albedo differs from its input by more than
     /// numerical noise.
@@ -552,54 +552,61 @@ fn refine_rendered_materials_impl(
     let mut loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
     let initial_loss = loss;
     let initial_materials = scene.model.materials.clone();
+    let basis = build_rendered_albedo_basis(
+        scene,
+        &mut renderer,
+        &mut tracer,
+        capture,
+        indices,
+        &cameras,
+    );
+    scene.model.materials.clone_from(&initial_materials);
+    renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
     if initialize_linear {
-        if let Some(candidate_loss) = fit_rendered_linear_albedo(
+        if let Some(ref basis) = basis {
+            if let Some(candidate_loss) = fit_rendered_linear_albedo(
+                scene,
+                &mut renderer,
+                &mut tracer,
+                capture,
+                indices,
+                &cameras,
+                basis,
+                loss,
+            ) {
+                loss = candidate_loss;
+            }
+        }
+    }
+    let coordinates;
+    let proposals;
+    if let Some(ref basis) = basis {
+        let before_coordinates = scene.model.materials.clone();
+        let (next_coordinates, next_proposals) = refine_albedo_from_basis(scene, basis, step);
+        coordinates = next_coordinates;
+        proposals = next_proposals;
+        renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
+        let candidate_loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+        if candidate_loss < loss {
+            loss = candidate_loss;
+        } else {
+            scene.model.materials = before_coordinates;
+            renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
+        }
+    } else {
+        let result = refine_rendered_albedo_fallback(
             scene,
             &mut renderer,
             &mut tracer,
             capture,
             indices,
             &cameras,
+            step,
             loss,
-        ) {
-            loss = candidate_loss;
-        }
-    }
-    let mut coordinates = 0;
-    let mut proposals = 0;
-    for step in [step, 0.5 * step] {
-        for material in 0..scene.model.materials.len() {
-            for channel in 0..3 {
-                coordinates += 1;
-                let original = scene.model.materials[material].albedo[channel];
-                let candidates = [(original - step).max(0.0), (original + step).min(1.0)];
-                let mut best = original;
-                let mut best_loss = loss;
-                let mut uploaded = original;
-                for candidate in candidates {
-                    if candidate == original {
-                        continue;
-                    }
-                    scene.model.materials[material].albedo[channel] = candidate;
-                    renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
-                    uploaded = candidate;
-                    let candidate_loss =
-                        rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
-                    proposals += 1;
-                    if candidate_loss < best_loss {
-                        best_loss = candidate_loss;
-                        best = candidate;
-                    }
-                }
-                scene.model.materials[material].albedo[channel] = best;
-                if uploaded != best {
-                    renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
-                }
-                if best != original {
-                    loss = best_loss;
-                }
-            }
-        }
+        );
+        loss = result.0;
+        coordinates = result.1;
+        proposals = result.2;
     }
     let changed = initial_materials
         .iter()
@@ -631,6 +638,186 @@ fn rendered_linear_rgb(
         .flatten()
         .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
         .collect()
+}
+
+struct RenderedAlbedoBasis {
+    base: Vec<f32>,
+    responses: Vec<Vec<f32>>,
+    target: Vec<f32>,
+}
+
+impl RenderedAlbedoBasis {
+    fn render(&self, materials: &[vol::relight::Material]) -> Vec<f32> {
+        let mut rendered = self.base.clone();
+        for (material, response) in self.responses.iter().enumerate() {
+            for (index, (value, &basis)) in rendered.iter_mut().zip(response).enumerate() {
+                *value += materials[material].albedo[index % 3] * basis;
+            }
+        }
+        rendered
+    }
+
+    fn squared_error(&self, rendered: f32, index: usize) -> f64 {
+        let difference =
+            capture::linear_to_srgb(rendered) - capture::linear_to_srgb(self.target[index]);
+        f64::from(difference * difference)
+    }
+
+    fn error_sum(&self, rendered: &[f32]) -> f64 {
+        debug_assert_eq!(rendered.len(), self.target.len());
+        rendered
+            .iter()
+            .enumerate()
+            .map(|(index, &rendered)| self.squared_error(rendered, index))
+            .sum::<f64>()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_rendered_albedo_basis(
+    scene: &mut score::Scene,
+    renderer: &mut score::Renderer,
+    tracer: &mut vol::gpu::RelightTracer,
+    capture: &capture::Capture,
+    indices: &[usize],
+    cameras: &[vol::CameraParams],
+) -> Option<RenderedAlbedoBasis> {
+    const MAX_COORDINATES: usize = 96;
+
+    let coordinates = scene.model.materials.len() * 3;
+    if coordinates == 0 || coordinates > MAX_COORDINATES {
+        return None;
+    }
+    for material in &mut scene.model.materials {
+        material.albedo = [0.0; 3];
+    }
+    renderer.update_prepared_materials(tracer, &scene.model.materials);
+    let base = rendered_linear_rgb(renderer, tracer, cameras);
+    let mut responses = Vec::with_capacity(scene.model.materials.len());
+    for material in 0..scene.model.materials.len() {
+        // Diffuse transport is diagonal in RGB, so one white-albedo render
+        // supplies the three independent coordinate responses.
+        scene.model.materials[material].albedo = [1.0; 3];
+        renderer.update_prepared_materials(tracer, &scene.model.materials);
+        let rendered = rendered_linear_rgb(renderer, tracer, cameras);
+        responses.push(
+            rendered
+                .iter()
+                .zip(&base)
+                .map(|(value, base)| value - base)
+                .collect(),
+        );
+        scene.model.materials[material].albedo = [0.0; 3];
+    }
+    let target: Vec<f32> = indices
+        .iter()
+        .flat_map(|&index| capture.views[index].pixels.iter())
+        .flat_map(|pixel| *pixel)
+        .collect();
+    debug_assert_eq!(target.len(), base.len());
+    Some(RenderedAlbedoBasis {
+        base,
+        responses,
+        target,
+    })
+}
+
+fn refine_albedo_from_basis(
+    scene: &mut score::Scene,
+    basis: &RenderedAlbedoBasis,
+    step: f32,
+) -> (usize, usize) {
+    let mut rendered = basis.render(&scene.model.materials);
+    let mut error_sum = basis.error_sum(&rendered);
+    let mut coordinates = 0;
+    let mut proposals = 0;
+    for step in [step, 0.5 * step] {
+        for material in 0..scene.model.materials.len() {
+            for channel in 0..3 {
+                coordinates += 1;
+                let original = scene.model.materials[material].albedo[channel];
+                let candidates = [(original - step).max(0.0), (original + step).min(1.0)];
+                let mut best = original;
+                let mut best_error_sum = error_sum;
+                for candidate in candidates {
+                    if candidate == original {
+                        continue;
+                    }
+                    let delta = candidate - original;
+                    let mut candidate_error_sum = error_sum;
+                    for index in (channel..rendered.len()).step_by(3) {
+                        candidate_error_sum -= basis.squared_error(rendered[index], index);
+                        let candidate_rendered =
+                            rendered[index] + delta * basis.responses[material][index];
+                        candidate_error_sum += basis.squared_error(candidate_rendered, index);
+                    }
+                    proposals += 1;
+                    if candidate_error_sum < best_error_sum {
+                        best_error_sum = candidate_error_sum;
+                        best = candidate;
+                    }
+                }
+                if best != original {
+                    let delta = best - original;
+                    for index in (channel..rendered.len()).step_by(3) {
+                        rendered[index] += delta * basis.responses[material][index];
+                    }
+                    scene.model.materials[material].albedo[channel] = best;
+                    error_sum = best_error_sum;
+                }
+            }
+        }
+    }
+    (coordinates, proposals)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn refine_rendered_albedo_fallback(
+    scene: &mut score::Scene,
+    renderer: &mut score::Renderer,
+    tracer: &mut vol::gpu::RelightTracer,
+    capture: &capture::Capture,
+    indices: &[usize],
+    cameras: &[vol::CameraParams],
+    step: f32,
+    mut loss: f64,
+) -> (f64, usize, usize) {
+    let mut coordinates = 0;
+    let mut proposals = 0;
+    for step in [step, 0.5 * step] {
+        for material in 0..scene.model.materials.len() {
+            for channel in 0..3 {
+                coordinates += 1;
+                let original = scene.model.materials[material].albedo[channel];
+                let candidates = [(original - step).max(0.0), (original + step).min(1.0)];
+                let mut best = original;
+                let mut best_loss = loss;
+                let mut uploaded = original;
+                for candidate in candidates {
+                    if candidate == original {
+                        continue;
+                    }
+                    scene.model.materials[material].albedo[channel] = candidate;
+                    renderer.update_prepared_materials(tracer, &scene.model.materials);
+                    uploaded = candidate;
+                    let candidate_loss = rendered_loss(renderer, tracer, capture, indices, cameras);
+                    proposals += 1;
+                    if candidate_loss < best_loss {
+                        best_loss = candidate_loss;
+                        best = candidate;
+                    }
+                }
+                scene.model.materials[material].albedo[channel] = best;
+                if uploaded != best {
+                    renderer.update_prepared_materials(tracer, &scene.model.materials);
+                }
+                if best != original {
+                    loss = best_loss;
+                }
+            }
+        }
+    }
+    (loss, coordinates, proposals)
 }
 
 fn solve_dense(matrix: &mut [f64], right: &mut [f64]) -> bool {
@@ -689,76 +876,49 @@ fn fit_rendered_linear_albedo(
     capture: &capture::Capture,
     indices: &[usize],
     cameras: &[vol::CameraParams],
+    basis: &RenderedAlbedoBasis,
     current_loss: f64,
 ) -> Option<f64> {
-    const MAX_COORDINATES: usize = 96;
     const RIDGE_RATIO: f64 = 1.0e-4;
 
     let original = scene.model.materials.clone();
     let coordinates = original.len() * 3;
-    if coordinates == 0 || coordinates > MAX_COORDINATES {
-        return None;
-    }
     let original_albedo: Vec<f64> = original
         .iter()
         .flat_map(|material| material.albedo)
         .map(f64::from)
         .collect();
-    for material in &mut scene.model.materials {
-        material.albedo = [0.0; 3];
-    }
-    renderer.update_prepared_materials(tracer, &scene.model.materials);
-    let base = rendered_linear_rgb(renderer, tracer, cameras);
-    let mut responses = Vec::with_capacity(coordinates);
-    for material in 0..original.len() {
-        // Diffuse transport is diagonal in RGB, so one white-albedo render
-        // supplies the three independent coordinate responses.
-        scene.model.materials[material].albedo = [1.0; 3];
-        renderer.update_prepared_materials(tracer, &scene.model.materials);
-        let rendered = rendered_linear_rgb(renderer, tracer, cameras);
-        for channel in 0..3 {
-            responses.push(
-                rendered
-                    .iter()
-                    .zip(&base)
-                    .enumerate()
-                    .map(|(index, (value, base))| {
-                        if index % 3 == channel {
-                            value - base
-                        } else {
-                            0.0
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            );
-        }
-        scene.model.materials[material].albedo = [0.0; 3];
-    }
-    let target: Vec<f32> = indices
+    let residual: Vec<f32> = basis
+        .target
         .iter()
-        .flat_map(|&index| capture.views[index].pixels.iter())
-        .flat_map(|pixel| *pixel)
-        .collect();
-    debug_assert_eq!(target.len(), base.len());
-    let residual: Vec<f32> = target
-        .iter()
-        .zip(&base)
+        .zip(&basis.base)
         .map(|(target, base)| target - base)
         .collect();
     let mut matrix = vec![0.0f64; coordinates * coordinates];
     let mut right = vec![0.0f64; coordinates];
     for row in 0..coordinates {
-        right[row] = responses[row]
-            .iter()
-            .zip(&residual)
-            .map(|(&response, &residual)| f64::from(response) * f64::from(residual))
+        let row_material = row / 3;
+        let row_channel = row % 3;
+        right[row] = (row_channel..residual.len())
+            .step_by(3)
+            .map(|index| {
+                f64::from(basis.responses[row_material][index]) * f64::from(residual[index])
+            })
             .sum();
         for column in 0..=row {
-            let product = responses[row]
-                .iter()
-                .zip(&responses[column])
-                .map(|(&left, &right)| f64::from(left) * f64::from(right))
-                .sum();
+            let column_material = column / 3;
+            let column_channel = column % 3;
+            let product = if row_channel == column_channel {
+                (row_channel..residual.len())
+                    .step_by(3)
+                    .map(|index| {
+                        f64::from(basis.responses[row_material][index])
+                            * f64::from(basis.responses[column_material][index])
+                    })
+                    .sum()
+            } else {
+                0.0
+            };
             matrix[row * coordinates + column] = product;
             matrix[column * coordinates + row] = product;
         }

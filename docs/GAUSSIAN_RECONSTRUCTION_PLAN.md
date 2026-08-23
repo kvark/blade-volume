@@ -4003,3 +4003,39 @@ accepted rendered-material stage takes 1.420 seconds versus 1.487 seconds for
 the scalar control, a 4.5% reduction. The change adds no API, option, shader,
 operation, binding, pipeline, model field, format, or dependency. Logs remain
 under `target/audit-runs/current-synthetic-v1/rendered-material-rgb-basis-{probe,control-after}/`.
+
+## Incremental affine material scoring (2026-08-23)
+
+The rendered-material coordinate passes now reuse that same affine diffuse
+basis instead of dispatching a complete GPU render for every lower and upper
+albedo proposal. One black-diffuse render supplies the fixed specular/base
+term, and one white-diffuse render per material supplies all three RGB
+responses. The implementation stores that response once rather than as three
+sparse coordinate vectors. A proposal changes only its matching RGB channel,
+so its sRGB error is updated over one third of the pixels while the other two
+channels and their error sum stay untouched. The accepted table is uploaded
+once and must still lower a fresh production render; otherwise the entire
+coordinate pass is rolled back. Palettes above the existing 96-coordinate
+linear-solve boundary retain the old direct-render fallback.
+
+The five fixed synthetic clouds retain the selected aggregate at
+23.496/22.926 dB, about 55.3% coverage, and 22.48 dB where hit. Their initial,
+post-support, and final material passes take roughly 0.79--0.86 seconds; the
+first-cloud paired control takes 1.404, 1.382, and 1.545 seconds respectively.
+The physical known-material recovery test still reaches the exact authored
+albedo.
+
+The larger 18-view gates show the intended scaling. Room's initial and
+post-support passes fall from 2.9 and 2.1 seconds to 0.6 and 0.6 seconds;
+Bonsai falls from 2.5 and 1.9 seconds to 0.6 and 0.6 seconds. Room's persisted
+Gaussian test result is unchanged at 14.34/12.89 dB, 78.8% coverage, and
+13.70 dB where hit. Bonsai remains 12.28/9.78 dB at 85.1% coverage; its
+0.01 dB where-hit movement is within the paired direct-Gaussian atomic
+variation. Peak scoped memory is 416 MB on Room and 603 MB on Bonsai, versus
+355 and 514 MB for the controls, with no swap, OOM, validation warning, Xid,
+or GPU fault. The change is private CPU scoring and adds no API, option,
+shader, graph operation, binding, pipeline, model field, format, or
+dependency. Logs remain under
+`target/audit-runs/rendered-material-incremental-basis-{room,bonsai}/` and
+their `-control-after` siblings; the fixed-cloud gate is under
+`target/audit-runs/current-synthetic-v1/rendered-material-compact-basis-five/`.
