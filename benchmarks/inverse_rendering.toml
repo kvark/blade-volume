@@ -5304,3 +5304,26 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-geometry-{clean-probe,selected-five,lr2-five}, target/audit-runs/multilight-gaussian-production-lr2-{smoke,scatter} (gitignored)"
 verdict = "select 2e-4: every held-light mean and tail improves or ties across five clouds and all aggregate metrics improve; the production repeated-capture path persists and reloads successfully; scratch appearance is restored and the implementation reuses the existing graph, shader, optimizer, and asset representation; retain source-parallel Meganeura scatter because the column-parallel fallback is 2.5x slower on the matched production continuation"
+
+[direct_gaussian.rejected_calibrated_light_scale_continuation]
+date = "2026-08-23"
+protocol = "selected four-light symmetric center continuation on the five fixed Gaussian clouds; additionally update anisotropic log-scales at 2e-4; persist and reload before unseen-studio-light scoring"
+scale_learning_rate = 0.0002
+control_mean = [23.43, 23.50, 23.18, 23.40, 23.21]
+candidate_mean = [23.45, 23.48, 23.19, 23.41, 23.20]
+control_worst = [22.87, 22.84, 22.53, 22.86, 22.75]
+candidate_worst = [22.88, 22.83, 22.53, 22.86, 22.73]
+control_coverage = [55.0, 55.3, 55.5, 55.4, 55.1]
+candidate_coverage = [55.1, 55.4, 55.6, 55.5, 55.3]
+control_covered = [22.54, 22.46, 22.05, 22.37, 22.18]
+candidate_covered = [22.53, 22.44, 22.07, 22.37, 22.13]
+control_average = [23.344, 22.770, 55.26, 22.320]
+candidate_average = [23.346, 22.766, 55.38, 22.308]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+continuation_seconds = [3.116, 3.041, 3.030, 2.996, 3.045]
+maximum_peak_memory_bytes = 247418880
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-scale-{1e4-probe,2e4-probe,2e4-five} (gitignored)"
+verdict = "reject and remove: +0.002 dB mean is noise-sized while aggregate worst-view and hit-region quality regress, including a clear cloud-2 regression; retain the simpler position-only continuation"

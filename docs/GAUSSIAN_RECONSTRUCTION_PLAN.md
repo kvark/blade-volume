@@ -3437,3 +3437,10 @@ smoke; its source-parallel CAS path takes 1.4--1.5 seconds and preserves the
 same output scores. The retained Meganeura branch is therefore current `main`
 plus only Blade revision alignment, constant-gradient host visibility, and
 source-parallel scatter accumulation.
+
+Allowing the same continuation to update anisotropic log-scales at `2e-4` is
+rejected. Across the five fixed clouds it reaches 23.346/22.766 dB, 55.38%
+coverage, and 22.308 dB where hit: the mean changes by only +0.002 dB while
+worst-view and hit-region quality regress. The second cloud alone loses
+0.02/0.01/0.02 dB in mean/worst/hit-region quality. The temporary scale update
+is removed; calibrated lights continue to refine centers only.
