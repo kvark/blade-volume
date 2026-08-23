@@ -5045,3 +5045,51 @@ Meganeura `b2cc256`. The Rust 1.98 format and Clippy gates pass, as do all 517
 workspace tests under the 12 GiB cgroup. The final cached suite peaks at 3.75
 GiB and reports no swap, OOM, Vulkan validation message, Xid, or GPU fault;
 logs are under `target/audit-runs/merged-stack-opacity/`.
+
+## Rejected photometric camera-ray correspondence (2026-08-23)
+
+The selected four-light log-response descriptor does not become a transferable
+center target when its search axis changes from the reconstructed normal to a
+source-camera ray. A private CPU prototype chose the best-facing training
+camera per particle, searched half a surfel radius along that pixel ray, then
+ran the ordinary conservative normal-axis response sweep. It changed no
+shader, graph operation, model field, dependency, or persisted format.
+
+Fixed-input A/B runs eliminate the preceding foam optimizer's atomic
+variation. Across five independently continued clouds, broad camera-ray search
+changes aggregate held-light Gaussian PBR mean/worst/where-hit quality from
+`23.996/23.224/22.812` to `24.032/23.284/22.860` dB. The aggregate is positive,
+but clouds 2, 3, and 5 regress in mean or covered quality. Halving the search
+to one quarter radius reaches a higher `24.052/23.320/22.878` dB aggregate,
+yet clouds 2 and 3 still regress in all three quality measures and every static
+Gaussian tail is neutral or lower. This is another scene-mixed proxy movement,
+not a production-quality gate.
+
+A stronger cross-view check does not rescue the family. It accepts a primary
+camera-ray proposal only when a second search from the widest-baseline visible
+camera scores the proposal and elects not to move it. This retains just 18 of
+198 primary moves on cloud 1 and 10 of 177 on cloud 3. Cloud 1 remains positive
+at `24.04/23.20` dB and `22.87` dB where hit, but cloud 3 changes
+`24.05/23.41/22.99` to `24.02/23.42/22.94` dB. Agreement between two
+fronto-parallel proxy searches still does not establish ownership in an
+overlapping Gaussian mixture. All camera-ray code and its environment gate are
+removed. Artifacts remain outside version control under
+`target/audit-runs/photometric-ray-correspondence/`.
+
+Every run used a separate 12 GiB cgroup. Peak memory is 266 MB, with zero swap,
+pressure, OOM, validation message, Xid, or GPU fault. The next correspondence
+experiment should create complete support only in holes independently confirmed
+from several depth maps, rather than moving a particle whose current center and
+appearance already form a coupled compensation.
+
+## Rejected flattened Gaussian candidate grid (2026-08-23)
+
+A private implementation replaced the per-tile `Vec<Vec<u32>>` candidate grid
+with contiguous CSR offsets and indices. It preserved insertion order, passed
+all 32 focused Gaussian tests, and changed no shader, graph operation, public
+API, model field, format, or dependency. On the exact Room reconstruction the
+complete cgroup scope changes from 13.681 to 13.764 seconds while peak host
+memory falls from 389.3 to 382.0 MB. The small memory reduction does not repay
+the extra count/fill traversal or storage complexity, so the implementation is
+removed. Artifacts remain outside version control under
+`target/audit-runs/candidate-csr/`.

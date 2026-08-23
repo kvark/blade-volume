@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-08-12
+Last updated: 2026-08-23
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -582,6 +582,19 @@ At the audited revision:
   and the completed 20,400-step continuation holds +0.48 dB selected and
   +0.25 dB all-37. The loss remains opt-in until the same result reproduces on
   another scene.
+- Deterministic per-view spatial pixel stratification does not transfer across
+  scenes or losses. Starting it before geometry warmup lowers Bonsai selected
+  held-out PSNR by 0.31 dB at step 2,000. Enabling it after the shared warmup
+  raises the 200,000-cell step-8,000 Bonsai result from 22.72 to 22.95 dB on
+  the selected eight views and from 23.33 to 23.46 dB over all 37. The same
+  continuation lowers Room's all-39 result from 23.76 to 23.68 dB under L1.
+  Under Smooth-L1, a favorable selected-eight change of +0.06 dB reverses on
+  all 39 views, from 23.10 to 23.06 dB. Runtime is neutral and all scopes stay
+  below 1.3 GiB with zero swap, OOM, validation message, Xid, or GPU fault.
+  The implementation is removed. Uniform screen coverage is not a robust
+  proxy for the distributed far/background residual; the next sampler gate
+  must use an explicit residual or visibility signal and preserve an unbiased
+  loss estimate.
 
 ### Remaining PowerFoam gaps
 
