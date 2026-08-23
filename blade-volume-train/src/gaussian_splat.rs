@@ -39,6 +39,7 @@ const PREPARED_CANDIDATE_BATCHES: usize = 20;
 // radius agreement over-expands the Gaussian; this log-space fraction is the
 // smallest tested joint-safe setting across five clouds and two real gates.
 const PBR_SUPPORT_FEEDBACK: f32 = 0.025;
+const PBR_MIN_PERSISTED_OPACITY: f32 = 0.05;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
 /// points. The covariance columns follow `glam::Mat2`'s column-major layout.
@@ -788,6 +789,75 @@ pub fn attach_pbr(
         materials: surface.materials.clone(),
     });
     gaussian.validate()
+}
+
+/// Remove learned Gaussian particles whose peak opacity is negligible.
+///
+/// This is deliberately a final model-compaction pass: topology is fixed while
+/// fitting, then every point-indexed Gaussian and PBR attribute is remapped in
+/// one place before persistence. Other point-cloud semantics are rejected
+/// rather than silently detached from their indices.
+pub fn prune_low_opacity(gaussian: &mut vol::PointCloudModel) -> Result<usize, String> {
+    gaussian.validate()?;
+    if gaussian.adjacency.is_some()
+        || gaussian.radii.is_some()
+        || gaussian.surface_normals.is_some()
+        || gaussian.surface_offsets.is_some()
+        || gaussian.surface_detail.is_some()
+        || gaussian.surface_color_coefficients.is_some()
+        || gaussian.spherical_voronoi.is_some()
+    {
+        return Err("Gaussian opacity pruning does not accept surface-cloud semantics".to_string());
+    }
+    let Some(ref transforms) = gaussian.transforms else {
+        return Err("Gaussian opacity pruning requires transforms".to_string());
+    };
+    let keep: Vec<_> = gaussian
+        .points
+        .iter()
+        .enumerate()
+        .filter_map(|(index, point)| (point.w >= PBR_MIN_PERSISTED_OPACITY).then_some(index))
+        .collect();
+    if keep.is_empty() {
+        return Err("Gaussian opacity pruning would remove every particle".to_string());
+    }
+    let removed = gaussian.points.len() - keep.len();
+    if removed == 0 {
+        return Ok(0);
+    }
+
+    let sh_stride = gaussian.sh_component_count() * 3;
+    let points = keep.iter().map(|&index| gaussian.points[index]).collect();
+    let sh_coefficients = keep
+        .iter()
+        .flat_map(|&index| {
+            gaussian.sh_coefficients[index * sh_stride..(index + 1) * sh_stride]
+                .iter()
+                .copied()
+        })
+        .collect();
+    let rotations = keep
+        .iter()
+        .map(|&index| transforms.rotations[index])
+        .collect();
+    let scales = keep.iter().map(|&index| transforms.scales[index]).collect();
+    let pbr = transforms.pbr.as_ref().map(|pbr| vol::PbrAttributes {
+        normals: keep.iter().map(|&index| pbr.normals[index]).collect(),
+        material_indices: keep
+            .iter()
+            .map(|&index| pbr.material_indices[index])
+            .collect(),
+        materials: pbr.materials.clone(),
+    });
+    gaussian.points = points;
+    gaussian.sh_coefficients = sh_coefficients;
+    gaussian.transforms = Some(vol::Transforms {
+        rotations,
+        scales,
+        pbr,
+    });
+    gaussian.validate()?;
+    Ok(removed)
 }
 
 fn set_diffuse_appearance(
@@ -2641,6 +2711,66 @@ mod tests {
         assert_eq!(pbr.normals, [glam::Vec3::Z, -glam::Vec3::Y]);
         assert_eq!(pbr.material_indices, [0, 1]);
         assert_eq!(pbr.materials, surface.materials);
+    }
+
+    #[test]
+    fn opacity_pruning_remaps_every_gaussian_pbr_attribute() {
+        let mut gaussian = model(vec![
+            glam::Vec4::new(1.0, 0.0, 0.0, 0.5),
+            glam::Vec4::new(2.0, 0.0, 0.0, 0.04),
+            glam::Vec4::new(3.0, 0.0, 0.0, 0.8),
+        ]);
+        gaussian.sh_degree = 1;
+        gaussian.sh_coefficients = (0..36).map(|value| value as f32).collect();
+        let transforms = gaussian.transforms.as_mut().unwrap();
+        transforms.rotations = vec![
+            glam::Quat::IDENTITY,
+            glam::Quat::from_rotation_x(0.5),
+            glam::Quat::from_rotation_y(0.5),
+        ];
+        transforms.scales = vec![
+            glam::Vec3::splat(1.0),
+            glam::Vec3::splat(2.0),
+            glam::Vec3::splat(3.0),
+        ];
+        transforms.pbr = Some(vol::PbrAttributes {
+            normals: vec![glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z],
+            material_indices: vec![1, 0, 1],
+            materials: vec![
+                vol::relight::Material::default(),
+                vol::relight::Material {
+                    albedo: [0.2, 0.3, 0.4],
+                    ..vol::relight::Material::default()
+                },
+            ],
+        });
+        gaussian.validate().unwrap();
+
+        assert_eq!(prune_low_opacity(&mut gaussian).unwrap(), 1);
+
+        assert_eq!(gaussian.points.len(), 2);
+        assert_eq!(gaussian.points[0].x, 1.0);
+        assert_eq!(gaussian.points[1].x, 3.0);
+        assert_eq!(
+            gaussian.sh_coefficients,
+            (0..12)
+                .chain(24..36)
+                .map(|value| value as f32)
+                .collect::<Vec<_>>(),
+        );
+        let transforms = gaussian.transforms.unwrap();
+        assert_eq!(
+            transforms.scales,
+            [glam::Vec3::splat(1.0), glam::Vec3::splat(3.0)],
+        );
+        assert_eq!(
+            transforms.rotations,
+            [glam::Quat::IDENTITY, glam::Quat::from_rotation_y(0.5)],
+        );
+        let pbr = transforms.pbr.unwrap();
+        assert_eq!(pbr.normals, [glam::Vec3::X, glam::Vec3::Z]);
+        assert_eq!(pbr.material_indices, [1, 1]);
+        assert_eq!(pbr.materials.len(), 2);
     }
 
     #[test]

@@ -1546,6 +1546,9 @@ fn main() {
                 stats.seconds,
             );
         }
+        let removed = train::gaussian_splat::prune_low_opacity(gaussian)
+            .unwrap_or_else(|error| fail(error));
+        println!("pruned {removed} low-opacity PBR Gaussian particles");
         if let Some(ref output) = args.pbr_gaussian_output {
             let output = path::Path::new(output);
             if let Some(parent) = output

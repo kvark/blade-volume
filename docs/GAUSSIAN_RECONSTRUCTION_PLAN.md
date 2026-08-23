@@ -4065,3 +4065,32 @@ initialization that preserves both footprint and local detail, plus an
 independent pruning or opacity continuation stage; adding overlapping copies
 is not geometry recovery. Logs remain under
 `target/audit-runs/current-synthetic-v1/densify-{25-first,gradient-10-first,rebuild-control-first,gradient-gentle-first,gradient-gentle-five}/`.
+
+## Final low-opacity Gaussian compaction (2026-08-23)
+
+Persisted relightable Gaussians now discard particles with learned peak
+opacity below 0.05 after geometry and material fitting are complete. The pass
+is a compact CPU remap of points, every SH row, rotation, scale, PBR normal,
+and material index; the shared material table is retained. It rejects clouds
+carrying adjacency or other surface-specific point semantics instead of
+silently invalidating their indices. Training topology and every optimizer
+remain unchanged.
+
+A paired replay over the five previously persisted synthetic outputs removes
+846 of 11,565 particles (7.3%). Mean and average worst-view quality remain
+23.428/22.865 dB at reported precision, coverage changes by less than 0.01
+percentage points, and where-hit quality changes by less than 0.001 dB. The
+paired renderer sample falls from 1.362 to 1.184 ms/frame, a 13.1% reduction.
+The full current pipeline independently removes 847 particles and remains
+within ordinary atomic-fit variation of the selected aggregate at
+approximately 23.492/22.924 dB, 55.26% coverage, and 22.478 dB where hit.
+
+The 18-view real gates keep the same result. Room removes 15,580 of 109,764
+particles (14.2%) and reports 14.34/12.90 dB, 78.7% coverage, and 13.70 dB
+where hit, versus 14.34/12.89 dB, 78.8%, and 13.70 for the control. Bonsai
+removes 10,391 of 169,432 particles (6.1%) and remains 12.28/9.78 dB at 85.2%
+coverage and 12.51 dB where hit. The gates peak at 393 and 500 MB respectively
+with no swap, OOM, validation error, Xid, or GPU fault. The change adds no
+option, shader, graph operation, binding, format field, or dependency. Logs
+remain under `target/audit-runs/opacity-prune-{five,005-room,005-bonsai}/` and
+`target/audit-runs/current-synthetic-v1/opacity-prune-005-five/`.
