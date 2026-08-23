@@ -1517,7 +1517,7 @@ fn main() {
                 )
                 .unwrap_or_else(|error| fail(error));
                 println!(
-                    "multi-light Gaussian geometry: {} calibrated lights, {} position updates in {:.3} s",
+                    "multi-light Gaussian geometry: {} calibrated lights, {} optimizer updates in {:.3} s",
                     lights.len(),
                     stats.iter().map(|stats| stats.steps).sum::<usize>(),
                     started.elapsed().as_secs_f64(),

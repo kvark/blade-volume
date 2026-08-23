@@ -30,6 +30,7 @@ const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
 const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 4.0e-4;
 const MULTI_LIGHT_NORMAL_LEARNING_RATE: f32 = 5.0e-4;
+const MULTI_LIGHT_NORMAL_CONTRAST_STEPS: usize = 25;
 const MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING: f32 = 0.5;
 const BACKGROUND_ONLY_OPACITY_SCALE: f32 = 2.0 / 3.0;
 // Match the selected support geometry-refresh cadence so one preparation pass
@@ -932,7 +933,9 @@ fn multilight_sample(light_count: usize, step: usize) -> (usize, u32) {
 /// mixed captures retain their display-referred residual for low-radiance
 /// coverage. It interleaves paired rays from the lights in forward/reverse
 /// order, avoiding an order prior while retaining joint Adam state and
-/// compiling the image-formation graph only once.
+/// compiling the image-formation graph only once. A short normals-only tail
+/// subtracts aligned light pairs, cancelling their shared opacity response
+/// without moving geometry.
 pub fn fit_multilight_geometry(
     gaussian: &mut vol::PointCloudModel,
     surface: &mut vol::relight::RelightModel,
@@ -1031,6 +1034,20 @@ fn fit_joint_multilight_positions(
         lights
             .iter()
             .map(|light| diffuse_irradiance(light.environment))
+            .collect::<Vec<_>>()
+    });
+    let normal_contrasts = normal_irradiance.as_ref().map(|irradiance| {
+        irradiance
+            .iter()
+            .enumerate()
+            .map(|(index, values)| {
+                let reference = &irradiance[(index + 1) % irradiance.len()];
+                values
+                    .iter()
+                    .zip(reference)
+                    .map(|(value, reference)| value - reference)
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>()
     });
 
@@ -1134,6 +1151,49 @@ fn fit_joint_multilight_positions(
         session.step();
         session.wait();
     }
+    let contrast_steps = if learn_normals {
+        MULTI_LIGHT_NORMAL_CONTRAST_STEPS * lights.len()
+    } else {
+        0
+    };
+    if learn_normals {
+        // With aligned cameras, subtracting two rendered diffuse fields also
+        // subtracts their labels while leaving the same Gaussian weights.
+        // Freeze centers so this tail can only debias shading normals.
+        session.set_lr_multiplier("positions", 0.0);
+        for step in 0..contrast_steps {
+            let (light_index, sequence) = multilight_sample(lights.len(), step);
+            let reference_index = (light_index + 1) % lights.len();
+            session.set_input(
+                "diffuse_irradiance",
+                &normal_contrasts.as_ref().unwrap()[light_index],
+            );
+            let mut batch = sample_rays_with_color_space(
+                lights[light_index].capture,
+                &pixel_rays,
+                view_indices,
+                options.batch_size,
+                sequence + 2 * MULTI_LIGHT_GEOMETRY_STEPS as u32,
+                false,
+            );
+            let reference = sample_rays_with_color_space(
+                lights[reference_index].capture,
+                &pixel_rays,
+                view_indices,
+                options.batch_size,
+                sequence + 2 * MULTI_LIGHT_GEOMETRY_STEPS as u32,
+                false,
+            );
+            debug_assert_eq!(batch.pixels, reference.pixels);
+            debug_assert_eq!(batch.alpha, reference.alpha);
+            for (value, reference) in batch.labels.iter_mut().zip(&reference.labels) {
+                *value -= reference;
+            }
+            set_batch(&mut session, gaussian, &batch, &candidate_index, options);
+            session.step();
+            session.wait();
+        }
+    }
     let normals = if learn_normals {
         let [positions, log_scales, opacity_logits, normals] = session
             .read_params(&[
@@ -1188,7 +1248,7 @@ fn fit_joint_multilight_positions(
     }
     Ok(MultilightFit {
         stats: FitStats {
-            steps: options.steps,
+            steps: options.steps + contrast_steps,
             initial_loss,
             final_loss,
         },
@@ -3246,7 +3306,7 @@ mod tests {
             fit_multilight_geometry(&mut candidate, &mut surface, &lights, &[0, 1], gpu).unwrap();
 
         assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].steps, 200);
+        assert_eq!(stats[0].steps, 250);
         assert!(stats[0].initial_loss.is_finite());
         assert!(stats[0].final_loss.is_finite());
         assert_eq!(candidate.sh_degree, 0);

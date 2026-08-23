@@ -877,7 +877,7 @@ fn main() {
                 std::process::exit(1);
             });
             println!(
-                "multi-light Gaussian geometry: {} calibrated lights, {} position updates in {:.1} s",
+                "multi-light Gaussian geometry: {} calibrated lights, {} optimizer updates in {:.1} s",
                 lights.len(),
                 stats.iter().map(|stats| stats.steps).sum::<usize>(),
                 started.elapsed().as_secs_f64(),

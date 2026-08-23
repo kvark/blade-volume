@@ -4318,3 +4318,35 @@ RMSE. The harmful high-rate direction is therefore not explained by excessive
 angular displacement from the previous normal. The extra graph input, loss,
 constant, and higher rate are removed. Runs and capped telemetry remain under
 `target/audit-runs/current-synthetic-v1/joint-center-normal-anchor-{01,1}-first/`.
+
+## Selected aligned-light Gaussian normal contrast (2026-08-23)
+
+The calibrated-light Gaussian continuation now ends with 25 normals-only
+updates per light on full aligned-light differences. For light `i`, the same
+graph receives diffuse irradiance `E_i - E_(i+1)` and corresponding linear
+labels `I_i - I_(i+1)` at identical camera rays. Gaussian weights,
+transmittance, albedo, and opacity are shared by the pair, so their common
+magnitude error cancels more directly than in another absolute-light update.
+Centers are frozen for this tail. It reuses the compiled graph, Adam state,
+candidate index, schedule, and existing operations; there is no new shader,
+entry, bind group, model field, file property, dependency, or public option.
+
+Against the selected joint-normal five-cloud control, mean held-light PSNR
+changes from 23.59/23.66/23.37/23.59/23.38 dB to
+23.59/23.67/23.40/23.61/23.38 dB. Worst-view PSNR changes from
+23.05/23.05/22.74/23.05/22.90 to 23.06/23.06/22.77/23.07/22.91 dB, and
+where-hit quality changes from 22.72/22.62/22.26/22.58/22.37 to
+22.71/22.62/22.28/22.61/22.38 dB. Coverage is identical for every cloud.
+Aggregate mean/worst/where-hit gains are approximately
++0.012/+0.016/+0.010 dB; every mean and tail improves or ties. A repeat of the
+first cloud resolves its one rounded where-hit trade at 23.59/23.05 dB and
+22.72 dB where hit, exactly matching the selected image scores while lowering
+nearest-truth normal RMSE from 54.03 to 53.69 degrees. The tail raises the
+joint pass from roughly 0.89 to 1.01 seconds.
+
+Twelve updates per light are rejected: the first-cloud normal RMSE reaches
+53.86 degrees, but held-light tail quality falls to 23.04 dB rather than the
+25-update repeat's 23.05 dB. The selected tail is therefore the smallest
+screened duration that preserves the fixed-cloud image gate. Runs and capped
+telemetry remain under
+`target/audit-runs/current-synthetic-v1/joint-center-normal-contrast-*`.
