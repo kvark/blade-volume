@@ -5380,3 +5380,16 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-interleave-probe (gitignored)"
 verdict = "reject before five-cloud gate and remove: mean, worst-view, and coverage regress while repeated graph/session construction makes the same update count about 80% slower"
+
+[direct_gaussian.rejected_normal_only_calibrated_light_motion]
+date = "2026-08-23"
+protocol = "first fixed Gaussian cloud; selected eight-fit multi-light schedule; after each light pass retain only the center displacement parallel to the corresponding PBR surface normal"
+control = [23.43, 22.87, 55.0, 22.54]
+candidate = [23.38, 22.78, 54.9, 22.54]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+continuation_seconds = 2.934
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/multilight-gaussian-normal-motion-probe (gitignored)"
+verdict = "reject before five-cloud gate and remove: geometry initialization has meaningful lateral error, and eliminating tangential center updates regresses mean, worst-view, and coverage"

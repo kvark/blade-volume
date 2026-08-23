@@ -3467,3 +3467,10 @@ coverage on the first cloud, below the selected 23.43/22.87 dB at 55.0%.
 Repeated graph/session construction also raises continuation time from about
 3.1 to 5.5 seconds. The selected eight 50-update fits remain both faster and
 more accurate.
+
+Projecting each calibrated-light center update onto its particle normal is
+rejected. Although this preserves a surfel's tangential identity, the first
+fixed cloud falls to 23.38/22.78 dB at 54.9% coverage from 23.43/22.87 dB at
+55.0%. The fused initializer contains meaningful lateral correspondence error,
+so unrestricted three-dimensional center motion remains necessary. The
+temporary host-side projection is removed.
