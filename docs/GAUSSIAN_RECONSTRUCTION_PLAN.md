@@ -4844,3 +4844,19 @@ lights; held-out poses and the held-out synthetic environment remain outside
 the decision. The synthetic gate runs automatically with photometric normals.
 Artifacts and 12 GB cgroup telemetry remain under
 `target/audit-runs/current-synthetic-v1/photometric-response-{isolated-five,strict,selected-five}/`.
+
+Repeating the selected response sweep after the joint calibrated Gaussian
+center fit is rejected. It first copies the learned Gaussian centers into the
+matching surface particles, applies the identical training-only descriptor and
+depth visibility, then copies accepted centers back before the existing
+material polish. Across the exact five-cloud controls, it moves 80--110 of
+190--234 scored particles but changes held-light mean/worst PSNR from
+24.064/23.330 to 24.062/23.328 dB, coverage from 55.40% to 55.38%, and
+where-hit quality from 22.894 to 22.900 dB. Clouds three and four regress. The
+calibrated Gaussian compositor has already chosen a finite-mixture optimum;
+another tangent-sheet correspondence pass is no longer aligned with it. The
+switch and center synchronization are removed. A stricter RGB-channel form
+that exactly cancels colored multiplicative albedo is also rejected before a
+five-cloud run: it lowers the fifth cloud from 24.03/23.22 to 23.97/23.19 dB.
+Artifacts remain under
+`target/audit-runs/current-synthetic-v1/{post-gaussian-response-probe,photometric-response-rgb-strict}/`.

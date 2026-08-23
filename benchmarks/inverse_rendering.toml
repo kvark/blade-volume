@@ -5663,3 +5663,25 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/photometric-response-{isolated-five,strict,selected-five} (gitignored)"
 verdict = "select: every worst view improves, four means improve and one ties, aggregate coverage is unchanged, and the signal cancels scalar material or exposure gain while reusing the existing CPU refinement path without shaders, graph operations, dependencies, or representation variants"
+
+[surface_refinement.multi_view.rejected_post_gaussian_photometric_response]
+date = "2026-08-23"
+protocol = "same exact five selected response-refined clouds; after joint calibrated Gaussian center fitting, synchronize centers into surfels, repeat the strict four-light response sweep, synchronize accepted centers back, then run the existing material polish"
+control_pbr_held_light_mean = [24.08, 24.08, 23.92, 24.21, 24.03]
+control_pbr_held_light_worst = [23.29, 23.42, 23.26, 23.46, 23.22]
+control_pbr_coverage_percent = [55.1, 55.4, 55.5, 55.5, 55.5]
+control_pbr_where_hit = [22.96, 22.93, 22.75, 23.02, 22.81]
+candidate_pbr_held_light_mean = [24.09, 24.09, 23.90, 24.20, 24.03]
+candidate_pbr_held_light_worst = [23.30, 23.42, 23.25, 23.44, 23.23]
+candidate_pbr_coverage_percent = [55.1, 55.4, 55.4, 55.5, 55.5]
+candidate_pbr_where_hit = [22.98, 22.95, 22.72, 23.02, 22.83]
+control_average = [24.064, 23.330, 55.40, 22.894]
+candidate_average = [24.062, 23.328, 55.38, 22.900]
+metric_order = ["mean_psnr_db", "worst_psnr_db", "coverage_percent", "covered_psnr_db"]
+scored_particles = [234, 195, 197, 190, 205]
+moved_particles = [110, 98, 95, 80, 89]
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/current-synthetic-v1/post-gaussian-response-probe (gitignored)"
+verdict = "reject and remove: clouds three and four regress and aggregate mean, tail, and coverage are slightly negative; the response sweep helps before mixture fitting but conflicts with the center optimum chosen by calibrated Gaussian compositing"
