@@ -4576,3 +4576,60 @@ multiple depth modes or establish cross-view particle correspondence rather
 than selecting the candidate nearest one modal depth. All capped runs and
 telemetry remain under
 `target/audit-runs/current-synthetic-v1/depth-owned-pbr-support-*`.
+
+## Rejected post-geometry single-light lobe recovery (2026-08-23)
+
+Re-running the existing physical material solver after the selected calibrated
+Gaussian center/normal continuation does not make specular semantics safe. The
+private screen rebuilt surface observations with the final normals and centers,
+then allowed four roughness/F0 hypothesis rounds against the known `sun-east`
+environment before attaching the resulting 12-material table to the Gaussian.
+It reused the existing CPU solver and exact renderer; no operation, shader,
+entry point, binding, model field, dependency, or public option was added.
+
+At the solver's established `0.15` lobe margin, 52.7% of observed particles
+have multiple-view angular evidence and the one-light residual is `0.06753`.
+Nevertheless, first-cloud volumetric Gaussian held-light quality collapses
+from the paired diffuse-only control's 23.60/23.06 dB and 22.73 dB where hit
+to 18.66/18.37 dB and 16.65 dB where hit. Training-light quality also falls to
+23.62/22.16 dB, so the result is not merely a held-light trade.
+
+Requiring a 50% residual improvement before accepting any non-default lobe is
+not conservative enough: the same gate reaches only 18.52/18.01 dB and 16.54
+dB where hit under the held light. The reconstructed surface observations and
+shared chromaticity clusters still confound highlights, overlap, and geometry;
+a stronger hypothesis threshold cannot turn them into correspondence. The
+post-geometry solve is removed. Recovering roughness and F0 now requires a
+joint multi-light rendered objective on the final Gaussian mixture, with an
+explicit validation holdout, rather than transferring a single-light surface
+decomposition. Artifacts remain under
+`target/audit-runs/current-synthetic-v1/post-geometry-specular-{first,half-margin-first}/`.
+
+## Rejected validation-gated Gaussian lobe polish (2026-08-23)
+
+An exact multi-light rendered objective still does not identify transferable
+roughness or F0 on the reconstructed Gaussian mixture. The private candidate
+optimized the final Gaussian material buffer through the production PBR
+renderer using three calibrated lights, reserved the fourth calibrated light
+as an internal gate, and kept `studio` plus both novel poses entirely unseen.
+It reused prepared tracers and material-buffer updates, with no new shader,
+backend operation, binding, model field, file property, or dependency.
+
+The coupled roughness/F0 fit changes 40 of 96 visited coordinates, reducing
+the three-light sRGB objective from `0.0060431` to `0.0059213` and the reserved
+light from `0.0094783` to `0.0091762`. The gate therefore retains it, but true
+held-light mean/worst/where-hit quality falls from the paired control's
+23.60/23.06/22.73 dB to 23.57/23.03/22.70 dB. Calibrated-light transfer alone
+is not an adequate proxy for novel illumination.
+
+Holding F0 at the dielectric default removes the large regression but not the
+strict failure. A `0.2` roughness step changes seven coordinates and reaches
+23.60/23.04/22.73 dB; a `0.1` step reaches 23.58/23.04/22.71 dB. Both improve
+their training and reserved-light objectives and both lose the true tail.
+Consequently the stats type, fitting API, prepared-tracer loop, synthetic
+wiring, and incidental material-copy change are removed. The selected asset
+continues to state only the PBR semantics supported by the evidence: fitted
+diffuse albedo with conservative rough-dielectric specular defaults. Runs and
+telemetry remain under
+`target/audit-runs/current-synthetic-v1/multilight-gaussian-pbr-first/` and
+`target/audit-runs/current-synthetic-v1/multilight-gaussian-roughness-{first,half-first}/`.
