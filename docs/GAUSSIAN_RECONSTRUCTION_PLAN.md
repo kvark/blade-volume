@@ -6630,3 +6630,28 @@ prototype and renamed test are removed without another scene expansion. The
 12 GiB reconstruction scopes peak below 580 MiB and the focused test scope at
 1.64 GB; all use zero swap and report no OOM or GPU fault. Ignored artifacts
 remain under `target/audit-runs/tile-pixel-mask/`.
+
+## Rejected fused-cell ray consensus (2026-08-24)
+
+A fusion-boundary experiment treated the camera rays already grouped into one
+multi-view voxel as noisy observations of one 3D point. Each cell accumulated
+the weighted closest-ray normal equations, anchored their solution to the
+existing confidence-weighted depth average, and clamped motion inside the
+evidence voxel. This acted before Gaussian overlap made ownership ambiguous
+and changed no topology, shader, graph operation, API, model field, format, or
+dependency.
+
+With a quarter-strength anchor and a half-voxel clamp, the dense fixture looks
+strong: held-light volumetric PBR rises from `24.47/23.25/23.22` to
+`24.65/23.42/23.47` dB mean/worst/where-hit. The independent nested fixture
+reverses the result, falling from `23.50/21.90` to `23.32/21.70` dB
+mean/where-hit while coverage drops from 52.8% to 52.6%. A four-times-stronger
+anchor and quarter-voxel clamp still reaches only `23.42/21.75` dB on nested.
+
+Voxel fusion intentionally merges nearby samples from a local surface patch;
+they are not repeated measurements of one exact point. Forcing their rays to
+intersect therefore biases camera layouts differently even when nearest-truth
+position error changes by less than `0.001` world unit. The accumulator,
+solver, and tuning constants are removed. All 12 GiB scopes peak below 365 MiB
+with zero swap, OOM, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/ray-consensus-fusion/`.
