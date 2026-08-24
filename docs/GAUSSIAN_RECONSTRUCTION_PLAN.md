@@ -6045,3 +6045,25 @@ Both micro-optimization screens peak below 764 MiB with zero swap, memory
 pressure, OOM, validation error, Xid, or GPU fault. Their candidate branch also
 passed formatting, strict all-target/all-feature Clippy, and both complete
 physical-GPU workspace configurations before being removed.
+
+## Rejected cross-light Gaussian material selection (2026-08-24)
+
+Selecting the final shared diffuse table by cross-light validation is not a
+useful replacement for the existing primary-light polish. A diagnostic made
+four candidates from the same final Gaussian cloud, polishing one candidate
+against each known light. It ranked each candidate by its sRGB loss on the
+other three lights relative to the unchanged initializer, so the light used
+to fit a candidate could not validate that candidate.
+
+All four candidates transfer to the other known lights: the loss ratios are
+0.974 for uniform, 0.979 for sun-east, 0.973 for sun-west, and 0.975 for
+sky-dome. The ranking nevertheless does not predict the unseen studio light.
+On the exact same trained cloud, the initializer scores 23.445 dB, the
+existing sun-east polish scores 23.504 dB, and the selected sun-west candidate
+scores 23.489 dB. Thus the gate gives back 0.015 dB relative to the simpler
+selected policy despite requiring four polishes and repeated exact-Gaussian
+validation renders. The diagnostic code is removed before a five-cloud gate;
+the ignored logs remain under `target/audit-runs/cross-light-material/`.
+
+The complete runs were isolated to 12 GiB cgroups. The final diagnostic peaked
+at 293 MiB with no swap, pressure, OOM, Xid, validation error, or GPU fault.
