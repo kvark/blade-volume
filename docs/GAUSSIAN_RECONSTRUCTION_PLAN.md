@@ -6874,6 +6874,19 @@ slightly higher candidate CPU time. One Bonsai pair moves from `10.7` to
 on the neutral second scene. The implementation and test are removed;
 artifacts remain under `target/audit-runs/global-gaussian-candidates/`.
 
+A second residual-driven static split is rejected at the dense gate. The
+prototype retained the selected midpoint split, reset the exact grouped
+position-gradient accumulator, preserved every surviving parameter and Adam
+moment, then selected a fresh top 5% at three quarters of the schedule. It
+grows 2,880 particles to 3,022 and then 3,136, but held-view static quality
+falls from the selected `26.85/24.94` to `26.23/24.28` dB mean/worst. The
+additional children remain overlapping despite fresh ownership evidence and
+375 subsequent updates. Recurring scheduling and accumulator plumbing are
+removed without a broader gate; the single midpoint event remains selected.
+The 12 GiB scope peaks at 322.1 MiB with zero swap, OOM, or GPU fault, and its
+ignored artifacts remain under
+`target/audit-runs/recurring-static-gaussian-split/`.
+
 Formatting, strict all-target/all-feature Clippy, and both complete physical-
 GPU workspace configurations pass. The default and all-feature test scopes
 peak at 3.00 and 3.15 GiB respectively, again with zero swap, memory pressure,
