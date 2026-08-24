@@ -6095,9 +6095,18 @@ On an order-adjacent dense pair, the aligned candidate scores
 movement is below the established GPU-atomic replay variation. The independent
 nested-camera gate rejects it at `23.899` versus `23.927` dB. PBR output is
 unchanged at reported precision because its topology is fitted independently.
+
+The purely geometric alternative is not transferable either. It keeps the
+same deterministic sample magnitude but places both children on the parent's
+widest covariance axis, directly subdividing the support that passed the broad
+gate. Dense improves from the same `26.83/24.90` control to `26.88/24.94` dB,
+but nested regresses from `23.927` to `23.883` dB. The retained covariance
+sample can distribute capacity among axes without adding a scene-dependent
+choice; forcing the largest extent merely exchanges which fixture benefits.
+
 Optimizer momentum is useful for selecting high-residual parents, but its
 signed direction is not a better child-placement sample after the parent's own
 position updates. The prototype is removed before a five-cloud expansion;
 artifacts remain outside version control under
-`target/audit-runs/static-split-direction/`. All four quality scopes report
-zero swap, memory pressure, OOM, Xid, validation error, or GPU fault.
+`target/audit-runs/static-split-{direction,axis}/`. All six quality scopes
+report zero swap, memory pressure, OOM, Xid, validation error, or GPU fault.
