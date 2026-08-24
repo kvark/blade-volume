@@ -91,6 +91,8 @@ An independent full-resolution gate trains upstream 3DGRUT on Bonsai for
 and cross-renders the exported 1.26-million-particle PLY through Blade. Blade
 agrees with the official 3DGRT images at `35.38` dB; the exact protocol and
 performance controls are recorded in the reconstruction plan linked below.
+The selected conservative 80-face proxy renders that gate at `64.01` ms per
+779x519 frame on the RTX 5070.
 
 The predefined-light row is the fixed-cloud result after learned-density
 normal initialization and the conservative complete-render normal, radius,

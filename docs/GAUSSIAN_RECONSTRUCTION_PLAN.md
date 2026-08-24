@@ -5680,3 +5680,54 @@ Formatting, strict all-target/all-feature Clippy, the focused adversarial GPU
 oracle, and both complete physical-GPU workspace test configurations pass. The
 default and all-feature 12 GiB scopes peak at 7.34 and 6.22 GB respectively,
 with zero swap, memory pressure, OOM, Xid, or GPU fault.
+
+## Native Gaussian topology boundary (2026-08-24)
+
+The official Bonsai run also makes the remaining topology gap concrete. It
+starts from 206,613 COLMAP particles, accumulates a view-space position
+gradient for every particle, clones or splits every 300 updates from step 500
+through 15,000, prunes opacity every 100, and resets opacity every 3,000. The
+resets remove roughly 15--21% of the live particles before growth resumes; the
+run finishes with 1,256,396. This is an optimizer lifecycle, not a final model
+conversion.
+
+The production relightable Gaussian is deliberately different: it converts an
+already reconstructed foam surface, preserves one-to-one ownership of PBR
+normals and materials, fits that fixed topology for 400 updates, and performs
+one quality-neutral opacity compaction before persistence. Its three private
+mid-fit split variants were already rejected because overlapping children
+either blurred covered pixels or broke the coupled surface correspondence.
+The foam densifier cannot be reused safely: its child selection and optimizer
+remap carry radii, adjacency, surface planes, and foam-specific traversal
+state.
+
+Adaptive Gaussian topology therefore remains a separate native-Gaussian
+training track. It needs durable per-particle gradient accumulators, Gaussian
+clone-versus-split semantics, opacity reset/pruning, rotation learning, and a
+complete optimizer-state remap, all gated before PBR attributes are attached.
+No partial topology option or cross-representation reuse is added to the
+current trainer.
+
+## Selected subdivided Gaussian proxy (2026-08-24)
+
+One subdivision of the shared Gaussian icosahedron reduces conservative empty
+volume without changing the analytic Gaussian response. The generated proxy
+has 42 vertices and 80 faces; it is scaled by its minimum face distance so
+every face remains on or outside the unit support sphere. A geometric unit
+test locks that enclosure, while the existing physical-GPU oracle continues
+to match exhaustive CPU ordering across 65 overlapping particles.
+
+On the 1,256,396-particle upstream Bonsai gate, all 37 saved images are
+byte-identical to the 20-face control and render-only time falls from `73.15`
+to `64.01` ms/frame (`12.5%`). A separately reconstructed 159k-particle Bonsai
+cloud falls from `10.30` to `8.62` ms/frame (`16.4%`). A second subdivision to
+320 faces is rejected at `65.98` ms/frame, as is the earlier eight-face
+octahedron at `182.3` ms/frame on its five-view screen. The selected proxy is
+private initialization data: it adds no shader, shader variant, public option,
+model field, format, dependency, or runtime geometry representation.
+
+Formatting, strict all-target/all-feature Clippy, the geometric regression,
+the adversarial physical-GPU oracle, and both complete physical-GPU workspace
+test configurations pass. The default and all-feature 12 GiB scopes peak at
+6.77 and 6.62 GB respectively, with zero swap, memory pressure, OOM, Xid, or
+GPU fault.

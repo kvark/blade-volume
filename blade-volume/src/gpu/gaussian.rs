@@ -1,6 +1,6 @@
 use blade_graphics as gpu;
 
-use std::{mem, ptr, slice};
+use std::{collections, mem, ptr, slice};
 
 pub struct InitParameters {
     pub min_opacity: f32,
@@ -24,6 +24,67 @@ fn visible_point_indices(model: &crate::PointCloudModel, min_opacity: f32) -> Ve
         .enumerate()
         .filter_map(|(index, point)| (point.w > min_opacity).then_some(index))
         .collect()
+}
+
+fn gaussian_proxy() -> (Vec<[f32; 3]>, Vec<[u16; 3]>) {
+    let shape = crate::Icosahedron::new(1.0);
+    let mut vertices: Vec<_> = shape
+        .vertices
+        .into_iter()
+        .map(|vertex| glam::Vec3::from(vertex).normalize())
+        .collect();
+    let mut midpoints = collections::HashMap::new();
+    let mut triangles = Vec::with_capacity(shape.triangles.len() * 4);
+    for triangle in shape.triangles {
+        let mut middle = [0u16; 3];
+        for (slot, edge) in [
+            (triangle[0], triangle[1]),
+            (triangle[1], triangle[2]),
+            (triangle[2], triangle[0]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let key = if edge.0 < edge.1 {
+                edge
+            } else {
+                (edge.1, edge.0)
+            };
+            middle[slot] = *midpoints.entry(key).or_insert_with(|| {
+                let index = vertices.len() as u16;
+                vertices.push((vertices[key.0 as usize] + vertices[key.1 as usize]).normalize());
+                index
+            });
+        }
+        triangles.extend_from_slice(&[
+            [triangle[0], middle[0], middle[2]],
+            [triangle[1], middle[1], middle[0]],
+            [triangle[2], middle[2], middle[1]],
+            [middle[0], middle[1], middle[2]],
+        ]);
+    }
+    // Project the new vertices onto one sphere, then expand by the smallest
+    // face distance. Every face consequently lies on or outside the unit
+    // support sphere, so the triangle proxy stays conservative.
+    let inradius = triangles
+        .iter()
+        .map(|triangle| {
+            let a = vertices[triangle[0] as usize];
+            let b = vertices[triangle[1] as usize];
+            let c = vertices[triangle[2] as usize];
+            (b - a).cross(c - a).normalize().dot(a).abs()
+        })
+        .fold(f32::INFINITY, f32::min);
+    for vertex in &mut vertices {
+        *vertex /= inradius;
+    }
+    (
+        vertices
+            .into_iter()
+            .map(|vertex| vertex.to_array())
+            .collect(),
+        triangles,
+    )
 }
 
 impl GaussianGpuCloud {
@@ -84,10 +145,9 @@ impl GaussianGpuCloud {
             }
         }
 
-        let inner_radius = 1.0;
-        let geometry = crate::Icosahedron::new(inner_radius);
-        let vertex_data_size = (geometry.vertices.len() * mem::size_of::<[f32; 3]>()) as u64;
-        let index_data_size = (geometry.triangles.len() * mem::size_of::<[u16; 3]>()) as u64;
+        let (vertices, triangles) = gaussian_proxy();
+        let vertex_data_size = (vertices.len() * mem::size_of::<[f32; 3]>()) as u64;
+        let index_data_size = (triangles.len() * mem::size_of::<[u16; 3]>()) as u64;
         let mesh_buf = context.create_buffer(gpu::BufferDesc {
             name: "gauss-mesh",
             size: vertex_data_size + index_data_size,
@@ -97,10 +157,10 @@ impl GaussianGpuCloud {
             vertex_data: mesh_buf.at(0),
             vertex_format: gpu::VertexFormat::F32Vec3,
             vertex_stride: mem::size_of::<[f32; 3]>() as u32,
-            vertex_count: geometry.vertices.len() as u32,
+            vertex_count: vertices.len() as u32,
             index_data: mesh_buf.at(vertex_data_size),
             index_type: Some(gpu::IndexType::U16),
-            triangle_count: geometry.triangles.len() as u32,
+            triangle_count: triangles.len() as u32,
             transform_data: gpu::Buffer::default().at(0),
             is_opaque: false,
         }];
@@ -167,14 +227,14 @@ impl GaussianGpuCloud {
         });
         unsafe {
             ptr::copy_nonoverlapping(
-                geometry.vertices.as_ptr(),
+                vertices.as_ptr(),
                 mesh_stage.data() as *mut [f32; 3],
-                geometry.vertices.len(),
+                vertices.len(),
             );
             ptr::copy_nonoverlapping(
-                geometry.triangles.as_ptr(),
+                triangles.as_ptr(),
                 mesh_stage.data().add(vertex_data_size as usize) as *mut [u16; 3],
-                geometry.triangles.len(),
+                triangles.len(),
             );
         }
 
@@ -260,6 +320,23 @@ mod tests {
     fn opacity_filter_preserves_model_order_for_instance_indices() {
         let model = filter_model();
         assert_eq!(visible_point_indices(&model, 0.01), vec![1, 3]);
+    }
+
+    #[test]
+    fn subdivided_proxy_conservatively_encloses_unit_support() {
+        let (vertices, triangles) = gaussian_proxy();
+        assert_eq!(vertices.len(), 42);
+        assert_eq!(triangles.len(), 80);
+        let mut minimum_face_distance = f32::INFINITY;
+        for triangle in triangles {
+            let a = glam::Vec3::from(vertices[triangle[0] as usize]);
+            let b = glam::Vec3::from(vertices[triangle[1] as usize]);
+            let c = glam::Vec3::from(vertices[triangle[2] as usize]);
+            let distance = (b - a).cross(c - a).normalize().dot(a).abs();
+            assert!(distance >= 1.0 - 1.0e-6);
+            minimum_face_distance = minimum_face_distance.min(distance);
+        }
+        assert!((minimum_face_distance - 1.0).abs() < 1.0e-6);
     }
 
     #[test]
