@@ -409,7 +409,7 @@ fn gpu_shading_matches_the_cpu_reference() {
 }
 
 #[test]
-fn volumetric_gaussian_pbr_matches_the_grouped_cpu_response() {
+fn volumetric_gaussian_pbr_groups_across_traversal_batches() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
@@ -421,24 +421,35 @@ fn volumetric_gaussian_pbr_matches_the_grouped_cpu_response() {
             normal: [0.0, 0.0, -1.0],
             material: 0,
         }],
-        materials: vec![vol::relight::Material {
-            albedo: [0.7, 0.35, 0.2],
-            roughness: 0.7,
-            specular_f0: [0.04; 3],
-            _padding: 0.0,
-        }],
+        materials: vec![
+            vol::relight::Material {
+                albedo: [0.8, 0.1, 0.05],
+                roughness: 0.7,
+                specular_f0: [0.04; 3],
+                _padding: 0.0,
+            },
+            vol::relight::Material {
+                albedo: [0.05, 0.1, 0.8],
+                roughness: 0.7,
+                specular_f0: [0.04; 3],
+                _padding: 0.0,
+            },
+        ],
     };
     let scale = glam::Vec3::new(0.45, 0.7, 0.25);
+    let particle_count = 13;
     let gaussian = vol::PointCloudModel {
-        points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 0.8); 2],
-        sh_coefficients: vec![0.0; 6],
+        points: vec![glam::Vec4::new(0.0, 0.0, 0.0, 0.8); particle_count],
+        sh_coefficients: vec![0.0; 3 * particle_count],
         sh_degree: 0,
         transforms: Some(vol::Transforms {
-            rotations: vec![glam::Quat::IDENTITY; 2],
-            scales: vec![scale; 2],
+            rotations: vec![glam::Quat::IDENTITY; particle_count],
+            scales: vec![scale; particle_count],
             pbr: Some(vol::PbrAttributes {
-                normals: vec![glam::Vec3::NEG_Z; 2],
-                material_indices: vec![0; 2],
+                normals: vec![glam::Vec3::NEG_Z; particle_count],
+                material_indices: (0..particle_count)
+                    .map(|index| u32::from(index + 1 == particle_count))
+                    .collect(),
                 materials: model.materials.clone(),
             }),
         }),
@@ -490,17 +501,23 @@ fn volumetric_gaussian_pbr_matches_the_grouped_cpu_response() {
             } else {
                 0.0
             };
-            let union_alpha = 1.0 - (1.0 - particle_alpha) * (1.0 - particle_alpha);
-            let saturated_alpha = (2.0 * particle_alpha).min(1.0);
+            let union_alpha = 1.0 - (1.0 - particle_alpha).powi(particle_count as i32);
+            let saturated_alpha = (particle_count as f32 * particle_alpha).min(1.0);
             let alpha = union_alpha + 0.75 * (saturated_alpha - union_alpha);
             covered += (alpha > 0.0) as usize;
-            let lit = vol::relight::shade(
-                glam::Vec3::NEG_Z,
-                -direction,
-                &model.materials[0],
-                &irradiance,
-                &specular,
-            );
+            let mut lit = [0.0; 3];
+            for material_index in 0..particle_count {
+                let sample = vol::relight::shade(
+                    glam::Vec3::NEG_Z,
+                    -direction,
+                    &model.materials[usize::from(material_index + 1 == particle_count)],
+                    &irradiance,
+                    &specular,
+                );
+                for channel in 0..3 {
+                    lit[channel] += sample[channel] / particle_count as f32;
+                }
+            }
             let actual = rendered[(y * SIZE[0] + x) as usize];
             for channel in 0..3 {
                 let expected = alpha * lit[channel] + (1.0 - alpha) * background[channel];

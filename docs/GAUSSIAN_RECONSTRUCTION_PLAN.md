@@ -5303,3 +5303,32 @@ seconds before the validated fast path, but its equivalent real-number formula
 can catastrophically cancel in `f32`: a stress ray through a Gaussian-space
 origin of magnitude `1e5` reports squared distance 1,024 instead of zero and
 could be culled. The prototype, scalar cache, and analytical test are removed.
+
+## Exact Gaussian sheet grouping across traversal batches (2026-08-24)
+
+The relight renderer previously finalized every Gaussian surface sheet at the
+end of its 12-hit sorting batch. Thirteen overlapping particles from one thin
+depth layer were consequently composited as two sheets, so both opacity and
+shading depended on an internal traversal working-set size. A physical-GPU
+regression with twelve red particles followed by one blue particle at the same
+response depth differs from the complete CPU sheet oracle by 0.0524 in one
+channel on the old shader.
+
+The existing Gaussian branch now carries only an unfinished sheet's limit,
+weighted colour, opacity sum, and transmittance into the next traversal batch.
+It finalizes the sheet when the next exact hit lies beyond its depth band or
+the traversal ends. The regression passes within the established half-float
+tolerance, while the complete eight-test relight CPU/GPU suite remains green.
+The 12-hit array, exact ordering, bounded eight-pass traversal, compositor
+constants, shader entry, pipeline, bindings, and point-cloud format are all
+unchanged.
+
+The selected nine-training-view production gate remains in its established
+variation band at 24.28/23.06 dB held-light volumetric Gaussian PBR, 55.2%
+coverage, and 22.93 dB where hit; rendering takes 1.44 ms per 100x75 frame.
+The complete 18/2-view Room reconstruction remains at 12.54/12.22 dB
+mean/worst and 68.9% coverage. Its scoped fit and score peak at 349.0 MB; the
+dense build-and-gate scope peaks at 962.3 MB. Both 12 GiB cgroups use zero swap
+and report no memory-pressure, OOM, validation, Xid, or GPU fault event. Runs
+remain outside version control under
+`target/audit-runs/{gaussian-cross-batch-sheet,current-synthetic-v1/gaussian-cross-batch-sheet}/`.

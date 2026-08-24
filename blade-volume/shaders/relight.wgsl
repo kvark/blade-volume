@@ -522,6 +522,20 @@ fn shade_surfel_sampled(index: u32, position: vec3<f32>, ray_dir: vec3<f32>, see
     return out;
 }
 
+fn gaussian_group_response(
+    sum_color: vec3<f32>,
+    sum_weight: f32,
+    group_transmittance: f32,
+) -> vec4<f32> {
+    let union_alpha = 1.0 - group_transmittance;
+    let alpha = mix(
+        union_alpha,
+        min(1.0, sum_weight),
+        GAUSSIAN_SURFACE_SATURATION,
+    );
+    return vec4<f32>(alpha * sum_color / max(sum_weight, 1.0e-6), alpha);
+}
+
 // Composite every surfel the ray passes through, nearest first.
 //
 // The acceleration structure holds a triangle circumscribing each disc, so a
@@ -534,6 +548,11 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
     var transmittance = 1.0;
     var cursor = Hit(0.0, 0u, 0.0);
     var cursor_valid = false;
+    var gaussian_group_active = false;
+    var gaussian_group_limit = 0.0;
+    var gaussian_sum_color = vec3<f32>(0.0);
+    var gaussian_sum_weight = 0.0;
+    var gaussian_group_transmittance = 1.0;
 
     // Bounded so a pathological cloud cannot spin here forever.
     for (var pass_index = 0u; pass_index < 8u; pass_index += 1u) {
@@ -581,39 +600,65 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
         }
 
         if (hit_count == 0u) {
+            if (gaussian_group_active) {
+                let group = gaussian_group_response(
+                    gaussian_sum_color,
+                    gaussian_sum_weight,
+                    gaussian_group_transmittance,
+                );
+                radiance += transmittance * group.xyz;
+                transmittance *= 1.0 - group.w;
+            }
             break;
         }
         if (g_params.kernel == 2u) {
             // A reconstructed surface is represented by overlapping volume
             // particles. Average the shading within a thin depth sheet, as the
             // finite surface path does, while retaining part of the Gaussian
-            // union opacity instead of making every overlap fully opaque.
+            // union opacity instead of making every overlap fully opaque. Keep
+            // an unfinished sheet across traversal batches so its response is
+            // independent of `HIT_WINDOW`.
             var i = 0u;
-            while (i < hit_count && transmittance > MIN_TRANSMITTANCE) {
-                let band = GAUSSIAN_SURFACE_BAND * g_surfels[hits[i].index].radius;
-                let limit = hits[i].t + band;
-                var sum_color = vec3<f32>(0.0);
-                var sum_weight = 0.0;
-                var group_transmittance = 1.0;
-                var j = i;
-                while (j < hit_count && hits[j].t <= limit) {
-                    let hit = hits[j];
-                    let point = ray_origin + hit.t * ray_dir;
-                    sum_color += hit.coverage
-                        * shade_surfel_sampled(hit.index, point, ray_dir, seed);
-                    sum_weight += hit.coverage;
-                    group_transmittance *= 1.0 - hit.coverage;
-                    j += 1u;
+            while (i < hit_count) {
+                let hit = hits[i];
+                if (!gaussian_group_active || hit.t > gaussian_group_limit) {
+                    if (gaussian_group_active) {
+                        let group = gaussian_group_response(
+                            gaussian_sum_color,
+                            gaussian_sum_weight,
+                            gaussian_group_transmittance,
+                        );
+                        radiance += transmittance * group.xyz;
+                        transmittance *= 1.0 - group.w;
+                        gaussian_group_active = false;
+                        if (transmittance <= MIN_TRANSMITTANCE) {
+                            break;
+                        }
+                    }
+                    gaussian_group_active = true;
+                    let band = GAUSSIAN_SURFACE_BAND * g_surfels[hit.index].radius;
+                    gaussian_group_limit = hit.t + band;
+                    gaussian_sum_color = vec3<f32>(0.0);
+                    gaussian_sum_weight = 0.0;
+                    gaussian_group_transmittance = 1.0;
                 }
-                let union_alpha = 1.0 - group_transmittance;
-                let alpha = mix(
-                    union_alpha,
-                    min(1.0, sum_weight),
-                    GAUSSIAN_SURFACE_SATURATION,
+                let point = ray_origin + hit.t * ray_dir;
+                gaussian_sum_color += hit.coverage
+                    * shade_surfel_sampled(hit.index, point, ray_dir, seed);
+                gaussian_sum_weight += hit.coverage;
+                gaussian_group_transmittance *= 1.0 - hit.coverage;
+                i += 1u;
+            }
+            if (gaussian_group_active
+                && (hit_count < HIT_WINDOW || pass_index + 1u == 8u)) {
+                let group = gaussian_group_response(
+                    gaussian_sum_color,
+                    gaussian_sum_weight,
+                    gaussian_group_transmittance,
                 );
-                radiance += transmittance * alpha * sum_color / max(sum_weight, 1.0e-6);
-                transmittance *= 1.0 - alpha;
-                i = j;
+                radiance += transmittance * group.xyz;
+                transmittance *= 1.0 - group.w;
+                gaussian_group_active = false;
             }
         } else {
             // Surfels close together in depth are one surface and get averaged;
