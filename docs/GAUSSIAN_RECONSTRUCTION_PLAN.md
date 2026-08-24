@@ -6587,6 +6587,18 @@ downstream atomic trajectory and lowers held-light mean/covered quality by
 about `0.03/0.04` dB. The small saving does not justify a tuned search limit or
 excluding a future smaller winning prefix.
 
+Combining observation-space ranking evidence from all four known lights is not
+retained either. Equal weighting improves the dense held-light volumetric score
+from the selected `24.48/23.25/23.24` to `24.56/23.31/23.36` dB
+mean/worst/where-hit, but regresses the independent nested fixture from about
+`23.50/21.90` to `23.38/21.75` dB mean/where-hit. Giving the primary light
+roughly half of the ranking weight produces only `24.50/23.22/23.26` dB on
+dense and raises assignment time from 6.43 to 9.41 seconds. A lower local loss
+under more training lights is therefore not a transferable proxy for the
+unseen-light objective. The generalized evidence API and diagnostic switch are
+removed; the selected primary-light ranking stays minimal. All three 12 GiB
+scopes use zero swap, report no OOM or GPU fault, and peak below 986 MiB.
+
 A physical-GPU oracle recovers a deliberately wrong label when its observations
 and complete image agree, then restores the original label when deliberately
 misleading local observations conflict with the complete image. The pass adds
