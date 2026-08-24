@@ -6696,3 +6696,27 @@ complete-render guarding alone does not make a later relabeling physical under
 unseen light. The 12 GiB scope peaks at 321 MiB with zero swap, OOM, or GPU
 fault. Ignored artifacts remain under
 `target/audit-runs/refreshed-material-observations/`.
+
+## Rejected multi-view Gaussian responsibility rollback (2026-08-24)
+
+A direct Gaussian confidence gate accumulated each sampled particle's
+front-to-back compositing weight (`transmittance × alpha`) during calibrated-
+light continuation. A center, opacity, and normal update was retained only if
+that weight reached 0.001 in at least two distinct camera views; otherwise the
+complete coupled particle state was restored. This keeps 2,217 of 2,880 dense
+updates and 1,900 of 3,156 nested updates, far more than the previously
+rejected surfel-center observation count. Those two screens improve by
+`+0.03/+0.02/+0.05` dB mean/worst/where-hit on dense and `+0.03/+0.01` dB
+mean/where-hit on nested.
+
+The five-cloud gate is mixed. Cloud 2 improves from
+`23.80/23.09/22.91` to `23.86/23.23/22.96` dB, but clouds 3--5 regress;
+cloud 4 falls from `23.72/23.19/22.78` to `23.68/23.19/22.73` and cloud 5
+from `23.58/23.07/22.66` to `23.55/23.03/22.63` dB. Lowering the threshold
+to 0.0001 retains 1,962 of 2,352 cloud-4 updates but still reaches only
+`23.70/23.19/22.75` dB. Candidate responsibility says that a component
+participated, not whether its jointly optimized displacement is transferable.
+The CPU compositor, support table, rollback, constant, and diagnostic are
+removed. All 12 GiB scopes peak below 335 MiB with zero swap, OOM, or GPU
+fault. Ignored artifacts remain under
+`target/audit-runs/multiview-responsibility/`.
