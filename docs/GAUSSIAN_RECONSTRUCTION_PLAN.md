@@ -6864,6 +6864,16 @@ at `7.2/7.2` versus `7.2/7.1` seconds, while Bonsai regresses from `10.7` to
 calculation and conservative floating-point guard are removed. Its ignored
 artifacts remain under `target/audit-runs/exact-gaussian-depth-extent/`.
 
+Factoring every full-image support into a separate per-view list is rejected
+too. The representation passes all 43 Gaussian tests and stores each such
+particle only once instead of once per tile, but the selected side-frustum
+cull has already made these supports too rare to matter. Two Room pairs take
+`7.2/7.2` seconds for the candidate versus `7.1/7.2` for the control, with
+slightly higher candidate CPU time. One Bonsai pair moves from `10.7` to
+`10.6` seconds, which does not offset the extra list and wider internal tuple
+on the neutral second scene. The implementation and test are removed;
+artifacts remain under `target/audit-runs/global-gaussian-candidates/`.
+
 Formatting, strict all-target/all-feature Clippy, and both complete physical-
 GPU workspace configurations pass. The default and all-feature test scopes
 peak at 3.00 and 3.15 GiB respectively, again with zero swap, memory pressure,
