@@ -5249,3 +5249,19 @@ candidate overflow or path truncation. Its capped scope peaks at 242,622,464
 host bytes and reports zero swap, pressure, OOM, Xid, or GPU fault. The change
 adds one full-precision depth shader/pipeline, but no representation, format,
 dependency, training graph operation, or second candidate implementation.
+
+## Rejected second PowerFoam reconstruction depth mode (2026-08-24)
+
+A private CPU oracle retained the two strongest front-to-back segment weights
+and let each form its own screen-space surface before the unchanged two-camera
+voxel consensus. This directly tested the natural follow-up to single-mode
+ownership without adding a GPU output or changing the point-cloud model.
+
+On the selected nine-training-view dense fixture, none of the 270,000 training
+rays has a second segment that reaches the existing 0.05 surface-evidence
+threshold. The fused cloud therefore remains exactly 2,880 particles with the
+same printed position and normal errors. CPU extraction takes 0.092 seconds
+versus 0.029 seconds for the selected GPU path. The prototype is removed
+without running the nested gate: at the confidence level accepted by fusion,
+this fixture has no second layer to test. Future depth ownership work needs a
+cross-view correspondence signal, not another per-ray absorption rank.
