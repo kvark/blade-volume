@@ -6580,6 +6580,13 @@ leaves mean PSNR fixed, and trades `+0.03` dB worst-view quality for `-0.02` dB
 where hit; nested changes zero labels. The extra 1.64--3.41 seconds and
 diagnostic are removed before a five-cloud expansion.
 
+Capping the prefix search at its first five proposals is not retained. It
+reduces the dense pass from 11 complete renders to five but moves phase time
+only from roughly 3.4 to 3.25 seconds; changed dispatch timing then shifts the
+downstream atomic trajectory and lowers held-light mean/covered quality by
+about `0.03/0.04` dB. The small saving does not justify a tuned search limit or
+excluding a future smaller winning prefix.
+
 A physical-GPU oracle recovers a deliberately wrong label when its observations
 and complete image agree, then restores the original label when deliberately
 misleading local observations conflict with the complete image. The pass adds
