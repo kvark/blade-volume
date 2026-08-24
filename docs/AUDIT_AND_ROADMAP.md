@@ -56,7 +56,9 @@ behind these gates:
    graph from 34.48--34.85 to 22.55--22.94 ms. The current 256-update Room
    table is still 2.23× slower and 3.88× larger in cgroup memory than a
    no-table control, and loses 0.9288 dB held out despite fitting the training
-   views 1.9592 dB better.
+   views 1.9592 dB better. A same-budget 32-view gate is also negative:
+   directional learning-rate ratios 1.0/0.1/0.01 change eight-view held PSNR
+   by -1.8018/-0.0644/-0.0114 dB. Lower rates only approach the control.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.
@@ -1811,8 +1813,11 @@ table passes the official-checkpoint pixel gate, but its zero-initialized short
 training screen loses held-out quality. The latest four-view Room continuation
 cuts the historical time gap to 2.23×, but uses 3.88× the cgroup memory and
 loses 0.9288 dB across eight held views. Compact directional alternatives also
-fail their held-out gates. The remaining item 7 work is therefore quality and
-memory improvement, not another runtime appearance variant.
+fail their held-out gates. A 32-training-view ratio sweep likewise changes the
+eight-view held mean by -1.8018/-0.0644/-0.0114 dB at ratios 1.0/0.1/0.01.
+The remaining item 7 work is therefore a new quality/responsibility hypothesis
+and memory improvement, not another runtime appearance variant or scalar-rate
+sweep.
 
 Acceptance gate: CPU, GPU, and brute-force bounded traversal agree; a reference
 checkpoint renders within a defined image tolerance; trained radii improve a
@@ -2185,7 +2190,10 @@ material path.
    the table's 29.1014/18.9553: the table overfits these four views and loses
    0.9288 dB across eight held views. Pin `c409bb2` after merge; retain the
    full table as opt-in until a scene-matched weighted second-scene checkpoint
-   is available for the longer gate.)
+   is available for the longer gate. A same-budget 32-view screen does not
+   rescue training: ratios 1.0/0.1/0.01 change held PSNR by
+   -1.8018/-0.0644/-0.0114 dB relative to no table. Do not spend another gate
+   on the scalar rate without a new regularization or responsibility model.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

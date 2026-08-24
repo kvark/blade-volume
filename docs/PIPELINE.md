@@ -2254,6 +2254,23 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   gap is materially smaller at 2.23× on this Room gate, but the table remains
   quality-negative and memory-heavy; keep it opt-in.
 
+#### M2bu — Multi-view directional-table quality gate (rejected)
+
+- The four-view loss is not just an underconstrained screen. At the same 256
+  updates, increasing Room training coverage to 32 views gives the no-table
+  control 24.7981/20.2976 dB over 32 training/eight held views. Directional
+  colour at learning-rate ratio 1.0 reaches 24.8909/18.4958 dB: only +0.0928
+  dB on the training mean and -1.8018 dB held out.
+- Ratios 0.1 and 0.01 score 25.0152/20.2332 and 24.8291/20.2862 dB. Their held
+  deltas are still -0.0644 and -0.0114 dB; reducing the rate simply converges
+  back toward the no-table result. No selected rate improves held quality, so
+  another scalar-rate sweep is not justified.
+- No implementation from this experiment is retained. The released table
+  remains valuable for exact checkpoint interchange/rendering, and M2bt makes
+  opt-in training materially cheaper, but zero-initialized training remains
+  rejected until a different spatial/directional responsibility or
+  regularization hypothesis is defined and passes a second scene.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -2555,9 +2572,9 @@ manifest accidentally.
 ## Out-of-scope (for now)
 
 - A longer two-scene training gate for the full PowerFoam directional table;
-  the latest Room screen cuts the historical time gap to 2.23× but loses
-  0.9288 dB over eight held views, and no scene-matched weighted Bonsai
-  checkpoint is available locally for a fresh second arm.
+  the latest Room screen cuts the historical time gap to 2.23×, but a 32-view
+  ratio sweep still has no positive held result, and no scene-matched weighted
+  Bonsai checkpoint is available locally for a fresh second arm.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.
