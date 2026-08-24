@@ -135,10 +135,12 @@ At the audited revision:
   scene WGSL, Gaussian WGSL, and the differentiable Meganeura graph now share
   the clamp and pass CPU/GPU regression tests. Renderer compatibility is no
   longer the primary Stage 2 blocker.
-- Opt-in `radfoam-v1` initialization and learning-rate policies plus a
-  beta-1 Smooth-L1 color loss are implemented without changing historical
-  defaults. A versioned scaled semantic-ablation manifest records both the
-  controls and the remaining batching/topology/resolution differences.
+- `radfoam-v1` initialization and learning-rate policies plus a beta-1
+  Smooth-L1 color loss are implemented. Reference initialization is now the
+  default after its quality gain and surface-only Delaunay failure gate; the
+  other reference policies remain opt-in. A versioned scaled semantic-ablation
+  manifest records both the controls and the remaining
+  batching/topology/resolution differences.
 - The first bundled semantic ablation was stopped at step 2,000 after its fresh
   serialized PLY reached 10.83 dB train / 12.37 dB held out, below the old
   scaled protocol's 13.08 / 13.08 dB checkpoint. It was memory-stable, but had

@@ -71,6 +71,14 @@ and points should outline the subject rather than form disconnected islands.
 If `sparse/0` is absent, improve overlap or texture, reduce blur, and verify
 that the phone did not switch lenses.
 
+Registration count and reprojection error are necessary but not sufficient.
+A short, low-parallax arc can register every frame below one pixel while
+triangulating the subject into a long depth spike. Check that the cloud has a
+plausible shape and that the camera path covers the intended sides of it. If
+`reconstruct` drops nearly every sparse point as an outlier, treat that as a
+capture failure and repeat a wider, continuous orbit; do not weaken the
+geometry filter to admit the bad cloud.
+
 ## Train clouds
 
 For the direct Gaussian light field and relightable Gaussian surface:

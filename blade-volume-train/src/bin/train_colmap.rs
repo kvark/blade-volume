@@ -122,10 +122,11 @@ struct Args {
     #[argh(option, default = "2000")]
     max_points: usize,
 
-    /// initial site policy: "top-track" or "radfoam-v1" (default top-track).
+    /// initial site policy: "top-track" or "radfoam-v1" (default radfoam-v1).
     /// The reference policy samples sparse points with replacement, adds a
-    /// broad background cloud, and starts appearance at gray.
-    #[argh(option, default = "String::from(\"top-track\")")]
+    /// broad background cloud, and starts appearance at gray. The legacy
+    /// top-track policy can form a nearly degenerate surface-only Delaunay set.
+    #[argh(option, default = "String::from(\"radfoam-v1\")")]
     initialization: String,
 
     /// use Qhull instead of the default `simple_delaunay_lib` Delaunay
@@ -1387,6 +1388,7 @@ mod tests {
         assert!(default.geometry_images.is_none());
         assert_eq!(default.geometry_steps_per_view, 0);
         assert_eq!(default.geometry_position_lr_ratio, 0.01);
+        assert_eq!(default.initialization, "radfoam-v1");
         assert_eq!(default.opacity_weight, None);
         assert_eq!(resolve_opacity_weight(default.opacity_weight, false), 0.0);
         assert_eq!(

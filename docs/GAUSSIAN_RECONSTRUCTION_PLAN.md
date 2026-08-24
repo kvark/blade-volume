@@ -5135,3 +5135,35 @@ dB in the control, within the established GPU-atomic variation. Focused
 render-refinement tests, all-target Clippy, and the full quality gate pass;
 both 12 GiB scopes report zero swap, pressure, OOM, Xid, or GPU fault. Runs
 remain outside version control under `target/audit-runs/current-profile/`.
+
+## Video capture end-to-end validation (2026-08-24)
+
+The new capture wrapper has now run against an actual CUDA-enabled COLMAP 4.2
+build rather than only executable-contract mocks. A 73-frame sample
+spanning the complete Bonsai orbit produced one shared `SIMPLE_RADIAL` camera,
+registered 73/73 images, triangulated 32,465 sparse points with 4.14 mean track
+length, and reached 0.413 pixel mean reprojection error. The full FFmpeg,
+feature, matching, and mapping scope peaked at 627.6 MB. It used no swap and
+reported no OOM, throttle, Xid, or GPU fault.
+
+Both native consumers accept the emitted COLMAP 4.2 binaries. A reduced direct
+reconstruction retained 31,907 Gaussian particles, wrote and reloaded the
+static and PBR PLYs, wrote the scene, and completed train/held rendering. A
+separate reference-initialized RadFoam smoke built exact adjacency for the
+documented 2,000 initial sites in 15 ms and completed a differentiable update.
+Those scopes peaked at 186.4 and 71.9 MB respectively. Their tiny resolutions
+and update counts make them contract tests, not reconstruction-quality gates.
+
+The validation also found two useful negative controls. A partial 80-frame arc
+registered every frame at 0.877 pixel error yet triangulated a depth-elongated
+cloud that the direct reconstruction correctly rejected in full. Registration
+and error statistics are therefore insufficient without inspecting the point
+shape and camera path; the capture guide now says this explicitly. On both the
+bad arc and the valid orbit, the historical top-track initializer's strongest
+256 surface points drove `simple_delaunay_lib` to the 12 GiB cgroup limit. The
+same valid orbit with the released RadFoam distribution builds 2,000 sites in
+milliseconds because its perturbed foreground and broad background avoid the
+degenerate surface-only set. Prior controlled Bonsai evidence also measured a
+2.03 dB held-view advantage for this initializer. It is now the library and
+CLI default; `--initialization top-track` remains available for historical
+ablations.

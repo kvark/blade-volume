@@ -43,6 +43,7 @@ cargo run --release -p blade-volume-train --bin train_colmap -- \
     --images etc/data/bonsai/images \
     --output  bonsai.ply \
     --novel-strip-prefix novel \
+    --initialization radfoam-v1 \
     --width 24 --height 24 --views 8 --epochs 200 \
     --max-steps 24 --max-points 2000 --learning-rate 0.05
 ```

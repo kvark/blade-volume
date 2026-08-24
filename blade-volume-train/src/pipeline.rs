@@ -215,7 +215,7 @@ impl Default for PipelineConfig {
             max_steps: 64,
             max_views: Some(8),
             max_initial_points: Some(2000),
-            initialization: InitialPointPolicy::TopTrackLength,
+            initialization: InitialPointPolicy::RadFoamV1,
             fit: diff_render::AppearanceFitConfig {
                 learning_rate: 0.1,
                 epochs: 100,
@@ -1392,6 +1392,10 @@ mod tests {
 
     #[test]
     fn radfoam_v1_initialization_is_deterministic_and_bounded() {
+        assert_eq!(
+            PipelineConfig::default().initialization,
+            InitialPointPolicy::RadFoamV1
+        );
         let points = (0..10_000)
             .map(|i| colmap::ColmapPoint3D {
                 id: i as u64,

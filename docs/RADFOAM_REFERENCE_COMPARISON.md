@@ -140,8 +140,9 @@ project. The machine-readable record is
 
 ## Implemented comparison controls
 
-The Rust trainer now exposes the following opt-in controls while preserving its
-existing defaults:
+The Rust trainer exposes the following reference controls. Reference
+initialization is now the default; the historical top-track initializer stays
+available explicitly for old comparisons:
 
 - `--initialization radfoam-v1` reproduces the sparse-with-replacement,
   perturbed-site, broad-background, neutral-appearance, and raw-density
@@ -179,7 +180,7 @@ existing defaults:
 
 These controls do not pretend to solve the remaining batch-size or update
 cadence differences. The historical L1/top-track/unified-cosine behavior stays
-available for regression and ablation.
+available explicitly for regression and ablation.
 
 ## Scaled semantic-ablation result
 
