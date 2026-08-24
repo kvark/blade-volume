@@ -537,6 +537,94 @@ fn volumetric_gaussian_pbr_groups_across_traversal_batches() {
 }
 
 #[test]
+fn volumetric_gaussian_pbr_traverses_past_eight_batches() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    const PARTICLE_COUNT: usize = 192;
+    let material = vol::relight::Material {
+        albedo: [0.8, 0.4, 0.2],
+        roughness: 0.9,
+        specular_f0: [0.04; 3],
+        _padding: 0.0,
+    };
+    let scale = glam::Vec3::new(4.0, 4.0, 0.00005);
+    let gaussian = vol::PointCloudModel {
+        points: (0..PARTICLE_COUNT)
+            .map(|index| glam::Vec4::new(0.0, 0.0, index as f32 * 0.2, 0.031))
+            .collect(),
+        sh_coefficients: vec![0.0; 3 * PARTICLE_COUNT],
+        sh_degree: 0,
+        transforms: Some(vol::Transforms {
+            rotations: vec![glam::Quat::IDENTITY; PARTICLE_COUNT],
+            scales: vec![scale; PARTICLE_COUNT],
+            pbr: Some(vol::PbrAttributes {
+                normals: vec![glam::Vec3::NEG_Z; PARTICLE_COUNT],
+                material_indices: vec![0; PARTICLE_COUNT],
+                materials: vec![material],
+            }),
+        }),
+        adjacency: None,
+        radii: None,
+        surface_normals: None,
+        surface_offsets: None,
+        surface_detail: None,
+        surface_color_coefficients: None,
+        spherical_voronoi: None,
+    };
+    let environment = vol::relight::Environment::uniform([0.6, 0.8, 0.4], 64, 32);
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 64, 32);
+    let mut tracer = vol::gpu::RelightTracer::new_gaussian(
+        &gaussian,
+        &environment,
+        &specular,
+        vol::gpu::RelightSettings {
+            background_rgb: [0.02, 0.03, 0.05],
+            diffuse_samples: 0,
+            show_environment: false,
+        },
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let camera = camera(4.0);
+    let rendered = harness.render(&mut tracer, camera);
+    let x = SIZE[0] / 2;
+    let y = SIZE[1] / 2;
+    let direction = ray_direction(&camera, x, y);
+    let origin = glam::Vec3::from(camera.cam_position);
+    let mut expected_transmittance = 1.0f32;
+    let mut expected_hits = 0usize;
+    for point in &gaussian.points {
+        if expected_transmittance <= 0.003 {
+            break;
+        }
+        let local_origin = (origin - point.truncate()) / scale;
+        let local_direction = direction / scale;
+        let t = -local_origin.dot(local_direction) / local_direction.length_squared();
+        let local_position = local_origin + t * local_direction;
+        let response = point.w * (-0.5 * local_position.length_squared()).exp();
+        if t > 0.0 && response >= 0.03 {
+            let alpha = 1.0 - (1.0 - response.min(0.999)).powf(1.1);
+            expected_transmittance *= 1.0 - alpha;
+            expected_hits += 1;
+        }
+    }
+    assert!(
+        expected_hits > 96,
+        "the oracle reached only {expected_hits} hits, so it did not cross the old traversal cap"
+    );
+    let expected_alpha = 1.0 - expected_transmittance;
+    let actual_alpha = rendered[(y * SIZE[0] + x) as usize][3];
+    assert!(
+        (actual_alpha - expected_alpha).abs() < 0.005,
+        "GPU alpha {actual_alpha:.5} differs from the complete {expected_hits}-hit oracle {expected_alpha:.5}"
+    );
+
+    tracer.deinit(&harness.context);
+    harness.destroy();
+}
+
+#[test]
 fn relighting_changes_the_image_and_nothing_else_has_to() {
     let Some(mut harness) = Harness::new() else {
         return;

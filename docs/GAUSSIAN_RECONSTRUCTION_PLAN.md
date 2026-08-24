@@ -5403,3 +5403,32 @@ than identifying better ownership. The scatter graph, group/radius cache,
 input, test, and batching assertions are removed before dense and real gates.
 Artifacts remain outside version control under
 `target/audit-runs/multilight-sheet-objective/`.
+
+## Complete relightable Gaussian depth traversal (2026-08-24)
+
+The relightable renderer no longer discards every sorted Gaussian hit after
+its eighth twelve-entry traversal window. The ordinary static Gaussian tracer
+already walks its strict `(depth, particle)` cursor until transmittance reaches
+the configured cutoff; the PBR tracer had retained an independent 96-hit cap.
+That cap is not a safe visual bound for deep low-opacity clouds. The same
+strictly advancing cursor now bounds the PBR loop by the finite particle set,
+while the existing `0.003` transmittance cutoff still stops irrelevant work.
+No hit window, ordering rule, sheet compositor, binding, pipeline, shader
+entry, representation, or public setting changes.
+
+A physical-GPU regression places 192 thin Gaussian sheets along one ray at an
+opacity just above the runtime support threshold. The old shader stops at
+`0.96387` alpha after 96 hits; the complete CPU oracle needs 168 hits to reach
+the existing cutoff at `0.99700` alpha. The corrected GPU pixel matches that
+oracle, and all nine relight CPU/GPU tests pass, including the independent
+cross-window surface-sheet regression.
+
+Ordinary reconstructions pay no measurable penalty because their useful rays
+already terminate within the former cap. The selected nine-training-view gate
+retains `24.27/23.06` dB mean/worst held-light Gaussian PBR, `55.2%` coverage,
+`22.94` dB where hit, and `1.35` ms per 100x75 frame. The complete Room gate
+retains `12.55/12.22` dB, `68.7%` coverage, and its established 10.6-second
+paired Gaussian fit. Their 12 GiB scopes peak at 906 and 549 MiB respectively,
+with zero swap, memory pressure, OOM, Xid, or GPU fault. Artifacts remain
+outside version control under
+`target/audit-runs/{current-synthetic-v1/unbounded-relight-traversal,unbounded-relight-traversal}/`.

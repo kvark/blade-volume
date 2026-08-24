@@ -554,8 +554,10 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
     var gaussian_sum_weight = 0.0;
     var gaussian_group_transmittance = 1.0;
 
-    // Bounded so a pathological cloud cannot spin here forever.
-    for (var pass_index = 0u; pass_index < 8u; pass_index += 1u) {
+    // Every full window advances the strict `(depth, particle)` cursor, so the
+    // finite particle set bounds this loop. Keep walking until the exact
+    // transmittance cutoff instead of dropping deep low-opacity layers.
+    loop {
         var rq: ray_query;
         rayQueryInitialize(&rq, g_tlas, RayDesc(
             0u, 0xFFu, 0.0, g_camera.depth, ray_origin, ray_dir
@@ -649,8 +651,7 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
                 gaussian_group_transmittance *= 1.0 - hit.coverage;
                 i += 1u;
             }
-            if (gaussian_group_active
-                && (hit_count < HIT_WINDOW || pass_index + 1u == 8u)) {
+            if (gaussian_group_active && hit_count < HIT_WINDOW) {
                 let group = gaussian_group_response(
                     gaussian_sum_color,
                     gaussian_sum_weight,
