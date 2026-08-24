@@ -1589,6 +1589,11 @@ fn projected_support_bounds(
     if local_mean.z + support.world_radius <= 1.0e-6 {
         return None;
     }
+    // A near-plane crossing needs the full image only when the same enclosing
+    // sphere can also reach the image cone.
+    if projection.sphere_misses_image(local_mean, support.world_radius) {
+        return None;
+    }
     if local_mean.z - support.world_radius <= 1.0e-6 {
         return Some((
             glam::Vec2::ZERO,
@@ -1597,9 +1602,6 @@ fn projected_support_bounds(
                 height.saturating_sub(1) as f32,
             ),
         ));
-    }
-    if projection.sphere_misses_image(local_mean, support.world_radius) {
-        return None;
     }
 
     let local_axes = support.axes.map(|axis| projection.camera_vector(axis));
@@ -4517,6 +4519,22 @@ mod tests {
 
         assert_eq!(support.gaussian_radius.to_bits(), cutoff.to_bits());
         assert_eq!(support.world_radius.to_bits(), (0.8 * cutoff).to_bits());
+    }
+
+    #[test]
+    fn near_plane_supports_still_use_the_side_frustum_cull() {
+        let projection = crate::inverse::capture::PixelProjection::new(&camera(), 64, 48);
+        let support = ProjectionSupport::new(
+            glam::Vec4::new(100.0, 0.0, 1.0, 0.8),
+            glam::Quat::IDENTITY,
+            glam::Vec3::splat(0.5),
+            1.0e-4,
+        )
+        .unwrap();
+
+        assert!(support.world_radius > support.mean.z);
+        assert!(projection.sphere_misses_image(support.mean, support.world_radius));
+        assert!(projected_support_bounds(&projection, 64, 48, &support).is_none());
     }
 
     #[test]

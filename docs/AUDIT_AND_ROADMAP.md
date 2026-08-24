@@ -1333,8 +1333,9 @@ At the audited revision:
   triangle ray-query path uses a lexicographic `(depth, point index)` cursor and
   complete-interval rescans, so its five-hit window changes work batching
   rather than omitting or proxy-face-ordering particles. Physical-GPU pixel
-  parity against the CPU oracle now passes. The official-checkpoint
-  cross-render remains outstanding. The invariant window sweep selects 48
+  parity against the CPU oracle now passes. The official 1,256,396-Gaussian
+  3DGRUT Bonsai checkpoint cross-render is complete: Blade agrees with the
+  upstream 3DGRT images at 35.38 dB. The invariant window sweep selects 48
   candidates: at 512² it cuts Bonsai/Room/small submit-plus-wait time from
   8.29/6.87/4.23 ms to 3.91/3.22/3.51 ms with identical output hashes. A
   regression keeps a broad support containing the camera, whose proxy exit is
@@ -1348,10 +1349,9 @@ At the audited revision:
 - Native Gaussian training now exists in `blade-volume-train`: the 3DGUT-style
   exact ray response, host-recorded candidate rows, staged SH/support fitting,
   calibrated multi-light center/normal continuation, and relightable PBR
-  attachment all use the existing Meganeura graph operations. The remaining
-  backend gaps are adaptive Gaussian topology and a recognized-checkpoint
-  cross-render against the official 3DGRUT implementation, not the absence of
-  a trainer.
+  attachment all use the existing Meganeura graph operations. A bounded static
+  split now exercises gradient accumulation and optimizer-state remapping, but
+  a recurring native-Gaussian grow/prune/reset lifecycle remains unfinished.
 
 ### Scene layer
 
@@ -1867,8 +1867,9 @@ oracle passes. Preserving exact repeat-light correspondence per camera before
 that pass then improves all four truth-normal RMSEs by 0.13--0.37 degrees and
 held-light mean/worst PSNR by another 0.06--0.17/0.05--0.11 dB. Coverage moves
 by at most 0.3 points. The large remaining 53.7--57.5 degree error keeps dense
-single-light correspondence as the geometry bottleneck. Cross-rendering a recognized
-volumetric Gaussian checkpoint against official 3DGRUT remains.
+single-light correspondence as the geometry bottleneck. The recognized-
+checkpoint gate is complete: Blade agrees with the official 3DGRUT Bonsai
+3DGRT images at 35.38 dB on the full 37-view split.
 
 Acceptance gate: imported standard checkpoints match the oracle at documented
 quality and performance; transformations pass rendered-pixel tests.
@@ -2278,11 +2279,11 @@ material path.
    reported train/held precision, all 19 path and eight image oracles pass,
    and host peak stays below 294 MB. These changes add no shader entry/group,
    pipeline, operation, or dependency.)
-3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
-   ray-query window gate is complete: a 48-candidate window preserves three 512²
-   output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/
-   16.9%. The conservative triangle BLAS remains an invisible point-candidate
-   accelerator, not polygonal scene geometry.
+3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT.
+   (Done: the complete 1,256,396-Gaussian Bonsai checkpoint agrees with
+   upstream 3DGRT at 35.38 dB over 37 held views. The 48-candidate ray-query
+   window preserves output hashes while the conservative triangle BLAS remains
+   an invisible point-candidate accelerator, not polygonal scene geometry.)
 
 ### P2: finish engine-level composition
 

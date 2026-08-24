@@ -6819,3 +6819,43 @@ Formatting, strict all-target/all-feature Clippy, and both complete physical-
 GPU workspace configurations pass. The default and all-feature test scopes
 peak at 3.19 and 2.93 GiB respectively, again with zero swap, memory pressure,
 OOM, validation error, Xid, or GPU fault.
+
+## Side-frustum culling before near-plane fallback (2026-08-24)
+
+A Gaussian support whose enclosing sphere crosses the camera plane needs a
+full-image fallback only when it can also intersect the camera's image cone.
+Candidate construction previously returned the full image before applying the
+already conservative side-frustum sphere test. The predicates are now applied
+in the opposite order: a sphere wholly outside any side plane is rejected,
+then a remaining near-plane support takes the unchanged full-image fallback.
+This changes no floating-point expression, support approximation, candidate
+response, ordering, public API, shader, graph, or model data.
+
+A focused regression covers a broad support that crosses the camera plane but
+is wholly outside the side frustum. The complete 42-test Gaussian filter also
+passes, including the 1.5-million-response extreme-anisotropy containment
+oracle and exact tiled/exhaustive candidate-row comparisons.
+
+The effect is substantial on broad production clouds. Two order-balanced
+169,432-particle Bonsai pairs reduce complete Gaussian fitting from
+`11.5/11.6` to `10.8/10.7` seconds. Two 109,764-particle Room pairs reduce it
+from `9.7/9.3` to `7.2/7.2` seconds, with scoped CPU time falling from roughly
+55 to 30 seconds. Held-view scores remain matched within hundredths of a dB.
+The dense end-to-end relighting gate takes `4.896` seconds for Gaussian fitting
+and retains `24.47/23.23/23.22` dB mean/worst/where-hit volumetric held-light
+quality at `55.1%` coverage, inside the selected replay band.
+
+An adjacent compact-origin representation is rejected before implementation.
+Temporary counters over all 1,876 Bonsai view-grid builds find 77.3% of origin
+slots visible on average. A compact record needs a particle index beside each
+12-byte origin, so its 16-byte records already exceed the current dense array
+above 75% visibility, before counting lookup indirection. The counters are
+removed. All 12 GiB reconstruction scopes peak below 510 MiB and the focused
+test build below 2.86 GiB, with zero swap, memory pressure, OOM, validation
+error, Xid, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/{compact-visible-gaussian-origins,near-plane-frustum-order}/`.
+
+Formatting, strict all-target/all-feature Clippy, and both complete physical-
+GPU workspace configurations pass. The default and all-feature test scopes
+peak at 3.00 and 3.15 GiB respectively, again with zero swap, memory pressure,
+OOM, validation error, Xid, or GPU fault.
