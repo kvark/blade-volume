@@ -6891,3 +6891,29 @@ Formatting, strict all-target/all-feature Clippy, and both complete physical-
 GPU workspace configurations pass. The default and all-feature test scopes
 peak at 3.00 and 3.15 GiB respectively, again with zero swap, memory pressure,
 OOM, validation error, Xid, or GPU fault.
+
+## Rejected octagonal Gaussian candidate bounds (2026-08-24)
+
+The exact projected ellipsoid was also bounded along the two screen diagonals,
+turning its existing X/Y rectangle into a conservative eight-sided candidate
+polygon. Per-tile records retained local `x+y` and `x-y` intervals; tiles
+outside either interval were omitted before the random transform reads and
+exact maximum-response calculation. A non-finite diagonal tangent solve fell
+back to the selected rectangle, and near-plane supports kept their full-image
+fallback.
+
+All 42 Gaussian-focused tests pass, including exact tiled/exhaustive and
+grouped/individual candidate rows and the roughly 1.5-million-response
+extreme-anisotropy containment oracle. The extra bounds are nevertheless
+slower in production. An adjacent Room candidate/control pair takes `7.6`
+versus `7.2` seconds for complete Gaussian fitting; the candidate-heavy Bonsai
+pair takes `11.9` versus `10.7` seconds. Held-view static and volumetric PBR
+scores remain inside their established replay bands on both scenes. Two extra
+tangent solves per visible particle and wider boundary records cost more than
+the transforms rejected from the rectangular corners.
+
+The complete implementation and its capture helper are removed. Reconstruction
+scopes peak below 487 MiB and the focused test scope at 1.30 GiB; every 12 GiB
+scope uses zero swap and reports no memory pressure, OOM, validation error,
+Xid, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/octagonal-gaussian-candidates/`.
