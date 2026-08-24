@@ -112,6 +112,10 @@ fn gaussian_trace(
             if (cursor_valid && !gaussian_hit_less(cursor, candidate)) {
                 continue;
             }
+            if (hit_count == GAUSSIAN_HIT_WINDOW &&
+                !gaussian_hit_less(candidate, hits[GAUSSIAN_HIT_WINDOW - 1u])) {
+                continue;
+            }
 
             var duplicate = false;
             for (var i = 0u; i < hit_count; i += 1u) {

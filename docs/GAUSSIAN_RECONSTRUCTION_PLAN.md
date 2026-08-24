@@ -5632,3 +5632,51 @@ with zero swap, memory pressure, OOM, validation, Xid, or GPU fault. This adds
 no shader, graph operation, public API, format, model field, dependency, or
 runtime representation. Artifacts remain outside version control under
 `target/audit-runs/{centered-gaussian-projection,negative-gaussian-discriminant}/`.
+
+## Official 3DGRUT cross-render and full-window rejection (2026-08-24)
+
+The static Gaussian backend now has an independent production-scale reference
+gate. Upstream 3DGRUT 2.0.0 at commit `a37ef721` trained the complete
+Mip-NeRF-360 Bonsai capture at downsample two for 30,000 steps, producing
+1,256,396 Gaussians. Its ordinary 3DGUT validation scores `32.1004` dB PSNR,
+`0.93984` SSIM, and `0.14090` LPIPS across all 37 every-eighth held-out views.
+Rendering that exact checkpoint through upstream's reference 3DGRT pipeline,
+while retaining the trained degree-two kernel and `0.0001` transmittance
+cutoff, scores `29.3692` dB, `0.91673`, and `0.17696` at `26.81` ms per
+779x519 frame. The 3DGUT and 3DGRT images agree at `33.32` dB, so their quality
+difference is an upstream rendering-method effect rather than an interchange
+error.
+
+Blade loads the exported standard PLY and renders the same cameras at the
+existing `1/255` opacity cutoff. Its images agree with the official 3DGRT
+renders at `35.38` dB and score `28.53` dB against ground truth. A private
+prototype separated upstream's normalized-response cutoff, alpha cutoff, and
+alpha ceiling. It changes cross-render PSNR by only `-0.003` dB and mean
+absolute error by `-0.000096`, with no speed change. Those extra public
+controls are removed: the measured difference does not justify expanding the
+runtime API.
+
+The gate did expose avoidable work in the existing exact-order traversal.
+After its 48-entry nearest-hit window is full, a candidate no better than the
+worst retained hit cannot affect the window. The old shader nevertheless ran
+the duplicate scan and complete insertion loop for every such candidate. One
+comparison now rejects it first. All 37 render-only frames fall from `130.57`
+to `73.15` ms on the RTX 5070, a 44.0% reduction, and saved output is
+byte-identical on the measured views. The existing physical-GPU oracle already
+exercises 65 adversarial, overlapping Gaussians across the 48-hit boundary and
+continues to match the exhaustive CPU result.
+
+Larger and smaller windows are rejected (`96`: `119.9` ms on the first five
+views, `32`: `129.1` ms, `16`: `157.7` ms, versus `120.3` ms at 48). Replacing
+the tight 20-face proxy with upstream's eight-face enclosing octahedron is also
+rejected: its larger empty volume raises the same five-view time to `182.3`
+ms. The remaining difference from OptiX is not addressed with a shader variant
+or another runtime knob. Reference checkpoints, images, virtual environment,
+and logs remain outside version control under `/x/Code/3dgrut-reference-gate`
+and `/x/Code/3dgrut-reference-*.log`; the repository gains no dependency,
+asset, benchmark result folder, shader entry, or public API.
+
+Formatting, strict all-target/all-feature Clippy, the focused adversarial GPU
+oracle, and both complete physical-GPU workspace test configurations pass. The
+default and all-feature 12 GiB scopes peak at 7.34 and 6.22 GB respectively,
+with zero swap, memory pressure, OOM, Xid, or GPU fault.

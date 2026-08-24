@@ -86,6 +86,12 @@ a held-out environment; Room and Bonsai have no relighting truth, so their PBR
 columns measure held poses under the recovered capture light. They must not be
 read as real-scene relighting accuracy.
 
+An independent full-resolution gate trains upstream 3DGRUT on Bonsai for
+30,000 steps (`32.10` dB with 3DGUT, `29.37` dB through its reference 3DGRT)
+and cross-renders the exported 1.26-million-particle PLY through Blade. Blade
+agrees with the official 3DGRT images at `35.38` dB; the exact protocol and
+performance controls are recorded in the reconstruction plan linked below.
+
 The predefined-light row is the fixed-cloud result after learned-density
 normal initialization and the conservative complete-render normal, radius,
 and material passes. Across five independently trained source clouds, the
