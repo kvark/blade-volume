@@ -522,17 +522,16 @@ fn shade_surfel_sampled(index: u32, position: vec3<f32>, ray_dir: vec3<f32>, see
     return out;
 }
 
-fn gaussian_group_response(
+fn surface_group_response(
     sum_color: vec3<f32>,
     sum_weight: f32,
     group_transmittance: f32,
 ) -> vec4<f32> {
-    let union_alpha = 1.0 - group_transmittance;
-    let alpha = mix(
-        union_alpha,
-        min(1.0, sum_weight),
-        GAUSSIAN_SURFACE_SATURATION,
-    );
+    var alpha = min(1.0, sum_weight);
+    if (g_params.kernel == 2u) {
+        let union_alpha = 1.0 - group_transmittance;
+        alpha = mix(union_alpha, alpha, GAUSSIAN_SURFACE_SATURATION);
+    }
     return vec4<f32>(alpha * sum_color / max(sum_weight, 1.0e-6), alpha);
 }
 
@@ -548,11 +547,11 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
     var transmittance = 1.0;
     var cursor = Hit(0.0, 0u, 0.0);
     var cursor_valid = false;
-    var gaussian_group_active = false;
-    var gaussian_group_limit = 0.0;
-    var gaussian_sum_color = vec3<f32>(0.0);
-    var gaussian_sum_weight = 0.0;
-    var gaussian_group_transmittance = 1.0;
+    var group_active = false;
+    var group_limit = 0.0;
+    var sum_color = vec3<f32>(0.0);
+    var sum_weight = 0.0;
+    var group_transmittance = 1.0;
 
     // Every full window advances the strict `(depth, particle)` cursor, so the
     // finite particle set bounds this loop. Keep walking until the exact
@@ -602,98 +601,49 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
         }
 
         if (hit_count == 0u) {
-            if (gaussian_group_active) {
-                let group = gaussian_group_response(
-                    gaussian_sum_color,
-                    gaussian_sum_weight,
-                    gaussian_group_transmittance,
-                );
+            if (group_active) {
+                let group = surface_group_response(sum_color, sum_weight, group_transmittance);
                 radiance += transmittance * group.xyz;
                 transmittance *= 1.0 - group.w;
             }
             break;
         }
-        if (g_params.kernel == 2u) {
-            // A reconstructed surface is represented by overlapping volume
-            // particles. Average the shading within a thin depth sheet, as the
-            // finite surface path does, while retaining part of the Gaussian
-            // union opacity instead of making every overlap fully opaque. Keep
-            // an unfinished sheet across traversal batches so its response is
-            // independent of `HIT_WINDOW`.
-            var i = 0u;
-            while (i < hit_count) {
-                let hit = hits[i];
-                if (!gaussian_group_active || hit.t > gaussian_group_limit) {
-                    if (gaussian_group_active) {
-                        let group = gaussian_group_response(
-                            gaussian_sum_color,
-                            gaussian_sum_weight,
-                            gaussian_group_transmittance,
-                        );
-                        radiance += transmittance * group.xyz;
-                        transmittance *= 1.0 - group.w;
-                        gaussian_group_active = false;
-                        if (transmittance <= MIN_TRANSMITTANCE) {
-                            break;
-                        }
+        // Close hits are one reconstructed surface and average their shading;
+        // the next depth group occludes it. Learned volume particles retain
+        // part of their union opacity, while finite surface particles saturate
+        // their coverage sum. Carry an unfinished group across traversal
+        // windows so neither result depends on `HIT_WINDOW`.
+        var i = 0u;
+        while (i < hit_count) {
+            let hit = hits[i];
+            if (!group_active || hit.t > group_limit) {
+                if (group_active) {
+                    let group = surface_group_response(sum_color, sum_weight, group_transmittance);
+                    radiance += transmittance * group.xyz;
+                    transmittance *= 1.0 - group.w;
+                    group_active = false;
+                    if (transmittance <= MIN_TRANSMITTANCE) {
+                        break;
                     }
-                    gaussian_group_active = true;
-                    let band = GAUSSIAN_SURFACE_BAND * g_surfels[hit.index].radius;
-                    gaussian_group_limit = hit.t + band;
-                    gaussian_sum_color = vec3<f32>(0.0);
-                    gaussian_sum_weight = 0.0;
-                    gaussian_group_transmittance = 1.0;
                 }
-                let point = ray_origin + hit.t * ray_dir;
-                gaussian_sum_color += hit.coverage
-                    * shade_surfel_sampled(hit.index, point, ray_dir, seed);
-                gaussian_sum_weight += hit.coverage;
-                gaussian_group_transmittance *= 1.0 - hit.coverage;
-                i += 1u;
+                group_active = true;
+                let band_scale = select(SURFACE_BAND, GAUSSIAN_SURFACE_BAND, g_params.kernel == 2u);
+                group_limit = hit.t + band_scale * g_surfels[hit.index].radius;
+                sum_color = vec3<f32>(0.0);
+                sum_weight = 0.0;
+                group_transmittance = 1.0;
             }
-            if (gaussian_group_active && hit_count < HIT_WINDOW) {
-                let group = gaussian_group_response(
-                    gaussian_sum_color,
-                    gaussian_sum_weight,
-                    gaussian_group_transmittance,
-                );
-                radiance += transmittance * group.xyz;
-                transmittance *= 1.0 - group.w;
-                gaussian_group_active = false;
-            }
-        } else {
-            // Surfels close together in depth are one surface and get averaged;
-            // the next group along the ray is behind it and occludes instead.
-            // Compositing all of them alike lets whichever disc happens to be in
-            // front carry the pixel, which is exactly what makes its flat normal
-            // visible as a facet.
-            var i = 0u;
-            while (i < hit_count && transmittance > MIN_TRANSMITTANCE) {
-                let band = SURFACE_BAND * g_surfels[hits[i].index].radius;
-                let limit = hits[i].t + band;
-                var sum_color = vec3<f32>(0.0);
-                var sum_weight = 0.0;
-                var j = i;
-                while (j < hit_count && hits[j].t <= limit) {
-                    let hit = hits[j];
-                    let point = ray_origin + hit.t * ray_dir;
-                    sum_color += hit.coverage
-                        * shade_surfel_sampled(hit.index, point, ray_dir, seed);
-                    sum_weight += hit.coverage;
-                    j += 1u;
-                }
-                // Coverage weights the average; it does not decide opacity.
-                // Compositing the weights instead leaves the interior of a surface
-                // partly transparent wherever a ray happens to pass near the rim
-                // of every disc covering it, and the background bleeding through
-                // there is far worse than the facets this is meant to remove.
-                // Saturating the sum keeps the inside solid and still lets a
-                // silhouette, where only a sliver of one disc is left, go soft.
-                let alpha = min(1.0, sum_weight);
-                radiance += transmittance * alpha * sum_color / max(sum_weight, 1.0e-6);
-                transmittance *= 1.0 - alpha;
-                i = j;
-            }
+            let point = ray_origin + hit.t * ray_dir;
+            sum_color += hit.coverage * shade_surfel_sampled(hit.index, point, ray_dir, seed);
+            sum_weight += hit.coverage;
+            group_transmittance *= 1.0 - hit.coverage;
+            i += 1u;
+        }
+        if (group_active && hit_count < HIT_WINDOW) {
+            let group = surface_group_response(sum_color, sum_weight, group_transmittance);
+            radiance += transmittance * group.xyz;
+            transmittance *= 1.0 - group.w;
+            group_active = false;
         }
         if (transmittance <= MIN_TRANSMITTANCE || hit_count < HIT_WINDOW) {
             break;

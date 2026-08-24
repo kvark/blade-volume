@@ -5432,3 +5432,30 @@ paired Gaussian fit. Their 12 GiB scopes peak at 906 and 549 MiB respectively,
 with zero swap, memory pressure, OOM, Xid, or GPU fault. Artifacts remain
 outside version control under
 `target/audit-runs/{current-synthetic-v1/unbounded-relight-traversal,unbounded-relight-traversal}/`.
+
+## Shared cross-window surface grouping (2026-08-24)
+
+The preceding traversal audit found the same internal-window dependency in the
+finite compact/Gaussian surface path. Its compositor finalized each depth
+group at the end of twelve hits, so a thirteenth particle on the same surface
+was treated as a separately occluded layer. A physical-GPU regression with
+twelve red particles and one blue particle at the same depth differs from the
+complete CPU surface-group oracle by `0.03461` in one channel on the old
+shader.
+
+All three relightable kernels now share one cross-window colour/coverage
+accumulator. Only the measured depth band and opacity response differ: finite
+surfaces keep their saturated coverage sum, while learned volumetric
+Gaussians keep the selected union/saturation blend. This removes 50 net WGSL
+lines and the duplicated grouping loop; it adds no shader variant, entry,
+pipeline, binding, format, model field, or public setting. Both the new
+thirteen-particle oracle and the prior volumetric 13/168-hit regressions pass,
+along with the complete ten-test relight CPU/GPU suite.
+
+The selected dense reconstruction remains at `24.28/23.14` dB mean/worst
+held-light Gaussian PBR, `55.1%` coverage, `22.93` dB where hit, and `1.27` ms
+per 100x75 frame. The full Room gate remains at `12.55/12.22` dB and `68.9%`
+coverage, with its paired Gaussian fit at 10.5 seconds. The 12 GiB scopes peak
+at 923 and 542 MiB and report zero swap, pressure, OOM, Xid, or GPU fault.
+Artifacts stay outside version control under
+`target/audit-runs/{current-synthetic-v1/shared-relight-group,shared-relight-group}/`.

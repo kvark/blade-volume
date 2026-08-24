@@ -409,6 +409,87 @@ fn gpu_shading_matches_the_cpu_reference() {
 }
 
 #[test]
+fn surface_gaussian_groups_across_traversal_batches() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let materials = vec![
+        vol::relight::Material {
+            albedo: [0.8, 0.1, 0.05],
+            roughness: 0.7,
+            specular_f0: [0.04; 3],
+            _padding: 0.0,
+        },
+        vol::relight::Material {
+            albedo: [0.05, 0.1, 0.8],
+            roughness: 0.7,
+            specular_f0: [0.04; 3],
+            _padding: 0.0,
+        },
+    ];
+    let particle_count = 13;
+    let model = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Gaussian,
+        surfels: (0..particle_count)
+            .map(|index| vol::relight::Surfel {
+                center: [0.0; 3],
+                radius: 1.0,
+                normal: [0.0, 0.0, -1.0],
+                material: u32::from(index + 1 == particle_count),
+            })
+            .collect(),
+        materials,
+    };
+    let environment = vol::relight::Environment::uniform([0.6, 0.8, 0.4], 64, 32);
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 64, 32);
+    let mut tracer = vol::gpu::RelightTracer::new(
+        &model,
+        &environment,
+        &specular,
+        vol::gpu::RelightSettings {
+            background_rgb: [0.02, 0.03, 0.05],
+            diffuse_samples: 0,
+            show_environment: false,
+        },
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let camera = camera(4.0);
+    let rendered = harness.render(&mut tracer, camera);
+    let irradiance = environment.diffuse_irradiance();
+    let x = SIZE[0] / 2;
+    let y = SIZE[1] / 2;
+    let direction = ray_direction(&camera, x, y);
+    let mut expected = [0.0f32; 3];
+    for surfel in &model.surfels {
+        let sample = vol::relight::shade(
+            glam::Vec3::NEG_Z,
+            -direction,
+            &model.materials[surfel.material as usize],
+            &irradiance,
+            &specular,
+        );
+        for channel in 0..3 {
+            expected[channel] += sample[channel] / particle_count as f32;
+        }
+    }
+    let actual = rendered[(y * SIZE[0] + x) as usize];
+    let worst = actual[..3]
+        .iter()
+        .zip(expected)
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        worst < 0.005,
+        "GPU surface group differs from the complete 13-particle oracle by {worst:.5}"
+    );
+    assert!((actual[3] - 1.0).abs() < 0.001);
+
+    tracer.deinit(&harness.context);
+    harness.destroy();
+}
+
+#[test]
 fn volumetric_gaussian_pbr_groups_across_traversal_batches() {
     let Some(mut harness) = Harness::new() else {
         return;
