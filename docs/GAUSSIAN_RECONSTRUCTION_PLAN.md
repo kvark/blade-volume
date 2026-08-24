@@ -5708,6 +5708,17 @@ complete optimizer-state remap, all gated before PBR attributes are attached.
 No partial topology option or cross-representation reuse is added to the
 current trainer.
 
+A direct lifecycle prototype confirms that the optimizer remap is a hard
+prerequisite rather than cleanup to defer. Splitting the selected static
+support fit into two 500-update sessions, with no topology change, drops the
+dense held-view gate from `26.61/24.79` to `25.10/23.24` dB. Selecting the top
+5% of camera-scaled position-gradient norms, cloning 2 narrow particles and
+splitting 142 broad particles, recovers only `0.02` dB mean and loses `0.06`
+dB on the worst view (`25.12/23.18`). The prototype and its temporary gradient
+instrumentation are removed. A viable implementation must resize a live
+session and preserve the surviving particles' Adam moments; rebuilding the
+session halfway through training is not an acceptable approximation.
+
 ## Selected subdivided Gaussian proxy (2026-08-24)
 
 One subdivision of the shared Gaussian icosahedron reduces conservative empty
