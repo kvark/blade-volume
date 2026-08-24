@@ -1252,6 +1252,28 @@ fn gpu_oriented_powerfoam_paths_and_normal_jacobians_match_cpu() {
 }
 
 #[test]
+fn gpu_frozen_oriented_powerfoam_paths_match_cpu_without_jacobians() {
+    let mut model = build_disconnected_ray_model(12);
+    let camera = make_camera_looking_along_x(100.0);
+    let target_ray = rays_for_pixels(&camera, &[32 * 64 + 32], 64, 64)[0];
+    model.surface_normals = Some(vec![-target_ray.direction; model.points.len()]);
+    model.surface_offsets = Some(
+        (0..model.points.len())
+            .map(|index| 0.002 * (index % 5) as f32 - 0.004)
+            .collect(),
+    );
+    assert_gpu_path_record_matches_cpu_with_mode(
+        model,
+        glam::Vec3::ZERO,
+        false,
+        false,
+        false,
+        PathJacobianMode::None,
+        false,
+    );
+}
+
+#[test]
 fn gpu_surface_detail_paths_with_and_without_queries_match_cpu() {
     let mut model = build_disconnected_ray_model(12);
     let camera = make_camera_looking_along_x(100.0);

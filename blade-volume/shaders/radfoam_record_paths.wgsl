@@ -177,6 +177,7 @@ struct PowerInterval {
     face_near: f32,
     face_far: f32,
     effective_near: f32,
+    effective_far: f32,
     previous: u32,
     next: u32,
     valid: u32,
@@ -458,7 +459,7 @@ fn power_interval(
             }
         } else if (numerator < 0.0) {
             // The ray is parallel to this face and lies outside the cell.
-            return PowerInterval(0.0, 0.0, 0.0, cell, cell, 0u);
+            return PowerInterval(0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
         }
     }
 
@@ -472,7 +473,7 @@ fn power_interval(
         let denominator = dot(ray_dir, surface_normal);
         if (abs(denominator) <= 1e-20) {
             if (dot(ray_origin - current.xyz, surface_normal) > surface_offset) {
-                return PowerInterval(0.0, 0.0, 0.0, cell, cell, 0u);
+                return PowerInterval(0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
             }
         } else {
             let surface_t =
@@ -486,9 +487,11 @@ fn power_interval(
         }
     }
     if (effective_far <= effective_near) {
-        return PowerInterval(0.0, 0.0, 0.0, cell, cell, 0u);
+        return PowerInterval(0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
     }
-    return PowerInterval(face_near, face_far, effective_near, previous, next, 1u);
+    return PowerInterval(
+        face_near, face_far, effective_near, effective_far, previous, next, 1u,
+    );
 }
 
 // Conservative perspective bounds for one support sphere. The camera-space
@@ -908,6 +911,18 @@ fn emit_powerfoam_splats(
         let faces = g_candidate_faces[candidate_slot];
         let neighbors = g_candidate_neighbors[candidate_slot];
         candidate_index += 1u;
+        if (g_params.jacobian_mode == 0u && !has_surface_detail()) {
+            let output_slot = row_start + output_step;
+            g_cells_out[output_slot] = cell;
+            g_next_cells_out[output_slot] = neighbors.y;
+            g_dts_out[output_slot] = min(
+                faces.y - g_candidate_depths[candidate_slot],
+                g_params.max_path_dt,
+            );
+            g_mask_out[output_slot] = 1.0;
+            output_step += 1u;
+            continue;
+        }
         let differential = interval_differential(
             ray_origin,
             ray_dir,
@@ -1009,7 +1024,12 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
         let compact_slot = candidate_begin + valid_count;
         g_candidates[compact_slot] = cell;
         g_candidate_depths[compact_slot] = interval.effective_near;
-        g_candidate_faces[compact_slot] = vec2<f32>(interval.face_near, interval.face_far);
+        let cached_far = select(
+            interval.face_far,
+            interval.effective_far,
+            g_params.jacobian_mode == 0u && !has_surface_detail(),
+        );
+        g_candidate_faces[compact_slot] = vec2<f32>(interval.face_near, cached_far);
         g_candidate_neighbors[compact_slot] = vec2<u32>(interval.previous, interval.next);
         valid_count += 1u;
     }
@@ -1051,8 +1071,13 @@ fn record_powerfoam_splats_parallel(
             if (interval.valid != 0u) {
                 w_parallel_cells[local_id.x] = cell;
                 w_parallel_depths[local_id.x] = interval.effective_near;
+                let cached_far = select(
+                    interval.face_far,
+                    interval.effective_far,
+                    g_params.jacobian_mode == 0u && !has_surface_detail(),
+                );
                 w_parallel_faces[local_id.x] =
-                    vec2<f32>(interval.face_near, interval.face_far);
+                    vec2<f32>(interval.face_near, cached_far);
                 w_parallel_neighbors[local_id.x] =
                     vec2<u32>(interval.previous, interval.next);
                 w_parallel_valid[local_id.x] = 1u;

@@ -2216,7 +2216,14 @@ material path.
    falls from 153 to 147 passes and from 2.76--2.84 to 2.43--2.48 ms; three
    matched 256-update runs average 3.049 seconds (-2.0%) at the same
    27.1422/19.8841 dB train/held quality. Traversal is now the larger remaining
-   production cost.)
+   production cost. The forward-only weighted recorder then reuses each
+   candidate's already-computed effective interval instead of repeating its
+   sphere and oriented-plane clip merely to emit `dt`. The warmed record pass
+   falls about 13%, total recorder time about 10%, and three matched 256-update
+   runs average 2.970 seconds (-2.6%) at the same reported quality. The
+   existing scratch carries the far endpoint; differential and detail-query
+   paths are unchanged, and no entry/group, binding, buffer, pipeline,
+   operation, or dependency is added.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

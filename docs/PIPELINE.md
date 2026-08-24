@@ -2364,6 +2364,29 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   shader, entry/group, binding, pipeline, public option, model field, format,
   or dependency is added.
 
+#### M2ca — Reuse frozen forward intervals (done)
+
+- PowerFoam clipping already computes each candidate's final support-,
+  radical-plane-, and oriented-surface-bounded interval before sorting. The
+  recorder nevertheless repeated the sphere and surface clip while emitting
+  `dt`, even when training requested neither geometry Jacobians nor spatial
+  detail queries. That forward-only path now carries the effective far
+  endpoint through the existing candidate-face scratch and subtracts the
+  already stored near endpoint. Full/surface Jacobian and detail-query modes
+  retain the original face endpoints and differential path.
+- On the same production Room continuation, the warmed serial record pass
+  falls from 2.23--2.43 to 1.96--2.05 ms (about 13%), and total recorder time
+  falls from 2.97--3.16 to 2.70--2.79 ms (about 10%). Three matched 256-update
+  training phases average 2.970 seconds, 2.6% below M2bz's 3.049-second mean.
+  A freshly serialized result again preserves 27.1422/19.8841 dB over four
+  training/eight held views at reported precision.
+- A dedicated physical-GPU oracle covers the weighted oriented forward-only
+  path against the independent CPU implementation; the complete path suite
+  continues to cover differential/detail modes, serial/workgroup clipping,
+  batching, overflow, and truncation. No buffer, binding, shader entry/group,
+  pipeline, public option, model field, format, graph operation, or dependency
+  is added.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
