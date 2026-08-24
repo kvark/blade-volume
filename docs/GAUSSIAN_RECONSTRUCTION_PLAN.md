@@ -6015,30 +6015,22 @@ Xid or validation error. The benchmark and all production prototypes are
 removed. Ignored captures remain under
 `target/audit-runs/gaussian-cache-response/`.
 
-## Compact Gaussian candidate transforms (2026-08-24)
+## Revisited Gaussian cache and shader micro-optimizations (2026-08-24)
 
-The tiled training recorder no longer mixes each particle's center into the
-randomly accessed inverse-transform cache. Gaussian origins are already
-precomputed once per camera, so the hot ray loop needs only the inverse
-rotation-scale matrix. Keeping those matrices in a separate contiguous table
-reduces its particle stride from 48 to 36 bytes. Grid construction reads the
-centers sequentially from the existing model, and the public exact-response
-helper retains its self-contained center plus matrix. Candidate membership,
-floating-point operations, sorting, batches, graph inputs, optimizer schedule,
-and persistent representation are unchanged.
-
-Five order-balanced dense-camera pairs leave Gaussian fitting effectively tied
-at 4.060 versus 4.053 seconds and process wall time at 10.27 versus 10.25
-seconds. Two reversed-order real-scene pairs are more informative: Room moves
-from a 10.9 to 10.75 second fit median and Bonsai from 13.05 to 12.8 seconds,
-improvements of 1.4% and 1.9%. Their process medians improve by 1.2% and 1.3%.
-Static and PBR held-view scores remain inside the controls' repeated-run band;
-exact tiled/exhaustive and grouped/individual candidate oracles continue to
-match every index and mask.
-The largest scope peaks at 764 MiB with zero swap, memory pressure, OOM, Xid,
-or GPU fault. This is a private cache-layout cleanup, not a new cache, option,
-dependency, graph operation, shader, or representation path. Artifacts remain
-outside version control under
+The earlier rejected compact candidate transform was screened again after the
+later recorder and topology work. It still removes an unused center from the
+randomly accessed inverse-transform table, reducing its particle stride from
+48 to 36 bytes without changing candidate arithmetic. Five order-balanced
+dense-camera pairs leave Gaussian fitting effectively tied at 4.060 versus
+4.053 seconds and process wall time at 10.27 versus 10.25 seconds. Two
+reversed-order real-scene pairs move Room from a 10.9 to 10.75 second fit
+median and Bonsai from 13.05 to 12.8 seconds, improvements of 1.4% and 1.9%.
+Those gains are weaker than the original August 22 real-scene screen, which
+was already rejected because its synthetic production benefit was only 0.5%.
+The new synthetic result is below 0.2%, so a second internal transform
+representation remains unjustified. The prototype is removed again; exact
+tiled/exhaustive and grouped/individual candidate oracles matched every index
+and mask during the screen. Artifacts remain outside version control under
 `target/audit-runs/candidate-transform-cache/`.
 
 Two adjacent runtime-shader cleanups are not selected. Hoisting the normalized
@@ -6049,7 +6041,7 @@ ms for both changes on the 1,256,396-particle Bonsai model. The compiler has
 already removed the useful redundancy; both source edits and the benchmark
 are removed.
 
-Formatting, strict all-target/all-feature Clippy, and both complete
-physical-GPU workspace configurations pass. The default and all-feature test
-scopes peak at 6.51 and 5.86 GiB respectively, with zero swap, memory pressure,
-OOM, validation error, Xid, or GPU fault.
+Both micro-optimization screens peak below 764 MiB with zero swap, memory
+pressure, OOM, validation error, Xid, or GPU fault. Their candidate branch also
+passed formatting, strict all-target/all-feature Clippy, and both complete
+physical-GPU workspace configurations before being removed.

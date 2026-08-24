@@ -105,9 +105,7 @@ struct CandidateGrid {
 
 struct CandidateIndex {
     views: Vec<Option<CandidateGrid>>,
-    // Per-view grids already cache transformed origins, so the hot ray loop
-    // needs only this compact matrix table.
-    world_to_gaussian: Vec<glam::Mat3>,
+    transforms: Vec<CandidateTransform>,
     max_distance_squared: Vec<f32>,
 }
 
@@ -129,15 +127,11 @@ fn candidate_transform(
     rotation: glam::Quat,
     scale: glam::Vec3,
 ) -> CandidateTransform {
+    let inverse_rotation = glam::Mat3::from_quat(rotation.normalize().inverse());
     CandidateTransform {
         mean,
-        world_to_gaussian: world_to_gaussian(rotation, scale),
+        world_to_gaussian: glam::Mat3::from_diagonal(scale.recip()) * inverse_rotation,
     }
-}
-
-fn world_to_gaussian(rotation: glam::Quat, scale: glam::Vec3) -> glam::Mat3 {
-    let inverse_rotation = glam::Mat3::from_quat(rotation.normalize().inverse());
-    glam::Mat3::from_diagonal(scale.recip()) * inverse_rotation
 }
 
 fn candidate_max_distance_squared(opacity: f32, min_alpha: f32) -> f32 {
@@ -161,11 +155,14 @@ impl CandidateIndex {
             .take(capture.views.len())
             .collect();
         let model_transforms = model.transforms.as_ref().unwrap();
-        let world_to_gaussian: Vec<glam::Mat3> = model_transforms
-            .rotations
+        let transforms: Vec<CandidateTransform> = model
+            .points
             .iter()
+            .zip(&model_transforms.rotations)
             .zip(&model_transforms.scales)
-            .map(|(&rotation, &scale)| world_to_gaussian(rotation, scale))
+            .map(|((point, rotation), scale)| {
+                candidate_transform(point.truncate(), *rotation, *scale)
+            })
             .collect();
         let max_distance_squared: Vec<f32> = model
             .points
@@ -175,7 +172,7 @@ impl CandidateIndex {
         if min_alpha == 0.0 {
             return Self {
                 views,
-                world_to_gaussian,
+                transforms,
                 max_distance_squared,
             };
         }
@@ -206,8 +203,7 @@ impl CandidateIndex {
                                         &capture.views[view_index].camera,
                                         capture.width,
                                         capture.height,
-                                        &world_to_gaussian,
-                                        &model.points,
+                                        &transforms,
                                         &projection_supports,
                                     ),
                                 )
@@ -224,7 +220,7 @@ impl CandidateIndex {
         });
         Self {
             views,
-            world_to_gaussian,
+            transforms,
             max_distance_squared,
         }
     }
@@ -252,18 +248,16 @@ impl CandidateGrid {
         camera: &vol::CameraParams,
         width: usize,
         height: usize,
-        world_to_gaussian: &[glam::Mat3],
-        points: &[glam::Vec4],
+        candidate_transforms: &[CandidateTransform],
         projection_supports: &[Option<ProjectionSupport>],
     ) -> Self {
         let tiles_x = width.div_ceil(TILE_SIZE);
         let tiles_y = height.div_ceil(TILE_SIZE);
         let mut tiles = vec![Vec::new(); tiles_x * tiles_y];
         let camera_origin = glam::Vec3::from(camera.cam_position);
-        let gaussian_origins = world_to_gaussian
+        let gaussian_origins = candidate_transforms
             .iter()
-            .zip(points)
-            .map(|(transform, point)| *transform * (camera_origin - point.truncate()))
+            .map(|transform| transform.world_to_gaussian * (camera_origin - transform.mean))
             .collect();
         let projection = crate::inverse::capture::PixelProjection::new(camera, width, height);
         for (index, support) in projection_supports.iter().enumerate() {
@@ -1687,11 +1681,7 @@ fn ray_distance_squared_from_gaussian_origin(
     transform: CandidateTransform,
 ) -> Option<(f32, f32)> {
     let (depth, distance_squared, direction_squared) =
-        ray_distance_squared_from_valid_gaussian_origin(
-            gaussian_origin,
-            ray_direction,
-            transform.world_to_gaussian,
-        );
+        ray_distance_squared_from_valid_gaussian_origin(gaussian_origin, ray_direction, transform);
     if !direction_squared.is_finite() || direction_squared <= 0.0 {
         return None;
     }
@@ -1701,9 +1691,9 @@ fn ray_distance_squared_from_gaussian_origin(
 fn ray_distance_squared_from_valid_gaussian_origin(
     gaussian_origin: glam::Vec3,
     ray_direction: glam::Vec3,
-    world_to_gaussian: glam::Mat3,
+    transform: CandidateTransform,
 ) -> (f32, f32, f32) {
-    let gaussian_direction = world_to_gaussian * ray_direction;
+    let gaussian_direction = transform.world_to_gaussian * ray_direction;
     let direction_squared = gaussian_direction.length_squared();
     let depth = -gaussian_origin.dot(gaussian_direction) / direction_squared;
     let closest = gaussian_origin + depth * gaussian_direction;
@@ -1880,7 +1870,7 @@ fn collect_indexed_candidate_hits(
             ray_distance_squared_from_valid_gaussian_origin(
                 gaussian_origins[particle],
                 direction,
-                index.world_to_gaussian[particle],
+                index.transforms[particle],
             );
         debug_assert!(direction_squared > 0.0 && depth.is_finite() && distance_squared.is_finite());
         if depth > 0.0 && distance_squared <= index.max_distance_squared[particle] {
@@ -4451,11 +4441,7 @@ mod tests {
             ray_distance_squared_from_gaussian_origin(gaussian_origin, direction, transform)
                 .unwrap();
         let (fast_depth, fast_distance, direction_squared) =
-            ray_distance_squared_from_valid_gaussian_origin(
-                gaussian_origin,
-                direction,
-                transform.world_to_gaussian,
-            );
+            ray_distance_squared_from_valid_gaussian_origin(gaussian_origin, direction, transform);
         assert!(direction_squared > 0.0);
         assert_eq!(fast_depth.to_bits(), checked.0.to_bits());
         assert_eq!(fast_distance.to_bits(), checked.1.to_bits());
