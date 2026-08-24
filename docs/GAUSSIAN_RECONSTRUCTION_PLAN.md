@@ -6079,3 +6079,25 @@ the ignored logs remain under `target/audit-runs/cross-light-material/`.
 
 The complete runs were isolated to 12 GiB cgroups. The final diagnostic peaked
 at 293 MiB with no swap, pressure, OOM, Xid, validation error, or GPU fault.
+
+## Rejected residual-aligned static Gaussian split (2026-08-24)
+
+The selected one-event static split was tested with its child axis aligned to
+the existing Adam position first moment instead of a deterministic standard
+normal covariance sample. For each selected parent, the world-space moment was
+transformed into its local frame and covariance-scaled; the two symmetric
+children kept the selected random sample's magnitude, scale divisor, topology
+budget, optimizer remap, and remaining schedule. The prototype reused existing
+optimizer state and added no graph operation, shader, option, or model field.
+
+On an order-adjacent dense pair, the aligned candidate scores
+`26.84/24.91` versus `26.83/24.90` dB for the control. That hundredth-decibel
+movement is below the established GPU-atomic replay variation. The independent
+nested-camera gate rejects it at `23.899` versus `23.927` dB. PBR output is
+unchanged at reported precision because its topology is fitted independently.
+Optimizer momentum is useful for selecting high-residual parents, but its
+signed direction is not a better child-placement sample after the parent's own
+position updates. The prototype is removed before a five-cloud expansion;
+artifacts remain outside version control under
+`target/audit-runs/static-split-direction/`. All four quality scopes report
+zero swap, memory pressure, OOM, Xid, validation error, or GPU fault.
