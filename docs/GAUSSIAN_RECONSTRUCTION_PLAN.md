@@ -6677,3 +6677,22 @@ paired-prune API, surface remap, and orchestration are removed; production
 retains the existing final-only compaction. All 12 GiB scopes peak below
 372 MiB with zero swap, OOM, or GPU fault. Ignored artifacts remain under
 `target/audit-runs/early-pbr-prune/`.
+
+## Rejected late surface re-observation (2026-08-24)
+
+The render-guarded material assignment was tested with observations refreshed
+after accepted surface center, radius, normal, and material-table refinement,
+instead of retaining the observations that initialized the coupled PBR state.
+The refreshed surface still exposes 1,372 of 3,156 nested particles, but the
+local ranking changes from 936 candidates with a 117-label accepted prefix to
+439 candidates with all 439 labels accepted under the known-light render.
+
+That lower training objective does not transfer through the later calibrated-
+light Gaussian continuation. Nested held-light volumetric quality falls from
+`23.50/21.90` to `23.48/21.85` dB mean/where-hit at unchanged 52.8% coverage.
+The re-observation is removed before dense or five-cloud expansion. The
+original observations remain part of the jointly initialized correspondence;
+complete-render guarding alone does not make a later relabeling physical under
+unseen light. The 12 GiB scope peaks at 321 MiB with zero swap, OOM, or GPU
+fault. Ignored artifacts remain under
+`target/audit-runs/refreshed-material-observations/`.
