@@ -5369,3 +5369,13 @@ separate position accumulator and both weighting branches are removed; peak
 confidence once again weights positions and normals identically. Runs remain
 outside version control under
 `target/audit-runs/fusion-position-{unweighted,sqrt}/`.
+
+A confidence-weighted geometric median is rejected as the robust alternative.
+Eight Weiszfeld iterations preserve the sharper-mode invariant and improve the
+nested fixture's post-refinement truth position RMSE from roughly 0.554 to
+0.553 world units. Nevertheless, static quality falls to 22.28 dB and
+held-light volumetric PBR to 23.15 dB, versus the selected 22.47 and 23.36 dB.
+The per-cell sample vectors and robust solve are removed before the dense and
+real gates. A locally better point estimate is still not a better parameter
+for the coupled finite Gaussian mixture. The run remains outside version
+control under `target/audit-runs/fusion-position-geomedian/`.
