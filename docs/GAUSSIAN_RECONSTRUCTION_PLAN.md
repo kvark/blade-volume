@@ -6433,3 +6433,34 @@ private camera surface for noise-level timing. Reconstruction scopes peak
 below 501 MiB and the test scope at 1.46 GiB; every 12 GiB scope uses zero swap
 and reports no memory pressure, OOM, validation error, Xid, or GPU fault.
 Ignored artifacts remain under `target/audit-runs/direct-ratio-projection/`.
+
+## Exact per-tile Gaussian pixel bounds (2026-08-24)
+
+Each private candidate-grid entry now retains the conservative integer pixel
+range already derived from its exact projected support AABB. Interior tiles
+cover all 8×8 pixels; boundary tiles encode their local inclusive X/Y range in
+four bytes beside the particle index. A ray outside that range skips the
+random transform/origin reads and exact response calculation. The resulting
+eight-byte entry replaces the former bare four-byte index; there is no second
+index, shader, graph operation, option, model field, format, or dependency.
+
+This is an exact early rejection, not a tighter floating-point approximation.
+The bounds use the same outward `floor`/`ceil` as tile assignment, and the
+complete extreme-anisotropy oracle now checks both tile membership and local
+pixel coverage for every exact response. All 42 Gaussian-filtered tests pass,
+including tiled/exhaustive and grouped/individual rows; a dedicated range test
+covers the first, interior, and last tile cases.
+
+Two order-balanced Bonsai candidates take `11.8/11.8` seconds versus
+`12.5/12.5` for controls (`5.6%` faster), while total scoped CPU time falls
+from about 74.4 to 65.0 seconds. Room moves from `10.0` to `9.9` seconds. The
+dense fixture is exactly neutral at a `3.954`-second median in both arms.
+Static and volumetric PBR held-view metrics remain in their established
+GPU-atomic replay bands on all three scenes. Reconstruction scopes peak below
+493 MiB with zero swap, memory pressure, OOM, validation error, Xid, or GPU
+fault. Ignored artifacts remain under `target/audit-runs/tile-pixel-bounds/`.
+
+Formatting, strict all-target/all-feature Clippy, and the complete default and
+all-feature physical-GPU workspace suites pass. The workspace scopes peak at
+3.06 and 2.92 GiB respectively; both remain below the 12 GiB limit with zero
+swap, memory pressure, OOM, validation error, Xid, or GPU fault.

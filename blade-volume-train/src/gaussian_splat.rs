@@ -98,8 +98,32 @@ struct CandidateRowSlices<'a> {
 struct CandidateGrid {
     width: usize,
     tiles_x: usize,
-    tiles: Vec<Vec<u32>>,
+    tiles: Vec<Vec<TileCandidate>>,
     gaussian_origins: Vec<glam::Vec3>,
+}
+
+#[derive(Clone, Copy)]
+struct TileCandidate {
+    particle: u32,
+    pixel_min: [u8; 2],
+    pixel_max: [u8; 2],
+}
+
+impl TileCandidate {
+    fn covers(&self, pixel: [u8; 2]) -> bool {
+        pixel[0] >= self.pixel_min[0]
+            && pixel[1] >= self.pixel_min[1]
+            && pixel[0] <= self.pixel_max[0]
+            && pixel[1] <= self.pixel_max[1]
+    }
+}
+
+fn tile_pixel_range(tile: usize, min: usize, max: usize) -> [u8; 2] {
+    let start = tile * TILE_SIZE;
+    [
+        min.saturating_sub(start).min(TILE_SIZE - 1) as u8,
+        (max - start).min(TILE_SIZE - 1) as u8,
+    ]
 }
 
 struct CandidateIndex {
@@ -215,12 +239,20 @@ impl CandidateIndex {
         }
     }
 
-    fn candidates(&self, view: usize, pixel: usize) -> Option<(&[u32], &[glam::Vec3])> {
+    fn candidates(
+        &self,
+        view: usize,
+        pixel: usize,
+    ) -> Option<(&[TileCandidate], &[glam::Vec3], [u8; 2])> {
         let grid = self.views[view].as_ref()?;
         let x = pixel % grid.width;
         let y = pixel / grid.width;
         let tile = (y / TILE_SIZE) * grid.tiles_x + x / TILE_SIZE;
-        Some((&grid.tiles[tile], &grid.gaussian_origins))
+        Some((
+            &grid.tiles[tile],
+            &grid.gaussian_origins,
+            [(x % TILE_SIZE) as u8, (y % TILE_SIZE) as u8],
+        ))
     }
 
     fn locality_key(&self, view: usize, pixel: usize) -> (usize, usize) {
@@ -255,10 +287,14 @@ impl CandidateGrid {
             else {
                 continue;
             };
-            let min_x = min.x.floor().max(0.0) as usize / TILE_SIZE;
-            let min_y = min.y.floor().max(0.0) as usize / TILE_SIZE;
-            let max_x = max.x.ceil().min(width.saturating_sub(1) as f32) as usize / TILE_SIZE;
-            let max_y = max.y.ceil().min(height.saturating_sub(1) as f32) as usize / TILE_SIZE;
+            let min_pixel_x = min.x.floor().max(0.0) as usize;
+            let min_pixel_y = min.y.floor().max(0.0) as usize;
+            let max_pixel_x = max.x.ceil().min(width.saturating_sub(1) as f32) as usize;
+            let max_pixel_y = max.y.ceil().min(height.saturating_sub(1) as f32) as usize;
+            let min_x = min_pixel_x / TILE_SIZE;
+            let min_y = min_pixel_y / TILE_SIZE;
+            let max_x = max_pixel_x / TILE_SIZE;
+            let max_y = max_pixel_y / TILE_SIZE;
             if min_x > max_x || min_y > max_y || min_x >= tiles_x || min_y >= tiles_y {
                 continue;
             }
@@ -266,7 +302,13 @@ impl CandidateGrid {
             gaussian_origins[index] = transform.world_to_gaussian * (camera_origin - support.mean);
             for tile_y in min_y..=max_y.min(tiles_y - 1) {
                 for tile_x in min_x..=max_x.min(tiles_x - 1) {
-                    tiles[tile_y * tiles_x + tile_x].push(index as u32);
+                    let x_range = tile_pixel_range(tile_x, min_pixel_x, max_pixel_x);
+                    let y_range = tile_pixel_range(tile_y, min_pixel_y, max_pixel_y);
+                    tiles[tile_y * tiles_x + tile_x].push(TileCandidate {
+                        particle: index as u32,
+                        pixel_min: [x_range[0], y_range[0]],
+                        pixel_max: [x_range[1], y_range[1]],
+                    });
                 }
             }
         }
@@ -1837,13 +1879,17 @@ fn collect_candidate_hits(
 fn collect_indexed_candidate_hits(
     index: &CandidateIndex,
     direction: glam::Vec3,
-    indices: &[u32],
+    candidates: &[TileCandidate],
     gaussian_origins: &[glam::Vec3],
+    tile_pixel: [u8; 2],
     hits: &mut Vec<(f32, u32)>,
 ) {
     hits.clear();
-    for &particle in indices {
-        let particle = particle as usize;
+    for candidate in candidates {
+        if !candidate.covers(tile_pixel) {
+            continue;
+        }
+        let particle = candidate.particle as usize;
         let (depth, distance_squared, direction_squared) =
             ray_distance_squared_from_valid_gaussian_origin(
                 gaussian_origins[particle],
@@ -1932,11 +1978,12 @@ fn record_indexed_candidate_range(
         let view = views[local_pixel];
         let pixel = pixels[local_pixel];
         match index.candidates(view, pixel) {
-            Some((candidates, gaussian_origins)) => collect_indexed_candidate_hits(
+            Some((candidates, gaussian_origins, tile_pixel)) => collect_indexed_candidate_hits(
                 index,
                 direction,
                 candidates,
                 gaussian_origins,
+                tile_pixel,
                 &mut hits,
             ),
             None => collect_candidate_hits(
@@ -4400,6 +4447,13 @@ mod tests {
     }
 
     #[test]
+    fn tile_pixel_ranges_clip_only_boundary_tiles() {
+        assert_eq!(tile_pixel_range(1, 10, 27), [2, 7]);
+        assert_eq!(tile_pixel_range(2, 10, 27), [0, 7]);
+        assert_eq!(tile_pixel_range(3, 10, 27), [0, 3]);
+    }
+
+    #[test]
     fn projection_support_uses_the_exact_alpha_cutoff() {
         let opacity = 0.8;
         let min_alpha = 1.0e-4;
@@ -4566,7 +4620,7 @@ mod tests {
         let origin = glam::Vec3::from(capture.views[0].camera.cam_position);
         for pixel in 0..capture.width * capture.height {
             let direction = rays.direction(pixel % capture.width, pixel / capture.width);
-            let candidates = index.candidates(0, pixel).unwrap().0;
+            let (candidates, _, tile_pixel) = index.candidates(0, pixel).unwrap();
             for particle in 0..PARTICLES {
                 let response = ray_response(
                     origin,
@@ -4579,7 +4633,9 @@ mod tests {
                 if response.depth > 0.0 && model.points[particle].w * response.response >= MIN_ALPHA
                 {
                     assert!(
-                        candidates.contains(&(particle as u32)),
+                        candidates.iter().any(|candidate| {
+                            candidate.particle == particle as u32 && candidate.covers(tile_pixel)
+                        }),
                         "tile omitted particle {particle} at pixel {pixel}"
                     );
                 }
@@ -4619,8 +4675,11 @@ mod tests {
         );
 
         let index = CandidateIndex::new(&model, &capture, &[0], MIN_ALPHA);
+        let (candidates, _, tile_pixel) = index.candidates(0, pixel).unwrap();
         assert!(
-            index.candidates(0, pixel).unwrap().0.contains(&0),
+            candidates
+                .iter()
+                .any(|candidate| candidate.particle == 0 && candidate.covers(tile_pixel)),
             "the exact contributing Gaussian was omitted from its pixel tile"
         );
     }
@@ -4656,8 +4715,11 @@ mod tests {
         );
 
         let index = CandidateIndex::new(&model, &capture, &[0], MIN_ALPHA);
+        let (candidates, _, tile_pixel) = index.candidates(0, PIXEL).unwrap();
         assert!(
-            index.candidates(0, PIXEL).unwrap().0.contains(&0),
+            candidates
+                .iter()
+                .any(|candidate| candidate.particle == 0 && candidate.covers(tile_pixel)),
             "the exact contributing Gaussian was collapsed into the adjacent tile"
         );
     }
