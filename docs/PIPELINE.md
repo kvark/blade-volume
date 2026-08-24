@@ -2423,6 +2423,21 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   unit test; no shader, entry/group, pipeline, buffer, binding, operation,
   public option, format, or dependency is added.
 
+#### M2cd — Stop clipping an already-empty PowerFoam interval (done)
+
+- Radical-plane clipping can only raise `face_near` and lower `face_far`.
+  Once they cross, no remaining neighbor can make the candidate valid again.
+  The GPU recorder now returns at that point instead of evaluating the rest of
+  the site's adjacency row. Final interval math and every valid path are
+  unchanged.
+- Three short profiles put the settled parallel-record median at
+  1.85--1.87 ms versus 1.90 ms for the exact-source control. The complete
+  256-update mean is effectively neutral at 2.784 versus 2.789 seconds. Two
+  longer 2,040-update runs average 17.358 seconds versus 17.568 seconds
+  (-1.2%), with the same reported loss. All 19 physical-GPU path-oracle tests
+  pass. The change adds no shader entry/group, pipeline, buffer, binding,
+  operation, public option, format, or dependency.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

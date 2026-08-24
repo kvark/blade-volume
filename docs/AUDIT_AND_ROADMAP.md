@@ -2236,8 +2236,12 @@ material path.
    record pass falls from 2.00--2.12 to 1.75--1.80 ms, and three matched
    256-update runs average 2.789 seconds (-5.3%) with the same reported
    train/held quality. The serial path remains faster at 0.9 entries/site, so
-   both existing paths are retained; no shader, entry/group, pipeline,
-   operation, or dependency is added.)
+   both existing paths are retained. The clipper now also stops scanning a
+   site's remaining neighbors as soon as its monotonically shrinking near/far
+   interval becomes empty. Two 2,040-update runs average 17.358 seconds versus
+   17.568 seconds (-1.2%) at the same reported loss; all 19 physical-GPU path
+   oracles pass. Neither optimization adds a shader entry/group, pipeline,
+   operation, or dependency.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

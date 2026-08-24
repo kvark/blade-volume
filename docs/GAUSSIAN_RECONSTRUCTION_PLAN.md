@@ -5197,3 +5197,30 @@ The pixel agrees within the existing half-float tolerance. At 512x512, paired
 every pair. The 4 GiB cgroups use no swap and report no OOM, throttle, Xid, or
 GPU fault; logs remain outside version control under
 `target/audit-runs/gaussian-window-sweep/`.
+
+## Rejected absorption-centroid normal depth (2026-08-24)
+
+A private CPU/WGSL prototype kept the winning RadFoam segment midpoint for
+surface positions but estimated screen-space slopes at that segment's exact
+conditional absorption centroid. A follow-up separated midpoint-based surfel
+membership from the new output normal, so the dense and nested gates retained
+their exact 2,880 and 3,156 baseline particles. It added no shader entry,
+binding, pipeline, graph operation, dependency, or representation variant.
+
+The geometric signal is real but does not pass the complete output gate. On
+the nine-training-view dense fixture, final normal RMSE improves
+48.32→44.88 degrees and held-light Gaussian PBR improves 24.27/23.07→
+24.45/23.25 dB, but the independently fitted static Gaussian drops
+26.03/23.92→23.88/22.47 dB. On the eleven-view nested fixture, normal RMSE
+improves 51.45→46.92 degrees while held-light PBR drops 23.35→23.25 dB and
+static quality drops 22.47→22.17 dB. Five continued clouds improve truth
+normals consistently, but their small PSNR movement is below the continuation's
+own GPU-atomic run-to-run variation: an identical cloud-4 control repeat moved
+24.18/23.48→24.06/23.34 dB and changed the fused count by 34 particles.
+
+The complete prototype is removed. Future normal work must optimize the final
+static and relit Gaussian image objectives jointly rather than substitute a
+locally more physical depth statistic. Artifacts and capped telemetry remain
+outside version control under
+`target/audit-runs/next-gaussian-gate/{absorption-normal-support,paired-control-current}/`;
+all scopes report zero swap, OOM, Xid, or GPU fault.

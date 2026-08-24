@@ -461,6 +461,9 @@ fn power_interval(
             // The ray is parallel to this face and lies outside the cell.
             return PowerInterval(0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
         }
+        if (face_far <= face_near) {
+            return PowerInterval(0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
+        }
     }
 
     var effective_near = max(face_near, sphere_near);
