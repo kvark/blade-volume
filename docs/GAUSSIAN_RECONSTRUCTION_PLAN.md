@@ -6208,3 +6208,21 @@ MiB, while the complete test scopes peak at 6.35 GiB. Every 12 GiB scope uses
 zero swap and reports no memory pressure, OOM, validation error, Xid, or GPU
 fault. Ignored benchmark outputs and telemetry remain under
 `target/audit-runs/visible-gaussian-origins/`.
+
+## Rejected balanced Gaussian grid workers (2026-08-24)
+
+The per-view candidate-grid builder reports twelve available CPU threads on
+this host, but its ceiling-sized chunks launch nine workers for eighteen
+views. A prototype divided the same view indices into twelve balanced ranges,
+leaving every grid and downstream candidate decision unchanged. All 39 focused
+Gaussian tests pass, including the exact tiled/exhaustive and grouped/individual
+candidate oracles.
+
+The additional workers do not produce a measurable end-to-end gain. In a
+reversed-order Room A/B, candidate fits take `10.6/10.7` seconds versus
+`10.6/10.8` for the control. Bonsai candidates take `13.1/13.1` seconds versus
+`13.2/12.9` for the control. The current larger chunks evidently amortize
+thread scheduling better on the six-core/12-thread machine. The prototype is
+removed; runs peak below 618 MiB with zero swap, OOM, Xid, validation error, or
+GPU fault. Ignored artifacts remain under
+`target/audit-runs/balanced-grid-workers/`.
