@@ -6360,3 +6360,22 @@ Formatting, strict all-target/all-feature Clippy, and both complete physical-
 GPU workspace test configurations pass. The test scopes peak at 3.39 GiB and
 also report zero swap, memory pressure, OOM, validation error, Xid, or GPU
 fault.
+
+## Rejected partial Gaussian hit sorting (2026-08-24)
+
+The exact-support Bonsai index still produces enough accepted hits to justify
+checking its sort: across the first 10,880 prepared rays, raw-hit counts are 25
+at p50, 157 at p90, 211 at p95, 346 at p99, and 520 at maximum. Of those rays,
+2,458 accept more than the fixed 64-row graph capacity.
+
+A prototype used the existing `(depth, particle index)` total order to select
+the nearest 64 hits before sorting only those rows. It produces the same
+deterministic prefix as a complete sort and passes all 42 Gaussian-filtered
+tests, including exact tiled/exhaustive and grouped/individual candidate
+oracles. It does not improve end-to-end fitting: two order-balanced Bonsai
+pairs are tied at `12.5/12.5` and `12.4/12.4` seconds. Candidate response
+evaluation, not ordering accepted hits, remains the useful target. The helper,
+test, and counters are removed. All 12 GiB scopes peak below 547 MiB apart from
+the 1.53 GiB test build, use zero swap, and report no memory pressure, OOM,
+validation error, Xid, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/partial-candidate-sort/`.
