@@ -6155,3 +6155,31 @@ without a real-scene expansion; artifacts remain outside version control under
 `target/audit-runs/static-covariance-normal/`. Every completed run stayed below
 12 GiB with zero swap, memory pressure, OOM, validation error, Xid, or GPU
 fault.
+
+## Rejected Adam-second-moment Gaussian split selection (2026-08-24)
+
+The static midpoint split keeps its exact grouped position-gradient history
+instead of ranking particles by Adam's existing position second moment. The
+prototype removed the grouped accumulator and candidate-visibility counters,
+read Adam's `v` table at the already synchronized midpoint, reduced each
+three-component row to an RMS magnitude, and retained the same camera-distance
+normalization, broad-support gate, split count, placement, remap, and recovery
+schedule. It added no graph node, shader, option, model field, or dependency.
+
+The replacement is mixed on the two small screens. Dense changes from the
+adjacent `26.844/24.906` dB control to `26.814/24.921` dB, trading mean for
+tail, while nested improves `23.927→23.944` dB. Complete paired-fit time moves
+only `4.899→4.866` and `5.572→5.541` seconds respectively, too little to claim
+a throughput tier.
+
+The definitive five-cloud static gate rejects the ranking. Four clouds lose
+both mean and tail; aggregate held quality falls from `25.508/24.529` to
+`25.468/24.486` dB. Adam's exponential second moment favors recent and
+frequently visible gradients, while the selected accumulator measures each
+particle's exact temporal gradient magnitude and then divides by the number of
+candidate-visible updates. That longer, visibility-normalized history is
+useful topology evidence rather than redundant optimizer state. The prototype
+is removed; artifacts remain outside version control under
+`target/audit-runs/static-split-adam-v/`. All seven completed scopes stayed
+below 12 GiB with zero swap, memory pressure, OOM, validation error, Xid, or
+GPU fault.
