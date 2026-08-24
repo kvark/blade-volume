@@ -6756,3 +6756,29 @@ wiring are removed. All 12 GiB scopes peak below 1.1 GB with zero swap, OOM,
 or GPU fault. Ignored artifacts remain under
 `target/audit-runs/coupled-multilight-proposal/` and
 `target/audit-runs/coupled-half/`.
+
+## Rejected projected Gaussian distance shortcut (2026-08-24)
+
+Exact candidate-response evaluation is the largest measured direct-Gaussian
+host cost, so the closest-point distance was tested through the equivalent
+identity `|o|² - (o·d)²/|d|²`. The direct rewrite removes the temporary closest
+vector and its second norm, but fails the extreme-anisotropy containment oracle:
+floating-point cancellation admits particle 495 at pixel 1,387 outside its
+conservative projected support. The exact public response path is restored.
+
+A second prototype used the identity only as a private indexed fast decision.
+An explicit error interval around the alpha-distance cutoff fell back to the
+original closest-point calculation whenever subtraction could affect the
+decision. All 41 Gaussian-focused tests pass, including exhaustive/indexed
+candidate equality and the 1.5-million-response projection oracle.
+
+The guarded arithmetic is slower in production. Two order-balanced 169,432-
+particle Bonsai pairs take `11.9/11.9` seconds for the candidate and
+`11.6/11.6` seconds for the control. Held Gaussian quality remains in its
+normal atomic replay band, with no compensating fidelity result. Computing an
+error bound and branching costs more than the few vector operations it can
+skip, so the helper and indexed branch are removed. The exact closest-point
+calculation remains shared by the oracle and host index. All 12 GiB scopes
+peak below 1.25 GB with zero swap, OOM, validation error, Xid, or GPU fault.
+Ignored artifacts remain under
+`target/audit-runs/projected-gaussian-distance/`.
