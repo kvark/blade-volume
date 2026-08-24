@@ -6855,6 +6855,15 @@ test build below 2.86 GiB, with zero swap, memory pressure, OOM, validation
 error, Xid, or GPU fault. Ignored artifacts remain under
 `target/audit-runs/{compact-visible-gaussian-origins,near-plane-frustum-order}/`.
 
+An exact camera-depth ellipsoid extent is also rejected as an additional
+near-plane refinement. It passes all 42 Gaussian tests, including the complete
+randomized containment oracle, but requires rotating all three covariance axes
+before deciding on the fallback. Two Room candidate/control pairs remain tied
+at `7.2/7.2` versus `7.2/7.1` seconds, while Bonsai regresses from `10.7` to
+`10.9` seconds and raises scoped CPU time from 53.8 to 55.0 seconds. The
+calculation and conservative floating-point guard are removed. Its ignored
+artifacts remain under `target/audit-runs/exact-gaussian-depth-extent/`.
+
 Formatting, strict all-target/all-feature Clippy, and both complete physical-
 GPU workspace configurations pass. The default and all-feature test scopes
 peak at 3.00 and 3.15 GiB respectively, again with zero swap, memory pressure,
