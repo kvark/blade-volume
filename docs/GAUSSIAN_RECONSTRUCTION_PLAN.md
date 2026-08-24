@@ -6226,3 +6226,18 @@ thread scheduling better on the six-core/12-thread machine. The prototype is
 removed; runs peak below 618 MiB with zero swap, OOM, Xid, validation error, or
 GPU fault. Ignored artifacts remain under
 `target/audit-runs/balanced-grid-workers/`.
+
+## Rejected shared Gaussian quaternion normalization (2026-08-24)
+
+Candidate refresh constructs both an inverse response transform and projected
+support axes from each covariance quaternion. A prototype fused the two model
+passes and normalized the quaternion once for both exact calculations. All 39
+focused Gaussian tests pass, including candidate-row equivalence and the
+anisotropic projection/response oracles.
+
+The saved work is not a throughput bottleneck. In a reversed-order Room A/B,
+candidate fits take `10.8/10.7` seconds and controls take `10.7/10.8` seconds.
+The extra helper and fused construction loop are removed without a larger-scene
+expansion. The four 12 GiB scopes peak below 378 MiB and report zero swap, OOM,
+Xid, validation error, or GPU fault. Ignored runs remain under
+`target/audit-runs/shared-normalized-quaternion/`.
