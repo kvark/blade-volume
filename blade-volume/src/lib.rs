@@ -282,13 +282,16 @@ impl PointCloudModel {
             if transforms
                 .rotations
                 .iter()
-                .any(|rotation| !rotation.is_finite())
-                || transforms
-                    .scales
-                    .iter()
-                    .any(|scale| !scale.is_finite() || scale.min_element() <= 0.0)
+                .any(|rotation| !rotation.is_finite() || (rotation.length() - 1.0).abs() > 1.0e-3)
             {
-                return Err("transforms must have finite rotations and positive scales".to_string());
+                return Err("transform rotations must be finite and unit length".to_string());
+            }
+            if transforms
+                .scales
+                .iter()
+                .any(|scale| !scale.is_finite() || scale.min_element() <= 0.0)
+            {
+                return Err("transform scales must be finite and positive".to_string());
             }
         }
         if let Some(pbr) = self
@@ -646,6 +649,23 @@ mod model_tests {
     #[test]
     fn model_validation_accepts_consistent_parallel_arrays() {
         assert!(valid_model().validate().is_ok());
+    }
+
+    #[test]
+    fn model_validation_requires_unit_gaussian_rotations() {
+        let mut model = valid_model();
+        model.transforms = Some(Transforms {
+            rotations: vec![glam::Quat::IDENTITY],
+            scales: vec![glam::Vec3::ONE],
+            pbr: None,
+        });
+        assert!(model.validate().is_ok());
+
+        model.transforms.as_mut().unwrap().rotations[0] = glam::Quat::from_array([0.0; 4]);
+        assert!(model.validate().unwrap_err().contains("unit length"));
+
+        model.transforms.as_mut().unwrap().rotations[0] = glam::Quat::from_xyzw(0.0, 0.0, 0.0, 2.0);
+        assert!(model.validate().unwrap_err().contains("unit length"));
     }
 
     #[test]

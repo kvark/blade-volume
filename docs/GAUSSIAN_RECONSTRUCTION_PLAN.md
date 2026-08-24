@@ -5558,3 +5558,22 @@ fits only from a 10.65-second control average to 10.7 seconds; paired wall
 times are likewise neutral. The key cache is removed rather than retaining
 bookkeeping that has no measured return. Logs stay under
 `target/audit-runs/locality-key-cache/`.
+
+## Strict Gaussian rotation contract (2026-08-24)
+
+`PointCloudModel::validate` now requires every Gaussian rotation quaternion to
+be finite and unit length. The runtime WGSL quaternion helpers, acceleration
+instance transforms, CPU oracle, and training candidate cache all rely on that
+standard rotation contract, but the former validation accepted even a zero
+quaternion or an arbitrary scalar multiple. Such a model could therefore pass
+the public boundary and produce different geometry in different consumers.
+
+PLY and SPZ loading, reconstruction, conversion, and training already emit
+unit quaternions, so no persisted production artifact or quality result
+changes. A focused model-boundary test accepts the identity and rejects both
+zero and length-two rotations. This adds no normalization policy, renderer
+branch, representation, format field, shader, operation, or dependency; it
+rejects invalid Gaussian geometry before any consumer interprets it. Strict
+Clippy and both full physical-GPU workspace configurations pass; the 534-test
+all-feature scope peaks at 9.2 GiB with zero swap, pressure, OOM, validation,
+Xid, or GPU fault.
