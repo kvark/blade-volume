@@ -2210,7 +2210,13 @@ material path.
    recorder's existing surface-query output genuinely optional then reduces
    its warmed time from 3.77--4.44 to 2.83--3.28 ms. The three-run training
    mean falls another 11.6% to 3.111 seconds, still at identical reported
-   train/held quality.)
+   train/held quality. Finally, the default-zero per-view exposure rate now
+   freezes those three parameters before differentiation instead of building
+   gradients and Adam state that a zero multiplier later discards. The graph
+   falls from 153 to 147 passes and from 2.76--2.84 to 2.43--2.48 ms; three
+   matched 256-update runs average 3.049 seconds (-2.0%) at the same
+   27.1422/19.8841 dB train/held quality. Traversal is now the larger remaining
+   production cost.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

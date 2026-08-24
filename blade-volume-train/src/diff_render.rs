@@ -786,6 +786,7 @@ pub fn build_volumetric_graph(
             use_surface_normal_loss: use_surface_normals,
             train_positions: true,
             train_radii: true,
+            train_exposure: true,
             surface_trainability: SurfaceTrainability::ALL,
             use_surface_detail: false,
             evaluate_surface_detail: false,
@@ -806,6 +807,7 @@ struct VolumetricGraphOptions {
     use_surface_normal_loss: bool,
     train_positions: bool,
     train_radii: bool,
+    train_exposure: bool,
     surface_trainability: SurfaceTrainability,
     use_surface_detail: bool,
     evaluate_surface_detail: bool,
@@ -1198,9 +1200,12 @@ fn build_volumetric_graph_with_options(
     // work post-meganeura `ca11915` (which implemented split's
     // backward), but the per-channel layout is what landed during
     // the original investigation and is easier to read; keeping it.
-    let exposure_r = g.parameter("exposure_r", &[num_views, 1]);
-    let exposure_g = g.parameter("exposure_g", &[num_views, 1]);
-    let exposure_b = g.parameter("exposure_b", &[num_views, 1]);
+    let exposure_r =
+        parameter_with_gradient(g, "exposure_r", &[num_views, 1], options.train_exposure);
+    let exposure_g =
+        parameter_with_gradient(g, "exposure_g", &[num_views, 1], options.train_exposure);
+    let exposure_b =
+        parameter_with_gradient(g, "exposure_b", &[num_views, 1], options.train_exposure);
     let view_idx = g.input_u32("view_idx", &[p]);
     let sh_coefficients = declare_sh_parameters(g, n_cells, num_components);
 
@@ -5626,6 +5631,10 @@ fn build_train_session(
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
+    let exposure_lr_ratio = std::env::var("BLADE_VOLUME_PER_VIEW_EXPOSURE")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.0);
     let surface_trainability = SurfaceTrainability {
         normals: surface_normal_lr_ratio > 0.0,
         offsets: surface_offset_lr_ratio > 0.0,
@@ -5668,6 +5677,7 @@ fn build_train_session(
             use_surface_normal_loss,
             train_positions,
             train_radii,
+            train_exposure: exposure_lr_ratio != 0.0,
             surface_trainability,
             use_surface_detail: model.surface_detail.is_some(),
             evaluate_surface_detail,
@@ -5966,10 +5976,6 @@ fn build_train_session(
     // post-training renormalises the SH-DC term, but cannot recover
     // the per-view residual. Set `BLADE_VOLUME_PER_VIEW_EXPOSURE=$r`
     // to opt in (r ~ 0.01–0.05; anything higher overshoots).
-    let exposure_lr_ratio = std::env::var("BLADE_VOLUME_PER_VIEW_EXPOSURE")
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(0.0);
     // "exposure_" prefix matches exposure_r/g/b at once.
     session.set_lr_multiplier("exposure_", exposure_lr_ratio);
 
@@ -9668,6 +9674,7 @@ mod tests {
                 use_surface_normal_loss: false,
                 train_positions: true,
                 train_radii: true,
+                train_exposure: true,
                 surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
                 evaluate_surface_detail: false,
@@ -9709,6 +9716,7 @@ mod tests {
                 use_surface_normal_loss: true,
                 train_positions: false,
                 train_radii: false,
+                train_exposure: true,
                 surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
                 evaluate_surface_detail: false,
@@ -9802,6 +9810,7 @@ mod tests {
                 use_surface_normal_loss: false,
                 train_positions: false,
                 train_radii: false,
+                train_exposure: true,
                 surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
                 evaluate_surface_detail: false,
@@ -9884,7 +9893,7 @@ mod tests {
     }
 
     #[test]
-    fn directional_color_only_graph_omits_frozen_surface_gradients() {
+    fn directional_color_only_graph_omits_other_parameter_gradients() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
             eprintln!("skipping frozen surface-detail graph test: no GPU");
@@ -9899,7 +9908,7 @@ mod tests {
             1,
             2,
             0,
-            1,
+            2,
             0,
             0.0,
             0.0,
@@ -9913,6 +9922,7 @@ mod tests {
                 use_surface_normal_loss: false,
                 train_positions: false,
                 train_radii: false,
+                train_exposure: false,
                 surface_trainability: trainability,
                 use_surface_detail: true,
                 evaluate_surface_detail: true,
@@ -9957,6 +9967,9 @@ mod tests {
             "surface_detail_directional_axes",
             "surface_detail_directional_unit_axes",
             "surface_detail_directional_temperatures",
+            "exposure_r",
+            "exposure_g",
+            "exposure_b",
         ] {
             assert!(session.has_parameter(name), "missing parameter {name}");
             assert!(
@@ -11343,6 +11356,7 @@ mod tests {
                 use_surface_normal_loss: false,
                 train_positions: false,
                 train_radii: false,
+                train_exposure: true,
                 surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
                 evaluate_surface_detail: false,

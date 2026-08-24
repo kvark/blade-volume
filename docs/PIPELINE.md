@@ -2346,6 +2346,24 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   entry/group, binding, pipeline, backend variant, public option, model field,
   format, or dependency is added.
 
+#### M2bz — Omit frozen per-view exposure gradients (done)
+
+- Per-view exposure is opt-in through `BLADE_VOLUME_PER_VIEW_EXPOSURE`; its
+  production learning-rate ratio defaults to zero. The graph nevertheless
+  used to differentiate all three exposure channels and allocate optimizer
+  state before applying that zero multiplier. Training now reads the existing
+  rate before graph construction and keeps the exposure parameters as frozen
+  forward inputs unless the rate is nonzero. Opt-in exposure training and its
+  parameter names are unchanged.
+- On the same 98,831-site, four-view Room continuation, the graph falls from
+  153 to 147 passes and its warmed time from 2.76--2.84 to 2.43--2.48 ms.
+  Three matched 256-update training phases average 3.049 seconds, 2.0% below
+  M2by's 3.111-second mean; traversal is now the larger cost. A freshly
+  serialized result again preserves 27.1422/19.8841 dB over four
+  training/eight held views at reported precision. No graph operation,
+  shader, entry/group, binding, pipeline, public option, model field, format,
+  or dependency is added.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
