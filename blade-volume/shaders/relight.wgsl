@@ -350,7 +350,7 @@ fn intersect_surfel(index: u32, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> Hi
         let local_direction = qrot(qinv(gaussian.rotation), ray_dir) / gaussian.scale;
         let t = -dot(local_origin, local_direction)
             / dot(local_direction, local_direction);
-        if (t <= 0.0) {
+        if (t <= 0.0 || t >= g_camera.depth) {
             return miss;
         }
         let local_position = local_origin + t * local_direction;
@@ -558,8 +558,13 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
     // transmittance cutoff instead of dropping deep low-opacity layers.
     loop {
         var rq: ray_query;
+        // A learned Gaussian's maximum-response point can be inside the
+        // camera interval even when its enclosing proxy exits beyond it.
+        // Query the complete proxy, then apply the semantic depth interval to
+        // the exact maximum in `intersect_surfel`.
+        let query_t_end = select(g_camera.depth, 1.0e30, g_params.kernel == 2u);
         rayQueryInitialize(&rq, g_tlas, RayDesc(
-            0u, 0xFFu, 0.0, g_camera.depth, ray_origin, ray_dir
+            0u, 0xFFu, 0.0, query_t_end, ray_origin, ray_dir
         ));
 
         var hit_count = 0u;

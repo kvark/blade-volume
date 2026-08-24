@@ -618,6 +618,82 @@ fn volumetric_gaussian_pbr_groups_across_traversal_batches() {
 }
 
 #[test]
+fn volumetric_gaussian_pbr_respects_the_camera_depth_interval() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let material = vol::relight::Material {
+        albedo: [0.8, 0.4, 0.2],
+        roughness: 0.9,
+        specular_f0: [0.04; 3],
+        _padding: 0.0,
+    };
+    let model = |center: glam::Vec3, scale: glam::Vec3| vol::PointCloudModel {
+        points: vec![center.extend(0.8)],
+        sh_coefficients: vec![0.0; 3],
+        sh_degree: 0,
+        transforms: Some(vol::Transforms {
+            rotations: vec![glam::Quat::IDENTITY],
+            scales: vec![scale],
+            pbr: Some(vol::PbrAttributes {
+                normals: vec![glam::Vec3::NEG_Z],
+                material_indices: vec![0],
+                materials: vec![material],
+            }),
+        }),
+        adjacency: None,
+        radii: None,
+        surface_normals: None,
+        surface_offsets: None,
+        surface_detail: None,
+        surface_color_coefficients: None,
+        spherical_voronoi: None,
+    };
+    let environment = vol::relight::Environment::uniform([0.6, 0.8, 0.4], 64, 32);
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 64, 32);
+    let settings = vol::gpu::RelightSettings {
+        background_rgb: [0.0; 3],
+        diffuse_samples: 0,
+        show_environment: false,
+    };
+    let mut camera = camera(4.0);
+    camera.depth = 1.0;
+    let center_pixel = (SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) as usize;
+
+    let cases = [
+        (
+            model(glam::Vec3::new(0.0, 0.0, -3.5), glam::Vec3::splat(4.0)),
+            true,
+        ),
+        (model(glam::Vec3::ZERO, glam::Vec3::ONE), false),
+    ];
+    for (gaussian, should_hit) in cases {
+        let mut tracer = vol::gpu::RelightTracer::new_gaussian(
+            &gaussian,
+            &environment,
+            &specular,
+            settings,
+            &harness.context,
+            &mut harness.encoder,
+        );
+        let alpha = harness.render(&mut tracer, camera)[center_pixel][3];
+        if should_hit {
+            assert!(
+                alpha > 0.5,
+                "a Gaussian enclosing the camera interval was omitted ({alpha})"
+            );
+        } else {
+            assert!(
+                alpha < 0.001,
+                "a Gaussian beyond the camera interval contributed {alpha}"
+            );
+        }
+        tracer.deinit(&harness.context);
+    }
+    harness.destroy();
+}
+
+#[test]
 fn volumetric_gaussian_pbr_traverses_past_eight_batches() {
     let Some(mut harness) = Harness::new() else {
         return;

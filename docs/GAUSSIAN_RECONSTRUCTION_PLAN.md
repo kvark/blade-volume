@@ -5518,3 +5518,43 @@ variation. No shader, graph operation, public API, format, model field, or
 dependency is added. Artifacts remain outside version control under
 `target/audit-runs/exact-gaussian-projection-bound/` and
 `target/audit-runs/current-synthetic-v1/exact-gaussian-projection-bound/`.
+
+## Exact relightable Gaussian camera interval (2026-08-24)
+
+The relightable Gaussian traversal now separates a conservative proxy's ray
+interval from the semantic interval of its exact maximum response. The former
+ray query stopped at the camera depth. It therefore omitted a broad Gaussian
+whose proxy enclosed the entire camera segment, because neither proxy face was
+inside the query, while a Gaussian centred beyond the far plane could still
+contribute when its near proxy face was inside. The static Gaussian tracer
+already avoided both errors.
+
+Learned-Gaussian proxy traversal now covers the complete finite proxy and
+rejects the resulting exact maximum unless it lies strictly between the camera
+and its far plane. Compact and surface-Gaussian discs retain their former
+query. A physical-GPU regression covers both directions: the old shader
+returns zero alpha for a broad Gaussian centred inside the interval, and also
+shades a narrower Gaussian centred beyond it; the corrected shader renders
+only the former. The complete eleven-test relight CPU/GPU suite passes.
+
+Ordinary production scenes remain in their established band. The Room gate
+retains `12.53/12.22` dB held-view Gaussian PBR and `68.8%` coverage with a
+10.5-second paired fit. The dense nine-view gate retains `24.28/23.13` dB
+held-light Gaussian PBR, `55.1%` coverage, `22.93` dB where hit, and `1.22`
+ms per 100x75 frame. Its static field reaches `26.02/23.93` dB and the paired
+fit takes 4.22 seconds. The combined 12 GiB scope peaks at 926.5 MiB with zero
+swap, pressure, OOM, Xid, validation, or GPU fault. No entry point, shader
+variant, binding, pipeline, operation, model field, format, API, or dependency
+is added. Formatting, all-target/all-feature Clippy, and both full workspace
+test configurations pass on the physical GPU; the 533-test all-feature gate
+peaks at 9.8 GiB with the same zero-event telemetry. Artifacts remain outside
+version control under `target/audit-runs/gaussian-depth-interval/` and
+`target/audit-runs/current-synthetic-v1/gaussian-depth-interval/`.
+
+An adjacent candidate-preparation micro-optimization is rejected. Computing
+each worker's `(view, tile)` locality key once instead of in the existing sort
+comparator adds a temporary key vector but changes two order-balanced Room
+fits only from a 10.65-second control average to 10.7 seconds; paired wall
+times are likewise neutral. The key cache is removed rather than retaining
+bookkeeping that has no measured return. Logs stay under
+`target/audit-runs/locality-key-cache/`.
