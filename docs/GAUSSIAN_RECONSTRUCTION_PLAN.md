@@ -6574,6 +6574,12 @@ seconds, but the independent nested phase changes from 2.971 to 3.009 seconds.
 The extra prepared-material helper and altered resource lifecycle are removed;
 the simpler rebuild remains selected.
 
+Repeating the guarded assignment after calibrated multi-light center/normal
+fitting does not justify another stage either. Dense changes only nine labels,
+leaves mean PSNR fixed, and trades `+0.03` dB worst-view quality for `-0.02` dB
+where hit; nested changes zero labels. The extra 1.64--3.41 seconds and
+diagnostic are removed before a five-cloud expansion.
+
 A physical-GPU oracle recovers a deliberately wrong label when its observations
 and complete image agree, then restores the original label when deliberately
 misleading local observations conflict with the complete image. The pass adds
