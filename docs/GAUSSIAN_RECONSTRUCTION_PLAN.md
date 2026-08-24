@@ -5731,3 +5731,28 @@ the adversarial physical-GPU oracle, and both complete physical-GPU workspace
 test configurations pass. The default and all-feature 12 GiB scopes peak at
 6.77 and 6.62 GB respectively, with zero swap, memory pressure, OOM, Xid, or
 GPU fault.
+
+## Selected 64-hit Gaussian window (2026-08-24)
+
+Temporary debug-target counters explain the remaining hardware traversal
+cost. Across all 37 upstream Bonsai views, a pixel sees 459 conservative proxy
+intersections and 426 analytically valid supports on average, but composites
+only 55 particles. The median pixel performs two complete BVH queries; the
+90th and 99th percentiles perform three, with a maximum of seven. After the
+80-face proxy, only about 7% of intersections are false, so adding more proxy
+faces is not the next lever. The counters and result fields are removed after
+measurement.
+
+The tighter proxy changes the hit-window tradeoff enough to justify one small
+follow-up. An order-balanced saved-binary sweep measures median render-only
+GPU time at roughly `63.77` ms for 48 hits, `63.42` for 56, `63.19` for 64,
+and `63.53` for 72. The previously rejected 96-entry window remains beyond the
+useful occupancy knee. The private constant is now 64; the existing
+65-particle physical-GPU oracle crosses its boundary and still matches the
+exhaustive CPU composition. This adds no option, shader variant, binding,
+dispatch, or persistent diagnostic.
+
+Formatting, strict all-target/all-feature Clippy, and both complete
+physical-GPU workspace configurations pass. The default and all-feature 12 GiB
+scopes peak at 6.49 and 6.27 GB respectively, with zero swap, memory pressure,
+OOM, Xid, or GPU fault.

@@ -25,7 +25,7 @@ struct GaussianTraceResult {
     hits_total: u32,
 }
 
-const GAUSSIAN_HIT_WINDOW: u32 = 48u;
+const GAUSSIAN_HIT_WINDOW: u32 = 64u;
 
 struct GaussianHit {
     t: f32,
