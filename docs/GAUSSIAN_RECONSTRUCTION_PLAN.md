@@ -6080,7 +6080,7 @@ the ignored logs remain under `target/audit-runs/cross-light-material/`.
 The complete runs were isolated to 12 GiB cgroups. The final diagnostic peaked
 at 293 MiB with no swap, pressure, OOM, Xid, validation error, or GPU fault.
 
-## Rejected residual-aligned static Gaussian split (2026-08-24)
+## Rejected static Gaussian split selection and placement variants (2026-08-24)
 
 The selected one-event static split was tested with its child axis aligned to
 the existing Adam position first moment instead of a deterministic standard
@@ -6104,9 +6104,16 @@ but nested regresses from `23.927` to `23.883` dB. The retained covariance
 sample can distribute capacity among axes without adding a scene-dependent
 choice; forcing the largest extent merely exchanges which fixture benefits.
 
-Optimizer momentum is useful for selecting high-residual parents, but its
-signed direction is not a better child-placement sample after the parent's own
-position updates. The prototype is removed before a five-cloud expansion;
+Weighting the existing camera-scaled position-gradient score by each parent's
+learned opacity does not provide better residual ownership. Dense trades mean
+for tail, moving `26.83/24.90→26.82/24.94` dB. Nested selects one additional
+split but regresses `23.927→23.908` dB. A position derivative already contains
+the particle's opacity and transmittance response; multiplying by peak opacity
+again double-counts that evidence and favors a different overlap basin.
+
+Optimizer momentum and opacity remain useful within training, but neither is
+a better split selector or child-placement direction after the parent's own
+updates. All prototypes are removed before a five-cloud expansion;
 artifacts remain outside version control under
-`target/audit-runs/static-split-{direction,axis}/`. All six quality scopes
+`target/audit-runs/static-split-{direction,axis,opacity}/`. All eight quality scopes
 report zero swap, memory pressure, OOM, Xid, validation error, or GPU fault.
