@@ -5701,12 +5701,12 @@ The foam densifier cannot be reused safely: its child selection and optimizer
 remap carry radii, adjacency, surface planes, and foam-specific traversal
 state.
 
-Adaptive Gaussian topology therefore remains a separate native-Gaussian
-training track. It needs durable per-particle gradient accumulators, Gaussian
-clone-versus-split semantics, opacity reset/pruning, rotation learning, and a
-complete optimizer-state remap, all gated before PBR attributes are attached.
-No partial topology option or cross-representation reuse is added to the
-current trainer.
+The complete recurring 3DGS lifecycle therefore remains a separate
+native-Gaussian training track. It still needs opacity reset/pruning and a
+longer growth schedule before PBR attributes are attached. The bounded split
+selected below supplies the missing per-particle gradient accumulator and
+complete optimizer-state remap without reusing foam topology or adding a
+public topology option.
 
 A direct lifecycle prototype confirms that the optimizer remap is a hard
 prerequisite rather than cleanup to defer. Splitting the selected static
@@ -5715,9 +5715,10 @@ dense held-view gate from `26.61/24.79` to `25.10/23.24` dB. Selecting the top
 5% of camera-scaled position-gradient norms, cloning 2 narrow particles and
 splitting 142 broad particles, recovers only `0.02` dB mean and loses `0.06`
 dB on the worst view (`25.12/23.18`). The prototype and its temporary gradient
-instrumentation are removed. A viable implementation must resize a live
-session and preserve the surviving particles' Adam moments; rebuilding the
-session halfway through training is not an acceptable approximation.
+instrumentation are removed. The selected follow-up below rebuilds the graph
+only when particle count changes, preserves every surviving raw parameter and
+Adam moment, keeps the bias-correction step, and initializes only new children
+with zero moments.
 
 ## Selected subdivided Gaussian proxy (2026-08-24)
 
@@ -5838,3 +5839,57 @@ Formatting, strict all-target/all-feature Clippy, and both complete physical-GPU
 workspace test configurations pass. The default and all-feature test scopes
 peak at 2.87 and 2.88 GiB respectively, with zero swap, memory pressure, OOM,
 Xid, validation, or GPU fault.
+
+## Selected one-event static Gaussian split (2026-08-24)
+
+Low-order static light fields now perform one topology event halfway through
+their 1,000-update support stage. The existing Meganeura Adam kernel
+accumulates one XYZ gradient norm per particle on the device; the trainer
+averages it over candidate-visible updates and applies the reference
+camera-distance scale. The top 5% are considered. A selected Gaussian is split
+only if its largest scale exceeds 1% of the camera extent, and the event runs
+only when at least half of the selected residuals are broad. This last gate is
+representation-driven: a dense surface cloud whose residuals are already
+narrow needs opacity-conserving clone semantics, not coincident copies.
+
+Each broad parent becomes two deterministic symmetric children at half a
+standard normal covariance sample, with scale divided by 1.6. The parent is
+removed. The graph is rebuilt only when this changes particle count. Every
+survivor retains its raw parameter values, first and second Adam moments, and
+the global bias-correction step. Children copy appearance, opacity, and raw
+rotation but start their moments at zero; their positions and scales come from
+the split. This is private schedule policy: no shader, graph operation, shader
+entry, binding, public option, model field, format, or dependency is added.
+
+The optimizer lifecycle is causal. A matched midpoint session restart with
+zeroed state drops the dense gate from `26.61/24.79` to `25.10/23.24` dB.
+Restoring moments without topology reaches `26.62/24.75`; adding the selected
+split reaches `26.80/24.90`, with 142 new particles (`2,880→3,022`). The
+independent nested-camera fixture adds 156 (`3,156→3,312`) and improves
+`23.79→23.89` dB. Paired Gaussian fitting takes 4.71 and 5.62 seconds on those
+two gates, versus 5.00 and 5.31 seconds in the earlier saved-binary controls;
+the topology event is a small fixed cost rather than a second training tail.
+
+All five six-view clouds improve in both mean and worst held-view PSNR:
+`25.42/24.62→25.58/24.73`, `25.28/24.25→25.43/24.31`,
+`25.35/24.26→25.51/24.36`, `25.50/24.71→25.62/24.80`, and
+`25.21/24.33→25.39/24.40` dB. Aggregate quality rises from
+`25.352/24.434` to `25.504/24.523` dB while adding 111--118 particles per
+cloud. Parent-moment inheritance and a 2.5% growth fraction are rejected;
+both regress the two weak screening clouds. Full-standard-deviation child
+offsets are also rejected because two tails regress even though their
+aggregate remains positive.
+
+The real Bonsai screen selects 3,597 high-gradient residuals but only 103 are
+broad, so the event is correctly skipped. A fresh saved-binary control scores
+`16.24/15.28` and the guarded path `16.25/15.30` dB. Room remains outside the
+low-order rotation/topology path because its 18 training views select SH-2.
+Deterministic tests lock split geometry, survivor ordering, narrow-cloud
+rejection, raw-parameter remapping, preserved survivor moments, and zero child
+moments. The final four-fixture scope peaks at 370 MiB and Bonsai at 496 MiB
+under 12 GiB cgroups, with zero swap, OOM, or GPU fault. Artifacts and rejected
+arms remain outside version control under
+`target/audit-runs/native-gaussian-topology/`.
+Formatting, strict all-target/all-feature Clippy, and both complete physical-GPU
+workspace configurations pass; the two full test scopes each peak at 3.02 GiB
+with zero swap, pressure, OOM, validation, Xid, or GPU fault.

@@ -28,6 +28,9 @@ const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
 const GAUSSIAN_ROTATION_LEARNING_RATE: f32 = 1.0e-3;
+const STATIC_GAUSSIAN_DENSIFY_FRACTION: f32 = 0.05;
+const STATIC_GAUSSIAN_SPLIT_OFFSET_SCALE: f32 = 0.5;
+const STATIC_GAUSSIAN_SPLIT_SCALE: f32 = 1.6;
 const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
 const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 4.0e-4;
 const HIGH_VIEW_MULTI_LIGHT_OPACITY_LEARNING_RATE: f32 = 5.0e-3;
@@ -3066,6 +3069,290 @@ pub fn fit(
     )
 }
 
+fn build_fit_session(
+    model: &vol::PointCloudModel,
+    options: FitOptions,
+    opacity_loss_weight: f32,
+    opacity_loss: OpacityLoss,
+    train_rotations: bool,
+    gpu: &sync::Arc<gpu::Context>,
+) -> mn::Session {
+    let mut graph = mn::Graph::new();
+    build_graph_with_losses(
+        &mut graph,
+        model.points.len(),
+        options.batch_size,
+        options.candidates_per_pixel,
+        model.sh_degree,
+        opacity_loss_weight,
+        options.background,
+        opacity_loss,
+        0.0,
+        false,
+        train_rotations,
+    );
+    let (mut session, _report) = mn::build(
+        &graph,
+        mn::SessionConfig {
+            mode: mn::Mode::Training,
+            gpu: Some(gpu.clone()),
+            ..Default::default()
+        },
+    );
+    let pixel_indices: Vec<u32> = (0..options.batch_size as u32)
+        .flat_map(|pixel| std::iter::repeat_n(pixel, options.candidates_per_pixel))
+        .collect();
+    session.set_input_u32("candidate_pixel_indices", &pixel_indices);
+    set_model_parameters(&mut session, model);
+    if train_rotations {
+        set_rotation_parameters(&mut session, model);
+    } else {
+        set_rotation_inputs(&mut session, model);
+    }
+    session
+}
+
+fn configure_fit_optimizer(
+    session: &mut mn::Session,
+    options: FitOptions,
+    rotation_learning_rate: f32,
+) {
+    session.set_adam(1.0, 0.9, 0.999, 1.0e-8);
+    session.set_lr_multiplier("positions", options.position_learning_rate);
+    session.set_lr_multiplier("log_scales", options.scale_learning_rate);
+    session.set_lr_multiplier("opacity_logits", options.opacity_learning_rate);
+    if rotation_learning_rate > 0.0 {
+        session.set_lr_multiplier("rotations", rotation_learning_rate);
+    }
+    session.set_lr_multiplier("sh_", options.sh_learning_rate);
+}
+
+struct GaussianAdamEntry {
+    name: &'static str,
+    stride: usize,
+    parameter: Vec<f32>,
+    m: Vec<f32>,
+    v: Vec<f32>,
+}
+
+struct GaussianAdamSnapshot {
+    entries: Vec<GaussianAdamEntry>,
+    step: u32,
+}
+
+#[derive(Clone, Copy)]
+enum GaussianRemap {
+    Survivor(usize),
+    Child(usize),
+}
+
+fn gaussian_adam_parameters(
+    sh_components: usize,
+    train_rotations: bool,
+) -> Vec<(&'static str, usize)> {
+    let mut entries = vec![
+        ("positions", 3),
+        ("log_scales", 3),
+        ("opacity_logits", 1),
+        ("sh_r", sh_components),
+        ("sh_g", sh_components),
+        ("sh_b", sh_components),
+    ];
+    if train_rotations {
+        entries.push(("rotations", 4));
+    }
+    entries
+}
+
+fn save_gaussian_adam(
+    session: &mn::Session,
+    sh_components: usize,
+    train_rotations: bool,
+) -> GaussianAdamSnapshot {
+    let entries = gaussian_adam_parameters(sh_components, train_rotations);
+    let names: Vec<_> = entries.iter().map(|&(name, _)| name).collect();
+    let parameters = session.read_params(&names);
+    let states = session.read_adam_states(&names);
+    let entries = entries
+        .into_iter()
+        .zip(parameters)
+        .zip(states)
+        .map(|(((name, stride), parameter), (m, v))| GaussianAdamEntry {
+            name,
+            stride,
+            parameter,
+            m,
+            v,
+        })
+        .collect();
+    GaussianAdamSnapshot {
+        entries,
+        step: session.adam_step_count(),
+    }
+}
+
+fn remap_gaussian_adam_entry(
+    entry: &GaussianAdamEntry,
+    mut parameter: Vec<f32>,
+    remap: &[GaussianRemap],
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let old_count = entry.parameter.len() / entry.stride;
+    assert_eq!(parameter.len(), remap.len() * entry.stride);
+    let mut m = vec![0.0; parameter.len()];
+    let mut v = vec![0.0; parameter.len()];
+    for (new_index, &source) in remap.iter().enumerate() {
+        let (old_index, child) = match source {
+            GaussianRemap::Survivor(index) => (index, false),
+            GaussianRemap::Child(index) => (index, true),
+        };
+        assert!(old_index < old_count);
+        let old = old_index * entry.stride;
+        let new = new_index * entry.stride;
+        let use_model_geometry = child && matches!(entry.name, "positions" | "log_scales");
+        if !use_model_geometry {
+            parameter[new..new + entry.stride]
+                .copy_from_slice(&entry.parameter[old..old + entry.stride]);
+        }
+        if !child {
+            m[new..new + entry.stride].copy_from_slice(&entry.m[old..old + entry.stride]);
+            v[new..new + entry.stride].copy_from_slice(&entry.v[old..old + entry.stride]);
+        }
+    }
+    (parameter, m, v)
+}
+
+fn restore_gaussian_adam(
+    session: &mut mn::Session,
+    snapshot: &GaussianAdamSnapshot,
+    remap: &[GaussianRemap],
+) {
+    let names: Vec<_> = snapshot.entries.iter().map(|entry| entry.name).collect();
+    let model_parameters = session.read_params(&names);
+    for (entry_index, entry) in snapshot.entries.iter().enumerate() {
+        let (parameter, m, v) =
+            remap_gaussian_adam_entry(entry, model_parameters[entry_index].clone(), remap);
+        session.set_parameter(entry.name, &parameter);
+        session.write_adam_m(entry.name, &m);
+        session.write_adam_v(entry.name, &v);
+    }
+    session.set_adam_step_count(snapshot.step);
+}
+
+fn gaussian_split_sample(index: usize) -> glam::Vec3 {
+    let unit = |lane| {
+        (hash((index as u32).wrapping_mul(0x9e37_79b9) ^ lane) as f64 + 0.5)
+            / (u32::MAX as f64 + 1.0)
+    };
+    let pair = |first, second| {
+        let radius = (-2.0 * unit(first).ln()).sqrt();
+        let angle = std::f64::consts::TAU * unit(second);
+        (radius * angle.cos(), radius * angle.sin())
+    };
+    let (x, y) = pair(0xa511_e9b3, 0x63d8_3595);
+    let (z, _) = pair(0xc2b2_ae35, 0x27d4_eb2f);
+    glam::Vec3::new(x as f32, y as f32, z as f32)
+}
+
+fn densify_static_gaussians(
+    model: &mut vol::PointCloudModel,
+    position_gradient: &[f32],
+    scene_extent: f32,
+) -> Option<(Vec<GaussianRemap>, usize)> {
+    assert_eq!(position_gradient.len(), model.points.len());
+    let transforms = model.transforms.take().unwrap();
+    assert!(transforms.pbr.is_none());
+    let mut order: Vec<_> = position_gradient
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &score)| (score.is_finite() && score > 0.0).then_some(index))
+        .collect();
+    order.sort_unstable_by(|&a, &b| {
+        position_gradient[b]
+            .total_cmp(&position_gradient[a])
+            .then_with(|| a.cmp(&b))
+    });
+    order.truncate(
+        ((model.points.len() as f32 * STATIC_GAUSSIAN_DENSIFY_FRACTION).round() as usize)
+            .min(order.len()),
+    );
+    let selected = order.len();
+    let broad_scale = 0.01 * scene_extent;
+    let mut splits = vec![false; model.points.len()];
+    let mut split = 0;
+    for index in order {
+        if transforms.scales[index].max_element() > broad_scale {
+            splits[index] = true;
+            split += 1;
+        }
+    }
+    // Narrow residual sites need opacity-conserving clone semantics. Do not
+    // rebuild a dense surface cloud for a token number of safe broad splits.
+    if selected == 0 || split * 2 < selected {
+        model.transforms = Some(transforms);
+        return None;
+    }
+
+    let new_len = model.points.len() + split;
+    let sh_stride = model.sh_component_count() * 3;
+    let mut points = Vec::with_capacity(new_len);
+    let mut sh_coefficients = Vec::with_capacity(new_len * sh_stride);
+    let mut rotations = Vec::with_capacity(new_len);
+    let mut scales = Vec::with_capacity(new_len);
+    let mut remap = Vec::with_capacity(new_len);
+    let mut append = |index: usize, point: glam::Vec4, scale: glam::Vec3, source: GaussianRemap| {
+        points.push(point);
+        sh_coefficients
+            .extend_from_slice(&model.sh_coefficients[index * sh_stride..(index + 1) * sh_stride]);
+        rotations.push(transforms.rotations[index]);
+        scales.push(scale);
+        remap.push(source);
+    };
+    for (index, &split) in splits.iter().enumerate() {
+        let point = model.points[index];
+        let scale = transforms.scales[index];
+        if split {
+            let local_offset =
+                STATIC_GAUSSIAN_SPLIT_OFFSET_SCALE * gaussian_split_sample(index) * scale;
+            let offset = transforms.rotations[index] * local_offset;
+            let child_scale = scale / STATIC_GAUSSIAN_SPLIT_SCALE;
+            append(
+                index,
+                (point.truncate() - offset).extend(point.w),
+                child_scale,
+                GaussianRemap::Child(index),
+            );
+            append(
+                index,
+                (point.truncate() + offset).extend(point.w),
+                child_scale,
+                GaussianRemap::Child(index),
+            );
+        } else {
+            append(index, point, scale, GaussianRemap::Survivor(index));
+        }
+    }
+    model.points = points;
+    model.sh_coefficients = sh_coefficients;
+    model.transforms = Some(vol::Transforms {
+        rotations,
+        scales,
+        pbr: None,
+    });
+    Some((remap, split))
+}
+
+fn capture_scene_extent(capture: &crate::inverse::capture::Capture, view_indices: &[usize]) -> f32 {
+    let positions: Vec<_> = view_indices
+        .iter()
+        .map(|&index| glam::Vec3::from_array(capture.views[index].camera.cam_position))
+        .collect();
+    let center = positions.iter().sum::<glam::Vec3>() / positions.len() as f32;
+    1.1 * positions
+        .iter()
+        .map(|&position| position.distance(center))
+        .fold(0.0f32, f32::max)
+}
+
 fn fit_with_opacity_loss(
     model: &mut vol::PointCloudModel,
     capture: &crate::inverse::capture::Capture,
@@ -3083,41 +3370,25 @@ fn fit_with_opacity_loss(
         OpacityLoss::Mask => options.opacity_loss_weight,
         OpacityLoss::BackgroundOnly => options.opacity_loss_weight * BACKGROUND_ONLY_OPACITY_SCALE,
     };
-    let mut graph = mn::Graph::new();
-    build_graph_with_losses(
-        &mut graph,
-        model.points.len(),
-        options.batch_size,
-        options.candidates_per_pixel,
-        model.sh_degree,
+    let train_rotations = rotation_learning_rate > 0.0;
+    let mut session = build_fit_session(
+        model,
+        options,
         opacity_loss_weight,
-        options.background,
         opacity_loss,
-        0.0,
-        false,
-        rotation_learning_rate > 0.0,
+        train_rotations,
+        &gpu,
     );
-    let (mut session, _report) = mn::build(
-        &graph,
-        mn::SessionConfig {
-            mode: mn::Mode::Training,
-            gpu: Some(gpu),
-            ..Default::default()
-        },
-    );
-    let pixel_indices: Vec<u32> = (0..options.batch_size as u32)
-        .flat_map(|pixel| std::iter::repeat_n(pixel, options.candidates_per_pixel))
-        .collect();
-    session.set_input_u32("candidate_pixel_indices", &pixel_indices);
-    set_model_parameters(&mut session, model);
-    if rotation_learning_rate > 0.0 {
-        set_rotation_parameters(&mut session, model);
-    } else {
-        set_rotation_inputs(&mut session, model);
-    }
     let pixel_rays = capture_pixel_rays(capture);
     let mut candidate_index =
         CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
+    let densify_step = if train_rotations {
+        options.steps / 2
+    } else {
+        0
+    };
+    let mut gradient_observations = (densify_step > 0).then(|| vec![0u32; model.points.len()]);
+    let mut gradient_observed_at = (densify_step > 0).then(|| vec![usize::MAX; model.points.len()]);
 
     let audit = sample_rays(
         capture,
@@ -3131,14 +3402,10 @@ fn fit_with_opacity_loss(
     session.wait();
     let initial_loss = read_loss(&session);
 
-    session.set_adam(1.0, 0.9, 0.999, 1.0e-8);
-    session.set_lr_multiplier("positions", options.position_learning_rate);
-    session.set_lr_multiplier("log_scales", options.scale_learning_rate);
-    session.set_lr_multiplier("opacity_logits", options.opacity_learning_rate);
-    if rotation_learning_rate > 0.0 {
-        session.set_lr_multiplier("rotations", rotation_learning_rate);
+    configure_fit_optimizer(&mut session, options, rotation_learning_rate);
+    if densify_step > 0 {
+        session.set_adam_grouped_grad_norm("positions", 3);
     }
-    session.set_lr_multiplier("sh_", options.sh_learning_rate);
     let sync_candidate_geometry = changes_candidate_geometry(options, rotation_learning_rate);
     let mut step = 0;
     while step < options.steps {
@@ -3147,8 +3414,14 @@ fn fit_with_opacity_loss(
         } else {
             PREPARED_CANDIDATE_BATCHES
         };
+        let until_densify = if step < densify_step {
+            densify_step - step
+        } else {
+            PREPARED_CANDIDATE_BATCHES
+        };
         let batch_count = PREPARED_CANDIDATE_BATCHES
             .min(until_geometry_sync)
+            .min(until_densify)
             .min(options.steps - step);
         let candidates = prepare_candidates(
             model,
@@ -3171,6 +3444,22 @@ fn fit_with_opacity_loss(
             );
             let start = batch_index * entries;
             let end = start + entries;
+            if step + batch_index < densify_step {
+                if let Some(ref mut observations) = gradient_observations {
+                    let observed_at = gradient_observed_at.as_mut().unwrap();
+                    for (&particle, &mask) in candidates.indices[start..end]
+                        .iter()
+                        .zip(&candidates.mask[start..end])
+                    {
+                        let particle = particle as usize;
+                        let sequence = step + batch_index;
+                        if mask != 0.0 && observed_at[particle] != sequence {
+                            observed_at[particle] = sequence;
+                            observations[particle] += 1;
+                        }
+                    }
+                }
+            }
             set_batch_inputs(
                 &mut session,
                 model,
@@ -3182,6 +3471,48 @@ fn fit_with_opacity_loss(
             session.wait();
         }
         step += batch_count;
+        if densify_step > 0 && step == densify_step {
+            let mut position_gradient = session.read_adam_grouped_grad_norm("positions");
+            download_candidate_geometry(&session, model, true);
+            let camera_positions: Vec<_> = view_indices
+                .iter()
+                .map(|&index| glam::Vec3::from_array(capture.views[index].camera.cam_position))
+                .collect();
+            for (index, value) in position_gradient.iter_mut().enumerate() {
+                *value /= gradient_observations.as_ref().unwrap()[index].max(1) as f32;
+                let position = model.points[index].truncate();
+                let mean_distance = camera_positions
+                    .iter()
+                    .map(|&camera| camera.distance(position))
+                    .sum::<f32>()
+                    / camera_positions.len() as f32;
+                *value *= 0.5 * mean_distance;
+            }
+            let densified = densify_static_gaussians(
+                model,
+                &position_gradient,
+                capture_scene_extent(capture, view_indices),
+            );
+            if let Some((remap, split)) = densified {
+                let adam = save_gaussian_adam(&session, model.sh_component_count(), true);
+                drop(session);
+                session = build_fit_session(
+                    model,
+                    options,
+                    opacity_loss_weight,
+                    opacity_loss,
+                    true,
+                    &gpu,
+                );
+                configure_fit_optimizer(&mut session, options, rotation_learning_rate);
+                restore_gaussian_adam(&mut session, &adam, &remap);
+                eprintln!(
+                    "static Gaussian densification: {} particles (+{} split)",
+                    model.points.len(),
+                    split,
+                );
+            }
+        }
         if sync_candidate_geometry && step % options.geometry_sync_every == 0 {
             // Candidate grids read only position, support, and opacity. Keep
             // the much larger SH table device-local until the final model.
@@ -3243,6 +3574,100 @@ mod tests {
             surface_color_coefficients: None,
             spherical_voronoi: None,
         }
+    }
+
+    #[test]
+    fn static_gaussian_split_is_deterministic_and_preserves_survivors() {
+        let mut source = model(
+            (0..20)
+                .map(|index| glam::Vec4::new(index as f32, 0.0, 0.0, 0.4))
+                .collect(),
+        );
+        source.sh_coefficients[15..18].copy_from_slice(&[1.0, 2.0, 3.0]);
+        let mut scores = vec![0.0; source.points.len()];
+        scores[5] = 1.0;
+        let mut first = source.clone();
+        let (remap, split) = densify_static_gaussians(&mut first, &scores, 10.0).unwrap();
+        let mut second = source;
+        densify_static_gaussians(&mut second, &scores, 10.0).unwrap();
+
+        assert_eq!(split, 1);
+        assert_eq!(first.points, second.points);
+        assert_eq!(first.sh_coefficients, second.sh_coefficients);
+        assert_eq!(first.points.len(), 21);
+        assert_eq!(first.points[4], glam::Vec4::new(4.0, 0.0, 0.0, 0.4));
+        assert_eq!(first.points[7], glam::Vec4::new(6.0, 0.0, 0.0, 0.4));
+        assert_eq!(
+            &first.sh_coefficients[15..21],
+            &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+        );
+        assert_close(0.5 * (first.points[5].x + first.points[6].x), 5.0, 1.0e-6);
+        assert_ne!(first.points[5], first.points[6]);
+        let transforms = first.transforms.as_ref().unwrap();
+        assert_eq!(transforms.scales[5], glam::Vec3::splat(0.625));
+        assert_eq!(transforms.scales[6], glam::Vec3::splat(0.625));
+        assert!(matches!(remap[4], GaussianRemap::Survivor(4)));
+        for entry in &remap[5..7] {
+            assert!(matches!(entry, GaussianRemap::Child(5)));
+        }
+        first.validate().unwrap();
+    }
+
+    #[test]
+    fn static_gaussian_split_skips_narrow_residuals() {
+        let mut cloud = model(vec![glam::Vec4::ZERO; 20]);
+        cloud
+            .transforms
+            .as_mut()
+            .unwrap()
+            .scales
+            .fill(glam::Vec3::splat(0.05));
+        let before = cloud.clone();
+        let mut scores = vec![0.0; cloud.points.len()];
+        scores[3] = 1.0;
+
+        assert!(densify_static_gaussians(&mut cloud, &scores, 10.0).is_none());
+        assert_eq!(cloud.points, before.points);
+        assert_eq!(cloud.sh_coefficients, before.sh_coefficients);
+        let transforms = cloud.transforms.as_ref().unwrap();
+        let before_transforms = before.transforms.as_ref().unwrap();
+        assert_eq!(transforms.rotations, before_transforms.rotations);
+        assert_eq!(transforms.scales, before_transforms.scales);
+    }
+
+    #[test]
+    fn gaussian_adam_remap_keeps_survivors_and_zeros_children() {
+        let remap = [
+            GaussianRemap::Survivor(1),
+            GaussianRemap::Child(0),
+            GaussianRemap::Child(0),
+        ];
+        let positions = GaussianAdamEntry {
+            name: "positions",
+            stride: 2,
+            parameter: vec![10.0, 11.0, 20.0, 21.0],
+            m: vec![1.0, 2.0, 3.0, 4.0],
+            v: vec![5.0, 6.0, 7.0, 8.0],
+        };
+        let (parameter, m, v) = remap_gaussian_adam_entry(
+            &positions,
+            vec![100.0, 101.0, 200.0, 201.0, 300.0, 301.0],
+            &remap,
+        );
+        assert_eq!(parameter, [20.0, 21.0, 200.0, 201.0, 300.0, 301.0]);
+        assert_eq!(m, [3.0, 4.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(v, [7.0, 8.0, 0.0, 0.0, 0.0, 0.0]);
+
+        let appearance = GaussianAdamEntry {
+            name: "sh_r",
+            ..positions
+        };
+        let (parameter, _, _) = remap_gaussian_adam_entry(
+            &appearance,
+            vec![100.0, 101.0, 200.0, 201.0, 300.0, 301.0],
+            &remap,
+        );
+        assert_eq!(parameter, [20.0, 21.0, 10.0, 11.0, 10.0, 11.0]);
     }
 
     #[test]

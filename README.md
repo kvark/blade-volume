@@ -215,6 +215,19 @@ The implementation reuses ordinary differentiable graph operations and adds
 no shader variant, graph operation, public option, model field, format, or
 dependency.
 
+Those same low-order static fits now perform one residual-guided split halfway
+through support training. They accumulate camera-scaled position-gradient
+norms on the device, select the top 5%, and split only broad Gaussians into two
+smaller children. The graph is rebuilt at the new particle count while every
+survivor keeps its raw parameters, Adam moments, and optimizer step; only new
+children start with zero moments. Across the five-cloud gate, every mean and
+worst view improves and the aggregate rises from 25.352/24.434 to
+25.504/24.523 dB. Dense and independent nested gates rise to 26.80/24.90 and
+23.89 dB. Dense real clouds whose selected residuals are already narrow skip
+the event, avoiding coincident opacity duplication. This remains a private
+training policy and adds no shader, graph operation, public option, format,
+model field, or dependency.
+
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered
 environment beside the PBR Gaussian. The writer reloads that PLY before its
