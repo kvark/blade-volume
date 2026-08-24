@@ -6263,3 +6263,21 @@ builder and index cutoff is not justified. Temporary timers are removed too.
 All scopes peak below 562 MiB with zero swap, OOM, Xid, validation error, or
 GPU fault. Ignored artifacts remain under
 `target/audit-runs/{current-gaussian-profile,reused-gaussian-cutoff}/`.
+
+## Rejected matrix-cached camera projection (2026-08-24)
+
+The candidate-grid camera cache was tested with a 3×3 inverse-orientation
+matrix instead of the selected quaternion. It reduces the arithmetic needed to
+transform each Gaussian mean and three covariance axes. The complete 232-test
+training library passes, including camera endpoint projection and exact
+tiled/exhaustive candidate coverage.
+
+The floating-point order is not decision-equivalent in production. Two Bonsai
+candidate fits improve from `13.0/13.1` to `12.8/12.9` seconds, but both lower
+held-light volumetric Gaussian PBR mean from `14.51` to `14.46` dB and
+where-hit quality from `14.30` to `14.24` dB. Static held-view quality stays in
+band, isolating the loss to marginal support decisions during PBR fitting. The
+matrix cache is removed without a Room expansion; exact quaternion transforms
+remain part of candidate topology. All 12 GiB scopes peak below 586 MiB with
+zero swap, OOM, Xid, validation error, or GPU fault. Ignored artifacts remain
+under `target/audit-runs/matrix-pixel-projection/`.
