@@ -454,15 +454,19 @@ fn repeat_eight_rows(
     g.reshape(eight, &[rows * vol::SURFACE_DETAIL_DIRECTIONS, width])
 }
 
-fn vector_lengths(g: &mut mn::Graph, vectors: mn::NodeId, rows: usize) -> mn::NodeId {
-    let squared = g.mul(vectors, vectors);
-    let squared_length = g.sum_inner(squared);
+fn regularized_sqrt(g: &mut mn::Graph, squared: mn::NodeId, rows: usize) -> mn::NodeId {
     let epsilon = g.constant(vec![1.0e-12_f32; rows], &[rows, 1]);
-    let squared_length = g.add(squared_length, epsilon);
-    let log = g.log(squared_length);
+    let regularized = g.add(squared, epsilon);
+    let log = g.log(regularized);
     let half = g.constant(vec![0.5_f32; rows], &[rows, 1]);
     let half_log = g.mul(log, half);
     g.exp(half_log)
+}
+
+fn vector_lengths(g: &mut mn::Graph, vectors: mn::NodeId, rows: usize) -> mn::NodeId {
+    let squared = g.mul(vectors, vectors);
+    let squared_length = g.sum_inner(squared);
+    regularized_sqrt(g, squared_length, rows)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -490,16 +494,17 @@ fn surface_detail_directional_weights(
     let unit_scale = 1.0_f32 / 3.0_f32.sqrt();
     let weight = g.constant(vec![unit_scale; 3], &[3]);
     let direction = g.rms_norm(view, weight, 1.0e-12);
-    let directions = repeat_eight_rows(g, direction, spatial_rows, 3);
 
     let axes = g.embedding(cell_indices, parameters.axes);
     let axes = g.reshape(axes, &[directional_rows, 3]);
     let temperatures = vector_lengths(g, axes, directional_rows);
-    let temperatures = repeat_xyz(g, temperatures, directional_rows);
-    let scaled_directions = g.mul(directions, temperatures);
-    let neg_axes = g.neg(axes);
-    let delta = g.add(scaled_directions, neg_axes);
-    let distances = vector_lengths(g, delta, directional_rows);
+    let normalized_axes = g.rms_norm(axes, weight, 1.0e-12 / 3.0);
+    let squared_distances =
+        g.pairwise_squared_distance(direction, normalized_axes, vol::SURFACE_DETAIL_DIRECTIONS);
+    let squared_distances = g.reshape(squared_distances, &[directional_rows, 1]);
+    let squared_temperatures = g.mul(temperatures, temperatures);
+    let scaled_squared_distances = g.mul(squared_distances, squared_temperatures);
+    let distances = regularized_sqrt(g, scaled_squared_distances, directional_rows);
     let neg_distances = g.neg(distances);
     let logits = g.reshape(
         neg_distances,
@@ -8075,6 +8080,49 @@ mod tests {
             (radius_gradient[0] - expected_radius_gradient).abs() < 2.0e-3,
             "radius gradient {} != CPU finite difference {expected_radius_gradient}",
             radius_gradient[0],
+        );
+
+        const AXIS_EPSILON: f32 = 1.0e-3;
+        let axis_x = model
+            .surface_detail
+            .as_ref()
+            .unwrap()
+            .directional
+            .as_ref()
+            .unwrap()
+            .axes[0]
+            .x;
+        let axis_loss = |value| {
+            let mut perturbed = model.clone();
+            perturbed
+                .surface_detail
+                .as_mut()
+                .unwrap()
+                .directional
+                .as_mut()
+                .unwrap()
+                .axes[0]
+                .x = value;
+            vol::trace::eval_surface_detail(
+                &perturbed,
+                0,
+                glam::Vec3::new(1.0, 0.0, 0.0),
+                glam::Vec3::Z,
+                query_near,
+            )
+            .1
+            .x
+        };
+        let expected_axis_gradient = (axis_loss(axis_x + AXIS_EPSILON)
+            - axis_loss(axis_x - AXIS_EPSILON))
+            / (2.0 * AXIS_EPSILON);
+        let mut axis_gradient = vec![0.0_f32; directional_width * 3];
+        session.read_param_grad("surface_detail_directional_axes", &mut axis_gradient);
+        assert!(expected_axis_gradient.abs() > 1.0e-6);
+        assert!(
+            (axis_gradient[0] - expected_axis_gradient).abs() < 2.0e-3,
+            "axis gradient {} != CPU finite difference {expected_axis_gradient}",
+            axis_gradient[0],
         );
 
         for (name, size) in [

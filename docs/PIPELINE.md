@@ -2197,6 +2197,31 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   fault. A longer two-scene quality gate remains deferred until this upstream
   commit is merged and pinned.
 
+#### M2bs — Compact directional-distance expansion (done)
+
+- The directional kernel no longer copies every spatial view direction eight
+  times or broadcasts every learned temperature over XYZ. It evaluates the
+  equivalent identity `|T d - a|² = T² |d - a/T|²` through Meganeura's
+  existing eight-wide pairwise-distance operation, then uses the same
+  regularized square root and softmax as before. A shared square-root helper
+  keeps that graph construction in one place. This adds no graph
+  operation, shader, shader entry/group, binding, pipeline, backend variant,
+  public option, model field, or dependency.
+- Stacked on grouped-scatter commit `c409bb2`, the matched 98,831-site Room
+  graph falls from 256 to 253 passes. Across 32 warmed updates at 4,096 rays ×
+  160 path entries, GPU graph time falls from 30.83--31.33 to 26.34--26.82 ms,
+  about 14.5%. A matched 256-update continuation falls from 17.873 to 15.943
+  seconds (-10.8%). Both arms score exactly 29.1014 dB over the four training
+  views and 18.9553 dB over eight held-out views at reported precision; every
+  printed held-out view is identical.
+- The physical-GPU graph test agrees with the CPU renderer for the complete
+  directional colour and checks both radius and learned-axis gradients against
+  CPU finite differences. The 256-update control/candidate scopes peak at
+  5.50/5.54 GB with zero swap, OOM, pressure, throttle, Xid, or GPU fault. No
+  scene-matched weighted Bonsai checkpoint is present locally, so the longer
+  second-scene gate remains deferred rather than substituting a cross-scene
+  initialization.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

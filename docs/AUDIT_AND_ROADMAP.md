@@ -2165,7 +2165,16 @@ material path.
    from 262 to 256 passes and from 34.48--34.85 to 30.83--31.33 ms (about
    -10.4%), while both arms score 24.2420/21.1172 dB on the four training/next
    held view. This adds no operation, shader entry/group, binding, pipeline, or
-   backend variant. Pin it after merge, then run the longer two-scene gate.)
+   backend variant. Blade then factors the eight repeated direction rows into
+   Meganeura's existing pairwise-distance operation using the equivalent
+   `|T d - a|² = T² |d - a/T|²` form. Stacked on `c409bb2`, the graph falls
+   from 256 to 253 passes and from 30.83--31.33 to 26.34--26.82 ms (about
+   -14.5%). A matched 256-update pair falls from 17.873 to 15.943 seconds and
+   scores identical 29.1014/18.9553 dB over four training/eight held views.
+   CPU/GPU forward and learned-axis finite-difference gates pass. This also
+   adds no operation or backend/shader variant. Pin `c409bb2` after merge;
+   retain the full table as opt-in until a scene-matched weighted second-scene
+   checkpoint is available for the longer gate.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/
