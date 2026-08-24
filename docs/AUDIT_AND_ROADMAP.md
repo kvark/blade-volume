@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -50,9 +50,10 @@ behind these gates:
 
 1. Match reference RadFoam training within the Stage 2 quality tolerance on a
    complete, reproducible scene. Checkpoint renderer parity is done.
-2. Reduce full directional-table backward cost before retrying a two-scene
-   training gate. Released-checkpoint pixel parity now passes; the first
-   zero-initialized Room screens are slower and quality-negative.
+2. Finish reducing full directional-table training cost before retrying a
+   two-scene gate. Released-checkpoint pixel parity passes, and the latest
+   generic grouped-scatter fusion cuts the profiled graph another 10.4%; the
+   first zero-initialized Room screens remain quality-negative.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.
@@ -1303,7 +1304,11 @@ At the audited revision:
   complete-interval rescans, so its five-hit window changes work batching
   rather than omitting or proxy-face-ordering particles. Physical-GPU pixel
   parity against the CPU oracle now passes. The official-checkpoint
-  cross-render and window-size performance sweep remain outstanding.
+  cross-render remains outstanding. The invariant window sweep selects 48
+  candidates: at 512² it cuts Bonsai/Room/small submit-plus-wait time from
+  8.29/6.87/4.23 ms to 3.91/3.22/3.51 ms with identical output hashes. A
+  regression keeps a broad support containing the camera, whose proxy exit is
+  beyond camera depth, behind more than one complete candidate batch.
 - Scene Gaussian tracing now keeps its hardware query interval separate from
   the Gaussian's semantic support interval. Reusing the finite semantic bounds
   for triangle queries excluded conservative icosahedron proxy faces lying
@@ -1812,7 +1817,7 @@ fixed ablation rather than merely changing topology.
 ### Stage 4: Gaussian backend
 
 1. Establish a trusted raster or reference 3DGRT image oracle.
-2. Sweep hit-window and proxy bounds for accuracy and performance.
+2. Sweep hit-window and proxy bounds for accuracy and performance. (Done.)
 3. Add cloud transforms without rebuilding point data.
 4. Decide whether native Gaussian reconstruction is justified after RadFoam and
    PowerFoam quality is established.
@@ -1829,8 +1834,7 @@ that pass then improves all four truth-normal RMSEs by 0.13--0.37 degrees and
 held-light mean/worst PSNR by another 0.06--0.17/0.05--0.11 dB. Coverage moves
 by at most 0.3 points. The large remaining 53.7--57.5 degree error keeps dense
 single-light correspondence as the geometry bottleneck. Cross-rendering a recognized
-volumetric Gaussian checkpoint against official 3DGRUT and the hit-window
-performance sweep remain.
+volumetric Gaussian checkpoint against official 3DGRUT remains.
 
 Acceptance gate: imported standard checkpoints match the oracle at documented
 quality and performance; transformations pass rendered-pixel tests.
@@ -2155,12 +2159,17 @@ material path.
    tangent. A matched 98,831-site directional-colour continuation falls from
    354 to 262 graph passes and from 75.03 to 68.88 ms (-8.2%) at unchanged
    21.2093/20.4618 dB train/next-view quality. This remains a generic
-   stop-gradient cleanup with no new operation or shader variant. The remaining
-   bounded target is the actual per-ray colour function, followed by a longer
-   quality gate.)
-3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT and
-   sweep the ray-query batch window for invariant pixels, query count, and frame
-   time. The conservative triangle BLAS remains an invisible point-candidate
+   stop-gradient cleanup with no new operation or shader variant. Meganeura
+   `c409bb2` then fuses each table gradient's eight-wide broadcast and multiply
+   into the existing atomic scatter. The matched 32-update Room graph falls
+   from 262 to 256 passes and from 34.48--34.85 to 30.83--31.33 ms (about
+   -10.4%), while both arms score 24.2420/21.1172 dB on the four training/next
+   held view. This adds no operation, shader entry/group, binding, pipeline, or
+   backend variant. Pin it after merge, then run the longer two-scene gate.)
+3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
+   ray-query window gate is complete: a 48-candidate window preserves three 512²
+   output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/
+   16.9%. The conservative triangle BLAS remains an invisible point-candidate
    accelerator, not polygonal scene geometry.
 
 ### P2: finish engine-level composition

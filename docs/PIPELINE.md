@@ -2173,6 +2173,30 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   shader entry/group, binding, pipeline, backend variant, or dependency. The
   remaining cost is the required released directional colour function itself.
 
+#### M2br — Fuse grouped directional-table scatters (upstreamed)
+
+- Meganeura commit `c409bb2` extends its existing row-scaled embedding-scatter
+  fusion to equal-width groups within a gathered row. The released directional
+  table reduces each 64-float colour row in eight-float groups; its backward
+  previously materialized three 41,943,040-element broadcasts and three
+  equally large multiplies before the existing atomic scatters. The compiler
+  now encodes the group width in the existing scatter mode and performs the
+  multiply at accumulation time. This adds no graph operation, shader entry or
+  group, binding, pipeline, or backend variant.
+- On a matched 98,831-site Room continuation at 4,096 rays × 160 path entries,
+  the graph falls from 262 to 256 passes. Across 32 warmed updates, GPU graph
+  time stays within 34.48--34.85 ms for the pinned control and 30.83--31.33 ms
+  for the candidate, about a 10.4% reduction. The path recorder remains about
+  6.1 ms in both arms. After all 32 updates, both freshly serialized PLYs score
+  24.2420 dB over the four training views and 21.1172 dB on the next held view.
+- Structural coverage proves the grouped broadcast is removed. A physical-GPU
+  repeated-index test compares the complete table gradient against CPU
+  accumulation, and Meganeura's formatting, warning-denied all-target clippy,
+  and complete all-target suite pass. The test scope peaks at 9.97 GB; both
+  profile scopes stay below 5.41 GB, with zero swap, OOM, throttle, or GPU
+  fault. A longer two-scene quality gate remains deferred until this upstream
+  commit is merged and pinned.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
