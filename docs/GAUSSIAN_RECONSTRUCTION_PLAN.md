@@ -5893,3 +5893,33 @@ arms remain outside version control under
 Formatting, strict all-target/all-feature Clippy, and both complete physical-GPU
 workspace configurations pass; the two full test scopes each peak at 3.02 GiB
 with zero swap, pressure, OOM, validation, Xid, or GPU fault.
+
+## Selected quaternion graph cleanup (2026-08-24)
+
+The trainable Gaussian rotation graph now doubles quaternion `x`, `y`, and `z`
+once and reuses the doubled products while expanding the rotation matrix. This
+is the standard algebraic form of the same normalized quaternion transform. It
+removes six pointwise graph multiplies, introduces no operation or shader, and
+does not change the optimizer schedule, parameterization, or persistent model.
+
+On the focused SH-0 graph this lowers the training plan from 313 to 296 GPU
+dispatches. The production SH-1 dense graph falls from 313 to 310 because its
+larger backward graph admits different fusion. Median profiled step time remains
+tied at about 1.21 ms, but an order-balanced end-to-end screen puts three warm
+candidate fits at 4.115--4.127 seconds and the two warm controls at
+4.146--4.148 seconds. This is a small approximately 0.7% throughput improvement,
+not a new performance tier.
+
+The quality gate is neutral. Five six-view clouds score `25.58/24.74`,
+`25.43/24.29`, `25.51/24.37`, `25.63/24.83`, and `25.40/24.42` dB. Their
+`25.508/24.529` aggregate is within hundredths of the selected
+`25.504/24.523` control, while the independent nested-camera fixture improves
+from `23.89` to `23.94` dB. A more aggressive attempt to freeze rotations at
+the midpoint is rejected: the dense result falls from `26.80/24.90` to
+`26.56/24.40` dB. Rotation gradients remain useful throughout the support
+stage even though their graph is launch-heavy.
+
+Profiling hooks and the freeze prototype are removed. The five-cloud screen
+peaks at 321 MiB under its 12 GiB cgroup with no swap, pressure, OOM, Xid, or
+GPU fault. Untracked artifacts remain under
+`target/audit-runs/native-gaussian-profile/`.
