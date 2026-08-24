@@ -2291,6 +2291,21 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   and 19.8841 dB over eight held views. Both runs cover the same exact path
   oracle; the held result is unchanged at reported precision.
 
+#### M2bw — Prepack frozen spatial-detail sites (done)
+
+- The production continuation freezes its surface normals and spatial-detail
+  offsets. Session upload now projects those offsets into their tangent planes
+  once, while the raw values remain the checkpoint authority. Training either
+  field keeps the original differentiable projection path. This is an internal
+  derived table, with no public API, model/PLY field, graph operation, shader,
+  entry/group, binding, pipeline, backend variant, or dependency.
+- On the same 98,831-site Room continuation, the graph falls from 197 to 195
+  passes and its warmed time from 5.48--5.53 to 5.31--5.40 ms. Three matched
+  256-update runs average 5.167 seconds before and 5.081 seconds after (-1.7%)
+  at the same approximately 0.523 GB peak memory. The freshly serialized result
+  preserves 27.1422/19.8841 dB over four training/eight held views at reported
+  precision.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

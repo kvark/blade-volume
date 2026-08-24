@@ -2199,7 +2199,10 @@ material path.
    camera, while projected candidates catch up at that boundary. Raising the
    internal crossover from 1,024 to 4,096 cuts a matched 256-update Room run
    from 6.014 to 5.035 seconds and peak cgroup memory from 0.919 to 0.523 GB,
-   while preserving 27.1422/19.8841 dB over four training/eight held views.)
+   while preserving 27.1422/19.8841 dB over four training/eight held views.
+   Prepacking frozen spatial-detail tangent sites then removes another two
+   graph passes and improves three matched 256-update runs by 1.7%, with the
+   same reported quality and memory.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

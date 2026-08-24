@@ -97,6 +97,9 @@ pub struct SphericalVoronoiGraph {
 pub struct SurfaceDetailGraph {
     /// `[N, 24]` site-major radius-normalized object-space offsets.
     pub offsets: mn::NodeId,
+    /// Optional `[N, 24]` tangent-projected offsets when both source fields
+    /// are frozen. Raw offsets remain the checkpoint authority.
+    pub frozen_tangent_offsets: Option<mn::NodeId>,
     /// `[N, 8]` radius-normalized signed heights.
     pub heights: mn::NodeId,
     /// `[N, 24]` channel-major RGB residuals.
@@ -572,9 +575,18 @@ fn evaluate_surface_detail_graph(
         _ => unreachable!("surface-query geometry inputs must be declared together"),
     };
 
-    let raw_sites = g.embedding(cell_indices, parameters.offsets);
+    let raw_sites = g.embedding(
+        cell_indices,
+        parameters
+            .frozen_tangent_offsets
+            .unwrap_or(parameters.offsets),
+    );
     let raw_sites = g.reshape(raw_sites, &[rows * vol::SURFACE_DETAIL_SITES, 3]);
-    let tangent_sites = g.pairwise_vector_rejection(raw_sites, normals, vol::SURFACE_DETAIL_SITES);
+    let tangent_sites = if parameters.frozen_tangent_offsets.is_some() {
+        raw_sites
+    } else {
+        g.pairwise_vector_rejection(raw_sites, normals, vol::SURFACE_DETAIL_SITES)
+    };
 
     // Height and colour weights query the base and displaced planes along the
     // same rays. Only the signed plane offset changes between them; keep the
@@ -1050,6 +1062,16 @@ fn build_volumetric_graph_with_options(
             &[n_cells, vol::SURFACE_DETAIL_SITES * 3],
             options.surface_trainability.detail_offsets,
         ),
+        frozen_tangent_offsets: (!options.surface_trainability.normals
+            && !options.surface_trainability.detail_offsets)
+            .then(|| {
+                parameter_with_gradient(
+                    g,
+                    "surface_detail_tangent_offsets",
+                    &[n_cells, vol::SURFACE_DETAIL_SITES * 3],
+                    false,
+                )
+            }),
         heights: parameter_with_gradient(
             g,
             "surface_detail_heights",
@@ -3696,6 +3718,22 @@ fn pack_frozen_directional_axes(axes: &[glam::Vec3]) -> (Vec<f32>, Vec<f32>) {
     (unit_axes, temperatures)
 }
 
+fn pack_frozen_surface_detail_offsets(offsets: &[glam::Vec3], normals: &[glam::Vec3]) -> Vec<f32> {
+    assert_eq!(offsets.len(), normals.len() * vol::SURFACE_DETAIL_SITES);
+    let mut tangent_offsets = Vec::with_capacity(offsets.len() * 3);
+    let (point_offsets, &[]) = offsets.as_chunks::<{ vol::SURFACE_DETAIL_SITES }>() else {
+        unreachable!()
+    };
+    for (point_offsets, &normal) in point_offsets.iter().zip(normals) {
+        let normal = normal.normalize();
+        for &offset in point_offsets {
+            let tangent = offset - normal * offset.dot(normal);
+            tangent_offsets.extend_from_slice(&tangent.to_array());
+        }
+    }
+    tangent_offsets
+}
+
 fn upload_model_parameters(
     session: &mut mn::Session,
     model: &vol::PointCloudModel,
@@ -3761,6 +3799,13 @@ fn upload_model_parameters(
             }
         }
         session.set_parameter("surface_detail_offsets", &offsets);
+        if session.has_parameter("surface_detail_tangent_offsets") {
+            let tangent_offsets = pack_frozen_surface_detail_offsets(
+                &detail.offsets,
+                model.surface_normals.as_ref().unwrap(),
+            );
+            session.set_parameter("surface_detail_tangent_offsets", &tangent_offsets);
+        }
         session.set_parameter("surface_detail_heights", &detail.heights);
         session.set_parameter("surface_detail_colors", &colors);
         if let Some(ref density_logits) = detail.density_logits {
@@ -7910,6 +7955,7 @@ mod tests {
         let cell_indices = graph.input_u32("cell_indices", &[1]);
         let parameters = SurfaceDetailGraph {
             offsets: graph.parameter("surface_detail_offsets", &[1, sites * 3]),
+            frozen_tangent_offsets: None,
             heights: graph.parameter("surface_detail_heights", &[1, sites]),
             colors: graph.parameter("surface_detail_colors", &[1, sites * 3]),
             density_logits: Some(graph.parameter("surface_detail_density_logits", &[1, sites])),
@@ -8216,6 +8262,35 @@ mod tests {
     }
 
     #[test]
+    fn frozen_surface_detail_prepack_projects_each_site_to_its_tangent_plane() {
+        let normals = [
+            glam::Vec3::new(2.0, -1.0, 3.0),
+            glam::Vec3::new(-0.5, 4.0, 1.0),
+        ];
+        let offsets = (0..normals.len() * vol::SURFACE_DETAIL_SITES)
+            .map(|index| {
+                glam::Vec3::new(
+                    0.1 * index as f32 - 0.4,
+                    -0.03 * index as f32 + 0.2,
+                    0.07 * index as f32 - 0.1,
+                )
+            })
+            .collect::<Vec<_>>();
+        let packed = pack_frozen_surface_detail_offsets(&offsets, &normals);
+
+        for (point, normal) in normals.into_iter().enumerate() {
+            let normal = normal.normalize();
+            for site in 0..vol::SURFACE_DETAIL_SITES {
+                let index = point * vol::SURFACE_DETAIL_SITES + site;
+                let actual = glam::Vec3::from_slice(&packed[index * 3..index * 3 + 3]);
+                let expected = offsets[index] - normal * offsets[index].dot(normal);
+                assert!((actual - expected).length() < 1.0e-6);
+                assert!(actual.dot(normal).abs() < 1.0e-6);
+            }
+        }
+    }
+
+    #[test]
     fn frozen_directional_axis_prepack_matches_gpu_weights() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
@@ -8397,6 +8472,7 @@ mod tests {
         let neg_ray_origin_geometry = graph.neg(ray_origin_geometry);
         let parameters = SurfaceDetailGraph {
             offsets: graph.parameter("surface_detail_offsets", &[1, sites * 3]),
+            frozen_tangent_offsets: None,
             heights: graph.parameter("surface_detail_heights", &[1, sites]),
             colors: graph.parameter("surface_detail_colors", &[1, sites * 3]),
             density_logits: None,
@@ -9752,6 +9828,12 @@ mod tests {
             false,
             ColorLoss::SmoothL1,
         );
+        assert!(vg
+            .surface_detail
+            .as_ref()
+            .unwrap()
+            .frozen_tangent_offsets
+            .is_some());
         let weighted = vg.weighted_path.unwrap();
         assert!(weighted.dt_reference_tangent.is_none());
         assert!(weighted.dt_grad_surface_normal.is_none());
@@ -9770,6 +9852,7 @@ mod tests {
             "surface_normals",
             "surface_offsets",
             "surface_detail_offsets",
+            "surface_detail_tangent_offsets",
             "surface_detail_heights",
             "surface_detail_colors",
             "surface_detail_density_logits",
