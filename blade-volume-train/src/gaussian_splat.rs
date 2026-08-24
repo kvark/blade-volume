@@ -98,8 +98,14 @@ struct CandidateRowSlices<'a> {
 struct CandidateGrid {
     width: usize,
     tiles_x: usize,
-    tiles: Vec<Vec<TileCandidate>>,
+    tiles: Vec<CandidateTile>,
     gaussian_origins: Vec<glam::Vec3>,
+}
+
+#[derive(Default)]
+struct CandidateTile {
+    full: Vec<u32>,
+    boundary: Vec<TileCandidate>,
 }
 
 #[derive(Clone, Copy)]
@@ -115,6 +121,21 @@ impl TileCandidate {
             && pixel[1] >= self.pixel_min[1]
             && pixel[0] <= self.pixel_max[0]
             && pixel[1] <= self.pixel_max[1]
+    }
+}
+
+#[cfg(test)]
+impl CandidateTile {
+    fn len(&self) -> usize {
+        self.full.len() + self.boundary.len()
+    }
+
+    fn contains(&self, particle: u32, pixel: [u8; 2]) -> bool {
+        self.full.contains(&particle)
+            || self
+                .boundary
+                .iter()
+                .any(|candidate| candidate.particle == particle && candidate.covers(pixel))
     }
 }
 
@@ -243,7 +264,7 @@ impl CandidateIndex {
         &self,
         view: usize,
         pixel: usize,
-    ) -> Option<(&[TileCandidate], &[glam::Vec3], [u8; 2])> {
+    ) -> Option<(&CandidateTile, &[glam::Vec3], [u8; 2])> {
         let grid = self.views[view].as_ref()?;
         let x = pixel % grid.width;
         let y = pixel / grid.width;
@@ -275,7 +296,9 @@ impl CandidateGrid {
     ) -> Self {
         let tiles_x = width.div_ceil(TILE_SIZE);
         let tiles_y = height.div_ceil(TILE_SIZE);
-        let mut tiles = vec![Vec::new(); tiles_x * tiles_y];
+        let mut tiles: Vec<CandidateTile> = std::iter::repeat_with(CandidateTile::default)
+            .take(tiles_x * tiles_y)
+            .collect();
         let camera_origin = glam::Vec3::from(camera.cam_position);
         let mut gaussian_origins = vec![glam::Vec3::ZERO; candidate_transforms.len()];
         let projection = crate::inverse::capture::PixelProjection::new(camera, width, height);
@@ -304,11 +327,16 @@ impl CandidateGrid {
                 for tile_x in min_x..=max_x.min(tiles_x - 1) {
                     let x_range = tile_pixel_range(tile_x, min_pixel_x, max_pixel_x);
                     let y_range = tile_pixel_range(tile_y, min_pixel_y, max_pixel_y);
-                    tiles[tile_y * tiles_x + tile_x].push(TileCandidate {
-                        particle: index as u32,
-                        pixel_min: [x_range[0], y_range[0]],
-                        pixel_max: [x_range[1], y_range[1]],
-                    });
+                    let tile = &mut tiles[tile_y * tiles_x + tile_x];
+                    if x_range == [0, TILE_SIZE as u8 - 1] && y_range == [0, TILE_SIZE as u8 - 1] {
+                        tile.full.push(index as u32);
+                    } else {
+                        tile.boundary.push(TileCandidate {
+                            particle: index as u32,
+                            pixel_min: [x_range[0], y_range[0]],
+                            pixel_max: [x_range[1], y_range[1]],
+                        });
+                    }
                 }
             }
         }
@@ -1882,17 +1910,14 @@ fn collect_candidate_hits(
 fn collect_indexed_candidate_hits(
     index: &CandidateIndex,
     direction: glam::Vec3,
-    candidates: &[TileCandidate],
+    candidates: &CandidateTile,
     gaussian_origins: &[glam::Vec3],
     tile_pixel: [u8; 2],
     hits: &mut Vec<(f32, u32)>,
 ) {
     hits.clear();
-    for candidate in candidates {
-        if !candidate.covers(tile_pixel) {
-            continue;
-        }
-        let particle = candidate.particle as usize;
+    let mut record = |particle: u32| {
+        let particle = particle as usize;
         let (depth, distance_squared, direction_squared) =
             ray_distance_squared_from_valid_gaussian_origin(
                 gaussian_origins[particle],
@@ -1902,6 +1927,14 @@ fn collect_indexed_candidate_hits(
         debug_assert!(direction_squared > 0.0 && depth.is_finite() && distance_squared.is_finite());
         if depth > 0.0 && distance_squared <= index.max_distance_squared[particle] {
             hits.push((depth, particle as u32));
+        }
+    };
+    for &particle in &candidates.full {
+        record(particle);
+    }
+    for candidate in &candidates.boundary {
+        if candidate.covers(tile_pixel) {
+            record(candidate.particle);
         }
     }
 }
@@ -4450,10 +4483,23 @@ mod tests {
     }
 
     #[test]
-    fn tile_pixel_ranges_clip_only_boundary_tiles() {
+    fn tile_pixel_ranges_and_full_coverage_storage_are_exact() {
         assert_eq!(tile_pixel_range(1, 10, 27), [2, 7]);
         assert_eq!(tile_pixel_range(2, 10, 27), [0, 7]);
         assert_eq!(tile_pixel_range(3, 10, 27), [0, 3]);
+
+        let tile = CandidateTile {
+            full: vec![1],
+            boundary: vec![TileCandidate {
+                particle: 2,
+                pixel_min: [2, 1],
+                pixel_max: [6, 5],
+            }],
+        };
+        assert_eq!(tile.len(), 2);
+        assert!(tile.contains(1, [0, 0]));
+        assert!(tile.contains(2, [2, 5]));
+        assert!(!tile.contains(2, [1, 5]));
     }
 
     #[test]
@@ -4636,9 +4682,7 @@ mod tests {
                 if response.depth > 0.0 && model.points[particle].w * response.response >= MIN_ALPHA
                 {
                     assert!(
-                        candidates.iter().any(|candidate| {
-                            candidate.particle == particle as u32 && candidate.covers(tile_pixel)
-                        }),
+                        candidates.contains(particle as u32, tile_pixel),
                         "tile omitted particle {particle} at pixel {pixel}"
                     );
                 }
@@ -4680,9 +4724,7 @@ mod tests {
         let index = CandidateIndex::new(&model, &capture, &[0], MIN_ALPHA);
         let (candidates, _, tile_pixel) = index.candidates(0, pixel).unwrap();
         assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.particle == 0 && candidate.covers(tile_pixel)),
+            candidates.contains(0, tile_pixel),
             "the exact contributing Gaussian was omitted from its pixel tile"
         );
     }
@@ -4720,9 +4762,7 @@ mod tests {
         let index = CandidateIndex::new(&model, &capture, &[0], MIN_ALPHA);
         let (candidates, _, tile_pixel) = index.candidates(0, PIXEL).unwrap();
         assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.particle == 0 && candidate.covers(tile_pixel)),
+            candidates.contains(0, tile_pixel),
             "the exact contributing Gaussian was collapsed into the adjacent tile"
         );
     }

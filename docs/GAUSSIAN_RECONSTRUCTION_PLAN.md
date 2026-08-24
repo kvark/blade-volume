@@ -6782,3 +6782,40 @@ calculation remains shared by the oracle and host index. All 12 GiB scopes
 peak below 1.25 GB with zero swap, OOM, validation error, Xid, or GPU fault.
 Ignored artifacts remain under
 `target/audit-runs/projected-gaussian-distance/`.
+
+## Compact full-coverage Gaussian tiles (2026-08-24)
+
+The host candidate grid now distinguishes ellipsoids that cover a complete
+8×8 tile from those that only overlap its boundary. Full-coverage membership
+stores one particle index and evaluates it directly. Only boundary membership
+retains the existing four-byte local pixel range and performs the four range
+comparisons. Both lists still enter the same exact maximum-response test and
+the resulting hits retain the total `(depth, particle)` sort, so optimizer
+input is unchanged.
+
+All 41 Gaussian-focused tests pass. The exhaustive/indexed and
+grouped/individual oracles compare every candidate row, while the randomized
+1.5-million-response oracle still proves that extreme anisotropic supports are
+never omitted. A dedicated storage test covers a full tile plus accepted and
+rejected boundary pixels.
+
+The large-screen effect is deliberately modest. Two order-balanced
+109,764-particle Room pairs reduce combined Gaussian fitting from `9.6/9.7` to
+`9.4/9.4` seconds, while scoped CPU falls from `55.85/56.50` to
+`54.91/55.29` seconds. The 169,432-particle Bonsai fit is neutral at `11.5`
+seconds in all three adjacent arms. The 2,880-particle dense reconstruction
+remains in its established fit and held-quality replay bands: its complete
+Gaussian fit takes `4.963` seconds and final volumetric held-light quality is
+`24.45/23.21/23.21` dB mean/worst/where-hit at 55.1% coverage.
+
+The change replaces redundant per-membership data and comparisons; it adds no
+approximation, cache, option, API, shader, graph operation, model field,
+format, or dependency. Reconstruction scopes peak below 575 MiB with zero
+swap, memory pressure, OOM, validation error, Xid, or GPU fault. Ignored
+artifacts remain under
+`target/audit-runs/compact-full-gaussian-tiles/`.
+
+Formatting, strict all-target/all-feature Clippy, and both complete physical-
+GPU workspace configurations pass. The default and all-feature test scopes
+peak at 3.19 and 2.93 GiB respectively, again with zero swap, memory pressure,
+OOM, validation error, Xid, or GPU fault.
