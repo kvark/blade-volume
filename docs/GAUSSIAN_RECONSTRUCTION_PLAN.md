@@ -6117,3 +6117,41 @@ updates. All prototypes are removed before a five-cloud expansion;
 artifacts remain outside version control under
 `target/audit-runs/static-split-{direction,axis,opacity}/`. All eight quality scopes
 report zero swap, memory pressure, OOM, Xid, validation error, or GPU fault.
+
+## Rejected learned static-covariance normal feedback (2026-08-24)
+
+The low-order static field's learned covariance frame is not transferred into
+the independently fitted PBR surface. A diagnostic matched each PBR particle
+to the nearest final static Gaussian, selected that Gaussian's narrowest
+world-space covariance axis, resolved its sign against the established PBR
+normal, and tested both replacement and a conservative 10% normalized blend.
+This reused existing model data and added no training node or renderer path;
+the matching and environment gate were diagnostic-only.
+
+Full replacement confirms that covariance orientation remains primarily an
+appearance/support variable. On the dense fixture it raises raw normal RMSE
+from `49.66` to `67.16` degrees and finishes at `65.04` instead of `48.49`
+degrees after the normal continuation. Scalar held-light PBR falls from
+`23.51/22.77` to `23.31/22.62` dB mean/worst. Volumetric PBR trades mean for
+tail at `24.24/23.25` versus `24.27/23.10` dB, which cannot redeem the severe
+geometry error.
+
+The 10% blend is a plausible weak cue but does not clear the production gate.
+Adjacent dense control/candidate runs improve final normal RMSE
+`48.49→48.18` degrees, scalar PBR `23.51/22.77→23.53/22.80` dB, and volumetric
+PBR `24.27/23.10→24.28/23.12` dB. The independent nested fixture also moves
+normal RMSE `51.47→51.32` degrees, scalar PBR `23.03→23.13` dB, and volumetric
+PBR `23.32→23.33` dB.
+
+Across the definitive five-cloud gate, however, average volumetric PBR changes
+only `23.504/22.930→23.514/22.930` dB. Clouds 2 and 5 each lose `0.03` dB in
+the volumetric tail. Scalar PBR averages `22.690/22.234→22.702/22.252` dB, but
+cloud 2 loses `0.06/0.04` dB and cloud 5 loses `0.02` dB mean. Normal RMSE
+does improve on every cloud, averaging `51.89→51.74` degrees, but that small
+cue is already followed by the selected explicit multi-light normal fit and
+does not produce a tail-safe rendered improvement. It does not justify a new
+static-to-PBR correspondence/ancestry mechanism. The prototype is removed
+without a real-scene expansion; artifacts remain outside version control under
+`target/audit-runs/static-covariance-normal/`. Every completed run stayed below
+12 GiB with zero swap, memory pressure, OOM, validation error, Xid, or GPU
+fault.
