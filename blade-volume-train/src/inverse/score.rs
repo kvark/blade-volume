@@ -366,7 +366,7 @@ impl Renderer {
         tracer.update_materials(materials, &self.context, &mut self.encoder);
     }
 
-    fn render_prepared_flat(
+    pub(crate) fn render_prepared_flat(
         &mut self,
         tracer: &mut vol::gpu::RelightTracer,
         cameras: &[vol::CameraParams],

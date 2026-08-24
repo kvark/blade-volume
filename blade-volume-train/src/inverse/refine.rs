@@ -633,9 +633,8 @@ fn rendered_linear_rgb(
 ) -> Vec<f32> {
     tracer.reset_sampling();
     renderer
-        .render_prepared_views(tracer, cameras)
-        .into_iter()
-        .flatten()
+        .render_prepared_flat(tracer, cameras)
+        .iter()
         .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
         .collect()
 }

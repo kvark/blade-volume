@@ -5116,3 +5116,22 @@ maps. The runs were stopped after that topology decision because a zero-particle
 proposal is exactly the control input. The complete prototype and environment
 hook are removed; production stays minimal. Logs remain outside version
 control under `target/audit-runs/support-completion/`.
+
+## Direct material-basis readback (2026-08-24)
+
+The rendered material solver now consumes the scoring renderer's mapped RGBA
+batch directly when constructing its flat RGB basis. It previously cloned the
+same batch into a nested vector of frames and immediately allocated and copied
+it again to discard alpha. Render dispatch, view and pixel order, material
+updates, floating-point values, and the optimizer are unchanged; this is a
+three-line removal plus crate-private access to the existing flat readback.
+
+On the selected nine-training/three-held dense fixture, a matched production
+build reduces the three material-polish phases from 0.828/0.835/0.883 seconds
+to 0.821/0.794/0.838 seconds. Complete scoped wall time changes from 18.083 to
+17.997 seconds, while peak memory falls from 349.1 to 288.5 MB. Held-light
+volumetric Gaussian PBR remains 24.28/23.07 dB mean/worst versus 24.28/23.08
+dB in the control, within the established GPU-atomic variation. Focused
+render-refinement tests, all-target Clippy, and the full quality gate pass;
+both 12 GiB scopes report zero swap, pressure, OOM, Xid, or GPU fault. Runs
+remain outside version control under `target/audit-runs/current-profile/`.
