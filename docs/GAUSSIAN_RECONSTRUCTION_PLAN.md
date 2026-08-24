@@ -5577,3 +5577,41 @@ rejects invalid Gaussian geometry before any consumer interprets it. Strict
 Clippy and both full physical-GPU workspace configurations pass; the 534-test
 all-feature scope peaks at 9.2 GiB with zero swap, pressure, OOM, validation,
 Xid, or GPU fault.
+
+## Numerically stable Gaussian tangent fallback (2026-08-24)
+
+The exact perspective candidate bound retained one `f32` cancellation hole.
+Its expanded tangent discriminant subtracts two nearly equal fourth-order
+terms for a small off-axis Gaussian. A finite ordinary-scale fixture at the
+first pixel of a 32-pixel-wide 90-degree camera has centre
+`(-9.6875, 0, 10)`, Y rotation `0.638136`, and scale
+`(1e-3, 1e-4, 1e-4)`. The exact ray response exceeds the `1e-4` candidate
+threshold, but the expanded discriminant becomes negative and the old grid
+omits the particle. The focused regression fails on the old implementation
+and checks the exact response independently before inspecting the tile.
+
+The established expanded solve remains the fast path. Only if it cannot
+produce finite roots, the code translates the same quadratic to the projected
+centre. Its constant is then non-positive, so the discriminant terms add
+instead of cancelling. This is an algebraically identical retry, not a wider
+support estimate. An all-`f64` solve, an always-centred solve, and pixel-space
+quantization prototypes were removed; no retry arithmetic, allocation, or
+bookkeeping reaches ordinary candidates.
+
+Temporary production instrumentation observed zero retries across every
+candidate-grid rebuild of the selected nine-training-view dense gate. The
+same final Room model gives identical old/new grids: 606,062 tile entries over
+352 tiles with a maximum of 3,410. Two order-balanced dense runs on each
+binary score `24.26/23.10` and `24.27/23.12` dB with the retry versus
+`24.29/23.14` and `24.28/23.12` dB without it. Because the measured retry
+count is zero, that sub-0.03 dB spread is independent optimizer variation,
+not a quality effect of this branch. The diagnostic counter is removed.
+
+The 512-particle, roughly 1.57-million-response conservative-grid oracle, the
+new focused cancellation regression, strict all-target/all-feature Clippy,
+and both complete physical-GPU workspace test configurations pass. The
+default and all-feature 12 GiB scopes peak at 3.89 and 3.21 GiB respectively,
+with zero swap, memory pressure, OOM, validation, Xid, or GPU fault. This adds
+no shader, graph operation, public API, format, model field, dependency, or
+runtime representation. Artifacts remain outside version control under
+`target/audit-runs/centered-gaussian-projection/`.

@@ -1557,12 +1557,39 @@ fn projected_ellipsoid_ratio_bounds(
         let b = 2.0 * (radius_squared * cross - center * mean.z);
         let c = center * center - radius_squared * diagonal;
         let discriminant = b * b - 4.0 * a * c;
-        if !a.is_finite() || a <= 0.0 || !discriminant.is_finite() || discriminant < -1.0e-5 {
+        if !a.is_finite() || a <= 0.0 {
             return None;
         }
-        let root = discriminant.max(0.0).sqrt();
-        let first = (-b - root) / (2.0 * a);
-        let second = (-b + root) / (2.0 * a);
+        if discriminant.is_finite() && discriminant >= -1.0e-5 {
+            let root = discriminant.max(0.0).sqrt();
+            let first = (-b - root) / (2.0 * a);
+            let second = (-b + root) / (2.0 * a);
+            if first.is_finite() && second.is_finite() {
+                return Some((first.min(second), first.max(second)));
+            }
+        }
+
+        // At a screen edge, the expanded discriminant can subtract nearly
+        // equal O(c⁴) terms and become negative in `f32`. Retry only that rare
+        // failure around the projected centre, where the constant is
+        // non-positive and the discriminant terms add instead.
+        let image_center = mean[component] / mean.z;
+        let mut perpendicular_squared = 0.0;
+        let mut coupling = 0.0;
+        for axis in sigma_axes {
+            let perpendicular = axis[component] - image_center * axis.z;
+            perpendicular_squared += perpendicular * perpendicular;
+            coupling += perpendicular * axis.z;
+        }
+        let b = 2.0 * radius_squared * coupling;
+        let c = -radius_squared * perpendicular_squared;
+        let discriminant = b * b - 4.0 * a * c;
+        if !discriminant.is_finite() || discriminant < 0.0 {
+            return None;
+        }
+        let root = discriminant.sqrt();
+        let first = image_center + (-b - root) / (2.0 * a);
+        let second = image_center + (-b + root) / (2.0 * a);
         (first.is_finite() && second.is_finite()).then_some((first.min(second), first.max(second)))
     };
     let x = bounds(0)?;
@@ -3943,6 +3970,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn projected_tiles_keep_subpixel_off_axis_gaussian() {
+        const WIDTH: usize = 32;
+        const MIN_ALPHA: f32 = 1.0e-4;
+        let pixel = 0;
+        let ratio = 2.0 * (pixel as f32 + 0.5) / WIDTH as f32 - 1.0;
+        let center = glam::Vec3::new(10.0 * ratio, 0.0, 10.0);
+        let rotation = glam::Quat::from_rotation_y(0.638_136);
+        let scale = glam::Vec3::new(1.0e-3, 1.0e-4, 1.0e-4);
+        let mut model = model(vec![center.extend(0.8)]);
+        {
+            let transforms = model.transforms.as_mut().unwrap();
+            transforms.rotations[0] = rotation;
+            transforms.scales[0] = scale;
+        }
+        let mut capture = empty_capture(WIDTH, 1);
+        capture.views[0].camera = camera();
+        let rays = crate::inverse::capture::PixelRays::new(
+            &capture.views[0].camera,
+            capture.width,
+            capture.height,
+        );
+        let direction = rays.direction(pixel, 0);
+        let response = ray_response(glam::Vec3::ZERO, direction, center, rotation, scale).unwrap();
+        assert!(
+            response.depth > 0.0 && 0.8 * response.response >= MIN_ALPHA,
+            "depth={} response={}",
+            response.depth,
+            response.response
+        );
+
+        let index = CandidateIndex::new(&model, &capture, &[0], MIN_ALPHA);
+        assert!(
+            index.candidates(0, pixel).unwrap().0.contains(&0),
+            "the exact contributing Gaussian was omitted from its pixel tile"
+        );
     }
 
     #[test]
