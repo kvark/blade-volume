@@ -6401,3 +6401,19 @@ All 12 GiB scopes peak below 480 MiB for reconstruction and 1.66 GiB for test
 builds, use zero swap, and report no memory pressure, OOM, validation error,
 Xid, or GPU fault. Ignored artifacts remain under
 `target/audit-runs/conic-tile-filter/`.
+
+## Rejected co-located Gaussian candidate cutoff (2026-08-24)
+
+The indexed response loop was tested with one private 40-byte record containing
+the 36-byte inverse transform and its alpha-distance cutoff, instead of reading
+the transform and a separate `f32` array at the same particle index. Candidate
+arithmetic and decisions are unchanged, and all 41 Gaussian-filtered tests
+pass, including the exact tiled/exhaustive and grouped/individual oracles.
+
+The second read is not a practical cache bottleneck. Two order-balanced Bonsai
+pairs take `12.4/12.5` and `12.4/12.4` seconds for candidate/control; held-view
+scores remain in the established replay band. The wider strided record and
+extra private type are removed. Reconstruction scopes peak below 501 MiB and
+the test scope at 1.48 GiB; every 12 GiB scope uses zero swap and reports no
+memory pressure, OOM, validation error, Xid, or GPU fault. Ignored artifacts
+remain under `target/audit-runs/coalesced-candidate-record/`.
