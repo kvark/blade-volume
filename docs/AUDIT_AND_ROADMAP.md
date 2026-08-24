@@ -521,6 +521,14 @@ At the audited revision:
   medians fall 3.73→2.45 seconds on Bonsai and 6.93→3.19 on Room, with selected
   quality preserved. The complete GPU-inclusive workspace suite peaks at
   5,226,614,784 bytes inside its 6 GiB scope with zero swap or memory events.
+- Weighted extraction no longer assumes that a camera-seeded Čech walk can
+  discover every PowerFoam component. CPU and GPU depth now integrate the
+  independently clipped, depth-sorted support rows used by the exact headless
+  renderer; RadFoam retains the walk. A disconnected-support oracle selects
+  the farther dominant segment on both implementations. Dense/nested fixture
+  depth metrics remain exact, and a 98,831-cell Room stress gate traces five
+  64x42 maps in 0.6 seconds at a 242,622,464-byte host peak with no overflow,
+  truncation, swap, OOM, or GPU fault.
 - Commit `3211300` adds a cloud-only normal-direction plane sweep after depth
   fusion. Normalized world-space tangent patches, candidate-specific source
   depth visibility, and local spatial coherence recover all 49 particles in a

@@ -188,6 +188,10 @@ fn has_surface_detail() -> bool {
     return (g_params.oriented & 2u) != 0u;
 }
 
+fn records_splat_depth() -> bool {
+    return (g_params.oriented & 4u) != 0u;
+}
+
 fn effective_surface_offset(
     cell: u32,
     ray_origin: vec3<f32>,
@@ -918,7 +922,11 @@ fn emit_powerfoam_splats(
         if (g_params.jacobian_mode == 0u && !has_surface_detail()) {
             let output_slot = row_start + output_step;
             g_cells_out[output_slot] = cell;
-            g_next_cells_out[output_slot] = neighbors.y;
+            g_next_cells_out[output_slot] = select(
+                neighbors.y,
+                bitcast<u32>(g_candidate_depths[candidate_slot]),
+                records_splat_depth(),
+            );
             g_dts_out[output_slot] = min(
                 faces.y - g_candidate_depths[candidate_slot],
                 g_params.max_path_dt,
@@ -942,7 +950,11 @@ fn emit_powerfoam_splats(
 
         let output_slot = row_start + output_step;
         g_cells_out[output_slot] = cell;
-        g_next_cells_out[output_slot] = neighbors.y;
+        g_next_cells_out[output_slot] = select(
+            neighbors.y,
+            bitcast<u32>(g_candidate_depths[candidate_slot]),
+            records_splat_depth(),
+        );
         g_dts_out[output_slot] = differential.dt;
         g_mask_out[output_slot] = 1.0;
         if (has_surface_detail()) {

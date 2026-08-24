@@ -2453,6 +2453,33 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   oracles pass. No traversal, shader entry/group, pipeline, buffer, binding,
   operation, option, format, or dependency is added.
 
+#### M2cf — Extract depth from every PowerFoam support component (done)
+
+- Reconstruction used the camera-seeded adjacency walk for both RadFoam and
+  PowerFoam depth. That is exact for a connected Voronoi walk, but a weighted
+  cloud's Čech graph may be disconnected: the walk can stop after one
+  component even when a later support sphere is valid and more opaque. CPU
+  depth extraction now uses the existing independently clipped PowerFoam
+  splat oracle whenever radii are present; unweighted RadFoam keeps the walk.
+- GPU depth uses the same projected candidates, exact interval clipping,
+  `(effective depth, cell index)` sort, fixed path buffers, overflow fallback,
+  and truncation checks as the existing headless PowerFoam renderer. Its one
+  additional integration entry writes full-precision mode depth, opacity, and
+  peak weight. The recorder stores the otherwise-unused forward next-cell
+  word as the interval-entry f32 bits in depth mode. No model field, file
+  format, dependency, training graph operation, or candidate implementation is
+  added.
+- A disconnected two-support regression makes the near component weak and the
+  far component dominant. Both CPU and physical-GPU extraction select the far
+  depth, while the broader GPU/CPU oracle covers ordinary, oriented, and
+  spatial-detail weighted clouds. All 19 existing path-recording tests and the
+  seven-test standalone rendering suite remain green.
+- The selected dense and nested synthetic fixtures retain their exact printed
+  depth RMSE and fused counts (2,880 and 3,156); depth time is 0.029 seconds in
+  both. A 98,831-cell Room checkpoint traces five 64x42 maps in 0.6 seconds,
+  with no candidate overflow or path truncation. Its 12 GiB scope peaks at
+  242,622,464 host bytes with zero swap, pressure, OOM, Xid, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

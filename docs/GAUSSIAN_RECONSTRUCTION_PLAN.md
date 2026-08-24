@@ -5224,3 +5224,28 @@ locally more physical depth statistic. Artifacts and capped telemetry remain
 outside version control under
 `target/audit-runs/next-gaussian-gate/{absorption-normal-support,paired-control-current}/`;
 all scopes report zero swap, OOM, Xid, or GPU fault.
+
+## Exact disconnected PowerFoam reconstruction depth (2026-08-24)
+
+Reconstruction depth previously selected the camera-seeded adjacency walk for
+every foam. That is not a complete support-discovery algorithm for PowerFoam:
+a valid weighted support can live in a disconnected Čech component, so a ray
+may terminate before reaching the segment with the strongest absorption. The
+CPU extractor now selects the existing independently clipped splat oracle for
+weighted clouds. The GPU extractor reuses the production PowerFoam recorder's
+projected candidates, exact clipping and ordering, buffers, overflow fallback,
+and truncation checks, then performs only the full-precision depth-statistic
+integration. RadFoam retains its cheaper adjacency walk.
+
+A two-component regression has a weak support at depth 3 and a dominant
+disconnected support at depth 6; both CPU and physical-GPU extraction now
+select depth 6. Existing weighted, oriented, and spatial-detail GPU/CPU depth
+oracles pass, as do all 19 path-recording tests and the seven-test standalone
+rendering suite. The selected dense and nested fixtures keep the exact printed
+depth errors and fused counts of 2,880 and 3,156, confirming that their relevant
+supports were already connected; both GPU depth phases take 0.029 seconds. A
+98,831-cell Room checkpoint traces five 64x42 maps in 0.6 seconds without
+candidate overflow or path truncation. Its capped scope peaks at 242,622,464
+host bytes and reports zero swap, pressure, OOM, Xid, or GPU fault. The change
+adds one full-precision depth shader/pipeline, but no representation, format,
+dependency, training graph operation, or second candidate implementation.

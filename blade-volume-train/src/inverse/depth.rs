@@ -36,11 +36,16 @@ pub struct DepthMap {
 struct GpuDepthTracer {
     context: sync::Arc<gpu::Context>,
     encoder: gpu::CommandEncoder,
-    tracer: vol::RadFoamGpuDepthTracer,
+    tracer: GpuDepthBackend,
     output: gpu::Texture,
     output_view: gpu::TextureView,
     readback: gpu::Buffer,
     extent: gpu::Extent,
+}
+
+enum GpuDepthBackend {
+    Walk(Box<vol::RadFoamGpuDepthTracer>),
+    Splat(Box<vol::PowerFoamGpuDepthTracer>),
 }
 
 impl GpuDepthTracer {
@@ -62,15 +67,26 @@ impl GpuDepthTracer {
             buffer_count: 1,
             manual_barriers: false,
         });
-        let tracer = vol::RadFoamGpuDepthTracer::new(
-            model,
-            vol::RadFoamDepthSettings {
-                max_steps,
-                weight_threshold: 0.001,
-            },
-            &context,
-            &mut encoder,
-        );
+        let settings = vol::RadFoamDepthSettings {
+            max_steps,
+            weight_threshold: 0.001,
+        };
+        let tracer = if model.radii.is_some() {
+            GpuDepthBackend::Splat(Box::new(vol::PowerFoamGpuDepthTracer::new(
+                model,
+                settings,
+                [width as u32, height as u32],
+                &context,
+                &mut encoder,
+            )))
+        } else {
+            GpuDepthBackend::Walk(Box::new(vol::RadFoamGpuDepthTracer::new(
+                model,
+                settings,
+                &context,
+                &mut encoder,
+            )))
+        };
         let output = context.create_texture(gpu::TextureDesc {
             name: "radfoam-depth",
             format: gpu::TextureFormat::Rgba32Float,
@@ -110,12 +126,17 @@ impl GpuDepthTracer {
     fn trace(&mut self, camera: vol::CameraParams) -> Result<DepthMap, String> {
         self.encoder.start();
         self.encoder.init_texture(self.output);
-        self.tracer.dispatch(
-            &mut self.encoder,
-            self.output_view,
-            camera,
-            [self.extent.width, self.extent.height],
-        );
+        match self.tracer {
+            GpuDepthBackend::Walk(ref mut tracer) => tracer.dispatch(
+                &mut self.encoder,
+                self.output_view,
+                camera,
+                [self.extent.width, self.extent.height],
+            ),
+            GpuDepthBackend::Splat(ref tracer) => {
+                tracer.dispatch(&mut self.encoder, self.output_view, camera)
+            }
+        }
         if let mut pass = self.encoder.transfer("radfoam-depth-readback") {
             pass.copy_texture_to_buffer(
                 self.output.into(),
@@ -129,6 +150,9 @@ impl GpuDepthTracer {
             Ok(true) => {}
             Ok(false) => return Err("GPU depth tracing timed out".to_string()),
             Err(error) => return Err(format!("GPU depth tracing failed: {error:?}")),
+        }
+        if let GpuDepthBackend::Splat(ref tracer) = self.tracer {
+            tracer.validate()?;
         }
 
         let count = self.extent.width as usize * self.extent.height as usize;
@@ -147,7 +171,10 @@ impl GpuDepthTracer {
         self.context.destroy_buffer(self.readback);
         self.context.destroy_texture_view(self.output_view);
         self.context.destroy_texture(self.output);
-        self.tracer.deinit(&self.context);
+        match self.tracer {
+            GpuDepthBackend::Walk(ref mut tracer) => tracer.deinit(&self.context),
+            GpuDepthBackend::Splat(ref mut tracer) => tracer.deinit(&self.context),
+        }
         self.context.destroy_command_encoder(&mut self.encoder);
     }
 }
@@ -249,14 +276,15 @@ impl<'a> DepthTracer<'a> {
         for local_y in 0..distance.len() / self.width {
             let y = first_y + local_y;
             for x in 0..self.width {
-                let result = vol::trace::trace_one_ray(
-                    self.model,
-                    vol::trace::Ray {
-                        origin: self.origin,
-                        direction: self.rays.direction(x, y),
-                    },
-                    self.settings,
-                );
+                let ray = vol::trace::Ray {
+                    origin: self.origin,
+                    direction: self.rays.direction(x, y),
+                };
+                let result = if self.model.radii.is_some() {
+                    vol::trace::trace_powerfoam_splats(self.model, ray, self.settings)
+                } else {
+                    vol::trace::trace_one_ray(self.model, ray, self.settings)
+                };
                 let slot = local_y * self.width + x;
                 alpha[slot] = result.rgba.w;
                 peak[slot] = result.peak_weight;
@@ -602,6 +630,28 @@ mod tests {
         }
     }
 
+    fn disconnected_powerfoam() -> vol::PointCloudModel {
+        vol::PointCloudModel {
+            points: vec![
+                glam::Vec4::new(0.0, 0.0, 3.0, 0.1),
+                glam::Vec4::new(0.0, 0.0, 6.0, 10.0),
+            ],
+            sh_coefficients: vec![0.0; 6],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: Some(vol::Adjacency {
+                neighbors: Vec::new(),
+                offsets: vec![0, 0, 0],
+            }),
+            radii: Some(vec![0.5, 0.5]),
+            surface_normals: None,
+            surface_offsets: None,
+            surface_detail: None,
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+        }
+    }
+
     #[test]
     fn batched_depth_tracing_matches_the_one_view_path() {
         let model = tiny_foam();
@@ -625,6 +675,30 @@ mod tests {
             assert_eq!(batched.alpha, one.alpha);
             assert_eq!(batched.peak, one.peak);
         }
+    }
+
+    #[test]
+    fn powerfoam_depth_discovers_a_stronger_disconnected_support() {
+        let model = disconnected_powerfoam();
+        let map = trace_depth(&model, &camera_looking_at_a_wall(0.0), 1, 1, 0, 8);
+        assert!((map.distance[0] - 6.0).abs() < 1.0e-6);
+        assert!(map.alpha[0] > 0.99);
+        assert!(map.peak[0] > 0.8);
+    }
+
+    #[test]
+    fn gpu_powerfoam_depth_discovers_a_stronger_disconnected_support() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping disconnected PowerFoam GPU depth test: no GPU");
+            return;
+        };
+        let model = disconnected_powerfoam();
+        let camera = camera_looking_at_a_wall(0.0);
+        let maps = trace_depths_gpu(&model, &[(camera, 0)], 1, 1, 8, gpu).unwrap();
+        assert!((maps[0].distance[0] - 6.0).abs() < 1.0e-5);
+        assert!(maps[0].alpha[0] > 0.99);
+        assert!(maps[0].peak[0] > 0.8);
     }
 
     #[test]

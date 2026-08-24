@@ -360,7 +360,9 @@ impl PathRecorder {
             tile_width,
             tile_height,
             tile_capacity: buffers.splat_tile_capacity,
-            oriented: cloud.is_oriented as u32 | (buffers.has_surface_queries as u32) << 1,
+            oriented: cloud.is_oriented as u32
+                | (buffers.has_surface_queries as u32) << 1
+                | (buffers.record_splat_depths as u32) << 2,
         };
 
         let data = PathRecordData {
@@ -612,6 +614,7 @@ pub struct PathRecordBuffers {
     jacobian_mode: PathJacobianMode,
     has_surface_queries: bool,
     has_splat_scratch: bool,
+    record_splat_depths: bool,
     splat_candidate_capacity: u32,
     splat_tile_count: u32,
     splat_tile_capacity: u32,
@@ -714,6 +717,32 @@ impl PathRecordBuffers {
             Some((image_resolution, max_points)),
             with_surface_queries,
         )
+    }
+
+    /// Compact PowerFoam depth streams with projected candidate tiles.
+    ///
+    /// The otherwise-unused forward `next_cells` stream stores each segment's
+    /// entry depth as raw f32 bits for the depth integrator.
+    pub(super) fn new_powerfoam_depth(
+        context: &gpu::Context,
+        num_pixels: u32,
+        max_steps: u32,
+        max_points: u32,
+        image_resolution: [u32; 2],
+        min_candidate_capacity: u32,
+        with_surface_queries: bool,
+    ) -> Self {
+        let mut buffers = Self::new_powerfoam_recorded_only_projected(
+            context,
+            num_pixels,
+            max_steps,
+            max_points,
+            image_resolution,
+            min_candidate_capacity,
+            with_surface_queries,
+        );
+        buffers.record_splat_depths = true;
+        buffers
     }
 
     /// Allocate every output stream as `Memory::External(Fd(None))` so the
@@ -1103,6 +1132,7 @@ impl PathRecordBuffers {
             jacobian_mode,
             has_surface_queries: with_surface_queries,
             has_splat_scratch: with_splat_scratch,
+            record_splat_depths: false,
             splat_candidate_capacity,
             splat_tile_count,
             splat_tile_capacity,
