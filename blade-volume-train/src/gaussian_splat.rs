@@ -111,7 +111,6 @@ struct CandidateIndex {
 
 #[derive(Clone, Copy)]
 struct CandidateTransform {
-    mean: glam::Vec3,
     world_to_gaussian: glam::Mat3,
 }
 
@@ -122,14 +121,9 @@ struct ProjectionSupport {
     world_radius: f32,
 }
 
-fn candidate_transform(
-    mean: glam::Vec3,
-    rotation: glam::Quat,
-    scale: glam::Vec3,
-) -> CandidateTransform {
+fn candidate_transform(rotation: glam::Quat, scale: glam::Vec3) -> CandidateTransform {
     let inverse_rotation = glam::Mat3::from_quat(rotation.normalize().inverse());
     CandidateTransform {
-        mean,
         world_to_gaussian: glam::Mat3::from_diagonal(scale.recip()) * inverse_rotation,
     }
 }
@@ -155,14 +149,11 @@ impl CandidateIndex {
             .take(capture.views.len())
             .collect();
         let model_transforms = model.transforms.as_ref().unwrap();
-        let transforms: Vec<CandidateTransform> = model
-            .points
+        let transforms: Vec<CandidateTransform> = model_transforms
+            .rotations
             .iter()
-            .zip(&model_transforms.rotations)
             .zip(&model_transforms.scales)
-            .map(|((point, rotation), scale)| {
-                candidate_transform(point.truncate(), *rotation, *scale)
-            })
+            .map(|(rotation, scale)| candidate_transform(*rotation, *scale))
             .collect();
         let max_distance_squared: Vec<f32> = model
             .points
@@ -273,8 +264,7 @@ impl CandidateGrid {
                 continue;
             }
             let transform = candidate_transforms[index];
-            gaussian_origins[index] =
-                transform.world_to_gaussian * (camera_origin - transform.mean);
+            gaussian_origins[index] = transform.world_to_gaussian * (camera_origin - support.mean);
             for tile_y in min_y..=max_y.min(tiles_y - 1) {
                 for tile_x in min_x..=max_x.min(tiles_x - 1) {
                     tiles[tile_y * tiles_x + tile_x].push(index as u32);
@@ -1646,19 +1636,8 @@ pub fn ray_response(
     {
         return None;
     }
-    ray_response_transformed(
-        ray_origin,
-        ray_direction,
-        candidate_transform(mean, rotation, scale),
-    )
-}
-
-fn ray_response_transformed(
-    ray_origin: glam::Vec3,
-    ray_direction: glam::Vec3,
-    transform: CandidateTransform,
-) -> Option<RayResponse> {
-    let gaussian_origin = transform.world_to_gaussian * (ray_origin - transform.mean);
+    let transform = candidate_transform(rotation, scale);
+    let gaussian_origin = transform.world_to_gaussian * (ray_origin - mean);
     ray_response_from_gaussian_origin(gaussian_origin, ray_direction, transform)
 }
 
@@ -4429,8 +4408,10 @@ mod tests {
         let rotation = glam::Quat::from_rotation_y(0.4);
         let scale = glam::Vec3::new(0.3, 0.8, 1.1);
         let direct = ray_response(origin, direction, mean, rotation, scale).unwrap();
-        let transform = candidate_transform(mean, rotation, scale);
-        let cached = ray_response_transformed(origin, direction, transform).unwrap();
+        let transform = candidate_transform(rotation, scale);
+        let gaussian_origin = transform.world_to_gaussian * (origin - mean);
+        let cached =
+            ray_response_from_gaussian_origin(gaussian_origin, direction, transform).unwrap();
 
         assert_eq!(cached.depth.to_bits(), direct.depth.to_bits());
         assert_eq!(cached.response.to_bits(), direct.response.to_bits());

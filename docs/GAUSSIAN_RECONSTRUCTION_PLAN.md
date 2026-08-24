@@ -6281,3 +6281,33 @@ matrix cache is removed without a Room expansion; exact quaternion transforms
 remain part of candidate topology. All 12 GiB scopes peak below 586 MiB with
 zero swap, OOM, Xid, validation error, or GPU fault. Ignored artifacts remain
 under `target/audit-runs/matrix-pixel-projection/`.
+
+## Single compact Gaussian candidate transform (2026-08-24)
+
+The sole private candidate transform now stores only its 3×3 world-to-Gaussian
+matrix. Indexed rays already consume a per-view Gaussian-space camera origin,
+so retaining the world-space mean in every randomly accessed transform was
+redundant. Grid construction reads the identical mean from the projection
+support it is already processing, while the standalone response oracle applies
+its explicit mean before calling the same transformed-origin helper. Arithmetic
+and candidate decisions are unchanged.
+
+This replaces rather than revives the previously rejected second compact
+cache: there is one 36-byte transform instead of parallel 48-byte and 36-byte
+representations, and the refactor deletes 19 net source lines. All 39 focused
+Gaussian tests pass, including bit-exact cached response, tiled/exhaustive
+candidate rows, and grouped/individual preparation.
+
+On the dense production fixture, the warm median falls from `4.040` to `3.975`
+seconds (`1.6%`). A reversed-order Room pair moves from `10.70` to `10.65`
+seconds, while Bonsai moves from `13.10` to `12.75` seconds (`2.7%`). Static
+and volumetric PBR held-view metrics remain in their established GPU-atomic
+replay bands on all three scenes. The 12 GiB reconstruction scopes peak below
+569 MiB with zero swap, OOM, Xid, validation error, or GPU fault. Ignored
+artifacts remain under
+`target/audit-runs/single-compact-candidate-transform/`.
+
+Formatting, strict all-target/all-feature Clippy, and both complete physical-
+GPU workspace test configurations pass. The test scopes peak at 3.39 GiB and
+also report zero swap, memory pressure, OOM, validation error, Xid, or GPU
+fault.
