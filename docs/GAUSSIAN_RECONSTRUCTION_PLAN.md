@@ -6612,3 +6612,21 @@ and both complete physical-GPU workspace configurations pass. The default and
 all-feature test scopes peak at 3.97 and 3.53 GB respectively, again with zero
 swap, OOM, or GPU fault. Ignored artifacts remain under
 `target/audit-runs/rendered-material-assignment/`.
+
+## Rejected Gaussian tile pixel masks (2026-08-24)
+
+The exact per-tile pixel bounds were tested as precomputed eight-bit X/Y masks
+instead of inclusive byte ranges. A coverage test becomes two variable shifts
+and bit tests rather than four boundary comparisons, while `TileCandidate`
+stays eight bytes and covers exactly the same pixels. All 41 Gaussian-focused
+tests pass, including the exhaustive/indexed and grouped/individual candidate
+oracles.
+
+The representation is not faster on the candidate-heavy Bonsai gate. In a
+control/mask/mask/control sequence, complete paired Gaussian fits take
+`11.6/12.1/11.5/11.6` seconds: the mask average is 0.2 seconds slower than the
+range average. The compiler's range checks are already efficient, so the mask
+prototype and renamed test are removed without another scene expansion. The
+12 GiB reconstruction scopes peak below 580 MiB and the focused test scope at
+1.64 GB; all use zero swap and report no OOM or GPU fault. Ignored artifacts
+remain under `target/audit-runs/tile-pixel-mask/`.
