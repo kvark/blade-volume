@@ -6156,6 +6156,25 @@ without a real-scene expansion; artifacts remain outside version control under
 12 GiB with zero swap, memory pressure, OOM, validation error, Xid, or GPU
 fault.
 
+## Candidate-row distribution and revisited four-pixel tiles (2026-08-24)
+
+A temporary first-preparation histogram on the 169,432-particle Bonsai fit
+rules out duplicate-ray reuse: 10,240 sampled rays contain 9,981 unique
+`(view,pixel)` pairs and touch 3,046 of the 8×8 view tiles. The actual pressure
+is conservative membership. PBR tile-list lengths have p50/p90/p99/max of
+`1205/5430/11831/21746`, although surviving exact hits have median 2 and reach
+the 64-candidate cap by p90. Static lists are somewhat smaller at
+`1053/3023/6068/10505`. Candidate-matrix rejection, not ray metadata or a few
+row allocations, is the dominant row cost.
+
+The older 4×4 tile policy was re-screened after the selected grid and transform
+cleanups. It lowers the PBR list distribution to `922/2815/5771/10088`, but
+the sampled rays touch 6,988 tiles and complete fitting regresses from `12.9`
+to `13.3` seconds. Quality stays in band. The one-constant prototype and all
+diagnostic counters are removed; 8×8 remains selected. Both 12 GiB runs peak
+below 605 MiB with zero swap, OOM, Xid, validation error, or GPU fault. Ignored
+artifacts remain under `target/audit-runs/candidate-row-distribution/`.
+
 ## Rejected Adam-second-moment Gaussian split selection (2026-08-24)
 
 The static midpoint split keeps its exact grouped position-gradient history
