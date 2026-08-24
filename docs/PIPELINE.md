@@ -2222,6 +2222,38 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   second-scene gate remains deferred rather than substituting a cross-scene
   initialization.
 
+#### M2bt — Prepack frozen directional axes (done)
+
+- When the directional-axis learning rate is zero, session upload now derives
+  a unit-axis table and a scalar-temperature table once. The raw axes remain
+  the checkpoint authority, while each training step gathers the two immutable
+  tables instead of normalizing 41,943,040 repeated axes on the GPU. Learned
+  axes retain the original differentiable path. The prepack is internal to the
+  training graph: no model/PLY field, public option, graph operation, shader,
+  shader entry/group, binding, pipeline, backend variant, or dependency is
+  added.
+- Stacked on `c409bb2` and M2bs, the matched 98,831-site Room graph falls from
+  253 to 251 passes and from 26.40--26.78 to 22.55--22.94 ms, about -14.5%.
+  The 256-update pipeline falls from 15.943 to 13.393 seconds (-16.0%), while
+  cgroup memory falls from 5.54 to 3.56 GB (-35.7%). Both full-table arms score
+  exactly 29.1014/18.9553 dB over four training/eight held views at reported
+  precision, including identical printed results for every held view.
+- A varying-magnitude physical-GPU test compares all 64 prepacked directional
+  weights with the direct CPU identity. Fixed-axis graph construction and
+  training tests verify that both derived tables are present, frozen, and
+  usable, while the learned-axis CPU finite-difference gate continues through
+  the unmodified path. The complete 523-test all-feature workspace gate,
+  warning-denied all-target clippy, and formatting pass on the RTX 5070. Tests
+  peak at 3.19 GB and clippy at 1.00 GB, with zero swap, pressure, OOM,
+  throttling, Xid, or GPU fault.
+- A current no-table control, made by removing only the directional table from
+  the same initializer, takes 6.014 seconds and 0.919 GB for the same 256
+  updates versus 13.393 seconds and 3.565 GB with the table. Directional colour
+  raises training PSNR from 27.1422 to 29.1014 dB but lowers the eight-view
+  held mean from 19.8841 to 18.9553 dB (-0.9288 dB). The former 5.7--6× time
+  gap is materially smaller at 2.23× on this Room gate, but the table remains
+  quality-negative and memory-heavy; keep it opt-in.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -2523,8 +2555,9 @@ manifest accidentally.
 ## Out-of-scope (for now)
 
 - A longer two-scene training gate for the full PowerFoam directional table;
-  the short Room/Bonsai screen is complete, but the remaining colour-table
-  backward still costs 5.7× on Bonsai.
+  the latest Room screen cuts the historical time gap to 2.23× but loses
+  0.9288 dB over eight held views, and no scene-matched weighted Bonsai
+  checkpoint is available locally for a fresh second arm.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.

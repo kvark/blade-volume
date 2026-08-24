@@ -51,9 +51,12 @@ behind these gates:
 1. Match reference RadFoam training within the Stage 2 quality tolerance on a
    complete, reproducible scene. Checkpoint renderer parity is done.
 2. Finish reducing full directional-table training cost before retrying a
-   two-scene gate. Released-checkpoint pixel parity passes, and the latest
-   generic grouped-scatter fusion cuts the profiled graph another 10.4%; the
-   first zero-initialized Room screens remain quality-negative.
+   two-scene gate. Released-checkpoint pixel parity passes; grouped scatter,
+   pairwise distance expansion, and frozen-axis prepacking reduce the matched
+   graph from 34.48--34.85 to 22.55--22.94 ms. The current 256-update Room
+   table is still 2.23× slower and 3.88× larger in cgroup memory than a
+   no-table control, and loses 0.9288 dB held out despite fitting the training
+   views 1.9592 dB better.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.
@@ -1805,10 +1808,11 @@ of item 7 is implemented across IO, traversal, training, densification, and
 resume and passes a positive fixed-versus-learned Bonsai gate. Spatial detail
 also passes its held-out gate. The complete released per-detail directional
 table passes the official-checkpoint pixel gate, but its zero-initialized short
-training screen loses held-out quality while taking six times longer. Compact
-directional alternatives also fail their held-out gates. The remaining item 7
-work is therefore training-cost and quality improvement, not another runtime
-appearance variant.
+training screen loses held-out quality. The latest four-view Room continuation
+cuts the historical time gap to 2.23×, but uses 3.88× the cgroup memory and
+loses 0.9288 dB across eight held views. Compact directional alternatives also
+fail their held-out gates. The remaining item 7 work is therefore quality and
+memory improvement, not another runtime appearance variant.
 
 Acceptance gate: CPU, GPU, and brute-force bounded traversal agree; a reference
 checkpoint renders within a defined image tolerance; trained radii improve a
@@ -2172,9 +2176,16 @@ material path.
    -14.5%). A matched 256-update pair falls from 17.873 to 15.943 seconds and
    scores identical 29.1014/18.9553 dB over four training/eight held views.
    CPU/GPU forward and learned-axis finite-difference gates pass. This also
-   adds no operation or backend/shader variant. Pin `c409bb2` after merge;
-   retain the full table as opt-in until a scene-matched weighted second-scene
-   checkpoint is available for the longer gate.)
+   adds no operation or backend/shader variant. Frozen axes are then packed
+   once as unit vectors and temperatures, removing their repeated GPU
+   normalization. The graph falls from 253 to 251 passes and from
+   26.40--26.78 to 22.55--22.94 ms; the matched 256-update pipeline falls from
+   15.943 to 13.393 seconds and from 5.54 to 3.56 GB. A no-table control still
+   takes only 6.014 seconds and 0.919 GB, and scores 27.1422/19.8841 dB versus
+   the table's 29.1014/18.9553: the table overfits these four views and loses
+   0.9288 dB across eight held views. Pin `c409bb2` after merge; retain the
+   full table as opt-in until a scene-matched weighted second-scene checkpoint
+   is available for the longer gate.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

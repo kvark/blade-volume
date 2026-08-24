@@ -117,6 +117,8 @@ pub struct SurfaceDetailGraph {
 pub struct SurfaceDetailDirectionalGraph {
     /// `[N, 192]` spatial-site/direction-major raw axes.
     pub axes: mn::NodeId,
+    /// Optional `[N, 192]` unit axes and `[N, 64]` temperatures for frozen axes.
+    pub frozen_kernel: Option<(mn::NodeId, mn::NodeId)>,
     /// `[N, 192]` channel-major RGB directional residuals.
     pub colors: mn::NodeId,
 }
@@ -495,10 +497,22 @@ fn surface_detail_directional_weights(
     let weight = g.constant(vec![unit_scale; 3], &[3]);
     let direction = g.rms_norm(view, weight, 1.0e-12);
 
-    let axes = g.embedding(cell_indices, parameters.axes);
-    let axes = g.reshape(axes, &[directional_rows, 3]);
-    let temperatures = vector_lengths(g, axes, directional_rows);
-    let normalized_axes = g.rms_norm(axes, weight, 1.0e-12 / 3.0);
+    let (normalized_axes, temperatures) = match parameters.frozen_kernel {
+        Some((unit_axes, temperatures)) => {
+            let unit_axes = g.embedding(cell_indices, unit_axes);
+            let unit_axes = g.reshape(unit_axes, &[directional_rows, 3]);
+            let temperatures = g.embedding(cell_indices, temperatures);
+            let temperatures = g.reshape(temperatures, &[directional_rows, 1]);
+            (unit_axes, temperatures)
+        }
+        None => {
+            let axes = g.embedding(cell_indices, parameters.axes);
+            let axes = g.reshape(axes, &[directional_rows, 3]);
+            let temperatures = vector_lengths(g, axes, directional_rows);
+            let normalized_axes = g.rms_norm(axes, weight, 1.0e-12 / 3.0);
+            (normalized_axes, temperatures)
+        }
+    };
     let squared_distances =
         g.pairwise_squared_distance(direction, normalized_axes, vol::SURFACE_DETAIL_DIRECTIONS);
     let squared_distances = g.reshape(squared_distances, &[directional_rows, 1]);
@@ -1057,14 +1071,31 @@ fn build_volumetric_graph_with_options(
             )
         }),
         directional: options.use_surface_detail_directional.then(|| {
-            let width = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS * 3;
+            let directions = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+            let width = directions * 3;
+            let train_axes = options.surface_trainability.detail_directional_axes;
             SurfaceDetailDirectionalGraph {
                 axes: parameter_with_gradient(
                     g,
                     "surface_detail_directional_axes",
                     &[n_cells, width],
-                    options.surface_trainability.detail_directional_axes,
+                    train_axes,
                 ),
+                frozen_kernel: (!train_axes).then(|| {
+                    let unit_axes = parameter_with_gradient(
+                        g,
+                        "surface_detail_directional_unit_axes",
+                        &[n_cells, width],
+                        false,
+                    );
+                    let temperatures = parameter_with_gradient(
+                        g,
+                        "surface_detail_directional_temperatures",
+                        &[n_cells, directions],
+                        false,
+                    );
+                    (unit_axes, temperatures)
+                }),
                 colors: parameter_with_gradient(
                     g,
                     "surface_detail_directional_colors",
@@ -3652,6 +3683,17 @@ fn dump_path_record_gpu_timings(timings: &[(String, std::time::Duration)]) {
     eprintln!("---");
 }
 
+fn pack_frozen_directional_axes(axes: &[glam::Vec3]) -> (Vec<f32>, Vec<f32>) {
+    let mut unit_axes = Vec::with_capacity(axes.len() * 3);
+    let mut temperatures = Vec::with_capacity(axes.len());
+    for &axis in axes {
+        let temperature = (axis.length_squared() + 1.0e-12).sqrt();
+        unit_axes.extend_from_slice(&(axis / temperature).to_array());
+        temperatures.push(temperature);
+    }
+    (unit_axes, temperatures)
+}
+
 fn upload_model_parameters(
     session: &mut mn::Session,
     model: &vol::PointCloudModel,
@@ -3727,6 +3769,11 @@ fn upload_model_parameters(
             let mut axes = Vec::with_capacity(n_cells * directions * 3);
             for &axis in &directional.axes {
                 axes.extend_from_slice(&axis.to_array());
+            }
+            if session.has_parameter("surface_detail_directional_unit_axes") {
+                let (unit_axes, temperatures) = pack_frozen_directional_axes(&directional.axes);
+                session.set_parameter("surface_detail_directional_unit_axes", &unit_axes);
+                session.set_parameter("surface_detail_directional_temperatures", &temperatures);
             }
             let mut colors = vec![0.0_f32; n_cells * directions * 3];
             for point in 0..n_cells {
@@ -7869,6 +7916,7 @@ mod tests {
                     "surface_detail_directional_axes",
                     &[1, directional_width * 3],
                 ),
+                frozen_kernel: None,
                 colors: graph.parameter(
                     "surface_detail_directional_colors",
                     &[1, directional_width * 3],
@@ -8137,6 +8185,136 @@ mod tests {
             session.read_param_grad(name, &mut gradient);
             assert!(gradient.iter().all(|value| value.is_finite()));
             assert!(gradient.iter().any(|value| value.abs() > 1.0e-8));
+        }
+    }
+
+    #[test]
+    fn frozen_directional_axis_prepack_preserves_chord_distances() {
+        let axes = [
+            glam::Vec3::ZERO,
+            glam::Vec3::new(0.25, -0.5, 0.75),
+            glam::Vec3::new(-4.0, 2.0, 1.0),
+            glam::Vec3::new(1.0e-5, -2.0e-5, 3.0e-5),
+        ];
+        let direction = glam::Vec3::new(0.3, -0.4, 0.5).normalize();
+        let (unit_axes, temperatures) = pack_frozen_directional_axes(&axes);
+
+        for (index, &axis) in axes.iter().enumerate() {
+            let temperature = temperatures[index];
+            let unit_axis = glam::Vec3::from_slice(&unit_axes[index * 3..index * 3 + 3]);
+            let direct = ((temperature * direction - axis).length_squared() + 1.0e-12).sqrt();
+            let prepacked = (temperature * temperature * (direction - unit_axis).length_squared()
+                + 1.0e-12)
+                .sqrt();
+            assert!(
+                (direct - prepacked).abs() < 2.0e-6,
+                "axis {index}: direct {direct} != prepacked {prepacked}",
+            );
+        }
+    }
+
+    #[test]
+    fn frozen_directional_axis_prepack_matches_gpu_weights() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping frozen directional-axis GPU test: no GPU");
+            return;
+        };
+        let sites = vol::SURFACE_DETAIL_SITES;
+        let directions = vol::SURFACE_DETAIL_DIRECTIONS;
+        let width = sites * directions;
+        let axes = (0..width)
+            .map(|index| {
+                let direction = index % directions;
+                let magnitude = 0.25 + 0.5 * (index % 9) as f32;
+                magnitude
+                    * glam::Vec3::new(
+                        if direction & 1 == 0 { -1.0 } else { 1.0 },
+                        if direction & 2 == 0 { -1.0 } else { 1.0 },
+                        if direction & 4 == 0 { -1.0 } else { 1.0 },
+                    )
+                    .normalize()
+            })
+            .collect::<Vec<_>>();
+        let packed_axes = axes
+            .iter()
+            .flat_map(|axis| axis.to_array())
+            .collect::<Vec<_>>();
+        let (unit_axes, temperatures) = pack_frozen_directional_axes(&axes);
+
+        let mut graph = mn::Graph::new();
+        let cell_indices = graph.input_u32("cell_indices", &[1]);
+        let centers = graph.parameter("positions", &[1, 3]);
+        let tangent_sites = graph.input("tangent_sites", &[sites, 3]);
+        let radii = graph.input("radii", &[1, 1]);
+        let ray_origin = graph.input("ray_origin", &[1, 3]);
+        let raw_axes = graph.parameter("surface_detail_directional_axes", &[1, width * 3]);
+        let unit_axis_table =
+            graph.parameter("surface_detail_directional_unit_axes", &[1, width * 3]);
+        let temperature_table =
+            graph.parameter("surface_detail_directional_temperatures", &[1, width]);
+        let colors = graph.parameter("surface_detail_directional_colors", &[1, width * 3]);
+        let weights = surface_detail_directional_weights(
+            &mut graph,
+            cell_indices,
+            &SurfaceDetailDirectionalGraph {
+                axes: raw_axes,
+                frozen_kernel: Some((unit_axis_table, temperature_table)),
+                colors,
+            },
+            centers,
+            tangent_sites,
+            radii,
+            ray_origin,
+            1,
+        );
+        graph.set_outputs(vec![weights]);
+
+        let (mut session, _) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Inference,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        session.set_parameter("positions", &[0.0, 0.0, 1.0]);
+        session.set_parameter("surface_detail_directional_axes", &packed_axes);
+        session.set_parameter("surface_detail_directional_unit_axes", &unit_axes);
+        session.set_parameter("surface_detail_directional_temperatures", &temperatures);
+        session.set_parameter("surface_detail_directional_colors", &vec![0.0; width * 3]);
+        session.set_input_u32("cell_indices", &[0]);
+        session.set_input("tangent_sites", &vec![0.0; sites * 3]);
+        session.set_input("radii", &[1.0]);
+        session.set_input("ray_origin", &[0.0, 0.0, 0.0]);
+        session.step();
+        session.wait();
+
+        let mut actual = vec![0.0_f32; width];
+        session.read_output_by_index(0, &mut actual);
+        for site in 0..sites {
+            let range = site * directions..(site + 1) * directions;
+            let logits = range
+                .clone()
+                .map(|index| {
+                    let temperature = temperatures[index];
+                    -((temperature * glam::Vec3::Z - axes[index]).length_squared() + 1.0e-12).sqrt()
+                })
+                .collect::<Vec<_>>();
+            let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let denominator = logits
+                .iter()
+                .map(|logit| (logit - max_logit).exp())
+                .sum::<f32>();
+            for (direction, logit) in logits.into_iter().enumerate() {
+                let expected = (logit - max_logit).exp() / denominator;
+                let index = site * directions + direction;
+                assert!(
+                    (actual[index] - expected).abs() < 2.0e-5,
+                    "weight {index}: GPU {} != CPU {expected}",
+                    actual[index],
+                );
+            }
         }
     }
 
@@ -9594,7 +9772,10 @@ mod tests {
             "surface_detail_colors",
             "surface_detail_density_logits",
             "surface_detail_directional_axes",
+            "surface_detail_directional_unit_axes",
+            "surface_detail_directional_temperatures",
         ] {
+            assert!(session.has_parameter(name), "missing parameter {name}");
             assert!(
                 !session.has_param_grad(name),
                 "unexpected gradient for {name}"
