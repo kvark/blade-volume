@@ -5265,3 +5265,41 @@ versus 0.029 seconds for the selected GPU path. The prototype is removed
 without running the nested gate: at the confidence level accepted by fusion,
 this fixture has no second layer to test. Future depth ownership work needs a
 cross-view correspondence signal, not another per-ray absorption rank.
+
+## Validated Gaussian candidate fast path (2026-08-24)
+
+Profiling the current 109,764-particle Room reconstruction attributes 5.56 of
+11.69 Gaussian-fit seconds to exact candidate preparation, 1.74 seconds to
+candidate-index refreshes, 1.58 seconds to Meganeura dispatch and wait, and
+1.18 seconds to selective parameter readback. Retaining every per-tile vector
+capacity lowers index construction by about 0.19 seconds but the complete fit
+by only 0.08 seconds; the additional parallel ownership path is removed.
+
+The private indexed recorder now uses an unchecked form of its existing
+closest-point calculation after the model, transforms, camera rays, and fit
+options have already passed their public validation. The checked exhaustive
+oracle retains all finite and nonzero-direction guards. Both paths execute the
+same matrix multiply, dot products, division, closest-point construction, and
+squared length; a bit-exact unit assertion covers their result, while the tiled
+recorder continues to match every exhaustive candidate row. This removes two
+redundant finite comparisons and the per-candidate `Option` branch without
+changing arithmetic or weakening an API boundary.
+
+On two fresh Room runs, indexed candidate preparation falls from 5.56 to 4.56
+seconds and the paired fit from 11.69 to 10.69 seconds in the instrumented run;
+the clean production binary reports 10.6 seconds. Persisted held-view
+volumetric PBR remains 12.55/12.22 dB mean/worst versus 12.55/12.21 in the
+control. The selected nine-training/three-held fixture is throughput-neutral
+within noise at 4.310 versus 4.264 seconds, while static held views move from
+26.01/23.88 to 26.03/23.93 dB and volumetric PBR from 24.27/23.07 to
+24.29/23.09 dB. The 12 GiB Room and synthetic scopes peak at 397 and 313 MB,
+with zero swap, pressure, OOM, Xid, or GPU fault. No public API, setting,
+allocation, dependency, shader, graph operation, model field, format, or
+alternate representation is added.
+
+A faster squared-origin prototype is deliberately not selected. Caching
+`|o|²` and evaluating `|o|² - (o·d)² / |d|²` reduces the Room fit to 11.28
+seconds before the validated fast path, but its equivalent real-number formula
+can catastrophically cancel in `f32`: a stress ray through a Gaussian-space
+origin of magnitude `1e5` reports squared distance 1,024 instead of zero and
+could be culled. The prototype, scalar cache, and analytical test are removed.

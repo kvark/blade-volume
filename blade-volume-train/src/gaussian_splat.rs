@@ -1580,15 +1580,25 @@ fn ray_distance_squared_from_gaussian_origin(
     ray_direction: glam::Vec3,
     transform: CandidateTransform,
 ) -> Option<(f32, f32)> {
-    let gaussian_direction = transform.world_to_gaussian * ray_direction;
-    let direction_squared = gaussian_direction.length_squared();
+    let (depth, distance_squared, direction_squared) =
+        ray_distance_squared_from_valid_gaussian_origin(gaussian_origin, ray_direction, transform);
     if !direction_squared.is_finite() || direction_squared <= 0.0 {
         return None;
     }
+    (depth.is_finite() && distance_squared.is_finite()).then_some((depth, distance_squared))
+}
+
+fn ray_distance_squared_from_valid_gaussian_origin(
+    gaussian_origin: glam::Vec3,
+    ray_direction: glam::Vec3,
+    transform: CandidateTransform,
+) -> (f32, f32, f32) {
+    let gaussian_direction = transform.world_to_gaussian * ray_direction;
+    let direction_squared = gaussian_direction.length_squared();
     let depth = -gaussian_origin.dot(gaussian_direction) / direction_squared;
     let closest = gaussian_origin + depth * gaussian_direction;
     let distance_squared = closest.length_squared();
-    (depth.is_finite() && distance_squared.is_finite()).then_some((depth, distance_squared))
+    (depth, distance_squared, direction_squared)
 }
 
 /// Record the closest exact Gaussian candidates for a ray batch.
@@ -1756,13 +1766,13 @@ fn collect_indexed_candidate_hits(
     hits.clear();
     for &particle in indices {
         let particle = particle as usize;
-        let Some((depth, distance_squared)) = ray_distance_squared_from_gaussian_origin(
-            gaussian_origins[particle],
-            direction,
-            index.transforms[particle],
-        ) else {
-            continue;
-        };
+        let (depth, distance_squared, direction_squared) =
+            ray_distance_squared_from_valid_gaussian_origin(
+                gaussian_origins[particle],
+                direction,
+                index.transforms[particle],
+            );
+        debug_assert!(direction_squared > 0.0 && depth.is_finite() && distance_squared.is_finite());
         if depth > 0.0 && distance_squared <= index.max_distance_squared[particle] {
             hits.push((depth, particle as u32));
         }
@@ -3731,18 +3741,22 @@ mod tests {
         let rotation = glam::Quat::from_rotation_y(0.4);
         let scale = glam::Vec3::new(0.3, 0.8, 1.1);
         let direct = ray_response(origin, direction, mean, rotation, scale).unwrap();
-        let cached = ray_response_transformed(
-            origin,
-            direction,
-            candidate_transform(mean, rotation, scale),
-        )
-        .unwrap();
+        let transform = candidate_transform(mean, rotation, scale);
+        let cached = ray_response_transformed(origin, direction, transform).unwrap();
 
         assert_eq!(cached.depth.to_bits(), direct.depth.to_bits());
         assert_eq!(cached.response.to_bits(), direct.response.to_bits());
         let inverse_rotation = rotation.normalize().inverse();
         let gaussian_origin = (inverse_rotation * (origin - mean)) / scale;
         let gaussian_direction = (inverse_rotation * direction) / scale;
+        let checked =
+            ray_distance_squared_from_gaussian_origin(gaussian_origin, direction, transform)
+                .unwrap();
+        let (fast_depth, fast_distance, direction_squared) =
+            ray_distance_squared_from_valid_gaussian_origin(gaussian_origin, direction, transform);
+        assert!(direction_squared > 0.0);
+        assert_eq!(fast_depth.to_bits(), checked.0.to_bits());
+        assert_eq!(fast_distance.to_bits(), checked.1.to_bits());
         let expected_depth =
             -gaussian_origin.dot(gaussian_direction) / gaussian_direction.length_squared();
         let closest = gaussian_origin + expected_depth * gaussian_direction;
