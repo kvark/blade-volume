@@ -1570,6 +1570,9 @@ fn projected_support_bounds(
             ),
         ));
     }
+    if projection.sphere_misses_image(local_mean, support.world_radius) {
+        return None;
+    }
 
     let local_axes = support.axes.map(|axis| projection.camera_vector(axis));
     let (min_ratio, max_ratio) =

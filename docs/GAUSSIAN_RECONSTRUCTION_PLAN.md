@@ -6464,3 +6464,38 @@ Formatting, strict all-target/all-feature Clippy, and the complete default and
 all-feature physical-GPU workspace suites pass. The workspace scopes peak at
 3.06 and 2.92 GiB respectively; both remain below the 12 GiB limit with zero
 swap, memory pressure, OOM, validation error, Xid, or GPU fault.
+
+## Conservative Gaussian frustum-sphere cull (2026-08-24)
+
+Candidate-grid construction now rejects an ellipsoid before solving its exact
+perspective tangents when the ellipsoid's existing enclosing sphere lies
+entirely outside any camera-frustum side plane. Plane distances include the
+sphere radius, so an intersecting or tangent support continues through the
+unchanged exact bound. Near-plane intersections still conservatively cover the
+complete image. This adds one private camera predicate and three call-site
+lines; it adds no cache, allocation, option, shader, graph operation, model
+field, format, public API, or dependency.
+
+The complete randomized extreme-anisotropy oracle still checks every exact
+response against the resulting tile and pixel bounds. All 42 Gaussian-filtered
+tests pass, and a dedicated camera test covers a disjoint sphere, a containing
+sphere, and both sides of one image-plane tangency. A mathematically equivalent
+squared-distance predicate was also screened and removed: it raises the dense
+fit from about 4.0 to 4.58 seconds and erases the Bonsai gain.
+
+With the selected plane-distance form, two order-balanced Bonsai candidates
+take `11.6/11.7` seconds versus `11.7/11.9` for controls; scoped CPU falls from
+`65.7/66.4` to `64.2/64.3` seconds. Room repeats a larger `9.5/9.5` versus
+`9.8/9.9` gain, with scoped CPU falling from `57.5/58.5` to `55.2/55.4`
+seconds. The 2,880-particle dense fixture pays a noise-level 0.04-second median
+cost (`4.027` versus `3.986` seconds), while its complete reconstruction scope
+stays within 0.15 second. Static and volumetric PBR held-view metrics remain in
+their established GPU-atomic replay bands on all three scenes. Reconstruction
+scopes peak below 539 MiB with zero swap, memory pressure, OOM, validation
+error, Xid, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/frustum-sphere-cull/`.
+
+Formatting, strict all-target/all-feature Clippy, and the complete default and
+all-feature physical-GPU workspace suites pass. The workspace scopes peak at
+3.07 and 2.80 GiB respectively; both remain below the 12 GiB limit with zero
+swap, memory pressure, OOM, validation error, Xid, or GPU fault.

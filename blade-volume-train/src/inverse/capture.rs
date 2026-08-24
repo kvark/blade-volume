@@ -172,6 +172,18 @@ impl PixelProjection {
         self.inverse_orientation * vector
     }
 
+    pub(crate) fn sphere_misses_image(&self, center: glam::Vec3, radius: f32) -> bool {
+        let min_ratio = (-glam::Vec2::ONE - self.principal) * self.tan_half;
+        let max_ratio = (glam::Vec2::ONE - self.principal) * self.tan_half;
+        center.x - min_ratio.x * center.z < -radius * glam::Vec2::new(1.0, min_ratio.x).length()
+            || max_ratio.x * center.z - center.x
+                < -radius * glam::Vec2::new(1.0, max_ratio.x).length()
+            || center.y - min_ratio.y * center.z
+                < -radius * glam::Vec2::new(1.0, min_ratio.y).length()
+            || max_ratio.y * center.z - center.y
+                < -radius * glam::Vec2::new(1.0, max_ratio.y).length()
+    }
+
     pub(crate) fn project_camera_space(&self, local: glam::Vec3) -> Option<([f32; 2], f32)> {
         if local.z <= 1.0e-6 {
             return None;
@@ -533,6 +545,24 @@ mod tests {
             assert!((world.0[1] - local.0[1]).abs() < 1.0e-4);
             assert!((world.1 - local.1).abs() < 1.0e-5);
         }
+    }
+
+    #[test]
+    fn enclosing_spheres_reject_only_disjoint_images() {
+        let camera = camera();
+        let projection = PixelProjection::new(&camera, 320, 180);
+        assert!(!projection.sphere_misses_image(glam::Vec3::new(0.0, 0.0, 4.0), 0.0));
+        assert!(projection.sphere_misses_image(glam::Vec3::new(100.0, 0.0, 4.0), 0.1));
+        assert!(!projection.sphere_misses_image(glam::Vec3::new(100.0, 0.0, 4.0), 200.0));
+
+        let radius = 0.5;
+        let depth = 4.0;
+        let ratio = (1.0 - camera.principal[0]) * (0.5 * camera.fov[0]).tan();
+        let normal_length = glam::Vec2::new(1.0, ratio).length();
+        let x = ratio * depth + 0.99 * radius * normal_length;
+        assert!(!projection.sphere_misses_image(glam::Vec3::new(x, 0.0, depth), radius));
+        let x = ratio * depth + 1.01 * radius * normal_length;
+        assert!(projection.sphere_misses_image(glam::Vec3::new(x, 0.0, depth), radius));
     }
 
     #[test]
