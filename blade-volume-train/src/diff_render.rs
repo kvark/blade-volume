@@ -5380,8 +5380,7 @@ struct AdamEntry {
 struct FixedAdamEntry {
     name: &'static str,
     parameter: Vec<f32>,
-    m: Vec<f32>,
-    v: Vec<f32>,
+    moments: Option<(Vec<f32>, Vec<f32>)>,
 }
 
 fn save_adam_state(
@@ -5425,23 +5424,33 @@ fn save_adam_state(
     }
     let exposure_names = ["exposure_r", "exposure_g", "exposure_b"];
     let exposure_parameters = session.read_params(&exposure_names);
-    let exposure_states = session.read_adam_states(&exposure_names);
+    let trainable_exposure_names = exposure_names
+        .iter()
+        .copied()
+        .filter(|name| session.has_param_grad(name))
+        .collect::<Vec<_>>();
+    let mut exposure_states = session
+        .read_adam_states(&trainable_exposure_names)
+        .into_iter();
     let exposure_entries = exposure_names
         .into_iter()
         .zip(exposure_parameters)
-        .zip(exposure_states)
-        .map(|((name, parameter), (m, v))| {
+        .map(|(name, parameter)| {
             assert_eq!(parameter.len(), num_views);
-            assert_eq!(m.len(), num_views);
-            assert_eq!(v.len(), num_views);
+            let moments = session.has_param_grad(name).then(|| {
+                let (m, v) = exposure_states.next().unwrap();
+                assert_eq!(m.len(), num_views);
+                assert_eq!(v.len(), num_views);
+                (m, v)
+            });
             FixedAdamEntry {
                 name,
                 parameter,
-                m,
-                v,
+                moments,
             }
         })
         .collect();
+    assert!(exposure_states.next().is_none());
     AdamSnapshot {
         entries,
         exposure_entries,
@@ -5523,8 +5532,10 @@ fn restore_adam_state_remap(
     }
     for entry in &snap.exposure_entries {
         session.set_parameter(entry.name, &entry.parameter);
-        session.write_adam_m(entry.name, &entry.m);
-        session.write_adam_v(entry.name, &entry.v);
+        if let Some((ref m, ref v)) = entry.moments {
+            session.write_adam_m(entry.name, m);
+            session.write_adam_v(entry.name, v);
+        }
     }
 }
 
@@ -12017,6 +12028,58 @@ mod tests {
         );
 
         assert_eq!(losses.len(), 3);
+        assert_eq!(model.points.len(), 5);
+        model.validate().unwrap();
+    }
+
+    #[test]
+    fn pixel_batched_densification_handles_frozen_exposure() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping pixel-batched frozen-exposure rebuild test: no GPU");
+            return;
+        };
+        let mut model = tiny_model();
+        let view = ViewSupervision {
+            camera: vol::CameraParams {
+                cam_position: [0.05, 0.05, -1.0],
+                depth: 10.0,
+                cam_orientation: [0.0, 0.0, 0.0, 1.0],
+                fov: [0.5, 0.5],
+                principal: [0.0, 0.0],
+            },
+            target_rgb: vec![0.9, 0.2, 0.1],
+            target_alpha: None,
+            width: 1,
+            height: 1,
+        };
+        let losses = fit_appearance_multi_view(
+            &mut model,
+            &[view],
+            1,
+            1,
+            16,
+            AppearanceFitConfig {
+                learning_rate: 0.01,
+                pixel_batch: Some(1),
+                steps_per_view: 3,
+                position_lr_ratio: 1.0,
+                geometry_rebuild_every: 1,
+                densify: Some(DensifyConfig {
+                    every: 1,
+                    fraction: 0.25,
+                    warmup: 1,
+                    target_points: 5,
+                    prune: true,
+                    ..DensifyConfig::default()
+                }),
+                ..AppearanceFitConfig::default()
+            },
+            gpu,
+        );
+
+        assert_eq!(losses.len(), 3);
+        assert!(losses.iter().all(|loss| loss.is_finite()));
         assert_eq!(model.points.len(), 5);
         model.validate().unwrap();
     }
