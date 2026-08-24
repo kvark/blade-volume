@@ -6525,3 +6525,53 @@ the selected static split remain unchanged; the environment diagnostic is
 removed. The three complete 12 GiB scopes peak at 329,314,304 bytes or less,
 use zero swap, and report no OOM or GPU fault. Ignored artifacts remain under
 `target/audit-runs/static-support-pbr/`.
+
+## Render-guarded material assignment refinement (2026-08-24)
+
+Shared material values were already fitted through complete production
+renders, but their per-particle labels remained fixed by the initializer's
+observation-space chromaticity clustering. The selected pass closes that
+mismatch without adding material capacity. After final support and normal
+refinement, every observed particle ranks the existing palette entries by its
+facing-weighted, display-referred error under the known environment, explicit
+normal, and recorded view directions. Only the best alternate label and its
+local reduction are retained as a candidate.
+
+Those local errors do not decide the output. Candidates are sorted
+deterministically, and prefixes of `N`, `N/2`, `N/4`, and so on are scored from
+the unchanged initializer through complete production surface renders. The
+lowest-loss prefix is accepted only when it improves the global objective;
+otherwise every label is restored. An accepted assignment is followed by the
+existing exact-render table polish. Unobserved particles retain their local
+propagated labels. The final labels and the same shared table then attach to
+the learned PBR Gaussian by the existing particle correspondence.
+
+The dense nine-training-view gate accepts all 1,060 ranked candidates. Its
+held-light volumetric Gaussian improves from `24.26/23.11` to `24.48/23.25`
+dB mean/worst, while covered-pixel quality rises from `22.90` to `23.24` dB at
+the same `55.1%` coverage. The independent eleven-training-view nested fixture
+selects only the top 117 of 943 candidates and improves the corresponding
+score from the `23.30`--`23.32` dB control band to `23.50` dB, with
+covered-pixel quality rising from about `21.64` to `21.90` dB.
+
+The definitive five-cloud replay improves every individual volumetric mean,
+tail, and covered-pixel score. The aggregate moves from
+`23.504/22.930` to `23.648/23.032` dB, coverage from `55.28%` to `55.32%`,
+and covered-pixel quality from `22.486` to `22.720` dB. The selected prefix
+sizes are 54, 54, 54, 201, and 860 particles; complete-render loss therefore
+limits the change rather than blindly trusting the observation proxy. Scalar
+surface means and tails also improve on all five clouds.
+
+A physical-GPU oracle recovers a deliberately wrong label when its observations
+and complete image agree, then restores the original label when deliberately
+misleading local observations conflict with the complete image. The pass adds
+no material, model field, option, shader, graph operation, format, or
+dependency. It performs logarithmically many existing surface renders only
+under the already opt-in rendered-material refinement path. Candidate
+reconstruction scopes peak below 393 MiB after the one release-build scope and
+the focused test build peaks at 3.30 GB; all 12 GiB scopes use zero swap and
+report no OOM or GPU fault. Formatting, strict all-target/all-feature Clippy,
+and both complete physical-GPU workspace configurations pass. The default and
+all-feature test scopes peak at 3.97 and 3.53 GB respectively, again with zero
+swap, OOM, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/rendered-material-assignment/`.

@@ -172,11 +172,14 @@ of the color loss in proportion to detached predicted opacity, preventing
 well-covered motion from repairing errors in frozen transmittance while
 poorly covered and background rays retain the coverage-driving residual. The
 existing exact-render material polish then accounts for changed overlapping
-mixtures. Joint normal fitting followed by a short aligned-light contrast tail
-improves every five-cloud mean and worst view, raising the selected aggregate
-from 23.50/22.93 to 23.53/22.97 dB at the same 55.3% coverage. Both passes are
-automatic only for a requested relightable Gaussian output under calibrated
-lights and add no training option or shader.
+mixtures. A guarded label pass now ranks alternate entries from known-light
+observations, tests only logarithmic prefixes through complete production
+renders, and re-polishes the same table after an accepted change. It improves
+every five-cloud held-light mean and tail, raising the single-light aggregate
+from 23.50/22.93 to 23.65/23.03 dB at unchanged coverage. Joint normal fitting
+followed by a short aligned-light contrast tail is automatic only for a
+requested relightable Gaussian output under calibrated lights. These passes add
+no training option, material field, shader, or dependency.
 
 Before surface extraction, a 200-update-per-view continuation of the same foam
 under one aligned secondary light improves all five independently trained

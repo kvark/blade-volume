@@ -113,6 +113,17 @@ pub struct RenderedMaterialStats {
     pub seconds: f64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderedMaterialAssignmentStats {
+    pub particles: usize,
+    pub candidates: usize,
+    pub proposals: usize,
+    pub changed: usize,
+    pub initial_loss: f64,
+    pub final_loss: f64,
+    pub seconds: f64,
+}
+
 /// One known-light capture used to refine Gaussian surface normals against
 /// complete production renders.
 #[derive(Clone, Copy)]
@@ -474,6 +485,154 @@ pub fn polish_rendered_materials(
     step: f32,
 ) -> Result<RenderedMaterialStats, String> {
     refine_rendered_materials_impl(scene, None, capture, indices, diffuse_samples, step, false)
+}
+
+/// Reassign a conservative prefix of particles to existing shared materials.
+///
+/// Observation-space error only ranks candidates. Complete production renders
+/// decide whether any prefix is retained, then the shared table is re-polished
+/// at `step` after an accepted assignment.
+pub fn refine_rendered_material_assignments(
+    scene: &mut score::Scene,
+    capture: &capture::Capture,
+    indices: &[usize],
+    observations: &decompose::Observations,
+    diffuse_samples: u32,
+    step: f32,
+) -> Result<RenderedMaterialAssignmentStats, String> {
+    if observations.surfels() != scene.model.surfels.len() {
+        return Err("rendered material assignment requires matching observations".to_string());
+    }
+    for &index in indices {
+        if index >= capture.views.len() {
+            return Err(format!("rendered material view {index} is out of bounds"));
+        }
+    }
+    if scene.model.materials.len() < 2 || indices.is_empty() {
+        return Ok(RenderedMaterialAssignmentStats {
+            particles: scene.model.surfels.len(),
+            ..RenderedMaterialAssignmentStats::default()
+        });
+    }
+
+    let cameras: Vec<_> = indices
+        .iter()
+        .map(|&index| capture.views[index].camera)
+        .collect();
+    let mut renderer = score::Renderer::new(capture.width, capture.height)?;
+    let mut tracer = renderer.prepare_scene(scene, diffuse_samples, false);
+    let started = std::time::Instant::now();
+    let initial_loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+    let irradiance = scene.environment.diffuse_irradiance();
+    let specular = vol::relight::SpecularEnvironment::prefilter(
+        &scene.environment,
+        scene.environment.width,
+        scene.environment.height,
+    );
+    let mut candidates = Vec::new();
+    for (index, surfel) in scene.model.surfels.iter().enumerate() {
+        let samples = observations.of(index);
+        if samples.is_empty() {
+            continue;
+        }
+        let current = surfel.material as usize;
+        let mut best = current;
+        let mut best_error = material_observation_error(
+            surfel,
+            &scene.model.materials[current],
+            samples,
+            &irradiance,
+            &specular,
+        );
+        let current_error = best_error;
+        for (material, candidate) in scene.model.materials.iter().enumerate() {
+            if material == current {
+                continue;
+            }
+            let error =
+                material_observation_error(surfel, candidate, samples, &irradiance, &specular);
+            if error < best_error {
+                best = material;
+                best_error = error;
+            }
+        }
+        if best != current {
+            candidates.push((current_error - best_error, index, best as u32));
+        }
+    }
+    candidates.sort_unstable_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+
+    let original = scene.model.surfels.clone();
+    let mut best_surfels = original.clone();
+    let mut final_loss = initial_loss;
+    let mut proposals = 0;
+    let mut count = candidates.len();
+    while count > 0 {
+        scene.model.surfels.clone_from(&original);
+        for &(_, index, material) in &candidates[..count] {
+            scene.model.surfels[index].material = material;
+        }
+        renderer.update_prepared_surfels(&scene.model.surfels);
+        let loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+        proposals += 1;
+        if loss < final_loss {
+            final_loss = loss;
+            best_surfels.clone_from(&scene.model.surfels);
+        }
+        count /= 2;
+    }
+    scene.model.surfels = best_surfels;
+    let changed = original
+        .iter()
+        .zip(&scene.model.surfels)
+        .filter(|&(before, after)| before.material != after.material)
+        .count();
+    renderer.destroy_prepared_scene(tracer);
+    renderer.destroy();
+    if changed > 0 {
+        final_loss =
+            polish_rendered_materials(scene, capture, indices, diffuse_samples, step)?.final_loss;
+    }
+    Ok(RenderedMaterialAssignmentStats {
+        particles: scene.model.surfels.len(),
+        candidates: candidates.len(),
+        proposals,
+        changed,
+        initial_loss,
+        final_loss,
+        seconds: started.elapsed().as_secs_f64(),
+    })
+}
+
+fn material_observation_error(
+    surfel: &vol::relight::Surfel,
+    material: &vol::relight::Material,
+    samples: &[decompose::Sample],
+    irradiance: &[[f32; 4]; 9],
+    specular: &vol::relight::SpecularEnvironment,
+) -> f64 {
+    let normal = glam::Vec3::from(surfel.normal).normalize_or_zero();
+    samples
+        .iter()
+        .map(|sample| {
+            let predicted =
+                vol::relight::shade(normal, sample.towards, material, irradiance, specular);
+            predicted
+                .iter()
+                .zip(sample.radiance)
+                .map(|(&predicted, observed)| {
+                    let difference =
+                        capture::linear_to_srgb(predicted) - capture::linear_to_srgb(observed);
+                    f64::from(sample.facing * difference * difference)
+                })
+                .sum::<f64>()
+        })
+        .sum()
 }
 
 /// Re-polish shared diffuse materials through the exact learned-Gaussian PBR
@@ -2153,6 +2312,31 @@ mod tests {
         surfels
     }
 
+    fn rendered_test_scene(offset: f32) -> score::Scene {
+        score::Scene {
+            model: vol::relight::RelightModel {
+                kernel: vol::relight::ParticleKernel::Gaussian,
+                surfels: vec![vol::relight::Surfel {
+                    center: [0.0, 0.0, offset],
+                    radius: 0.3,
+                    normal: [0.0, 0.0, -1.0],
+                    material: 0,
+                }],
+                materials: vec![vol::relight::Material {
+                    albedo: [0.7, 0.3, 0.2],
+                    roughness: 1.0,
+                    specular_f0: [0.04; 3],
+                    _padding: 0.0,
+                }],
+            },
+            environment: vol::relight::Environment {
+                width: 8,
+                height: 4,
+                texels: vec![[1.0; 3]; 32],
+            },
+        }
+    }
+
     #[test]
     fn plane_sweep_recovers_displacement_and_preserves_exact_surface() {
         let (capture, depths) = plane_fixture();
@@ -2251,28 +2435,7 @@ mod tests {
             camera(glam::Vec3::new(0.0, 0.0, -1.2)),
             camera(glam::Vec3::new(0.25, 0.0, -1.2)),
         ];
-        let make_scene = |offset: f32| score::Scene {
-            model: vol::relight::RelightModel {
-                kernel: vol::relight::ParticleKernel::Gaussian,
-                surfels: vec![vol::relight::Surfel {
-                    center: [0.0, 0.0, offset],
-                    radius: 0.3,
-                    normal: [0.0, 0.0, -1.0],
-                    material: 0,
-                }],
-                materials: vec![vol::relight::Material {
-                    albedo: [0.7, 0.3, 0.2],
-                    roughness: 1.0,
-                    specular_f0: [0.04; 3],
-                    _padding: 0.0,
-                }],
-            },
-            environment: vol::relight::Environment {
-                width: 8,
-                height: 4,
-                texels: vec![[1.0; 3]; 32],
-            },
-        };
+        let make_scene = rendered_test_scene;
 
         let Ok(mut truth_renderer) = score::Renderer::new(SIZE, SIZE) else {
             eprintln!("skipping runtime render refinement test: no ray-tracing GPU");
@@ -2500,6 +2663,91 @@ mod tests {
         final_renderer.destroy_prepared_scene(final_tracer);
         final_renderer.destroy();
         assert!((first_stats.final_loss - final_loss).abs() < 1.0e-8);
+    }
+
+    #[test]
+    fn rendered_material_assignment_recovers_and_rolls_back_labels() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        const SIZE: usize = 32;
+        let camera = camera(glam::Vec3::new(0.0, 0.0, -1.2));
+        let truth = rendered_test_scene(0.0);
+        let Ok(mut renderer) = score::Renderer::new(SIZE, SIZE) else {
+            eprintln!("skipping rendered material assignment test: no ray-tracing GPU");
+            return;
+        };
+        let rendered = renderer.render_views(&truth, &[camera], 0, false);
+        renderer.destroy();
+        let capture = capture::Capture {
+            width: SIZE,
+            height: SIZE,
+            views: vec![capture::View {
+                name: "material-truth".to_string(),
+                camera,
+                pixels: rendered[0]
+                    .iter()
+                    .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+                    .collect(),
+                mask: None,
+            }],
+        };
+        let wrong = vol::relight::Material {
+            albedo: [0.2, 0.7, 0.4],
+            roughness: 1.0,
+            specular_f0: [0.04; 3],
+            _padding: 0.0,
+        };
+
+        let mut misassigned = truth.clone();
+        misassigned.model.materials.push(wrong);
+        misassigned.model.surfels[0].material = 1;
+        let observations = decompose::observe(&misassigned.model, &capture, &[0], 0.1);
+        let stats = refine_rendered_material_assignments(
+            &mut misassigned,
+            &capture,
+            &[0],
+            &observations,
+            0,
+            0.05,
+        )
+        .unwrap();
+        assert_eq!(stats.candidates, 1);
+        assert_eq!(stats.changed, 1);
+        assert!(stats.final_loss < stats.initial_loss);
+        assert_eq!(misassigned.model.surfels[0].material, 0);
+
+        let mut protected = truth;
+        protected.model.materials.push(wrong);
+        let normal = glam::Vec3::from(protected.model.surfels[0].normal);
+        let towards = (glam::Vec3::from(camera.cam_position)
+            - glam::Vec3::from(protected.model.surfels[0].center))
+        .normalize();
+        let irradiance = protected.environment.diffuse_irradiance();
+        let specular = vol::relight::SpecularEnvironment::prefilter(
+            &protected.environment,
+            protected.environment.width,
+            protected.environment.height,
+        );
+        let misleading = decompose::Observations {
+            samples: vec![decompose::Sample {
+                radiance: vol::relight::shade(normal, towards, &wrong, &irradiance, &specular),
+                towards,
+                facing: normal.dot(towards),
+            }],
+            offsets: vec![0, 1],
+        };
+        let stats = refine_rendered_material_assignments(
+            &mut protected,
+            &capture,
+            &[0],
+            &misleading,
+            0,
+            0.05,
+        )
+        .unwrap();
+        assert_eq!(stats.candidates, 1);
+        assert_eq!(stats.changed, 0);
+        assert_eq!(stats.final_loss, stats.initial_loss);
+        assert_eq!(protected.model.surfels[0].material, 0);
     }
 
     #[test]

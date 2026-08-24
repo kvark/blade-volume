@@ -898,6 +898,28 @@ fn main() {
             stats.final_loss,
             stats.seconds,
         );
+        let assignment_stats = train::inverse::refine::refine_rendered_material_assignments(
+            &mut fitted.scene,
+            &capture,
+            &train_views,
+            &observations,
+            args.diffuse_samples,
+            0.0125,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("cannot refine rendered material assignments: {error}");
+            std::process::exit(1);
+        });
+        println!(
+            "rendered material assignments: {} candidates, {} proposals, {} of {} particles changed, loss {:.7} -> {:.7}, in {:.1} s",
+            assignment_stats.candidates,
+            assignment_stats.proposals,
+            assignment_stats.changed,
+            assignment_stats.particles,
+            assignment_stats.initial_loss,
+            assignment_stats.final_loss,
+            assignment_stats.seconds,
+        );
     }
 
     if let Some(ref mut gaussian) = learned_pbr_gaussian {

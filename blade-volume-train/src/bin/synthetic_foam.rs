@@ -1556,6 +1556,25 @@ fn main() {
             stats.final_loss,
             stats.seconds,
         );
+        let assignment_stats = train::inverse::refine::refine_rendered_material_assignments(
+            &mut fitted.scene,
+            &training_capture,
+            &training_indices,
+            &observations,
+            0,
+            0.0125,
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "rendered material assignment: {} candidates, {} proposals, {} of {} particles changed, loss {:.7} -> {:.7}, in {:.3} s",
+            assignment_stats.candidates,
+            assignment_stats.proposals,
+            assignment_stats.changed,
+            assignment_stats.particles,
+            assignment_stats.initial_loss,
+            assignment_stats.final_loss,
+            assignment_stats.seconds,
+        );
     }
     if let Some(ref surface_output) = args.surface_output {
         let surface_path = path::Path::new(surface_output);
