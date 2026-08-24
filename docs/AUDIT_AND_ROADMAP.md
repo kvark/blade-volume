@@ -1308,7 +1308,13 @@ At the audited revision:
   outside the ellipsoid support and could produce zero radiance. The local TLAS
   is now queried over the full forward interval, while maximum-response depth
   is filtered against semantic support before compositing.
-- No Gaussian training implementation exists.
+- Native Gaussian training now exists in `blade-volume-train`: the 3DGUT-style
+  exact ray response, host-recorded candidate rows, staged SH/support fitting,
+  calibrated multi-light center/normal continuation, and relightable PBR
+  attachment all use the existing Meganeura graph operations. The remaining
+  backend gaps are adaptive Gaussian topology and a recognized-checkpoint
+  cross-render against the official 3DGRUT implementation, not the absence of
+  a trainer.
 
 ### Scene layer
 

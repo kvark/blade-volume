@@ -5040,11 +5040,12 @@ the continuation. It adds no operation, shader entry, bind group, model field,
 format, dependency, or public option. Runs and capped telemetry remain under
 `target/audit-runs/{oracle-component-bound,multilight-normal-gate,high-view-gaussian-steps,multilight-support}/`.
 
-Final integration follows the merged validation stack at Blade `a6ae6a7` and
-Meganeura `b2cc256`. The Rust 1.98 format and Clippy gates pass, as do all 517
-workspace tests under the 12 GiB cgroup. The final cached suite peaks at 3.75
-GiB and reports no swap, OOM, Vulkan validation message, Xid, or GPU fault;
-logs are under `target/audit-runs/merged-stack-opacity/`.
+The dependency stack is now fully merged and pinned at Blade `95f5004` and
+Meganeura `0f87a8d`; there are no local overrides or dependency branches. The
+Rust 1.98 format and warnings-as-errors Clippy gates pass, as do all 521
+workspace/all-target/all-feature tests under the 12 GiB cgroup. The fresh
+suite peaks at 6.33 GB and reports zero swap, memory-pressure, OOM, Xid, or GPU
+fault events. Logs are under `target/audit-runs/dependency-uprev/`.
 
 ## Rejected photometric camera-ray correspondence (2026-08-23)
 
@@ -5093,3 +5094,25 @@ memory falls from 389.3 to 382.0 MB. The small memory reduction does not repay
 the extra count/fill traversal or storage complexity, so the implementation is
 removed. Artifacts remain outside version control under
 `target/audit-runs/candidate-csr/`.
+
+## Rejected multi-view depth-hole completion (2026-08-24)
+
+The proposed next topology step was tested without relaxing its ownership
+criterion. A private CPU-oracle prototype rendered the initial Gaussian
+surface into every masked training camera, retained foreground pixels below a
+chosen opacity, copied only their already-reconstructed foam depths, fused
+them at half the established voxel size, and required the ordinary two-camera
+world-space consensus before proposing a particle. Thus it could add cloud
+support only where independent depth maps agreed; it used no held-out pose,
+held-out light, G-buffer truth, polygonal geometry, shader, graph operation,
+model field, format, or dependency.
+
+On the selected nine-training-view dense fixture, an opacity threshold of
+`0.10` finds 185 undercovered training pixels but zero two-view cells. Raising
+the diagnostic threshold to `0.25` finds 547 pixels and still produces zero
+two-view cells. The apparent holes are therefore view-specific silhouette or
+thin-opacity tails, not missing surface cells supported by multiple foam depth
+maps. The runs were stopped after that topology decision because a zero-particle
+proposal is exactly the control input. The complete prototype and environment
+hook are removed; production stays minimal. Logs remain outside version
+control under `target/audit-runs/support-completion/`.
