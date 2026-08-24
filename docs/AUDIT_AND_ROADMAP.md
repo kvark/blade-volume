@@ -2251,8 +2251,16 @@ material path.
    oracles pass. The balanced hierarchy's exact post-frontier stack bound then
    reduces shared scratch from 32 to 25 words per lane. BVH gather falls about
    14%, and two matched 2,040-update runs average 17.067 seconds (-1.7%) with
-   1.2% less GPU wait. These changes add no shader entry/group, pipeline,
-   operation, or dependency.)
+   1.2% less GPU wait. The dense clipper then replaces lane zero's serial
+   64-item compaction loop with the workgroup atomic already used by candidate
+   gathering. Its existing depth/cell sort makes the temporary compact order
+   unobservable. Six matched settled samples reduce the record pass from 1.91
+   to 1.69 ms (-11.8%); three 256-update replicas reduce mean pipeline time
+   from 2.879 to 2.796 seconds (-2.9%) and mean wall time from 3.136 to 3.040
+   seconds (-3.1%). Every replica remains exactly 27.1422/19.8841 dB at
+   reported train/held precision, all 19 path and eight image oracles pass,
+   and host peak stays below 294 MB. These changes add no shader entry/group,
+   pipeline, operation, or dependency.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

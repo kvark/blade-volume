@@ -1058,9 +1058,10 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // Dense Cech graphs instead use all 64 lanes to clip one ray's candidates.
-// Each chunk stays in workgroup memory until lane zero compacts it into the
-// candidate row, avoiding a device-scope storage barrier. Lane zero then
-// sorts and emits the deterministic path.
+// Each chunk stays in workgroup memory while its valid lanes atomically claim
+// compact slots, avoiding a serial lane-zero scan and a device-scope storage
+// barrier. Lane zero then sorts by depth and cell and emits the deterministic
+// path, so the temporary atomic order is not observable.
 @compute @workgroup_size(64)
 fn record_powerfoam_splats_parallel(
     @builtin(workgroup_id) workgroup_id: vec3<u32>,
@@ -1080,7 +1081,10 @@ fn record_powerfoam_splats_parallel(
     let candidate_begin = output_pixel * g_params.candidate_capacity;
     let candidate_count = min(g_candidate_counts[output_pixel], g_params.candidate_capacity);
 
-    var valid_count = 0u;
+    if (local_id.x == 0u) {
+        atomicStore(&w_candidate_count, 0u);
+    }
+    workgroupBarrier();
     for (var chunk_begin = 0u; chunk_begin < candidate_count; chunk_begin += 64u) {
         let source_slot = chunk_begin + local_id.x;
         w_parallel_valid[local_id.x] = 0u;
@@ -1106,19 +1110,12 @@ fn record_powerfoam_splats_parallel(
         }
         workgroupBarrier();
 
-        if (local_id.x == 0u) {
-            let chunk_count = min(64u, candidate_count - chunk_begin);
-            for (var lane = 0u; lane < chunk_count; lane += 1u) {
-                if (w_parallel_valid[lane] == 0u) {
-                    continue;
-                }
-                let destination = candidate_begin + valid_count;
-                g_candidates[destination] = w_parallel_cells[lane];
-                g_candidate_depths[destination] = w_parallel_depths[lane];
-                g_candidate_faces[destination] = w_parallel_faces[lane];
-                g_candidate_neighbors[destination] = w_parallel_neighbors[lane];
-                valid_count += 1u;
-            }
+        if (w_parallel_valid[local_id.x] != 0u) {
+            let destination = candidate_begin + atomicAdd(&w_candidate_count, 1u);
+            g_candidates[destination] = w_parallel_cells[local_id.x];
+            g_candidate_depths[destination] = w_parallel_depths[local_id.x];
+            g_candidate_faces[destination] = w_parallel_faces[local_id.x];
+            g_candidate_neighbors[destination] = w_parallel_neighbors[local_id.x];
         }
         workgroupBarrier();
     }
@@ -1126,6 +1123,7 @@ fn record_powerfoam_splats_parallel(
     if (local_id.x != 0u) {
         return;
     }
+    let valid_count = atomicLoad(&w_candidate_count);
     emit_powerfoam_splats(ray_origin, ray_dir, output_pixel, candidate_begin, valid_count);
 }
 
