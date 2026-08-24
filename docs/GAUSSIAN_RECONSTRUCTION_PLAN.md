@@ -6379,3 +6379,25 @@ test, and counters are removed. All 12 GiB scopes peak below 547 MiB apart from
 the 1.53 GiB test build, use zero swap, and report no memory pressure, OOM,
 validation error, Xid, or GPU fault. Ignored artifacts remain under
 `target/audit-runs/partial-candidate-sort/`.
+
+## Rejected exact-conic Gaussian tile filtering (2026-08-24)
+
+The exact projected support is an ellipse inside its axis-aligned tile range,
+so a prototype rejected 8×8 tiles whose pixel-centre rectangle did not
+intersect that homogeneous conic. The check minimizes the conic quadratic over
+the rectangle interior and four edges; it adds no approximation to the
+accepted alpha cutoff.
+
+This is not a practical host index on the current path. Direct `f32` formation
+loses a valid extreme-anisotropy oracle hit at particle 382/pixel 32 because
+the tangent condition subtracts large nearly equal terms. Normalizing the
+Gaussian-space origin and transform moves but does not eliminate the problem:
+particle 378/pixel 552 is still omitted. Building and evaluating the conic in
+`f64` passes the full 41-test Gaussian filter, including all 1.5 million
+randomized exact-response containment checks, but raises the Bonsai Gaussian
+fit from the established `12.4`–`12.5` seconds to `15.0` seconds. The private
+conic implementation is removed; the simpler exact AABB remains selected.
+All 12 GiB scopes peak below 480 MiB for reconstruction and 1.66 GiB for test
+builds, use zero swap, and report no memory pressure, OOM, validation error,
+Xid, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/conic-tile-filter/`.
