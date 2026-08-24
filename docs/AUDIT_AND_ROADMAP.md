@@ -2193,7 +2193,13 @@ material path.
    is available for the longer gate. A same-budget 32-view screen does not
    rescue training: ratios 1.0/0.1/0.01 change held PSNR by
    -1.8018/-0.0644/-0.0114 dB relative to no table. Do not spend another gate
-   on the scalar rate without a new regularization or responsibility model.)
+   on the scalar rate without a new regularization or responsibility model.
+   Returning to the production no-table graph found its next generic win in
+   candidate selection: the shared sphere BVH is faster below 4,096 rays per
+   camera, while projected candidates catch up at that boundary. Raising the
+   internal crossover from 1,024 to 4,096 cuts a matched 256-update Room run
+   from 6.014 to 5.035 seconds and peak cgroup memory from 0.919 to 0.523 GB,
+   while preserving 27.1422/19.8841 dB over four training/eight held views.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

@@ -2271,6 +2271,26 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   rejected until a different spatial/directional responsibility or
   regularization hypothesis is defined and passes a second scene.
 
+#### M2bv — Select path candidates at the measured crossover (done)
+
+- The newer camera-independent sphere BVH is now faster than building a
+  projected screen index for the sparse per-camera slices used by mixed-view
+  training. On the 98,831-site Room cloud, matched 4,096-ray profiles put the
+  BVH path recorder at 3.7--4.4 ms for four cameras, versus 5.8--6.2 ms for
+  projected candidates. It remains faster at two cameras (3.8--4.3 ms versus
+  4.4--4.8 ms) and eight cameras (3.9--4.4 ms); the two paths converge at one
+  4,096-ray camera, where both take about 3.7--4.2 ms.
+- Training therefore shares the BVH until a camera contributes at least 4,096
+  rays, up from the obsolete 1,024-ray crossover. Projected candidates remain
+  available for dense batches and complete images. This changes only the
+  internal selection threshold: no path algorithm, shader, entry/group,
+  binding, public option, model field, format, or dependency is added.
+- A matched 256-update, four-view Room continuation falls from 6.014 to 5.035
+  seconds (-16.3%) and from 0.919 to 0.523 GB peak cgroup memory (-43.1%). Its
+  freshly serialized result preserves 27.1422 dB over the four training views
+  and 19.8841 dB over eight held views. Both runs cover the same exact path
+  oracle; the held result is unchanged at reported precision.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

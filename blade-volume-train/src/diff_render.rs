@@ -2232,7 +2232,9 @@ pub fn flatten_paths(paths: &[vol::trace::PathResult], max_steps: usize) -> Flat
 /// gradients well-behaved without changing the renderer's CPU output (which
 /// uses real `exp` and tolerates arbitrary dt).
 pub const MAX_PATH_DT: f32 = 50.0;
-const MIN_PROJECTED_RAYS_PER_CAMERA: usize = 1024;
+// The shared sphere BVH wins for sparse mixed-view batches; projected tiles
+// catch up once a camera contributes roughly a dense 64x64 ray batch.
+const MIN_PROJECTED_RAYS_PER_CAMERA: usize = 4096;
 
 #[derive(Clone, Debug)]
 pub struct FlatPaths {
