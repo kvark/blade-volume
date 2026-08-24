@@ -76,7 +76,7 @@ either reconstructed asset.
 | Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 25.17 / 24.35 dB | 22.68 / 22.22 dB | 56.7% |
 | Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 25.17 / 24.35 dB | 23.53 / 22.97 dB | 55.3% |
 | Synthetic (secondary-light foam continuation, five-cloud average) | 6 / 2 | 25.91 / 24.90 dB | 24.07 / 23.34 dB | 55.4% |
-| Synthetic (denser calibrated capture) | 9 / 3 | 26.61 / 24.79 dB | 24.28 / 23.13 dB | 55.1% |
+| Synthetic (denser calibrated capture) | 9 / 3 | 26.80 / 24.90 dB | 24.28 / 23.13 dB | 55.1% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
