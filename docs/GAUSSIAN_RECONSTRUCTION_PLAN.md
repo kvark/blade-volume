@@ -6562,6 +6562,18 @@ sizes are 54, 54, 54, 201, and 860 particles; complete-render loss therefore
 limits the change rather than blindly trusting the observation proxy. Scalar
 surface means and tails also improve on all five clouds.
 
+One immediate second alternation is already at the guarded fixed point on the
+dense gate. Although 617 particles locally prefer another palette entry, none
+of ten complete-render prefixes improves the post-polish loss; zero labels
+change and held-light quality is unchanged. The repeat costs 1.33 seconds and
+is removed rather than becoming an iteration count.
+
+Reusing the assignment tracer for the accepted-prefix table polish is also not
+a transferable optimization. It lowers one dense phase from 3.422 to 2.201
+seconds, but the independent nested phase changes from 2.971 to 3.009 seconds.
+The extra prepared-material helper and altered resource lifecycle are removed;
+the simpler rebuild remains selected.
+
 A physical-GPU oracle recovers a deliberately wrong label when its observations
 and complete image agree, then restores the original label when deliberately
 misleading local observations conflict with the complete image. The pass adds
