@@ -5218,11 +5218,23 @@ normals consistently, but their small PSNR movement is below the continuation's
 own GPU-atomic run-to-run variation: an identical cloud-4 control repeat moved
 24.18/23.48→24.06/23.34 dB and changed the fused count by 34 particles.
 
+One final follow-up kept the complete midpoint pipeline and applied only the
+centroid-to-midpoint normal rotation to its finished PBR surface. The candidate
+was required to improve mean, worst-view, coverage, and covered-pixel PSNR on
+reserved poses under the training light, while the static Gaussian remained on
+the baseline surface. It still failed both fixtures: dense moved
+22.71/22.02/58.2%/21.74→22.59/21.60/57.1%/21.78 and nested moved
+21.83/21.83/54.5%/21.43→21.42/21.42/53.5%/20.82
+(mean/worst/coverage/covered dB). The normal statistic therefore does not
+compose with the later normal and material refinements even when it is isolated
+from static appearance fitting.
+
 The complete prototype is removed. Future normal work must optimize the final
 static and relit Gaussian image objectives jointly rather than substitute a
 locally more physical depth statistic. Artifacts and capped telemetry remain
 outside version control under
-`target/audit-runs/next-gaussian-gate/{absorption-normal-support,paired-control-current}/`;
+`target/audit-runs/next-gaussian-gate/{absorption-normal-support,paired-control-current}/`
+and `target/audit-runs/centroid-normal-gate/`;
 all scopes report zero swap, OOM, Xid, or GPU fault.
 
 ## Exact disconnected PowerFoam reconstruction depth (2026-08-24)
