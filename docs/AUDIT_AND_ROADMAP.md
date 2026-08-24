@@ -2202,7 +2202,11 @@ material path.
    while preserving 27.1422/19.8841 dB over four training/eight held views.
    Prepacking frozen spatial-detail tangent sites then removes another two
    graph passes and improves three matched 256-update runs by 1.7%, with the
-   same reported quality and memory.)
+   same reported quality and memory. Detecting that the production
+   continuation's frozen spatial-detail residual is exactly the identity then
+   keeps its PLY/checkpoint fields but omits their unused graph: 195→153 passes,
+   a 30.7% reduction in three-run mean training time, and 0.523→0.293 GB peak
+   memory, again at identical reported train/held quality.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

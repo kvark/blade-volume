@@ -2306,6 +2306,27 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   preserves 27.1422/19.8841 dB over four training/eight held views at reported
   precision.
 
+#### M2bx — Omit frozen identity surface detail (done)
+
+- A model may retain the eight spatial-detail sites for exact PLY and
+  checkpoint interchange while its frozen residual is the identity: zero
+  height and colour, uniform density logits, and zero directional colour. The
+  training graph now detects that case and keeps every raw parameter as the
+  serialization authority without evaluating the residual graph fed by the
+  recorded spatial queries. Any effective or trainable detail field restores
+  the full graph.
+  Nonzero site offsets and directional axes alone do not affect the rendered
+  value, so they remain valid identity metadata.
+- The current 98,831-site Room initializer has exactly this form. Its graph
+  falls from 195 to 153 passes and warmed graph time from 5.42--5.81 to
+  2.78--2.92 ms. Three matched 256-update training phases fall from a
+  5.081-second mean to a 3.520-second mean (-30.7%), while peak cgroup memory
+  falls from approximately 0.523 to 0.293 GB. A freshly serialized result
+  preserves 27.1422/19.8841 dB over four training/eight held views at reported
+  precision.
+  This adds no public API, model/PLY field, graph operation, shader,
+  entry/group, binding, pipeline, backend variant, or dependency.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

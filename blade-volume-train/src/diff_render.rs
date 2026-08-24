@@ -788,6 +788,7 @@ pub fn build_volumetric_graph(
             train_radii: true,
             surface_trainability: SurfaceTrainability::ALL,
             use_surface_detail: false,
+            evaluate_surface_detail: false,
             use_surface_detail_density: false,
             use_surface_detail_directional: false,
             differentiate_surface_detail_directional_weights: false,
@@ -807,6 +808,7 @@ struct VolumetricGraphOptions {
     train_radii: bool,
     surface_trainability: SurfaceTrainability,
     use_surface_detail: bool,
+    evaluate_surface_detail: bool,
     use_surface_detail_density: bool,
     use_surface_detail_directional: bool,
     differentiate_surface_detail_directional_weights: bool,
@@ -859,6 +861,15 @@ impl SurfaceTrainability {
 
     fn geometry(self) -> bool {
         self.normals || self.offsets || self.detail_offsets || self.detail_heights
+    }
+
+    fn detail(self) -> bool {
+        self.detail_offsets
+            || self.detail_heights
+            || self.detail_colors
+            || self.detail_density
+            || self.detail_directional_axes
+            || self.detail_directional_colors
     }
 }
 
@@ -942,6 +953,10 @@ fn build_volumetric_graph_with_options(
     assert!(
         !options.use_surface_detail_density || options.use_surface_detail,
         "surface-detail density requires surface detail",
+    );
+    assert!(
+        !options.evaluate_surface_detail || options.use_surface_detail,
+        "surface-detail evaluation requires surface detail",
     );
     assert!(
         !options.use_surface_detail_directional || options.use_surface_detail,
@@ -1266,12 +1281,13 @@ fn build_volumetric_graph_with_options(
     let step_surface_normals =
         normalized_surface_normals.map(|normals| g.embedding(cell_indices, normals));
     let step_surface_offsets = surface_offsets.map(|offsets| g.embedding(cell_indices, offsets));
-    let step_surface_radii = (surface_detail.is_some() || surface_color_coefficients.is_some())
-        .then(|| {
+    let step_surface_radii =
+        (options.evaluate_surface_detail || surface_color_coefficients.is_some()).then(|| {
             let radii = g.embedding(cell_indices, differentiable_radii.unwrap());
             floor_surface_radii(g, radii, pl)
         });
-    let surface_detail_evaluation = surface_detail.as_ref().map(|parameters| {
+    let surface_detail_evaluation = options.evaluate_surface_detail.then(|| {
+        let parameters = surface_detail.as_ref().unwrap();
         let base_offsets =
             step_surface_offsets.unwrap_or_else(|| g.constant(vec![0.0_f32; pl], &[pl, 1]));
         evaluate_surface_detail_graph(
@@ -5538,6 +5554,25 @@ fn build_training_gpu_cloud(
     cloud
 }
 
+fn surface_detail_has_effect(detail: &vol::SurfaceDetail) -> bool {
+    let density_varies = detail.density_logits.as_ref().is_some_and(|values| {
+        let (rows, &[]) = values.as_chunks::<{ vol::SURFACE_DETAIL_SITES }>() else {
+            unreachable!()
+        };
+        rows.iter()
+            .any(|row| row[1..].iter().any(|&value| value != row[0]))
+    });
+    detail.heights.iter().any(|&value| value != 0.0)
+        || detail.colors.iter().any(|&value| value != glam::Vec3::ZERO)
+        || density_varies
+        || detail.directional.as_ref().is_some_and(|directional| {
+            directional
+                .colors
+                .iter()
+                .any(|&value| value != glam::Vec3::ZERO)
+        })
+}
+
 /// Build (or rebuild) the meganeura session + GPU cloud for the current
 /// model. Sized for `pixel_batch` and `max_steps`; both are constant
 /// across densify cycles so only the parameter-count-dependent pieces
@@ -5584,6 +5619,23 @@ fn build_train_session(
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
+    let surface_trainability = SurfaceTrainability {
+        normals: surface_normal_lr_ratio > 0.0,
+        offsets: surface_offset_lr_ratio > 0.0,
+        color: surface_color_lr_ratio > 0.0,
+        detail_offsets: surface_detail_offset_lr_ratio > 0.0,
+        detail_heights: surface_detail_height_lr_ratio > 0.0,
+        detail_colors: surface_detail_color_lr_ratio > 0.0,
+        detail_density: surface_detail_density_lr_ratio > 0.0,
+        detail_directional_axes: surface_detail_directional_axis_lr_ratio > 0.0,
+        detail_directional_colors: surface_detail_directional_color_lr_ratio > 0.0,
+        spherical_axes: spherical_voronoi_axis_lr_ratio > 0.0,
+        spherical_colors: spherical_voronoi_color_lr_ratio > 0.0,
+    };
+    let evaluate_surface_detail = model
+        .surface_detail
+        .as_ref()
+        .is_some_and(|detail| surface_trainability.detail() || surface_detail_has_effect(detail));
     let use_surface_detail_directional = model
         .surface_detail
         .as_ref()
@@ -5609,20 +5661,9 @@ fn build_train_session(
             use_surface_normal_loss,
             train_positions,
             train_radii,
-            surface_trainability: SurfaceTrainability {
-                normals: surface_normal_lr_ratio > 0.0,
-                offsets: surface_offset_lr_ratio > 0.0,
-                color: surface_color_lr_ratio > 0.0,
-                detail_offsets: surface_detail_offset_lr_ratio > 0.0,
-                detail_heights: surface_detail_height_lr_ratio > 0.0,
-                detail_colors: surface_detail_color_lr_ratio > 0.0,
-                detail_density: surface_detail_density_lr_ratio > 0.0,
-                detail_directional_axes: surface_detail_directional_axis_lr_ratio > 0.0,
-                detail_directional_colors: surface_detail_directional_color_lr_ratio > 0.0,
-                spherical_axes: spherical_voronoi_axis_lr_ratio > 0.0,
-                spherical_colors: spherical_voronoi_color_lr_ratio > 0.0,
-            },
+            surface_trainability,
             use_surface_detail: model.surface_detail.is_some(),
+            evaluate_surface_detail,
             use_surface_detail_density: model
                 .surface_detail
                 .as_ref()
@@ -8291,6 +8332,43 @@ mod tests {
     }
 
     #[test]
+    fn only_non_identity_surface_detail_needs_evaluation() {
+        let sites = vol::SURFACE_DETAIL_SITES;
+        let base = vol::SurfaceDetail {
+            offsets: vec![glam::Vec3::X; sites],
+            heights: vec![0.0; sites],
+            colors: vec![glam::Vec3::ZERO; sites],
+            density_logits: None,
+            directional: None,
+        };
+        assert!(!surface_detail_has_effect(&base));
+
+        let mut detail = base.clone();
+        detail.heights[2] = 0.25;
+        assert!(surface_detail_has_effect(&detail));
+
+        let mut detail = base.clone();
+        detail.colors[3] = glam::Vec3::new(0.0, 0.1, 0.0);
+        assert!(surface_detail_has_effect(&detail));
+
+        let mut detail = base.clone();
+        detail.density_logits = Some(vec![2.0; sites]);
+        assert!(!surface_detail_has_effect(&detail));
+        detail.density_logits.as_mut().unwrap()[4] = 3.0;
+        assert!(surface_detail_has_effect(&detail));
+
+        let mut detail = base;
+        let directions = sites * vol::SURFACE_DETAIL_DIRECTIONS;
+        detail.directional = Some(vol::SurfaceDetailDirectional {
+            axes: vec![glam::Vec3::Z; directions],
+            colors: vec![glam::Vec3::ZERO; directions],
+        });
+        assert!(!surface_detail_has_effect(&detail));
+        detail.directional.as_mut().unwrap().colors[5] = glam::Vec3::X;
+        assert!(surface_detail_has_effect(&detail));
+    }
+
+    #[test]
     fn frozen_directional_axis_prepack_matches_gpu_weights() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
@@ -9576,6 +9654,7 @@ mod tests {
                 train_radii: true,
                 surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
+                evaluate_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 differentiate_surface_detail_directional_weights: false,
@@ -9616,6 +9695,7 @@ mod tests {
                 train_radii: false,
                 surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
+                evaluate_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 differentiate_surface_detail_directional_weights: false,
@@ -9708,6 +9788,7 @@ mod tests {
                 train_radii: false,
                 surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
+                evaluate_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 differentiate_surface_detail_directional_weights: false,
@@ -9818,6 +9899,7 @@ mod tests {
                 train_radii: false,
                 surface_trainability: trainability,
                 use_surface_detail: true,
+                evaluate_surface_detail: true,
                 use_surface_detail_density: true,
                 use_surface_detail_directional: true,
                 differentiate_surface_detail_directional_weights: false,
@@ -11247,6 +11329,7 @@ mod tests {
                 train_radii: false,
                 surface_trainability: SurfaceTrainability::ALL,
                 use_surface_detail: false,
+                evaluate_surface_detail: false,
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 differentiate_surface_detail_directional_weights: false,
