@@ -5332,3 +5332,40 @@ dense build-and-gate scope peaks at 962.3 MB. Both 12 GiB cgroups use zero swap
 and report no memory-pressure, OOM, validation, Xid, or GPU fault event. Runs
 remain outside version control under
 `target/audit-runs/{gaussian-cross-batch-sheet,current-synthetic-v1/gaussian-cross-batch-sheet}/`.
+
+## Rejected aligned Gaussian candidate transform (2026-08-24)
+
+The private candidate cache was screened with glam's SIMD-aligned `Mat3A` in
+place of its scalar `Mat3`. All 32 focused Gaussian tests pass, including the
+exact tiled-versus-exhaustive and grouped-versus-individual candidate-row
+oracles. A first complete 109,764-particle Room fit falls from the established
+10.6 seconds to 10.0 seconds and retains 12.55/12.22 dB PBR quality.
+
+The apparent gain does not survive a reverse-order replay. The scalar control
+again takes 10.6 seconds, while the saved aligned binary then takes 10.8
+seconds. Its extra alignment/cache footprint therefore has no repeatable
+return on the six-core host. The candidate type is restored exactly; runs and
+cgroup telemetry remain outside version control under
+`target/audit-runs/candidate-mat3a/`.
+
+## Rejected weaker modal-depth fusion confidence (2026-08-24)
+
+Fused surface positions normally weight every unprojected modal-depth sample
+by the segment's peak absorption, just as fused normals do. Equal position
+weights challenge that assumption on the nine-training-view dense fixture:
+static held-pose quality changes from 25.99/23.87 to 26.13/24.20 dB, while
+held-light volumetric Gaussian PBR changes from 24.28/23.06 to 24.35/23.13 dB
+and 22.93 to 23.07 dB where hit at unchanged 55.2% coverage. Position RMSE is
+slightly worse, 0.5852 to 0.5859 world units, so the image gain is not a simple
+truth-geometry correction.
+
+The independent nested-camera fixture rejects the policy. Equal weights lower
+static quality from the established 22.47 to 22.42 dB and held-light
+volumetric PBR from 23.36 to 23.12 dB. A square-root confidence compromise is
+worse for the static field at 22.22 dB and reaches only 23.28 dB PBR. Both
+prototypes also fail the existing analytical invariant that a sharper modal
+segment should pull a shared surface less toward a weak depth outlier. The
+separate position accumulator and both weighting branches are removed; peak
+confidence once again weights positions and normals identically. Runs remain
+outside version control under
+`target/audit-runs/fusion-position-{unweighted,sqrt}/`.
