@@ -993,7 +993,6 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ray_origin = g_camera.position;
     let candidate_begin = output_pixel * g_params.candidate_capacity;
     let candidate_count = min(g_candidate_counts[output_pixel], g_params.candidate_capacity);
-    let row_start = output_pixel * g_params.max_steps;
 
     // Clip each candidate once and compact the valid intervals. A heap sort
     // then establishes the same depth/index order as the old repeated minimum
@@ -1014,83 +1013,7 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
         g_candidate_neighbors[compact_slot] = vec2<u32>(interval.previous, interval.next);
         valid_count += 1u;
     }
-    sort_candidate_row(candidate_begin, valid_count);
-
-    var candidate_index = 0u;
-    var output_step = 0u;
-    while (candidate_index < valid_count && output_step < g_params.max_steps) {
-        let candidate_slot = candidate_begin + candidate_index;
-        let cell = g_candidates[candidate_slot];
-        let faces = g_candidate_faces[candidate_slot];
-        let neighbors = g_candidate_neighbors[candidate_slot];
-        candidate_index += 1u;
-        let differential = interval_differential(
-            ray_origin,
-            ray_dir,
-            neighbors.x,
-            cell,
-            neighbors.y,
-            faces.x,
-            faces.y,
-        );
-        if (differential.valid == 0u) {
-            continue;
-        }
-
-        let output_slot = row_start + output_step;
-        g_cells_out[output_slot] = cell;
-        g_next_cells_out[output_slot] = neighbors.y;
-        g_dts_out[output_slot] = differential.dt;
-        g_mask_out[output_slot] = 1.0;
-        if (has_surface_detail()) {
-            g_surface_queries_out[output_slot] = differential.surface_query;
-            if (g_params.jacobian_mode == 1u) {
-                g_surface_query_grad_previous_out[output_slot] =
-                    differential.surface_query_d_previous;
-                g_surface_query_grad_current_out[output_slot] =
-                    differential.surface_query_d_current;
-            }
-        }
-        if (g_params.jacobian_mode != 0u) {
-            var reference_tangent = 0.0;
-            if (g_params.jacobian_mode == 1u) {
-                g_previous_cells_out[output_slot] = neighbors.x;
-                let previous_geometry = vec4<f32>(
-                    g_points[neighbors.x].xyz - ray_origin,
-                    g_points[neighbors.x].w,
-                );
-                let current_geometry = vec4<f32>(
-                    g_points[cell].xyz - ray_origin,
-                    g_points[cell].w,
-                );
-                let next_geometry = vec4<f32>(
-                    g_points[neighbors.y].xyz - ray_origin,
-                    g_points[neighbors.y].w,
-                );
-                reference_tangent =
-                    dot(differential.dt_d_previous, previous_geometry) +
-                    dot(differential.dt_d_current, current_geometry) +
-                    dot(differential.dt_d_next, next_geometry);
-                g_dt_grad_previous_out[output_slot] = differential.dt_d_previous;
-                g_dt_grad_current_out[output_slot] = differential.dt_d_current;
-                g_dt_grad_next_out[output_slot] = differential.dt_d_next;
-            }
-            if ((g_params.oriented & 1u) != 0u) {
-                let surface = g_surface_normals[cell];
-                reference_tangent += dot(
-                    differential.dt_d_surface_normal.xyz,
-                    surface.xyz,
-                ) + differential.dt_d_surface_normal.w * differential.surface_offset;
-                g_dt_grad_surface_normal_out[output_slot] =
-                    differential.dt_d_surface_normal;
-            }
-            g_dt_reference_tangents_out[output_slot] = reference_tangent;
-        }
-        output_step += 1u;
-    }
-
-    let truncated = output_step == g_params.max_steps && candidate_index < valid_count;
-    g_path_status_out[output_pixel] = output_step | select(0u, 0x80000000u, truncated);
+    emit_powerfoam_splats(ray_origin, ray_dir, output_pixel, candidate_begin, valid_count);
 }
 
 // Dense Cech graphs instead use all 64 lanes to clip one ray's candidates.
