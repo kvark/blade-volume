@@ -6417,3 +6417,19 @@ extra private type are removed. Reconstruction scopes peak below 501 MiB and
 the test scope at 1.48 GiB; every 12 GiB scope uses zero swap and reports no
 memory pressure, OOM, validation error, Xid, or GPU fault. Ignored artifacts
 remain under `target/audit-runs/coalesced-candidate-record/`.
+
+## Rejected direct Gaussian ratio projection (2026-08-24)
+
+The tangent solver's normalized image ratios were routed through a temporary
+crate-private ratio-to-pixel helper instead of the generic unit-depth 3D
+projection. A bit-exact regression confirms that the two paths produce the
+same pixels, and all projection-focused tests pass.
+
+The release compiler already removes the generic unit-depth work. Two
+order-balanced Room pairs put candidate runs at `9.8/9.8` seconds and controls
+at `9.9/9.8`; a Bonsai pair slightly favors the control at `12.3` versus
+`12.4` seconds. The helper and its test are removed rather than extending the
+private camera surface for noise-level timing. Reconstruction scopes peak
+below 501 MiB and the test scope at 1.46 GiB; every 12 GiB scope uses zero swap
+and reports no memory pressure, OOM, validation error, Xid, or GPU fault.
+Ignored artifacts remain under `target/audit-runs/direct-ratio-projection/`.
