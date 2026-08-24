@@ -2387,6 +2387,25 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   pipeline, public option, model field, format, graph operation, or dependency
   is added.
 
+#### M2cb — Use direct volumetric exponentials (done)
+
+- The core integrator retained its original
+  `exp(-x) = recip(sigmoid(x)) - 1` workaround from before Meganeura exposed a
+  differentiable exponential. It now evaluates transmittance as
+  `exp(-cumsum)` and alpha as `1 - exp(-density * dt)`, matching the existing
+  direct-exponential surface-detail path and deleting the obsolete surrogate.
+- The production Room graph falls from 147 to 138 passes and its warmed time
+  from 2.42--2.48 to 2.33--2.37 ms. Three matched 256-update training phases
+  average 2.946 seconds, 0.8% below M2ca's 2.970-second mean; mean GPU wait
+  improves by about 0.6%. The direct form changes f32 rounding, but the freshly
+  serialized result preserves 27.1422/19.8841 dB over four training/eight held
+  views at reported precision. A longer two-replica, 2,040-update gate confirms
+  the result: mean training falls 18.923→18.772 seconds (-0.8%) and mean GPU
+  wait 14.160→13.956 seconds (-1.4%), while both arms and both replicas score
+  exactly 29.3164/17.8472 dB at reported precision. No new graph operation,
+  shader, entry/group, binding, pipeline, option, format, or dependency is
+  added.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -2463,9 +2482,8 @@ Broken into sub-steps:
   - `blade_volume_train::diff_render::build_volumetric_graph` constructs
     the meganeura subgraph: gather per-step density/SH via `embedding`,
     cumulative-sum-by-pixel via `[P, L] @ [L, L]` matmul with a
-    strict-lower-triangular ones matrix, `exp(-x) = recip(sigmoid(x)) - 1`
-    surrogate (meganeura lacks raw `exp`), three parallel per-channel
-    pipelines summed into one scalar L1 loss.
+    strict-lower-triangular ones matrix, direct exponential transmittance,
+    and three parallel per-channel pipelines summed into one scalar L1 loss.
   - `fit_appearance_to_pixels` (single view) and `fit_appearance_multi_view`
     (camera ring) drive Adam manually via `set_adam` + `step` + `wait`
     rather than the Trainer/DataLoader path (whose `(data, labels)` shape

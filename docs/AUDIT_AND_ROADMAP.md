@@ -2223,7 +2223,14 @@ material path.
    runs average 2.970 seconds (-2.6%) at the same reported quality. The
    existing scratch carries the far endpoint; differential and detail-query
    paths are unchanged, and no entry/group, binding, buffer, pipeline,
-   operation, or dependency is added.)
+   operation, or dependency is added. Finally, the core integrator drops its
+   obsolete sigmoid/reciprocal exponential identity in favor of Meganeura's
+   existing differentiable `exp`. The graph falls from 147 to 138 passes and
+   from 2.42--2.48 to 2.33--2.37 ms; three matched 256-update runs average
+   2.946 seconds (-0.8%) at the same reported train/held quality. A
+   two-replica 2,040-update gate confirms -0.8% mean training time and -1.4%
+   mean GPU wait, with both arms exactly 29.3164/17.8472 dB at reported
+   precision.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

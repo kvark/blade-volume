@@ -10,9 +10,8 @@
 //!    intermediate RGB copy.
 //! 2. Applies a positive density activation and computes `raw = density * dt`.
 //! 3. Computes the exclusive per-pixel cumulative sum that gives transmittance.
-//! 4. Expresses `exp(-x)` via the identity
-//!    `exp(-x) = recip(sigmoid(x)) - 1` (valid for x >= 0), since meganeura
-//!    has `sigmoid` and `recip` but no raw `exp`.
+//! 4. Evaluates volumetric transmittance and alpha with Meganeura's
+//!    differentiable exponential.
 //! 5. Per-pixel-per-step `weight = T * alpha`, then per-channel
 //!    pixel colour `pixel_c = (weight * color_c) @ ones_L`.
 //! 6. L1 loss against ground-truth pixels.
@@ -1361,8 +1360,8 @@ fn build_volumetric_graph_with_options(
     let neg_t_shifted = g.neg(t_shifted);
     let dt_raw_2d = g.add(t_2d, neg_t_shifted); // [P, L]
 
-    // Clamp dt to [0, MAX_PATH_DT] to keep the sigmoid-surrogate-for-exp
-    // numerically stable. `min(relu(x), c) = c - relu(c - relu(x))`.
+    // Clamp dt to [0, MAX_PATH_DT] to bound optical-depth and gradient
+    // outliers. `min(relu(x), c) = c - relu(c - relu(x))`.
     let dt_pos = g.relu(dt_raw_2d);
     let max_dt_pl = g.constant(vec![MAX_PATH_DT; p * l], &[p, l]);
     let neg_dt_pos = g.neg(dt_pos);
@@ -1471,20 +1470,16 @@ fn build_volumetric_graph_with_options(
     // second multiplication by the same binary path mask would be redundant.
     let cumsum = g.exclusive_cumsum(raw, false); // [P, L]
 
-    // Transmittance: T = exp(-cumsum). Use the identity
-    //   exp(-x) = recip(sigmoid(x)) - 1   (valid for x >= 0)
+    // Transmittance: T = exp(-cumsum).
     let ones_pl = g.constant(vec![1.0; p * l], &[p, l]);
-    let twos_pl = g.constant(vec![2.0; p * l], &[p, l]);
-    let sig_cum = g.sigmoid(cumsum);
-    let rec_sig_cum = g.recip(sig_cum);
-    let neg_ones_pl = g.neg(ones_pl);
-    let t = g.add(rec_sig_cum, neg_ones_pl); // [P, L]
+    let neg_cumsum = g.neg(cumsum);
+    let t = g.exp(neg_cumsum); // [P, L]
 
-    // alpha = 1 - exp(-raw) = 2 - recip(sigmoid(raw))
-    let sig_raw = g.sigmoid(raw);
-    let rec_sig_raw = g.recip(sig_raw);
-    let neg_rec_sig_raw = g.neg(rec_sig_raw);
-    let alpha = g.add(twos_pl, neg_rec_sig_raw); // [P, L]
+    // alpha = 1 - exp(-raw)
+    let neg_raw = g.neg(raw);
+    let exp_neg_raw = g.exp(neg_raw);
+    let neg_exp_neg_raw = g.neg(exp_neg_raw);
+    let alpha = g.add(ones_pl, neg_exp_neg_raw); // [P, L]
 
     // A padded step has masked `dt = 0`, hence `raw = 0`, `alpha = 0`, and
     // `weight = 0`; another path-mask multiplication here would be redundant.
