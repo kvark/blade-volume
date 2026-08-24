@@ -2270,10 +2270,31 @@ material path.
    cursor only after pixel equivalence is locked down.
 3. PowerFoam compute splats are now required for correctness in training and
    headless evaluation. Conservative projected-tile candidates have exact
-   path/PSNR parity and a tested exhaustive overflow fallback; promote that
-   bounded tracer to the interactive viewer and cover resize/live settings.
-   Defer the unrelated SDF and Gaussian-compute backends until the Stage 2
-   quality gate is resolved.
+   path/PSNR parity and a tested exhaustive overflow fallback. The interactive
+   viewer now selects that same tracer whenever `radii.is_some()`, while plain
+   RadFoam retains the global adjacency walk. Disconnected weighted components
+   therefore no longer disappear only in the viewer. Full-image splats reuse
+   4,096 compact rows instead of allocating path and candidate scratch in
+   proportion to window area; the cloud projection and tile binning still run
+   only once per frame. A physical-GPU fixture forces four image batches and
+   is byte-identical to the original full-row renderer. Another gate covers
+   semantic backend selection, max-step and threshold changes, resize, and a
+   post-resize render. The existing full-row constructor and its complete
+   candidate/path telemetry remain unchanged for training and headless
+   evaluation.
+
+   On the current 98,831-site Room checkpoint with spatial detail and a
+   192-step exact row, the bounded viewer measures 2.00 ms at 320x180, 6.19 ms
+   at 640x360, and 23.27 ms at 1280x720 over settled frames on the RTX 5070.
+   The 8 GiB host cgroup peaks at 153 MB with zero swap, pressure, OOM, or GPU
+   fault. Resize and live max-step changes rebuild only resolution-dependent
+   scratch; no model clone, renderer/shader variant, graph operation,
+   dependency, or alternate point-cloud representation is added. Defer the
+   unrelated SDF and Gaussian-compute backends until the Stage 2 quality gate
+   is resolved. Generated benchmark code and output were removed; telemetry
+   remains outside version control under `/tmp/blade-volume-gpu-3776137.log`.
+   The default and all-feature workspace test matrices both pass serially in a
+   12 GiB cgroup; the larger run peaked at 6.13 GB without swap or OOM events.
 
 ## Benchmark and go/no-go policy
 

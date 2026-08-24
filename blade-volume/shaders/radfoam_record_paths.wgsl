@@ -60,6 +60,11 @@ struct RecordParams {
     tile_capacity: u32,
     /// Non-zero when cells are split by learned oriented surface planes.
     oriented: u32,
+    /// Added to compact source indices for batched full-image rendering.
+    image_pixel_offset: u32,
+    _padding0: u32,
+    _padding1: u32,
+    _padding2: u32,
 };
 
 struct Camera {
@@ -653,7 +658,7 @@ fn gather_powerfoam_candidates(
     }
     workgroupBarrier();
 
-    let pixel_idx = g_pixel_indices[output_pixel];
+    let pixel_idx = g_pixel_indices[output_pixel] + g_params.image_pixel_offset;
     let ray_dir = ray_dir_for_pixel(pixel_idx);
     let ray_origin = g_camera.position;
     var use_tile = false;
@@ -794,7 +799,7 @@ fn gather_powerfoam_bvh_candidates(
         workgroupBarrier();
     }
 
-    let pixel_idx = g_pixel_indices[output_pixel];
+    let pixel_idx = g_pixel_indices[output_pixel] + g_params.image_pixel_offset;
     let ray_dir = ray_dir_for_pixel(pixel_idx);
     let ray_origin = g_camera.position;
     let frontier_count = atomicLoad(&w_bvh_frontier_count);
@@ -1019,7 +1024,7 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let output_pixel = g_params.pixel_offset + p_id;
-    let pixel_idx = g_pixel_indices[output_pixel];
+    let pixel_idx = g_pixel_indices[output_pixel] + g_params.image_pixel_offset;
     let ray_dir = ray_dir_for_pixel(pixel_idx);
     let ray_origin = g_camera.position;
     let candidate_begin = output_pixel * g_params.candidate_capacity;
@@ -1069,7 +1074,7 @@ fn record_powerfoam_splats_parallel(
     }
 
     let output_pixel = g_params.pixel_offset + p_id;
-    let pixel_idx = g_pixel_indices[output_pixel];
+    let pixel_idx = g_pixel_indices[output_pixel] + g_params.image_pixel_offset;
     let ray_dir = ray_dir_for_pixel(pixel_idx);
     let ray_origin = g_camera.position;
     let candidate_begin = output_pixel * g_params.candidate_capacity;
@@ -1132,7 +1137,7 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let output_pixel = g_params.pixel_offset + p_id;
-    let pixel_idx = g_pixel_indices[output_pixel];
+    let pixel_idx = g_pixel_indices[output_pixel] + g_params.image_pixel_offset;
     let ray_dir = ray_dir_for_pixel(pixel_idx);
     let ray_origin = g_camera.position;
 

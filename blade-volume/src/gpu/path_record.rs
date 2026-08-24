@@ -141,6 +141,9 @@ pub struct RecordPathsArgs {
     /// Pixel indices use the same offset. This allows multiple camera
     /// dispatches to fill one optimizer batch without copying path data.
     pub pixel_offset: u32,
+    /// Added to each source pixel index without changing its compact output
+    /// row. Full-image renderers use this to reuse bounded rows in batches.
+    pub image_pixel_offset: u32,
     pub max_steps: u32,
     pub image_width: u32,
     pub image_height: u32,
@@ -170,6 +173,8 @@ struct RecordParams {
     tile_height: u32,
     tile_capacity: u32,
     oriented: u32,
+    image_pixel_offset: u32,
+    _padding: [u32; 3],
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -363,6 +368,8 @@ impl PathRecorder {
             oriented: cloud.is_oriented as u32
                 | (buffers.has_surface_queries as u32) << 1
                 | (buffers.record_splat_depths as u32) << 2,
+            image_pixel_offset: args.image_pixel_offset,
+            _padding: [0; 3],
         };
 
         let data = PathRecordData {
@@ -416,9 +423,20 @@ impl PathRecorder {
         buffers: &PathRecordBuffers,
         args: RecordPathsArgs,
     ) {
+        self.dispatch_inner(encoder, cloud, buffers, args, true);
+    }
+
+    fn dispatch_inner(
+        &self,
+        encoder: &mut gpu::CommandEncoder,
+        cloud: &crate::gpu::RadFoamGpuCloud,
+        buffers: &PathRecordBuffers,
+        args: RecordPathsArgs,
+        project_powerfoam: bool,
+    ) {
         let (data, tile_count) = self.prepare_dispatch(cloud, buffers, args);
         if cloud.is_power_foam {
-            if buffers.has_projected_splat_tiles() {
+            if project_powerfoam && buffers.has_projected_splat_tiles() {
                 {
                     let mut pass = encoder.compute("powerfoam-project-path-candidates");
                     let mut pc = pass.with(&self.splat_project_pipeline);
@@ -450,8 +468,7 @@ impl PathRecorder {
                 let mut pass = encoder.compute("powerfoam-record-splat-paths");
                 let mut pc = pass.with(&self.splat_record_pipeline);
                 pc.bind(0, &data);
-                let groups = args.num_pixels.div_ceil(64);
-                pc.dispatch([groups, 1, 1]);
+                pc.dispatch([args.num_pixels.div_ceil(64), 1, 1]);
             }
             return;
         }
@@ -461,6 +478,21 @@ impl PathRecorder {
         pc.bind(0, &data);
         let groups = args.num_pixels.div_ceil(64);
         pc.dispatch([groups, 1, 1]);
+    }
+
+    pub(super) fn dispatch_reusing_powerfoam_projection(
+        &self,
+        encoder: &mut gpu::CommandEncoder,
+        cloud: &crate::gpu::RadFoamGpuCloud,
+        buffers: &PathRecordBuffers,
+        args: RecordPathsArgs,
+    ) {
+        assert!(cloud.is_power_foam, "splat reuse requires PowerFoam");
+        assert!(
+            buffers.has_projected_splat_tiles(),
+            "splat reuse requires projected candidate buffers"
+        );
+        self.dispatch_inner(encoder, cloud, buffers, args, false);
     }
 
     /// Record multiple disjoint camera slices into one output batch.
@@ -1319,7 +1351,7 @@ mod tests {
 
     #[test]
     fn record_params_match_wgsl_uniform_layout() {
-        assert_eq!(mem::size_of::<RecordParams>(), 64);
+        assert_eq!(mem::size_of::<RecordParams>(), 80);
     }
 
     #[test]

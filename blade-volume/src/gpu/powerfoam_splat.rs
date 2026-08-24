@@ -10,7 +10,8 @@ struct SplatIntegrateParams {
     height: u32,
     weight_threshold: f32,
     appearance_flags: u32,
-    _padding: [u32; 2],
+    pixel_offset: u32,
+    num_pixels: u32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -41,6 +42,9 @@ pub struct PowerFoamGpuSplatTracer {
     integrate_pipeline: gpu::ComputePipeline,
     params: SplatIntegrateParams,
     resolution: [u32; 2],
+    candidate_capacity: u32,
+    max_batch_pixels: u32,
+    active_pixels: u32,
 }
 
 impl PowerFoamGpuSplatTracer {
@@ -48,6 +52,43 @@ impl PowerFoamGpuSplatTracer {
         model: &PointCloudModel,
         settings: super::RadFoamTraceSettings,
         resolution: [u32; 2],
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) -> Self {
+        Self::new_inner(model, settings, resolution, u32::MAX, context, encoder)
+    }
+
+    /// Create a renderer whose large full image reuses at most
+    /// `max_batch_pixels` path rows. This is intended for interactive targets,
+    /// where allocating candidate scratch for every display pixel would be
+    /// needlessly proportional to window area.
+    pub fn new_batched(
+        model: &PointCloudModel,
+        settings: super::RadFoamTraceSettings,
+        resolution: [u32; 2],
+        max_batch_pixels: u32,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) -> Self {
+        assert!(
+            max_batch_pixels > 0,
+            "PowerFoam splat batch must be non-zero"
+        );
+        Self::new_inner(
+            model,
+            settings,
+            resolution,
+            max_batch_pixels,
+            context,
+            encoder,
+        )
+    }
+
+    fn new_inner(
+        model: &PointCloudModel,
+        settings: super::RadFoamTraceSettings,
+        resolution: [u32; 2],
+        max_batch_pixels: u32,
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Self {
@@ -70,33 +111,18 @@ impl PowerFoamGpuSplatTracer {
         let num_pixels = resolution[0]
             .checked_mul(resolution[1])
             .expect("PowerFoam splat resolution is too large");
+        let active_pixels = num_pixels.min(max_batch_pixels);
         let cloud = super::RadFoamGpuCloud::new(model, context, encoder);
         let recorder = super::PathRecorder::new(context);
-        let buffers = super::PathRecordBuffers::new_powerfoam_recorded_only_projected(
-            context,
-            num_pixels,
-            settings.max_steps,
-            model.points.len() as u32,
+        let buffers = Self::create_buffers(
+            &cloud,
             resolution,
+            active_pixels,
+            settings.max_steps,
             settings.powerfoam_candidate_capacity,
-            model.surface_detail.is_some(),
+            context,
         );
-        let pixel_indices = (0..num_pixels).collect::<Vec<_>>();
-        buffers.write_pixel_indices(&pixel_indices);
-        encoder.start();
-        {
-            let mut transfer = encoder.transfer("powerfoam-splat-pixel-indices");
-            transfer.copy_buffer_to_buffer(
-                buffers.pixel_indices_stage.at(0),
-                buffers.pixel_indices.at(0),
-                u64::from(num_pixels) * std::mem::size_of::<u32>() as u64,
-            );
-        }
-        let sync = context.submit(encoder);
-        let completed = context
-            .wait_for(&sync, !0)
-            .expect("PowerFoam splat pixel-index upload failed");
-        assert!(completed, "PowerFoam splat pixel-index upload timed out");
+        Self::upload_pixel_indices(&buffers, active_pixels, context, encoder);
 
         let source = shaders::compose(shaders::POWERFOAM_SPLAT);
         let shader = context.create_shader(gpu::ShaderDesc {
@@ -120,7 +146,8 @@ impl PowerFoamGpuSplatTracer {
                 | (cloud.has_surface_detail as u32) << 2
                 | (cloud.has_surface_detail_density as u32) << 3
                 | (cloud.has_surface_detail_directional as u32) << 4,
-            _padding: [0; 2],
+            pixel_offset: 0,
+            num_pixels,
         };
         Self {
             cloud,
@@ -129,7 +156,94 @@ impl PowerFoamGpuSplatTracer {
             integrate_pipeline,
             params,
             resolution,
+            candidate_capacity: settings.powerfoam_candidate_capacity,
+            max_batch_pixels,
+            active_pixels,
         }
+    }
+
+    fn create_buffers(
+        cloud: &super::RadFoamGpuCloud,
+        resolution: [u32; 2],
+        num_pixels: u32,
+        max_steps: u32,
+        candidate_capacity: u32,
+        context: &gpu::Context,
+    ) -> super::PathRecordBuffers {
+        super::PathRecordBuffers::new_powerfoam_recorded_only_projected(
+            context,
+            num_pixels,
+            max_steps,
+            cloud.num_points as u32,
+            resolution,
+            candidate_capacity,
+            cloud.has_surface_detail,
+        )
+    }
+
+    fn upload_pixel_indices(
+        buffers: &super::PathRecordBuffers,
+        num_pixels: u32,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) {
+        let pixel_indices = (0..num_pixels).collect::<Vec<_>>();
+        buffers.write_pixel_indices(&pixel_indices);
+        encoder.start();
+        {
+            let mut transfer = encoder.transfer("powerfoam-splat-pixel-indices");
+            transfer.copy_buffer_to_buffer(
+                buffers.pixel_indices_stage.at(0),
+                buffers.pixel_indices.at(0),
+                u64::from(num_pixels) * std::mem::size_of::<u32>() as u64,
+            );
+        }
+        let sync = context.submit(encoder);
+        let completed = context
+            .wait_for(&sync, !0)
+            .expect("PowerFoam splat pixel-index upload failed");
+        assert!(completed, "PowerFoam splat pixel-index upload timed out");
+    }
+
+    /// Reallocate resolution-dependent path rows after the caller has finished
+    /// all submissions which use this tracer.
+    pub fn reconfigure(
+        &mut self,
+        resolution: [u32; 2],
+        max_steps: u32,
+        context: &gpu::Context,
+        encoder: &mut gpu::CommandEncoder,
+    ) {
+        assert!(
+            resolution[0] > 0 && resolution[1] > 0,
+            "PowerFoam splat resolution must be non-zero"
+        );
+        assert!(max_steps > 0, "PowerFoam splat max_steps must be non-zero");
+        if self.resolution == resolution && self.params.max_steps == max_steps {
+            return;
+        }
+
+        let num_pixels = resolution[0]
+            .checked_mul(resolution[1])
+            .expect("PowerFoam splat resolution is too large");
+        let active_pixels = num_pixels.min(self.max_batch_pixels);
+        self.buffers.destroy(context);
+        self.buffers = Self::create_buffers(
+            &self.cloud,
+            resolution,
+            active_pixels,
+            max_steps,
+            self.candidate_capacity,
+            context,
+        );
+        Self::upload_pixel_indices(&self.buffers, active_pixels, context, encoder);
+        self.params.max_steps = max_steps;
+        self.params.width = resolution[0];
+        self.params.height = resolution[1];
+        self.params.pixel_offset = 0;
+        self.params.num_pixels = num_pixels;
+        self.resolution = resolution;
+        self.active_pixels = active_pixels;
     }
 
     pub fn dispatch(
@@ -139,57 +253,75 @@ impl PowerFoamGpuSplatTracer {
         camera: CameraParams,
     ) {
         let num_pixels = self.resolution[0] * self.resolution[1];
-        let path_bytes = u64::from(num_pixels)
+        let path_bytes = u64::from(self.active_pixels)
             * u64::from(self.params.max_steps)
             * std::mem::size_of::<f32>() as u64;
-        {
-            let mut transfer = encoder.transfer("powerfoam-splat-path-prepare");
-            transfer.fill_buffer(self.buffers.mask.at(0), path_bytes, 0);
-        }
-        self.recorder.dispatch(
-            encoder,
-            &self.cloud,
-            &self.buffers,
-            super::RecordPathsArgs {
-                camera,
-                start_point: 0,
-                pixel_offset: 0,
-                max_steps: self.params.max_steps,
-                image_width: self.resolution[0],
-                image_height: self.resolution[1],
-                max_path_dt: 50.0,
-                depth: camera.depth,
-                num_pixels,
-            },
-        );
+        let first_batch = self.active_pixels.min(num_pixels);
+        let first_args = super::RecordPathsArgs {
+            camera,
+            start_point: 0,
+            pixel_offset: 0,
+            image_pixel_offset: 0,
+            max_steps: self.params.max_steps,
+            image_width: self.resolution[0],
+            image_height: self.resolution[1],
+            max_path_dt: 50.0,
+            depth: camera.depth,
+            num_pixels: first_batch,
+        };
+        for pixel_offset in (0..num_pixels).step_by(self.active_pixels as usize) {
+            let batch_pixels = self.active_pixels.min(num_pixels - pixel_offset);
+            {
+                let mut transfer = encoder.transfer("powerfoam-splat-path-prepare");
+                transfer.fill_buffer(self.buffers.mask.at(0), path_bytes, 0);
+            }
+            let args = super::RecordPathsArgs {
+                image_pixel_offset: pixel_offset,
+                num_pixels: batch_pixels,
+                ..first_args
+            };
+            if pixel_offset == 0 {
+                self.recorder
+                    .dispatch(encoder, &self.cloud, &self.buffers, args);
+            } else {
+                self.recorder.dispatch_reusing_powerfoam_projection(
+                    encoder,
+                    &self.cloud,
+                    &self.buffers,
+                    args,
+                );
+            }
 
-        let mut pass = encoder.compute("powerfoam-integrate-splats");
-        let mut compute = pass.with(&self.integrate_pipeline);
-        compute.bind(
-            0,
-            &SplatIntegrateData {
-                g_camera: camera,
-                g_params: self.params,
-                g_points: self.cloud.points(),
-                g_surface_normals: self.cloud.surface_normals(),
-                g_surface_details: self.cloud.surface_details(),
-                g_attributes: self.cloud.attributes(),
-                g_cells: self.buffers.cells.into(),
-                g_dts: self.buffers.dts.into(),
-                g_mask: self.buffers.mask.into(),
-                g_surface_queries: self.buffers.surface_queries.into(),
-                g_out: output,
-            },
-        );
-        compute.dispatch([
-            self.resolution[0].div_ceil(8),
-            self.resolution[1].div_ceil(8),
-            1,
-        ]);
+            let mut params = self.params;
+            params.pixel_offset = pixel_offset;
+            params.num_pixels = batch_pixels;
+            let mut pass = encoder.compute("powerfoam-integrate-splats");
+            let mut compute = pass.with(&self.integrate_pipeline);
+            compute.bind(
+                0,
+                &SplatIntegrateData {
+                    g_camera: camera,
+                    g_params: params,
+                    g_points: self.cloud.points(),
+                    g_surface_normals: self.cloud.surface_normals(),
+                    g_surface_details: self.cloud.surface_details(),
+                    g_attributes: self.cloud.attributes(),
+                    g_cells: self.buffers.cells.into(),
+                    g_dts: self.buffers.dts.into(),
+                    g_mask: self.buffers.mask.into(),
+                    g_surface_queries: self.buffers.surface_queries.into(),
+                    g_out: output,
+                },
+            );
+            compute.dispatch([batch_pixels.div_ceil(64), 1, 1]);
+        }
     }
 
     /// Reject a completed render if its bounded candidate scratch overflowed.
     pub fn validate_candidate_counts(&self) -> Result<u32, String> {
+        if self.active_pixels != self.resolution[0] * self.resolution[1] {
+            return Err("candidate telemetry is unavailable for a batched PowerFoam render".into());
+        }
         let num_pixels = (self.resolution[0] * self.resolution[1]) as usize;
         let observed = self.buffers.max_splat_candidate_count(0..num_pixels);
         let capacity = self.buffers.splat_candidate_capacity();
@@ -214,6 +346,11 @@ impl PowerFoamGpuSplatTracer {
 
     /// Summarize recorded paths after the render submission has completed.
     pub fn path_stats(&self) -> super::PathRecordStats {
+        assert_eq!(
+            self.active_pixels,
+            self.resolution[0] * self.resolution[1],
+            "path telemetry is unavailable for a batched PowerFoam render"
+        );
         let num_pixels = (self.resolution[0] * self.resolution[1]) as usize;
         self.buffers.path_stats(0..num_pixels)
     }
@@ -221,6 +358,14 @@ impl PowerFoamGpuSplatTracer {
     /// Fixed path-row capacity used by this tracer.
     pub fn max_steps(&self) -> u32 {
         self.params.max_steps
+    }
+
+    pub fn weight_threshold(&self) -> f32 {
+        self.params.weight_threshold
+    }
+
+    pub fn set_weight_threshold(&mut self, weight_threshold: f32) {
+        self.params.weight_threshold = weight_threshold;
     }
 
     pub fn deinit(&mut self, context: &gpu::Context) {

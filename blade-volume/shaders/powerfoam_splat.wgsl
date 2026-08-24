@@ -15,8 +15,8 @@ struct SplatIntegrateParams {
     height: u32,
     weight_threshold: f32,
     appearance_flags: u32,
-    _padding0: f32,
-    _padding1: f32,
+    pixel_offset: u32,
+    num_pixels: u32,
 };
 
 var<uniform> g_camera: Camera;
@@ -243,15 +243,17 @@ fn cell_density_color(
     return vec4<f32>(max(vec3<f32>(0.0), color), density * density_scale);
 }
 
-@compute @workgroup_size(8, 8, 1)
+@compute @workgroup_size(64, 1, 1)
 fn integrate_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= g_params.width || gid.y >= g_params.height) {
+    let output_pixel = gid.x;
+    if (output_pixel >= g_params.num_pixels) {
         return;
     }
-    let pixel = gid.y * g_params.width + gid.x;
-    let row = pixel * g_params.max_steps;
-    let px = (f32(gid.x) + 0.5) / f32(g_params.width);
-    let py = (f32(gid.y) + 0.5) / f32(g_params.height);
+    let pixel = g_params.pixel_offset + output_pixel;
+    let pixel_xy = vec2<u32>(pixel % g_params.width, pixel / g_params.width);
+    let row = output_pixel * g_params.max_steps;
+    let px = (f32(pixel_xy.x) + 0.5) / f32(g_params.width);
+    let py = (f32(pixel_xy.y) + 0.5) / f32(g_params.height);
     let ndc = vec2<f32>(2.0 * px - 1.0, 2.0 * py - 1.0);
     let local_direction = vec3<f32>(
         (ndc - g_camera.principal) * tan(0.5 * g_camera.fov),
@@ -281,7 +283,7 @@ fn integrate_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     textureStore(
         g_out,
-        vec2<i32>(i32(gid.x), i32(gid.y)),
+        vec2<i32>(pixel_xy),
         vec4<f32>(color, 1.0 - transmittance),
     );
 }

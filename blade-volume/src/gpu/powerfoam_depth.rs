@@ -148,6 +148,7 @@ impl PowerFoamGpuDepthTracer {
                 camera,
                 start_point: 0,
                 pixel_offset: 0,
+                image_pixel_offset: 0,
                 max_steps: self.params.max_steps,
                 image_width: self.resolution[0],
                 image_height: self.resolution[1],

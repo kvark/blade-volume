@@ -4823,6 +4823,7 @@ fn collect_path_contributions(
                     camera: view.camera,
                     start_point,
                     pixel_offset: 0,
+                    image_pixel_offset: 0,
                     max_steps: max_steps as u32,
                     image_width: view.width,
                     image_height: view.height,
@@ -6632,6 +6633,7 @@ fn fit_appearance_pixel_batched(
                     start_point: gpu_cloud
                         .containing_point(glam::Vec3::from_array(v.camera.cam_position)),
                     pixel_offset: range.start as u32,
+                    image_pixel_offset: 0,
                     max_steps: max_steps as u32,
                     image_width: v.width,
                     image_height: v.height,

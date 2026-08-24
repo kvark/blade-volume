@@ -661,3 +661,119 @@ fn surface_detail_powerfoam_splat_gpu_matches_cpu() {
     tracer.deinit(&context);
     context.destroy_command_encoder(&mut encoder);
 }
+
+#[test]
+fn batched_powerfoam_splats_match_full_image_rows() {
+    let _gpu_test_guard = gpu_test_guard();
+    let Some(context) = make_test_context() else {
+        eprintln!("Skipping batched PowerFoam splat test: no supported GPU device found");
+        return;
+    };
+    if !context.capabilities().binding_array {
+        eprintln!("Skipping batched PowerFoam splat test: no binding arrays");
+        return;
+    }
+    const RESOLUTION: [u32; 2] = [9, 3];
+    const BYTES_PER_ROW: u32 = RESOLUTION[0] * 8;
+    const BYTE_SIZE: u64 = (BYTES_PER_ROW * RESOLUTION[1]) as u64;
+    let model = vol::PointCloudModel {
+        points: vec![glam::Vec4::new(0.0, 0.0, 5.0, 1.2)],
+        sh_coefficients: vec![0.4, -0.2, 0.1],
+        sh_degree: 0,
+        transforms: None,
+        adjacency: Some(vol::Adjacency {
+            neighbors: Vec::new(),
+            offsets: vec![0, 0],
+        }),
+        radii: Some(vec![4.0]),
+        surface_normals: None,
+        surface_offsets: None,
+        surface_detail: None,
+        surface_color_coefficients: None,
+        spherical_voronoi: None,
+    };
+    model.validate().unwrap();
+    let settings = vol::RadFoamTraceSettings {
+        max_steps: 4,
+        weight_threshold: 1.0e-4,
+        ..vol::RadFoamTraceSettings::default()
+    };
+    let camera = vol::CameraParams {
+        cam_position: [0.0; 3],
+        depth: 10.0,
+        cam_orientation: glam::Quat::IDENTITY.into(),
+        fov: [0.5; 2],
+        principal: [0.0; 2],
+    };
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "powerfoam-batched-parity-test",
+        buffer_count: 1,
+        manual_barriers: false,
+    });
+    let mut full =
+        vol::PowerFoamGpuSplatTracer::new(&model, settings, RESOLUTION, &context, &mut encoder);
+    let mut batched = vol::PowerFoamGpuSplatTracer::new_batched(
+        &model,
+        settings,
+        RESOLUTION,
+        7,
+        &context,
+        &mut encoder,
+    );
+    let (full_texture, full_view) = create_output_rgba16(&context, RESOLUTION[0], RESOLUTION[1]);
+    let (batched_texture, batched_view) =
+        create_output_rgba16(&context, RESOLUTION[0], RESOLUTION[1]);
+    let full_readback = create_readback_buffer(&context, BYTE_SIZE);
+    let batched_readback = create_readback_buffer(&context, BYTE_SIZE);
+
+    encoder.start();
+    encoder.init_texture(full_texture);
+    encoder.init_texture(batched_texture);
+    full.dispatch(&mut encoder, full_view, camera);
+    batched.dispatch(&mut encoder, batched_view, camera);
+    for (name, texture, readback) in [
+        ("powerfoam-full-readback", full_texture, full_readback),
+        (
+            "powerfoam-batched-readback",
+            batched_texture,
+            batched_readback,
+        ),
+    ] {
+        let mut transfer = encoder.transfer(name);
+        transfer.copy_texture_to_buffer(
+            gpu::TexturePiece {
+                texture,
+                mip_level: 0,
+                array_layer: 0,
+                origin: [0; 3],
+            },
+            readback.at(0),
+            BYTES_PER_ROW,
+            gpu::Extent {
+                width: RESOLUTION[0],
+                height: RESOLUTION[1],
+                depth: 1,
+            },
+        );
+    }
+    let sync = context.submit(&mut encoder);
+    assert!(context.wait_for(&sync, !0).unwrap_or(false));
+    full.validate_candidate_counts().unwrap();
+    let full_bytes = unsafe {
+        std::slice::from_raw_parts(full_readback.data() as *const u8, BYTE_SIZE as usize)
+    };
+    let batched_bytes = unsafe {
+        std::slice::from_raw_parts(batched_readback.data() as *const u8, BYTE_SIZE as usize)
+    };
+    assert_eq!(batched_bytes, full_bytes);
+
+    context.destroy_buffer(batched_readback);
+    context.destroy_buffer(full_readback);
+    context.destroy_texture_view(batched_view);
+    context.destroy_texture(batched_texture);
+    context.destroy_texture_view(full_view);
+    context.destroy_texture(full_texture);
+    batched.deinit(&context);
+    full.deinit(&context);
+    context.destroy_command_encoder(&mut encoder);
+}

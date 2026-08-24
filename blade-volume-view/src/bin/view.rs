@@ -501,6 +501,11 @@ impl Example {
             surface_info.format,
             size,
         );
+        let debug_mode = if backend.supports_debug_mode() {
+            debug_mode
+        } else {
+            view::DebugMode::Off
+        };
 
         Self {
             camera,
@@ -547,6 +552,9 @@ impl Example {
     }
 
     fn toggle_debug_mode(&mut self) {
+        if !self.backend.supports_debug_mode() {
+            return;
+        }
         self.debug_mode = self.debug_mode.toggle();
         self.backend.set_debug_mode(self.debug_mode);
         println!("Debug mode: {:?}", self.debug_mode);
@@ -562,11 +570,13 @@ impl Example {
     }
 
     fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+        self.wait_for_gpu();
         self.window_size = size;
         let config = Self::make_surface_config(size);
         self.context.reconfigure_surface(&mut self.surface, config);
         self.backend.resize(
             &self.context,
+            &mut self.command_encoder,
             view::RenderSize {
                 width: size.width,
                 height: size.height,
@@ -605,8 +615,12 @@ impl Example {
                             view::RenderBackend::Gaussian(_) => {
                                 ui.label("Gaussian RT");
                             }
-                            view::RenderBackend::RadFoam(_) => {
-                                ui.label("RadFoam compute");
+                            view::RenderBackend::RadFoam(ref backend) => {
+                                ui.label(if backend.is_powerfoam() {
+                                    "PowerFoam compute splats"
+                                } else {
+                                    "RadFoam compute"
+                                });
                             }
                             view::RenderBackend::Relight(_) => {
                                 ui.label("Relightable point cloud");
@@ -690,17 +704,21 @@ impl Example {
 
                     ui.separator();
 
-                    ui.horizontal(|ui| {
-                        ui.label("Debug mode:");
-                        let mut enabled = self.debug_mode == view::DebugMode::ParticleDensity;
-                        if ui.checkbox(&mut enabled, "Particle density").changed() {
-                            self.debug_mode = if enabled {
-                                view::DebugMode::ParticleDensity
-                            } else {
-                                view::DebugMode::Off
-                            };
-                            self.backend.set_debug_mode(self.debug_mode);
-                        }
+                    let supports_debug = self.backend.supports_debug_mode();
+                    ui.add_enabled_ui(supports_debug, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Debug mode:");
+                            let mut enabled =
+                                self.debug_mode == view::DebugMode::ParticleDensity;
+                            if ui.checkbox(&mut enabled, "Particle density").changed() {
+                                self.debug_mode = if enabled {
+                                    view::DebugMode::ParticleDensity
+                                } else {
+                                    view::DebugMode::Off
+                                };
+                                self.backend.set_debug_mode(self.debug_mode);
+                            }
+                        });
                     });
 
                     ui.separator();
@@ -785,6 +803,9 @@ impl Example {
         if let Some(index) = chosen_environment {
             self.set_environment(index);
         }
+
+        self.backend
+            .prepare(&self.context, &mut self.command_encoder);
 
         let frame = self.surface.acquire_frame();
 
