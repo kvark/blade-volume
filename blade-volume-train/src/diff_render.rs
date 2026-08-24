@@ -5573,6 +5573,13 @@ fn surface_detail_has_effect(detail: &vol::SurfaceDetail) -> bool {
         })
 }
 
+fn should_evaluate_surface_detail(
+    detail: Option<&vol::SurfaceDetail>,
+    any_detail_field_trainable: bool,
+) -> bool {
+    detail.is_some_and(|detail| any_detail_field_trainable || surface_detail_has_effect(detail))
+}
+
 /// Build (or rebuild) the meganeura session + GPU cloud for the current
 /// model. Sized for `pixel_batch` and `max_steps`; both are constant
 /// across densify cycles so only the parameter-count-dependent pieces
@@ -5632,10 +5639,10 @@ fn build_train_session(
         spherical_axes: spherical_voronoi_axis_lr_ratio > 0.0,
         spherical_colors: spherical_voronoi_color_lr_ratio > 0.0,
     };
-    let evaluate_surface_detail = model
-        .surface_detail
-        .as_ref()
-        .is_some_and(|detail| surface_trainability.detail() || surface_detail_has_effect(detail));
+    let evaluate_surface_detail = should_evaluate_surface_detail(
+        model.surface_detail.as_ref(),
+        surface_trainability.detail(),
+    );
     let use_surface_detail_directional = model
         .surface_detail
         .as_ref()
@@ -5845,11 +5852,12 @@ fn build_train_session(
                     panic!("bind_external_buffer(dt_grad_surface_normal) failed: {err:?}")
                 });
         }
-        if model.surface_detail.is_some() {
-            assert!(
-                path_bufs.has_surface_queries(),
-                "surface-detail graph requires recorded query inputs"
-            );
+        assert_eq!(
+            path_bufs.has_surface_queries(),
+            evaluate_surface_detail,
+            "surface-detail graph and path buffers disagree on query inputs"
+        );
+        if evaluate_surface_detail {
             let source = gpu
                 .get_external_buffer_source(path_bufs.surface_queries)
                 .expect("surface-query path buffer must be exportable");
@@ -6241,6 +6249,14 @@ fn fit_appearance_pixel_batched(
         || config.surface_offset_lr_ratio > 0.0
         || config.surface_detail_offset_lr_ratio > 0.0
         || config.surface_detail_height_lr_ratio > 0.0;
+    let train_surface_detail = config.surface_detail_offset_lr_ratio > 0.0
+        || config.surface_detail_height_lr_ratio > 0.0
+        || config.surface_detail_color_lr_ratio > 0.0
+        || config.surface_detail_density_lr_ratio > 0.0
+        || config.surface_detail_directional_axis_lr_ratio > 0.0
+        || config.surface_detail_directional_color_lr_ratio > 0.0;
+    let evaluate_surface_detail =
+        should_evaluate_surface_detail(model.surface_detail.as_ref(), train_surface_detail);
     let path_jacobian_mode = if train_positions || train_radii {
         vol::gpu::PathJacobianMode::Full
     } else if train_surface_geometry {
@@ -6267,7 +6283,7 @@ fn fit_appearance_pixel_batched(
             model.points.len() as u32,
             max_image_resolution,
             config.powerfoam_candidate_capacity,
-            model.surface_detail.is_some(),
+            evaluate_surface_detail,
         )
     } else if model.radii.is_some() {
         vol::gpu::PathRecordBuffers::new_external_powerfoam(
@@ -6276,7 +6292,7 @@ fn fit_appearance_pixel_batched(
             max_steps as u32,
             path_jacobian_mode,
             config.powerfoam_candidate_capacity,
-            model.surface_detail.is_some(),
+            evaluate_surface_detail,
         )
     } else {
         vol::gpu::PathRecordBuffers::new_external_with_jacobians(
@@ -6932,7 +6948,7 @@ fn fit_appearance_pixel_batched(
                         model.points.len() as u32,
                         max_image_resolution,
                         config.powerfoam_candidate_capacity,
-                        model.surface_detail.is_some(),
+                        evaluate_surface_detail,
                     )
                 } else if model.radii.is_some() {
                     vol::gpu::PathRecordBuffers::new_external_powerfoam(
@@ -6941,7 +6957,7 @@ fn fit_appearance_pixel_batched(
                         max_steps as u32,
                         path_jacobian_mode,
                         config.powerfoam_candidate_capacity,
-                        model.surface_detail.is_some(),
+                        evaluate_surface_detail,
                     )
                 } else {
                     vol::gpu::PathRecordBuffers::new_external_with_jacobians(

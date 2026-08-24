@@ -2327,6 +2327,25 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   This adds no public API, model/PLY field, graph operation, shader,
   entry/group, binding, pipeline, backend variant, or dependency.
 
+#### M2by — Omit identity-detail path queries (done)
+
+- The path recorder already exposes surface-query payloads as optional, but it
+  previously required them whenever the uploaded cloud retained spatial-detail
+  metadata. Training now requests those existing outputs only when it evaluates
+  effective detail. The cloud and serialized fields stay intact; zero heights
+  preserve the base oriented interval, while any effective or trainable detail
+  restores the query path. A physical-GPU oracle covers the same identity cloud
+  with and without query outputs. Nonzero-height detail continues to require
+  and test the full path.
+- On the 98,831-site Room continuation, the warmed path recorder falls from
+  3.77--4.44 to 2.83--3.28 ms; its interval-clipping pass falls from
+  3.03--3.70 to 2.09--2.54 ms. Three matched 256-update training phases average
+  3.111 seconds, another 11.6% below M2bx and 38.8% below M2bw, at approximately
+  0.294 GB peak cgroup memory. The freshly serialized result again preserves
+  27.1422/19.8841 dB over four training/eight held views. No operation, shader,
+  entry/group, binding, pipeline, backend variant, public option, model field,
+  format, or dependency is added.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

@@ -2206,7 +2206,11 @@ material path.
    continuation's frozen spatial-detail residual is exactly the identity then
    keeps its PLY/checkpoint fields but omits their unused graph: 195→153 passes,
    a 30.7% reduction in three-run mean training time, and 0.523→0.293 GB peak
-   memory, again at identical reported train/held quality.)
+   memory, again at identical reported train/held quality. Making the path
+   recorder's existing surface-query output genuinely optional then reduces
+   its warmed time from 3.77--4.44 to 2.83--3.28 ms. The three-run training
+   mean falls another 11.6% to 3.111 seconds, still at identical reported
+   train/held quality.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

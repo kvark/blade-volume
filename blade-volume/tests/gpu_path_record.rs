@@ -277,6 +277,7 @@ fn assert_gpu_path_record_matches_cpu(
     expect_tile_overflow: bool,
     expect_path_truncation: bool,
 ) {
+    let with_surface_queries = model.surface_detail.is_some();
     assert_gpu_path_record_matches_cpu_with_mode(
         model,
         world_translation,
@@ -284,6 +285,7 @@ fn assert_gpu_path_record_matches_cpu(
         expect_path_truncation,
         false,
         PathJacobianMode::Full,
+        with_surface_queries,
     );
 }
 
@@ -292,6 +294,7 @@ fn assert_gpu_batched_path_record_matches_cpu(
     world_translation: glam::Vec3,
     expect_path_truncation: bool,
 ) {
+    let with_surface_queries = model.surface_detail.is_some();
     assert_gpu_path_record_matches_cpu_with_mode(
         model,
         world_translation,
@@ -299,6 +302,7 @@ fn assert_gpu_batched_path_record_matches_cpu(
         expect_path_truncation,
         true,
         PathJacobianMode::Full,
+        with_surface_queries,
     );
 }
 
@@ -309,6 +313,7 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
     expect_path_truncation: bool,
     batched_exhaustive: bool,
     jacobian_mode: PathJacobianMode,
+    with_surface_queries: bool,
 ) {
     let _gpu_test_guard = GPU_TEST_LOCK
         .lock()
@@ -347,7 +352,6 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
     ));
 
     let weighted = model.radii.is_some();
-    let with_surface_queries = model.surface_detail.is_some();
     let cpu = cpu_record(&model, &rays, 0, max_steps, depth);
     assert!(
         cpu.mask.iter().any(|&m| m != 0.0),
@@ -1248,7 +1252,7 @@ fn gpu_oriented_powerfoam_paths_and_normal_jacobians_match_cpu() {
 }
 
 #[test]
-fn gpu_surface_detail_paths_and_queries_match_cpu() {
+fn gpu_surface_detail_paths_with_and_without_queries_match_cpu() {
     let mut model = build_disconnected_ray_model(12);
     let camera = make_camera_looking_along_x(100.0);
     let target_ray = rays_for_pixels(&camera, &[32 * 64 + 32], 64, 64)[0];
@@ -1273,7 +1277,17 @@ fn gpu_surface_detail_paths_and_queries_match_cpu() {
         density_logits: None,
         directional: None,
     });
-    assert_gpu_path_record_matches_cpu(model, glam::Vec3::ZERO, false, false);
+    assert_gpu_path_record_matches_cpu(model.clone(), glam::Vec3::ZERO, false, false);
+    model.surface_detail.as_mut().unwrap().heights.fill(0.0);
+    assert_gpu_path_record_matches_cpu_with_mode(
+        model,
+        glam::Vec3::ZERO,
+        false,
+        false,
+        false,
+        PathJacobianMode::Full,
+        false,
+    );
 }
 
 #[test]
@@ -1331,6 +1345,7 @@ fn gpu_surface_only_tangent_matches_oriented_cpu_reference() {
         false,
         false,
         PathJacobianMode::Surface,
+        false,
     );
 }
 

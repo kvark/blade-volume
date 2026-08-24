@@ -323,8 +323,8 @@ impl PathRecorder {
             "surface-only path Jacobians require an oriented cloud"
         );
         assert!(
-            !cloud.has_surface_detail || buffers.has_surface_queries,
-            "surface-detail path recording requires surface-query outputs"
+            !buffers.has_surface_queries || cloud.has_surface_detail,
+            "surface-query outputs require surface-detail data"
         );
         let tile_width = args.image_width.div_ceil(SPLAT_TILE_SIZE);
         let tile_height = args.image_height.div_ceil(SPLAT_TILE_SIZE);
@@ -360,7 +360,7 @@ impl PathRecorder {
             tile_width,
             tile_height,
             tile_capacity: buffers.splat_tile_capacity,
-            oriented: cloud.is_oriented as u32 | (cloud.has_surface_detail as u32) << 1,
+            oriented: cloud.is_oriented as u32 | (buffers.has_surface_queries as u32) << 1,
         };
 
         let data = PathRecordData {
