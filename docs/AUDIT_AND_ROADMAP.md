@@ -2240,7 +2240,10 @@ material path.
    site's remaining neighbors as soon as its monotonically shrinking near/far
    interval becomes empty. Two 2,040-update runs average 17.358 seconds versus
    17.568 seconds (-1.2%) at the same reported loss; all 19 physical-GPU path
-   oracles pass. Neither optimization adds a shader entry/group, pipeline,
+   oracles pass. The balanced hierarchy's exact post-frontier stack bound then
+   reduces shared scratch from 32 to 25 words per lane. BVH gather falls about
+   14%, and two matched 2,040-update runs average 17.067 seconds (-1.7%) with
+   1.2% less GPU wait. These changes add no shader entry/group, pipeline,
    operation, or dependency.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²

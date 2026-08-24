@@ -2438,6 +2438,21 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   pass. The change adds no shader entry/group, pipeline, buffer, binding,
   operation, public option, format, or dependency.
 
+#### M2ce — Size the shared BVH stack to its exact bound (done)
+
+- The support hierarchy is balanced by construction and capped at `2^30`
+  leaves. After the gather workgroup expands six levels, each lane owns at most
+  a `2^24`-leaf subtree. Its depth-first traversal needs 25 stack words
+  including the root, not the previous conservative 32. One WGSL constant now
+  drives both the 64-lane allocation and lane stride.
+- Reducing shared scratch from 2,048 to 1,600 words lowers three settled Room
+  BVH-gather profiles from 0.73--0.75 to 0.62--0.64 ms (about 14%). Three
+  matched 256-update runs improve 2.784→2.753 seconds (-1.1%), and two
+  2,040-update runs improve 17.358→17.067 seconds (-1.7%); mean GPU wait falls
+  1.2% in both gates and reported loss is unchanged. All 19 physical-GPU path
+  oracles pass. No traversal, shader entry/group, pipeline, buffer, binding,
+  operation, option, format, or dependency is added.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

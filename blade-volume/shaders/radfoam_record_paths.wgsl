@@ -122,7 +122,8 @@ var<workgroup> w_bvh_frontier_a: array<u32, 64>;
 var<workgroup> w_bvh_frontier_b: array<u32, 64>;
 var<workgroup> w_bvh_frontier_count: atomic<u32>;
 var<workgroup> w_bvh_next_count: atomic<u32>;
-var<workgroup> w_bvh_stacks: array<u32, 2048>;
+const BVH_STACK_SIZE: u32 = 25u;
+var<workgroup> w_bvh_stacks: array<u32, 64u * BVH_STACK_SIZE>;
 
 fn qrot(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     let u = q.xyz;
@@ -722,7 +723,7 @@ fn ray_intersects_support_bounds(
 // row and cooperatively expand six tree levels, then each lane traverses one
 // disjoint subtree and performs the same exact ray/sphere test as the
 // exhaustive gather. The tree has at most 2^30 leaves and is split in halves,
-// so each remaining subtree fits its lane's 32-word shared stack.
+// so each remaining subtree fits its lane's 25-word shared stack.
 @compute @workgroup_size(64)
 fn gather_powerfoam_bvh_candidates(
     @builtin(workgroup_id) workgroup_id: vec3<u32>,
@@ -794,7 +795,7 @@ fn gather_powerfoam_bvh_candidates(
     let ray_origin = g_camera.position;
     let frontier_count = atomicLoad(&w_bvh_frontier_count);
     if (local_id.x < frontier_count) {
-        let stack_begin = local_id.x * 32u;
+        let stack_begin = local_id.x * BVH_STACK_SIZE;
         var stack_size = 1u;
         w_bvh_stacks[stack_begin] = w_bvh_frontier_a[local_id.x];
         while (stack_size != 0u) {
