@@ -6655,3 +6655,25 @@ position error changes by less than `0.001` world unit. The accumulator,
 solver, and tuning constants are removed. All 12 GiB scopes peak below 365 MiB
 with zero swap, OOM, or GPU fault. Ignored artifacts remain under
 `target/audit-runs/ray-consensus-fusion/`.
+
+## Rejected pre-continuation opacity pruning (2026-08-24)
+
+Final opacity is a learned Gaussian responsibility signal, so a private
+prototype compacted the PBR Gaussian and corresponding surface in lockstep
+before calibrated-light center/normal continuation. The ordinary final
+compaction threshold of 0.05 improves nested to `23.55/21.94` dB
+mean/where-hit from `23.50/21.90`, but is mixed on dense. A conservative 0.025
+threshold removes 74--126 particles before continuation and initially improves
+dense to `24.52/23.29/23.29` dB and nested to `23.57/23.57/21.98` dB
+mean/worst/where-hit.
+
+The definitive five-cloud result is not transferable per scene. Its aggregate
+does rise by `+0.014/+0.038/+0.010` dB mean/worst/where-hit, but clouds 4 and 5
+regress. Exact saved-binary pairs confirm cloud 4 at
+`23.71/23.22/22.77→23.70/23.19/22.74` dB and cloud 5 at
+`23.59/23.07/22.67→23.58/23.05/22.63` dB. A component that is safe to remove
+after all fitting can still constrain the later mixture optimization. The
+paired-prune API, surface remap, and orchestration are removed; production
+retains the existing final-only compaction. All 12 GiB scopes peak below
+372 MiB with zero swap, OOM, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/early-pbr-prune/`.
