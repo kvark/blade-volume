@@ -5982,3 +5982,35 @@ Both prototypes are removed: they add code without a measurable production
 benefit. All screens ran inside 12 GiB cgroups without swap, OOM, or GPU fault;
 ignored artifacts remain under
 `target/audit-runs/native-gaussian-{topology,profile}/`.
+
+## Rejected Gaussian opacity pruning and response caching (2026-08-24)
+
+Opacity pruning is not a useful follow-up to the selected midpoint split. On
+the five-cloud gate, midpoint candidates have only 0--2 particles below 0.01
+opacity and 1--10 below 0.02 out of roughly 2,300 particles. The persisted
+light fields have 7--15 below 0.01 and 34--42 below 0.02; even a comparatively
+aggressive 0.05 cutoff would remove only 76--98 particles. The reference
+thresholds therefore offer negligible capacity or traversal savings, while a
+larger cutoff would be a new quality-sensitive topology policy. No pruning
+code or option is retained.
+
+Reusing the exact squared Gaussian response distance from candidate filtering
+is also rejected. The response can be recovered correctly from proxy space by
+multiplying by the ellipsoid support scale squared. Packing that scale into
+the already available 24-bit instance custom index preserves the rendered
+image to 92.84 dB PSNR on the 1,256,396-particle Bonsai model: 99.9% of channel
+differences are at most one half-float step. It needs no binding, shader
+variant, or Gaussian-buffer load. However, storing one additional `f32` in
+each entry of the 64-hit local window raises the order-balanced median from
+13.863 to 16.752 ms per 512x512 frame, a 20.8% regression. Loading the exact
+support value from Gaussian storage is similarly slow. Recomputing the local
+response during compositing remains faster than increasing hit-window state.
+
+An earlier raw proxy-space prototype omitted the support correction and was
+discarded immediately at 23.94 dB image parity. The first control harness also
+submitted the initialization command encoder twice and provoked an NVIDIA MMU
+fault; after removing that application error, the untouched control, packed
+candidate, and physical CPU/GPU oracle all completed repeatedly without an
+Xid or validation error. The benchmark and all production prototypes are
+removed. Ignored captures remain under
+`target/audit-runs/gaussian-cache-response/`.
