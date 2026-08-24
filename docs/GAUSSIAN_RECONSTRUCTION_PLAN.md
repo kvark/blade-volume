@@ -5485,3 +5485,36 @@ second output/scatter traversal costs more than global tile ownership saves.
 Both 12 GiB scopes use under 915 MiB and report zero swap, pressure, OOM, Xid,
 or GPU fault. Logs remain outside version control under
 `target/audit-runs/global-locality-candidates/`.
+
+## Exact perspective Gaussian candidate bounds (2026-08-24)
+
+The training candidate grid no longer treats the covariance of six projected
+sigma points as a conservative finite-support bound. That approximation is
+useful for the public 3DGUT conic estimate, but it can exclude a ray whose
+exact anisotropic Gaussian response exceeds the optimizer threshold. A
+deterministic stress oracle covering 512 rotated, near-camera, off-axis
+Gaussians with scales from `1e-3` to `10` found such a false negative at
+particle 463 and pixel 508 in the old grid across roughly 1.57 million exact
+ray/particle checks.
+
+Candidate indexing now bounds the finite ellipsoid directly in perspective
+space. For image ratio `q`, centre `c`, covariance-root rows `A`, and support
+radius `r`, a tangent satisfies
+`(c_i - q*c_z)^2 = r^2 * |A_i - q*A_z|^2`; the two roots of that quadratic are
+the exact minimum and maximum along each image axis. Clouds intersecting the
+near plane retain the existing conservative full-screen fallback. The public
+projected-conic API and exact per-ray candidate test are unchanged, and the
+new stress oracle verifies that every threshold-contributing response appears
+in its tile row.
+
+The selected nine-view gate remains at `24.28/23.12` dB mean/worst held-light
+volumetric Gaussian PBR, `55.1%` coverage, `22.92` dB where hit, and `1.24` ms
+per 100x75 frame; its paired Gaussian fit takes 4.30 seconds. The complete
+Room gate remains at `12.53/12.22` dB and `68.8%` coverage with a 10.4-second
+fit. On the independent nested-camera fixture, two exact-bound runs score
+`23.31` and `23.32` dB versus `23.30` dB from the old approximation rebuilt
+into the same binary, resolving the earlier difference as normal optimizer
+variation. No shader, graph operation, public API, format, model field, or
+dependency is added. Artifacts remain outside version control under
+`target/audit-runs/exact-gaussian-projection-bound/` and
+`target/audit-runs/current-synthetic-v1/exact-gaussian-projection-bound/`.

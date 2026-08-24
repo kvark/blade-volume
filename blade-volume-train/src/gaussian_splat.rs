@@ -1511,20 +1511,63 @@ fn projected_support_bounds(
     }
 
     let local_axes = support.axes.map(|axis| projection.camera_vector(axis));
-    let conic = project_camera_sigma_axes(projection, local_mean, local_axes)?;
-    let conic_extent = glam::Vec2::new(
-        (support.gaussian_radius * support.gaussian_radius * conic.covariance.x_axis.x.max(0.0))
-            .sqrt(),
-        (support.gaussian_radius * support.gaussian_radius * conic.covariance.y_axis.y.max(0.0))
-            .sqrt(),
+    let (min_ratio, max_ratio) =
+        projected_ellipsoid_ratio_bounds(local_mean, local_axes, support.gaussian_radius)?;
+    let min = glam::Vec2::from(
+        projection
+            .project_camera_space(glam::Vec3::new(min_ratio.x, min_ratio.y, 1.0))?
+            .0,
     );
-    let min = conic.mean - conic_extent;
-    let max = conic.mean + conic_extent;
+    let max = glam::Vec2::from(
+        projection
+            .project_camera_space(glam::Vec3::new(max_ratio.x, max_ratio.y, 1.0))?
+            .0,
+    );
     if max.x < 0.0 || max.y < 0.0 || min.x >= width as f32 || min.y >= height as f32 {
         None
     } else {
         Some((min, max))
     }
+}
+
+fn projected_ellipsoid_ratio_bounds(
+    mean: glam::Vec3,
+    sigma_axes: [glam::Vec3; 3],
+    gaussian_radius: f32,
+) -> Option<(glam::Vec2, glam::Vec2)> {
+    // The sigma axes are sqrt(3) times the covariance square-root columns.
+    // A tangent image coordinate q along x or y satisfies
+    //   (c_i - q*c_z)^2 = r^2 * |A_i - q*A_z|^2.
+    // Solving that quadratic gives the exact perspective bounds of the finite
+    // ellipsoid, unlike a projected covariance ellipse under strong
+    // anisotropy or perspective.
+    let radius_squared = gaussian_radius * gaussian_radius / 3.0;
+    let zz = sigma_axes.iter().map(|axis| axis.z * axis.z).sum::<f32>();
+    let bounds = |component: usize| {
+        let center = mean[component];
+        let diagonal = sigma_axes
+            .iter()
+            .map(|axis| axis[component] * axis[component])
+            .sum::<f32>();
+        let cross = sigma_axes
+            .iter()
+            .map(|axis| axis[component] * axis.z)
+            .sum::<f32>();
+        let a = mean.z * mean.z - radius_squared * zz;
+        let b = 2.0 * (radius_squared * cross - center * mean.z);
+        let c = center * center - radius_squared * diagonal;
+        let discriminant = b * b - 4.0 * a * c;
+        if !a.is_finite() || a <= 0.0 || !discriminant.is_finite() || discriminant < -1.0e-5 {
+            return None;
+        }
+        let root = discriminant.max(0.0).sqrt();
+        let first = (-b - root) / (2.0 * a);
+        let second = (-b + root) / (2.0 * a);
+        (first.is_finite() && second.is_finite()).then_some((first.min(second), first.max(second)))
+    };
+    let x = bounds(0)?;
+    let y = bounds(1)?;
+    Some((glam::Vec2::new(x.0, y.0), glam::Vec2::new(x.1, y.1)))
 }
 
 /// Evaluate the exact maximum of a 3D anisotropic Gaussian along a ray.
@@ -3834,6 +3877,72 @@ mod tests {
             .sum();
         let exhaustive_entries = batch.origins.len() * model.points.len();
         assert!(candidate_entries < exhaustive_entries / 2);
+    }
+
+    #[test]
+    fn projected_tiles_contain_extreme_anisotropic_responses() {
+        const PARTICLES: usize = 512;
+        const MIN_ALPHA: f32 = 1.0e-4;
+        let unit = |seed| hash(seed) as f32 / u32::MAX as f32;
+        let mut points = Vec::with_capacity(PARTICLES);
+        let mut rotations = Vec::with_capacity(PARTICLES);
+        let mut scales = Vec::with_capacity(PARTICLES);
+        for index in 0..PARTICLES as u32 {
+            let z = 10.0_f32.powf(-1.5 + 2.8 * unit(7 * index + 1));
+            points.push(glam::Vec4::new(
+                (2.4 * unit(7 * index + 2) - 1.2) * z,
+                (1.8 * unit(7 * index + 3) - 0.9) * z,
+                z,
+                0.01 + 0.98 * unit(7 * index + 4),
+            ));
+            rotations.push(glam::Quat::from_euler(
+                glam::EulerRot::XYZ,
+                std::f32::consts::TAU * unit(7 * index + 5),
+                std::f32::consts::TAU * unit(7 * index + 6),
+                std::f32::consts::TAU * unit(7 * index + 7),
+            ));
+            scales.push(glam::Vec3::new(
+                10.0_f32.powf(-3.0 + 4.0 * unit(11 * index + 1)),
+                10.0_f32.powf(-3.0 + 4.0 * unit(11 * index + 2)),
+                10.0_f32.powf(-3.0 + 4.0 * unit(11 * index + 3)),
+            ));
+        }
+        let mut model = model(points);
+        {
+            let transforms = model.transforms.as_mut().unwrap();
+            transforms.rotations = rotations;
+            transforms.scales = scales;
+        }
+        let capture = empty_capture(64, 48);
+        let index = CandidateIndex::new(&model, &capture, &[0], MIN_ALPHA);
+        let transforms = model.transforms.as_ref().unwrap();
+        let rays = crate::inverse::capture::PixelRays::new(
+            &capture.views[0].camera,
+            capture.width,
+            capture.height,
+        );
+        let origin = glam::Vec3::from(capture.views[0].camera.cam_position);
+        for pixel in 0..capture.width * capture.height {
+            let direction = rays.direction(pixel % capture.width, pixel / capture.width);
+            let candidates = index.candidates(0, pixel).unwrap().0;
+            for particle in 0..PARTICLES {
+                let response = ray_response(
+                    origin,
+                    direction,
+                    model.points[particle].truncate(),
+                    transforms.rotations[particle],
+                    transforms.scales[particle],
+                )
+                .unwrap();
+                if response.depth > 0.0 && model.points[particle].w * response.response >= MIN_ALPHA
+                {
+                    assert!(
+                        candidates.contains(&(particle as u32)),
+                        "tile omitted particle {particle} at pixel {pixel}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
