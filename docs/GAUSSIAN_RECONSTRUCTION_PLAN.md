@@ -5167,3 +5167,33 @@ degenerate surface-only set. Prior controlled Bonsai evidence also measured a
 2.03 dB held-view advantage for this initializer. It is now the library and
 CLI default; `--initialization top-track` remains available for historical
 ablations.
+
+## Selected Gaussian ray-query batching (2026-08-24)
+
+The hardware Gaussian renderer now retains 48 maximum-response hits per exact
+sorting batch instead of five. A private sweep over 5, 8, 12, 16, 24, 32, 48,
+and 64 hits selected 48 as the measured knee; 64 regressed. The production
+shader still re-scans the TLAS after each batch and advances a lexicographic
+maximum-response cursor, so the change reduces repeated traversals without
+approximating particle order or adding a shader variant.
+
+The sweep also exposed an independent correctness bug in the standalone
+renderer. It used camera depth for both semantic response filtering and the
+triangle-proxy query. A broad Gaussian can have a valid maximum-response depth
+inside that interval while containing the camera and placing its only forward
+proxy face beyond it. The query now covers the complete forward TLAS while the
+existing `t_start`/`t_end` checks retain the requested semantic interval. This
+matches the scene renderer's existing behavior.
+
+A physical-GPU regression compares the production WGSL pixel with the
+exhaustive CPU oracle for 65 overlapping particles. Its broad far support
+contains the camera, exits beyond camera depth, and sorts after 64 narrow
+particles, covering both the proxy-interval bug and more than one 48-hit batch.
+The pixel agrees within the existing half-float tolerance. At 512x512, paired
+40-frame submit/wait measurements change from 8.29/8.37 to 3.91/4.04 ms on the
+169,432-particle Bonsai reconstruction, from 6.87/6.86 to 3.22/3.17 ms on the
+109,764-particle Room reconstruction, and from 4.23/4.24 to 3.51/3.35 ms on a
+2,735-particle controlled cloud. Rgba16 output hashes are identical within
+every pair. The 4 GiB cgroups use no swap and report no OOM, throttle, Xid, or
+GPU fault; logs remain outside version control under
+`target/audit-runs/gaussian-window-sweep/`.

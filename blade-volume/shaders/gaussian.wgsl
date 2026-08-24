@@ -92,7 +92,9 @@ fn draw_fs(vo: VertexOutput) -> @location(0) vec4<f32> {
     params.t_start = 0.0;
     params.t_end = g_camera.depth;
     params.query_t_start = params.t_start;
-    params.query_t_end = params.t_end;
+    // A visible maximum-response depth may be inside a broad proxy whose exit
+    // face lies beyond the camera's semantic depth interval.
+    params.query_t_end = 1.0e30;
 
     let result = gaussian_trace(ray_pos, ray_dir, params);
 

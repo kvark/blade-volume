@@ -34,32 +34,33 @@ fn sh1(color: glam::Vec3, z_delta: glam::Vec3) -> [f32; 12] {
 }
 
 fn adversarial_model() -> vol::PointCloudModel {
-    // The broad far particle's support proxy starts before the narrow near
-    // particle's proxy. Correct 3DGRT ordering is nevertheless near red at
-    // maximum-response t=2, followed by far blue at t=4.
-    let points = vec![
-        glam::Vec4::new(0.0, 0.0, 4.0, 0.5),
-        glam::Vec4::new(0.0, 0.0, 2.0, 0.5),
-    ];
+    // The broad far particle's support proxy contains the camera and extends
+    // beyond the semantic ray interval. Correct 3DGRT ordering nevertheless
+    // places its maximum-response depth after enough narrow hits to cross the
+    // shader's batching window.
+    let mut points = vec![glam::Vec4::new(0.0, 0.0, 8.0, 0.15)];
     let mut sh_coefficients = Vec::new();
     sh_coefficients.extend_from_slice(&sh1(
         glam::Vec3::new(0.0, 0.0, 0.8),
         glam::Vec3::new(0.0, 0.1, 0.2),
     ));
-    sh_coefficients.extend_from_slice(&sh1(
-        glam::Vec3::new(0.8, 0.0, 0.0),
-        glam::Vec3::new(0.2, 0.1, 0.0),
-    ));
+    for i in 0..64 {
+        let t = i as f32 / 63.0;
+        points.push(glam::Vec4::new(0.0, 0.0, 2.0 + 5.0 * t, 0.015));
+        sh_coefficients.extend_from_slice(&sh1(
+            glam::Vec3::new(0.8 * (1.0 - t), 0.2 * t, 0.0),
+            glam::Vec3::new(0.2 * (1.0 - t), 0.1, 0.2 * t),
+        ));
+    }
+    let mut scales = vec![glam::Vec3::new(1.0, 1.0, 7.0)];
+    scales.extend(std::iter::repeat_n(glam::Vec3::new(1.0, 1.0, 0.02), 64));
     vol::PointCloudModel {
         points,
         sh_coefficients,
         sh_degree: 1,
         transforms: Some(vol::Transforms {
-            rotations: vec![glam::Quat::IDENTITY; 2],
-            scales: vec![
-                glam::Vec3::new(1.0, 1.0, 1.0),
-                glam::Vec3::new(1.0, 1.0, 0.1),
-            ],
+            rotations: vec![glam::Quat::IDENTITY; 65],
+            scales,
             pbr: None,
         }),
         adjacency: None,
