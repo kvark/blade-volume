@@ -76,7 +76,7 @@ either reconstructed asset.
 | Synthetic (four calibrated lights, five-cloud average) | 6 / 2 | 25.17 / 24.35 dB | 22.68 / 22.22 dB | 56.7% |
 | Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 25.17 / 24.35 dB | 23.53 / 22.97 dB | 55.3% |
 | Synthetic (secondary-light foam continuation, five-cloud average) | 6 / 2 | 25.91 / 24.90 dB | 24.07 / 23.34 dB | 55.4% |
-| Synthetic (denser calibrated capture) | 9 / 3 | 26.03 / 23.95 dB | 24.28 / 23.08 dB | 55.1% |
+| Synthetic (denser calibrated capture) | 9 / 3 | 26.61 / 24.79 dB | 24.28 / 23.13 dB | 55.1% |
 | Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
 | Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
 
@@ -191,7 +191,8 @@ the Gaussian schedule now starts at 0.25 rather than 0.5 peak opacity. Dense
 multi-view surface samples otherwise begin nearly saturated and can leave the
 support stage in a poor opacity/appearance basin. On the fixed nine-view foam,
 this raises unseen-light Gaussian PBR from 22.59/20.94 to 24.15/22.97 dB while
-the independently fitted static field remains 26.03/23.95 dB. Six- and
+the independently fitted static field was 26.03/23.95 dB before the later
+covariance-rotation refinement. Six- and
 seven-view fits retain their established 0.5 initialization, as does the
 shared-appearance path, where lowering opacity did not generalize.
 
@@ -201,6 +202,18 @@ available. This lets physical diffuse responses recalibrate transmittance
 without changing covariance or durable appearance. It raises the denser
 capture from 24.15/22.97 to 24.28/23.08 dB and a separate eleven-view fixture
 from 23.28 to 23.36 dB. Six-view and maskless captures retain frozen opacity.
+
+Low-order static Gaussian fields now learn their normalized quaternion
+rotation together with scale, opacity, and position during the support stage.
+The selected `0.001` rate raises the dense nine-view gate from a reproduced
+25.99/23.90 to 26.61/24.79 dB and an independent eleven-view gate from 22.50
+to 23.79 dB. Across five six-view cloud replays it improves every mean and
+worst view, raising the aggregate by 0.38/0.21 dB. SH-2 fields and every PBR
+support fit keep their extracted covariance frame fixed: joint rotation made
+the scalar surface regress, while a later rotation-only transfer was neutral.
+The implementation reuses ordinary differentiable graph operations and adds
+no shader variant, graph operation, public option, model field, format, or
+dependency.
 
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered

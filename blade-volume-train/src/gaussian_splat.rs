@@ -27,6 +27,7 @@ const TILE_SUPPORT_MARGIN: f32 = 1.25;
 const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
+const GAUSSIAN_ROTATION_LEARNING_RATE: f32 = 1.0e-3;
 const MULTI_LIGHT_GEOMETRY_STEPS: usize = 50;
 const MULTI_LIGHT_GEOMETRY_POSITION_LEARNING_RATE: f32 = 4.0e-4;
 const HIGH_VIEW_MULTI_LIGHT_OPACITY_LEARNING_RATE: f32 = 5.0e-3;
@@ -467,6 +468,14 @@ fn selected_sh_degree(view_count: usize) -> usize {
     }
 }
 
+fn selected_rotation_learning_rate(view_count: usize, requested: f32) -> f32 {
+    if selected_sh_degree(view_count) < 2 {
+        requested
+    } else {
+        0.0
+    }
+}
+
 fn sh_basis(direction: glam::Vec3) -> [f32; 9] {
     let squared = direction * direction;
     [
@@ -513,12 +522,16 @@ pub fn fit_staged(
         view_indices,
         steps,
         0.0,
+        0.0,
         OpacityLoss::BackgroundOnly,
         gpu,
     )
 }
 
 /// Apply the direct-Gaussian schedule while also learning static light-field centres.
+/// SH-0/SH-1 fields also learn covariance rotation. SH-2 fields keep the
+/// extracted frame fixed because the higher directional appearance can trade
+/// responsibility with orientation and did not preserve the real-scene tail.
 pub fn fit_staged_light_field(
     model: &mut vol::PointCloudModel,
     capture: &crate::inverse::capture::Capture,
@@ -532,6 +545,7 @@ pub fn fit_staged_light_field(
         view_indices,
         steps,
         LIGHT_FIELD_POSITION_LEARNING_RATE,
+        GAUSSIAN_ROTATION_LEARNING_RATE,
         OpacityLoss::Mask,
         gpu,
     )
@@ -578,9 +592,18 @@ pub fn fit_staged_outputs(
             ..light_field_options
         },
         OpacityLoss::BackgroundOnly,
+        0.0,
         gpu.clone(),
     )?;
-    let light_field_support = fit(light_field, capture, view_indices, light_field_options, gpu)?;
+    let light_field_support = fit_with_opacity_loss(
+        light_field,
+        capture,
+        view_indices,
+        light_field_options,
+        OpacityLoss::Mask,
+        selected_rotation_learning_rate(view_indices.len(), GAUSSIAN_ROTATION_LEARNING_RATE),
+        gpu,
+    )?;
     Ok(SharedStagedFitStats {
         appearance,
         pbr_support,
@@ -612,6 +635,7 @@ fn fit_staged_impl(
     view_indices: &[usize],
     steps: usize,
     position_learning_rate: f32,
+    rotation_learning_rate: f32,
     opacity_loss: OpacityLoss,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<StagedFitStats, String> {
@@ -626,6 +650,7 @@ fn fit_staged_impl(
         view_indices,
         appearance_options,
         opacity_loss,
+        0.0,
         gpu.clone(),
     )?;
     if sh_degree > 0 {
@@ -637,6 +662,7 @@ fn fit_staged_impl(
         view_indices,
         support_options,
         opacity_loss,
+        selected_rotation_learning_rate(view_indices.len(), rotation_learning_rate),
         gpu,
     )?;
     Ok(StagedFitStats {
@@ -664,6 +690,7 @@ fn staged_options(
     } else {
         0.0
     };
+    let sh_degree = selected_sh_degree(view_indices.len());
     let appearance_options = FitOptions {
         steps: appearance_steps,
         batch_size: 512,
@@ -677,7 +704,6 @@ fn staged_options(
         opacity_loss_weight,
         background: [0.0; 3],
     };
-    let sh_degree = selected_sh_degree(view_indices.len());
     Ok((
         appearance_options,
         FitOptions {
@@ -1166,6 +1192,7 @@ fn fit_joint_multilight_positions(
         OpacityLoss::Mask,
         MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING,
         learn_normals,
+        false,
     );
     let (mut session, _report) = mn::build(
         &graph,
@@ -1225,7 +1252,7 @@ fn fit_joint_multilight_positions(
     }
     for step in 0..options.steps {
         if step != 0 && step.is_multiple_of(options.geometry_sync_every) {
-            download_candidate_geometry(&session, gaussian);
+            download_candidate_geometry(&session, gaussian, false);
             candidate_index = CandidateIndex::new(
                 gaussian,
                 lights[0].capture,
@@ -1324,7 +1351,7 @@ fn fit_joint_multilight_positions(
                 .collect(),
         )
     } else {
-        download_model(&session, gaussian);
+        download_model(&session, gaussian, false);
         None
     };
 
@@ -2157,6 +2184,7 @@ pub fn build_graph(
         OpacityLoss::Mask,
         0.0,
         false,
+        false,
     )
 }
 
@@ -2224,6 +2252,82 @@ fn build_diffuse_normal_colors(g: &mut mn::Graph, particles: usize) -> [mn::Node
     [r, g_channel, b]
 }
 
+fn build_rotation_axes(
+    g: &mut mn::Graph,
+    particles: usize,
+    train_rotations: bool,
+) -> [mn::NodeId; 3] {
+    if !train_rotations {
+        return ["rotation_x", "rotation_y", "rotation_z"]
+            .map(|name| g.input(name, &[particles, 3]));
+    }
+    let rotations = g.parameter("rotations", &[particles, 4]);
+    // RMS normalization divides by sqrt(sum(q^2) / 4); the half weight
+    // therefore produces an L2-normalized quaternion.
+    let unit_weight = g.constant(vec![0.5; 4], &[4]);
+    let unit = g.rms_norm(rotations, unit_weight, 1.0e-12);
+    let unit = g.reshape(unit, &[particles * 4]);
+    let x = g.split_a(unit, particles as u32, 1, 3, 1);
+    let yzw = g.split_b(unit, particles as u32, 1, 3, 1);
+    let y = g.split_a(yzw, particles as u32, 1, 2, 1);
+    let zw = g.split_b(yzw, particles as u32, 1, 2, 1);
+    let z = g.split_a(zw, particles as u32, 1, 1, 1);
+    let w = g.split_b(zw, particles as u32, 1, 1, 1);
+
+    let xx = g.mul(x, x);
+    let yy = g.mul(y, y);
+    let zz = g.mul(z, z);
+    let xy = g.mul(x, y);
+    let xz = g.mul(x, z);
+    let xw = g.mul(x, w);
+    let yz = g.mul(y, z);
+    let yw = g.mul(y, w);
+    let zw = g.mul(z, w);
+    let one = g.constant(vec![1.0; particles], &[particles]);
+    let two = g.constant(vec![2.0; particles], &[particles]);
+
+    let yy_zz = g.add(yy, zz);
+    let two_yy_zz = g.mul(yy_zz, two);
+    let negative_two_yy_zz = g.neg(two_yy_zz);
+    let r00 = g.add(one, negative_two_yy_zz);
+    let xy_zw = g.add(xy, zw);
+    let r10 = g.mul(xy_zw, two);
+    let negative_yw = g.neg(yw);
+    let xz_yw = g.add(xz, negative_yw);
+    let r20 = g.mul(xz_yw, two);
+
+    let negative_zw = g.neg(zw);
+    let xy_zw = g.add(xy, negative_zw);
+    let r01 = g.mul(xy_zw, two);
+    let xx_zz = g.add(xx, zz);
+    let two_xx_zz = g.mul(xx_zz, two);
+    let negative_two_xx_zz = g.neg(two_xx_zz);
+    let r11 = g.add(one, negative_two_xx_zz);
+    let yz_xw = g.add(yz, xw);
+    let r21 = g.mul(yz_xw, two);
+
+    let xz_yw = g.add(xz, yw);
+    let r02 = g.mul(xz_yw, two);
+    let negative_xw = g.neg(xw);
+    let yz_xw = g.add(yz, negative_xw);
+    let r12 = g.mul(yz_xw, two);
+    let xx_yy = g.add(xx, yy);
+    let two_xx_yy = g.mul(xx_yy, two);
+    let negative_two_xx_yy = g.neg(two_xx_yy);
+    let r22 = g.add(one, negative_two_xx_yy);
+
+    let axis = |g: &mut mn::Graph, a, b, c| {
+        let ab = g.concat(a, b, particles as u32, 1, 1, 1);
+        let abc = g.concat(ab, c, particles as u32, 2, 1, 1);
+        g.reshape(abc, &[particles, 3])
+    };
+    [
+        axis(g, r00, r10, r20),
+        axis(g, r01, r11, r21),
+        axis(g, r02, r12, r22),
+    ]
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_graph_with_losses(
     g: &mut mn::Graph,
@@ -2236,6 +2340,7 @@ fn build_graph_with_losses(
     opacity_loss: OpacityLoss,
     opacity_conditioned_color_ceiling: f32,
     diffuse_normals: bool,
+    train_rotations: bool,
 ) -> GaussianGraph {
     assert!(particles > 0);
     assert!(pixels > 0);
@@ -2255,8 +2360,7 @@ fn build_graph_with_losses(
     let sh_basis = g.input("sh_basis", &[pixels, sh_components]);
     let labels = g.input("labels", &[pixels, 3]);
     let target_alpha = g.input("target_alpha", &[pixels, 1]);
-    let rotation_rows =
-        ["rotation_x", "rotation_y", "rotation_z"].map(|name| g.input(name, &[particles, 3]));
+    let rotation_axes = build_rotation_axes(g, particles, train_rotations);
 
     let positions = g.parameter("positions", &[particles, 3]);
     let log_scales = g.parameter("log_scales", &[particles, 3]);
@@ -2284,8 +2388,8 @@ fn build_graph_with_losses(
 
     let mut gaussian_origins = Vec::with_capacity(3);
     let mut gaussian_directions = Vec::with_capacity(3);
-    for (rotation_row, scale) in rotation_rows.into_iter().zip([scale_x, scale_y, scale_z]) {
-        let basis = g.embedding(candidate_indices, rotation_row);
+    for (rotation_axis, scale) in rotation_axes.into_iter().zip([scale_x, scale_y, scale_z]) {
+        let basis = g.embedding(candidate_indices, rotation_axis);
         let origin_product = g.mul(relative_origins, basis);
         let local_origin = g.sum_inner(origin_product);
         gaussian_origins.push(g.div(local_origin, scale));
@@ -2608,6 +2712,15 @@ fn set_model_parameters(session: &mut mn::Session, model: &vol::PointCloudModel)
     session.set_parameter("sh_b", &sh_b);
 }
 
+fn set_rotation_parameters(session: &mut mn::Session, model: &vol::PointCloudModel) {
+    let rotations = &model.transforms.as_ref().unwrap().rotations;
+    let values: Vec<f32> = rotations
+        .iter()
+        .flat_map(|rotation| rotation.normalize().to_array())
+        .collect();
+    session.set_parameter("rotations", &values);
+}
+
 fn set_rotation_inputs(session: &mut mn::Session, model: &vol::PointCloudModel) {
     let rotations = &model.transforms.as_ref().unwrap().rotations;
     let mut rows: [Vec<f32>; 3] = std::array::from_fn(|_| Vec::with_capacity(rotations.len() * 3));
@@ -2655,15 +2768,42 @@ fn apply_model_geometry(
     }
 }
 
-fn download_candidate_geometry(session: &mn::Session, model: &mut vol::PointCloudModel) {
+fn apply_model_rotations(model: &mut vol::PointCloudModel, rotations: &[f32]) {
+    assert_eq!(rotations.len(), model.points.len() * 4);
+    let transforms = model.transforms.as_mut().unwrap();
+    for (rotation, values) in transforms
+        .rotations
+        .iter_mut()
+        .zip(rotations.as_chunks::<4>().0)
+    {
+        let candidate = glam::Quat::from_array(*values);
+        if candidate.is_finite() && candidate.length_squared() > 1.0e-12 {
+            *rotation = candidate.normalize();
+        }
+    }
+}
+
+fn download_candidate_geometry(
+    session: &mn::Session,
+    model: &mut vol::PointCloudModel,
+    rotations_changed: bool,
+) {
     let [positions, log_scales, opacity_logits] = session
         .read_params(&["positions", "log_scales", "opacity_logits"])
         .try_into()
         .unwrap();
     apply_model_geometry(model, &positions, &log_scales, &opacity_logits);
+    if rotations_changed {
+        let rotations = session.read_params(&["rotations"]).pop().unwrap();
+        apply_model_rotations(model, &rotations);
+    }
 }
 
-fn download_model(session: &mn::Session, model: &mut vol::PointCloudModel) {
+fn download_model(
+    session: &mn::Session,
+    model: &mut vol::PointCloudModel,
+    rotations_changed: bool,
+) {
     let sh_components = model.sh_component_count();
     let [positions, log_scales, opacity_logits, sh_r, sh_g, sh_b] = session
         .read_params(&[
@@ -2678,6 +2818,10 @@ fn download_model(session: &mn::Session, model: &mut vol::PointCloudModel) {
         .unwrap();
     let sh = [sh_r, sh_g, sh_b];
     apply_model_geometry(model, &positions, &log_scales, &opacity_logits);
+    if rotations_changed {
+        let rotations = session.read_params(&["rotations"]).pop().unwrap();
+        apply_model_rotations(model, &rotations);
+    }
     for index in 0..model.points.len() {
         for component in 0..sh_components {
             for (channel, values) in sh.iter().enumerate() {
@@ -2886,23 +3030,23 @@ fn read_loss(session: &mn::Session) -> f32 {
     loss[0]
 }
 
-fn changes_candidate_geometry(options: FitOptions) -> bool {
+fn changes_candidate_geometry(options: FitOptions, rotation_learning_rate: f32) -> bool {
     options.position_learning_rate > 0.0
         || options.scale_learning_rate > 0.0
         || options.opacity_learning_rate > 0.0
+        || rotation_learning_rate > 0.0
 }
 
-fn geometry_synced_by_final_step(options: FitOptions) -> bool {
-    changes_candidate_geometry(options) && options.steps.is_multiple_of(options.geometry_sync_every)
+fn geometry_synced_by_final_step(options: FitOptions, rotation_learning_rate: f32) -> bool {
+    changes_candidate_geometry(options, rotation_learning_rate)
+        && options.steps.is_multiple_of(options.geometry_sync_every)
 }
 
 /// Fit a Gaussian light field directly to posed RGB images.
 ///
 /// This is intentionally the small baseline: fixed particle count, SH-0/1/2, and
-/// exact CPU response testing after private screen-tile culling. It establishes
-/// whether direct Gaussian image formation improves reconstruction before
-/// learned rotations, higher-order SH, or densification add implementation
-/// surface area. Capture radiance is converted from linear light to the
+/// exact CPU response testing after private screen-tile culling. Capture
+/// radiance is converted from linear light to the
 /// display-referred sRGB convention stored by [`vol::PointCloudModel`].
 pub fn fit(
     model: &mut vol::PointCloudModel,
@@ -2917,6 +3061,7 @@ pub fn fit(
         view_indices,
         options,
         OpacityLoss::Mask,
+        0.0,
         gpu,
     )
 }
@@ -2927,9 +3072,13 @@ fn fit_with_opacity_loss(
     view_indices: &[usize],
     options: FitOptions,
     opacity_loss: OpacityLoss,
+    rotation_learning_rate: f32,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<FitStats, String> {
     validate_fit(model, capture, view_indices, options)?;
+    if !rotation_learning_rate.is_finite() || rotation_learning_rate < 0.0 {
+        return Err("rotation learning rate must be finite and non-negative".to_string());
+    }
     let opacity_loss_weight = match opacity_loss {
         OpacityLoss::Mask => options.opacity_loss_weight,
         OpacityLoss::BackgroundOnly => options.opacity_loss_weight * BACKGROUND_ONLY_OPACITY_SCALE,
@@ -2946,6 +3095,7 @@ fn fit_with_opacity_loss(
         opacity_loss,
         0.0,
         false,
+        rotation_learning_rate > 0.0,
     );
     let (mut session, _report) = mn::build(
         &graph,
@@ -2960,7 +3110,11 @@ fn fit_with_opacity_loss(
         .collect();
     session.set_input_u32("candidate_pixel_indices", &pixel_indices);
     set_model_parameters(&mut session, model);
-    set_rotation_inputs(&mut session, model);
+    if rotation_learning_rate > 0.0 {
+        set_rotation_parameters(&mut session, model);
+    } else {
+        set_rotation_inputs(&mut session, model);
+    }
     let pixel_rays = capture_pixel_rays(capture);
     let mut candidate_index =
         CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
@@ -2981,8 +3135,11 @@ fn fit_with_opacity_loss(
     session.set_lr_multiplier("positions", options.position_learning_rate);
     session.set_lr_multiplier("log_scales", options.scale_learning_rate);
     session.set_lr_multiplier("opacity_logits", options.opacity_learning_rate);
+    if rotation_learning_rate > 0.0 {
+        session.set_lr_multiplier("rotations", rotation_learning_rate);
+    }
     session.set_lr_multiplier("sh_", options.sh_learning_rate);
-    let sync_candidate_geometry = changes_candidate_geometry(options);
+    let sync_candidate_geometry = changes_candidate_geometry(options, rotation_learning_rate);
     let mut step = 0;
     while step < options.steps {
         let until_geometry_sync = if sync_candidate_geometry {
@@ -3029,17 +3186,17 @@ fn fit_with_opacity_loss(
             // Candidate grids read only position, support, and opacity. Keep
             // the much larger SH table device-local until the final model.
             if step == options.steps {
-                download_model(&session, model);
+                download_model(&session, model, rotation_learning_rate > 0.0);
             } else {
-                download_candidate_geometry(&session, model);
+                download_candidate_geometry(&session, model, rotation_learning_rate > 0.0);
             }
             candidate_index =
                 CandidateIndex::new(model, capture, view_indices, options.candidate_min_alpha);
         }
     }
-    let geometry_synced = geometry_synced_by_final_step(options);
+    let geometry_synced = geometry_synced_by_final_step(options, rotation_learning_rate);
     if !geometry_synced {
-        download_model(&session, model);
+        download_model(&session, model, rotation_learning_rate > 0.0);
     }
 
     session.clear_optimizer();
@@ -3343,11 +3500,15 @@ mod tests {
             opacity_learning_rate: 0.0,
             ..FitOptions::default()
         };
-        assert!(!changes_candidate_geometry(appearance));
-        assert!(changes_candidate_geometry(FitOptions {
-            scale_learning_rate: 0.01,
-            ..appearance
-        }));
+        assert!(!changes_candidate_geometry(appearance, 0.0));
+        assert!(changes_candidate_geometry(
+            FitOptions {
+                scale_learning_rate: 0.01,
+                ..appearance
+            },
+            0.0,
+        ));
+        assert!(changes_candidate_geometry(appearance, 0.01));
     }
 
     #[test]
@@ -3384,17 +3545,22 @@ mod tests {
             scale_learning_rate: 0.01,
             ..FitOptions::default()
         };
-        assert!(geometry_synced_by_final_step(support));
-        assert!(!geometry_synced_by_final_step(FitOptions {
-            steps: 99,
-            ..support
-        }));
-        assert!(!geometry_synced_by_final_step(FitOptions {
+        assert!(geometry_synced_by_final_step(support, 0.0));
+        assert!(!geometry_synced_by_final_step(
+            FitOptions {
+                steps: 99,
+                ..support
+            },
+            0.0,
+        ));
+        let appearance = FitOptions {
             position_learning_rate: 0.0,
             scale_learning_rate: 0.0,
             opacity_learning_rate: 0.0,
             ..support
-        }));
+        };
+        assert!(!geometry_synced_by_final_step(appearance, 0.0));
+        assert!(geometry_synced_by_final_step(appearance, 0.01));
     }
 
     #[test]
@@ -3406,6 +3572,11 @@ mod tests {
         assert_eq!(selected_sh_degree(MIN_SH1_VIEWS), 1);
         assert_eq!(selected_sh_degree(MIN_SH2_VIEWS - 1), 1);
         assert_eq!(selected_sh_degree(MIN_SH2_VIEWS), 2);
+        assert_eq!(
+            selected_rotation_learning_rate(MIN_SH2_VIEWS - 1, 0.001),
+            0.001
+        );
+        assert_eq!(selected_rotation_learning_rate(MIN_SH2_VIEWS, 0.001), 0.0);
     }
 
     #[test]
@@ -4117,6 +4288,7 @@ mod tests {
             OpacityLoss::BackgroundOnly,
             0.0,
             false,
+            true,
         );
         let (mut session, _report) = mn::build(
             &graph,
@@ -4168,17 +4340,11 @@ mod tests {
         session.set_input("labels", &[0.2, 0.2, 0.1]);
         session.set_input("target_alpha", &[0.0]);
         let front_rotation = glam::Quat::from_rotation_y(0.6);
-        for (name, axis) in [
-            ("rotation_x", glam::Vec3::X),
-            ("rotation_y", glam::Vec3::Y),
-            ("rotation_z", glam::Vec3::Z),
-        ] {
-            let values: Vec<f32> = [front_rotation * axis, axis]
-                .into_iter()
-                .flat_map(|value| value.to_array())
-                .collect();
-            session.set_input(name, &values);
-        }
+        let rotations: Vec<f32> = [front_rotation, glam::Quat::IDENTITY]
+            .into_iter()
+            .flat_map(|rotation| rotation.to_array())
+            .collect();
+        session.set_parameter("rotations", &rotations);
         session.step();
         session.wait();
 
@@ -4212,6 +4378,12 @@ mod tests {
         session.read_param_grad("log_scales", &mut scale_gradient);
         assert!(scale_gradient.iter().all(|value| value.is_finite()));
         assert!(scale_gradient[..3].iter().any(|value| value.abs() > 1.0e-5));
+        let mut rotation_gradient = [0.0_f32; 8];
+        session.read_param_grad("rotations", &mut rotation_gradient);
+        assert!(rotation_gradient.iter().all(|value| value.is_finite()));
+        assert!(rotation_gradient[..4]
+            .iter()
+            .any(|value| value.abs() > 1.0e-5));
         let mut sh_gradient = [0.0_f32; 18];
         session.read_param_grad("sh_r", &mut sh_gradient);
         assert!(sh_gradient.iter().all(|value| value.is_finite()));
@@ -4252,6 +4424,7 @@ mod tests {
             [0.0; 3],
             OpacityLoss::Mask,
             MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING,
+            false,
             false,
         );
         let (mut session, _report) = mn::build(
@@ -4357,6 +4530,62 @@ mod tests {
         assert!(
             final_distance < 0.25 * initial_distance,
             "position did not converge: {initial_distance} -> {final_distance}"
+        );
+    }
+
+    #[test]
+    fn direct_fit_recovers_anisotropic_rotation() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping direct Gaussian rotation test: no GPU");
+            return;
+        };
+        let bright = (0.8 - 0.5) / SH_C0;
+        let mut truth = model(vec![glam::Vec4::new(0.0, 0.0, 4.0, 0.8)]);
+        truth.sh_coefficients.fill(bright);
+        let transforms = truth.transforms.as_mut().unwrap();
+        transforms.rotations[0] = glam::Quat::from_euler(glam::EulerRot::YXZ, 0.55, 0.3, 0.0);
+        transforms.scales[0] = glam::Vec3::new(0.2, 0.7, 0.4);
+        let capture = synthetic_capture(&truth);
+
+        let mut fitted = truth.clone();
+        fitted.transforms.as_mut().unwrap().rotations[0] = glam::Quat::IDENTITY;
+        let initial_rotation = fitted.transforms.as_ref().unwrap().rotations[0];
+        let truth_rotation = truth.transforms.as_ref().unwrap().rotations[0];
+        let initial_error = initial_rotation.angle_between(truth_rotation);
+        let stats = fit_with_opacity_loss(
+            &mut fitted,
+            &capture,
+            &[0, 1],
+            FitOptions {
+                steps: 400,
+                batch_size: 64,
+                candidates_per_pixel: 1,
+                candidate_min_alpha: 0.0,
+                geometry_sync_every: 20,
+                position_learning_rate: 0.0,
+                scale_learning_rate: 0.0,
+                opacity_learning_rate: 0.0,
+                sh_learning_rate: 0.0,
+                opacity_loss_weight: 0.0,
+                background: [0.0; 3],
+            },
+            OpacityLoss::Mask,
+            0.01,
+            gpu,
+        )
+        .unwrap();
+        let final_rotation = fitted.transforms.as_ref().unwrap().rotations[0];
+        let final_error = final_rotation.angle_between(truth_rotation);
+        assert!(
+            stats.final_loss < 0.25 * stats.initial_loss,
+            "loss did not converge: {} -> {}",
+            stats.initial_loss,
+            stats.final_loss
+        );
+        assert!(
+            final_error < 0.5 * initial_error,
+            "rotation did not converge: {initial_error} -> {final_error}"
         );
     }
 }

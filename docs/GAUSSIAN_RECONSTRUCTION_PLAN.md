@@ -5756,3 +5756,74 @@ Formatting, strict all-target/all-feature Clippy, and both complete
 physical-GPU workspace configurations pass. The default and all-feature 12 GiB
 scopes peak at 6.49 and 6.27 GB respectively, with zero swap, memory pressure,
 OOM, Xid, or GPU fault.
+
+## Selected low-order static Gaussian rotation learning (2026-08-24)
+
+The direct Gaussian support graph now has a private trainable-covariance path.
+It stores one quaternion parameter per particle, normalizes each row inside the
+graph, and expands the quaternion into the same three covariance axes consumed
+by the existing analytic ray response. The fixed path remains the former three
+input axes. This is composed entirely from existing Meganeura normalization,
+split, pointwise, concat, gather, and reduction nodes: no graph operation,
+shader, shader entry, binding, public option, model field, format, or dependency
+is added.
+
+The path is deliberately selected only for a static light field using SH-0 or
+SH-1, at a `0.001` Adam multiplier during its support stage. It remains off for
+all PBR support and for SH-2 static fields, which currently means 18 or more
+training views. The boundary is about competing model capacity rather than
+scene identity: with SH-2 enabled, directional appearance and covariance
+orientation can exchange responsibility and the real-scene tail was not
+preserved.
+
+On exact saved-binary control/candidate runs, the nine-training/three-held-view
+dense gate improves from `25.99/23.90` to `26.61/24.79` dB mean/worst static
+PSNR. Its independently fitted scalar and volumetric PBR outputs remain within
+ordinary replay noise at `23.51/22.78` and `24.28/23.13` dB. The independent
+eleven-training/one-held-view fixture improves from `22.50` to `23.79` dB;
+its volumetric PBR result remains `23.29` versus `23.31` dB. Paired Gaussian
+fit time changes from 4.836 to 5.000 seconds on the dense gate and from 5.215
+to 5.312 seconds on the nested fixture.
+
+A five-cloud six-training-view replay is positive for every individual static
+mean and tail. The controls are `24.99/24.26`, `24.95/23.95`, `24.71/24.26`,
+`25.19/24.37`, and `25.01/24.28` dB; the selected results are `25.42/24.62`,
+`25.28/24.25`, `25.35/24.26`, `25.50/24.71`, and `25.21/24.33` dB. The
+aggregate therefore rises from `24.970/24.224` to `25.352/24.434` dB, a
+`+0.382/+0.210` dB gain. The fixed PBR path averages `23.502/22.922` versus
+`23.510/22.926` dB in the control, confirming that its tiny difference is
+unrelated optimizer variation.
+
+Two real-scene checks exercise opposite sides of the selection boundary. Room
+has 18 training views, keeps its SH-2 covariance fixed, and reproduces
+`20.29/19.62` versus `20.32/19.61` dB static PSNR; its held-pose volumetric PBR
+result is unchanged at `14.87/13.21` dB. Bonsai has 17 training views and
+improves from `15.68/14.98` to `16.26/15.31` dB static PSNR; its fixed
+volumetric PBR path remains `12.87/11.41` versus `12.86/11.41` dB. These
+low-resolution real captures are novel-view checks under their capture light,
+not relighting ground truth.
+
+Broader variants are rejected. Learning rotation jointly in PBR support raises
+the dense volumetric score from `24.28/23.11` to `24.44/23.21` dB but changes
+the scale basin before surface-radius handoff: the paired dense scalar surface
+drops from `23.51/22.75` to `23.44/22.70`, Room from `13.25/11.61` to
+`12.96/11.04`, and Bonsai from `12.32/10.42` to `11.10/8.45` dB. Keeping PBR
+support fixed and appending 1,000 rotation-only updates is neutral
+(`24.33/23.19` versus `24.28/23.11` dense, `23.32` versus `23.31` nested), so
+its cost is not retained. A 500-update joint rotation-and-scale tail regresses
+the dense and nested volumetric scores to `23.77/22.13` and `22.67` dB.
+Lower static rates of `0.0005` and `0.00025` reduce the synthetic gain without
+protecting the SH-2 Room tail, motivating the capacity gate instead of a
+scene-specific threshold.
+
+A focused physical-GPU graph oracle checks finite nonzero rotation gradients,
+and a two-view anisotropic fixture learns a deliberately wrong covariance
+orientation while reducing loss by more than 75%. The dense/nested/real gate
+scope peaks at 602.8 MiB and the five-cloud scope at 309.2 MiB under their
+12 GiB cgroups, with zero swap, OOM, or GPU fault. Complete artifacts remain
+outside version control under
+`target/audit-runs/trainable-gaussian-rotation/`.
+Formatting, strict all-target/all-feature Clippy, and both complete physical-GPU
+workspace test configurations pass. The default and all-feature test scopes
+peak at 2.87 and 2.88 GiB respectively, with zero swap, memory pressure, OOM,
+Xid, validation, or GPU fault.
