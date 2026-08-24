@@ -5955,3 +5955,30 @@ test scopes peak at 3.61 and 3.24 GiB with zero swap, pressure, OOM, validation
 error, Xid, or GPU fault. The latter run was slower because the host desktop
 was processing an unrelated KDE crash-handler loop; kernel and user journals
 identify `drkonqi-coredump-launcher`, not a Blade or NVIDIA process.
+
+## Rejected topology-capacity and remap micro-optimizations (2026-08-24)
+
+The selected midpoint split is not merely under-allocated. Doubling its
+high-gradient budget from 5% to 10% adds 224--234 particles per cloud instead
+of 111--118. Across the definitive five clouds it scores `25.55/24.70`,
+`25.38/24.24`, `25.56/24.34`, `25.72/24.83`, and `25.42/24.43` dB. The
+aggregate mean rises only from `25.504` to `25.526` dB while the aggregate
+worst view falls from `24.523` to `24.508` dB; two individual tails regress by
+0.03--0.07 dB. Moving the original 5% event from halfway to three quarters is
+more clearly negative: the first two clouds fall to `25.46/24.59` and
+`25.31/24.17` dB, so the remaining screen was stopped. Both constants are
+removed. The next topology hypothesis needs better residual ownership, not
+more children or less recovery time.
+
+Two adjacent host cleanups are also rejected. Reconstructing child remap
+parameters from the model already uploaded into a rebuilt session avoids one
+download, but an exact order-balanced six-pair A/B moves median Gaussian fit
+time from `4.015` to `4.039` seconds and median process wall time from `10.240`
+to `10.275` seconds. Separately, candidate preparation was changed to omit RGB
+and mask data that candidate selection does not consume. The shared sampler
+refactor required to do that raises the first three candidate fits to
+4.150--4.203 seconds versus 3.967--4.041 seconds for their exact controls.
+Both prototypes are removed: they add code without a measurable production
+benefit. All screens ran inside 12 GiB cgroups without swap, OOM, or GPU fault;
+ignored artifacts remain under
+`target/audit-runs/native-gaussian-{topology,profile}/`.
