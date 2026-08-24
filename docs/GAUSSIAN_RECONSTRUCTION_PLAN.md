@@ -5459,3 +5459,29 @@ coverage, with its paired Gaussian fit at 10.5 seconds. The 12 GiB scopes peak
 at 923 and 542 MiB and report zero swap, pressure, OOM, Xid, or GPU fault.
 Artifacts stay outside version control under
 `target/audit-runs/{current-synthetic-v1/shared-relight-group,shared-relight-group}/`.
+
+## Rejected global-locality Gaussian candidate partition (2026-08-24)
+
+A fresh phase profile of the 109,764-particle Room reconstruction attributes
+4.55 seconds of its four direct-Gaussian fits to exact candidate-row
+preparation, 1.81 seconds to projected-grid construction, 1.86 seconds to GPU
+updates, and 1.19 seconds to parameter synchronization. Candidate evaluation
+therefore remains the largest single phase.
+
+A private CPU prototype globally sorted each twenty-batch ray group by
+`(view, tile, pixel)`, assigned each locality to one of the existing twelve
+workers, reused exact duplicate pixel rows, and scattered the results back to
+the unchanged optimizer order. All 32 focused Gaussian tests pass, including
+the exhaustive/indexed and grouped/individual row oracles. The extra global
+sort, worker-local output tables, and final scatter nevertheless raise
+candidate preparation from 4.55 to 5.83 seconds (+28%) and the complete paired
+fit from 10.7 to 12.1 seconds. Held-view Gaussian PBR remains `12.55/12.22` dB
+at `68.9%` coverage, confirming that this is isolated scheduling rather than a
+quality change.
+
+The prototype and its temporary phase timers are removed. The current
+contiguous random partitions retain enough statistical load balance that a
+second output/scatter traversal costs more than global tile ownership saves.
+Both 12 GiB scopes use under 915 MiB and report zero swap, pressure, OOM, Xid,
+or GPU fault. Logs remain outside version control under
+`target/audit-runs/global-locality-candidates/`.
