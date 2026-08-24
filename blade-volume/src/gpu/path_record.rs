@@ -31,7 +31,7 @@ use blade_graphics as gpu;
 
 const SPLAT_TILE_SIZE: u32 = 16;
 const SPLAT_TILE_INDEX_BUDGET: u64 = 4 * 1024 * 1024;
-const PARALLEL_SPLAT_MIN_AVERAGE_NEIGHBORS: usize = 32;
+const PARALLEL_SPLAT_MIN_AVERAGE_NEIGHBORS: usize = 4;
 const MAX_PARALLEL_SPLAT_WORKGROUPS_PER_DIMENSION: u32 = 65_535;
 // Sphere-hit count and surviving path depth are different budgets. Real
 // learned-radius clouds can intersect many supports before radical-plane
@@ -1329,10 +1329,10 @@ mod tests {
     }
 
     #[test]
-    fn parallel_powerfoam_recording_requires_dense_adjacency() {
+    fn parallel_powerfoam_recording_uses_measured_adjacency_crossover() {
         assert!(!use_parallel_splat_recording(0, 0));
-        assert!(!use_parallel_splat_recording(200_000, 6_399_999));
-        assert!(use_parallel_splat_recording(200_000, 6_400_000));
+        assert!(!use_parallel_splat_recording(200_000, 799_999));
+        assert!(use_parallel_splat_recording(200_000, 800_000));
         assert!(use_parallel_splat_recording(200_000, 8_340_572));
     }
 

@@ -2230,7 +2230,14 @@ material path.
    2.946 seconds (-0.8%) at the same reported train/held quality. A
    two-replica 2,040-update gate confirms -0.8% mean training time and -1.4%
    mean GPU wait, with both arms exactly 29.3164/17.8472 dB at reported
-   precision.)
+   precision. Finally, a measured crossover sweep lowers the existing
+   workgroup-per-ray PowerFoam clipping gate from 32 to four adjacency
+   entries/site. At the production Room cloud's 15.9 entries/site the settled
+   record pass falls from 2.00--2.12 to 1.75--1.80 ms, and three matched
+   256-update runs average 2.789 seconds (-5.3%) with the same reported
+   train/held quality. The serial path remains faster at 0.9 entries/site, so
+   both existing paths are retained; no shader, entry/group, pipeline,
+   operation, or dependency is added.)
 3. Cross-render a recognized Gaussian checkpoint against official 3DGRUT. The
    ray-query window gate is complete: a 48-candidate window preserves three 512²
    output hashes while reducing Bonsai/Room/small frame time by 52.8%/53.1%/

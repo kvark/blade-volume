@@ -2406,6 +2406,23 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   shader, entry/group, binding, pipeline, option, format, or dependency is
   added.
 
+#### M2cc — Select parallel PowerFoam clipping at its measured crossover (done)
+
+- PowerFoam already had serial-per-ray and workgroup-per-ray interval clippers,
+  but the workgroup path was reserved for at least 32 adjacency entries/site.
+  A sweep over the same 98,831-site Room cloud places the crossover much lower:
+  at 2.6 entries/site the paths are effectively tied, at 6.6 the workgroup path
+  is 6--8% faster, and at 15.9 it cuts the settled record pass from
+  2.00--2.12 to 1.75--1.80 ms. The selection floor is therefore four. The
+  serial path remains useful: at 0.9 entries/site it is still slightly faster,
+  so removing that existing entry point would regress genuinely sparse clouds.
+- Three matched 256-update production Room runs average 2.789 seconds, 5.3%
+  below M2cb's 2.946-second mean; mean GPU wait improves by the same 5.3%.
+  The freshly serialized result remains 27.1422/19.8841 dB over four
+  training/eight held views. This only changes the selection constant and its
+  unit test; no shader, entry/group, pipeline, buffer, binding, operation,
+  public option, format, or dependency is added.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
