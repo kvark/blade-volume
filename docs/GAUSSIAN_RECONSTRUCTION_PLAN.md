@@ -5607,11 +5607,28 @@ binary score `24.26/23.10` and `24.27/23.12` dB with the retry versus
 count is zero, that sub-0.03 dB spread is independent optimizer variation,
 not a quality effect of this branch. The diagnostic counter is removed.
 
+The inherited `-1e-5` discriminant tolerance is removed as a follow-up. It
+used to clamp a small negative value to zero before the stable retry could see
+it, collapsing a finite footprint to one projected point. A deterministic
+valid-model fixture at 32,768 pixels wide has centre `(-0.75, 0, 1)`, Y
+rotation `2.4196432`, scale
+`(1.2137116e-5, 1.7371895e-3, 1.292347e-4)`, and an expanded discriminant of
+`-2.3841858e-7`. Its exact response contributes to pixel 4,095, but the old
+clamp places the point just past pixel 4,096 and assigns it only to the next
+eight-pixel tile. Every negative discriminant now takes the already selected
+centred retry; nonnegative ordinary inputs retain exactly the same fast path.
+
+Temporary counters observe zero retries across every grid rebuild in both the
+selected dense and complete Room gates. They retain `24.27/23.12` and
+`12.54/12.21` dB mean/worst held-light Gaussian PBR respectively. This closes
+the valid imported/extreme-model boundary without changing either measured
+production trajectory; the counters are again removed.
+
 The 512-particle, roughly 1.57-million-response conservative-grid oracle, the
-new focused cancellation regression, strict all-target/all-feature Clippy,
+two focused cancellation regressions, strict all-target/all-feature Clippy,
 and both complete physical-GPU workspace test configurations pass. The
-default and all-feature 12 GiB scopes peak at 3.89 and 3.21 GiB respectively,
+default and all-feature 12 GiB scopes peak at 3.51 and 3.26 GB respectively,
 with zero swap, memory pressure, OOM, validation, Xid, or GPU fault. This adds
 no shader, graph operation, public API, format, model field, dependency, or
 runtime representation. Artifacts remain outside version control under
-`target/audit-runs/centered-gaussian-projection/`.
+`target/audit-runs/{centered-gaussian-projection,negative-gaussian-discriminant}/`.

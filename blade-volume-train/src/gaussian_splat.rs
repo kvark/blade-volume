@@ -1560,8 +1560,8 @@ fn projected_ellipsoid_ratio_bounds(
         if !a.is_finite() || a <= 0.0 {
             return None;
         }
-        if discriminant.is_finite() && discriminant >= -1.0e-5 {
-            let root = discriminant.max(0.0).sqrt();
+        if discriminant.is_finite() && discriminant >= 0.0 {
+            let root = discriminant.sqrt();
             let first = (-b - root) / (2.0 * a);
             let second = (-b + root) / (2.0 * a);
             if first.is_finite() && second.is_finite() {
@@ -4007,6 +4007,43 @@ mod tests {
         assert!(
             index.candidates(0, pixel).unwrap().0.contains(&0),
             "the exact contributing Gaussian was omitted from its pixel tile"
+        );
+    }
+
+    #[test]
+    fn projected_tiles_do_not_collapse_small_negative_discriminant() {
+        const WIDTH: usize = 32_768;
+        const PIXEL: usize = 4_095;
+        const MIN_ALPHA: f32 = 1.0e-4;
+        let center = glam::Vec3::new(-0.75, 0.0, 1.0);
+        let rotation = glam::Quat::from_rotation_y(2.419_643_2);
+        let scale = glam::Vec3::new(1.213_711_6e-5, 1.737_189_5e-3, 1.292_347e-4);
+        let mut model = model(vec![center.extend(0.8)]);
+        {
+            let transforms = model.transforms.as_mut().unwrap();
+            transforms.rotations[0] = rotation;
+            transforms.scales[0] = scale;
+        }
+        let mut capture = empty_capture(WIDTH, 1);
+        capture.views[0].camera = camera();
+        let direction = crate::inverse::capture::PixelRays::new(
+            &capture.views[0].camera,
+            capture.width,
+            capture.height,
+        )
+        .direction(PIXEL, 0);
+        let response = ray_response(glam::Vec3::ZERO, direction, center, rotation, scale).unwrap();
+        assert!(
+            response.depth > 0.0 && 0.8 * response.response >= MIN_ALPHA,
+            "depth={} response={}",
+            response.depth,
+            response.response
+        );
+
+        let index = CandidateIndex::new(&model, &capture, &[0], MIN_ALPHA);
+        assert!(
+            index.candidates(0, PIXEL).unwrap().0.contains(&0),
+            "the exact contributing Gaussian was collapsed into the adjacent tile"
         );
     }
 
