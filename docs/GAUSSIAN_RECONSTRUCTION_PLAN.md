@@ -5379,3 +5379,27 @@ The per-cell sample vectors and robust solve are removed before the dense and
 real gates. A locally better point estimate is still not a better parameter
 for the coupled finite Gaussian mixture. The run remains outside version
 control under `target/audit-runs/fusion-position-geomedian/`.
+
+## Rejected runtime-sheet calibrated objective (2026-08-24)
+
+The calibrated-light continuation was tested with the production relight
+renderer's surface-sheet composition instead of independent volumetric alpha
+composition. Sorted host candidates received the same half-radius depth groups
+as the renderer. Existing Meganeura `scatter_add`, log/exp, and pointwise
+operations computed each group's volumetric union, capped opacity sum, 25/75
+partial saturation, alpha-weighted colour average, and front-to-back sheet
+composition. No operation, Meganeura shader, renderer shader, entry point,
+binding, model field, format, or dependency was added.
+
+A physical-GPU graph oracle reproduces the analytical opacity of two
+coincident particles, and grouped preparation preserves exact batched versus
+individual group IDs. The independent nested-camera output nevertheless falls
+from the selected 23.36 dB held-light volumetric PBR to 23.26 dB. Coverage
+falls from 52.7% to 51.9%; where-hit quality rises only from 21.69 to 21.74 dB,
+so the change exchanges support for an easier covered set. The grouped
+calibrated pass also leaves the reported centers and normals effectively
+unchanged: pooling a sheet removes the useful particle-local gradient rather
+than identifying better ownership. The scatter graph, group/radius cache,
+input, test, and batching assertions are removed before dense and real gates.
+Artifacts remain outside version control under
+`target/audit-runs/multilight-sheet-objective/`.
