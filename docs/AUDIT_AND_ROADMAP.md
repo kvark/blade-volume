@@ -666,6 +666,23 @@ At the audited revision:
   in expectation is not enough for a finite training trajectory. The CLI,
   graph inputs, and sampler are removed; generated artifacts remain under
   `target/audit-runs/residual-importance-sampling/`.
+- A direct cap gate on the selected fresh Smooth-L1 Bonsai trajectory rejects
+  capacity as the next quality lever. From the exact 200,000-cell step-8,000
+  state, matched continuations to step 10,000 score 24.4968/23.2723/23.7049 dB
+  train/selected-eight/all-37 at 200K, 24.5809/23.2673/23.7214 dB at 230K, and
+  24.5742/23.1781/23.7189 dB at 300K. The tiny +0.0165/+0.0140 dB all-view
+  gains cost 17.8%/35.6% more pipeline time; the 230K arm loses 1.01 dB on one
+  held view and the 300K arm loses 0.54 dB on the same tail. Host peaks are
+  1.27/1.32/2.05 GB with zero swap, OOM, throttling, or GPU faults. Fixed 200K
+  remains selected; no cap-specific code or control is retained. Generated
+  checkpoints remain under `target/audit-runs/robust-bonsai-cap-gate/`.
+- That gate exposed a separate resume correctness bug: default-zero per-view
+  exposures deliberately have parameters but no gradient or Adam state, while
+  the densification rebuild unconditionally requested their moments. The
+  snapshot now always preserves exposure values and carries moments only for
+  channels which actually have gradients. A physical-GPU pixel-batched test
+  crosses a prune/densify session rebuild with frozen exposure and continues
+  training with finite loss.
 
 ### Remaining PowerFoam gaps
 
