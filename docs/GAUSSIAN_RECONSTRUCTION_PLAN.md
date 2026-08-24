@@ -6720,3 +6720,39 @@ The CPU compositor, support table, rollback, constant, and diagnostic are
 removed. All 12 GiB scopes peak below 335 MiB with zero swap, OOM, or GPU
 fault. Ignored artifacts remain under
 `target/audit-runs/multiview-responsibility/`.
+
+## Rejected complete-render Gaussian update selection (2026-08-24)
+
+The calibrated-light continuation was also tested as one coupled model
+proposal rather than a per-attribute rollback. The private screen retained the
+pre-update Gaussian centers, opacity, and surface normals, ran the unchanged
+joint optimizer, then constructed baseline, half-step, and full-step states by
+interpolating all three attributes together. Each state was judged against
+every calibrated training image through the production Gaussian PBR renderer;
+covariance, materials, assignments, and lights stayed fixed.
+
+The exact objective can detect an overstep. Dense training quality rises
+monotonically from `23.618` through `23.914` to `24.009` dB and therefore keeps
+the selected full update. On the independent nested-camera fixture it instead
+ranks baseline/half/full at `23.339/23.435/23.376` dB. The half-step improves
+true held-light volumetric quality from a paired full update's
+`23.48/21.88` to `23.56/22.02` dB mean/where-hit, but lowers coverage from
+52.8% to 52.4%.
+
+That decision is not stable enough to productionize. In the five-cloud gate,
+the selector keeps the full update on four clouds and makes a nearly tied
+half-step choice on cloud 2. On an immediate replay the cloud-2 half/full
+training ranking reverses; the half-step trades about `+0.05` dB worst-view
+quality for `-0.02` dB where-hit quality and `-0.1` coverage point. Applying
+the half-step unconditionally is decisively worse on cloud 1, reducing held
+mean/worst/where-hit from the full-update band around
+`23.70/23.03/22.88` to `23.62/22.91/22.79` dB.
+
+The selector also adds 11--13 seconds at this fixture size because every
+fraction rebuilds the Gaussian acceleration structure under four
+environments. One scene-specific gain with a coverage trade does not justify
+that cost or orchestration. The interpolation, scoring loop, and synthetic
+wiring are removed. All 12 GiB scopes peak below 1.1 GB with zero swap, OOM,
+or GPU fault. Ignored artifacts remain under
+`target/audit-runs/coupled-multilight-proposal/` and
+`target/audit-runs/coupled-half/`.
