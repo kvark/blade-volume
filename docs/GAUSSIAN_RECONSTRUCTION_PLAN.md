@@ -6241,3 +6241,25 @@ The extra helper and fused construction loop are removed without a larger-scene
 expansion. The four 12 GiB scopes peak below 378 MiB and report zero swap, OOM,
 Xid, validation error, or GPU fault. Ignored runs remain under
 `target/audit-runs/shared-normalized-quaternion/`.
+
+## Current Gaussian phase profile and rejected cutoff reuse (2026-08-24)
+
+A temporary phase profile of the current 169,432-particle Bonsai reconstruction
+attributes 4.329 of its 13.021 Gaussian-fit seconds to exact candidate-row
+evaluation, 3.134 seconds to per-view candidate-grid construction, 2.009
+seconds to GPU optimizer dispatch/wait, 1.952 seconds to parameter readback,
+and 0.264 seconds to deterministic batch construction plus input upload. The
+remaining time includes graph/session setup and the initial/final audit. This
+confirms that candidate rows and projection are the next performance targets;
+sampling metadata and scalar setup are not.
+
+One exact scalar cleanup was screened and removed. Both candidate culling and
+projected support derive the same opacity cutoff `-2·ln(min_alpha/opacity)`.
+Reusing the already cached squared cutoff eliminates the second logarithm and
+passes all 39 focused Gaussian tests. On the warm profile it trims only about
+0.02 seconds from 3.1 seconds of grid construction, while complete candidate
+and control fits both take 13.1 seconds. The extra coupling between the support
+builder and index cutoff is not justified. Temporary timers are removed too.
+All scopes peak below 562 MiB with zero swap, OOM, Xid, validation error, or
+GPU fault. Ignored artifacts remain under
+`target/audit-runs/{current-gaussian-profile,reused-gaussian-cutoff}/`.
