@@ -22,6 +22,18 @@ blade-volume-test/     # Image-reference regression harness
 blade-volume-train/    # Meganeura-backed appearance training (COLMAP → foam)
 ```
 
+## Preparing a phone capture
+
+```bash
+etc/colmap.sh phone.mov etc/data/my-capture 3
+```
+
+This extracts video frames and runs COLMAP's sequential reconstruction into
+the `images/` + `sparse/0/` layout consumed below. It keeps only poses and
+sparse points; the runtime asset remains cloud-only. See
+[`docs/CAPTURE.md`](docs/CAPTURE.md) for recording guidance, failure checks,
+and the direct Gaussian reconstruction command.
+
 ## Training a foam from a COLMAP scene
 
 ```bash

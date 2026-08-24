@@ -2383,12 +2383,16 @@ Broken into sub-steps:
 - Not yet wired; the CLI dumps a final PLY and the existing viewer can
   load it after the run.
 
-### M4 — Capture stage
+### M4 — Capture stage (done)
 
 Only after M3 produces something worth looking at.
 
-- A short doc page: which phone apps work, what frame rate / exposure settings.
-- `etc/colmap.sh` wrapper: video → frames → COLMAP sparse reconstruction.
+- [`CAPTURE.md`](CAPTURE.md) covers phone-app controls, recording geometry,
+  frame-rate selection, cgroup containment, and sparse-model inspection.
+- `etc/colmap.sh` now extracts frames, runs shared-camera feature extraction,
+  sequential matching, and sparse mapping, then verifies the exact binary
+  layout consumed by both training paths. It publishes atomically and refuses
+  to replace an existing capture.
 
 ### M-mesh — Direct mesh → foam conversion (investigated)
 
