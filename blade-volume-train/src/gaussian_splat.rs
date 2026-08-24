@@ -255,10 +255,7 @@ impl CandidateGrid {
         let tiles_y = height.div_ceil(TILE_SIZE);
         let mut tiles = vec![Vec::new(); tiles_x * tiles_y];
         let camera_origin = glam::Vec3::from(camera.cam_position);
-        let gaussian_origins = candidate_transforms
-            .iter()
-            .map(|transform| transform.world_to_gaussian * (camera_origin - transform.mean))
-            .collect();
+        let mut gaussian_origins = vec![glam::Vec3::ZERO; candidate_transforms.len()];
         let projection = crate::inverse::capture::PixelProjection::new(camera, width, height);
         for (index, support) in projection_supports.iter().enumerate() {
             let Some(ref support) = *support else {
@@ -275,6 +272,9 @@ impl CandidateGrid {
             if min_x > max_x || min_y > max_y || min_x >= tiles_x || min_y >= tiles_y {
                 continue;
             }
+            let transform = candidate_transforms[index];
+            gaussian_origins[index] =
+                transform.world_to_gaussian * (camera_origin - transform.mean);
             for tile_y in min_y..=max_y.min(tiles_y - 1) {
                 for tile_x in min_x..=max_x.min(tiles_x - 1) {
                     tiles[tile_y * tiles_x + tile_x].push(index as u32);

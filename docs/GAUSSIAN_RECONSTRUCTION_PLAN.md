@@ -6183,3 +6183,28 @@ is removed; artifacts remain outside version control under
 `target/audit-runs/static-split-adam-v/`. All seven completed scopes stayed
 below 12 GiB with zero swap, memory pressure, OOM, validation error, Xid, or
 GPU fault.
+
+## Visible-only Gaussian origin construction (2026-08-24)
+
+The CPU candidate grid now transforms a camera origin into Gaussian space only
+when that particle's projected support intersects at least one screen tile.
+Offscreen entries keep a zero placeholder at the same particle index; no ray
+can address those entries because they are absent from every tile. This changes
+neither candidate ordering nor image formation and adds no representation,
+option, API, shader, operation, or dependency.
+
+The exact tiled-versus-exhaustive and grouped-versus-individual candidate
+oracles pass, as do all 39 focused Gaussian tests. An order-balanced dense
+micro-fixture is neutral after excluding the first candidate's cold run:
+`4.026` versus `4.013` seconds. Real scenes benefit because more initialized
+particles lie outside each view. A Room candidate/control/candidate sandwich
+takes `10.8/11.0/10.7` seconds; the final simplified implementation repeats
+`10.7` seconds. Bonsai moves from `13.2` to `13.1` seconds. Held-view scores
+remain within the established GPU-atomic replay band.
+
+Formatting, strict all-target/all-feature Clippy, and both complete physical-
+GPU workspace test configurations pass. Reconstruction scopes peak below 622
+MiB, while the complete test scopes peak at 6.35 GiB. Every 12 GiB scope uses
+zero swap and reports no memory pressure, OOM, validation error, Xid, or GPU
+fault. Ignored benchmark outputs and telemetry remain under
+`target/audit-runs/visible-gaussian-origins/`.
