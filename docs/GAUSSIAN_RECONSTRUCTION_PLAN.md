@@ -6175,6 +6175,36 @@ diagnostic counters are removed; 8×8 remains selected. Both 12 GiB runs peak
 below 605 MiB with zero swap, OOM, Xid, validation error, or GPU fault. Ignored
 artifacts remain under `target/audit-runs/candidate-row-distribution/`.
 
+## Exact Gaussian tile support (2026-08-24)
+
+The candidate grid now projects the exact ellipsoid on which
+`opacity·response = min_alpha`. The former 1.25 multiplier expanded that
+Gaussian-space radius by 25% even though the perspective tangent solver already
+computes the exact finite-support silhouette. Tile floor/ceiling still makes
+the discrete grid conservative; no shader, graph operation, option, model
+field, format, or dependency changes.
+
+The complete extreme anisotropy oracle tests 512 randomized particles against
+every ray in a 64×48 image and finds no omitted exact contributor. Dedicated
+subpixel, near-plane, and 32,768-pixel small-negative-discriminant regressions
+also pass. A new analytical test locks the projected radius to the same
+`sqrt(-2·ln(min_alpha/opacity))` cutoff used by exact candidate rejection. All
+40 focused Gaussian tests pass.
+
+The tighter bound is neutral on the small dense fixture: candidate and control
+medians are `4.028` and `4.023` seconds. It is useful on the large real clouds.
+Room falls from `10.8` to `10.0` seconds (`7.4%`), and Bonsai falls from
+`12.85` to `12.45` seconds (`3.1%`). Static and volumetric PBR held-view scores
+remain in their established GPU-atomic replay bands on all three scenes. The
+12 GiB reconstruction scopes peak below 575 MiB with zero swap, OOM, Xid,
+validation error, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/exact-tile-support/`.
+
+Formatting, strict all-target/all-feature Clippy, and both complete physical-GPU
+workspace test configurations pass. The default and all-feature test scopes
+peak at 3.42 GiB and 3.17 GiB respectively, with zero swap, memory pressure,
+OOM, Xid, validation error, or GPU fault.
+
 ## Rejected Adam-second-moment Gaussian split selection (2026-08-24)
 
 The static midpoint split keeps its exact grouped position-gradient history

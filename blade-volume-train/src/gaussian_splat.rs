@@ -23,7 +23,6 @@ const SH_C2: [f32; 5] = [
 const MIN_SCALE: f32 = 1.0e-4;
 const MAX_ALPHA: f32 = 0.999;
 const TILE_SIZE: usize = 8;
-const TILE_SUPPORT_MARGIN: f32 = 1.25;
 const MIN_SH1_VIEWS: usize = 8;
 const MIN_SH2_VIEWS: usize = 18;
 const LIGHT_FIELD_POSITION_LEARNING_RATE: f32 = 1.0e-4;
@@ -1500,7 +1499,7 @@ impl ProjectionSupport {
         let mean = point.truncate();
         let axes = gaussian_sigma_axes(mean, rotation, scale)?;
         let response_threshold = (min_alpha / point.w).clamp(f32::MIN_POSITIVE, 1.0);
-        let gaussian_radius = (-2.0 * response_threshold.ln()).sqrt() * TILE_SUPPORT_MARGIN;
+        let gaussian_radius = (-2.0 * response_threshold.ln()).sqrt();
         Some(Self {
             mean,
             axes,
@@ -4398,6 +4397,23 @@ mod tests {
         }
         assert_eq!(candidate_max_distance_squared(0.0, 0.0), f32::INFINITY);
         assert!(candidate_max_distance_squared(0.01, 0.02) < 0.0);
+    }
+
+    #[test]
+    fn projection_support_uses_the_exact_alpha_cutoff() {
+        let opacity = 0.8;
+        let min_alpha = 1.0e-4;
+        let support = ProjectionSupport::new(
+            glam::Vec4::new(0.0, 0.0, 3.0, opacity),
+            glam::Quat::IDENTITY,
+            glam::Vec3::new(0.2, 0.4, 0.8),
+            min_alpha,
+        )
+        .unwrap();
+        let cutoff = candidate_max_distance_squared(opacity, min_alpha).sqrt();
+
+        assert_eq!(support.gaussian_radius.to_bits(), cutoff.to_bits());
+        assert_eq!(support.world_radius.to_bits(), (0.8 * cutoff).to_bits());
     }
 
     #[test]
