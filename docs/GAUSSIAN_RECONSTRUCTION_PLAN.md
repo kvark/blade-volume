@@ -6499,3 +6499,29 @@ Formatting, strict all-target/all-feature Clippy, and the complete default and
 all-feature physical-GPU workspace suites pass. The workspace scopes peak at
 3.07 and 2.80 GiB respectively; both remain below the 12 GiB limit with zero
 swap, memory pressure, OOM, validation error, Xid, or GPU fault.
+
+## Rejected static-to-PBR Gaussian support transfer (2026-08-24)
+
+The independently fitted static light field learns centers, opacity, scale,
+and rotation from the complete primary-light image objective, so a bounded
+diagnostic tested whether any of that support should initialize the
+relightable PBR Gaussian after both fits. To keep particle indices comparable,
+the diagnostic disabled the static midpoint split. The selected independent
+control, including its one split event, scores `24.26/23.11` dB mean/worst on
+the held-out light, with `55.1%` coverage and `22.90` dB where hit.
+
+Transferring all static geometry and support changes those metrics to
+`24.27/23.00`, `56.3%`, and `22.80` dB. Transferring only scale and opacity is
+decisively negative at `23.47/22.17`, `56.8%`, and `22.27` dB. Opacity alone
+is a mixed `24.23/23.13`, `56.1%`, and `22.78` dB: the negligible tail gain
+comes with lower mean and hit-conditioned fidelity. Disabling the split also
+lowers static-light-field held-pose quality from `26.85/24.89` to about
+`26.6/24.7` dB, independently confirming that its extra support is useful only
+to that output.
+
+Static support therefore encodes primary-illumination appearance compensation
+that does not transfer cleanly to PBR shading. The independent PBR support and
+the selected static split remain unchanged; the environment diagnostic is
+removed. The three complete 12 GiB scopes peak at 329,314,304 bytes or less,
+use zero swap, and report no OOM or GPU fault. Ignored artifacts remain under
+`target/audit-runs/static-support-pbr/`.
