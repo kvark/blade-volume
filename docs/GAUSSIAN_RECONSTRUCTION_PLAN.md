@@ -5923,3 +5923,35 @@ Profiling hooks and the freeze prototype are removed. The five-cloud screen
 peaks at 321 MiB under its 12 GiB cgroup with no swap, pressure, OOM, Xid, or
 GPU fault. Untracked artifacts remain under
 `target/audit-runs/native-gaussian-profile/`.
+
+## Selected batched Gaussian geometry readback (2026-08-24)
+
+Candidate refresh used to stage position, scale, and opacity together, then
+submit and wait for a second transfer containing learned rotations. The
+trainer now asks Meganeura for all four parameters in one existing batched
+readback. Fixed-rotation fits retain the same three-parameter request. Refresh
+cadence, normalization, parameter values, candidate construction, graph, and
+persistent output are unchanged; this adds no API, operation, shader, or
+dependency.
+
+Phase timing on the dense gate identified synchronization as the host-side
+hotspot. Before the change, trainable support spends 0.792 of 2.108 seconds in
+refresh and midpoint topology work. The combined transfer lowers those figures
+to 0.600 and 1.891 seconds. Across six order-balanced complete paired fits, the
+median improves from 4.174 to 4.029 seconds (`3.5%`). The fixed-rotation stage
+is unchanged at 1.32 seconds, as expected.
+
+The readback is mathematically identical. The dense runs retain their selected
+26.6--26.7 dB mean and 24.8--24.9 dB worst-view range despite the established
+GPU atomic-order variation, and the independent nested fixture remains at
+`23.89` dB. The twelve-run timing scope peaks at 327 MiB under its 12 GiB
+cgroup with no swap, pressure, OOM, Xid, or GPU fault. Temporary timers are
+removed; artifacts remain under
+`target/audit-runs/native-gaussian-profile/readback-ab/`.
+
+Formatting, strict all-target/all-feature Clippy, the focused 39-test Gaussian
+suite, and both complete physical-GPU workspace configurations pass. The full
+test scopes peak at 3.61 and 3.24 GiB with zero swap, pressure, OOM, validation
+error, Xid, or GPU fault. The latter run was slower because the host desktop
+was processing an unrelated KDE crash-handler loop; kernel and user journals
+identify `drkonqi-coredump-launcher`, not a Blade or NVIDIA process.

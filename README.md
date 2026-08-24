@@ -215,7 +215,8 @@ The implementation reuses ordinary differentiable graph operations and adds
 no shader variant, graph operation, public option, model field, format, or
 dependency. Its quaternion expansion doubles each vector component once and
 reuses those products across the rotation matrix, removing redundant graph
-work without changing that surface.
+work without changing that surface. Geometry refreshes also download learned
+rotation with position, scale, and opacity in one transfer.
 
 Those same low-order static fits now perform one residual-guided split halfway
 through support training. They accumulate camera-scaled position-gradient

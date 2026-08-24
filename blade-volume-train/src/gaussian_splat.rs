@@ -2791,13 +2791,20 @@ fn download_candidate_geometry(
     model: &mut vol::PointCloudModel,
     rotations_changed: bool,
 ) {
-    let [positions, log_scales, opacity_logits] = session
-        .read_params(&["positions", "log_scales", "opacity_logits"])
-        .try_into()
-        .unwrap();
+    let names: &[&str] = if rotations_changed {
+        &["positions", "log_scales", "opacity_logits", "rotations"]
+    } else {
+        &["positions", "log_scales", "opacity_logits"]
+    };
+    let mut parameters = session.read_params(names);
+    let rotations = if rotations_changed {
+        Some(parameters.pop().unwrap())
+    } else {
+        None
+    };
+    let [positions, log_scales, opacity_logits] = parameters.try_into().unwrap();
     apply_model_geometry(model, &positions, &log_scales, &opacity_logits);
-    if rotations_changed {
-        let rotations = session.read_params(&["rotations"]).pop().unwrap();
+    if let Some(rotations) = rotations {
         apply_model_rotations(model, &rotations);
     }
 }
@@ -2808,21 +2815,36 @@ fn download_model(
     rotations_changed: bool,
 ) {
     let sh_components = model.sh_component_count();
-    let [positions, log_scales, opacity_logits, sh_r, sh_g, sh_b] = session
-        .read_params(&[
+    let names: &[&str] = if rotations_changed {
+        &[
             "positions",
             "log_scales",
             "opacity_logits",
             "sh_r",
             "sh_g",
             "sh_b",
-        ])
-        .try_into()
-        .unwrap();
+            "rotations",
+        ]
+    } else {
+        &[
+            "positions",
+            "log_scales",
+            "opacity_logits",
+            "sh_r",
+            "sh_g",
+            "sh_b",
+        ]
+    };
+    let mut parameters = session.read_params(names);
+    let rotations = if rotations_changed {
+        Some(parameters.pop().unwrap())
+    } else {
+        None
+    };
+    let [positions, log_scales, opacity_logits, sh_r, sh_g, sh_b] = parameters.try_into().unwrap();
     let sh = [sh_r, sh_g, sh_b];
     apply_model_geometry(model, &positions, &log_scales, &opacity_logits);
-    if rotations_changed {
-        let rotations = session.read_params(&["rotations"]).pop().unwrap();
+    if let Some(rotations) = rotations {
         apply_model_rotations(model, &rotations);
     }
     for index in 0..model.points.len() {
