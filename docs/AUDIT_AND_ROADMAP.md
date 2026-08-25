@@ -679,6 +679,15 @@ At the audited revision:
   1.27/1.32/2.05 GB with zero swap, OOM, throttling, or GPU faults. Fixed 200K
   remains selected; no cap-specific code or control is retained. Generated
   checkpoints remain under `target/audit-runs/robust-bonsai-cap-gate/`.
+- A compute-normalized continuation instead spends the same rays and exact
+  rebuilds on twice as many half-sized Adam updates, while halving the base
+  learning rate and doubling the fixed topology/densification intervals. Two
+  Bonsai replicas improve mean train/all-37 quality by +0.3288/+0.2628 dB at
+  +1.2% training time and improve 35/37 views each. Two Room replicas are
+  neutral-to-positive at +0.0196/+0.0273 dB while training 2.5% faster and
+  retaining the same capacity. The unscaled half-batch arm loses 0.7087 dB
+  held out. This is a selected explicit continuation recipe using existing
+  controls; growth-stage defaults and checkpoint semantics remain unchanged.
 - That gate exposed a separate resume correctness bug: default-zero per-view
   exposures deliberately have parameters but no gradient or Adam state, while
   the densification rebuild unconditionally requested their moments. The

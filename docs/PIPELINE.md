@@ -2640,6 +2640,30 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   clippy gate and complete all-feature physical-GPU workspace suite pass; the
   latter peaks at 7,099,281,408 bytes with zero swap, OOM, or GPU fault.
 
+#### M2cm — Ray-normalized half-batch continuation (selected recipe)
+
+- The accumulation gate showed that optimizer updates were more valuable than
+  extra rays per update, so a no-code schedule gate held total rays and exact
+  topology work constant. The candidate replaces each 4,096-ray update with
+  two 2,048-ray updates, keeps 16 views per batch, halves the base learning
+  rate `0.1→0.05`, and doubles fixed topology and densification intervals.
+  Keeping the original learning rate is rejected on Bonsai at 22.7129 dB held
+  out, 0.7087 dB below the repeated control mean.
+- From the 200,000-site Bonsai step-8,000 checkpoint, two candidate replicas
+  process the same 2.048 million rays and five rebuilds as the controls. Mean
+  train/held PSNR rises 24.1401/23.4216→24.4689/23.6844 dB. Both replicas
+  improve 35/37 held views. Mean training time is 28.295 versus 27.957 seconds
+  (+1.2%).
+- An independent Room continuation includes one complete growth boundary and
+  ends at 196,943/196,955 sites versus 196,946/196,943 for the controls. Mean
+  train/held PSNR changes 24.8786/23.9613→24.8982/23.9886 dB, while training
+  falls 31.001→30.233 seconds (-2.5%). The two paired held-view splits are
+  19/2/18 and 24/0/15 improved/tied/regressed.
+- This advances as an explicit post-growth or post-cap continuation recipe
+  using existing CLI controls. The global 4,096-ray defaults remain selected
+  by their growth-stage gates. No automatic phase, configuration field,
+  checkpoint rule, shader, graph operation, or dependency is added.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
