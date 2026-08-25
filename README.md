@@ -77,14 +77,21 @@ either reconstructed asset.
 | Synthetic (full Gaussian PBR geometry, five-cloud average) | 6 / 2 | 25.50 / 24.52 dB | 23.65 / 23.03 dB | 55.3% |
 | Synthetic (secondary-light foam continuation, five-cloud average) | 6 / 2 | 25.91 / 24.90 dB | 24.07 / 23.34 dB | 55.4% |
 | Synthetic (denser calibrated capture) | 9 / 3 | 26.80 / 24.90 dB | 24.48 / 23.25 dB | 55.1% |
-| Room | 18 / 2 | 18.74 / 18.70 dB | 12.56 / 12.29 dB | 80.9% |
-| Bonsai | 18 / 2 | 18.97 / 18.83 dB | 13.04 / 12.79 dB | 99.6% |
+| Room (sparse COLMAP) | 18 / 2 | 20.30 / 19.61 dB | 14.94 / 13.54 dB | 69.3% |
+| Bonsai (sparse COLMAP) | 18 / 2 | 16.84 / 16.54 dB | 14.51 / 14.43 dB | 82.6% |
 
-Each PSNR cell is mean / worst held view at the 128-pixel-wide research gate.
-The static columns always use the capture light. The synthetic PBR score uses
-a held-out environment; Room and Bonsai have no relighting truth, so their PBR
-columns measure held poses under the recovered capture light. They must not be
-read as real-scene relighting accuracy.
+Each PSNR cell is mean / worst held view. Synthetic gates render at 100x75;
+the Room and Bonsai gates render at 128x85. The static columns always use the
+capture light. The synthetic PBR score uses a held-out environment; Room and
+Bonsai have no relighting truth, so their PBR columns measure held poses under
+the recovered capture light. They must not be read as real-scene relighting
+accuracy.
+
+The Room and Bonsai rows are current-tree sparse-COLMAP reconstructions at
+128x85. Their PBR columns score the persisted volumetric Gaussian output, not
+the older scalar-surface control. The exact commands, outputs, and cgroup/GPU
+telemetry are under `target/audit-runs/tile-allocation-profile/`; repeated
+controls reproduce the displayed values within the expected GPU-atomic band.
 
 An independent full-resolution gate trains upstream 3DGRUT on Bonsai for
 30,000 steps (`32.10` dB with 3DGUT, `29.37` dB through its reference 3DGRT)
