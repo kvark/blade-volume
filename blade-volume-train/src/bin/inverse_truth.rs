@@ -146,10 +146,7 @@ fn main() {
         64,
         32,
     );
-    let truth = train::inverse::score::Scene {
-        model: model.clone(),
-        environment,
-    };
+    let truth = train::inverse::score::Scene::new(model.clone(), environment);
     println!(
         "truth: {} surfels over {} materials, {} views at {}x{}, {} shadow rays",
         model.surfels.len(),
@@ -269,7 +266,7 @@ fn main() {
     // coarser sky.
     let truth_shadows = Some(train::inverse::visibility::compute(
         &model,
-        &train::inverse::decompose::environment_directions(2 * truth.environment.height),
+        &train::inverse::decompose::environment_directions(2 * truth.environment().height),
         train::inverse::visibility::VisibilityOptions::default(),
     ));
     for (label, shadows) in [("open sky", None), ("shadowed", truth_shadows.as_ref())] {
@@ -278,7 +275,7 @@ fn main() {
             100.0
                 * train::inverse::decompose::forward_error(
                     &model,
-                    &truth.environment,
+                    truth.environment(),
                     shadows,
                     &observations
                 )
@@ -307,13 +304,13 @@ fn main() {
                 } else {
                     shadows.as_ref()
                 },
-                light: args.true_light.then_some(&truth.environment),
+                light: args.true_light.then_some(truth.environment()),
             },
         );
         let albedo = train::inverse::truth::compare_albedo(&model, &fitted.scene.model);
         let light = train::inverse::truth::compare_environment(
-            &truth.environment,
-            &fitted.scene.environment,
+            truth.environment(),
+            fitted.scene.environment(),
         );
         // Scored the way it was fitted. A fit that accounted for shadowing
         // has to be re-rendered with shadowing, or the comparison measures the
@@ -354,7 +351,7 @@ fn main() {
             for report in train::inverse::truth::per_material(
                 &model,
                 &fitted.scene.model,
-                &truth.environment,
+                truth.environment(),
                 &observations,
             ) {
                 println!(

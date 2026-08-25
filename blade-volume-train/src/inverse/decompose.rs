@@ -1427,18 +1427,18 @@ pub fn fit(
         .count();
 
     Decomposition {
-        scene: score::Scene {
-            model: vol::relight::RelightModel {
+        scene: score::Scene::new(
+            vol::relight::RelightModel {
                 kernel: model.kernel,
                 surfels,
                 materials,
             },
-            environment: vol::relight::Environment {
+            vol::relight::Environment {
                 width: kernel.width,
                 height: kernel.height,
                 texels: light,
             },
-        },
+        ),
         assignment,
         residual,
         unseen: count - active.len(),
@@ -2361,7 +2361,7 @@ mod tests {
         );
 
         // The recovered light is brightest towards the east.
-        let recovered = &fitted.scene.environment;
+        let recovered = fitted.scene.environment();
         let mut brightest = glam::Vec3::ZERO;
         let mut best = f32::NEG_INFINITY;
         for (texel, direction) in kernel.directions.iter().enumerate() {
@@ -2613,7 +2613,7 @@ mod tests {
             "an unconstrained albedo left a residual of {}",
             fitted.residual
         );
-        let recovered = &fitted.scene.environment;
+        let recovered = fitted.scene.environment();
         let east: f32 = kernel
             .directions
             .iter()

@@ -608,7 +608,7 @@ fn main() {
         fitted.unseen,
         started.elapsed().as_secs_f64()
     );
-    describe_light(&fitted.scene.environment);
+    describe_light(fitted.scene.environment());
 
     if args.render_refine_normals {
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
@@ -860,7 +860,7 @@ fn main() {
         println!("updated PBR radii from learned Gaussian support");
     }
     if args.render_refine_radii && fit_gaussians {
-        let environment = fitted.scene.environment.clone();
+        let environment = fitted.scene.environment().clone();
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
             capture: &capture,
             indices: &train_views,
@@ -1064,7 +1064,7 @@ fn main() {
             });
             println!("wrote and reloaded {}", output.display());
             let environment = output.with_extension("f32");
-            vol::io::try_save_environment(&environment, &fitted.scene.environment).unwrap_or_else(
+            vol::io::try_save_environment(&environment, fitted.scene.environment()).unwrap_or_else(
                 |error| {
                     eprintln!("cannot write {}: {error}", environment.display());
                     std::process::exit(1);
@@ -1082,7 +1082,7 @@ fn main() {
             println!("wrote {}", output.display());
         }
         let environment = output.with_extension("f32");
-        if let Err(e) = vol::io::try_save_environment(&environment, &fitted.scene.environment) {
+        if let Err(e) = vol::io::try_save_environment(&environment, fitted.scene.environment()) {
             eprintln!("cannot write {}: {e}", environment.display());
         } else {
             println!("wrote {}", environment.display());

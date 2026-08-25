@@ -321,10 +321,7 @@ fn score_model(
         std::fs::create_dir_all(directory).unwrap();
     }
     renderer.score_splits(
-        &train::inverse::score::Scene {
-            model: model.clone(),
-            environment: environment.clone(),
-        },
+        &train::inverse::score::Scene::new(model.clone(), environment.clone()),
         capture,
         &[(training_views, None), (held_out_views, dump)],
         samples,

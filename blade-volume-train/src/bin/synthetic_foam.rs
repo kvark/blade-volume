@@ -1340,7 +1340,7 @@ fn main() {
     }
     if !args.true_light {
         let light_error =
-            train::inverse::truth::compare_environment(&training_light, &fitted.scene.environment);
+            train::inverse::truth::compare_environment(&training_light, fitted.scene.environment());
         println!(
             "recovered training light: {:.1}% relative RMS after gauge [{:.3}, {:.3}, {:.3}]",
             100.0 * light_error.relative_rms,
@@ -1516,7 +1516,7 @@ fn main() {
     let mut pbr_controls = Vec::new();
     if args.render_refine_radii && fit_gaussians {
         pbr_controls.push(("radius", fitted.scene.model.clone()));
-        let environment = fitted.scene.environment.clone();
+        let environment = fitted.scene.environment().clone();
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
             capture: &training_capture,
             indices: &training_indices,
@@ -1622,14 +1622,13 @@ fn main() {
             .unwrap_or_else(|error| fail(format!("cannot write {surface_output}: {error}")));
         println!("wrote {surface_output}");
         let environment_path = surface_path.with_extension("f32");
-        vol::io::try_save_environment(&environment_path, &fitted.scene.environment).unwrap_or_else(
-            |error| {
+        vol::io::try_save_environment(&environment_path, fitted.scene.environment())
+            .unwrap_or_else(|error| {
                 fail(format!(
                     "cannot write {}: {error}",
                     environment_path.display()
                 ))
-            },
-        );
+            });
         println!("wrote {}", environment_path.display());
     }
     let held_out_light =
@@ -1643,12 +1642,13 @@ fn main() {
     .unwrap_or_else(|error| fail(error));
     let mut renderer = train::inverse::score::Renderer::new(dataset.width, dataset.height)
         .unwrap_or_else(|error| fail(error));
+    let held_out_scene =
+        train::inverse::score::Scene::new(fitted.scene.model.clone(), held_out_light.clone());
     for (name, model) in pbr_controls {
+        let mut control_scene = held_out_scene.clone();
+        control_scene.model = model;
         let control = renderer.score_splits(
-            &train::inverse::score::Scene {
-                model,
-                environment: held_out_light.clone(),
-            },
+            &control_scene,
             &held_out_capture,
             &[(&held_out_indices, None)],
             0,
@@ -1661,19 +1661,15 @@ fn main() {
         );
     }
     let training_summary = renderer.score_splits(
-        &train::inverse::score::Scene {
-            model: fitted.scene.model.clone(),
-            environment: fitted.scene.environment.clone(),
-        },
+        &fitted.scene,
         &training_capture,
         &[(&held_out_indices, None)],
         0,
     )[0];
+    let mut relight_scene = held_out_scene.clone();
+    relight_scene.model.clone_from(&fitted.scene.model);
     let relight_summary = renderer.score_splits(
-        &train::inverse::score::Scene {
-            model: fitted.scene.model.clone(),
-            environment: held_out_light.clone(),
-        },
+        &relight_scene,
         &held_out_capture,
         &[(&held_out_indices, None)],
         0,
@@ -1787,26 +1783,20 @@ fn main() {
             });
             println!("reloaded {} for scoring", output.display());
             let environment = output.with_extension("f32");
-            vol::io::try_save_environment(&environment, &fitted.scene.environment).unwrap_or_else(
+            vol::io::try_save_environment(&environment, fitted.scene.environment()).unwrap_or_else(
                 |error| fail(format!("cannot write {}: {error}", environment.display())),
             );
             println!("wrote {}", environment.display());
         }
         let training = renderer.score_gaussian_splits(
-            &train::inverse::score::Scene {
-                model: fitted.scene.model.clone(),
-                environment: fitted.scene.environment.clone(),
-            },
+            &fitted.scene,
             gaussian,
             &training_capture,
             &[(&held_out_indices, None)],
             0,
         )[0];
         let held = renderer.score_gaussian_splits(
-            &train::inverse::score::Scene {
-                model: fitted.scene.model.clone(),
-                environment: held_out_light.clone(),
-            },
+            &relight_scene,
             gaussian,
             &held_out_capture,
             &[(&held_out_indices, None)],

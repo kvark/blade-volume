@@ -292,14 +292,15 @@ fn refine_rendered_parameter(
     let mut tracers: Vec<_> = evidence
         .iter()
         .map(|entry| {
-            renderer.prepare_scene(
-                &score::Scene {
-                    model: scene.model.clone(),
-                    environment: entry.environment.clone(),
-                },
-                diffuse_samples,
-                false,
-            )
+            let prepared_scene = if scene.environment().width == entry.environment.width
+                && scene.environment().height == entry.environment.height
+                && scene.environment().texels == entry.environment.texels
+            {
+                scene.clone()
+            } else {
+                score::Scene::new(scene.model.clone(), entry.environment.clone())
+            };
+            renderer.prepare_scene(&prepared_scene, diffuse_samples, false)
         })
         .collect();
     let started = std::time::Instant::now();
@@ -520,11 +521,10 @@ pub fn refine_rendered_material_assignments(
         .map(|&index| capture.views[index].camera)
         .collect();
     let mut renderer = score::Renderer::new(capture.width, capture.height)?;
-    let (mut tracer, specular) =
-        renderer.prepare_scene_with_specular(scene, diffuse_samples, false);
+    let mut tracer = renderer.prepare_scene(scene, diffuse_samples, false);
     let started = std::time::Instant::now();
     let initial_loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
-    let irradiance = scene.environment.diffuse_irradiance();
+    let irradiance = scene.environment().diffuse_irradiance();
     let mut candidates = Vec::new();
     for (index, surfel) in scene.model.surfels.iter().enumerate() {
         let samples = observations.of(index);
@@ -538,15 +538,20 @@ pub fn refine_rendered_material_assignments(
             &scene.model.materials[current],
             samples,
             &irradiance,
-            &specular,
+            scene.specular(),
         );
         let current_error = best_error;
         for (material, candidate) in scene.model.materials.iter().enumerate() {
             if material == current {
                 continue;
             }
-            let error =
-                material_observation_error(surfel, candidate, samples, &irradiance, &specular);
+            let error = material_observation_error(
+                surfel,
+                candidate,
+                samples,
+                &irradiance,
+                scene.specular(),
+            );
             if error < best_error {
                 best = material;
                 best_error = error;
@@ -2309,8 +2314,8 @@ mod tests {
     }
 
     fn rendered_test_scene(offset: f32) -> score::Scene {
-        score::Scene {
-            model: vol::relight::RelightModel {
+        score::Scene::new(
+            vol::relight::RelightModel {
                 kernel: vol::relight::ParticleKernel::Gaussian,
                 surfels: vec![vol::relight::Surfel {
                     center: [0.0, 0.0, offset],
@@ -2325,12 +2330,12 @@ mod tests {
                     _padding: 0.0,
                 }],
             },
-            environment: vol::relight::Environment {
+            vol::relight::Environment {
                 width: 8,
                 height: 4,
                 texels: vec![[1.0; 3]; 32],
             },
-        }
+        )
     }
 
     #[test]
@@ -2717,11 +2722,11 @@ mod tests {
         let towards = (glam::Vec3::from(camera.cam_position)
             - glam::Vec3::from(protected.model.surfels[0].center))
         .normalize();
-        let irradiance = protected.environment.diffuse_irradiance();
+        let irradiance = protected.environment().diffuse_irradiance();
         let specular = vol::relight::SpecularEnvironment::prefilter(
-            &protected.environment,
-            protected.environment.width,
-            protected.environment.height,
+            protected.environment(),
+            protected.environment().width,
+            protected.environment().height,
         );
         let misleading = decompose::Observations {
             samples: vec![decompose::Sample {
@@ -2762,8 +2767,8 @@ mod tests {
             16,
         );
         let truth_normal = -glam::Vec3::Z;
-        let truth = score::Scene {
-            model: vol::relight::RelightModel {
+        let truth = score::Scene::new(
+            vol::relight::RelightModel {
                 kernel: vol::relight::ParticleKernel::Gaussian,
                 surfels: vec![vol::relight::Surfel {
                     center: [0.0; 3],
@@ -2778,8 +2783,8 @@ mod tests {
                     _padding: 0.0,
                 }],
             },
-            environment: environment.clone(),
-        };
+            environment.clone(),
+        );
         let Ok(mut truth_renderer) = score::Renderer::new(SIZE, SIZE) else {
             eprintln!("skipping rendered normal refinement test: no ray-tracing GPU");
             return;

@@ -17,7 +17,38 @@ use std::{path, sync};
 #[derive(Clone)]
 pub struct Scene {
     pub model: vol::relight::RelightModel,
-    pub environment: vol::relight::Environment,
+    environment: vol::relight::Environment,
+    specular: sync::Arc<sync::OnceLock<vol::relight::SpecularEnvironment>>,
+}
+
+impl Scene {
+    /// Pair a model with immutable lighting for repeated production renders.
+    ///
+    /// The first render builds the CPU GGX prefilter. Clones share that table,
+    /// so changing the model between refinement stages does not rebuild data
+    /// that depends only on the environment.
+    pub fn new(model: vol::relight::RelightModel, environment: vol::relight::Environment) -> Self {
+        Self {
+            model,
+            environment,
+            specular: sync::Arc::new(sync::OnceLock::new()),
+        }
+    }
+
+    /// The immutable environment used by this scene and its cached prefilter.
+    pub fn environment(&self) -> &vol::relight::Environment {
+        &self.environment
+    }
+
+    pub(crate) fn specular(&self) -> &vol::relight::SpecularEnvironment {
+        self.specular.get_or_init(|| {
+            vol::relight::SpecularEnvironment::prefilter(
+                &self.environment,
+                self.environment.width,
+                self.environment.height,
+            )
+        })
+    }
 }
 
 /// How well one image was reproduced.
@@ -258,12 +289,7 @@ impl Renderer {
         diffuse_samples: u32,
         show_environment: bool,
     ) -> vol::gpu::RelightTracer {
-        let specular = vol::relight::SpecularEnvironment::prefilter(
-            &scene.environment,
-            scene.environment.width,
-            scene.environment.height,
-        );
-        self.tracer_with_specular(scene, &specular, diffuse_samples, show_environment)
+        self.tracer_with_specular(scene, scene.specular(), diffuse_samples, show_environment)
     }
 
     fn tracer_with_specular(
@@ -296,15 +322,10 @@ impl Renderer {
         show_environment: bool,
     ) -> vol::gpu::RelightTracer {
         assert!(!self.geometry_update_pending);
-        let specular = vol::relight::SpecularEnvironment::prefilter(
-            &scene.environment,
-            scene.environment.width,
-            scene.environment.height,
-        );
         vol::gpu::RelightTracer::new_gaussian(
             gaussian,
             &scene.environment,
-            &specular,
+            scene.specular(),
             vol::gpu::RelightSettings {
                 background_rgb: [0.0; 3],
                 diffuse_samples,
@@ -341,22 +362,6 @@ impl Renderer {
         show_environment: bool,
     ) -> vol::gpu::RelightTracer {
         self.tracer(scene, diffuse_samples, show_environment)
-    }
-
-    /// Build a tracer and retain the identical CPU prefilter for host scoring.
-    pub(crate) fn prepare_scene_with_specular(
-        &mut self,
-        scene: &Scene,
-        diffuse_samples: u32,
-        show_environment: bool,
-    ) -> (vol::gpu::RelightTracer, vol::relight::SpecularEnvironment) {
-        let specular = vol::relight::SpecularEnvironment::prefilter(
-            &scene.environment,
-            scene.environment.width,
-            scene.environment.height,
-        );
-        let tracer = self.tracer_with_specular(scene, &specular, diffuse_samples, show_environment);
-        (tracer, specular)
     }
 
     pub(crate) fn prepare_gaussian_scene(
@@ -701,6 +706,31 @@ pub fn save_rgb(path: &path::Path, pixels: &[[f32; 3]], width: usize, height: us
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_scene() -> Scene {
+        Scene::new(
+            vol::relight::RelightModel {
+                kernel: vol::relight::ParticleKernel::Gaussian,
+                surfels: Vec::new(),
+                materials: Vec::new(),
+            },
+            vol::relight::Environment::uniform([1.0; 3], 8, 4),
+        )
+    }
+
+    #[test]
+    fn scene_clones_share_one_lazy_specular_prefilter() {
+        let scene = empty_scene();
+        let clone = scene.clone();
+        assert!(scene.specular.get().is_none());
+
+        let first = scene.specular();
+        assert!(std::ptr::eq(first, clone.specular()));
+        assert!(scene.specular.get().is_some());
+
+        let independent = empty_scene();
+        assert!(!std::ptr::eq(first, independent.specular()));
+    }
 
     #[test]
     fn an_exact_reproduction_scores_at_the_ceiling() {

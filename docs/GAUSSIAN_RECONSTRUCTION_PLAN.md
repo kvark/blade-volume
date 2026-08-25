@@ -7145,3 +7145,31 @@ All runs use separate 12 GiB cgroups. Peak memory stays below 310 MB with zero
 swap, memory pressure, OOM, validation error, Xid, or GPU fault. Ignored
 artifacts remain under
 `target/audit-runs/material-assignment-{early-stop,prefilter-reuse}/`.
+
+## Selected scene-owned environment prefilter (2026-08-25)
+
+Rendered refinement still rebuilt the same CPU GGX environment ladder at
+nearly every stage. The light is immutable across normal, material, center,
+support, assignment, final Gaussian polish, and score passes, but each fresh
+renderer previously treated it as new. `score::Scene` now owns one lazy
+standard-library `OnceLock` behind an `Arc`; scene clones with changed model
+state share it, while a genuinely different calibrated light constructs its
+own table. The environment is exposed read-only so the cached table cannot
+become stale. This removes the narrower assignment-only handoff selected in
+the preceding change and leaves one source of prefilter ownership.
+
+No shading arithmetic, render proposal, training schedule, shader, graph
+operation, pipeline, binding, model field, persisted format, dependency, or
+quality option changes. The dense production replay reduces complete cgroup
+wall time from `28.819` to `14.915` seconds and CPU time from `175.310` to
+`41.273` seconds. Its held-light volumetric result changes within the
+established GPU-atomic replay band from `24.48/23.24/23.25` to
+`24.49/23.26/23.25` dB mean/worst/where-hit at the same `55.1%` coverage.
+The independently laid-out nested fixture falls from `32.646` to `18.861`
+seconds and from `181.281` to `47.204` CPU seconds; held-light quality remains
+`23.48/21.88` dB mean/where-hit at `52.8%` coverage. Peak host memory is
+`308,056,064` and `317,194,240` bytes respectively, with zero swap, memory
+pressure, OOM, validation error, Xid, or GPU fault. A unit test locks lazy
+construction and pointer identity across scene clones. Ignored binaries,
+models, logs, and telemetry remain under
+`target/audit-runs/scene-prefilter-cache/`.
