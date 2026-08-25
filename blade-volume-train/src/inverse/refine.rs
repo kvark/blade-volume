@@ -520,15 +520,11 @@ pub fn refine_rendered_material_assignments(
         .map(|&index| capture.views[index].camera)
         .collect();
     let mut renderer = score::Renderer::new(capture.width, capture.height)?;
-    let mut tracer = renderer.prepare_scene(scene, diffuse_samples, false);
+    let (mut tracer, specular) =
+        renderer.prepare_scene_with_specular(scene, diffuse_samples, false);
     let started = std::time::Instant::now();
     let initial_loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
     let irradiance = scene.environment.diffuse_irradiance();
-    let specular = vol::relight::SpecularEnvironment::prefilter(
-        &scene.environment,
-        scene.environment.width,
-        scene.environment.height,
-    );
     let mut candidates = Vec::new();
     for (index, surfel) in scene.model.surfels.iter().enumerate() {
         let samples = observations.of(index);

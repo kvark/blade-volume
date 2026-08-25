@@ -258,16 +258,26 @@ impl Renderer {
         diffuse_samples: u32,
         show_environment: bool,
     ) -> vol::gpu::RelightTracer {
-        assert!(!self.geometry_update_pending);
         let specular = vol::relight::SpecularEnvironment::prefilter(
             &scene.environment,
             scene.environment.width,
             scene.environment.height,
         );
+        self.tracer_with_specular(scene, &specular, diffuse_samples, show_environment)
+    }
+
+    fn tracer_with_specular(
+        &mut self,
+        scene: &Scene,
+        specular: &vol::relight::SpecularEnvironment,
+        diffuse_samples: u32,
+        show_environment: bool,
+    ) -> vol::gpu::RelightTracer {
+        assert!(!self.geometry_update_pending);
         vol::gpu::RelightTracer::new(
             &scene.model,
             &scene.environment,
-            &specular,
+            specular,
             vol::gpu::RelightSettings {
                 background_rgb: [0.0; 3],
                 diffuse_samples,
@@ -331,6 +341,22 @@ impl Renderer {
         show_environment: bool,
     ) -> vol::gpu::RelightTracer {
         self.tracer(scene, diffuse_samples, show_environment)
+    }
+
+    /// Build a tracer and retain the identical CPU prefilter for host scoring.
+    pub(crate) fn prepare_scene_with_specular(
+        &mut self,
+        scene: &Scene,
+        diffuse_samples: u32,
+        show_environment: bool,
+    ) -> (vol::gpu::RelightTracer, vol::relight::SpecularEnvironment) {
+        let specular = vol::relight::SpecularEnvironment::prefilter(
+            &scene.environment,
+            scene.environment.width,
+            scene.environment.height,
+        );
+        let tracer = self.tracer_with_specular(scene, &specular, diffuse_samples, show_environment);
+        (tracer, specular)
     }
 
     pub(crate) fn prepare_gaussian_scene(

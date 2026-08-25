@@ -7110,3 +7110,38 @@ Every run used a separate 12 GiB cgroup. Peak memory stayed below 340 MB, swap
 remained zero, and telemetry reports no memory pressure, OOM, validation error,
 Xid, or GPU fault. Ignored binaries, models, complete logs, and telemetry remain
 under `target/audit-runs/pbr-only-gaussian/`.
+
+## Selected material-assignment prefilter reuse (2026-08-25)
+
+The render-guarded material assignment built a complete CPU GGX environment
+ladder twice. Preparing its production renderer generated and uploaded the
+first; observation-space candidate ranking then recomputed the same
+deterministic ladder from the unchanged environment. The renderer now returns
+the host prefilter beside the prepared tracer for this one caller, and the
+ranker uses that exact object. Rendering, shading arithmetic, candidate order,
+prefix proposals, loss evaluation, and acceptance are unchanged. The helper is
+crate-private and adds no dependency, shader, graph operation, pipeline,
+binding, model field, format, or public option.
+
+On the calibrated dense gate, assignment time falls from `3.383` to `2.406`
+seconds and complete scope time from `29.823` to `28.819` seconds. Volumetric
+held-light PBR changes within replay noise from `24.45/23.23/23.19` to
+`24.48/23.24/23.25` dB mean/worst/where-hit at the same `55.1%` coverage. An
+adjacent nested control/candidate pair reduces assignment from `4.172` to
+`3.172` seconds and scope time from `33.564` to `32.646` seconds. Its
+volumetric result changes from `23.51/21.92` to `23.48/21.88` dB
+mean/where-hit while coverage changes `52.7%→52.8%`, inside the established
+separate-process atomic band. A controlled physical-GPU assignment test covers
+both accepting the ranked material and rolling back misleading local evidence.
+
+A separate heuristic tried to stop the logarithmic prefix search after the
+first regression following an improving proposal. It cut the dense search from
+eleven complete-render proposals to two, but assignment time changed only
+`3.383→3.347` seconds because the duplicated prefilter, not prefix rendering,
+was the measured cost. The early-stop state and branch are removed; exhaustive
+logarithmic prefix selection remains.
+
+All runs use separate 12 GiB cgroups. Peak memory stays below 310 MB with zero
+swap, memory pressure, OOM, validation error, Xid, or GPU fault. Ignored
+artifacts remain under
+`target/audit-runs/material-assignment-{early-stop,prefilter-reuse}/`.
