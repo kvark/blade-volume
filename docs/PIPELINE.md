@@ -2483,6 +2483,42 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   with no candidate overflow or path truncation. Its 12 GiB scope peaks at
   242,622,464 host bytes with zero swap, pressure, OOM, Xid, or GPU fault.
 
+#### M2cg — Fuse grouped directional-table gathers (upstream branch)
+
+- Meganeura commits `ba4720b` and `db14f62`, stacked on the grouped-scatter
+  branch at `c409bb2`, remove the remaining three materialized directional
+  colour gathers. The compiler recognizes an embedding row reshaped into
+  equal contiguous reduction groups and carries that factor through the
+  existing generated reduction kernel's row-repeat metadata. The scheduler
+  loads the selected source subrow directly. This is a generic code-generation
+  mutation: it adds no graph operation, shader entry/group, pre-made shader,
+  binding, pipeline, backend variant, or public API.
+- Fusion also exposed a generic allocator bug: buffers whose producers and
+  consumers had both been compiled away were treated as dedicated live-in
+  allocations. Persistent and user-visible buffers remain pinned, while all
+  untouched internal artifacts now share one four-byte dummy allocation. On
+  the exact grouped-scatter control, this reduces the physical plan from
+  6.603 to 2.898 GB. Adding grouped-gather fusion reduces it again to 2.463 GB,
+  including a 435 MB reduction in device-local storage.
+- On a matched 98,831-site Room continuation at 4,096 rays × 160 path entries,
+  the warm graph falls from 234 to 231 passes and from 22.25--22.46 to
+  19.96--19.99 ms, about -10.7%. Across 256 updates with the allocator fix in
+  both arms, GPU wait falls 7.173→6.701 seconds (-6.6%), training wall time
+  falls 11.258→10.947 seconds (-2.8%), active VRAM falls 3,758→3,310 MiB, and
+  cgroup peak memory falls 3,474,280,448→3,369,148,416 bytes.
+- Both arms score exactly 29.1014 dB over four training views and 18.9553 dB
+  over eight held views at reported precision; every printed held-view score
+  is identical. Structural compiler tests, generated-source tests, a physical
+  GPU fused/unfused parity test, formatting, warning-denied all-target clippy,
+  and the complete Meganeura all-target suite pass. The suite peaks at
+  8,366,551,040 bytes under a 12 GiB cgroup with zero swap, pressure, OOM,
+  throttle, Xid, or GPU fault.
+- This makes the released table substantially more practical but does not
+  change its quality decision: the matched no-table held score remains
+  19.8841 dB, so zero-initialized directional-table training stays opt-in.
+  Blade-volume remains pinned to Meganeura `0f87a8d` until the stacked upstream
+  branches are merged.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
