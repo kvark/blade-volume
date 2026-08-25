@@ -121,9 +121,15 @@ pub struct SurfaceDetailDirectionalGraph {
     pub axes: mn::NodeId,
     /// Optional `[N, 192]` unit axes and `[N, 64]` temperatures for frozen axes.
     pub frozen_kernel: Option<(mn::NodeId, mn::NodeId)>,
-    /// `[N, 192]` channel-major RGB directional residuals.
-    pub colors: mn::NodeId,
+    /// Three `[N, 64]` directional-residual channel tables.
+    pub colors: [mn::NodeId; 3],
 }
+
+const DIRECTIONAL_COLOR_PARAMETER_NAMES: [&str; 3] = [
+    "surface_detail_directional_colors_r",
+    "surface_detail_directional_colors_g",
+    "surface_detail_directional_colors_b",
+];
 
 #[derive(Clone, Debug)]
 pub struct ShChannelGraph {
@@ -202,6 +208,12 @@ fn set_sh_lr_multipliers(
         if num_components > 1 {
             session.set_lr_multiplier(&sh_rest_parameter_name(channel), rest_multiplier);
         }
+    }
+}
+
+fn set_directional_color_lr_multiplier(session: &mut mn::Session, multiplier: f32) {
+    for name in DIRECTIONAL_COLOR_PARAMETER_NAMES {
+        session.set_lr_multiplier(name, multiplier);
     }
 }
 
@@ -1134,12 +1146,14 @@ fn build_volumetric_graph_with_options(
                     );
                     (unit_axes, temperatures)
                 }),
-                colors: parameter_with_gradient(
-                    g,
-                    "surface_detail_directional_colors",
-                    &[n_cells, width],
-                    options.surface_trainability.detail_directional_colors,
-                ),
+                colors: DIRECTIONAL_COLOR_PARAMETER_NAMES.map(|name| {
+                    parameter_with_gradient(
+                        g,
+                        name,
+                        &[n_cells, directions],
+                        options.surface_trainability.detail_directional_colors,
+                    )
+                }),
             }
         }),
         surface_queries: surface_queries.unwrap(),
@@ -2123,8 +2137,7 @@ fn pixel_sh(
             parameters.directional.as_ref(),
             evaluation.directional_weights,
         ) {
-            let width = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
-            let directional_tables = split_rgb_table(g, directional.colors, n_cells, width);
+            let directional_tables = directional.colors;
             let bias = g.constant(
                 vec![0.5_f32; pl * vol::SURFACE_DETAIL_SITES],
                 &[pl, vol::SURFACE_DETAIL_SITES],
@@ -3001,8 +3014,8 @@ fn configure_optimizer(
                 "surface_detail_directional_axes",
                 config.surface_detail_directional_axis_lr_ratio,
             );
-            session.set_lr_multiplier(
-                "surface_detail_directional_colors",
+            set_directional_color_lr_multiplier(
+                session,
                 config.surface_detail_directional_color_lr_ratio,
             );
             session.set_lr_multiplier(
@@ -3061,8 +3074,8 @@ fn configure_optimizer(
                 "surface_detail_directional_axes",
                 spherical_axis_rate * config.surface_detail_directional_axis_lr_ratio,
             );
-            session.set_lr_multiplier(
-                "surface_detail_directional_colors",
+            set_directional_color_lr_multiplier(
+                session,
                 surface_offset_rate * config.surface_detail_directional_color_lr_ratio,
             );
             session.set_lr_multiplier(
@@ -3838,18 +3851,20 @@ fn upload_model_parameters(
                 session.set_parameter("surface_detail_directional_unit_axes", &unit_axes);
                 session.set_parameter("surface_detail_directional_temperatures", &temperatures);
             }
-            let mut colors = vec![0.0_f32; n_cells * directions * 3];
+            let mut colors: [Vec<f32>; 3] =
+                std::array::from_fn(|_| vec![0.0_f32; n_cells * directions]);
             for point in 0..n_cells {
-                let base = point * directions * 3;
                 for direction in 0..directions {
                     let color = directional.colors[point * directions + direction];
                     for channel in 0..3 {
-                        colors[base + channel * directions + direction] = color[channel];
+                        colors[channel][point * directions + direction] = color[channel];
                     }
                 }
             }
             session.set_parameter("surface_detail_directional_axes", &axes);
-            session.set_parameter("surface_detail_directional_colors", &colors);
+            for (name, colors) in DIRECTIONAL_COLOR_PARAMETER_NAMES.into_iter().zip(colors) {
+                session.set_parameter(name, &colors);
+            }
         }
     }
     if let Some(ref spherical_voronoi) = model.spherical_voronoi {
@@ -4011,12 +4026,48 @@ fn checkpoint_has_tensor(path: &std::path::Path, name: &str) -> Result<bool, Str
         .any(|window| window == quoted_name.as_bytes()))
 }
 
-/// Load a native checkpoint, migrating the pre-packed degree>0 SH layout.
+fn legacy_directional_color_channels(
+    checkpoint: &mn::data::safetensors::SafeTensorsModel,
+    prefix: Option<&str>,
+    n_cells: usize,
+) -> Result<Option<[Vec<f32>; 3]>, String> {
+    let base_name = "surface_detail_directional_colors";
+    let name = match prefix {
+        Some(prefix) => format!("{prefix}.{base_name}"),
+        None => base_name.to_string(),
+    };
+    if !checkpoint.tensor_info().contains_key(&name) {
+        return Ok(None);
+    }
+    let packed = checkpoint
+        .tensor_f32(&name)
+        .map_err(|err| format!("failed to read legacy checkpoint tensor {name}: {err}"))?;
+    let width = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+    let expected = n_cells * width * 3;
+    if packed.len() != expected {
+        return Err(format!(
+            "legacy checkpoint tensor {name} has {} values, expected {expected}",
+            packed.len()
+        ));
+    }
+    let mut channels: [Vec<f32>; 3] = std::array::from_fn(|_| vec![0.0_f32; n_cells * width]);
+    for cell in 0..n_cells {
+        for (channel, values) in channels.iter_mut().enumerate() {
+            let source = cell * width * 3 + channel * width;
+            let target = cell * width;
+            values[target..target + width].copy_from_slice(&packed[source..source + width]);
+        }
+    }
+    Ok(Some(channels))
+}
+
+/// Load a native checkpoint, migrating earlier packed parameter layouts.
 ///
 /// The paired PLY has already initialized every current parameter. New
-/// checkpoints load directly. A legacy checkpoint instead stores one tensor
-/// per higher-order component; pack its parameter values and Adam moments into
-/// the current row-major tables after Meganeura restores all matching fields.
+/// checkpoints load directly. Legacy checkpoints may store one tensor per SH
+/// component or one RGB directional-colour tensor; pack their values and Adam
+/// moments into the current row-major tables after Meganeura restores all
+/// matching fields.
 fn load_optimizer_checkpoint(
     session: &mut mn::Session,
     path: &std::path::Path,
@@ -4025,41 +4076,74 @@ fn load_optimizer_checkpoint(
 ) -> Result<bool, String> {
     let num_components = (1 + sh_degree) * (1 + sh_degree);
     let has_packed_sh = num_components > 1 && checkpoint_has_tensor(path, "sh_r_rest")?;
+    let has_split_directional = checkpoint_has_tensor(path, DIRECTIONAL_COLOR_PARAMETER_NAMES[0])?;
+    let has_legacy_directional = checkpoint_has_tensor(path, "surface_detail_directional_colors")?;
+    let migrate_sh = num_components > 1 && !has_packed_sh;
+    let migrate_directional = session.has_parameter(DIRECTIONAL_COLOR_PARAMETER_NAMES[0])
+        && has_legacy_directional
+        && !has_split_directional;
     session
         .load_checkpoint(path)
         .map_err(|err| format!("failed to load {}: {err:?}", path.display()))?;
-    if num_components == 1 || has_packed_sh {
+    if !migrate_sh && !migrate_directional {
         return Ok(false);
     }
 
     let checkpoint = mn::data::safetensors::SafeTensorsModel::load(path.to_path_buf())
         .map_err(|err| format!("failed to inspect {}: {err}", path.display()))?;
     let mut migrated = false;
-    for channel in ["sh_r", "sh_g", "sh_b"] {
-        let Some(parameter) =
-            legacy_sh_tensor(&checkpoint, None, channel, num_components, n_cells)?
-        else {
-            continue;
-        };
-        let rest_name = sh_rest_parameter_name(channel);
-        session.set_parameter(&rest_name, &parameter);
-        if let Some(moment) = legacy_sh_tensor(
-            &checkpoint,
-            Some("adam_m"),
-            channel,
-            num_components,
-            n_cells,
-        )? {
-            session.write_adam_m(&rest_name, &moment);
+    if migrate_sh {
+        for channel in ["sh_r", "sh_g", "sh_b"] {
+            let Some(parameter) =
+                legacy_sh_tensor(&checkpoint, None, channel, num_components, n_cells)?
+            else {
+                continue;
+            };
+            let rest_name = sh_rest_parameter_name(channel);
+            session.set_parameter(&rest_name, &parameter);
+            if let Some(moment) = legacy_sh_tensor(
+                &checkpoint,
+                Some("adam_m"),
+                channel,
+                num_components,
+                n_cells,
+            )? {
+                session.write_adam_m(&rest_name, &moment);
+            }
+            if let Some(moment) = legacy_sh_tensor(
+                &checkpoint,
+                Some("adam_v"),
+                channel,
+                num_components,
+                n_cells,
+            )? {
+                session.write_adam_v(&rest_name, &moment);
+            }
+            migrated = true;
         }
-        if let Some(moment) = legacy_sh_tensor(
-            &checkpoint,
-            Some("adam_v"),
-            channel,
-            num_components,
-            n_cells,
-        )? {
-            session.write_adam_v(&rest_name, &moment);
+    }
+    if migrate_directional {
+        let parameters = legacy_directional_color_channels(&checkpoint, None, n_cells)?
+            .expect("legacy directional tensor was detected above");
+        for (name, parameter) in DIRECTIONAL_COLOR_PARAMETER_NAMES
+            .into_iter()
+            .zip(parameters)
+        {
+            session.set_parameter(name, &parameter);
+        }
+        if let Some(channels) =
+            legacy_directional_color_channels(&checkpoint, Some("adam_m"), n_cells)?
+        {
+            for (name, channel) in DIRECTIONAL_COLOR_PARAMETER_NAMES.into_iter().zip(channels) {
+                session.write_adam_m(name, &channel);
+            }
+        }
+        if let Some(channels) =
+            legacy_directional_color_channels(&checkpoint, Some("adam_v"), n_cells)?
+        {
+            for (name, channel) in DIRECTIONAL_COLOR_PARAMETER_NAMES.into_iter().zip(channels) {
+                session.write_adam_v(name, &channel);
+            }
         }
         migrated = true;
     }
@@ -4434,7 +4518,7 @@ fn download_model_parameters(
             .is_some_and(|detail| detail.directional.is_some())
         {
             names.push("surface_detail_directional_axes".to_string());
-            names.push("surface_detail_directional_colors".to_string());
+            names.extend(DIRECTIONAL_COLOR_PARAMETER_NAMES.map(str::to_string));
         }
     }
     if model.spherical_voronoi.is_some() {
@@ -4498,7 +4582,8 @@ fn download_model_parameters(
         if let Some(ref mut directional) = detail.directional {
             let directions = sites * vol::SURFACE_DETAIL_DIRECTIONS;
             let axes = next_parameter(&mut readback, "surface_detail_directional_axes");
-            let colors = next_parameter(&mut readback, "surface_detail_directional_colors");
+            let colors =
+                DIRECTIONAL_COLOR_PARAMETER_NAMES.map(|name| next_parameter(&mut readback, name));
             for point in 0..n_cells {
                 let base = point * directions * 3;
                 for direction in 0..directions {
@@ -4506,9 +4591,9 @@ fn download_model_parameters(
                         &axes[base + direction * 3..base + direction * 3 + 3],
                     );
                     directional.colors[point * directions + direction] = glam::Vec3::new(
-                        colors[base + direction],
-                        colors[base + directions + direction],
-                        colors[base + 2 * directions + direction],
+                        colors[0][point * directions + direction],
+                        colors[1][point * directions + direction],
+                        colors[2][point * directions + direction],
                     );
                 }
             }
@@ -5327,9 +5412,14 @@ fn per_cell_param_names_with_stride(
         ));
     }
     if has_surface_detail_directional {
-        let stride = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS * 3;
-        names.push(("surface_detail_directional_axes".to_string(), stride));
-        names.push(("surface_detail_directional_colors".to_string(), stride));
+        let channel_stride = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+        names.push((
+            "surface_detail_directional_axes".to_string(),
+            channel_stride * 3,
+        ));
+        names.extend(
+            DIRECTIONAL_COLOR_PARAMETER_NAMES.map(|name| (name.to_string(), channel_stride)),
+        );
     }
     if has_spherical_voronoi {
         names.push((
@@ -5771,11 +5861,13 @@ fn build_train_session(
             .as_ref()
             .is_some_and(|detail| detail.directional.is_some())
         {
-            assert_eq!(
-                session.has_param_grad("surface_detail_directional_colors"),
-                surface_detail_directional_color_lr_ratio > 0.0,
-                "surface-detail directional-color training state does not match its learning rate"
-            );
+            for name in DIRECTIONAL_COLOR_PARAMETER_NAMES {
+                assert_eq!(
+                    session.has_param_grad(name),
+                    surface_detail_directional_color_lr_ratio > 0.0,
+                    "surface-detail directional-color training state does not match its learning rate"
+                );
+            }
             assert_eq!(
                 session.has_param_grad("surface_detail_directional_axes"),
                 surface_detail_directional_axis_lr_ratio > 0.0,
@@ -5948,8 +6040,8 @@ fn build_train_session(
             "surface_detail_directional_axes",
             surface_detail_directional_axis_lr_ratio,
         );
-        session.set_lr_multiplier(
-            "surface_detail_directional_colors",
+        set_directional_color_lr_multiplier(
+            &mut session,
             surface_detail_directional_color_lr_ratio,
         );
     }
@@ -6386,7 +6478,7 @@ fn fit_appearance_pixel_batched(
         );
     }
     if let Some(ref state_path) = config.resume_state_path {
-        let migrated_legacy_sh = load_optimizer_checkpoint(
+        let migrated_legacy_parameters = load_optimizer_checkpoint(
             &mut session,
             state_path,
             config.sh_degree,
@@ -6405,8 +6497,8 @@ fn fit_appearance_pixel_batched(
             state_path.display(),
             session.adam_step_count()
         );
-        if migrated_legacy_sh {
-            log::info!("resume: migrated legacy per-component SH parameters and Adam moments");
+        if migrated_legacy_parameters {
+            log::info!("resume: migrated legacy parameter and Adam-moment layouts");
         }
     }
     if !collect_powerfoam_point_error
@@ -8036,10 +8128,8 @@ mod tests {
                     &[1, directional_width * 3],
                 ),
                 frozen_kernel: None,
-                colors: graph.parameter(
-                    "surface_detail_directional_colors",
-                    &[1, directional_width * 3],
-                ),
+                colors: DIRECTIONAL_COLOR_PARAMETER_NAMES
+                    .map(|name| graph.parameter(name, &[1, directional_width])),
             }),
             surface_queries: graph.input("surface_queries", &[1, 2]),
             surface_query_grad_previous: None,
@@ -8072,8 +8162,7 @@ mod tests {
         let red = graph.mul(red, evaluation.color_weights);
         let mut red = graph.sum_inner(red);
         let directional = parameters.directional.as_ref().unwrap();
-        let directional_red =
-            split_rgb_table(&mut graph, directional.colors, 1, directional_width)[0];
+        let directional_red = directional.colors[0];
         let directional_red = graph.embedding(cell_indices, directional_red);
         let directional_red = graph.reshape(directional_red, &[sites, directions]);
         let directional_red = graph.mul(directional_red, evaluation.directional_weights.unwrap());
@@ -8150,10 +8239,13 @@ mod tests {
         session.set_parameter("surface_detail_colors", &packed_colors);
         session.set_parameter("surface_detail_density_logits", &density_logits);
         session.set_parameter("surface_detail_directional_axes", &packed_axes);
-        session.set_parameter(
-            "surface_detail_directional_colors",
-            &packed_directional_colors,
-        );
+        for (channel, name) in DIRECTIONAL_COLOR_PARAMETER_NAMES.iter().enumerate() {
+            let start = channel * directional_width;
+            session.set_parameter(
+                name,
+                &packed_directional_colors[start..start + directional_width],
+            );
+        }
         session.set_parameter("positions", &[0.0, 0.0, 10.0]);
         session.set_parameter("surface_normals", &[0.0, 0.0, -1.0]);
         session.set_parameter("surface_offsets", &[0.0]);
@@ -8298,13 +8390,16 @@ mod tests {
             ("surface_detail_colors", sites * 3),
             ("surface_detail_density_logits", sites),
             ("surface_detail_directional_axes", directional_width * 3),
-            ("surface_detail_directional_colors", directional_width * 3),
         ] {
             let mut gradient = vec![0.0_f32; size];
             session.read_param_grad(name, &mut gradient);
             assert!(gradient.iter().all(|value| value.is_finite()));
             assert!(gradient.iter().any(|value| value.abs() > 1.0e-8));
         }
+        let mut gradient = vec![0.0_f32; directional_width];
+        session.read_param_grad(DIRECTIONAL_COLOR_PARAMETER_NAMES[0], &mut gradient);
+        assert!(gradient.iter().all(|value| value.is_finite()));
+        assert!(gradient.iter().any(|value| value.abs() > 1.0e-8));
     }
 
     #[test]
@@ -8438,14 +8533,13 @@ mod tests {
             graph.parameter("surface_detail_directional_unit_axes", &[1, width * 3]);
         let temperature_table =
             graph.parameter("surface_detail_directional_temperatures", &[1, width]);
-        let colors = graph.parameter("surface_detail_directional_colors", &[1, width * 3]);
         let weights = surface_detail_directional_weights(
             &mut graph,
             cell_indices,
             &SurfaceDetailDirectionalGraph {
                 axes: raw_axes,
                 frozen_kernel: Some((unit_axis_table, temperature_table)),
-                colors,
+                colors: [raw_axes; 3],
             },
             centers,
             tangent_sites,
@@ -8467,7 +8561,6 @@ mod tests {
         session.set_parameter("surface_detail_directional_axes", &packed_axes);
         session.set_parameter("surface_detail_directional_unit_axes", &unit_axes);
         session.set_parameter("surface_detail_directional_temperatures", &temperatures);
-        session.set_parameter("surface_detail_directional_colors", &vec![0.0; width * 3]);
         session.set_input_u32("cell_indices", &[0]);
         session.set_input("tangent_sites", &vec![0.0; sites * 3]);
         session.set_input("radii", &[1.0]);
@@ -9547,11 +9640,11 @@ mod tests {
                 "surface_detail_directional_axes".to_string(),
                 directional_stride,
             )));
-            assert!(oriented_names.contains(&(
-                "surface_detail_directional_colors".to_string(),
-                directional_stride,
-            )));
-            assert_eq!(oriented_names.len(), names.len() + 13);
+            let directional_channel_stride = directional_stride / 3;
+            for name in DIRECTIONAL_COLOR_PARAMETER_NAMES {
+                assert!(oriented_names.contains(&(name.to_string(), directional_channel_stride)));
+            }
+            assert_eq!(oriented_names.len(), names.len() + 15);
         }
     }
 
@@ -9985,7 +10078,10 @@ mod tests {
                 "unexpected gradient for {name}"
             );
         }
-        assert!(session.has_param_grad("surface_detail_directional_colors"));
+        for name in DIRECTIONAL_COLOR_PARAMETER_NAMES {
+            assert!(session.has_parameter(name), "missing parameter {name}");
+            assert!(session.has_param_grad(name));
+        }
     }
 
     #[test]
@@ -10517,6 +10613,95 @@ mod tests {
                     .iter()
                     .map(|entry| entry + 2.0)
                     .collect::<Vec<_>>()
+            );
+        }
+        std::fs::remove_file(checkpoint).unwrap();
+    }
+
+    #[test]
+    fn packed_directional_color_checkpoint_migrates_values_and_moments() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping directional-color checkpoint migration test: no GPU");
+            return;
+        };
+        let n_cells = 2usize;
+        let width = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
+        let values: Vec<f32> = (0..n_cells * width * 3)
+            .map(|index| index as f32 * 0.01 - 1.0)
+            .collect();
+
+        let mut legacy_graph = mn::Graph::new();
+        let parameter =
+            legacy_graph.parameter("surface_detail_directional_colors", &[n_cells, width * 3]);
+        let loss = legacy_graph.mean_all(parameter);
+        legacy_graph.set_outputs(vec![loss]);
+        let (mut legacy_session, _) = mn::build(
+            &legacy_graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu.clone()),
+                ..Default::default()
+            },
+        );
+        legacy_session.set_parameter("surface_detail_directional_colors", &values);
+        legacy_session.write_adam_m(
+            "surface_detail_directional_colors",
+            &values.iter().map(|value| value + 1.0).collect::<Vec<_>>(),
+        );
+        legacy_session.write_adam_v(
+            "surface_detail_directional_colors",
+            &values.iter().map(|value| value + 2.0).collect::<Vec<_>>(),
+        );
+        legacy_session.set_adam_step_count(23);
+        let checkpoint = std::env::temp_dir().join(format!(
+            "blade-volume-legacy-directional-colors-{}.safetensors",
+            std::process::id()
+        ));
+        legacy_session.save_checkpoint(&checkpoint).unwrap();
+        drop(legacy_session);
+
+        let mut split_graph = mn::Graph::new();
+        let parameters = DIRECTIONAL_COLOR_PARAMETER_NAMES
+            .map(|name| split_graph.parameter(name, &[n_cells, width]));
+        let mut loss = split_graph.mean_all(parameters[0]);
+        for parameter in &parameters[1..] {
+            let term = split_graph.mean_all(*parameter);
+            loss = split_graph.add(loss, term);
+        }
+        split_graph.set_outputs(vec![loss]);
+        let (mut split_session, _) = mn::build(
+            &split_graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        assert!(load_optimizer_checkpoint(&mut split_session, &checkpoint, 0, n_cells).unwrap());
+        assert_eq!(split_session.adam_step_count(), 23);
+
+        for (channel, name) in DIRECTIONAL_COLOR_PARAMETER_NAMES.iter().enumerate() {
+            let mut expected = vec![0.0_f32; n_cells * width];
+            for cell in 0..n_cells {
+                let source = cell * width * 3 + channel * width;
+                let target = cell * width;
+                expected[target..target + width].copy_from_slice(&values[source..source + width]);
+            }
+            let mut actual = vec![0.0_f32; expected.len()];
+            let mut actual_m = vec![0.0_f32; expected.len()];
+            let mut actual_v = vec![0.0_f32; expected.len()];
+            split_session.read_param(name, &mut actual);
+            split_session.read_adam_m(name, &mut actual_m);
+            split_session.read_adam_v(name, &mut actual_v);
+            assert_eq!(actual, expected);
+            assert_eq!(
+                actual_m,
+                expected.iter().map(|value| value + 1.0).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                actual_v,
+                expected.iter().map(|value| value + 2.0).collect::<Vec<_>>()
             );
         }
         std::fs::remove_file(checkpoint).unwrap();

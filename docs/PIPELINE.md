@@ -2519,6 +2519,42 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   Blade-volume remains pinned to Meganeura `0f87a8d` until the stacked upstream
   branches are merged.
 
+#### M2ch — Store directional-colour training tables by channel (done)
+
+- The released directional appearance remains RGB in `PointCloudModel` and in
+  PLY files, but the training graph now keeps three `[N, 64]` parameter tables
+  instead of one channel-major `[N, 192]` table. This directly matches the
+  three colour consumers and removes the large split/concatenate gradient
+  path. It adds no operation, shader, binding, pipeline, backend, dependency,
+  public API, or file-format variant.
+- Resume remains compatible with packed checkpoints. Loading detects the old
+  `surface_detail_directional_colors` tensor and splits its parameter values
+  and both Adam moments by cell and channel; the optimizer step is preserved.
+  A physical-GPU regression verifies the exact migrated values and moments.
+  Upload, readback, optimizer-rate, densification, and Adam-state remapping
+  paths all enumerate the same three tables.
+- With the same locally optimized Meganeura compiler in both arms, the matched
+  98,831-site, 4,096-ray graph falls from 231 to 221 passes and from
+  5.14--5.29 to 3.17--3.34 ms after warm-up, about -37%. Across 256 updates,
+  pipeline time falls 11.125→10.323 seconds (-7.2%); a repeat takes 10.254
+  seconds. Active VRAM falls 3,310→3,164 MiB and cgroup peak memory falls
+  3,528,081,408→3,037,446,144 bytes.
+- Both arms and the candidate repeat score exactly 29.1014 dB over four
+  training views and 18.9553 dB over eight held views at reported precision;
+  all eight printed held-view scores are identical. The changed scatter
+  destination layout does change a sparse set of atomic accumulation results:
+  directional-colour RMS delta is 3.53e-6 with 281 of 18,975,552 values above
+  1e-5 and maximum delta 0.0092. Candidate repeats are closer than this, and
+  all reported quality scores remain exact. This is the existing
+  separate-process atomic-order tolerance, not a semantic change.
+- Formatting, warning-denied workspace all-target clippy, the focused
+  physical-GPU forward/backward and checkpoint-migration tests, and the full
+  default and all-feature workspace all-target suites pass. The cold default
+  suite peaks at 4,251,430,912 bytes in a 12 GiB cgroup; the all-feature repeat
+  peaks at 3,491,340,288 bytes. Both have zero swap, pressure, OOM, Xid, or GPU
+  fault. The no-directional-table held score remains 19.8841 dB, so the table
+  stays opt-in pending a positive two-scene quality gate.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
