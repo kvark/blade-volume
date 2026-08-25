@@ -173,10 +173,6 @@ struct Args {
     #[argh(option, default = "200")]
     steps_per_view: usize,
 
-    /// micro-batches averaged before each Adam update (default 1)
-    #[argh(option, default = "1")]
-    gradient_accumulation: usize,
-
     /// initial uniform per-cell density before training (default 1.0)
     #[argh(option, default = "1.0")]
     initial_density: f32,
@@ -939,7 +935,6 @@ fn main() {
             pixel_batch,
             views_per_batch,
             steps_per_view: args.steps_per_view,
-            gradient_accumulation: args.gradient_accumulation,
             sh_degree: args.sh_degree,
             color_loss,
             lr_schedule,
@@ -1388,7 +1383,6 @@ mod tests {
         .unwrap();
         assert_eq!(default.pixel_batch, 1024);
         assert_eq!(default.views_per_batch, 0);
-        assert_eq!(default.gradient_accumulation, 1);
         assert!(!default.skip_eval);
         assert!(default.masks.is_none());
         assert!(default.geometry_images.is_none());
@@ -1415,14 +1409,11 @@ mod tests {
                 "256",
                 "--views-per-batch",
                 "16",
-                "--gradient-accumulation",
-                "4",
             ],
         )
         .unwrap();
         assert_eq!(explicit.pixel_batch, 256);
         assert_eq!(explicit.views_per_batch, 16);
-        assert_eq!(explicit.gradient_accumulation, 4);
         assert!(!explicit.skip_eval);
 
         let skip_eval = <Args as argh::FromArgs>::from_args(

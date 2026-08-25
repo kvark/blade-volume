@@ -2576,48 +2576,30 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   spatial/directional responsibility model; neither another scalar rate nor a
   smaller copy of the same table is supported by the current gates.
 
-#### M2cj — Temporal gradient accumulation (opt-in)
+#### M2cj — Temporal gradient accumulation (implemented experimentally; rejected)
 
-- `AppearanceFitConfig::gradient_accumulation` and the matching
-  `train_colmap --gradient-accumulation` option average micro-batches before one
-  Adam update. When the requested camera count fits, the complete update is
-  jointly stratified and its interleaved micro-batches cover distinct camera
-  intervals. Meganeura owns the persistent gradient buffers; Blade only clears
-  them at the update boundary and configures Adam on the final micro-batch.
-  The default remains one and preserves the exact prior RNG path. Checkpoints
-  are still written only between Adam updates, and an accumulated split/resume
-  test is bit-identical to uninterrupted training.
-- The option is useful for camera coverage, not as a blanket larger-batch
-  default. On the fixed 98,831-site Room cloud, 256 updates over four training
-  views regress held PSNR as accumulation rises: the established 4,096-ray
-  control scores 27.1422/19.8841 dB train/held, 2x scores
-  27.5404/19.7973, and 4x scores 27.8309/19.5675. The extra rays fit the same
-  four views more closely and generalize less well.
-- With 32 training views and four cameras per 4,096-ray micro-batch, 2x
-  accumulation improves the established 24.7981/20.2976 dB control to
-  25.3196/20.5602 dB in 5.119 seconds. A monolithic 8,192-ray/eight-view batch
-  scores 25.3243/20.4419 dB in 5.021 seconds. Accumulation is therefore 2%
-  slower here, but retains the 4,096-ray graph and path-buffer shapes and is
-  +0.1183 dB held out in this sample. Keep it explicit; select it when a
-  larger multi-view batch is useful but the corresponding graph/path buffers
-  do not fit comfortably.
-- The repeated-input physical-GPU gate verifies that two micro-batches produce
-  the same parameters and loss as one direct Adam update. The 32-view runs
-  process 2,097,152 rays without path truncation, swap, OOM, Xid, or GPU fault
-  inside the 12 GiB scope.
-- A production-schedule gate resumes the selected 171,396-site Room checkpoint
-  at step 6,000 with trainable geometry, 272 training cameras, and the complete
-  step-6,500 densification boundary. The 4,096-ray control ends with 196,946
-  sites and scores 24.8841/23.9801 dB over 272 training/39 held views. Jointly
-  stratified 2x accumulation ends with 196,969 sites and scores
-  25.0030/24.0771 dB, improving 30 held frames, regressing seven, and tying two.
-  The +0.0970 dB held gain costs 31.571→41.033 seconds of training (+30%): GPU
-  step time doubles from 9.575 to 19.426 seconds while topology remains roughly
-  fixed at 17.515/16.464 seconds. Both arms complete 1.11 million-ray
-  contribution passes and all training rays without truncation, swap, OOM,
-  Xid, or GPU fault. This supports the opt-in setting on the real schedule but
-  not a default change; a same-wall comparison against additional Adam updates
-  is still required.
+- A bounded-memory prototype used Meganeura's native persistent gradient
+  buffers to average multiple independently recorded ray batches before one
+  Adam update. A second increment jointly stratified cameras across the update
+  while preserving the exact one-batch RNG path and update-boundary resume.
+  Repeated-input and segmented physical-GPU tests passed.
+- Fixed-topology screens looked positive when update count was held constant.
+  On the 98,831-site Room cloud, 2x accumulation with 32 training views raised
+  train/held PSNR from 24.7981/20.2976 to 25.3196/20.5602 dB. With only four
+  training views it instead overfit: 27.1422/19.8841 became
+  27.5404/19.7973, and 4x fell to 19.5675 dB held out.
+- The production-schedule gate resumed the 171,396-site Room step-6,000
+  checkpoint through a complete trainable-geometry and densification window.
+  At 500 Adam updates, 2x accumulation improved all-39 held PSNR
+  23.9801→24.0771 dB and improved 30/39 frames, but training time grew
+  31.571→41.033 seconds. Spending a slightly larger 43.230-second budget on
+  700 ordinary updates instead reached 24.3756 dB held out and beat the
+  accumulated arm on all 39 frames by 0.02--0.54 dB.
+- Optimizer updates, not rays per update, are the better use of compute in the
+  current production regime. The configuration field, CLI option, sampling
+  helper, training-loop nesting, and tests are removed; no runtime or
+  checkpoint format ever changed. Revisit only if a future model cannot fit a
+  statistically adequate per-update batch in memory.
 
 ### M3 — Training crate scaffolding
 

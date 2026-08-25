@@ -2423,10 +2423,6 @@ pub struct AppearanceFitConfig {
     pub views_per_batch: usize,
     /// Number of Adam steps per view in randomly batched mode. Default 200.
     pub steps_per_view: usize,
-    /// Micro-batches averaged before each Adam update. Default 1. This raises
-    /// the effective ray batch without increasing the static graph or path
-    /// buffer shape.
-    pub gradient_accumulation: usize,
     /// SH degree for view-dependent colour. 0 = flat colour (default,
     /// matches the original radfoam pipeline). 1–3 enable view
     /// dependence: ~3-5 dB PSNR improvement on Mip-NeRF 360 scenes at
@@ -2680,7 +2676,6 @@ impl Default for AppearanceFitConfig {
             pixel_batch: None,
             views_per_batch: 1,
             steps_per_view: 200,
-            gradient_accumulation: 1,
             sh_degree: 0,
             color_loss: ColorLoss::L1,
             densify: None,
@@ -2736,29 +2731,6 @@ fn sample_training_views(state: &mut u64, num_views: usize, count: usize) -> Vec
         .map(|slot| {
             let begin = slot * num_views / count;
             let end = (slot + 1) * num_views / count;
-            begin + (next_lcg_u32(state) as usize) % (end - begin)
-        })
-        .collect()
-}
-
-fn sample_accumulated_training_views(
-    state: &mut u64,
-    num_views: usize,
-    count: usize,
-    micro_batch: usize,
-    micro_batches: usize,
-) -> Vec<usize> {
-    let total = count
-        .checked_mul(micro_batches)
-        .expect("accumulated view count overflowed");
-    if total > num_views {
-        return sample_training_views(state, num_views, count);
-    }
-    (0..count)
-        .map(|slot| {
-            let accumulated_slot = slot * micro_batches + micro_batch;
-            let begin = accumulated_slot * num_views / total;
-            let end = (accumulated_slot + 1) * num_views / total;
             begin + (next_lcg_u32(state) as usize) % (end - begin)
         })
         .collect()
@@ -3413,9 +3385,6 @@ pub struct ViewSupervision {
 /// the obsolete precomputed-path graph. `Some(K)` uses random mini-batches and
 /// `steps_per_view * views.len()` steps. `views_per_batch > 1` distributes
 /// each random-pixel batch across a deterministic stratified camera sample.
-/// `gradient_accumulation` independently sampled micro-batches are averaged
-/// before each Adam update, making the effective random-pixel batch
-/// `K * gradient_accumulation` without increasing the static buffer shapes.
 pub fn fit_appearance_multi_view(
     model: &mut vol::PointCloudModel,
     views: &[ViewSupervision],
@@ -3479,10 +3448,6 @@ pub(crate) fn fit_appearance_multi_view_outcome(
     }
     let pixel_batch = config.pixel_batch.unwrap_or(p);
     assert!(pixel_batch > 0, "pixel_batch must be greater than zero");
-    assert!(
-        config.gradient_accumulation > 0,
-        "gradient_accumulation must be greater than zero"
-    );
     assert!(max_steps > 0, "max_steps must be greater than zero");
     assert!(
         config.learning_rate.is_finite() && config.learning_rate >= 0.0,
@@ -6542,10 +6507,6 @@ fn fit_appearance_pixel_batched(
     {
         session.set_adam_grouped_grad_norm("positions", 3);
     }
-    session.set_grad_accumulate(
-        u32::try_from(config.gradient_accumulation)
-            .expect("gradient_accumulation exceeds the Meganeura limit"),
-    );
 
     // `pixel_idx_per_step` is constant across all training steps —
     // upload once. The new session built for each densify cycle gets
@@ -6595,79 +6556,100 @@ fn fit_appearance_pixel_batched(
 
         let cycle_start = steps_done;
         for cycle_step in 0..cycle_budget {
+            let input_start = std::time::Instant::now();
             let step = steps_done + cycle_step;
-            let mut step_loss = 0.0_f32;
-            let mut step_path = vol::gpu::PathRecordStats::default();
-            session.zero_grad();
-            for micro_batch in 0..config.gradient_accumulation {
-                let input_start = std::time::Instant::now();
-                let selected_views = sample_accumulated_training_views(
-                    &mut sampling_rng,
-                    views.len(),
-                    views_per_batch,
-                    micro_batch,
-                    config.gradient_accumulation,
-                );
-                for (slot, &vi) in selected_views.iter().enumerate() {
-                    let range = batch_view_range(slot, views_per_batch, pixel_batch);
-                    let origin = ray_constants(&views[vi].camera).origin;
-                    for k in range {
-                        ray_origin_buf[k * 3] = origin.x;
-                        ray_origin_buf[k * 3 + 1] = origin.y;
-                        ray_origin_buf[k * 3 + 2] = origin.z;
-                        view_idx_buf[k] = vi as u32;
-                    }
+            let selected_views =
+                sample_training_views(&mut sampling_rng, views.len(), views_per_batch);
+            for (slot, &vi) in selected_views.iter().enumerate() {
+                let range = batch_view_range(slot, views_per_batch, pixel_batch);
+                let origin = ray_constants(&views[vi].camera).origin;
+                for k in range {
+                    ray_origin_buf[k * 3] = origin.x;
+                    ray_origin_buf[k * 3 + 1] = origin.y;
+                    ray_origin_buf[k * 3 + 2] = origin.z;
+                    view_idx_buf[k] = vi as u32;
                 }
+            }
 
-                // Two sampling modes:
-                //   - random pixels: split the batch across the selected views,
-                //     then pick independent random pixels within each view.
-                //   - patch: pick a random `q × q` patch corner and emit
-                //     pixel indices in row-major order across the patch, so
-                //     the graph can treat them as a 2D image for gradient
-                //     L1.
-                if patch_size > 0 {
-                    let v = &views[selected_views[0]];
-                    let cam_ray_constants = ray_constants(&v.camera);
-                    let q = patch_size as u32;
-                    let max_x = v.width.saturating_sub(q);
-                    let max_y = v.height.saturating_sub(q);
-                    let x0 = next_lcg_u32(&mut sampling_rng) % (max_x + 1);
-                    let y0 = next_lcg_u32(&mut sampling_rng) % (max_y + 1);
-                    for ky in 0..q {
-                        for kx in 0..q {
-                            let k = (ky * q + kx) as usize;
-                            let ix = x0 + kx;
-                            let iy = y0 + ky;
-                            let pidx = iy * v.width + ix;
-                            pixel_indices[k] = pidx;
-                            let base = (pidx as usize) * 3;
-                            target_buf[k * 3] = v.target_rgb[base];
-                            target_buf[k * 3 + 1] = v.target_rgb[base + 1];
-                            target_buf[k * 3 + 2] = v.target_rgb[base + 2];
-                            target_alpha_buf[k] = v
-                                .target_alpha
-                                .as_ref()
-                                .map_or(1.0, |target| target[pidx as usize]);
-                            let dir =
-                                ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
-                            ray_dir_per_pixel_buf[k * 3] = dir.x;
-                            ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
-                            ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
-                            if num_components > 1 {
-                                let basis = sh_basis(dir, num_components);
-                                for (j, &bv) in basis.iter().enumerate().skip(1) {
-                                    basis_inputs[j - 1][k] = bv;
-                                }
+            // Two sampling modes:
+            //   - random pixels: split the batch across the selected views,
+            //     then pick independent random pixels within each view.
+            //   - patch: pick a random `q × q` patch corner and emit
+            //     pixel indices in row-major order across the patch, so
+            //     the graph can treat them as a 2D image for gradient
+            //     L1.
+            if patch_size > 0 {
+                let v = &views[selected_views[0]];
+                let cam_ray_constants = ray_constants(&v.camera);
+                let q = patch_size as u32;
+                let max_x = v.width.saturating_sub(q);
+                let max_y = v.height.saturating_sub(q);
+                let x0 = next_lcg_u32(&mut sampling_rng) % (max_x + 1);
+                let y0 = next_lcg_u32(&mut sampling_rng) % (max_y + 1);
+                for ky in 0..q {
+                    for kx in 0..q {
+                        let k = (ky * q + kx) as usize;
+                        let ix = x0 + kx;
+                        let iy = y0 + ky;
+                        let pidx = iy * v.width + ix;
+                        pixel_indices[k] = pidx;
+                        let base = (pidx as usize) * 3;
+                        target_buf[k * 3] = v.target_rgb[base];
+                        target_buf[k * 3 + 1] = v.target_rgb[base + 1];
+                        target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+                        target_alpha_buf[k] = v
+                            .target_alpha
+                            .as_ref()
+                            .map_or(1.0, |target| target[pidx as usize]);
+                        let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
+                        ray_dir_per_pixel_buf[k * 3] = dir.x;
+                        ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
+                        ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
+                        if num_components > 1 {
+                            let basis = sh_basis(dir, num_components);
+                            for (j, &bv) in basis.iter().enumerate().skip(1) {
+                                basis_inputs[j - 1][k] = bv;
                             }
                         }
                     }
-                } else if full_image_batch {
-                    let v = &views[selected_views[0]];
+                }
+            } else if full_image_batch {
+                let v = &views[selected_views[0]];
+                let cam_ray_constants = ray_constants(&v.camera);
+                let img_size = v.width * v.height;
+                assert_eq!(pixel_batch, img_size as usize);
+                for (k, pidx) in (0..img_size).enumerate() {
+                    pixel_indices[k] = pidx;
+                    let base = (pidx as usize) * 3;
+                    target_buf[k * 3] = v.target_rgb[base];
+                    target_buf[k * 3 + 1] = v.target_rgb[base + 1];
+                    target_buf[k * 3 + 2] = v.target_rgb[base + 2];
+                    target_alpha_buf[k] = v
+                        .target_alpha
+                        .as_ref()
+                        .map_or(1.0, |target| target[pidx as usize]);
+
+                    let ix = pidx % v.width;
+                    let iy = pidx / v.width;
+                    let dir = ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
+                    ray_dir_per_pixel_buf[k * 3] = dir.x;
+                    ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
+                    ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
+
+                    if num_components > 1 {
+                        let basis = sh_basis(dir, num_components);
+                        for (j, &bv) in basis.iter().enumerate().skip(1) {
+                            basis_inputs[j - 1][k] = bv;
+                        }
+                    }
+                }
+            } else {
+                for (slot, &vi) in selected_views.iter().enumerate() {
+                    let v = &views[vi];
                     let cam_ray_constants = ray_constants(&v.camera);
                     let img_size = v.width * v.height;
-                    assert_eq!(pixel_batch, img_size as usize);
-                    for (k, pidx) in (0..img_size).enumerate() {
+                    for k in batch_view_range(slot, views_per_batch, pixel_batch) {
+                        let pidx = next_lcg_u32(&mut sampling_rng) % img_size;
                         pixel_indices[k] = pidx;
                         let base = (pidx as usize) * 3;
                         target_buf[k * 3] = v.target_rgb[base];
@@ -6692,204 +6674,154 @@ fn fit_appearance_pixel_batched(
                             }
                         }
                     }
-                } else {
-                    for (slot, &vi) in selected_views.iter().enumerate() {
-                        let v = &views[vi];
-                        let cam_ray_constants = ray_constants(&v.camera);
-                        let img_size = v.width * v.height;
-                        for k in batch_view_range(slot, views_per_batch, pixel_batch) {
-                            let pidx = next_lcg_u32(&mut sampling_rng) % img_size;
-                            pixel_indices[k] = pidx;
-                            let base = (pidx as usize) * 3;
-                            target_buf[k * 3] = v.target_rgb[base];
-                            target_buf[k * 3 + 1] = v.target_rgb[base + 1];
-                            target_buf[k * 3 + 2] = v.target_rgb[base + 2];
-                            target_alpha_buf[k] = v
-                                .target_alpha
-                                .as_ref()
-                                .map_or(1.0, |target| target[pidx as usize]);
+                }
+            }
+            path_bufs.write_pixel_indices(&pixel_indices);
+            session.set_input("ray_origin", &ray_origin_buf);
+            session.set_input("ray_dir_per_pixel", &ray_dir_per_pixel_buf);
+            for (j, vec) in basis_inputs.iter().enumerate() {
+                session.set_input(&format!("basis_{}", j + 1), vec);
+            }
+            phase_timings.input_prepare += input_start.elapsed();
 
-                            let ix = pidx % v.width;
-                            let iy = pidx / v.width;
-                            let dir =
-                                ray_dir_for_pixel(&cam_ray_constants, ix, iy, v.width, v.height);
-                            ray_dir_per_pixel_buf[k * 3] = dir.x;
-                            ray_dir_per_pixel_buf[k * 3 + 1] = dir.y;
-                            ray_dir_per_pixel_buf[k * 3 + 2] = dir.z;
+            let path_submit_start = std::time::Instant::now();
+            record_encoder.start();
+            if profile_gpu {
+                dump_path_record_gpu_timings(record_encoder.timings());
+            }
+            {
+                let mut tx = record_encoder.transfer("path-record-prepare");
+                let pix_size = (pixel_batch * std::mem::size_of::<u32>()) as u64;
+                tx.copy_buffer_to_buffer(
+                    path_bufs.pixel_indices_stage.at(0),
+                    path_bufs.pixel_indices.at(0),
+                    pix_size,
+                );
+                if model.radii.is_none() {
+                    tx.fill_buffer(path_bufs.cells.at(0), pl_bytes, 0);
+                    tx.fill_buffer(path_bufs.next_cells.at(0), pl_bytes, 0);
+                    tx.fill_buffer(path_bufs.mask.at(0), pl_bytes, 0);
+                    if path_bufs.has_geometry_jacobians() {
+                        tx.fill_buffer(path_bufs.previous_cells.at(0), pl_bytes, 0);
+                    }
+                }
+                if !path_payload_initialized {
+                    tx.fill_buffer(path_bufs.dts.at(0), pl_bytes, 0);
+                }
+                if path_bufs.has_jacobians() && !path_payload_initialized {
+                    tx.fill_buffer(path_bufs.dt_reference_tangents.at(0), pl_bytes, 0);
+                }
+                if path_bufs.has_geometry_jacobians() && !path_payload_initialized {
+                    tx.fill_buffer(path_bufs.dt_grad_previous.at(0), pl_bytes * 4, 0);
+                    tx.fill_buffer(path_bufs.dt_grad_current.at(0), pl_bytes * 4, 0);
+                    tx.fill_buffer(path_bufs.dt_grad_next.at(0), pl_bytes * 4, 0);
+                }
+                if path_bufs.has_surface_jacobians() && !path_payload_initialized {
+                    tx.fill_buffer(path_bufs.dt_grad_surface_normal.at(0), pl_bytes * 4, 0);
+                }
+                if path_bufs.has_surface_queries() && !path_payload_initialized {
+                    tx.fill_buffer(path_bufs.surface_queries.at(0), pl_bytes * 2, 0);
+                }
+                if path_bufs.has_surface_query_jacobians() && !path_payload_initialized {
+                    tx.fill_buffer(path_bufs.surface_query_grad_previous.at(0), pl_bytes * 4, 0);
+                    tx.fill_buffer(path_bufs.surface_query_grad_current.at(0), pl_bytes * 4, 0);
+                }
+            }
+            record_args.clear();
+            for (slot, &vi) in selected_views.iter().enumerate() {
+                let v = &views[vi];
+                let range = batch_view_range(slot, views_per_batch, pixel_batch);
+                record_args.push(vol::gpu::RecordPathsArgs {
+                    camera: v.camera,
+                    start_point: gpu_cloud
+                        .containing_point(glam::Vec3::from_array(v.camera.cam_position)),
+                    pixel_offset: range.start as u32,
+                    image_pixel_offset: 0,
+                    max_steps: max_steps as u32,
+                    image_width: v.width,
+                    image_height: v.height,
+                    max_path_dt: MAX_PATH_DT,
+                    depth: v.camera.depth,
+                    num_pixels: range.len() as u32,
+                });
+            }
+            recorder.dispatch_batch(&mut record_encoder, &gpu_cloud, &path_bufs, &record_args);
+            let _ = gpu.submit(&mut record_encoder);
+            path_payload_initialized = true;
+            phase_timings.path_submit += path_submit_start.elapsed();
 
-                            if num_components > 1 {
-                                let basis = sh_basis(dir, num_components);
-                                for (j, &bv) in basis.iter().enumerate().skip(1) {
-                                    basis_inputs[j - 1][k] = bv;
-                                }
-                            }
-                        }
-                    }
+            let gpu_step_start = std::time::Instant::now();
+            session.set_input("labels", &target_buf);
+            if config.opacity_weight > 0.0 {
+                session.set_input("target_alpha", &target_alpha_buf);
+            }
+            session.set_input_u32("view_idx", &view_idx_buf);
+            if config.quantile_weight > 0.0 {
+                for (near, far) in quantile_near.iter_mut().zip(quantile_far.iter_mut()) {
+                    let qa = next_quantile(&mut quantile_rng);
+                    let qb = next_quantile(&mut quantile_rng);
+                    *near = -qa.max(qb).ln();
+                    *far = -qa.min(qb).ln();
                 }
-                path_bufs.write_pixel_indices(&pixel_indices);
-                session.set_input("ray_origin", &ray_origin_buf);
-                session.set_input("ray_dir_per_pixel", &ray_dir_per_pixel_buf);
-                for (j, vec) in basis_inputs.iter().enumerate() {
-                    session.set_input(&format!("basis_{}", j + 1), vec);
-                }
-                phase_timings.input_prepare += input_start.elapsed();
-
-                let path_submit_start = std::time::Instant::now();
-                record_encoder.start();
-                if profile_gpu {
-                    dump_path_record_gpu_timings(record_encoder.timings());
-                }
-                {
-                    let mut tx = record_encoder.transfer("path-record-prepare");
-                    let pix_size = (pixel_batch * std::mem::size_of::<u32>()) as u64;
-                    tx.copy_buffer_to_buffer(
-                        path_bufs.pixel_indices_stage.at(0),
-                        path_bufs.pixel_indices.at(0),
-                        pix_size,
-                    );
-                    if model.radii.is_none() {
-                        tx.fill_buffer(path_bufs.cells.at(0), pl_bytes, 0);
-                        tx.fill_buffer(path_bufs.next_cells.at(0), pl_bytes, 0);
-                        tx.fill_buffer(path_bufs.mask.at(0), pl_bytes, 0);
-                        if path_bufs.has_geometry_jacobians() {
-                            tx.fill_buffer(path_bufs.previous_cells.at(0), pl_bytes, 0);
-                        }
-                    }
-                    if !path_payload_initialized {
-                        tx.fill_buffer(path_bufs.dts.at(0), pl_bytes, 0);
-                    }
-                    if path_bufs.has_jacobians() && !path_payload_initialized {
-                        tx.fill_buffer(path_bufs.dt_reference_tangents.at(0), pl_bytes, 0);
-                    }
-                    if path_bufs.has_geometry_jacobians() && !path_payload_initialized {
-                        tx.fill_buffer(path_bufs.dt_grad_previous.at(0), pl_bytes * 4, 0);
-                        tx.fill_buffer(path_bufs.dt_grad_current.at(0), pl_bytes * 4, 0);
-                        tx.fill_buffer(path_bufs.dt_grad_next.at(0), pl_bytes * 4, 0);
-                    }
-                    if path_bufs.has_surface_jacobians() && !path_payload_initialized {
-                        tx.fill_buffer(path_bufs.dt_grad_surface_normal.at(0), pl_bytes * 4, 0);
-                    }
-                    if path_bufs.has_surface_queries() && !path_payload_initialized {
-                        tx.fill_buffer(path_bufs.surface_queries.at(0), pl_bytes * 2, 0);
-                    }
-                    if path_bufs.has_surface_query_jacobians() && !path_payload_initialized {
-                        tx.fill_buffer(
-                            path_bufs.surface_query_grad_previous.at(0),
-                            pl_bytes * 4,
-                            0,
-                        );
-                        tx.fill_buffer(path_bufs.surface_query_grad_current.at(0), pl_bytes * 4, 0);
-                    }
-                }
-                record_args.clear();
-                for (slot, &vi) in selected_views.iter().enumerate() {
-                    let v = &views[vi];
-                    let range = batch_view_range(slot, views_per_batch, pixel_batch);
-                    record_args.push(vol::gpu::RecordPathsArgs {
-                        camera: v.camera,
-                        start_point: gpu_cloud
-                            .containing_point(glam::Vec3::from_array(v.camera.cam_position)),
-                        pixel_offset: range.start as u32,
-                        image_pixel_offset: 0,
-                        max_steps: max_steps as u32,
-                        image_width: v.width,
-                        image_height: v.height,
-                        max_path_dt: MAX_PATH_DT,
-                        depth: v.camera.depth,
-                        num_pixels: range.len() as u32,
-                    });
-                }
-                recorder.dispatch_batch(&mut record_encoder, &gpu_cloud, &path_bufs, &record_args);
-                let _ = gpu.submit(&mut record_encoder);
-                path_payload_initialized = true;
-                phase_timings.path_submit += path_submit_start.elapsed();
-
-                let gpu_step_start = std::time::Instant::now();
-                session.set_input("labels", &target_buf);
-                if config.opacity_weight > 0.0 {
-                    session.set_input("target_alpha", &target_alpha_buf);
-                }
-                session.set_input_u32("view_idx", &view_idx_buf);
-                if config.quantile_weight > 0.0 {
-                    for (near, far) in quantile_near.iter_mut().zip(quantile_far.iter_mut()) {
-                        let qa = next_quantile(&mut quantile_rng);
-                        let qb = next_quantile(&mut quantile_rng);
-                        *near = -qa.max(qb).ln();
-                        *far = -qa.min(qb).ln();
-                    }
-                    let ramp = (2.0 * step as f32 / total_steps as f32).min(1.0);
-                    session.set_input("quantile_near", &quantile_near);
-                    session.set_input("quantile_far", &quantile_far);
-                    session.set_input("quantile_scale", &[config.quantile_weight * ramp]);
-                }
-                if let Some(ref mut batch) = interpenetration_batch {
-                    batch.upload(
-                        &mut session,
-                        model,
-                        step,
-                        total_steps,
-                        config.interpenetration_weight,
-                    );
-                }
-                if config.surface_normal_weight > 0.0 {
-                    let normal_weight = surface_normal_weight_at_step(
-                        config.surface_normal_weight,
-                        step,
-                        total_steps,
-                    );
-                    session.set_input("surface_normal_loss_scale", &[normal_weight]);
-                }
-                if micro_batch + 1 == config.gradient_accumulation {
-                    // Reconfigure Adam and parameter-specific multipliers only on
-                    // the final micro-batch. Earlier passes accumulate the mean
-                    // gradient without advancing optimizer time.
-                    configure_optimizer(&mut session, &config, step, total_steps);
-                } else {
-                    session.clear_optimizer();
-                }
-                session.step();
-                session.wait();
-                let recorded_path = path_bufs.path_stats(0..pixel_batch);
-                step_path.max_steps_used =
-                    step_path.max_steps_used.max(recorded_path.max_steps_used);
-                step_path.truncated_rays += recorded_path.truncated_rays;
-                let first_path_truncation =
-                    training_path_truncated_rays == 0 && recorded_path.truncated_rays > 0;
-                training_path_rays += pixel_batch;
-                training_path_truncated_rays += recorded_path.truncated_rays;
-                training_path_max_steps_used =
-                    training_path_max_steps_used.max(recorded_path.max_steps_used);
-                if first_path_truncation {
-                    log::warn!(
-                        "training paths first truncated at step {}: {} / {} rays reached \
+                let ramp = (2.0 * step as f32 / total_steps as f32).min(1.0);
+                session.set_input("quantile_near", &quantile_near);
+                session.set_input("quantile_far", &quantile_far);
+                session.set_input("quantile_scale", &[config.quantile_weight * ramp]);
+            }
+            if let Some(ref mut batch) = interpenetration_batch {
+                batch.upload(
+                    &mut session,
+                    model,
+                    step,
+                    total_steps,
+                    config.interpenetration_weight,
+                );
+            }
+            if config.surface_normal_weight > 0.0 {
+                let normal_weight =
+                    surface_normal_weight_at_step(config.surface_normal_weight, step, total_steps);
+                session.set_input("surface_normal_loss_scale", &[normal_weight]);
+            }
+            // Reconfigure Adam and any parameter-specific multipliers for the
+            // current global step. This is a cheap session-field update.
+            configure_optimizer(&mut session, &config, step, total_steps);
+            session.step();
+            session.wait();
+            let recorded_path = path_bufs.path_stats(0..pixel_batch);
+            let first_path_truncation =
+                training_path_truncated_rays == 0 && recorded_path.truncated_rays > 0;
+            training_path_rays += pixel_batch;
+            training_path_truncated_rays += recorded_path.truncated_rays;
+            training_path_max_steps_used =
+                training_path_max_steps_used.max(recorded_path.max_steps_used);
+            if first_path_truncation {
+                log::warn!(
+                    "training paths first truncated at step {}: {} / {} rays reached \
                      max_steps={}",
-                        step + 1,
-                        recorded_path.truncated_rays,
-                        pixel_batch,
-                        max_steps,
-                    );
-                }
-                if model.radii.is_some() {
-                    let observed = path_bufs.max_splat_candidate_count(0..pixel_batch);
-                    training_candidate_max_used = training_candidate_max_used.max(observed);
-                    assert!(
+                    step + 1,
+                    recorded_path.truncated_rays,
+                    pixel_batch,
+                    max_steps,
+                );
+            }
+            if model.radii.is_some() {
+                let observed = path_bufs.max_splat_candidate_count(0..pixel_batch);
+                training_candidate_max_used = training_candidate_max_used.max(observed);
+                assert!(
                     observed <= path_bufs.splat_candidate_capacity(),
                     "PowerFoam training path needs {observed} candidates for one ray at step {}, \
                      but scratch capacity is {}",
                     step + 1,
                     path_bufs.splat_candidate_capacity(),
                 );
-                }
-                model_parameters_current = false;
-                if profile_gpu {
-                    session.dump_gpu_timings();
-                }
-                let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
-                step_loss += loss;
-                phase_timings.gpu_step_wait += gpu_step_start.elapsed();
             }
-
-            losses.push(step_loss / config.gradient_accumulation as f32);
+            model_parameters_current = false;
+            if profile_gpu {
+                session.dump_gpu_timings();
+            }
+            let loss = session.read_output(1).first().copied().unwrap_or(f32::NAN);
+            losses.push(loss);
+            phase_timings.gpu_step_wait += gpu_step_start.elapsed();
 
             if step == 0 || (step + 1).is_multiple_of(log_every) {
                 let window: usize = log_every.min(losses.len());
@@ -6903,9 +6835,9 @@ fn fit_appearance_pixel_batched(
                     recent_avg,
                     window,
                     model.points.len(),
-                    step_path.max_steps_used,
+                    recorded_path.max_steps_used,
                     max_steps,
-                    step_path.truncated_rays,
+                    recorded_path.truncated_rays,
                 );
             }
         }
@@ -7187,10 +7119,6 @@ fn fit_appearance_pixel_batched(
                 {
                     session.set_adam_grouped_grad_norm("positions", 3);
                 }
-                session.set_grad_accumulate(
-                    u32::try_from(config.gradient_accumulation)
-                        .expect("gradient_accumulation exceeds the Meganeura limit"),
-                );
                 // pixel_idx_per_step is constant across cycles — re-upload
                 // to the fresh session.
                 session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
@@ -10350,28 +10278,6 @@ mod tests {
         }
         assert_eq!(mixed_state, advance_lcg(seed, 4));
 
-        let mut accumulated_state = seed;
-        let mut accumulated = Vec::new();
-        for micro_batch in 0..2 {
-            let views =
-                sample_accumulated_training_views(&mut accumulated_state, 16, 4, micro_batch, 2);
-            for (slot, view) in views.into_iter().enumerate() {
-                accumulated.push((slot * 2 + micro_batch, view));
-            }
-        }
-        accumulated.sort_unstable();
-        for (slot, &(_, view)) in accumulated.iter().enumerate() {
-            assert!(view >= slot * 16 / 8);
-            assert!(view < (slot + 1) * 16 / 8);
-        }
-        assert_eq!(accumulated_state, advance_lcg(seed, 8));
-
-        let mut accumulated_single_state = seed;
-        let accumulated_single =
-            sample_accumulated_training_views(&mut accumulated_single_state, 11, 4, 0, 1);
-        assert_eq!(accumulated_single, mixed);
-        assert_eq!(accumulated_single_state, mixed_state);
-
         let ranges: Vec<_> = (0..4).map(|slot| batch_view_range(slot, 4, 10)).collect();
         assert_eq!(ranges, [0..2, 2..5, 5..7, 7..10]);
     }
@@ -12678,9 +12584,8 @@ mod tests {
         let base = AppearanceFitConfig {
             learning_rate: 0.01,
             pixel_batch: Some(4),
-            views_per_batch: 1,
+            views_per_batch: 2,
             steps_per_view: 4,
-            gradient_accumulation: 2,
             ..AppearanceFitConfig::default()
         };
         let checkpoint = std::env::temp_dir().join(format!(
@@ -12754,82 +12659,6 @@ mod tests {
             checkpoint.with_extension("ply.step"),
         ] {
             let _ = std::fs::remove_file(path);
-        }
-    }
-
-    #[test]
-    fn gradient_accumulation_averages_before_one_adam_update() {
-        let _gpu_test_guard = crate::fit::gpu_test_guard();
-        let Some(gpu) = try_init_gpu() else {
-            eprintln!("skipping gradient accumulation test: no GPU");
-            return;
-        };
-        let view = ViewSupervision {
-            camera: vol::CameraParams {
-                cam_position: [0.05, 0.05, -1.0],
-                depth: 10.0,
-                cam_orientation: glam::Quat::IDENTITY.to_array(),
-                fov: [0.5; 2],
-                principal: [0.0; 2],
-            },
-            target_rgb: vec![0.8, 0.2, 0.1],
-            target_alpha: None,
-            width: 1,
-            height: 1,
-        };
-        let base = AppearanceFitConfig {
-            learning_rate: 0.01,
-            pixel_batch: Some(1),
-            steps_per_view: 1,
-            ..AppearanceFitConfig::default()
-        };
-
-        let mut direct = tiny_model();
-        let direct_losses = fit_appearance_multi_view(
-            &mut direct,
-            std::slice::from_ref(&view),
-            1,
-            1,
-            16,
-            base.clone(),
-            gpu.clone(),
-        );
-        let mut accumulated = tiny_model();
-        let accumulated_losses = fit_appearance_multi_view(
-            &mut accumulated,
-            &[view],
-            1,
-            1,
-            16,
-            AppearanceFitConfig {
-                gradient_accumulation: 2,
-                ..base
-            },
-            gpu,
-        );
-
-        assert_eq!(direct_losses.len(), 1);
-        assert_eq!(accumulated_losses.len(), 1);
-        assert!((direct_losses[0] - accumulated_losses[0]).abs() < 1.0e-6);
-        for (direct, accumulated) in direct
-            .points
-            .iter()
-            .zip(accumulated.points.iter())
-            .flat_map(|(direct, accumulated)| {
-                direct.to_array().into_iter().zip(accumulated.to_array())
-            })
-            .chain(
-                direct
-                    .sh_coefficients
-                    .iter()
-                    .copied()
-                    .zip(accumulated.sh_coefficients.iter().copied()),
-            )
-        {
-            assert!(
-                (direct - accumulated).abs() < 1.0e-6,
-                "direct={direct}, accumulated={accumulated}"
-            );
         }
     }
 
