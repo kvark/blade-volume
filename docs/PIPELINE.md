@@ -2640,7 +2640,7 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   clippy gate and complete all-feature physical-GPU workspace suite pass; the
   latter peaks at 7,099,281,408 bytes with zero swap, OOM, or GPU fault.
 
-#### M2cm — Ray-normalized half-batch continuation (selected recipe)
+#### M2cm — Ray-normalized half-batch continuation (scene-specific)
 
 - The accumulation gate showed that optimizer updates were more valuable than
   extra rays per update, so a no-code schedule gate held total rays and exact
@@ -2659,6 +2659,13 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   train/held PSNR changes 24.8786/23.9613→24.8982/23.9886 dB, while training
   falls 31.001→30.233 seconds (-2.5%). The two paired held-view splits are
   19/2/18 and 24/0/15 improved/tied/regressed.
+- A second matched window takes both Room trajectories through their final
+  growth to exactly 200,000 sites. Across two replicas, the 4,096-ray control
+  averages 25.5531/24.4810 dB train/held in 33.190 seconds; 2,048 rays averages
+  25.5460/24.4800 dB in 33.910 seconds. The effectively zero -0.0010 dB held
+  delta costs 2.2% more time, and paired view splits disagree at 10/2/27 and
+  20/2/17 improved/tied/regressed. Room therefore does not preserve the
+  first-window gain at the capacity boundary.
 - Continuing the ray-normalized ladder to 1,024 rays is rejected by the
   cross-scene gate. Two Bonsai replicas improve the 2,048-ray mean by
   +0.3344/+0.2357 dB train/held at 29.864 seconds (+5.5%). Two Room replicas
@@ -2671,10 +2678,11 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   24.7929/23.9046 dB in 36.404 seconds, -0.1053/-0.0840 dB below the repeated
   2,048-ray mean while taking 20.4% longer; it regresses 33/39 held views
   against the first 2,048-ray replica. The ladder stops here.
-- This advances as an explicit post-growth or post-cap continuation recipe
-  using existing CLI controls. The global 4,096-ray defaults remain selected
-  by their growth-stage gates. No automatic phase, configuration field,
-  checkpoint rule, shader, graph operation, or dependency is added.
+- The half-batch schedule advances only as a scene-gated Bonsai post-cap
+  quality option using existing CLI controls. It is not a general Room or
+  growth-stage recipe. The global 4,096-ray defaults remain selected; no
+  automatic phase, configuration field, checkpoint rule, shader, graph
+  operation, or dependency is added.
 
 #### M2cn — Decouple densification correctness from topology cadence (done)
 
