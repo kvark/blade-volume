@@ -7048,3 +7048,30 @@ Every reconstruction scope peaks below 331 MiB and the focused test scope at
 3.40 GiB. All 12 GiB scopes use zero swap and report no memory pressure, OOM,
 validation error, Xid, or GPU fault. Ignored artifacts remain under
 `target/audit-runs/joint-surface-support/`.
+
+## Rejected camera-stratified Gaussian batches (2026-08-25)
+
+The direct-Gaussian sampler was tested with an exact per-batch camera balance.
+Instead of hashing every lane independently onto a camera, each deterministic
+512-ray batch selected a hashed starting view and cycled through all selected
+views. Pixel coordinates retained the established hash, and the ray budget,
+loss measure, candidate rows, optimizer, and schedules were unchanged. This
+removes camera-count variance without adding state or a sampling mode. All 42
+Gaussian-focused tests pass on the physical GPU.
+
+The lower-variance estimator is not a better finite training sequence. On the
+dense nine-view gate, static held quality falls from `26.86/24.93` to
+`26.75/24.56` dB mean/worst. Volumetric held-light PBR trades
+`24.48/23.24/23.25` for `24.47/23.28/23.17` dB mean/worst/where-hit at the
+same `55.1%` coverage. Nested static quality falls `23.91→23.89` dB while
+volumetric PBR changes `23.50/21.90→23.52/21.94` dB mean/where-hit and
+coverage `52.8→52.7%`. Exact balance therefore changes which image samples
+the fixed update budget sees, but does not add evidence; its dense covered
+quality and static tail losses reject it before the five-cloud gate. The
+one-line sampler change is removed and independent uniform camera sampling
+remains.
+
+The reconstruction scopes peak below 327 MiB and the focused test scope at
+3.25 GiB. Every 12 GiB scope uses zero swap and reports no memory pressure,
+OOM, validation error, Xid, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/view-stratified-gaussian-batches/`.
