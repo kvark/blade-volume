@@ -2601,6 +2601,27 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   checkpoint format ever changed. Revisit only if a future model cannot fit a
   statistically adequate per-update batch in memory.
 
+#### M2ck — Sparser trainable-geometry topology cadence (rejected)
+
+- Exact Qhull rebuilds account for 16.6--17.5 of 30.4--31.6 training seconds
+  in a 500-update Room window, so the existing `--geometry-rebuild-every`
+  control was screened without adding code. Candidates divide the 500-update
+  densification interval, ensuring contribution sampling and densification see
+  freshly rebuilt topology.
+- Rebuilding every 250 rather than 100 updates cut repeated Room training time
+  from a mean 31.001 to 23.298 seconds (-24.8%). Mean held-out PSNR was
+  statistically neutral, 23.9613→23.9819 dB. The independent 200,000-site
+  Bonsai gate rejected it: 28.018→18.216 seconds came with
+  23.4068→23.2195 dB held out (-0.1873 dB).
+- A less aggressive 125-update cadence was repeated in order-balanced Bonsai
+  runs. Mean training time fell 27.957→24.691 seconds (-11.7%), but mean
+  train/held PSNR fell 24.1401/23.4216→24.0611/23.3829 dB. Its two paired
+  held-view comparisons regressed 25/37 and 27/37 frames, with mean deltas of
+  -0.0343 and -0.0454 dB.
+- The production default remains 100 updates. No new schedule, heuristic, or
+  runtime variant is retained. A future performance attempt should make exact
+  rebuilds cheaper rather than exposing the model to staler adjacency.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
