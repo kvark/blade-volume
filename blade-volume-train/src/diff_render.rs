@@ -2741,6 +2741,29 @@ fn sample_training_views(state: &mut u64, num_views: usize, count: usize) -> Vec
         .collect()
 }
 
+fn sample_accumulated_training_views(
+    state: &mut u64,
+    num_views: usize,
+    count: usize,
+    micro_batch: usize,
+    micro_batches: usize,
+) -> Vec<usize> {
+    let total = count
+        .checked_mul(micro_batches)
+        .expect("accumulated view count overflowed");
+    if total > num_views {
+        return sample_training_views(state, num_views, count);
+    }
+    (0..count)
+        .map(|slot| {
+            let accumulated_slot = slot * micro_batches + micro_batch;
+            let begin = accumulated_slot * num_views / total;
+            let end = (accumulated_slot + 1) * num_views / total;
+            begin + (next_lcg_u32(state) as usize) % (end - begin)
+        })
+        .collect()
+}
+
 fn batch_view_range(slot: usize, count: usize, pixel_batch: usize) -> std::ops::Range<usize> {
     slot * pixel_batch / count..(slot + 1) * pixel_batch / count
 }
@@ -6578,8 +6601,13 @@ fn fit_appearance_pixel_batched(
             session.zero_grad();
             for micro_batch in 0..config.gradient_accumulation {
                 let input_start = std::time::Instant::now();
-                let selected_views =
-                    sample_training_views(&mut sampling_rng, views.len(), views_per_batch);
+                let selected_views = sample_accumulated_training_views(
+                    &mut sampling_rng,
+                    views.len(),
+                    views_per_batch,
+                    micro_batch,
+                    config.gradient_accumulation,
+                );
                 for (slot, &vi) in selected_views.iter().enumerate() {
                     let range = batch_view_range(slot, views_per_batch, pixel_batch);
                     let origin = ray_constants(&views[vi].camera).origin;
@@ -10322,6 +10350,28 @@ mod tests {
         }
         assert_eq!(mixed_state, advance_lcg(seed, 4));
 
+        let mut accumulated_state = seed;
+        let mut accumulated = Vec::new();
+        for micro_batch in 0..2 {
+            let views =
+                sample_accumulated_training_views(&mut accumulated_state, 16, 4, micro_batch, 2);
+            for (slot, view) in views.into_iter().enumerate() {
+                accumulated.push((slot * 2 + micro_batch, view));
+            }
+        }
+        accumulated.sort_unstable();
+        for (slot, &(_, view)) in accumulated.iter().enumerate() {
+            assert!(view >= slot * 16 / 8);
+            assert!(view < (slot + 1) * 16 / 8);
+        }
+        assert_eq!(accumulated_state, advance_lcg(seed, 8));
+
+        let mut accumulated_single_state = seed;
+        let accumulated_single =
+            sample_accumulated_training_views(&mut accumulated_single_state, 11, 4, 0, 1);
+        assert_eq!(accumulated_single, mixed);
+        assert_eq!(accumulated_single_state, mixed_state);
+
         let ranges: Vec<_> = (0..4).map(|slot| batch_view_range(slot, 4, 10)).collect();
         assert_eq!(ranges, [0..2, 2..5, 5..7, 7..10]);
     }
@@ -12628,7 +12678,7 @@ mod tests {
         let base = AppearanceFitConfig {
             learning_rate: 0.01,
             pixel_batch: Some(4),
-            views_per_batch: 2,
+            views_per_batch: 1,
             steps_per_view: 4,
             gradient_accumulation: 2,
             ..AppearanceFitConfig::default()

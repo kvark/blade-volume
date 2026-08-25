@@ -44,11 +44,11 @@ production-ready reconstruction pipeline.
 Temporal gradient accumulation now provides a bounded-memory way to raise
 multi-view coverage per optimizer update. It is deliberately opt-in: on the
 98,831-site Room gate, 2x accumulation improves the 32-training-view held score
-from 20.2976 to 20.4819 dB, while the same setting over only four training
+from 20.2976 to 20.5602 dB, while the same setting over only four training
 views lowers held quality from 19.8841 to 19.7973 dB. The implementation keeps
-the static graph and path-buffer sizes unchanged, preserves exact
-update-boundary resume, and uses 20% less host memory than the matched
-monolithic 8,192-ray run, at a 3% training-time cost.
+the 4,096-ray static graph and path-buffer sizes instead of the matched
+monolithic run's 8,192-ray shapes, preserves exact update-boundary resume, and
+costs 2% more training time.
 
 The corrected paths pass the targeted NVIDIA/Vulkan physical-GPU gates,
 including weighted differentiable traversal, Gaussian CPU/GPU parity, and
