@@ -2605,6 +2605,19 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   the same parameters and loss as one direct Adam update. The 32-view runs
   process 2,097,152 rays without path truncation, swap, OOM, Xid, or GPU fault
   inside the 12 GiB scope.
+- A production-schedule gate resumes the selected 171,396-site Room checkpoint
+  at step 6,000 with trainable geometry, 272 training cameras, and the complete
+  step-6,500 densification boundary. The 4,096-ray control ends with 196,946
+  sites and scores 24.8841/23.9801 dB over 272 training/39 held views. Jointly
+  stratified 2x accumulation ends with 196,969 sites and scores
+  25.0030/24.0771 dB, improving 30 held frames, regressing seven, and tying two.
+  The +0.0970 dB held gain costs 31.571→41.033 seconds of training (+30%): GPU
+  step time doubles from 9.575 to 19.426 seconds while topology remains roughly
+  fixed at 17.515/16.464 seconds. Both arms complete 1.11 million-ray
+  contribution passes and all training rays without truncation, swap, OOM,
+  Xid, or GPU fault. This supports the opt-in setting on the real schedule but
+  not a default change; a same-wall comparison against additional Adam updates
+  is still required.
 
 ### M3 — Training crate scaffolding
 

@@ -48,7 +48,12 @@ from 20.2976 to 20.5602 dB, while the same setting over only four training
 views lowers held quality from 19.8841 to 19.7973 dB. The implementation keeps
 the 4,096-ray static graph and path-buffer sizes instead of the matched
 monolithic run's 8,192-ray shapes, preserves exact update-boundary resume, and
-costs 2% more training time.
+costs 2% more training time. A complete production-schedule continuation from
+the 171,396-site Room step-6,000 checkpoint confirms the quality direction:
+over 500 trainable-geometry updates and one densification boundary, 2x
+accumulation improves all-39 held PSNR from 23.9801 to 24.0771 dB and improves
+30/39 frames. Training time rises 31.571 to 41.033 seconds, so the setting
+remains an explicit quality/compute tradeoff rather than a new default.
 
 The corrected paths pass the targeted NVIDIA/Vulkan physical-GPU gates,
 including weighted differentiable traversal, Gaussian CPU/GPU parity, and
