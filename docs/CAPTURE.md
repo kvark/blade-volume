@@ -96,3 +96,23 @@ A single uncontrolled-light clip can measure capture-light re-rendering, but
 it cannot establish that recovered material and illumination are physically
 separate. Relighting validation needs camera-aligned repeated captures under
 measured lights, as described in [Inverse rendering](INVERSE_RENDERING.md).
+
+## Capture a relighting gate
+
+For the first controlled experiment, stop the camera at repeatable pose marks
+and photograph every pose under at least four independently controlled lights.
+Do not move the camera while cycling lights. Lock the settings listed above,
+record the position and RGB power of every emitter, and capture a gray card for
+radiometric calibration. Use the same filenames in every light directory.
+
+Reserve several camera poses and one complete light before fitting. Pass the
+remaining aligned lights with paired `--normal-images` and
+`--normal-environment` options, then score the excluded light with
+`--held-out-images` and `--held-out-environment`. With `--dump`, its reference
+and rendered images are written below `held-light/{scalar,gaussian}/`; the
+`relight` and `g-relight` rows are the scalar-surface and volumetric-Gaussian
+scores at the held camera/light cross-product.
+
+See [Relighting capture and dataset ladder](RELIGHTING_DATASETS.md) for the
+public-data starting point and the path from this aligned rig to a moving-phone
+capture with independently posed `(camera, light)` observations.

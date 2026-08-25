@@ -252,6 +252,15 @@ are excluded from the density prior in both outputs. Calibrated PBR geometry
 uses a 20% trust region because it improves every mean and worst view in the
 five-cloud gate; ordinary single-light and static outputs retain 10%.
 
+For an independent two-axis score, pair `--held-out-images` with
+`--held-out-environment`. The directory must contain the same selected camera
+names, but neither its pixels nor its measured light is loaded until all
+fitting and output serialization have finished. `relight` reports the held
+cameras under that excluded light for the scalar surface, and `g-relight` does
+the same for `--pbr-gaussian-output`. This is the production counterpart of
+the synthetic held-light gate; the ranked real datasets and first protocol are
+in [Relighting capture and dataset ladder](RELIGHTING_DATASETS.md).
+
 `--render-refine-materials` optionally finishes a small shared material table
 against complete production renders of every training view. It coordinate
 descends the three diffuse albedo channels by a fixed 0.025 step while holding

@@ -82,6 +82,15 @@ struct Args {
     #[argh(option)]
     normal_environment: Vec<String>,
 
+    /// aligned photographs under a light excluded from all fitting; scored on
+    /// the held camera views together with --held-out-environment
+    #[argh(option)]
+    held_out_images: Option<String>,
+
+    /// measured environment for --held-out-images
+    #[argh(option)]
+    held_out_environment: Option<String>,
+
     /// alternations between solving for albedo and for light (default 24)
     #[argh(option, default = "24")]
     iterations: usize,
@@ -215,7 +224,7 @@ fn main() {
     let args: Args = argh::from_env();
     let fit_gaussians = args.gaussian_output.is_some() || args.pbr_gaussian_output.is_some();
 
-    if let Err(message) = validate_normal_captures(&args) {
+    if let Err(message) = validate_lit_captures(&args) {
         eprintln!("{message}");
         std::process::exit(1);
     }
@@ -263,6 +272,10 @@ fn main() {
         }
     };
     let (train_views, test_views) = capture.split(args.test_every);
+    if args.held_out_images.is_some() && test_views.is_empty() {
+        eprintln!("held-out-light scoring needs at least one held camera view");
+        std::process::exit(1);
+    }
     if args.surface_powerfoam_steps_per_view > 0 && args.masks.is_none() {
         eprintln!("surface PowerFoam continuation requires --masks");
         std::process::exit(1);
@@ -1101,6 +1114,14 @@ fn main() {
     }
 
     // ---------------------------------------------------------------- score
+    // Load the withheld light only after every fitting stage has finished, so
+    // neither its pixels nor its environment can accidentally select a model.
+    drop(normal_captures);
+    let held_out_capture =
+        load_held_out_capture(&capture, sparse, height, &args).unwrap_or_else(|message| {
+            eprintln!("cannot load held-out capture: {message}");
+            std::process::exit(1);
+        });
     let mut renderer = match train::inverse::score::Renderer::new(capture.width, capture.height) {
         Ok(r) => r,
         Err(message) => {
@@ -1115,7 +1136,7 @@ fn main() {
     let dump = args.dump.as_deref().map(path::Path::new);
 
     println!(
-        "\n{:<8}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}",
+        "\n{:<10}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}",
         "split", "views", "psnr srgb", "worst", "psnr linear", "coverage", "where hit"
     );
     let splits = [
@@ -1130,15 +1151,7 @@ fn main() {
         if indices.is_empty() {
             continue;
         }
-        println!(
-            "{name:<8}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{:>12.2}",
-            summary.views,
-            summary.srgb_psnr,
-            summary.worst_srgb_psnr,
-            summary.linear_psnr,
-            100.0 * summary.coverage,
-            summary.covered_srgb_psnr
-        );
+        print_reconstruction_summary(name, summary);
     }
     if let Some(ref gaussian) = learned_pbr_gaussian {
         let summaries =
@@ -1150,15 +1163,38 @@ fn main() {
             if indices.is_empty() {
                 continue;
             }
-            println!(
-                "{name:<8}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{:>12.2}",
-                summary.views,
-                summary.srgb_psnr,
-                summary.worst_srgb_psnr,
-                summary.linear_psnr,
-                100.0 * summary.coverage,
-                summary.covered_srgb_psnr
-            );
+            print_reconstruction_summary(name, summary);
+        }
+    }
+    if let Some(ref held) = held_out_capture {
+        let held_scene =
+            train::inverse::score::Scene::new(fitted.scene.model.clone(), held.environment.clone());
+        let held_dump = dump.map(|directory| directory.join("held-light/scalar"));
+        if let Some(ref directory) = held_dump {
+            let _ = std::fs::create_dir_all(directory);
+        }
+        let held_splits = [(test_views.as_slice(), held_dump.as_deref())];
+        let summary = renderer.score_splits(
+            &held_scene,
+            &held.capture,
+            &held_splits,
+            args.diffuse_samples,
+        )[0];
+        print_reconstruction_summary("relight", summary);
+        if let Some(ref gaussian) = learned_pbr_gaussian {
+            let gaussian_dump = dump.map(|directory| directory.join("held-light/gaussian"));
+            if let Some(ref directory) = gaussian_dump {
+                let _ = std::fs::create_dir_all(directory);
+            }
+            let gaussian_splits = [(test_views.as_slice(), gaussian_dump.as_deref())];
+            let summary = renderer.score_gaussian_splits(
+                &held_scene,
+                gaussian,
+                &held.capture,
+                &gaussian_splits,
+                0,
+            )[0];
+            print_reconstruction_summary("g-relight", summary);
         }
     }
     renderer.destroy();
@@ -1297,7 +1333,7 @@ fn surfels_from_foam(
     capture: &train::inverse::capture::Capture,
     reconstruction: &train::colmap::Reconstruction,
     views: &[usize],
-    normal_captures: &[NormalCapture],
+    normal_captures: &[LitCapture],
     args: &Args,
     gpu: Option<sync::Arc<gpu::Context>>,
 ) -> (
@@ -1785,7 +1821,19 @@ fn score_gaussian_test(
     )))
 }
 
-fn validate_normal_captures(args: &Args) -> Result<(), String> {
+fn print_reconstruction_summary(name: &str, summary: train::inverse::score::Summary) {
+    println!(
+        "{name:<10}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{:>12.2}",
+        summary.views,
+        summary.srgb_psnr,
+        summary.worst_srgb_psnr,
+        summary.linear_psnr,
+        100.0 * summary.coverage,
+        summary.covered_srgb_psnr
+    );
+}
+
+fn validate_lit_captures(args: &Args) -> Result<(), String> {
     if args.normal_images.len() != args.normal_environment.len() {
         return Err(format!(
             "--normal-images was supplied {} times but --normal-environment was supplied {} times",
@@ -1802,12 +1850,55 @@ fn validate_normal_captures(args: &Args) -> Result<(), String> {
     if args.render_refine_normals && args.environment.is_none() {
         return Err("rendered normal refinement needs --environment".to_string());
     }
+    if args.held_out_images.is_some() != args.held_out_environment.is_some() {
+        return Err(
+            "--held-out-images and --held-out-environment must be supplied together".to_string(),
+        );
+    }
+    if args.held_out_images.is_some() && args.test_every == 0 {
+        return Err("held-out-light scoring needs --test-every greater than zero".to_string());
+    }
     Ok(())
 }
 
-struct NormalCapture {
+struct LitCapture {
     capture: train::inverse::capture::Capture,
     environment: vol::relight::Environment,
+}
+
+fn load_lit_capture(
+    primary: &train::inverse::capture::Capture,
+    sparse: &path::Path,
+    height: usize,
+    args: &Args,
+    images: &str,
+    environment: &str,
+) -> Result<LitCapture, String> {
+    let (capture, _) = train::inverse::capture::Capture::from_colmap_with_masks(
+        sparse,
+        path::Path::new(images),
+        args.masks.as_deref().map(path::Path::new),
+        args.width,
+        height,
+        args.stride,
+    )?;
+    if capture.views.len() != primary.views.len()
+        || capture
+            .views
+            .iter()
+            .zip(&primary.views)
+            .any(|(left, right)| left.name != right.name)
+    {
+        return Err(format!(
+            "{images} does not contain the same selected photographs as the primary capture"
+        ));
+    }
+    let environment = vol::io::try_load_environment(path::Path::new(environment))
+        .map_err(|error| format!("cannot read {environment}: {error}"))?;
+    Ok(LitCapture {
+        capture,
+        environment,
+    })
 }
 
 fn load_normal_captures(
@@ -1815,38 +1906,29 @@ fn load_normal_captures(
     sparse: &path::Path,
     height: usize,
     args: &Args,
-) -> Result<Vec<NormalCapture>, String> {
+) -> Result<Vec<LitCapture>, String> {
     args.normal_images
         .iter()
         .zip(&args.normal_environment)
         .map(|(images, environment)| {
-            let (capture, _) = train::inverse::capture::Capture::from_colmap_with_masks(
-                sparse,
-                path::Path::new(images),
-                args.masks.as_deref().map(path::Path::new),
-                args.width,
-                height,
-                args.stride,
-            )?;
-            if capture.views.len() != primary.views.len()
-                || capture
-                    .views
-                    .iter()
-                    .zip(&primary.views)
-                    .any(|(left, right)| left.name != right.name)
-            {
-                return Err(format!(
-                    "{images} does not contain the same selected photographs as the primary capture"
-                ));
-            }
-            let environment = vol::io::try_load_environment(path::Path::new(environment))
-                .map_err(|error| format!("cannot read {environment}: {error}"))?;
-            Ok(NormalCapture {
-                capture,
-                environment,
-            })
+            load_lit_capture(primary, sparse, height, args, images, environment)
         })
         .collect()
+}
+
+fn load_held_out_capture(
+    primary: &train::inverse::capture::Capture,
+    sparse: &path::Path,
+    height: usize,
+    args: &Args,
+) -> Result<Option<LitCapture>, String> {
+    args.held_out_images
+        .as_deref()
+        .zip(args.held_out_environment.as_deref())
+        .map(|(images, environment)| {
+            load_lit_capture(primary, sparse, height, args, images, environment)
+        })
+        .transpose()
 }
 
 fn refine_normals_from_captures(
@@ -1854,7 +1936,7 @@ fn refine_normals_from_captures(
     primary: &train::inverse::capture::Capture,
     train_views: &[usize],
     primary_light: &vol::relight::Environment,
-    secondary: &[NormalCapture],
+    secondary: &[LitCapture],
 ) -> train::inverse::decompose::NormalRefinement {
     let mut observations = vec![train::inverse::decompose::observe(
         model,
@@ -2257,6 +2339,8 @@ mod tests {
         assert!(defaults.surface_powerfoam_output.is_none());
         assert!(defaults.gaussian_output.is_none());
         assert!(defaults.pbr_gaussian_output.is_none());
+        assert!(defaults.held_out_images.is_none());
+        assert!(defaults.held_out_environment.is_none());
         assert_eq!(defaults.gaussian_steps, 1_500);
         assert_eq!(defaults.diffuse_samples, 0);
 
@@ -2408,7 +2492,7 @@ mod tests {
             "--normal-environment",
             "west.f32",
         ]);
-        assert!(validate_normal_captures(&missing_primary).is_err());
+        assert!(validate_lit_captures(&missing_primary).is_err());
 
         let mismatched = parse(&[
             "--environment",
@@ -2416,14 +2500,14 @@ mod tests {
             "--normal-images",
             "images-west",
         ]);
-        assert!(validate_normal_captures(&mismatched).is_err());
+        assert!(validate_lit_captures(&mismatched).is_err());
 
         let rendered_without_secondary =
             parse(&["--environment", "east.f32", "--render-refine-normals"]);
-        validate_normal_captures(&rendered_without_secondary).unwrap();
+        validate_lit_captures(&rendered_without_secondary).unwrap();
 
         let rendered_without_environment = parse(&["--render-refine-normals"]);
-        assert!(validate_normal_captures(&rendered_without_environment).is_err());
+        assert!(validate_lit_captures(&rendered_without_environment).is_err());
 
         let paired = parse(&[
             "--environment",
@@ -2438,7 +2522,40 @@ mod tests {
             "sky.f32",
             "--render-refine-normals",
         ]);
-        validate_normal_captures(&paired).unwrap();
+        validate_lit_captures(&paired).unwrap();
         assert_eq!(paired.normal_images.len(), 2);
+    }
+
+    #[test]
+    fn held_out_light_requires_paired_inputs_and_a_test_split() {
+        let parse = |extra: &[&str]| {
+            let mut arguments = vec!["--sparse", "sparse", "--images", "images"];
+            arguments.extend_from_slice(extra);
+            <Args as argh::FromArgs>::from_args(&["reconstruct"], &arguments).unwrap()
+        };
+
+        let images_only = parse(&["--held-out-images", "images-west"]);
+        assert!(validate_lit_captures(&images_only).is_err());
+
+        let environment_only = parse(&["--held-out-environment", "west.f32"]);
+        assert!(validate_lit_captures(&environment_only).is_err());
+
+        let no_test = parse(&[
+            "--held-out-images",
+            "images-west",
+            "--held-out-environment",
+            "west.f32",
+            "--test-every",
+            "0",
+        ]);
+        assert!(validate_lit_captures(&no_test).is_err());
+
+        let paired = parse(&[
+            "--held-out-images",
+            "images-west",
+            "--held-out-environment",
+            "west.f32",
+        ]);
+        validate_lit_captures(&paired).unwrap();
     }
 }
