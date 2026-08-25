@@ -37,7 +37,8 @@ a convincing real-world result.
   poses under several known lights and masks, reserve both cameras and a light,
   and require a visible held-view/held-light improvement. Until that passes,
   real Room/Bonsai PBR scores are capture-light diagnostics, not evidence of
-  relighting.
+  relighting. The ranked public datasets, exact split, and capture roadmap are
+  in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
 The concise evidence is below. Detailed protocols, experiments, and rejected
 ideas live in
