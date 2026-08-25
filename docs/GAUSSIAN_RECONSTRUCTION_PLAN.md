@@ -7333,3 +7333,45 @@ repeatable gain worth fixed capacities or a second construction path. The
 12 GiB scopes peak below 669 MiB and report zero swap, OOM, validation error,
 Xid, or GPU fault. Ignored logs, outputs, counters, and telemetry remain under
 `target/audit-runs/tile-allocation-profile/`.
+
+## Calibrated-normal direction-count gate (2026-08-25)
+
+The discrete repeated-light normal search remains at 512 directions. On the
+independently laid-out nested capture, 256/512/1,024/2,048 directions take
+`0.094/0.147/0.253/0.473` seconds. Their extracted truth-normal RMSE is
+`53.32/53.32/53.29/53.33` degrees and the final joint Gaussian-normal RMSE is
+`51.38/51.46/51.41/51.59` degrees: a denser photometric search does not
+produce a consistently better surface orientation.
+
+More importantly, persisted held-light volumetric quality is
+`23.43/23.48/23.43/23.33` dB mean and
+`21.80/21.88/21.79/21.68` dB where hit at effectively unchanged 52.8%
+coverage. The dense capture gives 2,048 directions an apparent replay gain,
+but its pre-render normal metrics are slightly worse and the independent gate
+rejects it decisively. Both production call sites are restored to 512: it is
+the transferable output optimum, not just the historical setting. Ignored
+models, logs, and telemetry remain under
+`target/audit-runs/photometric-normal-directions/`.
+
+## Persisted static-Gaussian scoring (2026-08-25)
+
+`reconstruct` and `synthetic_foam` now reload a written static Gaussian PLY
+before computing its held-view score, matching the existing relightable
+Gaussian boundary. Reported quality therefore covers the durable asset rather
+than only the in-memory training result. A malformed writer now fails the
+production command, while any lossy serialization change is reflected in the
+published score.
+
+The dense calibrated gate writes and reloads both outputs, then reaches
+`26.80/24.88` dB mean/worst static quality and `24.47/23.24` dB held-light
+volumetric PBR at 55.1% coverage. The real Room CLI similarly reloads both
+assets before reporting `20.29/19.62` dB static and `14.93/13.54` dB
+volumetric PBR on its two held poses. The static and PBR PLY files have SHA-256
+`2454a227bcf5924096c3293dbc5c6085d6ca5b2f8c3b28b63ebe90a20383de21`
+and `69bb86a47008bbdea02961de55164c6c641c60c3affae3e8584f0384e4b9c3b7`
+on the dense gate. Both 12 GiB scopes peak below 512 MiB with zero swap, OOM,
+validation error, Xid, or GPU fault. This changes no model field, file format,
+renderer, shader, graph operation, dependency, or public option. Ignored
+outputs and telemetry remain under `target/audit-runs/static-gaussian-reload/`.
+The default and all-feature workspace test matrices also pass in full; each
+peaks at 2.8 GiB in its 12 GiB scope with the same clean GPU and OOM counters.

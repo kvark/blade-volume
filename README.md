@@ -88,10 +88,11 @@ the recovered capture light. They must not be read as real-scene relighting
 accuracy.
 
 The Room and Bonsai rows are current-tree sparse-COLMAP reconstructions at
-128x85. Their PBR columns score the persisted volumetric Gaussian output, not
-the older scalar-surface control. The exact commands, outputs, and cgroup/GPU
-telemetry are under `target/audit-runs/tile-allocation-profile/`; repeated
-controls reproduce the displayed values within the expected GPU-atomic band.
+128x85. Both columns score persisted and reloaded cloud outputs; the PBR
+column uses the volumetric Gaussian rather than the older scalar-surface
+control. The exact commands, outputs, and cgroup/GPU telemetry are under
+`target/audit-runs/tile-allocation-profile/`; repeated controls reproduce the
+displayed values within the expected GPU-atomic band.
 
 An independent full-resolution gate trains upstream 3DGRUT on Bonsai for
 30,000 steps (`32.10` dB with 3DGUT, `29.37` dB through its reference 3DGRT)

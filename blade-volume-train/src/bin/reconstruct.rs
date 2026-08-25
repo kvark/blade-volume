@@ -812,10 +812,6 @@ fn main() {
                 fit_seconds,
             );
         }
-        let test = score_gaussian_test(&gaussian, &capture, &test_views).unwrap_or_else(|error| {
-            eprintln!("cannot score direct Gaussian field: {error}");
-            std::process::exit(1);
-        });
         if let Some(ref output) = args.gaussian_output {
             let output = path::Path::new(output);
             if let Some(parent) = output
@@ -834,8 +830,23 @@ fn main() {
                 );
                 std::process::exit(1);
             });
-            println!("wrote {}", output.display());
+            gaussian = vol::io::try_load_gaussian(output.to_str().unwrap_or_else(|| {
+                eprintln!("output path is not UTF-8: {}", output.display());
+                std::process::exit(1);
+            }))
+            .unwrap_or_else(|error| {
+                eprintln!(
+                    "cannot reload written direct Gaussian {}: {error}",
+                    output.display()
+                );
+                std::process::exit(1);
+            });
+            println!("wrote and reloaded {}", output.display());
         }
+        let test = score_gaussian_test(&gaussian, &capture, &test_views).unwrap_or_else(|error| {
+            eprintln!("cannot score direct Gaussian field: {error}");
+            std::process::exit(1);
+        });
         println!(
             "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} ({:.1} s total Gaussian fitting)",
             stats.appearance.steps,

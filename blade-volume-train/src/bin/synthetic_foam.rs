@@ -1475,15 +1475,6 @@ fn main() {
             );
         }
         describe_scores("fixed-center Gaussian held-out", &core_held_out_scores);
-        let held_out_scores = train::gaussian_splat::evaluate_views(
-            &gaussian,
-            &training_capture,
-            &held_out_indices,
-            64,
-            1.0e-5,
-            [0.0; 3],
-        )
-        .unwrap_or_else(|error| fail(error));
         println!(
             "direct Gaussian: {} appearance updates {:.6} -> {:.6}, {} support updates {:.6} -> {:.6} ({:.3} s total Gaussian fitting)",
             stats.appearance.steps,
@@ -1494,7 +1485,6 @@ fn main() {
             stats.light_field_support.final_loss,
             fit_seconds,
         );
-        describe_scores("direct Gaussian held-out", &held_out_scores);
         if let Some(ref output) = args.gaussian_output {
             let output = path::Path::new(output);
             if let Some(parent) = output
@@ -1506,8 +1496,27 @@ fn main() {
             convert::save_ply(output, &gaussian).unwrap_or_else(|error| {
                 fail(format!("cannot write {}: {error:?}", output.display()))
             });
-            println!("wrote {}", output.display());
+            gaussian = vol::io::try_load_gaussian(output.to_str().unwrap_or_else(|| {
+                fail(format!("output path is not UTF-8: {}", output.display()))
+            }))
+            .unwrap_or_else(|error| {
+                fail(format!(
+                    "cannot reload written direct Gaussian {}: {error}",
+                    output.display()
+                ))
+            });
+            println!("wrote and reloaded {}", output.display());
         }
+        let held_out_scores = train::gaussian_splat::evaluate_views(
+            &gaussian,
+            &training_capture,
+            &held_out_indices,
+            64,
+            1.0e-5,
+            [0.0; 3],
+        )
+        .unwrap_or_else(|error| fail(error));
+        describe_scores("direct Gaussian held-out", &held_out_scores);
         train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
             .unwrap_or_else(|error| fail(error));
         learned_pbr_gaussian = Some(pbr_gaussian);
