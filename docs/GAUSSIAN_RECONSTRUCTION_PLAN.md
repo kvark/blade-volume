@@ -6973,3 +6973,40 @@ The 12 GiB reconstruction scopes peak below 330 MiB and the focused test scope
 at 1.16 GiB, with zero swap, memory pressure, OOM, validation error, Xid, or
 GPU fault. Ignored artifacts remain under
 `target/audit-runs/view-balanced-depth-fusion/`.
+
+## Rejected view-balanced fused normals (2026-08-25)
+
+The preceding camera-balancing result was isolated to normals. Centers kept
+the selected per-sample peak weighting, and the original per-sample normal sum
+continued to decide cell consistency and membership. Only the retained
+particle's orientation combined one confidence-weighted normal per camera,
+using that camera's mean modal peak. Particle counts and center accumulation
+were therefore exact controls. An analytical test verifies that ten equally
+confident normal samples from one camera do not outweigh one sample from
+another; all ten focused depth tests pass on the physical GPU.
+
+The two initial gates are encouraging. Dense final normal RMSE improves
+`48.39→47.85` degrees and volumetric held-light PBR improves from
+`24.48/23.24/23.23` to `24.74/23.44/23.57` dB mean/worst/where-hit at the
+same `55.1%` coverage. Nested final normal RMSE improves `51.44→51.02`
+degrees and volumetric PBR changes `23.50/21.90→23.55/21.99` dB
+mean/where-hit, with coverage changing `52.8→52.7%`. Static held quality is
+approximately neutral across those two fixtures.
+
+The definitive five-cloud gate is not individually transferable. Aggregate
+volumetric mean/worst/where-hit improves only
+`23.648/23.032/22.720→23.684/23.082/22.738` dB while coverage changes
+`55.32→55.28%`. Clouds 1 and 4 regress in all three quality scores; cloud 4
+falls `23.72/23.19/22.78→23.64/23.13/22.60` dB, and cloud 5 also loses tail
+quality. Final normal RMSE does improve on every cloud, averaging
+`51.86→51.66` degrees, while static aggregate mean/tail changes by only about
+`+0.004/+0.004` dB. A locally cleaner normal is therefore still coupled to
+the overlapping renderer's support/material compensation. Blending the
+candidate back toward the selected estimator would tune toward the identity
+without reversing the per-scene trade, so the per-view maps, extra normal
+accumulator, and test are removed.
+
+The 12 GiB reconstruction scopes peak below 332 MiB and the focused test scope
+at 1.22 GiB, with zero swap, memory pressure, OOM, validation error, Xid, or
+GPU fault. Ignored artifacts remain under
+`target/audit-runs/view-balanced-normal-fusion/`.
