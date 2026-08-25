@@ -7010,3 +7010,41 @@ The 12 GiB reconstruction scopes peak below 332 MiB and the focused test scope
 at 1.22 GiB, with zero swap, memory pressure, OOM, validation error, Xid, or
 GPU fault. Ignored artifacts remain under
 `target/audit-runs/view-balanced-normal-fusion/`.
+
+## Rejected joint rendered center/support refinement (2026-08-25)
+
+The selected simultaneous production-render pass perturbs particle centers
+along their normals, while its existing radius flag only affects the later
+exact coordinate polish. A private prototype reused each antithetic render
+pair to estimate both coordinates: center and log-radius received independent
+deterministic signs, the localized error integral selected their directions,
+and the complete training render accepted the coupled proposal. The existing
+anchor prior covered both normalized coordinates. This added no render,
+shader, graph operation, model field, format, dependency, or public option.
+An analytical physical-GPU test recovered both a displaced center and an
+undersized radius from exact rendered supervision.
+
+Dense and nested screens initially look positive. Dense volumetric held-light
+quality changes from `24.48/23.24/23.25` to `24.50/23.24/23.26` dB
+mean/worst/where-hit at the same `55.1%` coverage. Nested changes from
+`23.50/21.90` to `23.52/21.94` dB mean/where-hit while coverage falls
+`52.8→52.6%`. The coupled pass also lowers its training-render objective more
+than center-only refinement on both fixtures.
+
+The definitive five-cloud gate is not individually transferable. Aggregate
+mean/worst/where-hit changes only
+`23.648/23.032/22.720→23.656/23.052/22.740` dB and coverage
+`55.32→55.34%`. Cloud 3 regresses from `23.45/22.79/22.38` to
+`23.42/22.71/22.33` dB despite the lower training objective; cloud 1 also
+loses mean quality and coverage. A support radius gives the rendered optimizer
+another way to compensate for imperfect surface ownership, but the exact
+training images still cannot say whether that broader or narrower proxy
+transfers to a novel view. Halving the new radius step would tune the
+candidate back toward the selected center-only identity without adding the
+missing evidence, so the radius state, paired perturbation, test, and all
+integration changes are removed.
+
+Every reconstruction scope peaks below 331 MiB and the focused test scope at
+3.40 GiB. All 12 GiB scopes use zero swap and report no memory pressure, OOM,
+validation error, Xid, or GPU fault. Ignored artifacts remain under
+`target/audit-runs/joint-surface-support/`.
