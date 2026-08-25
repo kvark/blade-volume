@@ -10,6 +10,40 @@ Training lives in a separate crate built on [meganeura](https://github.com/kvark
 no Python, no Burn. See `docs/AUDIT_AND_ROADMAP.md` for the audited status and
 stage gates.
 
+## Reconstruction Status
+
+Short version: capture-light novel-view reconstruction works end to end. A
+relightable surface is proven on controlled synthetic captures, but is not yet
+a convincing real-world result.
+
+- **Capture and poses — working.** A phone video or image burst goes through
+  COLMAP and becomes posed photographs plus sparse points. COLMAP is an offline
+  input stage; the output asset remains a point cloud.
+- **Static light field — working, still soft.** Posed RGB images train a
+  view-dependent anisotropic Gaussian cloud (`light-field.ply`) for novel views
+  under the captured illumination. Real Room and Bonsai gates are recognizable
+  but still lose fine detail and clean boundaries.
+- **Surface cloud — implemented.** The pipeline extracts point positions,
+  anisotropic support, opacity, and normals from the learned density field. It
+  does not convert the result to polygons.
+- **Surface properties and relighting — controlled proof.** With aligned
+  captures under measured lights, the pipeline fits a shared PBR material table
+  and renders held cameras under a light excluded from fitting. Recovering
+  geometry, unknown illumination, and especially specular properties from one
+  ordinary real capture remains weak and underconstrained.
+- **Cloud runtime — working.** The same viewer consumes static Gaussian and
+  relightable Gaussian/RadFoam/PowerFoam assets; no mesh fallback is involved.
+- **Next gate — real measured relighting.** Capture one real scene from aligned
+  poses under several known lights and masks, reserve both cameras and a light,
+  and require a visible held-view/held-light improvement. Until that passes,
+  real Room/Bonsai PBR scores are capture-light diagnostics, not evidence of
+  relighting.
+
+The concise evidence is below. Detailed protocols, experiments, and rejected
+ideas live in
+[`docs/GAUSSIAN_RECONSTRUCTION_PLAN.md`](docs/GAUSSIAN_RECONSTRUCTION_PLAN.md)
+and [`docs/AUDIT_AND_ROADMAP.md`](docs/AUDIT_AND_ROADMAP.md).
+
 ## Workspace Structure
 
 This repository is organized as a Cargo workspace:
@@ -69,6 +103,19 @@ a static anisotropic Gaussian light field, and a Gaussian surface with shared
 PBR materials plus a recovered environment. No polygonal geometry enters
 either reconstructed asset.
 
+These are unedited outputs from persisted and reloaded point clouds. The Room
+row shows a held camera under the captured light; the synthetic row holds out
+both the camera and the studio environment used for the reference.
+
+| Checkpoint | Reference | Reconstructed point cloud |
+| --- | --- | --- |
+| Room light field<br>held camera, captured light | <img src="docs/images/reconstruction/room-held-reference.png" alt="Room held-view reference" width="320"> | <img src="docs/images/reconstruction/room-held-light-field.png" alt="Room held view rendered by the static Gaussian cloud" width="320"> |
+| Synthetic relighting<br>held camera, unseen studio light | <img src="docs/images/reconstruction/synthetic-held-light-reference.png" alt="Synthetic held-view and held-light reference" width="320"> | <img src="docs/images/reconstruction/synthetic-held-light-pbr.png" alt="Held view under an unseen light rendered by the relightable Gaussian cloud" width="320"> |
+
+The pictures expose what PSNR alone hides: the light-field branch has the
+scene and viewpoint but remains blurry, while the relightable branch responds
+to the new light but loses sharp geometry, reflections, and support.
+
 | Gate | Training / held views | Static held PSNR | PBR held PSNR | Coverage |
 | --- | ---: | ---: | ---: | ---: |
 | Synthetic (PBR unseen light) | 6 / 2 | 25.06 / 24.34 dB | 18.90 / 18.68 dB | 56.4% |
@@ -80,12 +127,16 @@ either reconstructed asset.
 | Room (sparse COLMAP) | 18 / 2 | 20.30 / 19.61 dB | 14.94 / 13.54 dB | 69.3% |
 | Bonsai (sparse COLMAP) | 18 / 2 | 16.84 / 16.54 dB | 14.51 / 14.43 dB | 82.6% |
 
-Each PSNR cell is mean / worst held view. Synthetic gates render at 100x75;
-the Room and Bonsai gates render at 128x85. The static columns always use the
-capture light. The synthetic PBR score uses a held-out environment; Room and
-Bonsai have no relighting truth, so their PBR columns measure held poses under
-the recovered capture light. They must not be read as real-scene relighting
-accuracy.
+Each PSNR cell is mean / worst held view. The current denser synthetic gate
+and gallery use 200x150 final renders after the initial foam stage trains at
+100x75; Room and Bonsai render at 128x85. The older synthetic rows remain as a
+progression of controlled gates. The static columns always use the capture
+light. Synthetic PBR uses a held-out environment; Room and Bonsai have no
+relighting truth, so their PBR columns measure held poses under the recovered
+capture light and must not be read as real-scene relighting accuracy.
+
+<details>
+<summary>Detailed reconstruction history and rationale</summary>
 
 The Room and Bonsai rows are current-tree sparse-COLMAP reconstructions at
 128x85. Both columns score persisted and reloaded cloud outputs; the PBR
@@ -241,6 +292,8 @@ worst view improves and the aggregate rises from 25.352/24.434 to
 the event, avoiding coincident opacity duplication. This remains a private
 training policy and adds no shader, graph operation, public option, format,
 model field, or dependency.
+
+</details>
 
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered
