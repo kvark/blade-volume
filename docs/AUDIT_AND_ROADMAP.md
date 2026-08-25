@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-08-24
+Last updated: 2026-08-25
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -50,15 +50,18 @@ behind these gates:
 
 1. Match reference RadFoam training within the Stage 2 quality tolerance on a
    complete, reproducible scene. Checkpoint renderer parity is done.
-2. Finish reducing full directional-table training cost before retrying a
-   two-scene gate. Released-checkpoint pixel parity passes; grouped scatter,
-   pairwise distance expansion, and frozen-axis prepacking reduce the matched
-   graph from 34.48--34.85 to 22.55--22.94 ms. The current 256-update Room
-   table is still 2.23× slower and 3.88× larger in cgroup memory than a
-   no-table control, and loses 0.9288 dB held out despite fitting the training
-   views 1.9592 dB better. A same-budget 32-view gate is also negative:
-   directional learning-rate ratios 1.0/0.1/0.01 change eight-view held PSNR
-   by -1.8018/-0.0644/-0.0114 dB. Lower rates only approach the control.
+2. Keep the full directional table opt-in until both cost and quality change.
+   Released-checkpoint pixel parity passes. Generic Meganeura grouped
+   scatter/gather fusion, frozen-axis prepacking, and channel-wise Blade
+   parameters reduce the current matched graph to 221 passes and
+   3.17--3.34 ms. Even so, 256 updates take 10.323 seconds and peak at 3.04 GB,
+   versus 2.583 seconds and 292 MB for the no-table production graph. The full
+   table loses 0.9288 dB held out despite fitting the four training views
+   1.9592 dB better. Sharing one eight-direction residual across all eight
+   spatial sites is also rejected at 18.1785 dB held out and 13.139 seconds;
+   smaller copies of the same table are not the missing regularizer. A future
+   retry needs a different spatial/directional responsibility model and must
+   pass a two-scene gate.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.

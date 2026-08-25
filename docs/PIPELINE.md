@@ -2555,6 +2555,27 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   fault. The no-directional-table held score remains 19.8841 dB, so the table
   stays opt-in pending a positive two-scene quality gate.
 
+#### M2ci — Shared-site directional capacity screen (rejected)
+
+- A bounded regularization prototype replaced each cell's 64 directional
+  residuals per colour channel with eight residuals shared across its eight
+  spatial detail sites. Upload averaged an existing full table and download
+  expanded the shared values back into the unchanged model/PLY layout. This
+  tested the smallest representation that could cut optimizer state by eight
+  while preventing every spatial site from independently memorizing the four
+  training views.
+- The extra row replication makes the graph larger despite the smaller table:
+  266 passes and 2.70--2.75 ms versus 221 passes and 3.17--3.34 ms for the full
+  table. More importantly, the matched 256-update run takes 13.139 seconds and
+  scores only 26.9244/18.1785 dB over four training/eight held views. The full
+  table takes 10.323 seconds and scores 29.1014/18.9553 dB; the production
+  no-table control takes 2.583 seconds and scores 27.1422/19.8841 dB.
+- Sharing spatial sites therefore removes useful capacity without fixing the
+  table's generalization or cost. The prototype and its alternate parameter
+  layout are removed completely. A future retry needs a different
+  spatial/directional responsibility model; neither another scalar rate nor a
+  smaller copy of the same table is supported by the current gates.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
