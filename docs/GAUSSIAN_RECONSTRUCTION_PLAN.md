@@ -7226,3 +7226,34 @@ mean/where-hit on nested. Coverage stays `55.1%` on dense and changes
 both 12 GiB scopes use zero swap and report no pressure, OOM, validation
 error, Xid, or GPU fault. Ignored binaries, models, logs, and telemetry remain
 under `target/audit-runs/scoring-context-reuse/`.
+
+## Selected rendered-material target reuse (2026-08-25)
+
+Rendered material coordinate descent repeatedly encoded each unchanged capture
+channel from linear radiance to sRGB for both sides of every coordinate
+proposal. With twelve materials, nine to eleven cameras, and three material
+stages, that meant tens of millions of redundant `powf` evaluations. The
+existing affine response basis now stores one encoded target beside the linear
+target required by its solver. Its lower and upper coordinate proposals also
+share one walk over the current rendered error instead of encoding and
+subtracting the same value twice. Each candidate accumulator retains the exact
+previous floating-point operation order.
+
+The deterministic first material pass keeps its exact `0.0054431→0.0051767`
+dense objective while falling from `0.792→0.486` seconds; nested keeps
+`0.0053998→0.0050110` while falling from `0.986→0.622` seconds. Later dense
+material stages fall `0.865→0.562`, `1.212→0.886`, and `0.793→0.509`
+seconds for post-support polish, guarded assignment including repolish, and
+final Gaussian polish. The adjacent complete dense scope falls
+`11.625→10.380` seconds and `25.454→24.117` CPU seconds. Nested falls
+`14.952→13.991` seconds and `30.298→29.671` CPU seconds.
+
+Final dense held-light volumetric quality remains `24.47` dB mean and changes
+`23.21→23.24` dB worst and `23.24→23.23` dB where hit at the same `55.1%`
+coverage. Nested final values remain inside its established separate-process
+atomic replay range. A focused CPU regression locks the two-step encoded-basis
+descent. Peak memory is 276.5--278.5 MB; both 12 GiB gates use zero swap and
+report no pressure, OOM, validation error, Xid, or GPU fault. The change adds
+no shader, graph operation, render, proposal, model, format, dependency, or
+public API. Ignored binaries, models, logs, and telemetry remain under
+`target/audit-runs/material-target-transfer/`.

@@ -803,6 +803,7 @@ struct RenderedAlbedoBasis {
     base: Vec<f32>,
     responses: Vec<Vec<f32>>,
     target: Vec<f32>,
+    target_srgb: Vec<f32>,
 }
 
 impl RenderedAlbedoBasis {
@@ -817,8 +818,7 @@ impl RenderedAlbedoBasis {
     }
 
     fn squared_error(&self, rendered: f32, index: usize) -> f64 {
-        let difference =
-            capture::linear_to_srgb(rendered) - capture::linear_to_srgb(self.target[index]);
+        let difference = capture::linear_to_srgb(rendered) - self.target_srgb[index];
         f64::from(difference * difference)
     }
 
@@ -873,11 +873,16 @@ fn build_rendered_albedo_basis(
         .flat_map(|&index| capture.views[index].pixels.iter())
         .flat_map(|pixel| *pixel)
         .collect();
+    let target_srgb = target
+        .iter()
+        .map(|&value| capture::linear_to_srgb(value))
+        .collect();
     debug_assert_eq!(target.len(), base.len());
     Some(RenderedAlbedoBasis {
         base,
         responses,
         target,
+        target_srgb,
     })
 }
 
@@ -898,19 +903,26 @@ fn refine_albedo_from_basis(
                 let candidates = [(original - step).max(0.0), (original + step).min(1.0)];
                 let mut best = original;
                 let mut best_error_sum = error_sum;
-                for candidate in candidates {
+                let mut candidate_error_sums = [error_sum; 2];
+                for index in (channel..rendered.len()).step_by(3) {
+                    let current_error = basis.squared_error(rendered[index], index);
+                    for (slot, &candidate) in candidates.iter().enumerate() {
+                        if candidate == original {
+                            continue;
+                        }
+                        candidate_error_sums[slot] -= current_error;
+                        let candidate_rendered = rendered[index]
+                            + (candidate - original) * basis.responses[material][index];
+                        candidate_error_sums[slot] +=
+                            basis.squared_error(candidate_rendered, index);
+                    }
+                }
+                for (slot, candidate) in candidates.into_iter().enumerate() {
                     if candidate == original {
                         continue;
                     }
-                    let delta = candidate - original;
-                    let mut candidate_error_sum = error_sum;
-                    for index in (channel..rendered.len()).step_by(3) {
-                        candidate_error_sum -= basis.squared_error(rendered[index], index);
-                        let candidate_rendered =
-                            rendered[index] + delta * basis.responses[material][index];
-                        candidate_error_sum += basis.squared_error(candidate_rendered, index);
-                    }
                     proposals += 1;
+                    let candidate_error_sum = candidate_error_sums[slot];
                     if candidate_error_sum < best_error_sum {
                         best_error_sum = candidate_error_sum;
                         best = candidate;
@@ -2076,6 +2088,36 @@ mod tests {
         assert!(solve_dense(&mut matrix, &mut right));
         assert!((right[0] - 1.0).abs() < 1.0e-12);
         assert!((right[1] - 2.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn encoded_basis_descent_recovers_a_material() {
+        let mut scene = score::Scene::new(
+            vol::relight::RelightModel {
+                kernel: vol::relight::ParticleKernel::Gaussian,
+                surfels: Vec::new(),
+                materials: vec![vol::relight::Material {
+                    albedo: [0.4; 3],
+                    ..vol::relight::Material::default()
+                }],
+            },
+            vol::relight::Environment::uniform([1.0; 3], 2, 1),
+        );
+        let target = vec![0.55; 6];
+        let target_srgb = target
+            .iter()
+            .map(|&value| capture::linear_to_srgb(value))
+            .collect();
+        let basis = RenderedAlbedoBasis {
+            base: vec![0.0; 6],
+            responses: vec![vec![1.0; 6]],
+            target,
+            target_srgb,
+        };
+
+        assert_eq!(refine_albedo_from_basis(&mut scene, &basis, 0.1), (6, 12));
+        assert_eq!(scene.model.materials[0].albedo, [0.55; 3]);
+        assert!(basis.error_sum(&basis.render(&scene.model.materials)) < 1.0e-12);
     }
 
     #[test]
