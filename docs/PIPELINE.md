@@ -789,11 +789,14 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   geometry moments. The RadFoam-v1 schedule and relative parameter groups also
   retain position gradients when their policy supplies a non-zero rate. Public
   low-level graph construction keeps its full-gradient contract.
-- Meganeura is pinned to `ad08f97`, which excludes detached scalar-gradient
-  sentinels from optimizer state. Without that compiler fix, dead parameters
-  still appeared trainable and Adam could read beyond the one-element sentinel.
-  A structural GPU test requires frozen weighted positions/radii to have no
-  gradient while density, normals, offsets, and spatial colour remain trainable.
+- The original gate used Meganeura `ad08f97`, which excluded detached
+  gradient sentinels from optimizer state. Without that compiler fix, dead
+  parameters still appeared trainable and Adam could read beyond the
+  one-element sentinel. A structural GPU test requires frozen weighted
+  positions/radii to have no gradient while density, normals, offsets, and
+  spatial colour remain trainable. The workspace has since moved to the merged
+  dependency head; see the current reconstruction plan for its scalar-sentinel
+  follow-up.
 - Frozen checkpoints contain their exact parameter values but omit unused Adam
   moments. Resuming the same configuration is exact; deliberately enabling
   geometry later starts the previously absent moments at zero. Mixed-view,

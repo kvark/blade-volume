@@ -244,12 +244,13 @@ model field, or dependency.
 
 `reconstruct --gaussian-output light-field.ply --pbr-gaussian-output relightable.ply`
 writes the two durable cloud outputs. `relightable.f32` stores the recovered
-environment beside the PBR Gaussian. The writer reloads that PLY before its
+environment beside the PBR Gaussian. Each requested PLY is reloaded before its
 final score, so reported quality includes serialization. Either output can be
 requested alone; a PBR-only request runs the selected independent PBR schedule
-without constructing or training a static light field. Current research artifacts and complete logs are generated under
-`target/audit-runs/` and intentionally remain outside version control. The
-exact protocols, negative results, and artifact locations are recorded in
+without constructing or training a static light field. Current research
+artifacts and complete logs are generated under `target/audit-runs/` and
+intentionally remain outside version control. The exact protocols, negative
+results, and artifact locations are recorded in
 [`docs/GAUSSIAN_RECONSTRUCTION_PLAN.md`](docs/GAUSSIAN_RECONSTRUCTION_PLAN.md).
 
 CI enforces workspace formatting, all-feature clippy with warnings denied,

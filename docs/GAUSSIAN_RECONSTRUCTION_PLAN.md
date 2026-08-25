@@ -7396,3 +7396,24 @@ confidence here. The source is restored to the simpler equal mean. All 12 GiB
 scopes peak below 301 MiB with zero swap, OOM, validation error, Xid, or GPU
 fault. Ignored outputs and telemetry remain under
 `target/audit-runs/photometric-normal-facing/`.
+
+## Dependency-head and frozen-scalar audit (2026-08-25)
+
+The workspace already pins the current merged heads of Blade (`95f5004`) and
+Meganeura (`0f87a8d`); fetching both upstreams finds no newer merged revision.
+A broad `cargo update --dry-run` proposes unrelated crates.io churn and is not
+applied. The dependency graph therefore remains stock and minimal.
+
+The audit did find one unmerged Meganeura edge case. Current `main` excludes a
+detached parameter's scalar-zero gradient sentinel by shape, which works for
+every multi-element frozen geometry table but mistakes a one-element frozen
+parameter for a real scalar gradient. The focused compiler regression fails on
+`0f87a8d` with two optimizer pairs instead of one and passes on the already
+pushed `origin/fix/frozen-scalar-parameter-gradient` branch at `d2ac76d`.
+Ordinary multi-view reconstruction is unaffected; the exposed blade-volume
+case is a one-view exposure table frozen at its identity, whose unnecessary
+zero Adam state can enter a checkpoint. Blade-volume deliberately remains on
+merged Meganeura `main` instead of adding another dependency fork. The branch
+needs to merge before the next normal uprev. Both 12 GiB compiler scopes report
+zero OOM or GPU fault; ignored logs remain under
+`target/audit-runs/meganeura-frozen-scalar/`.
