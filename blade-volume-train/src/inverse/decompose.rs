@@ -432,27 +432,35 @@ pub fn refine_normals_known_lights_per_view(
     let mut stats = NormalRefinement::default();
     for index in 0..model.surfels.len() {
         let current = glam::Vec3::from(model.surfels[index].normal);
-        let first_samples = distinct[0].observations.of(index);
-        let mut estimates = Vec::with_capacity(first_samples.len());
-        for &first in first_samples {
+        let mut views = Vec::new();
+        for &light in &distinct {
+            for sample in light.observations.of(index) {
+                if !views.contains(&sample.view) {
+                    views.push(sample.view);
+                }
+            }
+        }
+        let mut estimates = Vec::with_capacity(views.len());
+        for view in views {
             let mut readings = Vec::with_capacity(distinct.len());
+            let mut towards = glam::Vec3::ZERO;
             for &light in &distinct {
                 let Some(sample) = light
                     .observations
                     .of(index)
                     .iter()
-                    .find(|sample| sample.view == first.view)
+                    .find(|sample| sample.view == view)
                 else {
-                    readings.clear();
-                    break;
+                    continue;
                 };
+                towards = sample.towards;
                 readings.push((light.irradiance, sample.radiance));
             }
-            if readings.len() != distinct.len() {
+            if readings.len() < 2 {
                 continue;
             }
             let (best, best_score) =
-                best_photometric_normal(current, first.towards, &readings, &candidates);
+                best_photometric_normal(current, towards, &readings, &candidates);
             if best_score.is_finite() {
                 estimates.push(best);
             }
@@ -2133,7 +2141,7 @@ mod tests {
     #[test]
     fn repeat_view_correspondence_uses_the_shared_subset() {
         let truth = glam::Vec3::new(0.35, 0.25, 0.902_774).normalize();
-        let outlier = glam::Vec3::new(-0.65, 0.35, 0.68).normalize();
+        let outlier = glam::Vec3::new(-0.8, -0.4, 0.44).normalize();
         let albedo = [0.6, 0.4, 0.25];
         let mut irradiance = Vec::new();
         for (component, sign) in [(3, 1.0), (3, -1.0), (1, 1.0), (2, 1.0)] {
@@ -2146,23 +2154,18 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(light_index, light)| {
-                let mut samples = Vec::new();
-                let shade = light.shade(truth);
-                samples.push(Sample {
-                    view: 0,
+                let (view, normal) = if light_index == 2 {
+                    (1, outlier)
+                } else {
+                    (0, truth)
+                };
+                let shade = light.shade(normal);
+                let samples = vec![Sample {
+                    view,
                     radiance: std::array::from_fn(|channel| albedo[channel] * shade[channel]),
                     towards: glam::Vec3::Z,
-                    facing: truth.z,
-                });
-                if light_index == 1 {
-                    let shade = light.shade(outlier);
-                    samples.push(Sample {
-                        view: 1,
-                        radiance: std::array::from_fn(|channel| albedo[channel] * shade[channel]),
-                        towards: glam::Vec3::Z,
-                        facing: outlier.z,
-                    });
-                }
+                    facing: normal.z,
+                }];
                 Observations {
                     offsets: vec![0, samples.len() as u32],
                     samples,
