@@ -7287,3 +7287,24 @@ complete default/all-feature physical-GPU workspace configurations pass. The
 the two workspace suites, with zero swap, memory pressure, OOM, validation
 error, Xid, or GPU fault. Ignored logs, models, and telemetry remain under
 `target/audit-runs/light-view-correspondence/`.
+
+## Rejected material-assignment micro-caches (2026-08-25)
+
+Two exact material-assignment cleanups are intentionally not retained. The
+first encoded every captured observation to sRGB once before ranking particles
+against the shared palette, instead of repeating the unchanged target transfer
+for every candidate material. On the dense gate, assignment takes `0.889`
+seconds versus `0.881` for the adjacent control and complete wall time ties at
+`10.35` versus `10.32` seconds. The transfers are already a negligible part
+of the render-and-shade phase, so the extra observation buffer is removed.
+
+The second kept the assignment renderer and prepared surface alive for the
+immediately following material polish. Dense assignment is effectively tied
+at `0.882` versus `0.890` seconds. Nested improves `1.588→1.465` seconds, but
+the roughly 0.12-second saving is below one percent of the complete command
+and requires a second prepared-material entry point plus tighter tracer
+lifetime coupling. It is removed to keep the refinement API single-path and
+minimal. All focused correctness tests pass for both prototypes; the retained
+source is again an exact clean control. Capped logs and telemetry remain under
+`target/audit-runs/assignment-target-transfer/` with zero swap, OOM, Xid, or
+GPU fault.
