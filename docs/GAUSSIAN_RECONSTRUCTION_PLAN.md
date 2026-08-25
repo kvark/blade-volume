@@ -7417,3 +7417,24 @@ merged Meganeura `main` instead of adding another dependency fork. The branch
 needs to merge before the next normal uprev. Both 12 GiB compiler scopes report
 zero OOM or GPU fault; ignored logs remain under
 `target/audit-runs/meganeura-frozen-scalar/`.
+
+## Rejected prepared Gaussian ray reuse (2026-08-25)
+
+Candidate preparation already constructs and sRGB-encodes the next twenty
+deterministic ray batches before recording their particle rows. A private
+prototype retained that combined batch and uploaded slices during optimization
+instead of sampling the identical rays again. The grouped/individual oracle
+was extended to compare every origin, direction, view, pixel, label, alpha,
+candidate index, and mask exactly; all 42 Gaussian-focused tests pass. The
+change adds no GPU work or numerical decision, but requires a second private
+slice-upload entry point and keeps the combined labels alive through the
+window.
+
+Two order-balanced Room pairs show no production gain. Candidate/control wall
+times are `9.22/9.24` and `8.90/8.87` seconds; user CPU time is likewise mixed
+at `28.18/27.39` and `27.74/27.61` seconds. The Gaussian phase merely rounds
+to `7.1` rather than `7.2` seconds, below complete-command noise, and candidate
+cgroup peaks are not lower. The source is restored to the simpler resampling
+loop. All 12 GiB scopes peak below 453 MiB with zero swap, OOM, validation
+error, Xid, or GPU fault. Ignored binaries, outputs, logs, and telemetry remain
+under `target/audit-runs/prepared-ray-reuse/`.
