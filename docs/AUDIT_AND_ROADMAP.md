@@ -692,7 +692,9 @@ At the audited revision:
   becomes neutral (-0.0010 dB held) and 2.2% slower, with inconsistent paired
   view majorities. This remains a scene-gated Bonsai post-cap quality option
   using existing controls; growth-stage defaults and checkpoint semantics
-  remain unchanged.
+  remain unchanged. A second equal-ray Bonsai window confirms persistence:
+  the cumulative held gain is +0.3709 dB, all 37 views improve, and cumulative
+  training cost rises only 1.3%.
   Continuing to 1,024 rays improves repeated Bonsai held quality by another
   0.2357 dB but regresses a majority of Room views in both paired replicas
   while taking 5.2% longer than 2,048 rays. The 512-ray rung then loses

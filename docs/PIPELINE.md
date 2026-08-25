@@ -2654,6 +2654,12 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   train/held PSNR rises 24.1401/23.4216→24.4689/23.6844 dB. Both replicas
   improve 35/37 held views. Mean training time is 28.295 versus 27.957 seconds
   (+1.2%).
+- A second equal-ray window confirms that the Bonsai gain persists rather than
+  merely arriving earlier. Across 4.096 million cumulative rays and ten exact
+  rebuilds from the common step-8,000 checkpoint, 4,096 rays reaches
+  24.2704/23.5192 dB while 2,048 rays reaches 24.7751/23.8901 dB
+  (+0.5047/+0.3709). All 37 held views improve. Cumulative training is
+  55.558→56.254 seconds (+1.3%).
 - An independent Room continuation includes one complete growth boundary and
   ends at 196,943/196,955 sites versus 196,946/196,943 for the controls. Mean
   train/held PSNR changes 24.8786/23.9613→24.8982/23.9886 dB, while training
