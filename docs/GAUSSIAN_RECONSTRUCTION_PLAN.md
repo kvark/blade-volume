@@ -6939,3 +6939,37 @@ The 12 GiB reconstruction scopes peak below 492 MiB and the focused test scope
 at 1.30 GiB, with zero swap, memory pressure, OOM, validation error, Xid, or
 GPU fault. Ignored artifacts remain under
 `target/audit-runs/unchecked-gaussian-candidates/`.
+
+## Rejected view-balanced depth fusion (2026-08-25)
+
+Multi-view fusion requires distinct cameras but formerly let a camera's weight
+grow with every pixel it contributed to one voxel. A private prototype first
+formed one confidence-weighted center and normal per camera/cell, then combined
+those camera estimates using their mean modal peak. This preserved the existing
+rule that a sharp absorption mode outweighs haze while preventing a close or
+front-facing camera from counting several times merely because it sampled the
+cell more densely. An analytical test locks that ten pixels from one camera
+have the same aggregate weight as one equally confident pixel from another;
+all ten focused depth tests pass on the physical GPU.
+
+The dense nine-view fixture exposes a genuine output trade. Against an adjacent
+control, volumetric held-light Gaussian PBR improves from
+`24.48/23.24/23.23` to `24.81/23.45/23.73` dB mean/worst/where-hit, while
+coverage changes `55.1→55.2%` and final normal RMSE improves
+`48.39→48.11` degrees. Static held-pose quality simultaneously falls from
+`26.82/24.88` to `26.69/24.61` dB, and position RMSE changes
+`0.5854→0.5866` world units.
+
+The independent nested-camera fixture rejects the policy. Extracted position
+RMSE improves `0.5515→0.5487` and final normal RMSE `51.44→50.59` degrees,
+but static held quality falls `23.91→23.77` dB and volumetric held-light PBR
+falls from `23.50/21.90` to `23.41/21.82` dB mean/where-hit while coverage
+changes `52.8→52.7%`. Equal camera influence produces a cleaner local geometry
+statistic, but does not preserve the support/appearance basin across camera
+layouts. The per-view maps, fusion structs, and regression are removed; the
+selected per-sample peak weighting remains.
+
+The 12 GiB reconstruction scopes peak below 330 MiB and the focused test scope
+at 1.16 GiB, with zero swap, memory pressure, OOM, validation error, Xid, or
+GPU fault. Ignored artifacts remain under
+`target/audit-runs/view-balanced-depth-fusion/`.
