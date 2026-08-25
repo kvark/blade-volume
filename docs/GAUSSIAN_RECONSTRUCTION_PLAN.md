@@ -7173,3 +7173,30 @@ pressure, OOM, validation error, Xid, or GPU fault. A unit test locks lazy
 construction and pointer identity across scene clones. Ignored binaries,
 models, logs, and telemetry remain under
 `target/audit-runs/scene-prefilter-cache/`.
+
+## Selected GGX sample-ladder hoist (2026-08-25)
+
+The remaining prefilter profile exposed a pure loop invariant. Every output
+texel independently rebuilt the same 4,096 Hammersley-distributed GGX half
+vectors for its roughness level, including the radical inverse, sine, cosine,
+and square roots. The prefilter now constructs that deterministic vector once
+per level and shares it read-only with the existing row workers. Each texel
+keeps the same tangent transform, environment lookup, cosine weight,
+accumulation order, normalization, and upsampling arithmetic. The temporary
+sample vector is about 48 KiB and is dropped with its level.
+
+An isolated old/new executable serialized every f32 of all eight prefiltered
+levels for the same nonuniform HDR sky. The files compare byte-for-byte and
+share SHA-256
+`09b436bf849b1df69f039851c318711d772cb1ecdd372b724c0d6649745206a9`.
+The dense complete scope falls from `14.915` to `13.380` seconds and CPU time
+from `41.273` to `26.970` seconds. Its held-light volumetric result changes
+within replay noise from `24.49/23.26/23.25` to `24.50/23.26/23.26` dB
+mean/worst/where-hit at the same `55.1%` coverage. Nested falls from `18.861`
+to `17.250` seconds and `47.204` to `32.208` CPU seconds; held-light quality
+remains `23.48` dB mean and changes `21.88→21.86` dB where hit at the same
+`52.8%` coverage. Peak host memory is `307,277,824` and `317,067,264` bytes,
+with zero swap, pressure, OOM, validation error, Xid, or GPU fault. The change
+adds no API, dependency, shader, render variant, graph operation, model field,
+or persisted data. Ignored equivalence programs, exact level files, models,
+logs, and telemetry remain under `target/audit-runs/ggx-sample-hoist/`.

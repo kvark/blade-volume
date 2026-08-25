@@ -421,6 +421,13 @@ impl SpecularEnvironment {
             let small_width = (width >> level).max(8);
             let small_height = (height >> level).max(4);
             let mut small = vec![[0.0f32; 4]; small_width * small_height];
+            let samples: Vec<_> = (0..SAMPLES)
+                .map(|index| {
+                    let hammersley =
+                        glam::Vec2::new(index as f32 / SAMPLES as f32, radical_inverse(index));
+                    importance_sample_ggx(hammersley, roughness)
+                })
+                .collect();
             // Rows are independent, and there are millions of samples behind
             // each level, so this is split across the machine. It is the one
             // thing standing between changing the light and seeing it change.
@@ -430,6 +437,7 @@ impl SpecularEnvironment {
                 for (chunk_index, chunk) in
                     small.chunks_mut(rows_per_chunk * small_width).enumerate()
                 {
+                    let samples = &samples;
                     scope.spawn(move || {
                         let first_row = chunk_index * rows_per_chunk;
                         for (row, texels) in chunk.chunks_mut(small_width).enumerate() {
@@ -450,12 +458,7 @@ impl SpecularEnvironment {
 
                                 let mut total = [0.0f32; 3];
                                 let mut weight = 0.0f32;
-                                for index in 0..SAMPLES {
-                                    let hammersley = glam::Vec2::new(
-                                        index as f32 / SAMPLES as f32,
-                                        radical_inverse(index),
-                                    );
-                                    let local = importance_sample_ggx(hammersley, roughness);
+                                for &local in samples {
                                     let half =
                                         tangent * local.x + bitangent * local.y + normal * local.z;
                                     let light =
