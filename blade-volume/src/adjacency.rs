@@ -587,8 +587,17 @@ pub fn compute_adjacency_qhull(points: &[glam::Vec4], config: &AdjacencyConfig) 
             Some(v) => v,
             None => continue,
         };
-        let ids: Vec<usize> = vs.iter().filter_map(|v| v.index(&qh)).collect();
-        if ids.len() != 4 {
+        let mut ids = [0usize; 4];
+        let mut id_count = 0;
+        for index in vs.iter().filter_map(|vertex| vertex.index(&qh)) {
+            if id_count == ids.len() {
+                id_count += 1;
+                break;
+            }
+            ids[id_count] = index;
+            id_count += 1;
+        }
+        if id_count != ids.len() {
             continue;
         }
         // The six edges of the tetrahedron — each is a Voronoi

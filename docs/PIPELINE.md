@@ -2622,6 +2622,24 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   runtime variant is retained. A future performance attempt should make exact
   rebuilds cheaper rather than exposing the model to staler adjacency.
 
+#### M2cl — Stack-allocate Qhull simplex indices (done)
+
+- Profiling a 200,000-site exact rebuild attributes 2.51--2.57 seconds to
+  Qhull and about 0.41 seconds to extracting and deduplicating its 1.32 million
+  tetrahedra. Extraction previously allocated a four-element `Vec` for every
+  tetrahedron. Filling the same four indices on the stack preserves facet,
+  edge, CSR-row, and neighbor order without changing the topology algorithm.
+- On fixed Bonsai and Room clouds, the new builder reproduces the stored
+  3,041,020- and 2,975,854-entry CSR arrays byte for byte. Their extraction
+  phases fall 410.3→386.4 ms (-5.8%) and 410.6→382.5 ms (-6.8%). A global
+  edge-vector alternative is rejected because sorting it takes 446--461 ms.
+- A complete five-rebuild Bonsai replay lowers topology time from the repeated
+  control mean of 15.551 to 15.284 seconds (-1.7%) and training from 27.957 to
+  27.609 seconds (-1.2%). Its 24.1694/23.4580 dB train/held-out score is within
+  the adjacent controls' separate-process GPU variation. The strict all-target
+  clippy gate and complete all-feature physical-GPU workspace suite pass; the
+  latter peaks at 7,099,281,408 bytes with zero swap, OOM, or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
