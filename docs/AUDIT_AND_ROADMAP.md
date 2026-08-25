@@ -585,11 +585,13 @@ At the audited revision:
   They pass in 3.61 seconds with a 259 MB peak; the unmodified concurrent
   workspace command subsequently passes in 25.82 seconds with a 476 MB peak
   and zero swap, pressure, OOM, or GPU faults.
-- When a topology and densification boundary coincide, the trainer now
-  refreshes adjacency and the GPU cloud before collecting contribution and
-  resampling statistics. Previously it downloaded current positions but paired
-  them with the preceding GPU geometry for that scan. A moving-geometry,
-  prune-and-densify physical-GPU test covers the corrected operation order.
+- At every densification boundary, the trainer now refreshes trainable
+  geometry before collecting contribution and resampling statistics. The
+  original correction only did this when a scheduled topology boundary
+  happened to coincide, so independent fixed cadences could still pair
+  downloaded current positions with the preceding adjacency and GPU cloud.
+  Moving-geometry, prune-and-densify physical-GPU tests cover the corrected
+  operation order, including a deliberately non-coincident schedule.
 - Contribution view/phase rotation is keyed by the absolute densification
   round, not the generic session-rebuild counter. Topology-cadence ablations
   therefore see identical contribution samples at the same global boundary;

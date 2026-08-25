@@ -3400,6 +3400,8 @@ pub fn fit_appearance_multi_view(
 pub(crate) struct AppearanceFitOutcome {
     pub losses: Vec<f32>,
     pub endpoint_checkpoint: Option<std::path::PathBuf>,
+    #[cfg(test)]
+    geometry_refreshes_before_densification: usize,
 }
 
 pub(crate) fn fit_appearance_multi_view_outcome(
@@ -6279,6 +6281,8 @@ fn fit_appearance_pixel_batched(
 
     let mut losses = Vec::with_capacity(invocation_end.saturating_sub(steps_done));
     let mut endpoint_checkpoint = None;
+    #[cfg(test)]
+    let mut geometry_refreshes_before_densification = 0usize;
     let mut training_path_rays = 0usize;
     let mut training_path_truncated_rays = 0usize;
     let mut training_path_max_steps_used = 0u32;
@@ -6902,7 +6906,7 @@ fn fit_appearance_pixel_batched(
                 // Refresh trainable geometry before collecting densification
                 // statistics. Moving positions/radii also require exact
                 // adjacency; changing only orientation does not.
-                if topology_schedule_due {
+                if geometry_trainable {
                     if topology_trainable {
                         let topology_start = std::time::Instant::now();
                         rebuild_training_adjacency(model, config.rebuild_with_qhull);
@@ -6928,6 +6932,10 @@ fn fit_appearance_pixel_batched(
                         "densify round {}: refreshed current geometry before resampling",
                         densification_round,
                     );
+                    #[cfg(test)]
+                    {
+                        geometry_refreshes_before_densification += 1;
+                    }
                 }
 
                 let contribution = if d.prune {
@@ -7354,6 +7362,8 @@ fn fit_appearance_pixel_batched(
     AppearanceFitOutcome {
         losses,
         endpoint_checkpoint,
+        #[cfg(test)]
+        geometry_refreshes_before_densification,
     }
 }
 
@@ -12168,13 +12178,12 @@ mod tests {
     }
 
     #[test]
-    fn densification_rebuilds_and_continues_training() {
+    fn densification_refreshes_noncoincident_trainable_geometry() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
         let Some(gpu) = try_init_gpu() else {
-            eprintln!("skipping densification_rebuilds_and_continues_training: no GPU");
+            eprintln!("skipping noncoincident densification refresh test: no GPU");
             return;
         };
-        let mut model = tiny_model();
         let view = ViewSupervision {
             camera: vol::CameraParams {
                 cam_position: [0.05, 0.05, -1.0],
@@ -12188,7 +12197,8 @@ mod tests {
             width: 1,
             height: 1,
         };
-        let losses = fit_appearance_multi_view(
+        let mut model = tiny_model();
+        let outcome = fit_appearance_multi_view_outcome(
             &mut model,
             &[view],
             1,
@@ -12198,7 +12208,7 @@ mod tests {
                 learning_rate: 0.01,
                 epochs: 3,
                 position_lr_ratio: 1.0,
-                geometry_rebuild_every: 1,
+                geometry_rebuild_every: 2,
                 densify: Some(DensifyConfig {
                     every: 1,
                     fraction: 0.25,
@@ -12212,7 +12222,8 @@ mod tests {
             gpu,
         );
 
-        assert_eq!(losses.len(), 3);
+        assert_eq!(outcome.losses.len(), 3);
+        assert_eq!(outcome.geometry_refreshes_before_densification, 1);
         assert_eq!(model.points.len(), 5);
         model.validate().unwrap();
     }

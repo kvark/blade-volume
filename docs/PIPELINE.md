@@ -2664,6 +2664,25 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   by their growth-stage gates. No automatic phase, configuration field,
   checkpoint rule, shader, graph operation, or dependency is added.
 
+#### M2cn — Decouple densification correctness from topology cadence (done)
+
+- The 512-ray Room screen exposed an operation-order bug when its 800-update
+  topology cadence did not divide the 4,000-update densification phase from
+  the resumed global step. The trainer downloaded current parameters at the
+  growth boundary but refreshed adjacency and GPU traversal geometry only
+  when the independent topology schedule was also due. Contribution scores,
+  one-ring pruning, and unweighted sibling placement could therefore combine
+  the current host model with the preceding traversal snapshot.
+- Every active trainable-geometry densification boundary now performs the
+  required pre-resampling refresh. Coincident schedules still execute exactly
+  one pre-resampling refresh; frozen geometry remains unchanged. A physical
+  GPU regression makes the first growth and topology boundaries deliberately
+  non-coincident and asserts that the refresh path runs before training
+  continues on a valid grown model.
+- The completed pre-fix 512-ray Room run is excluded from the quality ladder.
+  Earlier 4,096/2,048/1,024-ray screens aligned their schedules and remain
+  valid. The affected arm is rerun from its common checkpoint after this fix.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
