@@ -43,37 +43,97 @@ capture research:
 
 ## First gate
 
-Start with one selectively downloaded OpenIllumination object, not the full
-corpus. Materialize all selected camera names under four lighting patterns:
-three known training lights and one untouched evaluation light. Keep the
-official masks, combine enough official train and test cameras to make one
-posed capture, and reserve the test cameras before any geometry work.
+The checked-in selective fetch downloads 22 cameras of one object under four
+OLATs, about 24 MB rather than the complete 900 GB corpus. Revisions are pinned
+in the script. The Rust importer converts the published camera-to-world
+matrices to pose-only COLMAP binaries, copies PNG masks, writes the official
+five-camera split, and creates distant-light `.f32` environments:
 
-The first importer should emit the existing COLMAP-plus-aligned-directories
-contract and calibrated `.f32` lights. Then run the primary light plus two
-aligned fitting lights through `reconstruct`:
+```bash
+etc/fetch_openillumination.sh
+
+cargo run -p blade-volume-train --bin import_openillumination -- \
+    --input etc/data/openillumination/OLAT/obj_16_friends_cup \
+    --output etc/data/openillumination/prepared/obj_16_friends_cup \
+    --light-positions etc/data/openillumination/light_pos.npy \
+    --light 000 --light 062 --light 082 --light 092
+```
+
+OpenIllumination does not provide a sparse SfM cloud. `camera-lattice` therefore
+fills the calibrated focus volume with point-cloud sites. With masks it
+deterministically tightens that volume and seeds density and DC colour from a
+soft visual hull; sites outside the hull remain low-density but trainable.
+Train OLAT 062 while keeping the published five cameras completely out of
+initialization and fitting:
+
+```bash
+cargo run --release -p blade-volume-train --bin train_colmap -- \
+    --sparse etc/data/openillumination/prepared/obj_16_friends_cup/sparse/0 \
+    --images etc/data/openillumination/OLAT/obj_16_friends_cup/Lights/062/raw_undistorted \
+    --masks etc/data/openillumination/prepared/obj_16_friends_cup/masks \
+    --test-list etc/data/openillumination/prepared/obj_16_friends_cup/test.txt \
+    --output target/audit-runs/openillumination/foam.ply \
+    --initialization camera-lattice --max-points 4096 --views 0 \
+    --width 128 --height 174 --pixel-batch 1024 --views-per-batch 16 \
+    --steps-per-view 200 --max-steps 192 --sh-degree 2
+```
+
+Then fit OLATs 062, 082, and 092 and score OLAT 000, which is loaded only after
+all fitting finishes:
 
 ```bash
 cargo run --release -p blade-volume-train --bin reconstruct -- \
-    --sparse capture/sparse/0 \
-    --images capture/light-001 \
-    --masks capture/masks \
-    --environment capture/light-001.f32 \
-    --normal-images capture/light-004 \
-    --normal-environment capture/light-004.f32 \
-    --normal-images capture/light-007 \
-    --normal-environment capture/light-007.f32 \
-    --held-out-images capture/light-010 \
-    --held-out-environment capture/light-010.f32 \
-    --pbr-gaussian-output target/audit-runs/openillumination/scene.ply \
+    --sparse etc/data/openillumination/prepared/obj_16_friends_cup/sparse/0 \
+    --images etc/data/openillumination/OLAT/obj_16_friends_cup/Lights/062/raw_undistorted \
+    --masks etc/data/openillumination/prepared/obj_16_friends_cup/masks \
+    --test-list etc/data/openillumination/prepared/obj_16_friends_cup/test.txt \
+    --width 128 --stride 1 \
+    --environment etc/data/openillumination/prepared/obj_16_friends_cup/light-062.f32 \
+    --normal-images etc/data/openillumination/OLAT/obj_16_friends_cup/Lights/082/raw_undistorted \
+    --normal-environment etc/data/openillumination/prepared/obj_16_friends_cup/light-082.f32 \
+    --normal-images etc/data/openillumination/OLAT/obj_16_friends_cup/Lights/092/raw_undistorted \
+    --normal-environment etc/data/openillumination/prepared/obj_16_friends_cup/light-092.f32 \
+    --held-out-images etc/data/openillumination/OLAT/obj_16_friends_cup/Lights/000/raw_undistorted \
+    --held-out-environment etc/data/openillumination/prepared/obj_16_friends_cup/light-000.f32 \
+    --foam target/audit-runs/openillumination/foam.ply \
+    --gaussian-output target/audit-runs/openillumination/static.ply \
+    --pbr-gaussian-output target/audit-runs/openillumination/pbr.ply \
+    --gaussian-steps 1500 \
     --dump target/audit-runs/openillumination/images
 ```
 
-The ordinary `test` and `g-test` rows measure novel cameras under the capture
-light. `relight` and `g-relight` use the same held cameras under light 010,
-which is loaded only for scoring. Its comparison images are written under
-`images/held-light/{scalar,gaussian}/`. No dataset images or generated results
-belong in Git.
+Static light-field comparisons are written under `images/static-light/`.
+`relight` and `g-relight` use the official held cameras under OLAT 000; their
+comparisons are under `images/held-light/{scalar,gaussian}/`. The command also
+prints black and capture-light-copy baselines. No downloaded data or generated
+results belong in Git.
+
+### Current result: plumbing passes, quality does not
+
+The first current-tree run on `obj_16_friends_cup` establishes an honest
+failure baseline:
+
+| Output | Held condition | Mean / worst PSNR | Coverage | Baseline comparison |
+| --- | --- | ---: | ---: | --- |
+| Static Gaussian | OLAT 062, official held cameras | 31.51 / 28.98 dB | — | Black: 31.10 / 28.46 dB; a narrow numerical win, visibly still a dark blur. |
+| Relightable scalar cloud | unseen OLAT 000, official held cameras | 24.03 / 21.24 dB | 12.1% | Loses badly to black at 29.69 / 28.11 dB and capture-light copy at 30.30 / 28.16 dB. |
+| Relightable Gaussian | unseen OLAT 000, official held cameras | 29.49 / 27.68 dB | 0.4% | Not a pass: 612 of 638 particles were pruned and the score comes from rendering almost black. |
+
+The full run, including static and held-light reference/render pairs, is under
+`target/audit-runs/openillumination/official-full-v1/`; the foam training run
+is under `target/audit-runs/openillumination/official-static-v1/`. Both are
+ignored research artifacts. Peak cgroup memory was 946 MB for training and
+957 MB for reconstruction, with no memory pressure, OOM, socket-throttling, or
+GPU-fault marker.
+
+The generated lights are explicit approximations, not claimed calibration.
+The public `light_pos.npy` gives the 142 OLAT directions used by the official
+photometric code, but not an absolute radiometric power for this pipeline.
+The importer normalizes each direction and assigns unit normal-incidence
+irradiance to a finite distant lobe. It therefore omits finite-distance
+falloff, emitter size, RGB power variation, camera response calibration, and
+interreflection. Passing the real gate requires improving this representation,
+not tuning against OLAT 000.
 
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact
@@ -98,15 +158,19 @@ cycled or strobed during one trajectory.
 
 ## Implementation order
 
-1. Import one OpenIllumination object and reproduce the held-camera/held-light
-   score above.
-2. Represent the light-stage LEDs honestly. First quantify the error from a
-   distant directional approximation; add calibrated point emitters if that
-   error is material. The emitters remain analytic or point-sampled—no polygon
-   geometry is needed.
-3. Generalize aligned directories to sparse `(camera, light)` observations so
+1. Fix the surface bottleneck exposed above. Keep a cloud throughout: derive a
+   consistent boundary/support cloud from the multi-view mask hull and foam
+   density, then require held-training-camera coverage before a PBR Gaussian
+   can replace the scalar control. A near-empty Gaussian must lose selection.
+2. Represent the light-stage LEDs honestly. Preserve calibrated finite light
+   positions, fit per-light RGB/radiometric gains from training lights only,
+   and add analytic point-emitter falloff if it beats the distant control. No
+   polygonal light geometry is needed.
+3. Require every candidate to beat black and capture-light-copy baselines on
+   mean, worst-view, covered-pixel quality, and visible shadow/highlight motion.
+4. Generalize aligned directories to sparse `(camera, light)` observations so
    every light need not be photographed at every pose.
-4. Fit diffuse albedo and normals first. Enable roughness and reflectance only
+5. Fit diffuse albedo and normals first. Enable roughness and reflectance only
    after multiple lights improve held-light quality consistently.
-5. Confirm the selected method on DiLiGenT-MV or ReNé, then scale to
+6. Confirm the selected method on DiLiGenT-MV or ReNé, then scale to
    OLATverse/OpenSubstance only if the smaller gates justify it.

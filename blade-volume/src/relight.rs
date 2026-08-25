@@ -210,6 +210,68 @@ impl Environment {
         }
     }
 
+    /// A finite-width directional emitter with a requested normal-incidence
+    /// irradiance.
+    ///
+    /// `direction` points from the scene towards the emitter. The radiance in
+    /// the disc is normalized on the discrete equirectangular grid so a
+    /// Lambertian surface with this normal receives `irradiance` before its
+    /// `albedo / PI` response. This is a useful distant approximation for a
+    /// calibrated light-stage LED; it does not model near-field falloff.
+    pub fn directional(
+        direction: glam::Vec3,
+        irradiance: [f32; 3],
+        angular_radius: f32,
+        width: usize,
+        height: usize,
+    ) -> Self {
+        assert!(width > 0 && height > 0);
+        assert!(direction.is_finite() && direction.length() > f32::EPSILON);
+        assert!(irradiance
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0));
+        assert!(angular_radius.is_finite());
+        let emitter = direction.normalize();
+        let cos_radius = angular_radius.max(0.0).cos();
+        let base =
+            (2.0 * std::f32::consts::PI / width as f32) * (std::f32::consts::PI / height as f32);
+        let mut weights = vec![0.0f32; width * height];
+        let mut projected_solid_angle = 0.0f32;
+        let mut nearest = (0usize, f32::NEG_INFINITY);
+        for y in 0..height {
+            let v = (y as f32 + 0.5) / height as f32;
+            let solid_angle = base * (std::f32::consts::PI * v).sin();
+            for x in 0..width {
+                let index = y * width + x;
+                let cosine = emitter.dot(equirect_direction((x as f32 + 0.5) / width as f32, v));
+                if cosine > nearest.1 {
+                    nearest = (index, cosine);
+                }
+                if cosine >= cos_radius {
+                    weights[index] = cosine.max(0.0) * solid_angle;
+                    projected_solid_angle += weights[index];
+                }
+            }
+        }
+        if projected_solid_angle == 0.0 {
+            let y = nearest.0 / width;
+            let v = (y as f32 + 0.5) / height as f32;
+            let solid_angle = base * (std::f32::consts::PI * v).sin();
+            weights[nearest.0] = nearest.1.max(f32::EPSILON) * solid_angle;
+            projected_solid_angle = weights[nearest.0];
+        }
+        let radiance = irradiance.map(|value| value / projected_solid_angle);
+        let texels = weights
+            .into_iter()
+            .map(|weight| if weight > 0.0 { radiance } else { [0.0; 3] })
+            .collect();
+        Self {
+            width,
+            height,
+            texels,
+        }
+    }
+
     /// A sky with a sun in it, for when there is no captured environment.
     ///
     /// Not a model of anything: a gradient from the horizon to the zenith, a
@@ -822,6 +884,33 @@ mod tests {
                 "expected the environment back, got {lit:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_directional_environment_has_the_requested_incident_energy() {
+        let direction = glam::Vec3::new(0.4, 0.7, -0.3).normalize();
+        let environment = Environment::directional(direction, [0.7, 1.0, 1.3], 0.08, 128, 64);
+        let base = (2.0 * std::f32::consts::PI / environment.width as f32)
+            * (std::f32::consts::PI / environment.height as f32);
+        let mut incident = [0.0f32; 3];
+        for y in 0..environment.height {
+            let v = (y as f32 + 0.5) / environment.height as f32;
+            let solid_angle = base * (std::f32::consts::PI * v).sin();
+            for x in 0..environment.width {
+                let u = (x as f32 + 0.5) / environment.width as f32;
+                let cosine = direction.dot(equirect_direction(u, v)).max(0.0);
+                for (sum, radiance) in incident
+                    .iter_mut()
+                    .zip(environment.texels[y * environment.width + x])
+                {
+                    *sum += radiance * cosine * solid_angle;
+                }
+            }
+        }
+        for (actual, expected) in incident.into_iter().zip([0.7, 1.0, 1.3]) {
+            assert!((actual - expected).abs() < 1.0e-5, "{incident:?}");
+        }
+        assert_eq!(environment.sample(-direction), [0.0; 3]);
     }
 
     #[test]
