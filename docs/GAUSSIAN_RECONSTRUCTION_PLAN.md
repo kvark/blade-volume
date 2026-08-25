@@ -7438,3 +7438,24 @@ cgroup peaks are not lower. The source is restored to the simpler resampling
 loop. All 12 GiB scopes peak below 453 MiB with zero swap, OOM, validation
 error, Xid, or GPU fault. Ignored binaries, outputs, logs, and telemetry remain
 under `target/audit-runs/prepared-ray-reuse/`.
+
+## Rejected stronger per-view normal blend (2026-08-25)
+
+The selected repeated-light estimator blends its shared multi-camera normal
+halfway toward the mean of exact camera-local fits. Moving three quarters of
+the way toward that same consensus passes every analytical decomposition test
+and initially improves the dense gate: volumetric held-light quality reaches
+`24.57/23.36/23.35` dB mean/worst/where-hit from the current
+`24.47/23.24/23.23` band at unchanged 55.1% coverage. Its final joint normal
+RMSE also improves to 48.00 degrees.
+
+The independent nested layout reverses the result. An adjacent frozen-binary
+control reaches `23.51` dB mean and `21.90` dB where hit, while the stronger
+blend reaches only `23.39/21.79` dB at the same 52.7% coverage. Truth-normal
+RMSE nevertheless improves `51.45→51.38` degrees. Moving closer to the
+camera-local photometric orientation is therefore not a transferable output
+improvement: the overlapping Gaussian mixture still compensates orientation
+with support and materials. The source remains at the previously gated equal
+blend. All 12 GiB scopes peak below 301 MiB with zero swap, OOM, validation
+error, Xid, or GPU fault. Ignored outputs and telemetry remain under
+`target/audit-runs/photometric-normal-blend/`.
