@@ -1690,6 +1690,7 @@ fn supplement_sparse_track_observations(
                     continue;
                 }
                 samples.push(train::inverse::decompose::Sample {
+                    view: sparse_observation.view as u32,
                     radiance: sparse_observation.radiance,
                     towards,
                     facing,
@@ -2194,6 +2195,7 @@ mod tests {
             materials: vec![vol::relight::Material::default(); 2],
         };
         let original = train::inverse::decompose::Sample {
+            view: 0,
             radiance: [1.0, 0.0, 0.0],
             towards: -glam::Vec3::Z,
             facing: 1.0,

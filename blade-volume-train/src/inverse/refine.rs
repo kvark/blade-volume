@@ -2772,6 +2772,7 @@ mod tests {
         );
         let misleading = decompose::Observations {
             samples: vec![decompose::Sample {
+                view: 0,
                 radiance: vol::relight::shade(normal, towards, &wrong, &irradiance, &specular),
                 towards,
                 facing: normal.dot(towards),

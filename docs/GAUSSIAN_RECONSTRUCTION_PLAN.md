@@ -7257,3 +7257,33 @@ report no pressure, OOM, validation error, Xid, or GPU fault. The change adds
 no shader, graph operation, render, proposal, model, format, dependency, or
 public API. Ignored binaries, models, logs, and telemetry remain under
 `target/audit-runs/material-target-transfer/`.
+
+## Exact repeated-light view correspondence (2026-08-25)
+
+The discrete calibrated-light normal initializer no longer infers camera
+correspondence from equal per-surfel sample counts. Each observation carries
+the capture-view index that produced it, and repeated captures are joined by
+that key. A surfel with partially different masks can now use the cameras
+actually shared by every distinct light; equal-sized but different camera
+subsets can no longer be paired by accident. The sample index is a `u32`, so
+the observation record remains 32 bytes and the correction adds no rendering
+path, shader, graph operation, model field, file property, or dependency.
+
+A focused analytical regression gives one light an extra outlier observation
+that the other three captures do not contain. The old all-counts-equal gate
+declined the repeat-view correction entirely; the keyed common subset is
+supported and moves the anchored normal closer to truth. Both existing
+complete-repeat behavior and the new partial-mask case pass, as do all 240
+training-library tests on the physical GPU.
+
+The current dense and nested synthetic fixtures have identical masks and
+camera order under all four lights, so their deterministic extraction and
+photometric-normal values remain exact controls. Dense held-light volumetric
+PBR is `24.48/23.25/23.24` dB mean/worst/where-hit at `55.1%` coverage;
+nested is `23.53/21.93` dB mean/where-hit at `52.7%`, within the established
+separate-process atomic replay range. Strict all-feature Clippy and both
+complete default/all-feature physical-GPU workspace configurations pass. The
+12 GiB scopes peak below 304 MiB for reconstruction and at 3.03/2.92 GiB for
+the two workspace suites, with zero swap, memory pressure, OOM, validation
+error, Xid, or GPU fault. Ignored logs, models, and telemetry remain under
+`target/audit-runs/light-view-correspondence/`.

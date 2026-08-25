@@ -100,6 +100,8 @@ impl Default for FitOptions {
 /// One surfel, seen once.
 #[derive(Clone, Copy, Debug)]
 pub struct Sample {
+    /// Capture view that produced this observation.
+    pub view: u32,
     /// Observed radiance, linear.
     pub radiance: [f32; 3],
     /// Unit direction from the surface towards the camera.
@@ -429,27 +431,26 @@ pub fn refine_normals_known_lights_per_view(
     let candidates = normal_candidates(candidate_count.max(1));
     let mut stats = NormalRefinement::default();
     for index in 0..model.surfels.len() {
-        let sample_count = distinct[0].observations.of(index).len();
-        if sample_count == 0
-            || distinct
-                .iter()
-                .any(|light| light.observations.of(index).len() != sample_count)
-        {
-            continue;
-        }
         let current = glam::Vec3::from(model.surfels[index].normal);
-        let mut estimates = Vec::with_capacity(sample_count);
-        for sample_index in 0..sample_count {
-            let first = distinct[0].observations.of(index)[sample_index];
-            let readings: Vec<_> = distinct
-                .iter()
-                .map(|light| {
-                    (
-                        light.irradiance,
-                        light.observations.of(index)[sample_index].radiance,
-                    )
-                })
-                .collect();
+        let first_samples = distinct[0].observations.of(index);
+        let mut estimates = Vec::with_capacity(first_samples.len());
+        for &first in first_samples {
+            let mut readings = Vec::with_capacity(distinct.len());
+            for &light in &distinct {
+                let Some(sample) = light
+                    .observations
+                    .of(index)
+                    .iter()
+                    .find(|sample| sample.view == first.view)
+                else {
+                    readings.clear();
+                    break;
+                };
+                readings.push((light.irradiance, sample.radiance));
+            }
+            if readings.len() != distinct.len() {
+                continue;
+            }
             let (best, best_score) =
                 best_photometric_normal(current, first.towards, &readings, &candidates);
             if best_score.is_finite() {
@@ -663,6 +664,7 @@ fn observe_serial(
                 surfel: index,
                 pixel,
                 sample: Sample {
+                    view: view_index as u32,
                     radiance: view.pixels[pixel],
                     towards,
                     facing,
@@ -1983,6 +1985,7 @@ mod tests {
         let samples = mean
             .iter()
             .map(|radiance| Sample {
+                view: 0,
                 radiance: *radiance,
                 towards: glam::Vec3::Y,
                 facing: 1.0,
@@ -2011,6 +2014,7 @@ mod tests {
                 let shade = light.shade(truth);
                 Observations {
                     samples: vec![Sample {
+                        view: 0,
                         radiance: std::array::from_fn(|channel| albedo[channel] * shade[channel]),
                         towards: glam::Vec3::Z,
                         facing: truth.z,
@@ -2070,9 +2074,11 @@ mod tests {
             .map(|light| Observations {
                 samples: [truth, truth, outlier]
                     .into_iter()
-                    .map(|normal| {
+                    .enumerate()
+                    .map(|(view, normal)| {
                         let shade = light.shade(normal);
                         Sample {
+                            view: view as u32,
                             radiance: std::array::from_fn(|channel| {
                                 albedo[channel] * shade[channel]
                             }),
@@ -2116,6 +2122,80 @@ mod tests {
                 changed: 1,
             }
         );
+        assert!(
+            repeated_error < shared_error,
+            "shared error {} degrees, repeat-view error {} degrees",
+            shared_error.to_degrees(),
+            repeated_error.to_degrees(),
+        );
+    }
+
+    #[test]
+    fn repeat_view_correspondence_uses_the_shared_subset() {
+        let truth = glam::Vec3::new(0.35, 0.25, 0.902_774).normalize();
+        let outlier = glam::Vec3::new(-0.65, 0.35, 0.68).normalize();
+        let albedo = [0.6, 0.4, 0.25];
+        let mut irradiance = Vec::new();
+        for (component, sign) in [(3, 1.0), (3, -1.0), (1, 1.0), (2, 1.0)] {
+            let mut light = crate::relight::Irradiance::default();
+            light.coefficients[0] = [2.0; 3];
+            light.coefficients[component] = [sign; 3];
+            irradiance.push(light);
+        }
+        let observations: Vec<_> = irradiance
+            .iter()
+            .enumerate()
+            .map(|(light_index, light)| {
+                let mut samples = Vec::new();
+                let shade = light.shade(truth);
+                samples.push(Sample {
+                    view: 0,
+                    radiance: std::array::from_fn(|channel| albedo[channel] * shade[channel]),
+                    towards: glam::Vec3::Z,
+                    facing: truth.z,
+                });
+                if light_index == 1 {
+                    let shade = light.shade(outlier);
+                    samples.push(Sample {
+                        view: 1,
+                        radiance: std::array::from_fn(|channel| albedo[channel] * shade[channel]),
+                        towards: glam::Vec3::Z,
+                        facing: outlier.z,
+                    });
+                }
+                Observations {
+                    offsets: vec![0, samples.len() as u32],
+                    samples,
+                }
+            })
+            .collect();
+        let lights: Vec<_> = irradiance
+            .into_iter()
+            .zip(&observations)
+            .map(|(irradiance, observations)| KnownLightObservations {
+                irradiance,
+                observations,
+            })
+            .collect();
+        let initial = glam::Vec3::new(-0.5, 0.5, 0.7).normalize();
+        let make_model = || vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0; 3],
+                radius: 1.0,
+                normal: initial.to_array(),
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material::default()],
+        };
+        let mut shared = make_model();
+        refine_normals_known_lights(&mut shared, &lights, 4096);
+        let mut repeated = make_model();
+        let stats = refine_normals_known_lights_per_view(&mut repeated, &lights, 4096);
+        let shared_error = glam::Vec3::from(shared.surfels[0].normal).angle_between(truth);
+        let repeated_error = glam::Vec3::from(repeated.surfels[0].normal).angle_between(truth);
+
+        assert_eq!(stats.supported, 1);
         assert!(
             repeated_error < shared_error,
             "shared error {} degrees, repeat-view error {} degrees",
@@ -2170,6 +2250,7 @@ mod tests {
         let mut offsets = vec![0; unseen + 1];
         for &radiance in mean {
             samples.push(Sample {
+                view: 0,
                 radiance,
                 towards: glam::Vec3::Y,
                 facing: 1.0,
@@ -2419,6 +2500,7 @@ mod tests {
                     continue;
                 }
                 samples.push(Sample {
+                    view: view as u32,
                     radiance: vol::relight::shade(
                         normal,
                         towards,
