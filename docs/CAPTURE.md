@@ -113,6 +113,12 @@ and rendered images are written below `held-light/{scalar,gaussian}/`; the
 `relight` and `g-relight` rows are the scalar-surface and volumetric-Gaussian
 scores at the held camera/light cross-product.
 
+When a capture or public dataset publishes its own camera split, put the exact
+COLMAP image names in a text file and pass the same `--test-list` to
+`train_colmap` and `reconstruct`. This takes precedence over the periodic
+`--test-every` convention and prevents dataset test cameras from entering
+geometry or appearance fitting.
+
 See [Relighting capture and dataset ladder](RELIGHTING_DATASETS.md) for the
 public-data starting point and the path from this aligned rig to a moving-phone
 capture with independently posed `(camera, light)` observations.

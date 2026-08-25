@@ -58,6 +58,11 @@ struct Args {
     #[argh(option, default = "8")]
     test_every: usize,
 
+    /// file containing exact COLMAP image names to hold out, one per line;
+    /// takes precedence over --test-every
+    #[argh(option)]
+    test_list: Option<String>,
+
     /// materials the surfels are clustered into (default 0 = one per surfel).
     /// Sharing is a prior about the scene rather than something the
     /// photographs said, and it costs both the albedo and the re-rendering.
@@ -271,7 +276,26 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let (train_views, test_views) = capture.split(args.test_every);
+    let test_names = args
+        .test_list
+        .as_deref()
+        .map(path::Path::new)
+        .map(train::pipeline::read_image_list)
+        .transpose()
+        .unwrap_or_else(|message| {
+            eprintln!("{message}");
+            std::process::exit(1);
+        });
+    let (train_views, test_views) = test_names
+        .as_ref()
+        .map_or_else(
+            || Ok(capture.split(args.test_every)),
+            |names| capture.split_named(names),
+        )
+        .unwrap_or_else(|message| {
+            eprintln!("cannot split capture: {message}");
+            std::process::exit(1);
+        });
     if args.held_out_images.is_some() && test_views.is_empty() {
         eprintln!("held-out-light scoring needs at least one held camera view");
         std::process::exit(1);
@@ -872,8 +896,20 @@ fn main() {
         );
         if let (Some((initial_mean, initial_worst)), Some((mean, worst))) = (initial_test, test) {
             println!(
-                "direct Gaussian test: {initial_mean:.2} -> {mean:.2} dB mean, {initial_worst:.2} -> {worst:.2} dB worst"
+                "light-field test: {initial_mean:.2} -> {mean:.2} dB mean, {initial_worst:.2} -> {worst:.2} dB worst"
             );
+        }
+        if let Some(ref directory) = args.dump {
+            dump_static_gaussian(
+                &gaussian,
+                &capture,
+                &test_views,
+                &path::Path::new(directory).join("static-light"),
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("cannot dump static Gaussian comparisons: {error}");
+                std::process::exit(1);
+            });
         }
         train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
             .unwrap_or_else(|error| {
@@ -1134,6 +1170,20 @@ fn main() {
         let _ = std::fs::create_dir_all(directory);
     }
     let dump = args.dump.as_deref().map(path::Path::new);
+
+    if !test_views.is_empty() {
+        let (mean, worst) = capture_baseline_psnr(None, &capture, &test_views);
+        println!("held-camera black baseline: {mean:.2} dB mean, {worst:.2} dB worst");
+    }
+    if let Some(ref held) = held_out_capture {
+        let (black_mean, black_worst) = capture_baseline_psnr(None, &held.capture, &test_views);
+        let (copy_mean, copy_worst) =
+            capture_baseline_psnr(Some(&capture), &held.capture, &test_views);
+        println!(
+            "held-light baselines: black {black_mean:.2}/{black_worst:.2} dB, \
+             capture-light copy {copy_mean:.2}/{copy_worst:.2} dB mean/worst"
+        );
+    }
 
     println!(
         "\n{:<10}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}",
@@ -1821,6 +1871,98 @@ fn score_gaussian_test(
     )))
 }
 
+fn dump_static_gaussian(
+    model: &vol::PointCloudModel,
+    capture: &train::inverse::capture::Capture,
+    views: &[usize],
+    directory: &path::Path,
+) -> Result<(), String> {
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
+    let pixels = capture.width * capture.height;
+    for &index in views {
+        let view = &capture.views[index];
+        let origin = glam::Vec3::from(view.camera.cam_position);
+        let origins = vec![origin; pixels];
+        let directions: Vec<_> = (0..capture.height)
+            .flat_map(|y| {
+                (0..capture.width).map(move |x| {
+                    train::inverse::capture::pixel_direction(
+                        &view.camera,
+                        capture.width,
+                        capture.height,
+                        x,
+                        y,
+                    )
+                })
+            })
+            .collect();
+        let rendered =
+            train::gaussian_splat::render_rays(model, &origins, &directions, 64, 1.0e-5, [0.0; 3]);
+        let mut image = image::RgbImage::new(capture.width as u32, capture.height as u32);
+        for (pixel, value) in rendered.iter().enumerate() {
+            let color = value
+                .truncate()
+                .to_array()
+                .map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
+            image.put_pixel(
+                (pixel % capture.width) as u32,
+                (pixel / capture.width) as u32,
+                image::Rgb(color),
+            );
+        }
+        let stem = path::Path::new(&view.name).file_stem().map_or_else(
+            || view.name.clone(),
+            |stem| stem.to_string_lossy().into_owned(),
+        );
+        image
+            .save(directory.join(format!("{stem}-render.png")))
+            .map_err(|error| format!("cannot save static render {stem}: {error}"))?;
+        train::inverse::score::save_rgb(
+            &directory.join(format!("{stem}-photo.png")),
+            &view.pixels,
+            capture.width,
+            capture.height,
+        );
+    }
+    Ok(())
+}
+
+fn capture_baseline_psnr(
+    prediction: Option<&train::inverse::capture::Capture>,
+    reference: &train::inverse::capture::Capture,
+    views: &[usize],
+) -> (f32, f32) {
+    let mut scores = Vec::with_capacity(views.len());
+    for &view in views {
+        let reference_pixels = &reference.views[view].pixels;
+        let prediction_pixels = prediction.map(|capture| &capture.views[view].pixels);
+        let squared_error = reference_pixels
+            .iter()
+            .enumerate()
+            .flat_map(|(pixel, truth)| {
+                (0..3).map(move |channel| {
+                    let predicted = prediction_pixels.map_or(0.0, |pixels| {
+                        train::inverse::capture::linear_to_srgb(pixels[pixel][channel])
+                    });
+                    let truth = train::inverse::capture::linear_to_srgb(truth[channel]);
+                    (predicted - truth).powi(2)
+                })
+            })
+            .sum::<f32>()
+            / (reference_pixels.len() * 3) as f32;
+        scores.push(if squared_error == 0.0 {
+            f32::INFINITY
+        } else {
+            -10.0 * squared_error.log10()
+        });
+    }
+    (
+        scores.iter().sum::<f32>() / scores.len() as f32,
+        scores.iter().copied().fold(f32::INFINITY, f32::min),
+    )
+}
+
 fn print_reconstruction_summary(name: &str, summary: train::inverse::score::Summary) {
     println!(
         "{name:<10}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{:>12.2}",
@@ -1855,8 +1997,11 @@ fn validate_lit_captures(args: &Args) -> Result<(), String> {
             "--held-out-images and --held-out-environment must be supplied together".to_string(),
         );
     }
-    if args.held_out_images.is_some() && args.test_every == 0 {
-        return Err("held-out-light scoring needs --test-every greater than zero".to_string());
+    if args.held_out_images.is_some() && args.test_every == 0 && args.test_list.is_none() {
+        return Err(
+            "held-out-light scoring needs --test-every or --test-list to reserve cameras"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -2078,6 +2223,24 @@ mod tests {
         train::gaussian_splat::from_surface(&surface).unwrap();
         assert_eq!(surface.surfels[0].material, 0);
         assert_eq!(surface.materials.len(), 1);
+    }
+
+    #[test]
+    fn capture_baseline_compares_in_display_space() {
+        let capture = train::inverse::capture::Capture {
+            width: 1,
+            height: 1,
+            views: vec![train::inverse::capture::View {
+                name: "view".to_string(),
+                camera: vol::CameraParams::default(),
+                pixels: vec![[0.25, 0.5, 0.75]],
+                mask: None,
+            }],
+        };
+        let (copy, _) = capture_baseline_psnr(Some(&capture), &capture, &[0]);
+        let (black, _) = capture_baseline_psnr(None, &capture, &[0]);
+        assert!(copy.is_infinite());
+        assert!(black.is_finite() && black > 0.0);
     }
 
     #[test]

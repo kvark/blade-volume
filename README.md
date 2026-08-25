@@ -33,12 +33,14 @@ a convincing real-world result.
   ordinary real capture remains weak and underconstrained.
 - **Cloud runtime — working.** The same viewer consumes static Gaussian and
   relightable Gaussian/RadFoam/PowerFoam assets; no mesh fallback is involved.
-- **Next gate — real measured relighting.** Capture one real scene from aligned
-  poses under several known lights and masks, reserve both cameras and a light,
-  and require a visible held-view/held-light improvement. Until that passes,
-  real Room/Bonsai PBR scores are capture-light diagnostics, not evidence of
-  relighting. The ranked public datasets, exact split, and capture roadmap are
-  in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
+- **Real measured relighting — integrated, not passed.** The selective
+  OpenIllumination gate now imports 17 official training cameras, five official
+  test cameras, masks, and four OLAT directions without Python or a mesh. Its
+  static light field narrowly beats black on held cameras, but the first
+  held-light surface clouds lose to both black and copying the capture-light
+  photograph. This is now the blocking quality gate, not an unimplemented
+  experiment. Exact commands, baselines, images, and next steps are in
+  [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
 The concise evidence is below. Detailed protocols, experiments, and rejected
 ideas live in
@@ -127,6 +129,15 @@ to the new light but loses sharp geometry, reflections, and support.
 | Synthetic (denser calibrated capture) | 9 / 3 | 26.80 / 24.88 dB | 24.47 / 23.24 dB | 55.1% |
 | Room (sparse COLMAP) | 18 / 2 | 20.30 / 19.61 dB | 14.94 / 13.54 dB | 69.3% |
 | Bonsai (sparse COLMAP) | 18 / 2 | 16.84 / 16.54 dB | 14.51 / 14.43 dB | 82.6% |
+
+The first real two-axis gate is deliberately reported against trivial
+baselines. On OpenIllumination `obj_16_friends_cup`, the static Gaussian under
+captured OLAT 062 reaches 31.51/28.98 dB on the five official held cameras,
+versus black at 31.10/28.46 dB. Under unseen OLAT 000, however, black scores
+29.69/28.11 dB and copying the OLAT-062 photograph scores 30.30/28.16 dB. The
+relightable scalar cloud reaches only 24.03/21.24 dB at 12.1% coverage; the
+Gaussian reaches 29.49/27.68 dB by collapsing to 0.4% coverage. Therefore the
+real relighting gate fails despite superficially high full-frame PSNR.
 
 Each PSNR cell is mean / worst held view. The current denser synthetic gate
 and gallery use 200x150 final renders after the initial foam stage trains at

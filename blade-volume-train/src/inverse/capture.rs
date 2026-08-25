@@ -356,7 +356,8 @@ impl Capture {
             if !path.exists() {
                 continue;
             }
-            let mask = masks.map(|directory| directory.join(&image.name));
+            let mask =
+                masks.map(|directory| pipeline::corresponding_mask_path(directory, &image.name));
             if let Some(ref mask) = mask {
                 if !mask.exists() {
                     return Err(format!(
@@ -446,19 +447,38 @@ impl Capture {
 
     /// Indices of the views held out of the fit, and the ones kept.
     ///
-    /// Every eighth image, which is what the mip-NeRF 360 protocol uses and
-    /// what published numbers on these scenes are measured against.
+    /// Index zero and every `every`-th image after it are held out, matching
+    /// the standard LLFF/Mip-NeRF 360 split and [`crate::pipeline`].
     pub fn split(&self, every: usize) -> (Vec<usize>, Vec<usize>) {
         let mut train = Vec::new();
         let mut test = Vec::new();
         for index in 0..self.views.len() {
-            if every > 0 && index % every == every - 1 {
+            if every > 0 && index % every == 0 {
                 test.push(index);
             } else {
                 train.push(index);
             }
         }
         (train, test)
+    }
+
+    /// Split by exact image names supplied by a dataset protocol.
+    pub fn split_named(&self, names: &[String]) -> Result<(Vec<usize>, Vec<usize>), String> {
+        let mut train = Vec::new();
+        let mut test = Vec::new();
+        for (index, view) in self.views.iter().enumerate() {
+            if names.iter().any(|name| name == &view.name) {
+                test.push(index);
+            } else {
+                train.push(index);
+            }
+        }
+        for name in names {
+            if !self.views.iter().any(|view| &view.name == name) {
+                return Err(format!("held-out image is absent from the capture: {name}"));
+            }
+        }
+        Ok((train, test))
     }
 }
 
@@ -545,6 +565,29 @@ mod tests {
             assert!((world.0[1] - local.0[1]).abs() < 1.0e-4);
             assert!((world.1 - local.1).abs() < 1.0e-5);
         }
+    }
+
+    #[test]
+    fn held_view_split_matches_the_llff_protocol() {
+        let capture = Capture {
+            width: 1,
+            height: 1,
+            views: (0..11)
+                .map(|index| View {
+                    name: index.to_string(),
+                    camera: vol::CameraParams::default(),
+                    pixels: vec![[0.0; 3]],
+                    mask: None,
+                })
+                .collect(),
+        };
+        let (train, test) = capture.split(5);
+        assert_eq!(train, [1, 2, 3, 4, 6, 7, 8, 9]);
+        assert_eq!(test, [0, 5, 10]);
+        let names = vec!["2".to_string(), "9".to_string()];
+        let (train, test) = capture.split_named(&names).unwrap();
+        assert_eq!(test, [2, 9]);
+        assert_eq!(train.len(), 9);
     }
 
     #[test]

@@ -92,6 +92,10 @@ struct Args {
     #[argh(option, default = "0")]
     test_views: usize,
 
+    /// file containing exact COLMAP image names to hold out, one per line
+    #[argh(option)]
+    test_list: Option<String>,
+
     /// skip post-training PSNR evaluation
     #[argh(switch)]
     skip_eval: bool,
@@ -122,10 +126,9 @@ struct Args {
     #[argh(option, default = "2000")]
     max_points: usize,
 
-    /// initial site policy: "top-track" or "radfoam-v1" (default radfoam-v1).
-    /// The reference policy samples sparse points with replacement, adds a
-    /// broad background cloud, and starts appearance at gray. The legacy
-    /// top-track policy can form a nearly degenerate surface-only Delaunay set.
+    /// initial site policy: "top-track", "radfoam-v1", or "camera-lattice"
+    /// (default radfoam-v1). Camera-lattice fills the calibrated view volume
+    /// when a posed capture has no sparse point cloud.
     #[argh(option, default = "String::from(\"radfoam-v1\")")]
     initialization: String,
 
@@ -786,6 +789,21 @@ fn main() {
     } else {
         Some(args.pixel_batch)
     };
+    if args.test_list.is_some() && (args.test_every > 0 || args.test_views > 0) {
+        eprintln!("--test-list cannot be combined with --test-every or --test-views");
+        std::process::exit(2);
+    }
+    let test_names = args
+        .test_list
+        .as_deref()
+        .map(path::Path::new)
+        .map(pipeline::read_image_list)
+        .transpose()
+        .unwrap_or_else(|message| {
+            eprintln!("{message}");
+            std::process::exit(2);
+        })
+        .unwrap_or_default();
     let views_per_batch =
         resolve_views_per_batch(args.views_per_batch, pixel_batch, args.patch_size).unwrap_or_else(
             |message| {
@@ -797,8 +815,12 @@ fn main() {
     let initialization = match args.initialization.as_str() {
         "top-track" => pipeline::InitialPointPolicy::TopTrackLength,
         "radfoam-v1" => pipeline::InitialPointPolicy::RadFoamV1,
+        "camera-lattice" => pipeline::InitialPointPolicy::CameraLattice,
         other => {
-            eprintln!("unknown --initialization '{other}' (use 'top-track' or 'radfoam-v1')");
+            eprintln!(
+                "unknown --initialization '{other}' \
+                 (use 'top-track', 'radfoam-v1', or 'camera-lattice')"
+            );
             std::process::exit(2);
         }
     };
@@ -1016,6 +1038,7 @@ fn main() {
         oriented_powerfoam: args.oriented_powerfoam,
         init_ply,
         test_every: args.test_every,
+        test_names,
     };
 
     let sparse = path::Path::new(&args.sparse);
@@ -1076,13 +1099,23 @@ fn main() {
     };
     if let Some(ref geometry_images) = args.geometry_images {
         let geometry_images = path::Path::new(geometry_images);
-        let (train_images, _) = pipeline::split_train_test(
-            &outcome.reconstruction,
-            images,
-            config.max_views,
-            args.test_views,
-            args.test_every,
-        );
+        let (train_images, _) = if config.test_names.is_empty() {
+            pipeline::split_train_test(
+                &outcome.reconstruction,
+                images,
+                config.max_views,
+                args.test_views,
+                args.test_every,
+            )
+        } else {
+            pipeline::split_train_test_named(
+                &outcome.reconstruction,
+                images,
+                config.max_views,
+                args.test_views,
+                &config.test_names,
+            )
+        };
         let continuation_config = geometry_continuation_config(
             &config,
             args.geometry_steps_per_view,
@@ -1170,17 +1203,29 @@ fn main() {
 
     // --- Evaluation on held-out test views ---
     let evaluation_start = std::time::Instant::now();
-    if !args.skip_eval && (args.test_views > 0 || args.test_every > 0) {
-        // Same split logic as training (existence-filtered COLMAP order):
+    if !args.skip_eval
+        && (args.test_views > 0 || args.test_every > 0 || !config.test_names.is_empty())
+    {
+        // Same split logic as training: exact names when supplied,
         // interleaved every-Nth when --test-every > 0, else the legacy
         // contiguous first-train/next-test slicing.
-        let (train_images, test_images) = pipeline::split_train_test(
-            &outcome.reconstruction,
-            images,
-            config.max_views,
-            args.test_views,
-            args.test_every,
-        );
+        let (train_images, test_images) = if config.test_names.is_empty() {
+            pipeline::split_train_test(
+                &outcome.reconstruction,
+                images,
+                config.max_views,
+                args.test_views,
+                args.test_every,
+            )
+        } else {
+            pipeline::split_train_test_named(
+                &outcome.reconstruction,
+                images,
+                config.max_views,
+                args.test_views,
+                &config.test_names,
+            )
+        };
         let test_views = build_evaluation_views(
             &outcome.reconstruction,
             images,
@@ -1389,6 +1434,7 @@ mod tests {
         assert_eq!(default.geometry_steps_per_view, 0);
         assert_eq!(default.geometry_position_lr_ratio, 0.01);
         assert_eq!(default.initialization, "radfoam-v1");
+        assert!(default.test_list.is_none());
         assert_eq!(default.opacity_weight, None);
         assert_eq!(resolve_opacity_weight(default.opacity_weight, false), 0.0);
         assert_eq!(
@@ -1409,11 +1455,14 @@ mod tests {
                 "256",
                 "--views-per-batch",
                 "16",
+                "--initialization",
+                "camera-lattice",
             ],
         )
         .unwrap();
         assert_eq!(explicit.pixel_batch, 256);
         assert_eq!(explicit.views_per_batch, 16);
+        assert_eq!(explicit.initialization, "camera-lattice");
         assert!(!explicit.skip_eval);
 
         let skip_eval = <Args as argh::FromArgs>::from_args(

@@ -11,10 +11,10 @@
 //!
 //! The bin target `train_colmap` (in `src/bin/`) wraps these for CLI use.
 
-use crate::{colmap, diff_render, metrics, render};
+use crate::{colmap, diff_render, inverse, metrics, render};
 use blade_graphics as gpu;
 use blade_volume as vol;
-use std::{path, sync};
+use std::{fs, path, sync};
 
 /// Returns the Voronoi or power cell containing `camera_origin`. Use this as
 /// the `start_cell` of every ray for the view at that camera. Weighted clouds
@@ -46,6 +46,25 @@ pub fn load_and_downsample_image(
         out.push(px[2] as f32 / 255.0);
     }
     Ok(out)
+}
+
+/// Find a foreground mask corresponding to an image name.
+///
+/// Most captures mirror the complete path. Public datasets commonly keep
+/// JPEG photographs and lossless PNG masks, so a missing exact match falls
+/// back to the same relative stem with a `.png` extension.
+pub(crate) fn corresponding_mask_path(directory: &path::Path, image_name: &str) -> path::PathBuf {
+    let exact = directory.join(image_name);
+    if exact.is_file() {
+        exact
+    } else {
+        let png = exact.with_extension("png");
+        if png.is_file() {
+            png
+        } else {
+            exact
+        }
+    }
 }
 
 fn sample_bilinear(image: &image::RgbImage, x: f64, y: f64) -> [f32; 3] {
@@ -117,8 +136,8 @@ pub struct PipelineConfig {
     /// (`simple_delaunay_lib`) gets quadratic on tens of thousands of points;
     /// real COLMAP scenes routinely ship 100K+, so subsampling is essential.
     /// Interpretation is policy-specific: top-track initialization keeps the
-    /// strongest tracks, while RadFoam v1 scales its sparse/background mix to
-    /// the cap.
+    /// strongest tracks, RadFoam v1 scales its sparse/background mix to the
+    /// cap, and camera-lattice uses it as the exact site count.
     pub max_initial_points: Option<usize>,
     /// Policy used to turn the sparse COLMAP cloud into initial foam sites.
     pub initialization: InitialPointPolicy,
@@ -152,6 +171,9 @@ pub struct PipelineConfig {
     /// makes the test set a contiguous tail arc (mostly extrapolation) and
     /// depresses test PSNR versus the standard protocol.
     pub test_every: usize,
+    /// Exact COLMAP image names held out by a dataset-defined split. When
+    /// non-empty this takes precedence over [`Self::test_every`].
+    pub test_names: Vec<String>,
 }
 
 /// Adjacency algorithm to use when building the initial foam.
@@ -206,6 +228,9 @@ pub enum InitialPointPolicy {
     /// in `[0, 1)` (background `-0.5`). The Rust PRNG is deterministic but is
     /// not expected to reproduce PyTorch's bit sequence.
     RadFoamV1,
+    /// Fill the camera focus volume with a deterministic jittered lattice.
+    /// This is for calibrated posed captures that do not provide SfM points.
+    CameraLattice,
 }
 
 impl Default for PipelineConfig {
@@ -227,6 +252,7 @@ impl Default for PipelineConfig {
             oriented_powerfoam: false,
             init_ply: None,
             test_every: 0,
+            test_names: Vec::new(),
         }
     }
 }
@@ -292,6 +318,64 @@ pub fn split_train_test<'a>(
             .collect();
         (train, test)
     }
+}
+
+/// Partition views with an explicit held-out filename list.
+///
+/// This is the unambiguous path for datasets that publish their own split.
+/// Names use the same relative paths as COLMAP's `images.bin`.
+pub fn split_train_test_named<'a>(
+    reconstruction: &'a colmap::Reconstruction,
+    images_dir: &path::Path,
+    max_views: Option<usize>,
+    test_views: usize,
+    test_names: &[String],
+) -> (Vec<&'a colmap::ColmapImage>, Vec<&'a colmap::ColmapImage>) {
+    let mut train = Vec::new();
+    let mut test = Vec::new();
+    for image in reconstruction
+        .images
+        .iter()
+        .filter(|image| images_dir.join(&image.name).is_file())
+    {
+        if test_names.iter().any(|name| name == &image.name) {
+            test.push(image);
+        } else {
+            train.push(image);
+        }
+    }
+    if let Some(cap) = max_views {
+        train.truncate(cap);
+    }
+    if test_views > 0 {
+        test.truncate(test_views);
+    }
+    (train, test)
+}
+
+/// Read one relative COLMAP image name per line.
+pub fn read_image_list(source: &path::Path) -> Result<Vec<String>, String> {
+    let text = fs::read_to_string(source)
+        .map_err(|error| format!("cannot read {}: {error}", source.display()))?;
+    let mut names = Vec::new();
+    for (line, value) in text.lines().enumerate() {
+        let name = value.trim();
+        if name.is_empty() || name.starts_with('#') {
+            continue;
+        }
+        if names.iter().any(|existing| existing == name) {
+            return Err(format!(
+                "{} repeats image name {name} on line {}",
+                source.display(),
+                line + 1,
+            ));
+        }
+        names.push(name.to_string());
+    }
+    if names.is_empty() {
+        return Err(format!("{} contains no image names", source.display()));
+    }
+    Ok(names)
 }
 
 /// Build the training views from a COLMAP reconstruction.
@@ -386,7 +470,7 @@ fn build_views_from_optional_masks<'a>(
         };
         let target_alpha = masks_dir
             .map(|directory| {
-                let mask_path = directory.join(&image.name);
+                let mask_path = corresponding_mask_path(directory, &image.name);
                 load_and_rectify_image(&mask_path, config.resolution.0, config.resolution.1, camera)
                     .map_err(|error| format!("cannot read mask {}: {error}", mask_path.display()))
                     .map(|rgb| {
@@ -975,6 +1059,177 @@ fn density_from_raw(raw: f32, softplus_beta: f32) -> f32 {
     }
 }
 
+fn camera_focus(cameras: &[vol::CameraParams]) -> glam::Vec3 {
+    let mut system = glam::Mat3::ZERO;
+    let mut right = glam::Vec3::ZERO;
+    for camera in cameras {
+        let origin = glam::Vec3::from(camera.cam_position);
+        let direction = glam::Quat::from_array(camera.cam_orientation) * glam::Vec3::Z;
+        let projector = glam::Mat3::IDENTITY
+            - glam::Mat3::from_cols(
+                direction * direction.x,
+                direction * direction.y,
+                direction * direction.z,
+            );
+        system += projector;
+        right += projector * origin;
+    }
+    if system.determinant().abs() <= 1.0e-6 {
+        cameras
+            .iter()
+            .map(|camera| glam::Vec3::from(camera.cam_position))
+            .sum::<glam::Vec3>()
+            / cameras.len().max(1) as f32
+    } else {
+        system.inverse() * right
+    }
+}
+
+fn lattice_hash(mut value: u32) -> u32 {
+    value ^= value >> 16;
+    value = value.wrapping_mul(0x7feb_352d);
+    value ^= value >> 15;
+    value = value.wrapping_mul(0x846c_a68b);
+    value ^ (value >> 16)
+}
+
+fn layered_lattice(count: usize, radius: f32, camera_side: glam::Vec3) -> Vec<glam::Vec3> {
+    let side = (count as f64).cbrt().ceil() as usize;
+    let orientation = glam::Quat::from_rotation_arc(glam::Vec3::Z, camera_side);
+    (0..count)
+        .map(|index| {
+            let indices = [index % side, (index / side) % side, index / (side * side)];
+            let local = glam::Vec3::from_array(std::array::from_fn(|axis| {
+                let jitter = lattice_hash((3 * index + axis) as u32) as f64 / u32::MAX as f64 - 0.5;
+                ((((indices[axis] as f64 + 0.5 + 0.6 * jitter) / side as f64) * 2.0 - 1.0)
+                    * radius as f64) as f32
+            }));
+            orientation * local
+        })
+        .collect()
+}
+
+/// Initialize a volume from calibrated cameras when no sparse cloud exists.
+///
+/// The radius is relative to the median distance from a camera to the common
+/// focus. Filling the back first avoids a complete absorbing layer directly
+/// in front of the cameras when `count` is not a perfect cube.
+pub fn camera_lattice_initial_model(
+    cameras: &[vol::CameraParams],
+    count: usize,
+    radius_factor: f32,
+    density: f32,
+) -> Result<vol::PointCloudModel, String> {
+    if cameras.is_empty() {
+        return Err("camera-lattice initialization needs a training camera".to_string());
+    }
+    if count < 4 {
+        return Err("camera-lattice initialization needs at least four sites".to_string());
+    }
+    if !radius_factor.is_finite() || radius_factor <= 0.0 {
+        return Err("camera-lattice radius factor must be positive".to_string());
+    }
+    let focus = camera_focus(cameras);
+    let mut distances: Vec<f32> = cameras
+        .iter()
+        .map(|camera| (glam::Vec3::from(camera.cam_position) - focus).length())
+        .collect();
+    distances.sort_by(f32::total_cmp);
+    let radius = distances[distances.len() / 2] * radius_factor;
+    if !radius.is_finite() || radius <= f32::EPSILON {
+        return Err("camera-lattice cameras do not enclose a finite volume".to_string());
+    }
+    let camera_side = cameras
+        .iter()
+        .filter_map(|camera| (glam::Vec3::from(camera.cam_position) - focus).try_normalize())
+        .sum::<glam::Vec3>()
+        .try_normalize()
+        .unwrap_or(glam::Vec3::Z);
+    let points = layered_lattice(count, radius, camera_side)
+        .into_iter()
+        .map(|position| (focus + position).extend(density))
+        .collect();
+    log::info!(
+        "camera bundle focus ({:.3}, {:.3}, {:.3}), initial radius {:.3}",
+        focus.x,
+        focus.y,
+        focus.z,
+        radius,
+    );
+    Ok(vol::PointCloudModel {
+        sh_coefficients: vec![0.0; count * 3],
+        sh_degree: 0,
+        transforms: None,
+        adjacency: None,
+        radii: None,
+        surface_normals: None,
+        surface_offsets: None,
+        surface_detail: None,
+        surface_color_coefficients: None,
+        spherical_voronoi: None,
+        points,
+    })
+}
+
+/// Seed a pose-only lattice from the intersection of its training silhouettes.
+///
+/// Sites outside the soft visual hull retain a small positive density rather
+/// than zero, so the ordinary ReLU parameterization can still recover them.
+/// The lattice and its Voronoi topology remain unchanged.
+fn initialize_camera_lattice_from_masks(
+    model: &mut vol::PointCloudModel,
+    views: &[diff_render::ViewSupervision],
+    initial_density: f32,
+) -> usize {
+    let masked_views: Vec<_> = views
+        .iter()
+        .filter_map(|view| view.target_alpha.as_deref().map(|mask| (view, mask)))
+        .collect();
+    if masked_views.is_empty() {
+        return 0;
+    }
+    let outside_density = (0.01 * initial_density).max(f32::EPSILON);
+    let mut inside_count = 0;
+    for (index, point) in model.points.iter_mut().enumerate() {
+        let position = point.truncate();
+        let mut support = 0;
+        let mut color = glam::Vec3::ZERO;
+        for &(view, mask) in &masked_views {
+            let Some((pixel, _)) = inverse::capture::project(
+                &view.camera,
+                view.width as usize,
+                view.height as usize,
+                position,
+            ) else {
+                continue;
+            };
+            let x = pixel[0].floor() as isize;
+            let y = pixel[1].floor() as isize;
+            if x < 0 || y < 0 || x >= view.width as isize || y >= view.height as isize {
+                continue;
+            }
+            let slot = y as usize * view.width as usize + x as usize;
+            if mask[slot] > 0.5 {
+                support += 1;
+                color += glam::Vec3::from_slice(&view.target_rgb[3 * slot..3 * slot + 3]);
+            }
+        }
+        let inside = support * 5 >= masked_views.len() * 4;
+        if inside {
+            point.w = initial_density;
+            let average = color / support as f32;
+            model.sh_coefficients[3 * index..3 * index + 3]
+                .copy_from_slice(&((average - 0.5) / 0.282_094_8).to_array());
+            inside_count += 1;
+        } else {
+            point.w = outside_density;
+            model.sh_coefficients[3 * index..3 * index + 3]
+                .copy_from_slice(&glam::Vec3::splat(-0.5 / 0.282_094_8).to_array());
+        }
+    }
+    inside_count
+}
+
 fn radfoam_v1_initial_model(
     reconstruction: &colmap::Reconstruction,
     max_points: Option<usize>,
@@ -1075,6 +1330,34 @@ fn train_colmap_appearance_split_optional_masks(
     let load_start = std::time::Instant::now();
     let recon = colmap::load_reconstruction(sparse_dir);
     let load_duration = load_start.elapsed();
+    let (view_images, test_images) = if config.test_names.is_empty() {
+        split_train_test(&recon, images_dir, config.max_views, 0, config.test_every)
+    } else {
+        split_train_test_named(&recon, images_dir, config.max_views, 0, &config.test_names)
+    };
+    let view_start = std::time::Instant::now();
+    if !config.test_names.is_empty() {
+        log::info!(
+            "named held-out split: {} train / {} test images",
+            view_images.len(),
+            test_images.len(),
+        );
+    } else if config.test_every > 0 {
+        log::info!(
+            "every-{}th held-out split: {} train / {} test images",
+            config.test_every,
+            view_images.len(),
+            test_images.len(),
+        );
+    }
+    let views = build_views_from_optional_masks(
+        &recon,
+        images_dir,
+        masks_dir,
+        config,
+        view_images.iter().copied(),
+    )?;
+    let view_duration = view_start.elapsed();
     let initialization_start = std::time::Instant::now();
     // Resume path: take the foam from a checkpoint PLY instead of the
     // COLMAP cloud. Cameras/views still come from `recon`; the PLY already
@@ -1100,6 +1383,37 @@ fn train_colmap_appearance_split_optional_masks(
                 config.max_initial_points,
                 config.fit.softplus_beta,
             ),
+            InitialPointPolicy::CameraLattice => {
+                let cameras: Vec<_> = views.iter().map(|view| view.camera).collect();
+                let count = config.max_initial_points.unwrap_or(2_000);
+                let target_inside = (count / 16).max(4);
+                let mut radius_factor = 0.7;
+                let (model, inside) = loop {
+                    let mut candidate = camera_lattice_initial_model(
+                        &cameras,
+                        count,
+                        radius_factor,
+                        config.initial_density,
+                    )?;
+                    let inside = initialize_camera_lattice_from_masks(
+                        &mut candidate,
+                        &views,
+                        config.initial_density,
+                    );
+                    if masks_dir.is_none() || inside >= target_inside || radius_factor <= 0.0875 {
+                        break (candidate, inside);
+                    }
+                    radius_factor *= 0.5;
+                };
+                if masks_dir.is_some() {
+                    log::info!(
+                        "camera-lattice visual hull seeded {inside}/{} sites at radius factor {:.4}",
+                        model.points.len(),
+                        radius_factor,
+                    );
+                }
+                model
+            }
         }
     };
     if config.init_ply.is_none() && config.initialization == InitialPointPolicy::TopTrackLength {
@@ -1136,10 +1450,8 @@ fn train_colmap_appearance_split_optional_masks(
     let initialization_duration = initialization_start.elapsed();
     let t0 = std::time::Instant::now();
     let reference_cameras = if matches!(config.adjacency, AdjacencyKind::PowerFoamReference) {
-        let (images, _) =
-            split_train_test(&recon, images_dir, config.max_views, 0, config.test_every);
-        images
-            .into_iter()
+        view_images
+            .iter()
             .filter(|image| {
                 recon.cameras[&image.camera_id]
                     .model
@@ -1176,28 +1488,6 @@ fn train_colmap_appearance_split_optional_masks(
         config.resolution,
     );
 
-    let view_start = std::time::Instant::now();
-    let view_images = if config.test_every > 0 {
-        let (train_imgs, test_imgs) =
-            split_train_test(&recon, images_dir, config.max_views, 0, config.test_every);
-        log::info!(
-            "every-{}th held-out split: {} train / {} test images",
-            config.test_every,
-            train_imgs.len(),
-            test_imgs.len(),
-        );
-        train_imgs
-    } else {
-        recon
-            .images
-            .iter()
-            .filter(|image| images_dir.join(&image.name).is_file())
-            .take(config.max_views.unwrap_or(recon.images.len()))
-            .collect()
-    };
-    let views =
-        build_views_from_optional_masks(&recon, images_dir, masks_dir, config, view_images)?;
-    let view_duration = view_start.elapsed();
     if views.is_empty() {
         log::warn!("no usable training views — returning untrained initial model");
         log::info!(
@@ -1389,6 +1679,109 @@ fn train_colmap_appearance_split_optional_masks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn camera(position: glam::Vec3, target: glam::Vec3) -> vol::CameraParams {
+        vol::CameraParams {
+            cam_position: position.to_array(),
+            cam_orientation: glam::Quat::from_rotation_arc(
+                glam::Vec3::Z,
+                (target - position).normalize(),
+            )
+            .to_array(),
+            fov: [1.0; 2],
+            principal: [0.0; 2],
+            depth: 100.0,
+        }
+    }
+
+    #[test]
+    fn camera_lattice_is_deterministic_and_centered_on_the_view_bundle() {
+        let target = glam::Vec3::new(0.2, -0.3, 0.7);
+        let cameras = [
+            camera(glam::Vec3::new(-3.0, 0.0, 1.0), target),
+            camera(glam::Vec3::new(2.0, -2.0, 2.0), target),
+            camera(glam::Vec3::new(1.0, 3.0, -1.0), target),
+        ];
+        let focus = camera_focus(&cameras);
+        assert!((focus - target).length() < 1.0e-4, "focus {focus:?}");
+        let first = camera_lattice_initial_model(&cameras, 2_048, 0.7, 0.1).unwrap();
+        let second = camera_lattice_initial_model(&cameras, 2_048, 0.7, 0.1).unwrap();
+        assert_eq!(first.points, second.points);
+        assert_eq!(first.points.len(), 2_048);
+        assert!(first.points.iter().all(|point| point.w == 0.1));
+        first.validate().unwrap();
+    }
+
+    #[test]
+    fn camera_lattice_rejects_an_empty_or_degenerate_bundle() {
+        assert!(camera_lattice_initial_model(&[], 2_048, 0.7, 0.1).is_err());
+        let camera = vol::CameraParams::default();
+        assert!(camera_lattice_initial_model(&[camera], 2_048, 0.7, 0.1).is_err());
+    }
+
+    #[test]
+    fn mask_lookup_accepts_png_for_a_jpeg_capture() {
+        let directory = std::env::temp_dir().join(format!(
+            "blade-volume-mask-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("lookup")
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("frame.png"), b"mask").unwrap();
+        assert_eq!(
+            corresponding_mask_path(&directory, "frame.jpg"),
+            directory.join("frame.png")
+        );
+        assert_eq!(
+            corresponding_mask_path(&directory, "missing.jpg"),
+            directory.join("missing.jpg")
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn camera_lattice_masks_seed_a_soft_visual_hull() {
+        let camera = vol::CameraParams {
+            cam_orientation: glam::Quat::IDENTITY.to_array(),
+            fov: [std::f32::consts::FRAC_PI_2; 2],
+            ..Default::default()
+        };
+        let mut target_alpha = vec![0.0; 9];
+        target_alpha[4] = 1.0;
+        let mut target_rgb = vec![0.0; 27];
+        target_rgb[12..15].copy_from_slice(&[0.25, 0.5, 0.75]);
+        let view = diff_render::ViewSupervision {
+            camera,
+            target_rgb,
+            target_alpha: Some(target_alpha),
+            width: 3,
+            height: 3,
+        };
+        let mut model = vol::PointCloudModel {
+            points: vec![
+                glam::Vec4::new(0.0, 0.0, 1.0, 1.0),
+                glam::Vec4::new(0.8, 0.0, 1.0, 1.0),
+            ],
+            sh_coefficients: vec![0.0; 6],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: None,
+            radii: None,
+            surface_normals: None,
+            surface_offsets: None,
+            surface_detail: None,
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+        };
+        assert_eq!(
+            initialize_camera_lattice_from_masks(&mut model, &[view], 1.0),
+            1
+        );
+        assert_eq!(model.points[0].w, 1.0);
+        assert_eq!(model.points[1].w, 0.01);
+        assert_ne!(model.sh_coefficients[..3], [0.0; 3]);
+    }
 
     #[test]
     fn radfoam_v1_initialization_is_deterministic_and_bounded() {
@@ -2025,6 +2418,7 @@ mod tests {
             oriented_powerfoam: false,
             init_ply: None,
             test_every: 0,
+            test_names: Vec::new(),
         };
         let trained = train_colmap_appearance(&sparse, &images, &config, gpu.clone());
 

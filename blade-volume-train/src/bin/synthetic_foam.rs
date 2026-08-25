@@ -240,103 +240,15 @@ fn photometric_descriptor_capture(
     ])
 }
 
-fn camera_focus(cameras: &[vol::CameraParams]) -> glam::Vec3 {
-    let mut system = glam::Mat3::ZERO;
-    let mut right = glam::Vec3::ZERO;
-    for camera in cameras {
-        let origin = glam::Vec3::from(camera.cam_position);
-        let direction = glam::Quat::from_array(camera.cam_orientation) * glam::Vec3::Z;
-        let projector = glam::Mat3::IDENTITY
-            - glam::Mat3::from_cols(
-                direction * direction.x,
-                direction * direction.y,
-                direction * direction.z,
-            );
-        system += projector;
-        right += projector * origin;
-    }
-    if system.determinant().abs() <= 1.0e-6 {
-        cameras
-            .iter()
-            .map(|camera| glam::Vec3::from(camera.cam_position))
-            .sum::<glam::Vec3>()
-            / cameras.len().max(1) as f32
-    } else {
-        system.inverse() * right
-    }
-}
-
-fn hash(mut value: u32) -> u32 {
-    value ^= value >> 16;
-    value = value.wrapping_mul(0x7feb_352d);
-    value ^= value >> 15;
-    value = value.wrapping_mul(0x846c_a68b);
-    value ^ (value >> 16)
-}
-
-/// Fill a jittered lattice from the back of the capture volume towards the
-/// cameras. A non-cubic count leaves the camera-facing outer layer sparse,
-/// avoiding an initial wall of absorbing sites directly in front of every
-/// training ray.
-fn layered_positions(count: usize, radius: f32, camera_side: glam::Vec3) -> Vec<glam::Vec3> {
-    let side = (count as f64).cbrt().ceil() as usize;
-    let orientation = glam::Quat::from_rotation_arc(glam::Vec3::Z, camera_side);
-    (0..count)
-        .map(|index| {
-            let indices = [index % side, (index / side) % side, index / (side * side)];
-            let local = glam::Vec3::from_array(std::array::from_fn(|axis| {
-                let jitter = hash((3 * index + axis) as u32) as f64 / u32::MAX as f64 - 0.5;
-                ((((indices[axis] as f64 + 0.5 + 0.6 * jitter) / side as f64) * 2.0 - 1.0)
-                    * radius as f64) as f32
-            }));
-            orientation * local
-        })
-        .collect()
-}
-
 fn initial_model(
     cameras: &[vol::CameraParams],
     count: usize,
     radius_factor: f32,
     density: f32,
 ) -> vol::PointCloudModel {
-    if count < 4 {
-        fail("the initial cloud needs at least four sites");
-    }
-    let focus = camera_focus(cameras);
-    let mut distances: Vec<f32> = cameras
-        .iter()
-        .map(|camera| (glam::Vec3::from(camera.cam_position) - focus).length())
-        .collect();
-    distances.sort_by(f32::total_cmp);
-    let radius = distances[distances.len() / 2] * radius_factor;
-    let camera_side = cameras
-        .iter()
-        .filter_map(|camera| (glam::Vec3::from(camera.cam_position) - focus).try_normalize())
-        .sum::<glam::Vec3>()
-        .try_normalize()
-        .unwrap_or(glam::Vec3::Z);
-    let points = layered_positions(count, radius, camera_side)
-        .into_iter()
-        .map(|position| (focus + position).extend(density))
-        .collect();
-    println!(
-        "camera bundle focus ({:.3}, {:.3}, {:.3}), initial radius {:.3}",
-        focus.x, focus.y, focus.z, radius
-    );
-    let mut model = vol::PointCloudModel {
-        sh_coefficients: vec![0.0; count * 3],
-        sh_degree: 0,
-        transforms: None,
-        adjacency: None,
-        radii: None,
-        surface_normals: None,
-        surface_offsets: None,
-        surface_detail: None,
-        surface_color_coefficients: None,
-        spherical_voronoi: None,
-        points,
-    };
+    let mut model =
+        train::pipeline::camera_lattice_initial_model(cameras, count, radius_factor, density)
+            .unwrap_or_else(|error| fail(error));
     model.compute_adjacency_default();
     model
 }
@@ -1905,49 +1817,11 @@ mod tests {
         assert_eq!(args.pbr_gaussian_output.as_deref(), Some("relightable.ply"));
     }
 
-    fn camera(position: glam::Vec3, target: glam::Vec3) -> vol::CameraParams {
-        vol::CameraParams {
-            cam_position: position.to_array(),
-            cam_orientation: glam::Quat::from_rotation_arc(
-                glam::Vec3::Z,
-                (target - position).normalize(),
-            )
-            .to_array(),
-            fov: [1.0; 2],
-            principal: [0.0; 2],
-            depth: 100.0,
-        }
-    }
-
     #[test]
     fn view_split_reserves_only_the_requested_residue() {
         let (training, held_out) = split_views(8, 4, 1);
         assert_eq!(training, [0, 2, 3, 4, 6, 7]);
         assert_eq!(held_out, [1, 5]);
-    }
-
-    #[test]
-    fn camera_focus_meets_converging_view_axes() {
-        let target = glam::Vec3::new(0.2, -0.3, 0.7);
-        let cameras = [
-            camera(glam::Vec3::new(-3.0, 0.0, 1.0), target),
-            camera(glam::Vec3::new(2.0, -2.0, 2.0), target),
-            camera(glam::Vec3::new(1.0, 3.0, -1.0), target),
-        ];
-        let actual = camera_focus(&cameras);
-        assert!((actual - target).length() < 1.0e-4, "focus {actual:?}");
-    }
-
-    #[test]
-    fn partial_lattice_layer_faces_the_cameras() {
-        let camera_side = glam::Vec3::new(0.4, -0.2, 0.9).normalize();
-        let positions = layered_positions(2048, 1.0, camera_side);
-        assert_eq!(positions.len(), 2048);
-        let front = positions
-            .iter()
-            .filter(|position| position.dot(camera_side) > 0.85)
-            .count();
-        assert_eq!(front, 20, "the sparse outer layer moved off camera-side");
     }
 
     #[test]
