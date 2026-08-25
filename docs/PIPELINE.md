@@ -2576,6 +2576,34 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   spatial/directional responsibility model; neither another scalar rate nor a
   smaller copy of the same table is supported by the current gates.
 
+#### M2cj — Temporal gradient accumulation (opt-in)
+
+- `AppearanceFitConfig::gradient_accumulation` and the matching
+  `train_colmap --gradient-accumulation` option average independently sampled
+  micro-batches before one Adam update. Meganeura owns the persistent gradient
+  buffers; Blade only clears them at the update boundary and configures Adam
+  on the final micro-batch. The default remains one. Checkpoints are still
+  written only between Adam updates, and an accumulated split/resume test is
+  bit-identical to uninterrupted training.
+- The option is useful for camera coverage, not as a blanket larger-batch
+  default. On the fixed 98,831-site Room cloud, 256 updates over four training
+  views regress held PSNR as accumulation rises: the established 4,096-ray
+  control scores 27.1422/19.8841 dB train/held, 2x scores
+  27.5404/19.7973, and 4x scores 27.8309/19.5675. The extra rays fit the same
+  four views more closely and generalize less well.
+- With 32 training views and four cameras per 4,096-ray micro-batch, 2x
+  accumulation improves the established 24.7981/20.2976 dB control to
+  25.3027/20.4819 dB. It trains in 5.175 seconds and peaks at 253,263,872 host
+  bytes. A monolithic 8,192-ray/eight-view batch scores 25.3243/20.4419 dB in
+  5.021 seconds and peaks at 316,489,728 bytes. Accumulation is therefore 3%
+  slower here, but uses 20% less host memory and is +0.0400 dB held out in
+  this sample. Keep it explicit; select it when a larger multi-view batch is
+  useful but the corresponding graph/path buffers do not fit comfortably.
+- The repeated-input physical-GPU gate verifies that two micro-batches produce
+  the same parameters and loss as one direct Adam update. The 32-view runs
+  process 2,097,152 rays without path truncation, swap, OOM, Xid, or GPU fault
+  inside the 12 GiB scope.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
