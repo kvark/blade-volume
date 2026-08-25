@@ -7375,3 +7375,24 @@ renderer, shader, graph operation, dependency, or public option. Ignored
 outputs and telemetry remain under `target/audit-runs/static-gaussian-reload/`.
 The default and all-feature workspace test matrices also pass in full; each
 peaks at 2.8 GiB in its 12 GiB scope with the same clean GPU and OOM counters.
+
+## Rejected view-facing photometric-normal consensus (2026-08-25)
+
+A camera-local calibrated normal was temporarily weighted by its solved
+view-facing cosine before the existing consensus was blended with the shared
+normal. This is a plausible confidence measure for projected support and adds
+only one multiply per estimate. It passes the analytical correspondence tests
+and improves the dense gate's volumetric held-light result from the current
+`24.47/23.24/23.23` dB mean/worst/where-hit band to
+`24.51/23.33/23.26` dB at the same 55.1% coverage.
+
+The independent nested layout rejects the rule. An adjacent restored control
+reaches `23.49` dB mean and `21.88` dB where hit, while facing weighting falls
+to `23.37/21.75` dB at the same 52.8% coverage. Extracted truth-normal RMSE is
+unchanged at 53.32 degrees; the later density blend improves only
+`52.17→52.15` degrees. A grazing camera can be the useful correction when the
+shared surface normal is already wrong, so projected facing is not reliable
+confidence here. The source is restored to the simpler equal mean. All 12 GiB
+scopes peak below 301 MiB with zero swap, OOM, validation error, Xid, or GPU
+fault. Ignored outputs and telemetry remain under
+`target/audit-runs/photometric-normal-facing/`.
