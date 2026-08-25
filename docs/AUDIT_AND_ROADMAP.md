@@ -690,6 +690,11 @@ At the audited revision:
   retaining the same capacity. The unscaled half-batch arm loses 0.7087 dB
   held out. This is a selected explicit continuation recipe using existing
   controls; growth-stage defaults and checkpoint semantics remain unchanged.
+  Continuing to 1,024 rays improves repeated Bonsai held quality by another
+  0.2357 dB but regresses a majority of Room views in both paired replicas
+  while taking 5.2% longer than 2,048 rays. The 512-ray rung then loses
+  0.0840 dB Room held quality and takes 20.4% longer. Both smaller rungs are
+  rejected; 2,048 rays remains the cross-scene continuation recipe.
 - That gate exposed a separate resume correctness bug: default-zero per-view
   exposures deliberately have parameters but no gradient or Adam state, while
   the densification rebuild unconditionally requested their moments. The

@@ -2659,6 +2659,18 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   train/held PSNR changes 24.8786/23.9613→24.8982/23.9886 dB, while training
   falls 31.001→30.233 seconds (-2.5%). The two paired held-view splits are
   19/2/18 and 24/0/15 improved/tied/regressed.
+- Continuing the ray-normalized ladder to 1,024 rays is rejected by the
+  cross-scene gate. Two Bonsai replicas improve the 2,048-ray mean by
+  +0.3344/+0.2357 dB train/held at 29.864 seconds (+5.5%). Two Room replicas
+  instead change it by -0.0153/-0.0129 dB at 31.796 seconds (+5.2%), with
+  paired held-view splits of 16/2/21 and 13/1/25. The extra updates help
+  Bonsai, but do not transfer well enough to justify their cost.
+- A final 512-ray rung shows diminishing returns even on Bonsai: its single
+  24.9883/24.0491 dB run adds only 0.1291 dB held over the repeated 1,024-ray
+  mean while taking 32.846 seconds (+10.0%). The corrected Room run reaches
+  24.7929/23.9046 dB in 36.404 seconds, -0.1053/-0.0840 dB below the repeated
+  2,048-ray mean while taking 20.4% longer; it regresses 33/39 held views
+  against the first 2,048-ray replica. The ladder stops here.
 - This advances as an explicit post-growth or post-cap continuation recipe
   using existing CLI controls. The global 4,096-ray defaults remain selected
   by their growth-stage gates. No automatic phase, configuration field,
@@ -2681,7 +2693,10 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   continues on a valid grown model.
 - The completed pre-fix 512-ray Room run is excluded from the quality ladder.
   Earlier 4,096/2,048/1,024-ray screens aligned their schedules and remain
-  valid. The affected arm is rerun from its common checkpoint after this fix.
+  valid. The affected arm was rerun from its common checkpoint after this fix;
+  it refreshed at the non-coincident step-10,000 boundary, grew to 196,988
+  sites, recorded zero path truncation, and supplied the rejected 512-ray
+  quality result above.
 
 ### M3 — Training crate scaffolding
 
