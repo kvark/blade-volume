@@ -7200,3 +7200,29 @@ with zero swap, pressure, OOM, validation error, Xid, or GPU fault. The change
 adds no API, dependency, shader, render variant, graph operation, model field,
 or persisted data. Ignored equivalence programs, exact level files, models,
 logs, and telemetry remain under `target/audit-runs/ggx-sample-hoist/`.
+
+## Selected production scoring-context reuse (2026-08-25)
+
+Complete-render refinement formerly created and destroyed a validated Vulkan
+ray-tracing context for every normal, material, support, assignment, and score
+stage. Tests had already shared one scoring context to make ordinary parallel
+execution reliable, but release binaries retained the repeated device path.
+They now use the same standard-library `OnceLock` policy. Renderers still own
+and destroy their short-lived targets, readback buffers, encoders, tracers, and
+scene resources; only the Blade context and its pipeline cache live for the
+process. No render, optimizer, shader, graph operation, pipeline variant,
+binding, model, format, dependency, or public API changes.
+
+Adjacent old/new binary gates reduce the dense complete scope from
+`13.574→11.750` seconds and CPU time from `27.363→25.717` seconds. The nested
+layout falls from `17.308→15.322` seconds and `33.131→29.248` CPU seconds.
+Every deterministic pre-Gaussian render objective is unchanged; final
+volumetric held-light quality changes within the established GPU-atomic replay
+band from `24.50/23.27/23.27` to `24.47/23.23/23.22` dB
+mean/worst/where-hit on dense and from `23.49/21.87` to `23.52/21.93` dB
+mean/where-hit on nested. Coverage stays `55.1%` on dense and changes
+`52.8→52.7%` on nested. Peak host memory rises conservatively from
+`305.4→320.3` MB and `317.1→324.9` MB because the context stays resident;
+both 12 GiB scopes use zero swap and report no pressure, OOM, validation
+error, Xid, or GPU fault. Ignored binaries, models, logs, and telemetry remain
+under `target/audit-runs/scoring-context-reuse/`.

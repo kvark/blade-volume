@@ -639,13 +639,9 @@ fn init_scoring_context() -> Result<sync::Arc<gpu::Context>, String> {
     Ok(sync::Arc::new(context))
 }
 
-#[cfg(not(test))]
 fn scoring_context() -> Result<sync::Arc<gpu::Context>, String> {
-    init_scoring_context()
-}
-
-#[cfg(test)]
-fn scoring_context() -> Result<sync::Arc<gpu::Context>, String> {
+    // Refinement stages own short-lived render targets and tracers, not GPU
+    // devices. Keeping the device alive also retains Blade's pipeline cache.
     static CONTEXT: sync::OnceLock<Result<sync::Arc<gpu::Context>, String>> = sync::OnceLock::new();
     CONTEXT.get_or_init(init_scoring_context).clone()
 }
