@@ -6917,3 +6917,25 @@ scopes peak below 487 MiB and the focused test scope at 1.30 GiB; every 12 GiB
 scope uses zero swap and reports no memory pressure, OOM, validation error,
 Xid, or GPU fault. Ignored artifacts remain under
 `target/audit-runs/octagonal-gaussian-candidates/`.
+
+## Rejected unchecked Gaussian candidate reads (2026-08-25)
+
+The indexed response loop was screened with unchecked reads from its three
+same-length particle tables. Tile membership is private and constructed by
+enumerating those tables, so debug assertions could state the safety invariant
+without changing candidate arithmetic or ordering. All 42 Gaussian-focused
+tests pass, including exact tiled/exhaustive and grouped/individual candidate
+rows and the extreme-anisotropy containment oracle.
+
+The release compiler already removes the useful bounds-check overhead. An
+adjacent candidate/control Bonsai pair ties at `10.7/10.7` seconds for complete
+Gaussian fitting and `13.738/13.741` seconds for the full command. Scoped CPU
+time slightly favors the safe control at `53.543` versus `53.704` seconds;
+held-view metrics are identical within the established replay band. Adding an
+unsafe invariant for no measurable return would make the hot path harder to
+maintain, so the prototype is removed and ordinary slice indexing remains.
+
+The 12 GiB reconstruction scopes peak below 492 MiB and the focused test scope
+at 1.30 GiB, with zero swap, memory pressure, OOM, validation error, Xid, or
+GPU fault. Ignored artifacts remain under
+`target/audit-runs/unchecked-gaussian-candidates/`.
