@@ -91,12 +91,13 @@ PBR fit continues from the calibrated surface and still returns only its
 learned radius to the relightable scene. No runtime representation or shader
 variant is added.
 
-The fitted scales do carry geometry evidence shared by both outputs. After the
-direct fit, their volume-equivalent three-sigma radius updates the corresponding
-relightable Gaussian surfel before it is scored or written. Centers, normals,
-material assignments, and PBR values remain unchanged. This happens only when
-`--gaussian-output` requests the direct fit; a PBR-only reconstruction retains
-its extracted radii.
+The learned PBR Gaussian scales carry support evidence back to the relightable
+surface. After fitting, their volume-equivalent three-sigma radius updates the
+corresponding surfel before it is scored or written. Centers, normals, material
+assignments, and PBR values remain unchanged. When both outputs are requested,
+the static light field also receives its own support fit. A PBR-only request
+runs only the dedicated fixed-centre PBR schedule and skips the unused static
+model, densification, evaluation, and support stage.
 
 `--render-refine-radii` can then check that transferred support against the
 complete PBR renderer. Eight localized antithetic rounds begin at ±10% and

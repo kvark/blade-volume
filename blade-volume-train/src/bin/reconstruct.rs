@@ -692,7 +692,41 @@ fn main() {
     }
 
     let mut learned_pbr_gaussian = None;
-    if fit_gaussians {
+    if fit_gaussians && args.gaussian_output.is_none() {
+        let gpu = compute_gpu
+            .get_or_insert_with(|| require_compute_gpu("PBR Gaussian training"))
+            .clone();
+        let mut pbr_gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
+            .unwrap_or_else(|error| {
+                eprintln!("cannot initialize PBR support Gaussian field: {error}");
+                std::process::exit(1);
+            });
+        let started = std::time::Instant::now();
+        let stats = train::gaussian_splat::fit_staged(
+            &mut pbr_gaussian,
+            &capture,
+            &train_views,
+            args.gaussian_steps,
+            gpu,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("cannot fit PBR Gaussian support: {error}");
+            std::process::exit(1);
+        });
+        println!(
+            "Gaussian PBR only: {} appearance and {} support updates in {:.1} s",
+            stats.appearance.steps,
+            stats.support.steps,
+            started.elapsed().as_secs_f64(),
+        );
+        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
+            .unwrap_or_else(|error| {
+                eprintln!("cannot update PBR support from direct Gaussian field: {error}");
+                std::process::exit(1);
+            });
+        learned_pbr_gaussian = Some(pbr_gaussian);
+        println!("updated PBR radii from learned Gaussian support");
+    } else if fit_gaussians {
         let gaussian_surface = if let Some(ref surfels) = sparse_gaussian_surface {
             vol::relight::RelightModel {
                 kernel: vol::relight::ParticleKernel::Gaussian,
@@ -2245,6 +2279,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(args.gaussian_output.as_deref(), Some("light-field.ply"));
+        assert!(args.pbr_gaussian_output.is_none());
         assert_eq!(args.gaussian_steps, 800);
     }
 
@@ -2262,6 +2297,7 @@ mod tests {
             ],
         )
         .unwrap();
+        assert!(args.gaussian_output.is_none());
         assert_eq!(args.pbr_gaussian_output.as_deref(), Some("relightable.ply"));
     }
 

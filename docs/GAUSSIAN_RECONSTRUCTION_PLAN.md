@@ -7075,3 +7075,38 @@ The reconstruction scopes peak below 327 MiB and the focused test scope at
 3.25 GiB. Every 12 GiB scope uses zero swap and reports no memory pressure,
 OOM, validation error, Xid, or GPU fault. Ignored artifacts remain under
 `target/audit-runs/view-stratified-gaussian-batches/`.
+
+## Selected PBR-only Gaussian training (2026-08-25)
+
+Requesting only `--pbr-gaussian-output` still entered the paired-output path.
+It constructed an unrequested static Gaussian, ran its residual-guided split
+and support optimization, evaluated it, and then discarded it. It also selected
+the shared half-opacity appearance basin rather than the dedicated PBR schedule
+already gated for independently fitted support. Both command-line entry points
+now call that existing fixed-centre PBR fit directly when no
+`--gaussian-output` is present. The two-output path is structurally unchanged.
+No shader, graph operation, model field, format, dependency, or public option
+is added.
+
+The complete calibrated dense gate confirms that this is a quality correction,
+not merely an orchestration shortcut. Volumetric held-light PBR improves from
+`22.62/21.03/21.18` to `24.45/23.23/23.19` dB mean/worst/where-hit, with
+coverage changing from `57.2%` to `55.1%`. The scalar PBR result also improves
+from `23.36/22.35/22.28` to `23.60/22.83/22.46` dB while coverage changes
+`56.9%→56.4%`. The selected PBR-only result is within `0.05` dB of the
+established independently fitted two-output gate. Its Gaussian fitting time
+falls from `4.447` to `2.094` seconds; complete scope time falls from `35.915`
+to `29.823` seconds and peak memory from `339.9` to `309.0` MB.
+
+A same-binary 18/2-view Room replay checks the production entry point. Omitting
+the static output reduces Gaussian fitting from `7.2` to `3.9` seconds. The
+PBR-only and paired results score `14.94/13.53` and `14.92/13.53` dB
+mean/worst on test poses, with `69.3%` coverage in both; the `0.02` dB mean
+difference is inside the established GPU-atomic replay band. The dedicated
+path therefore reproduces the useful paired-output PBR result without paying
+for the unrelated radiance field.
+
+Every run used a separate 12 GiB cgroup. Peak memory stayed below 340 MB, swap
+remained zero, and telemetry reports no memory pressure, OOM, validation error,
+Xid, or GPU fault. Ignored binaries, models, complete logs, and telemetry remain
+under `target/audit-runs/pbr-only-gaussian/`.

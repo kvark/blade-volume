@@ -749,8 +749,10 @@ fn main() {
     if args.surface_powerfoam_output.is_some() && args.surface_powerfoam_steps_per_view == 0 {
         fail("--surface-powerfoam-output requires --surface-powerfoam-steps-per-view");
     }
-    if args.gaussian_output.is_some() && args.gaussian_steps < 2 {
-        fail("--gaussian-output requires at least two --gaussian-steps");
+    if (args.gaussian_output.is_some() || args.pbr_gaussian_output.is_some())
+        && args.gaussian_steps < 2
+    {
+        fail("Gaussian output requires at least two --gaussian-steps");
     }
     let dataset = train::relight::Dataset::load(path::Path::new(&args.dataset))
         .unwrap_or_else(|error| fail(error));
@@ -1383,7 +1385,39 @@ fn main() {
     }
     let mut learned_pbr_gaussian = None;
     let fit_gaussians = args.gaussian_output.is_some() || args.pbr_gaussian_output.is_some();
-    if fit_gaussians {
+    if fit_gaussians && args.gaussian_output.is_none() {
+        let mut pbr_gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
+            .unwrap_or_else(|error| fail(error));
+        let started = std::time::Instant::now();
+        let stats = train::gaussian_splat::fit_staged(
+            &mut pbr_gaussian,
+            &training_capture,
+            &training_indices,
+            args.gaussian_steps,
+            gpu.clone(),
+        )
+        .unwrap_or_else(|error| fail(error));
+        println!(
+            "Gaussian PBR only: {} appearance and {} support updates in {:.3} s",
+            stats.appearance.steps,
+            stats.support.steps,
+            started.elapsed().as_secs_f64(),
+        );
+        let held_out_scores = train::gaussian_splat::evaluate_views(
+            &pbr_gaussian,
+            &training_capture,
+            &held_out_indices,
+            64,
+            1.0e-5,
+            [0.0; 3],
+        )
+        .unwrap_or_else(|error| fail(error));
+        describe_scores("fixed-center Gaussian held-out", &held_out_scores);
+        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
+            .unwrap_or_else(|error| fail(error));
+        learned_pbr_gaussian = Some(pbr_gaussian);
+        println!("updated PBR radii from learned Gaussian support");
+    } else if fit_gaussians {
         let light_field_surface = static_gaussian_surface
             .as_ref()
             .unwrap_or(&fitted.scene.model);
@@ -1850,7 +1884,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(args.gaussian_output.as_deref(), Some("light-field.ply"));
+        assert!(args.pbr_gaussian_output.is_none());
         assert_eq!(args.gaussian_steps, 800);
+    }
+
+    #[test]
+    fn relightable_gaussian_output_is_opt_in() {
+        let args = <Args as argh::FromArgs>::from_args(
+            &["synthetic_foam"],
+            &[
+                "--dataset",
+                "capture",
+                "--output",
+                "model.ply",
+                "--pbr-gaussian-output",
+                "relightable.ply",
+            ],
+        )
+        .unwrap();
+        assert!(args.gaussian_output.is_none());
+        assert_eq!(args.pbr_gaussian_output.as_deref(), Some("relightable.ply"));
     }
 
     fn camera(position: glam::Vec3, target: glam::Vec3) -> vol::CameraParams {
