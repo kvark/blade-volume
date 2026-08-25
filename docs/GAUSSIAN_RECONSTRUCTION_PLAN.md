@@ -7311,3 +7311,25 @@ minimal. All focused correctness tests pass for both prototypes; the retained
 source is again an exact clean control. Capped logs and telemetry remain under
 `target/audit-runs/assignment-target-transfer/` with zero swap, OOM, Xid, or
 GPU fault.
+
+## Rejected Gaussian tile allocation policies (2026-08-25)
+
+The current Room fit constructs 1,876 per-view candidate grids, each with 176
+tiles. Temporary occupancy counters show that ordinary vector growth retains
+roughly 30--45% spare capacity across the full-coverage and boundary lists.
+An exact two-pass prototype first counted every tile membership, reserved the
+final lengths, and then populated the same lists in the same particle order.
+All 42 Gaussian-focused tests pass, including exhaustive/indexed and
+grouped/individual candidate-row equality, but the extra membership walk moves
+the Room Gaussian phase from `7.2` to `7.3` seconds and complete wall time from
+`8.92` to `9.00` seconds. Peak RSS also rises by about 9 MiB.
+
+A one-pass alternative gave each full/boundary list a small `16/64` starting
+capacity. It avoids the counting walk and early reallocations, but does not
+transfer. Two order-balanced Room pairs put candidate/control wall time at
+`8.80/8.96` and `8.90/8.86` seconds; Bonsai takes `13.58/13.55` seconds. The
+source is restored to default empty vectors: neither exact policy provides a
+repeatable gain worth fixed capacities or a second construction path. The
+12 GiB scopes peak below 669 MiB and report zero swap, OOM, validation error,
+Xid, or GPU fault. Ignored logs, outputs, counters, and telemetry remain under
+`target/audit-runs/tile-allocation-profile/`.
