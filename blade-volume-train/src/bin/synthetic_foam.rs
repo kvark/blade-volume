@@ -195,6 +195,21 @@ fn fail(message: impl std::fmt::Display) -> ! {
     std::process::exit(1);
 }
 
+fn guard_pbr_support(
+    gaussian: &mut vol::PointCloudModel,
+    established: &vol::PointCloudModel,
+    stage: &str,
+) {
+    let guard = train::gaussian_splat::guard_pbr_support(gaussian, established)
+        .unwrap_or_else(|error| fail(format!("cannot guard PBR support after {stage}: {error}")));
+    if guard.restored {
+        println!(
+            "PBR support: rejected {stage} collapse ({} of {} particles persist); restored established opacity and scale",
+            guard.retained, guard.particles,
+        );
+    }
+}
+
 fn split_views(count: usize, stride: usize, offset: usize) -> (Vec<usize>, Vec<usize>) {
     if stride < 2 {
         fail("held-out stride must be at least two");
@@ -1296,10 +1311,13 @@ fn main() {
         .unwrap_or_else(|error| fail(error));
     }
     let mut learned_pbr_gaussian = None;
+    let mut pbr_support_baseline = None;
     let fit_gaussians = args.gaussian_output.is_some() || args.pbr_gaussian_output.is_some();
     if fit_gaussians && args.gaussian_output.is_none() {
-        let mut pbr_gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
-            .unwrap_or_else(|error| fail(error));
+        let mut pbr_gaussian =
+            train::gaussian_splat::pbr_from_surface(&fitted.scene.model, training_indices.len())
+                .unwrap_or_else(|error| fail(error));
+        let established_support = pbr_gaussian.clone();
         let started = std::time::Instant::now();
         let stats = train::gaussian_splat::fit_staged(
             &mut pbr_gaussian,
@@ -1315,6 +1333,7 @@ fn main() {
             stats.support.steps,
             started.elapsed().as_secs_f64(),
         );
+        guard_pbr_support(&mut pbr_gaussian, &established_support, "single-light fit");
         let held_out_scores = train::gaussian_splat::evaluate_views(
             &pbr_gaussian,
             &training_capture,
@@ -1327,6 +1346,7 @@ fn main() {
         describe_scores("fixed-center Gaussian held-out", &held_out_scores);
         train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
             .unwrap_or_else(|error| fail(error));
+        pbr_support_baseline = Some(pbr_gaussian.clone());
         learned_pbr_gaussian = Some(pbr_gaussian);
         println!("updated PBR radii from learned Gaussian support");
     } else if fit_gaussians {
@@ -1335,11 +1355,17 @@ fn main() {
             .unwrap_or(&fitted.scene.model);
         let mut gaussian = train::gaussian_splat::from_surface(light_field_surface)
             .unwrap_or_else(|error| fail(error));
-        let mut pbr_gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
-            .unwrap_or_else(|error| fail(error));
+        let independent_outputs = static_gaussian_surface.is_some();
+        let mut pbr_gaussian = if independent_outputs {
+            train::gaussian_splat::pbr_from_surface(&fitted.scene.model, training_indices.len())
+        } else {
+            train::gaussian_splat::from_surface(&fitted.scene.model)
+        }
+        .unwrap_or_else(|error| fail(error));
+        let established_support = pbr_gaussian.clone();
         let gpu = gpu.clone();
         let started = std::time::Instant::now();
-        let (stats, shared_appearance) = if static_gaussian_surface.is_some() {
+        let (stats, shared_appearance) = if independent_outputs {
             let stats = train::gaussian_splat::fit_staged_independent_outputs(
                 &mut pbr_gaussian,
                 &mut gaussian,
@@ -1362,6 +1388,7 @@ fn main() {
             .unwrap_or_else(|error| fail(error));
             (stats, true)
         };
+        guard_pbr_support(&mut pbr_gaussian, &established_support, "single-light fit");
         let fit_seconds = started.elapsed().as_secs_f64();
         let core_held_out_scores = train::gaussian_splat::evaluate_views(
             &pbr_gaussian,
@@ -1431,6 +1458,7 @@ fn main() {
         describe_scores("direct Gaussian held-out", &held_out_scores);
         train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
             .unwrap_or_else(|error| fail(error));
+        pbr_support_baseline = Some(pbr_gaussian.clone());
         learned_pbr_gaussian = Some(pbr_gaussian);
         println!("updated PBR radii from learned Gaussian support");
     }
@@ -1653,6 +1681,13 @@ fn main() {
                 multilight_geometry_fitted = true;
             }
         }
+        guard_pbr_support(
+            gaussian,
+            pbr_support_baseline
+                .as_ref()
+                .expect("learned PBR Gaussian has an established support baseline"),
+            "multi-light fit",
+        );
         if args.render_refine_radii {
             train::gaussian_splat::apply_surface_radius_feedback(gaussian, &fitted.scene.model)
                 .unwrap_or_else(|error| fail(error));
