@@ -72,6 +72,13 @@ pub struct Score {
     /// Fraction of rendered geometry coverage that falls inside a foreground
     /// mask, or `None` when the reference view has no mask.
     pub mask_precision: Option<f64>,
+    /// PSNR over the reference foreground mask, independent of how much of the
+    /// surrounding black frame the object occupies.
+    ///
+    /// This measures appearance and missing support together on the object.
+    /// Read it with mask recall and precision: geometry rendered outside the
+    /// mask is deliberately excluded here and remains visible in precision.
+    pub foreground_srgb_psnr: Option<f64>,
     /// PSNR over the covered part of the frame alone.
     ///
     /// The whole-frame number mixes two failures that need separate fixes —
@@ -91,6 +98,8 @@ pub struct Summary {
     pub coverage: f64,
     pub mask_recall: Option<f64>,
     pub mask_precision: Option<f64>,
+    pub foreground_srgb_psnr: Option<f64>,
+    pub worst_foreground_srgb_psnr: Option<f64>,
     pub covered_srgb_psnr: f64,
     pub views: usize,
     pub render_ms: f64,
@@ -123,6 +132,11 @@ impl Summary {
             coverage: scores.iter().map(|s| s.coverage).sum::<f64>() / count,
             mask_recall: average_optional(|score| score.mask_recall),
             mask_precision: average_optional(|score| score.mask_precision),
+            foreground_srgb_psnr: average_optional(|score| score.foreground_srgb_psnr),
+            worst_foreground_srgb_psnr: scores
+                .iter()
+                .filter_map(|score| score.foreground_srgb_psnr)
+                .reduce(f64::min),
             covered_srgb_psnr: scores.iter().map(|s| s.covered_srgb_psnr).sum::<f64>() / count,
             views: scores.len(),
             render_ms,
@@ -159,6 +173,7 @@ fn compare_coverage(
     let mut coverage_sum = 0.0f64;
     let mut mask_intersection = 0.0f64;
     let mut mask_sum = 0.0f64;
+    let mut foreground_encoded = 0.0f64;
     for (index, texel) in rendered.iter().enumerate() {
         let truth = reference[index];
         let coverage = covered.map_or(texel[3], |values| values[index]);
@@ -175,6 +190,9 @@ fn compare_coverage(
             let difference = (capture::linear_to_srgb(texel[channel])
                 - capture::linear_to_srgb(truth[channel])) as f64;
             encoded += difference * difference;
+            if let Some(mask) = mask {
+                foreground_encoded += difference * difference * mask[index] as f64;
+            }
             if is_covered {
                 inside += difference * difference;
             }
@@ -188,6 +206,9 @@ fn compare_coverage(
         coverage: coverage_sum / rendered.len() as f64,
         mask_recall: mask.map(|_| mask_intersection / mask_sum.max(f64::EPSILON)),
         mask_precision: mask.map(|_| mask_intersection / coverage_sum.max(f64::EPSILON)),
+        foreground_srgb_psnr: mask.and_then(|_| {
+            (mask_sum > f64::EPSILON).then(|| psnr(foreground_encoded / (3.0 * mask_sum)))
+        }),
         covered_srgb_psnr: if inside_count > 0 {
             psnr(inside / (inside_count * 3) as f64)
         } else {
@@ -784,6 +805,7 @@ mod tests {
         assert!((score.coverage - 0.5).abs() < 1.0e-6);
         assert_eq!(score.mask_recall, None);
         assert_eq!(score.mask_precision, None);
+        assert_eq!(score.foreground_srgb_psnr, None);
         assert!(score.covered_srgb_psnr > 90.0);
     }
 
@@ -799,6 +821,16 @@ mod tests {
         let score = compare_coverage(&rendered, &reference, None, Some(&[1.0, 1.0, 0.0, 0.0]));
         assert_eq!(score.mask_recall, Some(0.75));
         assert_eq!(score.mask_precision, Some(0.75));
+        assert_eq!(score.foreground_srgb_psnr, Some(99.0));
+    }
+
+    #[test]
+    fn foreground_score_excludes_background_error() {
+        let reference = vec![[0.2; 3], [0.0; 3]];
+        let rendered = vec![[0.2, 0.2, 0.2, 1.0], [1.0, 1.0, 1.0, 1.0]];
+        let score = compare_coverage(&rendered, &reference, None, Some(&[1.0, 0.0]));
+        assert!(score.srgb_psnr < 4.0);
+        assert_eq!(score.foreground_srgb_psnr, Some(99.0));
     }
 
     #[test]

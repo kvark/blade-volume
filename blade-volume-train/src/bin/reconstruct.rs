@@ -1190,26 +1190,38 @@ fn main() {
     let dump = args.dump.as_deref().map(path::Path::new);
 
     if !test_views.is_empty() {
-        let (mean, worst) = capture_baseline_psnr(None, &capture, &test_views);
-        println!("held-camera black baseline: {mean:.2} dB mean, {worst:.2} dB worst");
+        let baseline = capture_baseline_psnr(None, &capture, &test_views);
+        println!(
+            "held-camera black baseline: {:.2}/{:.2} dB whole-frame, {} foreground mean/worst",
+            baseline.mean,
+            baseline.worst,
+            baseline.foreground_text(),
+        );
     }
     if let Some(ref held) = held_out_capture {
-        let (black_mean, black_worst) = capture_baseline_psnr(None, &held.capture, &test_views);
-        let (copy_mean, copy_worst) =
-            capture_baseline_psnr(Some(&capture), &held.capture, &test_views);
+        let black = capture_baseline_psnr(None, &held.capture, &test_views);
+        let copy = capture_baseline_psnr(Some(&capture), &held.capture, &test_views);
         println!(
-            "held-light baselines: black {black_mean:.2}/{black_worst:.2} dB, \
-             capture-light copy {copy_mean:.2}/{copy_worst:.2} dB mean/worst"
+            "held-light baselines: black {:.2}/{:.2} dB whole-frame, {} foreground; \
+             capture-light copy {:.2}/{:.2} dB whole-frame, {} foreground mean/worst",
+            black.mean,
+            black.worst,
+            black.foreground_text(),
+            copy.mean,
+            copy.worst,
+            copy.foreground_text(),
         );
     }
 
     println!(
-        "\n{:<10}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}",
+        "\n{:<10}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}",
         "split",
         "views",
         "psnr srgb",
         "worst",
         "psnr linear",
+        "mask psnr",
+        "mask worst",
         "coverage",
         "mask rec",
         "mask prec",
@@ -1954,39 +1966,73 @@ fn dump_static_gaussian(
     Ok(())
 }
 
+struct CaptureBaseline {
+    mean: f32,
+    worst: f32,
+    foreground_mean: Option<f32>,
+    foreground_worst: Option<f32>,
+}
+
+impl CaptureBaseline {
+    fn foreground_text(&self) -> String {
+        self.foreground_mean.zip(self.foreground_worst).map_or_else(
+            || "—".to_string(),
+            |(mean, worst)| format!("{mean:.2}/{worst:.2} dB"),
+        )
+    }
+}
+
 fn capture_baseline_psnr(
     prediction: Option<&train::inverse::capture::Capture>,
     reference: &train::inverse::capture::Capture,
     views: &[usize],
-) -> (f32, f32) {
+) -> CaptureBaseline {
     let mut scores = Vec::with_capacity(views.len());
+    let mut foreground_scores = Vec::with_capacity(views.len());
     for &view in views {
         let reference_pixels = &reference.views[view].pixels;
         let prediction_pixels = prediction.map(|capture| &capture.views[view].pixels);
-        let squared_error = reference_pixels
-            .iter()
-            .enumerate()
-            .flat_map(|(pixel, truth)| {
-                (0..3).map(move |channel| {
-                    let predicted = prediction_pixels.map_or(0.0, |pixels| {
-                        train::inverse::capture::linear_to_srgb(pixels[pixel][channel])
-                    });
-                    let truth = train::inverse::capture::linear_to_srgb(truth[channel]);
-                    (predicted - truth).powi(2)
-                })
-            })
-            .sum::<f32>()
-            / (reference_pixels.len() * 3) as f32;
+        let mut squared_error = 0.0f32;
+        let mut foreground_error = 0.0f32;
+        let mut foreground_weight = 0.0f32;
+        for (pixel, truth) in reference_pixels.iter().enumerate() {
+            let mask = reference.views[view]
+                .mask
+                .as_ref()
+                .map_or(0.0, |mask| mask[pixel]);
+            foreground_weight += mask;
+            for channel in 0..3 {
+                let predicted = prediction_pixels.map_or(0.0, |pixels| {
+                    train::inverse::capture::linear_to_srgb(pixels[pixel][channel])
+                });
+                let truth = train::inverse::capture::linear_to_srgb(truth[channel]);
+                let error = (predicted - truth).powi(2);
+                squared_error += error;
+                foreground_error += mask * error;
+            }
+        }
+        squared_error /= (reference_pixels.len() * 3) as f32;
         scores.push(if squared_error == 0.0 {
             f32::INFINITY
         } else {
             -10.0 * squared_error.log10()
         });
+        if foreground_weight > f32::EPSILON {
+            foreground_error /= 3.0 * foreground_weight;
+            foreground_scores.push(if foreground_error == 0.0 {
+                f32::INFINITY
+            } else {
+                -10.0 * foreground_error.log10()
+            });
+        }
     }
-    (
-        scores.iter().sum::<f32>() / scores.len() as f32,
-        scores.iter().copied().fold(f32::INFINITY, f32::min),
-    )
+    CaptureBaseline {
+        mean: scores.iter().sum::<f32>() / scores.len() as f32,
+        worst: scores.iter().copied().fold(f32::INFINITY, f32::min),
+        foreground_mean: (!foreground_scores.is_empty())
+            .then(|| foreground_scores.iter().sum::<f32>() / foreground_scores.len() as f32),
+        foreground_worst: foreground_scores.into_iter().reduce(f32::min),
+    }
 }
 
 fn print_reconstruction_summary(name: &str, summary: train::inverse::score::Summary) {
@@ -1996,8 +2042,14 @@ fn print_reconstruction_summary(name: &str, summary: train::inverse::score::Summ
     let mask_precision = summary
         .mask_precision
         .map_or_else(|| "—".to_string(), |value| format!("{:.1}%", 100.0 * value));
+    let foreground = summary
+        .foreground_srgb_psnr
+        .map_or_else(|| "—".to_string(), |value| format!("{value:.2}"));
+    let foreground_worst = summary
+        .worst_foreground_srgb_psnr
+        .map_or_else(|| "—".to_string(), |value| format!("{value:.2}"));
     println!(
-        "{name:<10}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{mask_recall:>12}{mask_precision:>12}{:>12.2}",
+        "{name:<10}{:>8}{:>12.2}{:>12.2}{:>12.2}{foreground:>12}{foreground_worst:>12}{:>11.1}%{mask_recall:>12}{mask_precision:>12}{:>12.2}",
         summary.views,
         summary.srgb_psnr,
         summary.worst_srgb_psnr,
@@ -2307,10 +2359,11 @@ mod tests {
                 mask: None,
             }],
         };
-        let (copy, _) = capture_baseline_psnr(Some(&capture), &capture, &[0]);
-        let (black, _) = capture_baseline_psnr(None, &capture, &[0]);
-        assert!(copy.is_infinite());
-        assert!(black.is_finite() && black > 0.0);
+        let copy = capture_baseline_psnr(Some(&capture), &capture, &[0]);
+        let black = capture_baseline_psnr(None, &capture, &[0]);
+        assert!(copy.mean.is_infinite());
+        assert_eq!(copy.foreground_mean, None);
+        assert!(black.mean.is_finite() && black.mean > 0.0);
     }
 
     #[test]
