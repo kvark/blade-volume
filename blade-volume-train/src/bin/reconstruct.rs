@@ -759,15 +759,13 @@ fn main() {
             stats.support.steps,
             started.elapsed().as_secs_f64(),
         );
-        guard_pbr_support(&mut pbr_gaussian, &established_support, "single-light fit");
-        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
-            .unwrap_or_else(|error| {
-                eprintln!("cannot update PBR support from direct Gaussian field: {error}");
-                std::process::exit(1);
-            });
+        if guard_pbr_support(&mut pbr_gaussian, &established_support, "single-light fit") {
+            match_pbr_surface_extent(&mut pbr_gaussian, &fitted.scene.model);
+        } else {
+            update_surface_radii(&mut fitted.scene.model, &pbr_gaussian);
+        }
         pbr_support_baseline = Some(pbr_gaussian.clone());
         learned_pbr_gaussian = Some(pbr_gaussian);
-        println!("updated PBR radii from learned Gaussian support");
     } else if fit_gaussians {
         let gaussian_surface = if let Some(ref surfels) = sparse_gaussian_surface {
             vol::relight::RelightModel {
@@ -910,7 +908,8 @@ fn main() {
                 "light-field test: {initial_mean:.2} -> {mean:.2} dB mean, {initial_worst:.2} -> {worst:.2} dB worst"
             );
         }
-        guard_pbr_support(&mut pbr_gaussian, &established_support, "single-light fit");
+        let support_restored =
+            guard_pbr_support(&mut pbr_gaussian, &established_support, "single-light fit");
         if let Some(ref directory) = args.dump {
             dump_static_gaussian(
                 &gaussian,
@@ -923,14 +922,13 @@ fn main() {
                 std::process::exit(1);
             });
         }
-        train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
-            .unwrap_or_else(|error| {
-                eprintln!("cannot update PBR support from direct Gaussian field: {error}");
-                std::process::exit(1);
-            });
+        if support_restored {
+            match_pbr_surface_extent(&mut pbr_gaussian, &fitted.scene.model);
+        } else {
+            update_surface_radii(&mut fitted.scene.model, &pbr_gaussian);
+        }
         pbr_support_baseline = Some(pbr_gaussian.clone());
         learned_pbr_gaussian = Some(pbr_gaussian);
-        println!("updated PBR radii from learned Gaussian support");
     }
     if args.render_refine_radii && fit_gaussians {
         let environment = fitted.scene.environment().clone();
@@ -1206,8 +1204,16 @@ fn main() {
     }
 
     println!(
-        "\n{:<10}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}",
-        "split", "views", "psnr srgb", "worst", "psnr linear", "coverage", "where hit"
+        "\n{:<10}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}",
+        "split",
+        "views",
+        "psnr srgb",
+        "worst",
+        "psnr linear",
+        "coverage",
+        "mask rec",
+        "mask prec",
+        "where hit"
     );
     let splits = [
         (train_views.as_slice(), None),
@@ -1984,8 +1990,14 @@ fn capture_baseline_psnr(
 }
 
 fn print_reconstruction_summary(name: &str, summary: train::inverse::score::Summary) {
+    let mask_recall = summary
+        .mask_recall
+        .map_or_else(|| "—".to_string(), |value| format!("{:.1}%", 100.0 * value));
+    let mask_precision = summary
+        .mask_precision
+        .map_or_else(|| "—".to_string(), |value| format!("{:.1}%", 100.0 * value));
     println!(
-        "{name:<10}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{:>12.2}",
+        "{name:<10}{:>8}{:>12.2}{:>12.2}{:>12.2}{:>11.1}%{mask_recall:>12}{mask_precision:>12}{:>12.2}",
         summary.views,
         summary.srgb_psnr,
         summary.worst_srgb_psnr,
@@ -1999,7 +2011,7 @@ fn guard_pbr_support(
     gaussian: &mut vol::PointCloudModel,
     established: &vol::PointCloudModel,
     stage: &str,
-) {
+) -> bool {
     let guard =
         train::gaussian_splat::guard_pbr_support(gaussian, established).unwrap_or_else(|error| {
             eprintln!("cannot guard PBR Gaussian support after {stage}: {error}");
@@ -2011,6 +2023,26 @@ fn guard_pbr_support(
             guard.retained, guard.particles,
         );
     }
+    guard.restored
+}
+
+fn match_pbr_surface_extent(
+    gaussian: &mut vol::PointCloudModel,
+    surface: &vol::relight::RelightModel,
+) {
+    train::gaussian_splat::match_pbr_surface_extent(gaussian, surface).unwrap_or_else(|error| {
+        eprintln!("cannot restore PBR Gaussian surface extent: {error}");
+        std::process::exit(1);
+    });
+    println!("restored PBR Gaussian extent from the established surface");
+}
+
+fn update_surface_radii(surface: &mut vol::relight::RelightModel, gaussian: &vol::PointCloudModel) {
+    train::gaussian_splat::update_surface_radii(surface, gaussian).unwrap_or_else(|error| {
+        eprintln!("cannot update PBR support from direct Gaussian field: {error}");
+        std::process::exit(1);
+    });
+    println!("updated PBR radii from learned Gaussian support");
 }
 
 fn validate_lit_captures(args: &Args) -> Result<(), String> {

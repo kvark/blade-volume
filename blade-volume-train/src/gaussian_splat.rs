@@ -46,6 +46,8 @@ const PREPARED_CANDIDATE_BATCHES: usize = 20;
 // smallest tested joint-safe setting across five clouds and two real gates.
 const PBR_SUPPORT_FEEDBACK: f32 = 0.025;
 const HIGH_VIEW_PBR_INITIAL_OPACITY: f32 = 0.25;
+// Matches the production PBR Gaussian renderer's response cutoff.
+const PBR_RENDER_MIN_ALPHA: f32 = 3.0e-2;
 const PBR_MIN_PERSISTED_OPACITY: f32 = 0.05;
 const PBR_MIN_RETAINED_DIVISOR: usize = 4;
 const STATIC_CONTINUATION_MIN_VALIDATION_GAIN_DB: f32 = 0.05;
@@ -903,6 +905,50 @@ pub fn pbr_from_surface(
     let mut model = from_surface(surface)?;
     initialize_pbr_opacity(&mut model, view_count);
     Ok(model)
+}
+
+fn pbr_support_sigma(opacity: f32) -> f32 {
+    (2.0 * (opacity / PBR_RENDER_MIN_ALPHA).ln()).sqrt()
+}
+
+/// Match a PBR Gaussian's production response cutoff to an established
+/// relightable surface, preserving learned anisotropy.
+///
+/// This repairs the fallback after a rejected support fit. It is deliberately
+/// not part of ordinary PBR initialization: healthy optimized clouds retain
+/// the scale selected by the established synthetic gate.
+pub fn match_pbr_surface_extent(
+    gaussian: &mut vol::PointCloudModel,
+    surface: &vol::relight::RelightModel,
+) -> Result<(), String> {
+    gaussian.validate()?;
+    surface.validate()?;
+    if gaussian.points.len() != surface.surfels.len() {
+        return Err("PBR extent matching requires matching particle counts".to_string());
+    }
+    if gaussian
+        .points
+        .iter()
+        .any(|point| point.w <= PBR_RENDER_MIN_ALPHA)
+    {
+        return Err(format!(
+            "PBR extent matching requires opacity above {PBR_RENDER_MIN_ALPHA}"
+        ));
+    }
+    let transforms = gaussian
+        .transforms
+        .as_mut()
+        .ok_or_else(|| "PBR extent matching requires Gaussian transforms".to_string())?;
+    for ((point, scale), surfel) in gaussian
+        .points
+        .iter()
+        .zip(&mut transforms.scales)
+        .zip(&surface.surfels)
+    {
+        let current = pbr_support_sigma(point.w) * (scale.x * scale.y * scale.z).cbrt();
+        *scale *= surfel.radius / current;
+    }
+    gaussian.validate()
 }
 
 fn initialize_pbr_opacity(model: &mut vol::PointCloudModel, view_count: usize) {
@@ -3912,6 +3958,31 @@ mod tests {
         );
         initialize_pbr_opacity(&mut gaussian, MIN_SH1_VIEWS - 1);
         assert!(gaussian.points.iter().all(|point| point.w == 0.5));
+    }
+
+    #[test]
+    fn pbr_extent_matching_preserves_the_finite_support_radius() {
+        let surface = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0, 0.0, 2.0],
+                radius: 0.6,
+                normal: glam::Vec3::Z.to_array(),
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material::default()],
+        };
+        for views in [MIN_SH1_VIEWS - 1, MIN_SH1_VIEWS] {
+            let mut gaussian = pbr_from_surface(&surface, views).unwrap();
+            match_pbr_surface_extent(&mut gaussian, &surface).unwrap();
+            let opacity = gaussian.points[0].w;
+            let support = pbr_support_sigma(opacity);
+            let scale = gaussian.transforms.as_ref().unwrap().scales[0];
+            assert_close(scale.x * support, surface.surfels[0].radius, 1.0e-6);
+            assert_eq!(scale, glam::Vec3::splat(scale.x));
+            match_pbr_surface_extent(&mut gaussian, &surface).unwrap();
+            assert_eq!(gaussian.transforms.unwrap().scales[0], scale);
+        }
     }
 
     #[test]

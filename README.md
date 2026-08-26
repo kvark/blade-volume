@@ -135,12 +135,17 @@ baselines. On OpenIllumination `obj_16_friends_cup`, the static Gaussian under
 captured OLAT 062 reaches 31.51/28.98 dB on the five official held cameras,
 versus black at 31.10/28.46 dB. Under unseen OLAT 000, however, black scores
 29.69/28.11 dB and copying the OLAT-062 photograph scores 30.30/28.16 dB. The
-relightable scalar cloud reaches only 23.58/20.58 dB at 14.1% coverage. A
+relightable scalar cloud reaches only 23.62/20.61 dB at 14.1% frame coverage. A
 support-collapse guard now rejects the Gaussian fit when fewer than one quarter
-of its input particles would survive: all 638 particles persist, raising
-Gaussian coverage from 0.4% to 9.4%, but honest held-light quality is still only
-25.74/23.43 dB. Therefore the real relighting gate still fails both trivial
-baselines; it no longer hides that failure behind an almost-black render.
+of its input particles would survive. The fallback restores the established
+surface at the production Gaussian cutoff rather than feeding rejected radii
+back into it: all 638 particles persist, Gaussian frame coverage rises from
+0.4% to 10.3%, and held-light quality reaches 26.12/23.89 dB. On the foreground
+mask, the scalar cloud has 73.0% recall / 55.3% precision and the Gaussian has
+61.4% / 63.5%; raw frame coverage alone was misleading because the object
+occupies only a small part of each image. The real relighting gate still fails
+both trivial baselines, but no longer hides that failure behind an almost-black
+render.
 
 Each PSNR cell is mean / worst held view. The current denser synthetic gate
 and gallery use 200x150 final renders after the initial foam stage trains at

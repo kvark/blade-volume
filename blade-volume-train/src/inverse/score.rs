@@ -63,6 +63,15 @@ pub struct Score {
     /// Fraction of the frame that hit reconstructed geometry. A high PSNR
     /// over a tenth of the pixels is not a reconstruction.
     pub coverage: f64,
+    /// Fraction of a foreground mask covered by rendered geometry.
+    ///
+    /// `None` when the reference view has no mask. Read this together with
+    /// [`mask_precision`](Self::mask_precision): making every ray opaque has
+    /// perfect recall and useless precision.
+    pub mask_recall: Option<f64>,
+    /// Fraction of rendered geometry coverage that falls inside a foreground
+    /// mask, or `None` when the reference view has no mask.
+    pub mask_precision: Option<f64>,
     /// PSNR over the covered part of the frame alone.
     ///
     /// The whole-frame number mixes two failures that need separate fixes —
@@ -80,6 +89,8 @@ pub struct Summary {
     pub srgb_psnr: f64,
     pub worst_srgb_psnr: f64,
     pub coverage: f64,
+    pub mask_recall: Option<f64>,
+    pub mask_precision: Option<f64>,
     pub covered_srgb_psnr: f64,
     pub views: usize,
     pub render_ms: f64,
@@ -91,6 +102,17 @@ impl Summary {
             return Self::default();
         }
         let count = scores.len() as f64;
+        let average_optional = |get: fn(&Score) -> Option<f64>| {
+            let mut total = 0.0;
+            let mut count = 0usize;
+            for score in scores {
+                if let Some(value) = get(score) {
+                    total += value;
+                    count += 1;
+                }
+            }
+            (count > 0).then_some(total / count.max(1) as f64)
+        };
         Self {
             linear_psnr: scores.iter().map(|s| s.linear_psnr).sum::<f64>() / count,
             srgb_psnr: scores.iter().map(|s| s.srgb_psnr).sum::<f64>() / count,
@@ -99,6 +121,8 @@ impl Summary {
                 .map(|s| s.srgb_psnr)
                 .fold(f64::INFINITY, f64::min),
             coverage: scores.iter().map(|s| s.coverage).sum::<f64>() / count,
+            mask_recall: average_optional(|score| score.mask_recall),
+            mask_precision: average_optional(|score| score.mask_precision),
             covered_srgb_psnr: scores.iter().map(|s| s.covered_srgb_psnr).sum::<f64>() / count,
             views: scores.len(),
             render_ms,
@@ -116,13 +140,14 @@ fn psnr(mean_square_error: f64) -> f64 {
 
 /// Compare one rendered frame against its photograph.
 pub fn compare(rendered: &[[f32; 4]], reference: &[[f32; 3]], covered: &[f32]) -> Score {
-    compare_coverage(rendered, reference, Some(covered))
+    compare_coverage(rendered, reference, Some(covered), None)
 }
 
 fn compare_coverage(
     rendered: &[[f32; 4]],
     reference: &[[f32; 3]],
     covered: Option<&[f32]>,
+    mask: Option<&[f32]>,
 ) -> Score {
     /// A pixel counts as covered when geometry accounts for most of it.
     const MOSTLY: f32 = 0.5;
@@ -132,11 +157,18 @@ fn compare_coverage(
     let mut inside = 0.0f64;
     let mut inside_count = 0usize;
     let mut coverage_sum = 0.0f64;
+    let mut mask_intersection = 0.0f64;
+    let mut mask_sum = 0.0f64;
     for (index, texel) in rendered.iter().enumerate() {
         let truth = reference[index];
         let coverage = covered.map_or(texel[3], |values| values[index]);
         let is_covered = coverage >= MOSTLY;
         coverage_sum += coverage as f64;
+        if let Some(mask) = mask {
+            let target = mask[index];
+            mask_intersection += coverage.min(target) as f64;
+            mask_sum += target as f64;
+        }
         for channel in 0..3 {
             let difference = (texel[channel] - truth[channel]) as f64;
             linear += difference * difference;
@@ -154,6 +186,8 @@ fn compare_coverage(
         linear_psnr: psnr(linear / samples),
         srgb_psnr: psnr(encoded / samples),
         coverage: coverage_sum / rendered.len() as f64,
+        mask_recall: mask.map(|_| mask_intersection / mask_sum.max(f64::EPSILON)),
+        mask_precision: mask.map(|_| mask_intersection / coverage_sum.max(f64::EPSILON)),
         covered_srgb_psnr: if inside_count > 0 {
             psnr(inside / (inside_count * 3) as f64)
         } else {
@@ -588,7 +622,12 @@ impl Renderer {
             let rendered = self.draw(tracer, view.camera);
             elapsed += started.elapsed();
 
-            scores.push(compare_coverage(&rendered, &view.pixels, None));
+            scores.push(compare_coverage(
+                &rendered,
+                &view.pixels,
+                None,
+                view.mask.as_deref(),
+            ));
 
             if let Some(directory) = dump {
                 let stem = path::Path::new(&view.name)
@@ -741,9 +780,25 @@ mod tests {
     fn coverage_comes_from_rendered_alpha() {
         let reference = vec![[0.2, 0.3, 0.4]; 2];
         let rendered = vec![[0.2, 0.3, 0.4, 0.25], [0.2, 0.3, 0.4, 0.75]];
-        let score = compare_coverage(&rendered, &reference, None);
+        let score = compare_coverage(&rendered, &reference, None, None);
         assert!((score.coverage - 0.5).abs() < 1.0e-6);
+        assert_eq!(score.mask_recall, None);
+        assert_eq!(score.mask_precision, None);
         assert!(score.covered_srgb_psnr > 90.0);
+    }
+
+    #[test]
+    fn masked_coverage_separates_recall_from_precision() {
+        let reference = vec![[0.0; 3]; 4];
+        let rendered = vec![
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 0.5],
+            [0.0, 0.0, 0.0, 0.5],
+            [0.0, 0.0, 0.0, 0.0],
+        ];
+        let score = compare_coverage(&rendered, &reference, None, Some(&[1.0, 1.0, 0.0, 0.0]));
+        assert_eq!(score.mask_recall, Some(0.75));
+        assert_eq!(score.mask_precision, Some(0.75));
     }
 
     #[test]
