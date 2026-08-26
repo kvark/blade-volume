@@ -113,11 +113,17 @@ results belong in Git.
 The first current-tree run on `obj_16_friends_cup` establishes an honest
 failure baseline:
 
-| Output | Held condition | Mean / worst PSNR | Frame coverage | Mask recall / precision | Baseline comparison |
-| --- | --- | ---: | ---: | ---: | --- |
-| Static Gaussian | OLAT 062, official held cameras | 31.51 / 28.99 dB | — | — | Black: 31.10 / 28.46 dB; a narrow numerical win, visibly still a dark blur. |
-| Relightable scalar cloud | unseen OLAT 000, official held cameras | 23.62 / 20.61 dB | 14.1% | 73.0% / 55.3% | Loses badly to black at 29.69 / 28.11 dB and capture-light copy at 30.30 / 28.16 dB. |
-| Relightable Gaussian | unseen OLAT 000, official held cameras | 26.12 / 23.89 dB | 10.3% | 61.4% / 63.5% | All 638 particles persist after rejecting a degenerate support fit. The cloud is visible but blurry and still loses both baselines. |
+| Output | Held condition | Whole-frame PSNR | Foreground PSNR | Frame coverage | Mask recall / precision | Baseline comparison |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Static Gaussian | OLAT 062, official held cameras | 31.51 / 28.99 dB | — | — | — | Black: 31.10 / 28.46 dB; a narrow numerical win, visibly still a dark blur. |
+| Relightable scalar cloud | unseen OLAT 000, official held cameras | 23.62 / 20.61 dB | 16.56 / 14.30 dB | 14.1% | 73.0% / 55.3% | Loses badly to both foreground baselines. |
+| Relightable Gaussian | unseen OLAT 000, official held cameras | 26.12 / 23.89 dB | 18.09 / 15.72 dB | 10.3% | 61.4% / 63.5% | All 638 particles persist after rejecting a degenerate support fit. The cloud is visible but blurry and still loses both baselines. |
+
+The OLAT-000 black and capture-light-copy baselines are respectively
+29.69/28.11 and 30.30/28.16 dB over the whole frame, but only 19.93/18.08 and
+20.55/19.24 dB on the foreground. Mean/worst foreground PSNR is now reported
+directly by `reconstruct`; it measures missing support and wrong shading on the
+object while mask precision continues to expose geometry rendered outside it.
 
 The full run, including static and held-light reference/render pairs, is under
 `target/audit-runs/openillumination/official-fallback-extent/`; the foam
@@ -140,14 +146,38 @@ at 24.26/23.44 dB mean/worst and 55.1% coverage. This is a safety bound, not a
 quality claim: the guarded OpenIllumination render exposes that normals,
 materials, and the light model remain wrong.
 
-The generated lights are explicit approximations, not claimed calibration.
-The public `light_pos.npy` gives the 142 OLAT directions used by the official
-photometric code, but not an absolute radiometric power for this pipeline.
-The importer normalizes each direction and assigns unit normal-incidence
-irradiance to a finite distant lobe. It therefore omits finite-distance
-falloff, emitter size, RGB power variation, camera response calibration, and
-interreflection. Passing the real gate requires improving this representation,
-not tuning against OLAT 000.
+The generated lights are explicit approximations, not claimed radiometric
+calibration. The public `light_pos.npy` gives the 142 directions used directly
+by the official photometric-stereo code. The
+[paper](https://papers.nips.cc/paper_files/paper/2023/hash/74a67268c5cc5910f64938cac4526a90-Abstract-Datasets_and_Benchmarks.html)
+reports identical LED
+intensity, an arbitrary common intensity of five, and a fitted spherical-
+Gaussian sharpness of 236.9705. The importer normalizes each direction and
+assigns unit normal-incidence irradiance to a 0.08-radian distant lobe, fixing
+the otherwise arbitrary material/light scale consistently across OLATs.
+
+Four current-tree controls reject the obvious calibration substitutions:
+
+- treating the raw unit-sphere locations as finite inverse-square point lights
+  was 0.05–0.59 dB worse than the distant control on held cameras for each of
+  OLATs 000, 062, 082, and 092; the mean gain inferred from training lights was
+  2.12 dB worse on OLAT 000 than its diagnostic per-light fit;
+- reproducing the published spherical-Gaussian lobe convention and sharpness
+  in the complete gate reduced held-light Gaussian quality to 25.75/23.57 dB;
+- a joint diffuse-albedo solve over OLATs 062, 082, and 092 reached only
+  25.64/23.54 dB under OLAT 000 after subtracting the fixed specular term;
+- following the
+  [supplementary protocol](https://oppo-us-research.github.io/OpenIllumination/files/supp.pdf)'s
+  combined object-plus-support mask
+  for fitting reduced object-only held-light quality to 24.60/22.96 dB, with
+  64.7% recall and 57.6% precision.
+
+The exact ignored controls are under
+`target/audit-runs/openillumination/{point-light-control,sg-lobe-full,multilight-albedo-control,official-com-mask}/`.
+They leave the distant lobe, object mask, and primary-light material fit as the
+selected baseline. Missing foreground support, shadows, interreflection, and
+non-diffuse appearance remain live explanations; tuning against OLAT 000 is
+still forbidden.
 
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact
@@ -172,18 +202,16 @@ cycled or strobed during one trajectory.
 
 ## Implementation order
 
-1. Represent the light-stage LEDs honestly. Mask-relative metrics show that
-   the object occupies only a small part of each frame and that wrong shading,
-   not the old raw coverage number alone, now dominates the real failure.
-   Preserve calibrated finite light
-   positions, fit per-light RGB/radiometric gains from training lights only,
-   and add analytic point-emitter falloff if it beats the distant control. No
-   polygonal light geometry is needed.
-2. Improve the surface boundary from the multi-view mask hull and foam density,
+1. Improve the surface boundary from the multi-view mask hull and foam density,
    using mask precision/recall on withheld training cameras rather than raw
    frame coverage to select any replacement for the established cloud.
+2. Add visibility and indirect transport together, first as a scalar-cloud
+   control. Sharp OLAT shadows are absent from the selected analytic-direct
+   Gaussian renderer; enabling only one half can trade an over-bright error for
+   an under-bright one rather than recover transport.
 3. Require every candidate to beat black and capture-light-copy baselines on
-   mean, worst-view, covered-pixel quality, and visible shadow/highlight motion.
+   foreground mean/worst PSNR, mask recall/precision, covered-pixel quality,
+   and visible shadow/highlight motion.
 4. Generalize aligned directories to sparse `(camera, light)` observations so
    every light need not be photographed at every pose.
 5. Fit diffuse albedo and normals first. Enable roughness and reflectance only

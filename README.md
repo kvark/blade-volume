@@ -134,18 +134,22 @@ The first real two-axis gate is deliberately reported against trivial
 baselines. On OpenIllumination `obj_16_friends_cup`, the static Gaussian under
 captured OLAT 062 reaches 31.51/28.98 dB on the five official held cameras,
 versus black at 31.10/28.46 dB. Under unseen OLAT 000, however, black scores
-29.69/28.11 dB and copying the OLAT-062 photograph scores 30.30/28.16 dB. The
-relightable scalar cloud reaches only 23.62/20.61 dB at 14.1% frame coverage. A
+29.69/28.11 dB and copying the OLAT-062 photograph scores 30.30/28.16 dB. On
+the object mask those baselines are 19.93/18.08 and 20.55/19.24 dB: the
+foreground score removes the easy black background without hiding geometry
+rendered outside the object. The relightable scalar cloud reaches only
+23.62/20.61 dB whole-frame and 16.56/14.30 dB foreground at 14.1% frame
+coverage. A
 support-collapse guard now rejects the Gaussian fit when fewer than one quarter
 of its input particles would survive. The fallback restores the established
 surface at the production Gaussian cutoff rather than feeding rejected radii
 back into it: all 638 particles persist, Gaussian frame coverage rises from
-0.4% to 10.3%, and held-light quality reaches 26.12/23.89 dB. On the foreground
-mask, the scalar cloud has 73.0% recall / 55.3% precision and the Gaussian has
-61.4% / 63.5%; raw frame coverage alone was misleading because the object
-occupies only a small part of each image. The real relighting gate still fails
-both trivial baselines, but no longer hides that failure behind an almost-black
-render.
+0.4% to 10.3%, and held-light quality reaches 26.12/23.89 dB whole-frame and
+18.09/15.72 dB foreground. On the foreground mask, the scalar cloud has 73.0%
+recall / 55.3% precision and the Gaussian has 61.4% / 63.5%; raw frame coverage
+alone was misleading because the object occupies only a small part of each
+image. The real relighting gate still fails both trivial baselines on the
+object itself, but no longer hides that failure behind an almost-black render.
 
 Each PSNR cell is mean / worst held view. The current denser synthetic gate
 and gallery use 200x150 final renders after the initial foam stage trains at
