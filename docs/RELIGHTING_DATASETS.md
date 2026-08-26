@@ -179,6 +179,39 @@ selected baseline. Missing foreground support, shadows, interreflection, and
 non-diffuse appearance remain live explanations; tuning against OLAT 000 is
 still forbidden.
 
+The next attribution pass rules out global geometry and transport knobs as a
+solution to the visible failure:
+
+- raising the source field from 4,096 sites at 128 pixels to 16,384 sites at
+  256 pixels produces 3,193 rather than 638 extracted particles, but those
+  particles remain a fragmented volume. Held-light Gaussian quality falls to
+  25.15/23.12 dB whole-frame and 18.06/15.94 dB foreground;
+- a silhouette-only visual hull improves the static held-camera result to
+  31.62/29.12 dB, but no consensus threshold preserves foreground mean, tail,
+  recall, and precision together. Denser hulls are worse. Clipping or weakly
+  filling the learned density inside the hull has the same trade: the best
+  mean gains come from rendering less of the object, and a capture-light
+  validation camera correctly rejects the conservative candidates;
+- widening every observation footprint from 1.7 to 2.5 cells lets 381 rather
+  than 359 particles receive evidence and raises this real held-light
+  Gaussian to 26.14/24.22 dB whole-frame and 18.70/16.21 dB foreground. The
+  identical synthetic gate collapses from 24.26/23.44 to 20.38/19.20 dB;
+  narrowing only the final output support does not repair that regression;
+- primary lattice position learning, SH-0 geometry, an opaque visual-hull
+  seed, and one or two sequential secondary-light continuations each move a
+  real mean by a few tenths but regress a tail or mask recall. None passes the
+  complete gate;
+- enabling sampled visibility and the existing indirect bounce together on
+  the scalar control reaches only 23.27/20.26 dB whole-frame and
+  16.10/13.73 dB foreground. Transport cannot repair the surface on which it
+  is evaluated.
+
+These ignored controls live under
+`target/audit-runs/openillumination/{dense-16k-256,visual-hull,primary-position-4k,geometry-sh0-4k,opaque-hull-sh0,secondary-light-4k,two-secondary-4k,wide-observe-narrow-support,wide-observe-narrow-support-synthetic,shadow-bounce-scalar-16}/`.
+All GPU work ran in the guarded 12 GiB scope. The largest complete workspace
+test scope peaked at 3.10 GiB and the experimental scopes reported no swap,
+memory pressure, OOM, socket throttling, or GPU fault.
+
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact
 object/light selection. A result is useful only if it beats a capture-light
@@ -202,13 +235,15 @@ cycled or strobed during one trajectory.
 
 ## Implementation order
 
-1. Improve the surface boundary from the multi-view mask hull and foam density,
-   using mask precision/recall on withheld training cameras rather than raw
-   frame coverage to select any replacement for the established cloud.
-2. Add visibility and indirect transport together, first as a scalar-cloud
-   control. Sharp OLAT shadows are absent from the selected analytic-direct
-   Gaussian renderer; enabling only one half can trade an over-bright error for
-   an under-bright one rather than recover transport.
+1. Replace global support widening with per-ray surface responsibility. A
+   candidate must identify which depth layer owns a foreground observation,
+   using multi-view mask and foam evidence without treating every silhouette
+   pixel as a request to widen every overlapping point. Select it on withheld
+   training cameras using foreground PSNR and mask precision/recall.
+2. Once that surface gate passes, revisit visibility and indirect transport
+   together. The current scalar control proves they are not useful while the
+   support is fragmented; enabling only one half can also trade an over-bright
+   error for an under-bright one rather than recover transport.
 3. Require every candidate to beat black and capture-light-copy baselines on
    foreground mean/worst PSNR, mask recall/precision, covered-pixel quality,
    and visible shadow/highlight motion.

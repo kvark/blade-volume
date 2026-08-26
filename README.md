@@ -150,6 +150,11 @@ recall / 55.3% precision and the Gaussian has 61.4% / 63.5%; raw frame coverage
 alone was misleading because the object occupies only a small part of each
 image. The real relighting gate still fails both trivial baselines on the
 object itself, but no longer hides that failure behind an almost-black render.
+The comparisons show a fragmented, blob-like surface rather than merely a
+miscalibrated BRDF. Denser source clouds, silhouette hulls, global support
+widening, moving lattice sites, lower-order appearance, and extra sequential
+lights have all failed a mean/tail/foreground cross-check; the next target is
+per-ray surface responsibility, not another global radius or capacity knob.
 
 Each PSNR cell is mean / worst held view. The current denser synthetic gate
 and gallery use 200x150 final renders after the initial foam stage trains at
