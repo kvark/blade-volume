@@ -35,7 +35,10 @@ a convincing real-world result.
   relightable Gaussian/RadFoam/PowerFoam assets; no mesh fallback is involved.
 - **Real measured relighting — integrated, not passed.** The selective
   OpenIllumination gate now imports 17 official training cameras, five official
-  test cameras, masks, and four OLAT directions without Python or a mesh. Its
+  test cameras, masks, and selected OLAT directions without Python or a mesh.
+  One fitted asset can now be scored against several lights excluded from all
+  fitting, preventing a promising interpolation from being mistaken for broad
+  relighting. Its
   static light field narrowly beats black on held cameras, but the first
   held-light surface clouds lose to both black and copying the capture-light
   photograph. This is now the blocking quality gate, not an unimplemented
@@ -153,8 +156,11 @@ object itself, but no longer hides that failure behind an almost-black render.
 The comparisons show a fragmented, blob-like surface rather than merely a
 miscalibrated BRDF. Denser source clouds, silhouette hulls, global support
 widening, moving lattice sites, lower-order appearance, and extra sequential
-lights have all failed a mean/tail/foreground cross-check; the next target is
-per-ray surface responsibility, not another global radius or capacity knob.
+lights have all failed a mean/tail/foreground cross-check. Broader calibrated
+lighting can improve one unseen direction substantially, but a second unseen
+direction currently rejects the same fitted asset; the next target is a
+surface/material model that transfers across held lights, not another global
+radius or capacity knob.
 
 Each PSNR cell is mean / worst held view. The current denser synthetic gate
 and gallery use 200x150 final renders after the initial foam stage trains at

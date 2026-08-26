@@ -87,14 +87,14 @@ struct Args {
     #[argh(option)]
     normal_environment: Vec<String>,
 
-    /// aligned photographs under a light excluded from all fitting; scored on
-    /// the held camera views together with --held-out-environment
+    /// aligned photographs under a light excluded from all fitting; repeat
+    /// together with --held-out-environment to score several unseen lights
     #[argh(option)]
-    held_out_images: Option<String>,
+    held_out_images: Vec<String>,
 
-    /// measured environment for --held-out-images
+    /// measured environment for each --held-out-images capture
     #[argh(option)]
-    held_out_environment: Option<String>,
+    held_out_environment: Vec<String>,
 
     /// alternations between solving for albedo and for light (default 24)
     #[argh(option, default = "24")]
@@ -296,7 +296,7 @@ fn main() {
             eprintln!("cannot split capture: {message}");
             std::process::exit(1);
         });
-    if args.held_out_images.is_some() && test_views.is_empty() {
+    if !args.held_out_images.is_empty() && test_views.is_empty() {
         eprintln!("held-out-light scoring needs at least one held camera view");
         std::process::exit(1);
     }
@@ -1171,8 +1171,8 @@ fn main() {
     // Load the withheld light only after every fitting stage has finished, so
     // neither its pixels nor its environment can accidentally select a model.
     drop(normal_captures);
-    let held_out_capture =
-        load_held_out_capture(&capture, sparse, height, &args).unwrap_or_else(|message| {
+    let held_out_captures =
+        load_held_out_captures(&capture, sparse, height, &args).unwrap_or_else(|message| {
             eprintln!("cannot load held-out capture: {message}");
             std::process::exit(1);
         });
@@ -1198,11 +1198,19 @@ fn main() {
             baseline.foreground_text(),
         );
     }
-    if let Some(ref held) = held_out_capture {
+    for (index, held) in held_out_captures.iter().enumerate() {
         let black = capture_baseline_psnr(None, &held.capture, &test_views);
         let copy = capture_baseline_psnr(Some(&capture), &held.capture, &test_views);
+        if held_out_captures.len() > 1 {
+            println!("held-light {index}: {}", args.held_out_environment[index]);
+        }
+        let label = if held_out_captures.len() == 1 {
+            String::new()
+        } else {
+            format!(" {index}")
+        };
         println!(
-            "held-light baselines: black {:.2}/{:.2} dB whole-frame, {} foreground; \
+            "held-light{label} baselines: black {:.2}/{:.2} dB whole-frame, {} foreground; \
              capture-light copy {:.2}/{:.2} dB whole-frame, {} foreground mean/worst",
             black.mean,
             black.worst,
@@ -1214,7 +1222,7 @@ fn main() {
     }
 
     println!(
-        "\n{:<10}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}",
+        "\n{:<12}{:>8}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}{:>12}",
         "split",
         "views",
         "psnr srgb",
@@ -1254,10 +1262,16 @@ fn main() {
             print_reconstruction_summary(name, summary);
         }
     }
-    if let Some(ref held) = held_out_capture {
+    for (index, held) in held_out_captures.iter().enumerate() {
         let held_scene =
             train::inverse::score::Scene::new(fitted.scene.model.clone(), held.environment.clone());
-        let held_dump = dump.map(|directory| directory.join("held-light/scalar"));
+        let held_dump = dump.map(|directory| {
+            if held_out_captures.len() == 1 {
+                directory.join("held-light/scalar")
+            } else {
+                directory.join(format!("held-light/{index}/scalar"))
+            }
+        });
         if let Some(ref directory) = held_dump {
             let _ = std::fs::create_dir_all(directory);
         }
@@ -1268,9 +1282,20 @@ fn main() {
             &held_splits,
             args.diffuse_samples,
         )[0];
-        print_reconstruction_summary("relight", summary);
+        let label = if held_out_captures.len() == 1 {
+            "relight".to_string()
+        } else {
+            format!("relight-{index}")
+        };
+        print_reconstruction_summary(&label, summary);
         if let Some(ref gaussian) = learned_pbr_gaussian {
-            let gaussian_dump = dump.map(|directory| directory.join("held-light/gaussian"));
+            let gaussian_dump = dump.map(|directory| {
+                if held_out_captures.len() == 1 {
+                    directory.join("held-light/gaussian")
+                } else {
+                    directory.join(format!("held-light/{index}/gaussian"))
+                }
+            });
             if let Some(ref directory) = gaussian_dump {
                 let _ = std::fs::create_dir_all(directory);
             }
@@ -1282,7 +1307,12 @@ fn main() {
                 &gaussian_splits,
                 0,
             )[0];
-            print_reconstruction_summary("g-relight", summary);
+            let label = if held_out_captures.len() == 1 {
+                "g-relight".to_string()
+            } else {
+                format!("g-relight-{index}")
+            };
+            print_reconstruction_summary(&label, summary);
         }
     }
     renderer.destroy();
@@ -2049,7 +2079,7 @@ fn print_reconstruction_summary(name: &str, summary: train::inverse::score::Summ
         .worst_foreground_srgb_psnr
         .map_or_else(|| "—".to_string(), |value| format!("{value:.2}"));
     println!(
-        "{name:<10}{:>8}{:>12.2}{:>12.2}{:>12.2}{foreground:>12}{foreground_worst:>12}{:>11.1}%{mask_recall:>12}{mask_precision:>12}{:>12.2}",
+        "{name:<12}{:>8}{:>12.2}{:>12.2}{:>12.2}{foreground:>12}{foreground_worst:>12}{:>11.1}%{mask_recall:>12}{mask_precision:>12}{:>12.2}",
         summary.views,
         summary.srgb_psnr,
         summary.worst_srgb_psnr,
@@ -2114,12 +2144,14 @@ fn validate_lit_captures(args: &Args) -> Result<(), String> {
     if args.render_refine_normals && args.environment.is_none() {
         return Err("rendered normal refinement needs --environment".to_string());
     }
-    if args.held_out_images.is_some() != args.held_out_environment.is_some() {
-        return Err(
-            "--held-out-images and --held-out-environment must be supplied together".to_string(),
-        );
+    if args.held_out_images.len() != args.held_out_environment.len() {
+        return Err(format!(
+            "--held-out-images was supplied {} times but --held-out-environment was supplied {} times",
+            args.held_out_images.len(),
+            args.held_out_environment.len(),
+        ));
     }
-    if args.held_out_images.is_some() && args.test_every == 0 && args.test_list.is_none() {
+    if !args.held_out_images.is_empty() && args.test_every == 0 && args.test_list.is_none() {
         return Err(
             "held-out-light scoring needs --test-every or --test-list to reserve cameras"
                 .to_string(),
@@ -2183,19 +2215,19 @@ fn load_normal_captures(
         .collect()
 }
 
-fn load_held_out_capture(
+fn load_held_out_captures(
     primary: &train::inverse::capture::Capture,
     sparse: &path::Path,
     height: usize,
     args: &Args,
-) -> Result<Option<LitCapture>, String> {
+) -> Result<Vec<LitCapture>, String> {
     args.held_out_images
-        .as_deref()
-        .zip(args.held_out_environment.as_deref())
+        .iter()
+        .zip(&args.held_out_environment)
         .map(|(images, environment)| {
             load_lit_capture(primary, sparse, height, args, images, environment)
         })
-        .transpose()
+        .collect()
 }
 
 fn refine_normals_from_captures(
@@ -2625,8 +2657,8 @@ mod tests {
         assert!(defaults.surface_powerfoam_output.is_none());
         assert!(defaults.gaussian_output.is_none());
         assert!(defaults.pbr_gaussian_output.is_none());
-        assert!(defaults.held_out_images.is_none());
-        assert!(defaults.held_out_environment.is_none());
+        assert!(defaults.held_out_images.is_empty());
+        assert!(defaults.held_out_environment.is_empty());
         assert_eq!(defaults.gaussian_steps, 1_500);
         assert_eq!(defaults.diffuse_samples, 0);
 
@@ -2643,6 +2675,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(known.environment.as_deref(), Some("capture.f32"));
+    }
+
+    #[test]
+    fn held_lights_are_repeatable_and_paired() {
+        let args = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--test-list",
+                "test.txt",
+                "--held-out-images",
+                "held-a",
+                "--held-out-environment",
+                "held-a.f32",
+                "--held-out-images",
+                "held-b",
+                "--held-out-environment",
+                "held-b.f32",
+            ],
+        )
+        .unwrap();
+        assert_eq!(args.held_out_images, ["held-a", "held-b"]);
+        assert_eq!(args.held_out_environment, ["held-a.f32", "held-b.f32"]);
+        validate_lit_captures(&args).unwrap();
+
+        let mismatched = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--test-list",
+                "test.txt",
+                "--held-out-images",
+                "held-a",
+            ],
+        )
+        .unwrap();
+        assert!(validate_lit_captures(&mismatched)
+            .unwrap_err()
+            .contains("supplied 1 times"));
     }
 
     #[test]

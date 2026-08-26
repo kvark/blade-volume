@@ -108,6 +108,18 @@ comparisons are under `images/held-light/{scalar,gaussian}/`. The command also
 prints black and capture-light-copy baselines. No downloaded data or generated
 results belong in Git.
 
+Both held-light arguments are repeatable. Every fitted asset can therefore be
+scored against several lights which remain unloaded until all fitting and
+serialization finish. Multi-light comparisons are separated under
+`images/held-light/{0,1,...}/` and printed as `relight-N`/`g-relight-N`:
+
+```bash
+    --held-out-images .../Lights/000/raw_undistorted \
+    --held-out-environment .../light-000.f32 \
+    --held-out-images .../Lights/086/raw_undistorted \
+    --held-out-environment .../light-086.f32
+```
+
 ### Current result: plumbing passes, quality does not
 
 The first current-tree run on `obj_16_friends_cup` establishes an honest
@@ -215,9 +227,43 @@ solution to the visible failure:
 
 These ignored controls live under
 `target/audit-runs/openillumination/{dense-16k-256,visual-hull,primary-position-4k,geometry-sh0-4k,opaque-hull-sh0,secondary-light-4k,two-secondary-4k,wide-observe-narrow-support,wide-observe-narrow-support-synthetic,shadow-bounce-scalar-16,peak-point-fusion,peak-point-voxel-fusion,peak-point-voxel-min3,peak-point-voxel-min3-r18,peak-point-supported-fusion}/`.
-All GPU work ran in the guarded 12 GiB scope. The largest complete workspace
-test scope peaked at 3.10 GiB and the experimental scopes reported no swap,
-memory pressure, OOM, socket throttling, or GPU fault.
+All GPU work ran in the guarded 12 GiB scope. The final default-feature and
+all-feature workspace test scopes peaked at 7.10 GiB and 6.17 GiB respectively;
+the experimental and test scopes reported no swap, OOM, socket throttling, or
+GPU fault.
+
+### Broader-light holdout
+
+Three extra selective OLAT downloads test whether calibrated-light coverage,
+rather than the surface, explains the first real failure. The original
+training directions 062/082/092 are nearly coplanar (+Z/+X/-X). Adding OLAT
+139 supplies +Y evidence; adding 015 supplies a -Y/+Z diagonal. OLAT 000 and
+the nearly opposite -Z OLAT 086 are both excluded from fitting and scored from
+one persisted asset by the repeatable held-light interface above.
+
+| Training OLATs | Held OLAT | Gaussian whole-frame PSNR | Foreground PSNR | Foreground recall / precision |
+| --- | --- | ---: | ---: | ---: |
+| 062/082/092 | 000 | 26.12 / 23.89 dB | 18.09 / 15.72 dB | 61.4% / 63.5% |
+| +139 | 000 | 26.92 / 24.41 dB | 19.06 / 16.12 dB | 60.5% / 63.7% |
+| +139/+015 | 000 | 27.87 / 25.80 dB | 19.68 / 17.47 dB | 59.6% / 64.0% |
+| 062/082/092 | 086 | 22.83 / 20.57 dB | 13.49 / 11.46 dB | 61.4% / 63.5% |
+| +139/+015 | 086 | 22.59 / 20.86 dB | 13.15 / 10.78 dB | 59.6% / 64.0% |
+
+The extra lights make OLAT 000 a much better interpolation, but they do not
+improve the independent OLAT 086 transfer: mean and foreground tail regress.
+Fixing the Gaussian continuation to 375 total updates improves OLAT-000 recall
+but still regresses OLAT 086, so the extra evidence is not merely being
+over-optimized. Adding 086 to form an approximate six-axis training set then
+reduces OLAT-000 recall to 47.8%. None of these schedules is selected as a new
+model default. The transferable result is the evaluation rule: capture lights
+must span 3D, and a relightable claim now requires at least two excluded light
+directions rather than the nearest unseen OLAT alone.
+
+The exact ignored runs are under
+`target/audit-runs/openillumination/{four-training-lights,four-training-lights-015,five-training-lights-015,six-axis-training-lights,three-training-lights-held-086,four-training-lights-139-held-086,five-training-lights-held-086,five-training-lights-fixed-budget-held-000,five-training-lights-fixed-budget-held-086,five-training-two-held}/`.
+All complete runs used the guarded 12 GiB scope; the final two-held run peaked
+at 1.1 GiB including its release rebuild, with zero swap, memory pressure, OOM,
+or GPU fault.
 
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact
