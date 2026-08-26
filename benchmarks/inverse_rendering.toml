@@ -5721,3 +5721,22 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/current-synthetic-v1/photometric-normal-unbounded-albedo (gitignored)"
 verdict = "reject before five clouds and restore the physical diffuse bound: unconstrained gain lets highlight and mixture error choose non-transferable normals, regressing every held-light measure"
+
+[openillumination.selected_joint_known_light_material]
+date = "2026-08-26"
+protocol = "official friends-cup camera split; per-particle diffuse materials; one persisted Gaussian asset scored under excluded OLATs 000 and 086; five training OLATs 062/082/092/139/015 span both sides of the scene"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+three_light_000_control = [26.12, 23.89, 18.09, 15.72, 61.4, 63.5]
+three_light_000_joint = [27.33, 25.62, 19.54, 17.59, 64.9, 61.8]
+three_light_086_control = [22.83, 20.57, 13.49, 11.46, 61.4, 63.5]
+three_light_086_joint = [22.78, 20.47, 13.44, 11.23, 64.9, 61.8]
+five_light_000_control = [27.87, 25.80, 19.68, 17.47, 59.6, 64.0]
+five_light_000_joint = [28.94, 27.18, 20.48, 18.49, 62.2, 63.0]
+five_light_086_control = [22.59, 20.86, 13.15, 10.78, 59.6, 64.0]
+five_light_086_joint = [22.81, 21.01, 13.39, 10.87, 62.2, 63.0]
+maximum_peak_memory_bytes = 1179508736
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/openillumination/joint-material-{three-training-two-held,four-139-two-held,four-015-two-held,five-training-two-held,selected-five} (gitignored)"
+verdict = "select only for per-particle materials with at least five broad calibrated lights: every whole-frame and foreground mean/tail improves under both held directions; three lights and one four-light control fail the second-tail gate, while the existing four-light shared-palette synthetic path remains unchanged"

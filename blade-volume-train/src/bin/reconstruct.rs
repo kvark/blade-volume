@@ -647,6 +647,28 @@ fn main() {
     );
     describe_light(fitted.scene.environment());
 
+    // Smaller light sets and shared palettes fail held-light transfer gates;
+    // five broad directions with one material per particle pass both tails.
+    if normal_captures.len() >= 4 && args.materials == 0 {
+        let stats = refine_materials_from_captures(
+            &mut fitted.scene.model,
+            &observations,
+            &train_views,
+            known_light
+                .as_ref()
+                .expect("known light validated for additional captures"),
+            &normal_captures,
+            args.brightest_albedo,
+        );
+        println!(
+            "materials: jointly fitted {} of {} entries across {} known lights ({} coordinates changed)",
+            stats.supported,
+            fitted.scene.model.materials.len(),
+            normal_captures.len() + 1,
+            stats.changed,
+        );
+    }
+
     if args.render_refine_normals {
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
             capture: &capture,
@@ -2272,6 +2294,52 @@ fn refine_normals_from_captures(
         )
         .collect();
     train::inverse::decompose::refine_normals_known_lights_per_view(model, &lights, 512)
+}
+
+fn refine_materials_from_captures(
+    model: &mut vol::relight::RelightModel,
+    primary_observations: &train::inverse::decompose::Observations,
+    train_views: &[usize],
+    primary_light: &vol::relight::Environment,
+    secondary: &[LitCapture],
+    ceiling: f32,
+) -> train::inverse::decompose::MaterialRefinement {
+    let observations: Vec<_> = secondary
+        .iter()
+        .map(|entry| {
+            train::inverse::decompose::observe(
+                model,
+                &entry.capture,
+                train_views,
+                train::inverse::decompose::FitOptions::default().min_facing,
+            )
+        })
+        .collect();
+    let mut lights = Vec::with_capacity(secondary.len() + 1);
+    lights.push(train::inverse::decompose::KnownLightObservations {
+        irradiance: train::relight::Irradiance::project(
+            &primary_light.texels,
+            primary_light.width,
+            primary_light.height,
+        ),
+        observations: primary_observations,
+    });
+    lights.extend(
+        secondary
+            .iter()
+            .zip(&observations)
+            .map(
+                |(entry, observations)| train::inverse::decompose::KnownLightObservations {
+                    irradiance: train::relight::Irradiance::project(
+                        &entry.environment.texels,
+                        entry.environment.width,
+                        entry.environment.height,
+                    ),
+                    observations,
+                },
+            ),
+    );
+    train::inverse::decompose::refine_materials_known_lights(model, &lights, ceiling)
 }
 
 /// Say what the recovered light looks like, in terms that can be checked.

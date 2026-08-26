@@ -38,11 +38,12 @@ a convincing real-world result.
   test cameras, masks, and selected OLAT directions without Python or a mesh.
   One fitted asset can now be scored against several lights excluded from all
   fitting, preventing a promising interpolation from being mistaken for broad
-  relighting. Its
-  static light field narrowly beats black on held cameras, but the first
-  held-light surface clouds lose to both black and copying the capture-light
-  photograph. This is now the blocking quality gate, not an unimplemented
-  experiment. Exact commands, baselines, images, and next steps are in
+  relighting. With five broad calibrated directions, one durable per-particle
+  albedo fit now improves both excluded directions; the harder one reaches
+  22.81/21.01 dB. The asset still does not pass every black/capture-copy
+  baseline, and its surface remains visibly fragmented. This is now the
+  blocking quality gate, not an unimplemented experiment. Exact commands,
+  baselines, images, and next steps are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
 The concise evidence is below. Detailed protocols, experiments, and rejected
@@ -157,10 +158,11 @@ The comparisons show a fragmented, blob-like surface rather than merely a
 miscalibrated BRDF. Denser source clouds, silhouette hulls, global support
 widening, moving lattice sites, lower-order appearance, and extra sequential
 lights have all failed a mean/tail/foreground cross-check. Broader calibrated
-lighting can improve one unseen direction substantially, but a second unseen
-direction currently rejects the same fitted asset; the next target is a
-surface/material model that transfers across held lights, not another global
-radius or capacity knob.
+lighting alone improves only one unseen direction, but requiring one
+per-particle albedo to explain five broad known lights improves both excluded
+directions from the same asset. It remains below the complete trivial-baseline
+gate; the next target is the fragmented surface and missing transport, not
+another global radius or capacity knob.
 
 Each PSNR cell is mean / worst held view. The current denser synthetic gate
 and gallery use 200x150 final renders after the initial foam stage trains at

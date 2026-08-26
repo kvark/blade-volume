@@ -259,11 +259,35 @@ model default. The transferable result is the evaluation rule: capture lights
 must span 3D, and a relightable claim now requires at least two excluded light
 directions rather than the nearest unseen OLAT alone.
 
+### Joint known-light material
+
+The baseline above still estimates each durable diffuse albedo from the
+primary OLAT only. A small analytical continuation now requires one
+per-particle albedo to explain all calibrated captures. It changes no geometry
+representation, shader, graph operation, model field, option, or dependency.
+The production command selects it only for one material per particle and at
+least five known lights: the three-light control improves OLAT 000 but regresses
+OLAT 086, and a four-light control still loses one whole-frame tail.
+
+| Fit | Held OLAT 000 whole / foreground PSNR | Held OLAT 086 whole / foreground PSNR |
+| --- | ---: | ---: |
+| Three lights, primary-only material | 26.12 / 23.89; 18.09 / 15.72 dB | 22.83 / 20.57; 13.49 / 11.46 dB |
+| Three lights, joint material | 27.33 / 25.62; 19.54 / 17.59 dB | 22.78 / 20.47; 13.44 / 11.23 dB |
+| Five lights, primary-only material | 27.87 / 25.80; 19.68 / 17.47 dB | 22.59 / 20.86; 13.15 / 10.78 dB |
+| **Five lights, joint material** | **28.94 / 27.18; 20.48 / 18.49 dB** | **22.81 / 21.01; 13.39 / 10.87 dB** |
+
+The selected row improves every whole-frame and foreground mean/tail from one
+persisted asset. OLAT 000 still loses the black and capture-copy whole-frame
+baselines. OLAT 086 beats black and the capture-copy mean, but its worst view
+still trails capture-copy by 0.22 dB. This is material-transfer progress, not a
+claim that real relighting now passes. The next blocker remains the visibly
+fragmented surface and the unmodelled shadows/interreflection that its free
+albedos still absorb.
+
 The exact ignored runs are under
-`target/audit-runs/openillumination/{four-training-lights,four-training-lights-015,five-training-lights-015,six-axis-training-lights,three-training-lights-held-086,four-training-lights-139-held-086,five-training-lights-held-086,five-training-lights-fixed-budget-held-000,five-training-lights-fixed-budget-held-086,five-training-two-held}/`.
+`target/audit-runs/openillumination/{four-training-lights,four-training-lights-015,five-training-lights-015,six-axis-training-lights,three-training-lights-held-086,four-training-lights-139-held-086,five-training-lights-held-086,five-training-lights-fixed-budget-held-000,five-training-lights-fixed-budget-held-086,five-training-two-held,joint-material-three-training-two-held,joint-material-four-139-two-held,joint-material-four-015-two-held,joint-material-five-training-two-held,joint-material-selected-five}/`.
 All complete runs used the guarded 12 GiB scope; the final two-held run peaked
-at 1.1 GiB including its release rebuild, with zero swap, memory pressure, OOM,
-or GPU fault.
+at 1.1 GiB including its release rebuild, with zero swap, OOM, or GPU fault.
 
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact

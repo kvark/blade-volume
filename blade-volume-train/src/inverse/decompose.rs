@@ -255,6 +255,13 @@ pub struct NormalRefinement {
     pub changed: usize,
 }
 
+/// Result of re-solving one fixed material table across calibrated lights.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MaterialRefinement {
+    pub supported: usize,
+    pub changed: usize,
+}
+
 fn normal_candidates(count: usize) -> Vec<glam::Vec3> {
     let golden_angle = std::f32::consts::PI * (3.0 - 5.0f32.sqrt());
     (0..count)
@@ -487,6 +494,64 @@ pub fn refine_normals_known_lights_per_view(
         .zip(original)
         .filter(|entry| entry.0.normal != entry.1)
         .count();
+    stats
+}
+
+/// Re-solve diffuse albedo from every calibrated capture while keeping
+/// geometry, material assignment, non-diffuse parameters, and light fixed.
+///
+/// A single measured capture still paints its cast shadows, interreflection,
+/// and model error into free albedos. Requiring one albedo to explain several
+/// measured lights reduces that bias without adding a material representation
+/// or a training parameter.
+pub fn refine_materials_known_lights(
+    model: &mut vol::relight::RelightModel,
+    lights: &[KnownLightObservations<'_>],
+    ceiling: f32,
+) -> MaterialRefinement {
+    if lights.is_empty() || model.materials.is_empty() {
+        return MaterialRefinement::default();
+    }
+    let mut numerator = vec![[0.0f64; 3]; model.materials.len()];
+    let mut denominator = vec![[0.0f64; 3]; model.materials.len()];
+    for light in lights {
+        assert_eq!(light.observations.surfels(), model.surfels.len());
+        for (index, surfel) in model.surfels.iter().enumerate() {
+            let material = surfel.material as usize;
+            assert!(material < model.materials.len());
+            let shade = light
+                .irradiance
+                .shade(glam::Vec3::from(surfel.normal).normalize_or_zero());
+            for sample in light.observations.of(index) {
+                let weight = sample.facing.max(0.0) as f64;
+                for channel in 0..3 {
+                    let response = shade[channel] as f64;
+                    numerator[material][channel] +=
+                        weight * response * sample.radiance[channel] as f64;
+                    denominator[material][channel] += weight * response * response;
+                }
+            }
+        }
+    }
+
+    let mut stats = MaterialRefinement::default();
+    for (index, material) in model.materials.iter_mut().enumerate() {
+        if denominator[index].iter().any(|&value| value > 1.0e-12) {
+            stats.supported += 1;
+        }
+        for channel in 0..3 {
+            if denominator[index][channel] <= 1.0e-12 {
+                continue;
+            }
+            let previous = material.albedo[channel];
+            material.albedo[channel] = (numerator[index][channel] / denominator[index][channel])
+                .clamp(0.005, ceiling as f64) as f32;
+            if material.albedo[channel] != previous {
+                stats.changed += 1;
+            }
+        }
+    }
+
     stats
 }
 
@@ -2063,6 +2128,63 @@ mod tests {
             recovered.dot(truth) > 0.995,
             "normal {recovered:?} against {truth:?}"
         );
+    }
+
+    #[test]
+    fn known_lights_recover_one_durable_diffuse_material() {
+        let truth = [0.65, 0.35, 0.2];
+        let normals = [
+            glam::Vec3::new(0.3, 0.4, 0.866_025).normalize(),
+            glam::Vec3::new(-0.6, 0.2, 0.774_597).normalize(),
+        ];
+        let mut first = crate::relight::Irradiance::default();
+        first.coefficients[0] = [2.0, 1.8, 1.6];
+        first.coefficients[3] = [0.4, 0.3, 0.2];
+        let mut second = crate::relight::Irradiance::default();
+        second.coefficients[0] = [1.4, 1.6, 1.8];
+        second.coefficients[1] = [-0.2, -0.1, 0.1];
+        let irradiance = [first, second];
+        let observations: Vec<_> = irradiance
+            .iter()
+            .map(|light| {
+                let means: Vec<_> = normals
+                    .iter()
+                    .map(|&normal| {
+                        let shade = light.shade(normal);
+                        std::array::from_fn(|channel| truth[channel] * shade[channel])
+                    })
+                    .collect();
+                from_means(&means)
+            })
+            .collect();
+        let lights: Vec<_> = irradiance
+            .into_iter()
+            .zip(&observations)
+            .map(|(irradiance, observations)| KnownLightObservations {
+                irradiance,
+                observations,
+            })
+            .collect();
+        let mut model = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: normals
+                .into_iter()
+                .map(|normal| vol::relight::Surfel {
+                    center: normal.to_array(),
+                    radius: 0.1,
+                    normal: normal.to_array(),
+                    material: 0,
+                })
+                .collect(),
+            materials: vec![vol::relight::Material::default()],
+        };
+
+        let stats = refine_materials_known_lights(&mut model, &lights, 0.8);
+        assert_eq!(stats.supported, 1);
+        assert_eq!(stats.changed, 3);
+        for (actual, expected) in model.materials[0].albedo.iter().zip(truth) {
+            assert!((actual - expected).abs() < 1.0e-6);
+        }
     }
 
     #[test]
