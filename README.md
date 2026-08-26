@@ -135,9 +135,12 @@ baselines. On OpenIllumination `obj_16_friends_cup`, the static Gaussian under
 captured OLAT 062 reaches 31.51/28.98 dB on the five official held cameras,
 versus black at 31.10/28.46 dB. Under unseen OLAT 000, however, black scores
 29.69/28.11 dB and copying the OLAT-062 photograph scores 30.30/28.16 dB. The
-relightable scalar cloud reaches only 24.03/21.24 dB at 12.1% coverage; the
-Gaussian reaches 29.49/27.68 dB by collapsing to 0.4% coverage. Therefore the
-real relighting gate fails despite superficially high full-frame PSNR.
+relightable scalar cloud reaches only 23.58/20.58 dB at 14.1% coverage. A
+support-collapse guard now rejects the Gaussian fit when fewer than one quarter
+of its input particles would survive: all 638 particles persist, raising
+Gaussian coverage from 0.4% to 9.4%, but honest held-light quality is still only
+25.74/23.43 dB. Therefore the real relighting gate still fails both trivial
+baselines; it no longer hides that failure behind an almost-black render.
 
 Each PSNR cell is mean / worst held view. The current denser synthetic gate
 and gallery use 200x150 final renders after the initial foam stage trains at
@@ -236,9 +239,10 @@ pre-continuation appearance coefficients afterward. When every capture has a
 mask, the same graph jointly updates particle centers and explicit diffuse
 normals through the exact nine-term irradiance basis in linear radiance;
 maskless or mixed captures retain the previous display-referred,
-position-only path needed for low-radiance coverage. Covariance, opacity,
-support, materials, durable SH, and the runtime representation stay fixed
-during this continuation. A weak foreground residual conditions at most 50%
+position-only path needed for low-radiance coverage. Covariance, materials,
+durable SH, and the runtime representation stay fixed during this
+continuation; dense masked captures may also recalibrate opacity as described
+below. A weak foreground residual conditions at most 50%
 of the color loss in proportion to detached predicted opacity, preventing
 well-covered motion from repairing errors in frozen transmittance while
 poorly covered and background rays retain the coverage-driving residual. The

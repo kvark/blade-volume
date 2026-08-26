@@ -47,6 +47,7 @@ const PREPARED_CANDIDATE_BATCHES: usize = 20;
 const PBR_SUPPORT_FEEDBACK: f32 = 0.025;
 const HIGH_VIEW_PBR_INITIAL_OPACITY: f32 = 0.25;
 const PBR_MIN_PERSISTED_OPACITY: f32 = 0.05;
+const PBR_MIN_RETAINED_DIVISOR: usize = 4;
 const STATIC_CONTINUATION_MIN_VALIDATION_GAIN_DB: f32 = 0.05;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
@@ -401,6 +402,14 @@ pub struct FitStats {
     pub steps: usize,
     pub initial_loss: f32,
     pub final_loss: f32,
+}
+
+/// Outcome of rejecting a PBR support fit that collapsed most of its input cloud.
+#[derive(Clone, Copy, Debug)]
+pub struct PbrSupportGuard {
+    pub particles: usize,
+    pub retained: usize,
+    pub restored: bool,
 }
 
 /// One calibrated image capture used to separate Gaussian geometry from
@@ -886,6 +895,16 @@ pub fn from_surface(surface: &vol::relight::RelightModel) -> Result<vol::PointCl
     Ok(model)
 }
 
+/// Convert a relightable surface using the selected PBR opacity initialization.
+pub fn pbr_from_surface(
+    surface: &vol::relight::RelightModel,
+    view_count: usize,
+) -> Result<vol::PointCloudModel, String> {
+    let mut model = from_surface(surface)?;
+    initialize_pbr_opacity(&mut model, view_count);
+    Ok(model)
+}
+
 fn initialize_pbr_opacity(model: &mut vol::PointCloudModel, view_count: usize) {
     let opacity = if view_count >= MIN_SH1_VIEWS {
         HIGH_VIEW_PBR_INITIAL_OPACITY
@@ -895,6 +914,51 @@ fn initialize_pbr_opacity(model: &mut vol::PointCloudModel, view_count: usize) {
     for point in &mut model.points {
         point.w = opacity;
     }
+}
+
+/// Restore established opacity and scale when fitting would persist a nearly
+/// empty PBR cloud.
+///
+/// The quarter-cloud threshold is deliberately permissive: selected synthetic
+/// and production fits retain more than four fifths of their inputs, while a
+/// collapse below this bound no longer represents the reconstructed surface.
+/// Learned appearance and later center updates remain intact.
+pub fn guard_pbr_support(
+    model: &mut vol::PointCloudModel,
+    established: &vol::PointCloudModel,
+) -> Result<PbrSupportGuard, String> {
+    model.validate()?;
+    established.validate()?;
+    if model.points.len() != established.points.len() {
+        return Err("PBR support guard requires matching particle counts".to_string());
+    }
+    let particles = model.points.len();
+    let retained = model
+        .points
+        .iter()
+        .filter(|point| point.w >= PBR_MIN_PERSISTED_OPACITY)
+        .count();
+    let restored = retained < particles.div_ceil(PBR_MIN_RETAINED_DIVISOR);
+    if restored {
+        for (point, baseline) in model.points.iter_mut().zip(&established.points) {
+            point.w = baseline.w;
+        }
+        let transforms = model
+            .transforms
+            .as_mut()
+            .ok_or_else(|| "PBR support guard requires learned transforms".to_string())?;
+        let established_transforms = established
+            .transforms
+            .as_ref()
+            .ok_or_else(|| "PBR support guard requires established transforms".to_string())?;
+        transforms.scales.clone_from(&established_transforms.scales);
+        model.validate()?;
+    }
+    Ok(PbrSupportGuard {
+        particles,
+        retained,
+        restored,
+    })
 }
 
 /// Transfer learned Gaussian support back to the corresponding PBR surfels.
@@ -3848,6 +3912,63 @@ mod tests {
         );
         initialize_pbr_opacity(&mut gaussian, MIN_SH1_VIEWS - 1);
         assert!(gaussian.points.iter().all(|point| point.w == 0.5));
+    }
+
+    #[test]
+    fn pbr_support_guard_restores_only_a_degenerate_fit() {
+        let mut established = model(
+            (0..8)
+                .map(|index| glam::Vec4::new(index as f32, 0.0, 2.0, 0.25))
+                .collect(),
+        );
+        established
+            .transforms
+            .as_mut()
+            .unwrap()
+            .scales
+            .fill(glam::Vec3::splat(0.3));
+
+        let mut collapsed = established.clone();
+        collapsed.points.iter_mut().for_each(|point| point.w = 0.01);
+        collapsed.points[0].w = 0.1;
+        collapsed.points[0].x += 0.5;
+        collapsed
+            .transforms
+            .as_mut()
+            .unwrap()
+            .scales
+            .fill(glam::Vec3::splat(0.02));
+        let guard = guard_pbr_support(&mut collapsed, &established).unwrap();
+        assert!(guard.restored);
+        assert_eq!(guard.retained, 1);
+        assert_eq!(collapsed.points[0].x, established.points[0].x + 0.5);
+        assert!(collapsed.points.iter().all(|point| point.w == 0.25));
+        assert!(collapsed
+            .transforms
+            .unwrap()
+            .scales
+            .iter()
+            .all(|&scale| scale == glam::Vec3::splat(0.3)));
+
+        let mut bounded = established.clone();
+        for point in &mut bounded.points[2..] {
+            point.w = 0.01;
+        }
+        bounded
+            .transforms
+            .as_mut()
+            .unwrap()
+            .scales
+            .fill(glam::Vec3::splat(0.02));
+        let guard = guard_pbr_support(&mut bounded, &established).unwrap();
+        assert!(!guard.restored);
+        assert_eq!(guard.retained, 2);
+        assert!(bounded
+            .transforms
+            .unwrap()
+            .scales
+            .iter()
+            .all(|&scale| scale == glam::Vec3::splat(0.02)));
     }
 
     #[test]

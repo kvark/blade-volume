@@ -729,15 +729,18 @@ fn main() {
     }
 
     let mut learned_pbr_gaussian = None;
+    let mut pbr_support_baseline = None;
     if fit_gaussians && args.gaussian_output.is_none() {
         let gpu = compute_gpu
             .get_or_insert_with(|| require_compute_gpu("PBR Gaussian training"))
             .clone();
-        let mut pbr_gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
-            .unwrap_or_else(|error| {
-                eprintln!("cannot initialize PBR support Gaussian field: {error}");
-                std::process::exit(1);
-            });
+        let mut pbr_gaussian =
+            train::gaussian_splat::pbr_from_surface(&fitted.scene.model, train_views.len())
+                .unwrap_or_else(|error| {
+                    eprintln!("cannot initialize PBR support Gaussian field: {error}");
+                    std::process::exit(1);
+                });
+        let established_support = pbr_gaussian.clone();
         let started = std::time::Instant::now();
         let stats = train::gaussian_splat::fit_staged(
             &mut pbr_gaussian,
@@ -756,11 +759,13 @@ fn main() {
             stats.support.steps,
             started.elapsed().as_secs_f64(),
         );
+        guard_pbr_support(&mut pbr_gaussian, &established_support, "single-light fit");
         train::gaussian_splat::update_surface_radii(&mut fitted.scene.model, &pbr_gaussian)
             .unwrap_or_else(|error| {
                 eprintln!("cannot update PBR support from direct Gaussian field: {error}");
                 std::process::exit(1);
             });
+        pbr_support_baseline = Some(pbr_gaussian.clone());
         learned_pbr_gaussian = Some(pbr_gaussian);
         println!("updated PBR radii from learned Gaussian support");
     } else if fit_gaussians {
@@ -798,42 +803,48 @@ fn main() {
         let gpu = compute_gpu
             .get_or_insert_with(|| require_compute_gpu("direct Gaussian training"))
             .clone();
-        let mut pbr_gaussian = train::gaussian_splat::from_surface(&fitted.scene.model)
+        let independent_outputs =
+            sparse_gaussian_surface.is_some() || static_gaussian_surface.is_some();
+        let mut pbr_gaussian = if independent_outputs {
+            train::gaussian_splat::pbr_from_surface(&fitted.scene.model, train_views.len())
+        } else {
+            train::gaussian_splat::from_surface(&fitted.scene.model)
+        }
+        .unwrap_or_else(|error| {
+            eprintln!("cannot initialize PBR support Gaussian field: {error}");
+            std::process::exit(1);
+        });
+        let established_support = pbr_gaussian.clone();
+        let started = std::time::Instant::now();
+        let (stats, shared_appearance) = if independent_outputs {
+            let stats = train::gaussian_splat::fit_staged_independent_outputs(
+                &mut pbr_gaussian,
+                &mut gaussian,
+                &capture,
+                &train_views,
+                args.gaussian_steps,
+                gpu,
+            )
             .unwrap_or_else(|error| {
-                eprintln!("cannot initialize PBR support Gaussian field: {error}");
+                eprintln!("cannot fit independent Gaussian outputs: {error}");
                 std::process::exit(1);
             });
-        let started = std::time::Instant::now();
-        let (stats, shared_appearance) =
-            if sparse_gaussian_surface.is_some() || static_gaussian_surface.is_some() {
-                let stats = train::gaussian_splat::fit_staged_independent_outputs(
-                    &mut pbr_gaussian,
-                    &mut gaussian,
-                    &capture,
-                    &train_views,
-                    args.gaussian_steps,
-                    gpu,
-                )
-                .unwrap_or_else(|error| {
-                    eprintln!("cannot fit independent Gaussian outputs: {error}");
-                    std::process::exit(1);
-                });
-                (stats, false)
-            } else {
-                let stats = train::gaussian_splat::fit_staged_outputs(
-                    &mut pbr_gaussian,
-                    &mut gaussian,
-                    &capture,
-                    &train_views,
-                    args.gaussian_steps,
-                    gpu,
-                )
-                .unwrap_or_else(|error| {
-                    eprintln!("cannot fit Gaussian outputs: {error}");
-                    std::process::exit(1);
-                });
-                (stats, true)
-            };
+            (stats, false)
+        } else {
+            let stats = train::gaussian_splat::fit_staged_outputs(
+                &mut pbr_gaussian,
+                &mut gaussian,
+                &capture,
+                &train_views,
+                args.gaussian_steps,
+                gpu,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("cannot fit Gaussian outputs: {error}");
+                std::process::exit(1);
+            });
+            (stats, true)
+        };
         let fit_seconds = started.elapsed().as_secs_f64();
         if shared_appearance {
             println!(
@@ -899,6 +910,7 @@ fn main() {
                 "light-field test: {initial_mean:.2} -> {mean:.2} dB mean, {initial_worst:.2} -> {worst:.2} dB worst"
             );
         }
+        guard_pbr_support(&mut pbr_gaussian, &established_support, "single-light fit");
         if let Some(ref directory) = args.dump {
             dump_static_gaussian(
                 &gaussian,
@@ -916,6 +928,7 @@ fn main() {
                 eprintln!("cannot update PBR support from direct Gaussian field: {error}");
                 std::process::exit(1);
             });
+        pbr_support_baseline = Some(pbr_gaussian.clone());
         learned_pbr_gaussian = Some(pbr_gaussian);
         println!("updated PBR radii from learned Gaussian support");
     }
@@ -1055,6 +1068,13 @@ fn main() {
             );
             multilight_geometry_fitted = true;
         }
+        guard_pbr_support(
+            gaussian,
+            pbr_support_baseline
+                .as_ref()
+                .expect("learned PBR Gaussian has an established support baseline"),
+            "multi-light fit",
+        );
         if args.render_refine_radii {
             train::gaussian_splat::apply_surface_radius_feedback(gaussian, &fitted.scene.model)
                 .unwrap_or_else(|error| {
@@ -1973,6 +1993,24 @@ fn print_reconstruction_summary(name: &str, summary: train::inverse::score::Summ
         100.0 * summary.coverage,
         summary.covered_srgb_psnr
     );
+}
+
+fn guard_pbr_support(
+    gaussian: &mut vol::PointCloudModel,
+    established: &vol::PointCloudModel,
+    stage: &str,
+) {
+    let guard =
+        train::gaussian_splat::guard_pbr_support(gaussian, established).unwrap_or_else(|error| {
+            eprintln!("cannot guard PBR Gaussian support after {stage}: {error}");
+            std::process::exit(1);
+        });
+    if guard.restored {
+        println!(
+            "PBR support: rejected {stage} collapse ({} of {} particles persist); restored established opacity and scale",
+            guard.retained, guard.particles,
+        );
+    }
 }
 
 fn validate_lit_captures(args: &Args) -> Result<(), String> {
