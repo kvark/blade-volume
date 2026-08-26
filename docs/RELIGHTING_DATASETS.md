@@ -113,28 +113,32 @@ results belong in Git.
 The first current-tree run on `obj_16_friends_cup` establishes an honest
 failure baseline:
 
-| Output | Held condition | Mean / worst PSNR | Coverage | Baseline comparison |
-| --- | --- | ---: | ---: | --- |
-| Static Gaussian | OLAT 062, official held cameras | 31.51 / 28.99 dB | — | Black: 31.10 / 28.46 dB; a narrow numerical win, visibly still a dark blur. |
-| Relightable scalar cloud | unseen OLAT 000, official held cameras | 23.58 / 20.58 dB | 14.1% | Loses badly to black at 29.69 / 28.11 dB and capture-light copy at 30.30 / 28.16 dB. |
-| Relightable Gaussian | unseen OLAT 000, official held cameras | 25.74 / 23.43 dB | 9.4% | All 638 particles persist after rejecting a degenerate support fit. The cloud is visible but blurry and still loses both baselines. |
+| Output | Held condition | Mean / worst PSNR | Frame coverage | Mask recall / precision | Baseline comparison |
+| --- | --- | ---: | ---: | ---: | --- |
+| Static Gaussian | OLAT 062, official held cameras | 31.51 / 28.99 dB | — | — | Black: 31.10 / 28.46 dB; a narrow numerical win, visibly still a dark blur. |
+| Relightable scalar cloud | unseen OLAT 000, official held cameras | 23.62 / 20.61 dB | 14.1% | 73.0% / 55.3% | Loses badly to black at 29.69 / 28.11 dB and capture-light copy at 30.30 / 28.16 dB. |
+| Relightable Gaussian | unseen OLAT 000, official held cameras | 26.12 / 23.89 dB | 10.3% | 61.4% / 63.5% | All 638 particles persist after rejecting a degenerate support fit. The cloud is visible but blurry and still loses both baselines. |
 
 The full run, including static and held-light reference/render pairs, is under
-`target/audit-runs/openillumination/official-full-support-guard/`; the foam
+`target/audit-runs/openillumination/official-fallback-extent/`; the foam
 training run is under `target/audit-runs/openillumination/official-static-v1/`.
 Both are ignored research artifacts. Peak cgroup memory was 946 MB for training
-and 728 MB for the guarded reconstruction, with no memory pressure, OOM,
-socket-throttling, or GPU-fault marker.
+and 1.12 GB for the guarded reconstruction including its release build, with no
+memory pressure, OOM, socket-throttling, or GPU-fault marker.
 
 The initial PBR support optimizer kept only 22 of 638 particles above the
 persistence threshold. The reconstruction now treats retaining less than one
 quarter of the established cloud as a failed fit and restores its opacity and
-scale before radius feedback, calibrated-light continuation, and persistence.
-The same guard runs after the multi-light pass. It does not activate on the
-established synthetic control, which retained 2,184 of 2,343 particles and
-kept 55.1% held-light coverage. This is a safety bound, not a quality claim:
-the guarded OpenIllumination render exposes that normals, materials, and the
-light model remain wrong.
+scale before calibrated-light continuation and persistence. The rejected fit
+no longer feeds its radii back into the scalar surface. Instead, the fallback
+matches the Gaussian's actual 0.03 production response cutoff to the
+established finite surfel radius; this raises held-light Gaussian quality by
+0.38/0.46 dB mean/worst and foreground recall by 5.3 points. The same guard
+runs after the multi-light pass. It does not activate on the established
+synthetic control, which retained 2,184 of 2,343 particles; that control remains
+at 24.26/23.44 dB mean/worst and 55.1% coverage. This is a safety bound, not a
+quality claim: the guarded OpenIllumination render exposes that normals,
+materials, and the light model remain wrong.
 
 The generated lights are explicit approximations, not claimed calibration.
 The public `light_pos.npy` gives the 142 OLAT directions used by the official
@@ -168,15 +172,16 @@ cycled or strobed during one trajectory.
 
 ## Implementation order
 
-1. Continue fixing the surface bottleneck exposed above. The near-empty
-   Gaussian now loses to its established cloud support. Next derive a more
-   accurate boundary/support cloud from the multi-view mask hull and foam
-   density, then require held-training-camera coverage before learned support
-   can replace that control.
-2. Represent the light-stage LEDs honestly. Preserve calibrated finite light
+1. Represent the light-stage LEDs honestly. Mask-relative metrics show that
+   the object occupies only a small part of each frame and that wrong shading,
+   not the old raw coverage number alone, now dominates the real failure.
+   Preserve calibrated finite light
    positions, fit per-light RGB/radiometric gains from training lights only,
    and add analytic point-emitter falloff if it beats the distant control. No
    polygonal light geometry is needed.
+2. Improve the surface boundary from the multi-view mask hull and foam density,
+   using mask precision/recall on withheld training cameras rather than raw
+   frame coverage to select any replacement for the established cloud.
 3. Require every candidate to beat black and capture-light-copy baselines on
    mean, worst-view, covered-pixel quality, and visible shadow/highlight motion.
 4. Generalize aligned directories to sparse `(camera, light)` observations so
