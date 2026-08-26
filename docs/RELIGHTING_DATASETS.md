@@ -201,13 +201,20 @@ solution to the visible failure:
   seed, and one or two sequential secondary-light continuations each move a
   real mean by a few tenths but regress a tail or mask recall. None passes the
   complete gate;
+- using the strongest foam cell as a stable cross-view surface identity also
+  fails to resolve the volume. One disc per identity collapses 638 particles
+  to 356 and reduces held-light Gaussian quality to 25.68/23.14 dB. Splitting
+  identities spatially produces 983 particles and 25.89/24.00 dB; filtering
+  ordinary spatial fusion by identity consensus is effectively neutral at
+  26.15/23.88 dB, with slightly worse foreground tail and mask recall. The
+  extra depth-map channel and fusion path were therefore removed;
 - enabling sampled visibility and the existing indirect bounce together on
   the scalar control reaches only 23.27/20.26 dB whole-frame and
   16.10/13.73 dB foreground. Transport cannot repair the surface on which it
   is evaluated.
 
 These ignored controls live under
-`target/audit-runs/openillumination/{dense-16k-256,visual-hull,primary-position-4k,geometry-sh0-4k,opaque-hull-sh0,secondary-light-4k,two-secondary-4k,wide-observe-narrow-support,wide-observe-narrow-support-synthetic,shadow-bounce-scalar-16}/`.
+`target/audit-runs/openillumination/{dense-16k-256,visual-hull,primary-position-4k,geometry-sh0-4k,opaque-hull-sh0,secondary-light-4k,two-secondary-4k,wide-observe-narrow-support,wide-observe-narrow-support-synthetic,shadow-bounce-scalar-16,peak-point-fusion,peak-point-voxel-fusion,peak-point-voxel-min3,peak-point-voxel-min3-r18,peak-point-supported-fusion}/`.
 All GPU work ran in the guarded 12 GiB scope. The largest complete workspace
 test scope peaked at 3.10 GiB and the experimental scopes reported no swap,
 memory pressure, OOM, socket throttling, or GPU fault.
