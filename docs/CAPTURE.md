@@ -139,6 +139,13 @@ clouds. `--dense-max-points` changes the bound; it is a memory/throughput limit,
 not a request to duplicate points. Omit `--dense-cloud` to use sparse geometry
 for both outputs.
 
+When sampled visibility is enabled, `--diffuse-samples N` controls the forward
+model used while fitting. Use `--score-diffuse-samples M` to spend a larger ray
+budget only on final metrics and PNG dumps. It defaults to `N`, so existing
+commands still evaluate exactly the renderer they trained against; setting
+`N=8, M=64` is a useful final-quality split for the same-session light-stage
+gate and does not retrain a different asset.
+
 For a measured novel-view score, the dense cloud must be reconstructed from
 the training photographs only. A `fused.ply` built from every frame has already
 used the held cameras to select and refine geometry, even if `reconstruct`

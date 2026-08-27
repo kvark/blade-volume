@@ -159,6 +159,12 @@ struct Args {
     #[argh(option, default = "0")]
     diffuse_samples: u32,
 
+    /// shadow rays per shading point when scoring and dumping. Defaults to
+    /// --diffuse-samples, so fitting and evaluation still match unless this is
+    /// explicitly requested.
+    #[argh(option)]
+    score_diffuse_samples: Option<u32>,
+
     /// fit without shadowing or indirect light
     #[argh(switch)]
     no_shadows: bool,
@@ -1284,7 +1290,8 @@ fn main() {
         (train_views.as_slice(), None),
         (test_views.as_slice(), dump),
     ];
-    let summaries = renderer.score_splits(&fitted.scene, &capture, &splits, args.diffuse_samples);
+    let score_diffuse_samples = args.score_diffuse_samples.unwrap_or(args.diffuse_samples);
+    let summaries = renderer.score_splits(&fitted.scene, &capture, &splits, score_diffuse_samples);
     for ((name, indices), summary) in [("train", &train_views), ("test", &test_views)]
         .into_iter()
         .zip(summaries)
@@ -1325,7 +1332,7 @@ fn main() {
             &held_scene,
             &held.capture,
             &held_splits,
-            args.diffuse_samples,
+            score_diffuse_samples,
         )[0];
         let label = if held_out_captures.len() == 1 {
             "relight".to_string()
@@ -2805,6 +2812,7 @@ mod tests {
         assert!(defaults.held_out_environment.is_empty());
         assert_eq!(defaults.gaussian_steps, 1_500);
         assert_eq!(defaults.diffuse_samples, 0);
+        assert!(defaults.score_diffuse_samples.is_none());
 
         let known = <Args as argh::FromArgs>::from_args(
             &["reconstruct"],
@@ -2819,6 +2827,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(known.environment.as_deref(), Some("capture.f32"));
+    }
+
+    #[test]
+    fn score_sampling_can_be_higher_than_fit_sampling() {
+        let args = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--diffuse-samples",
+                "8",
+                "--score-diffuse-samples",
+                "64",
+            ],
+        )
+        .unwrap();
+        assert_eq!(args.diffuse_samples, 8);
+        assert_eq!(args.score_diffuse_samples, Some(64));
     }
 
     #[test]

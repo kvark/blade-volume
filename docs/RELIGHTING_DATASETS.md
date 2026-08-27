@@ -362,11 +362,14 @@ recall 84.5%→87.8%; Gaussian foreground moves 16.33/14.53→16.47/14.80 dB.
 Whole-frame tails change by -0.11 and -0.08 dB respectively, so this is a
 support-focused final-quality schedule rather than a universal default.
 
-The selected persisted assets then give the following untouched-light result:
+The selected persisted assets then give the following untouched-light result.
+The scalar asset is trained with eight visibility-plus-bounce rays and scored
+with 64 through `--score-diffuse-samples 64`; the Gaussian path remains
+analytic and is unchanged by that reporting option.
 
 | Asset | Excluded pattern 005 whole / foreground | Excluded pattern 006 whole / foreground |
 | --- | ---: | ---: |
-| Scalar point surface | 23.44/22.50; 14.18/13.23 dB | 22.83/20.70; 13.34/11.69 dB |
+| Scalar point surface | 23.78/22.66; 14.62/13.74 dB | 22.97/20.81; 13.52/11.80 dB |
 | Full-covariance Gaussian | 22.96/20.69; 13.82/11.92 dB | 22.30/19.30; 12.92/10.62 dB |
 | Strongest black/capture-copy baseline | 22.78/20.66; 12.35/10.71 dB | 23.43/19.11; 12.99/8.48 dB |
 
@@ -391,10 +394,10 @@ objective that assigns missing foreground evidence to local Gaussian geometry,
 followed by finite-light visibility and indirect transport. More global radius,
 opacity, or iteration knobs are not supported by this gate.
 
-The final 30.1-second reconstruction peaks at 725 MB of scoped host memory,
-uses no swap, and records no OOM, socket throttling, or GPU fault. The RTX 5070
-finishes at 46 °C. Exact ignored outputs and telemetry are under
-`target/audit-runs/openillumination/lighting-pattern-audit/{grouped-five-importer-final,selector-*}`.
+The final converged-evaluation run takes 32.1 seconds and peaks at 801 MB of
+scoped host memory, uses no swap, and records no OOM, socket throttling, or GPU
+fault. The RTX 5070 finishes at 49 °C. Exact ignored outputs and telemetry are under
+`target/audit-runs/openillumination/lighting-pattern-audit/{fit8-score64-final,grouped-five-importer-final,selector-*}`.
 
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact

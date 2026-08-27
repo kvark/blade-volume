@@ -303,6 +303,13 @@ visibility-plus-bounce model for captures where that trade is known to help.
 `--no-shadows` remains a diagnostic override that can decouple the material fit
 from a requested sampled render.
 
+Fitting and final evaluation have separate budgets when convergence matters.
+`--score-diffuse-samples M` overrides the sample count only for final scalar
+metrics and image dumps; when omitted it inherits `--diffuse-samples`, keeping
+the former matched behavior. This avoids both failure modes: a low-sample dump
+need not be mistaken for reconstruction speckle, and raising the reporting
+quality no longer silently changes the fitted materials and surface.
+
 ## Where it stands
 
 On a scene whose answer is known, the albedo/light split works: albedo
