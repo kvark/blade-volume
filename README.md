@@ -141,8 +141,9 @@ scene and viewpoint but remains blurry, while the relightable branches respond
 to new lights but lose sharp geometry, reflections, and support. The final row
 is the strongest same-session result selected without looking at patterns 005
 or 006. It is a real PNG from the persisted 2,500-point scalar asset, not a
-diagram or best-view control; the speckled bowl is the remaining surface
-failure described below.
+diagram or best-view control. Its eight-ray dump includes evaluation noise as
+well as surface error; `reconstruct --score-diffuse-samples 64` now produces a
+cleaner final dump without silently changing the eight-ray training model.
 
 | Gate | Training / held views | Static held PSNR | PBR held PSNR | Coverage |
 | --- | ---: | ---: | ---: | ---: |
@@ -155,7 +156,7 @@ failure described below.
 | Room (sparse COLMAP) | 18 / 2 | 20.30 / 19.61 dB | 14.94 / 13.54 dB | 69.3% |
 | Bonsai (sparse COLMAP) | 18 / 2 | 16.84 / 16.54 dB | 14.51 / 14.43 dB | 82.6% |
 | Bonsai (training-only dense MVS) | 17 / 3 | 18.52 / 14.59 dB | 15.80 / 11.66 dB | 63.8% |
-| OpenIllumination patterns (scalar, excluded 005 / 006) | 24 / 10 | 26.20 / 20.56 dB | 23.44 / 22.50; 22.83 / 20.70 dB | 9.0% |
+| OpenIllumination patterns (scalar, excluded 005 / 006, 64-ray score) | 24 / 10 | 26.25 / 20.58 dB | 23.78 / 22.66; 22.97 / 20.81 dB | 9.0% |
 | OpenIllumination patterns (Gaussian, excluded 005 / 006) | 24 / 10 | 26.20 / 20.56 dB | 22.96 / 20.69; 22.30 / 19.30 dB | 7.0% |
 
 The earlier OLAT-only two-axis gate is deliberately reported against trivial

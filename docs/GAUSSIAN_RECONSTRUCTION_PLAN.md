@@ -7592,3 +7592,45 @@ The final selected run takes 30.1 seconds, peaks at 725 MB inside the 12 GiB
 scope, uses no swap, and reports no OOM, throttling, validation warning, Xid, or
 GPU fault. The 5070 finishes at 46 degrees C. Ignored outputs and telemetry are
 under `target/audit-runs/openillumination/lighting-pattern-audit/`.
+
+## Separated converged evaluation and rejected support attributions (2026-08-27)
+
+Sampled transport was coupled to both fitting and final scoring through one
+`--diffuse-samples` value. Raising it from eight to 64 therefore produced a
+cleaner image but also refit a different model: the run grew to about 80
+seconds, improved pattern 005, and remained mixed on pattern-006 and Gaussian
+tails. The analytic path was faster but lowered the known-light scalar
+foreground tail from the selected 14.45 to 11.97 dB. Neither is a replacement
+training schedule.
+
+`reconstruct --score-diffuse-samples M` now overrides only the final scalar
+metrics and PNG dumps, inheriting `--diffuse-samples` when omitted. With the
+selected eight-ray fit and a 64-ray score, excluded patterns 005/006 reach
+`23.78/22.66;14.62/13.74` and `22.97/20.81;13.52/11.80` dB
+whole/foreground. Every scalar mean and tail improves over the noisy
+eight-ray report while the persisted asset and analytic Gaussian evaluation
+remain unchanged. The complete run takes 32.1 seconds, peaks at 800,755,712
+bytes inside its 12 GiB scope, uses no swap, and reports no OOM, throttling,
+validation warning, Xid, or GPU fault.
+
+Several independent-support hypotheses were screened before that reporting
+fix. COLMAP's `fused.ply.vis` contains useful evidence (pattern-cloud support
+spans 2--24 cameras, median seven), but visibility-weighted voxel averages,
+five/seven-view filters, and highest-confidence voxel representatives all
+trade away held-camera tails or silhouette recall. Restoring every collapsed
+particle or only particles observed from eight projected centers likewise
+raises recall while lowering foreground fidelity. Halving or interpolating the
+PBR opacity rate, weakening its background loss, and doubling the later
+multi-light opacity rate produce the same trade.
+
+The broad all-LED capture establishes a stronger boundary. Fitting PBR support
+only on pattern 013 raises Gaussian recall from 66.4% to 87.6%, but lowers the
+worst known-light camera to 20.27 dB whole-frame and 12.18 dB foreground.
+Quarter log-space covariance/opacity fusion and opacity-only fusion with the
+primary fit remain decisively negative. Broad illumination therefore exposes
+missing components, but independent fitted supports cannot be merged after the
+fact; a future improvement needs one joint multi-light support objective with
+light-specific nuisance appearance. A stratified eight-ray shader prototype
+is removed too: its small scalar gains do not preserve Gaussian quality. No
+sidecar loader, support heuristic, shader change, model field, operation,
+backend variant, or dependency is retained from these negative screens.
