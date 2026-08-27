@@ -265,6 +265,33 @@ pub fn surfels_from_points(
     (surfels, dropped)
 }
 
+/// Build discs from points that already carry independently measured normals.
+///
+/// Local covariance still establishes spacing and rejects isolated points, but
+/// it does not replace the normal supplied by dense multi-view stereo.
+pub fn surfels_from_oriented_points(
+    points: &[(glam::Vec3, glam::Vec3)],
+    options: SurfaceOptions,
+) -> (Vec<vol::relight::Surfel>, usize) {
+    let positions: Vec<_> = points.iter().map(|entry| entry.0).collect();
+    let estimates = estimate_surfaces(&positions, &[], options);
+    let mut surfels = Vec::with_capacity(points.len());
+    let mut dropped = 0usize;
+    for (point, estimate) in points.iter().zip(estimates) {
+        let (Some(estimate), Some(normal)) = (estimate, point.1.try_normalize()) else {
+            dropped += 1;
+            continue;
+        };
+        surfels.push(vol::relight::Surfel {
+            center: point.0.to_array(),
+            radius: estimate.spacing * options.radius_factor,
+            normal: normal.to_array(),
+            material: surfels.len() as u32,
+        });
+    }
+    (surfels, dropped)
+}
+
 fn nearest_camera(cameras: &[glam::Vec3], point: glam::Vec3) -> Option<glam::Vec3> {
     cameras.iter().copied().min_by(|a, b| {
         (*a - point)
@@ -333,6 +360,21 @@ mod tests {
             spherical_voronoi: None,
             points,
         }
+    }
+
+    #[test]
+    fn oriented_points_keep_the_independent_normal() {
+        let points: Vec<_> = (0..4)
+            .flat_map(|y| {
+                (0..4).map(move |x| (glam::Vec3::new(x as f32, y as f32, 0.0), glam::Vec3::Y))
+            })
+            .collect();
+        let (surfels, dropped) = surfels_from_oriented_points(&points, SurfaceOptions::default());
+        assert_eq!(dropped, 0);
+        assert_eq!(surfels.len(), points.len());
+        assert!(surfels
+            .iter()
+            .all(|surfel| glam::Vec3::from(surfel.normal) == glam::Vec3::Y));
     }
 
     fn plane_cloud(normal: glam::Vec3, extent: usize) -> Vec<glam::Vec3> {

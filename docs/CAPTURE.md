@@ -1,8 +1,9 @@
 # Phone capture
 
-The capture stage produces posed photographs and sparse points. It does not
-introduce a mesh: COLMAP is used only for camera calibration, poses, and the
-initial point cloud consumed by `blade-volume-train`.
+The capture stage produces posed photographs and a point cloud. Sparse points
+are the quick default; optional dense multi-view stereo supplies independent
+surface correspondences and normals. It does not introduce a mesh: COLMAP is
+used only for camera calibration, poses, and point-cloud initialization.
 
 ## Record
 
@@ -24,7 +25,7 @@ Android expose the useful locks directly.
 
 Transfer the original video without social-media recompression.
 
-## Recover poses and sparse points
+## Recover poses and point clouds
 
 Install `ffmpeg` and [COLMAP](https://colmap.github.io/install.html) (a
 CUDA-enabled build is recommended), then run:
@@ -52,12 +53,29 @@ etc/data/my-capture/
     └── points3D.bin
 ```
 
+To also recover the independently matched surface cloud, add `--dense`:
+
+```bash
+etc/colmap.sh --dense phone.mov etc/data/my-capture 3
+```
+
+This runs COLMAP's geometrically consistent PatchMatch stereo and fuses only
+the oriented points; it deliberately stops before Poisson, Delaunay, or any
+other meshing stage. The additional output is `dense/fused.ply` (and COLMAP's
+workspace/visibility side data). Dense images default to at most 2000 pixels
+on their long side; set `COLMAP_DENSE_MAX_IMAGE_SIZE` when the GPU requires a
+smaller bound or a carefully monitored run justifies a larger one.
+
 For a memory-limited workstation, contain the full extraction and mapping run:
 
 ```bash
 etc/cgroup_run.sh --mem 12G --gpu-log capture-gpu.log -- \
-    etc/colmap.sh phone.mov etc/data/my-capture 3
+    etc/colmap.sh --dense phone.mov etc/data/my-capture 3
 ```
+
+Dense stereo is also VRAM-heavy. Watch `capture-gpu.log`; the memory cgroup
+bounds system memory but cannot turn a GPU out-of-memory failure into a useful
+COLMAP result.
 
 The wrapper intentionally assumes one unknown `SIMPLE_RADIAL` camera because
 all extracted frames came from one locked phone lens. If the camera is already
@@ -87,10 +105,28 @@ For the direct Gaussian light field and relightable Gaussian surface:
 cargo run --release -p blade-volume-train --bin reconstruct -- \
     --sparse etc/data/my-capture/sparse/0 \
     --images etc/data/my-capture/images \
+    --dense-cloud etc/data/my-capture/dense/fused.ply \
     --gaussian-output my-capture-static.ply \
     --pbr-gaussian-output my-capture-pbr.ply \
     --output my-capture.scene
 ```
+
+`reconstruct` spatially averages a dense input to at most 50,000 particles by
+default, retains COLMAP's fused normals, estimates local disc support, and then
+fits appearance from the photographs. The relightable model uses this dense
+surface, while the direct captured-light Gaussian keeps the sparse training
+tracks: a leakage-free Bonsai gate selected that split because dense geometry
+improved PBR support but softened the direct light field. Both outputs remain
+clouds. `--dense-max-points` changes the bound; it is a memory/throughput limit,
+not a request to duplicate points. Omit `--dense-cloud` to use sparse geometry
+for both outputs.
+
+For a measured novel-view score, the dense cloud must be reconstructed from
+the training photographs only. A `fused.ply` built from every frame has already
+used the held cameras to select and refine geometry, even if `reconstruct`
+later receives `--test-list`; that is useful for a final production asset but
+is test leakage. Prepare a training-only COLMAP dense workspace before
+reporting held-view or held-light numbers.
 
 A single uncontrolled-light clip can measure capture-light re-rendering, but
 it cannot establish that recovered material and illumination are physically

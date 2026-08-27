@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
-# Extract a phone video and reconstruct the canonical COLMAP sparse layout.
+# Extract a phone video and reconstruct the canonical COLMAP layout.
 #
 # Usage:
-#   etc/colmap.sh VIDEO OUTPUT [FRAMES_PER_SECOND]
+#   etc/colmap.sh [--dense] VIDEO OUTPUT [FRAMES_PER_SECOND]
 
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 VIDEO OUTPUT [FRAMES_PER_SECOND]"
-  echo "writes OUTPUT/images and OUTPUT/sparse/0; default frame rate is 3"
+  echo "usage: $0 [--dense] VIDEO OUTPUT [FRAMES_PER_SECOND]"
+  echo "writes OUTPUT/images and OUTPUT/sparse/0; --dense also writes OUTPUT/dense/fused.ply"
+  echo "default frame rate is 3"
 }
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   usage
   exit 0
+fi
+DENSE=0
+if [ "${1:-}" = "--dense" ]; then
+  DENSE=1
+  shift
 fi
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
   usage >&2
@@ -25,6 +31,7 @@ OUTPUT="${2%/}"
 FPS="${3:-3}"
 FFMPEG="${FFMPEG:-ffmpeg}"
 COLMAP="${COLMAP:-colmap}"
+DENSE_MAX_IMAGE_SIZE="${COLMAP_DENSE_MAX_IMAGE_SIZE:-2000}"
 
 if [ ! -f "$VIDEO" ]; then
   echo "[colmap] video does not exist: $VIDEO" >&2
@@ -36,6 +43,10 @@ if [ -z "$OUTPUT" ]; then
 fi
 if ! [[ "$FPS" =~ ^[1-9][0-9]*$ ]]; then
   echo "[colmap] frames per second must be a positive integer: $FPS" >&2
+  exit 2
+fi
+if [ "$DENSE" -eq 1 ] && ! [[ "$DENSE_MAX_IMAGE_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[colmap] dense maximum image size must be a positive integer: $DENSE_MAX_IMAGE_SIZE" >&2
   exit 2
 fi
 if [ -e "$OUTPUT" ]; then
@@ -94,6 +105,37 @@ for FILE in cameras.bin images.bin points3D.bin; do
   fi
 done
 
+if [ "$DENSE" -eq 1 ]; then
+  echo "[colmap] preparing images for dense stereo at up to ${DENSE_MAX_IMAGE_SIZE}px"
+  "$COLMAP" image_undistorter \
+    --image_path "$WORK/images" \
+    --input_path "$WORK/sparse/0" \
+    --output_path "$WORK/dense" \
+    --output_type COLMAP \
+    --max_image_size "$DENSE_MAX_IMAGE_SIZE"
+
+  echo "[colmap] matching dense multi-view correspondences"
+  "$COLMAP" patch_match_stereo \
+    --workspace_path "$WORK/dense" \
+    --workspace_format COLMAP \
+    --PatchMatchStereo.geom_consistency true
+
+  echo "[colmap] fusing the oriented point cloud"
+  "$COLMAP" stereo_fusion \
+    --workspace_path "$WORK/dense" \
+    --workspace_format COLMAP \
+    --input_type geometric \
+    --output_path "$WORK/dense/fused.ply"
+  if [ ! -s "$WORK/dense/fused.ply" ]; then
+    echo "[colmap] dense reconstruction did not produce dense/fused.ply" >&2
+    exit 4
+  fi
+fi
+
 mv -- "$WORK" "$OUTPUT"
 trap - EXIT
-echo "[colmap] ready: $OUTPUT/images and $OUTPUT/sparse/0"
+if [ "$DENSE" -eq 1 ]; then
+  echo "[colmap] ready: $OUTPUT/images, $OUTPUT/sparse/0, and $OUTPUT/dense/fused.ply"
+else
+  echo "[colmap] ready: $OUTPUT/images and $OUTPUT/sparse/0"
+fi
