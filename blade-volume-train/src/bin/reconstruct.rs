@@ -358,12 +358,11 @@ fn main() {
     // ------------------------------------------------------------- geometry
     let started = std::time::Instant::now();
     let mut sparse_gaussian_surface = if uses_sparse_static_gaussian_surface(&args) {
-        Some(surfels_from_training_sparse(
-            &reconstruction,
-            &capture,
-            &train_views,
-            &args,
-        ))
+        let surfels = surfels_from_training_sparse(&reconstruction, &capture, &train_views, &args);
+        // Pose-only datasets have no sparse tracks. In that case the selected
+        // dense cloud is also the only point-cloud initializer for the direct
+        // output.
+        (!surfels.is_empty()).then_some(surfels)
     } else {
         None
     };
