@@ -389,7 +389,12 @@ retaining all 2,500 particles changes recall by only 0.4 point and lowers
 foreground PSNR. Per-point material refinement is inapplicable to a 2,500-entry
 material table, and exact position-plus-radius coordinate descent exceeds 12
 minutes without finishing where the selected bounded pass takes about 12
-seconds. The next algorithmic target is therefore a batched multi-view support
+seconds. Production screens also reject one temporary appearance table per
+particle and light: it gains small foreground PSNR but loses 1.3 recall points
+and a known-light tail. Applying finite-light visibility plus one bounce as a
+fixed per-particle factor raises recall by 0.8 point but loses 0.50/0.56 dB on
+known-light Gaussian mean/tail and lowers precision. The next algorithmic
+target is therefore a batched multi-view support
 objective that assigns missing foreground evidence to local Gaussian geometry,
 followed by finite-light visibility and indirect transport. More global radius,
 opacity, or iteration knobs are not supported by this gate.
