@@ -2,24 +2,33 @@
 # Extract a phone video and reconstruct the canonical COLMAP layout.
 #
 # Usage:
-#   etc/colmap.sh [--dense] VIDEO OUTPUT [FRAMES_PER_SECOND]
+#   etc/colmap.sh [--dense | --dense-images PATH] VIDEO OUTPUT [FRAMES_PER_SECOND]
 
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 [--dense] VIDEO OUTPUT [FRAMES_PER_SECOND]"
+  echo "usage: $0 [--dense | --dense-images PATH] VIDEO OUTPUT [FRAMES_PER_SECOND]"
   echo "writes OUTPUT/images and OUTPUT/sparse/0; --dense also writes OUTPUT/dense/fused.ply"
+  echo "--dense-images uses same-pose broad-light images for dense stereo"
   echo "default frame rate is 3"
 }
 
+DENSE=0
+DENSE_IMAGES=""
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   usage
   exit 0
-fi
-DENSE=0
-if [ "${1:-}" = "--dense" ]; then
+elif [ "${1:-}" = "--dense" ]; then
   DENSE=1
   shift
+elif [ "${1:-}" = "--dense-images" ]; then
+  if [ "$#" -lt 2 ]; then
+    echo "[colmap] --dense-images needs a directory" >&2
+    exit 2
+  fi
+  DENSE=1
+  DENSE_IMAGES="${2%/}"
+  shift 2
 fi
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
   usage >&2
@@ -35,6 +44,10 @@ DENSE_MAX_IMAGE_SIZE="${COLMAP_DENSE_MAX_IMAGE_SIZE:-2000}"
 
 if [ ! -f "$VIDEO" ]; then
   echo "[colmap] video does not exist: $VIDEO" >&2
+  exit 2
+fi
+if [ -n "$DENSE_IMAGES" ] && [ ! -d "$DENSE_IMAGES" ]; then
+  echo "[colmap] dense image directory does not exist: $DENSE_IMAGES" >&2
   exit 2
 fi
 if [ -z "$OUTPUT" ]; then
@@ -80,6 +93,15 @@ if [ "${#FRAMES[@]}" -lt 3 ]; then
   echo "[colmap] need at least three extracted frames, found ${#FRAMES[@]}" >&2
   exit 4
 fi
+if [ -n "$DENSE_IMAGES" ]; then
+  for FRAME in "${FRAMES[@]}"; do
+    FRAME_NAME="$(basename -- "$FRAME")"
+    if [ ! -f "$DENSE_IMAGES/$FRAME_NAME" ]; then
+      echo "[colmap] dense image set is missing $FRAME_NAME" >&2
+      exit 4
+    fi
+  done
+fi
 
 echo "[colmap] extracting features from ${#FRAMES[@]} frames"
 "$COLMAP" feature_extractor \
@@ -106,9 +128,10 @@ for FILE in cameras.bin images.bin points3D.bin; do
 done
 
 if [ "$DENSE" -eq 1 ]; then
+  DENSE_IMAGE_PATH="${DENSE_IMAGES:-$WORK/images}"
   echo "[colmap] preparing images for dense stereo at up to ${DENSE_MAX_IMAGE_SIZE}px"
   "$COLMAP" image_undistorter \
-    --image_path "$WORK/images" \
+    --image_path "$DENSE_IMAGE_PATH" \
     --input_path "$WORK/sparse/0" \
     --output_path "$WORK/dense" \
     --output_type COLMAP \

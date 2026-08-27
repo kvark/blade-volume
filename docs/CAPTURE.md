@@ -66,6 +66,24 @@ workspace/visibility side data). Dense images default to at most 2000 pixels
 on their long side; set `COLMAP_DENSE_MAX_IMAGE_SIZE` when the GPU requires a
 smaller bound or a carefully monitored run justifies a larger one.
 
+For a controlled relighting capture, the measured-light photographs may be a
+poor stereo source because shadows and highlights move between views. Capture
+one broad, diffuse image without moving the camera at every pose and give that
+directory to the dense stage:
+
+```bash
+etc/colmap.sh --dense-images etc/data/my-broad-light phone.mov \
+    etc/data/my-capture 3
+```
+
+The alternate directory must contain the same `frame_*.png` basenames at the
+same resolution, through the same locked lens, with the object and camera at
+the exact corresponding poses. It is used only by PatchMatch and fusion;
+`OUTPUT/images` still contains the video frames used to fit appearance. The
+wrapper rejects a missing counterpart before starting COLMAP. A separately
+registered orbit is not equivalent: a real soft-object gate produced a dense
+cloud but failed held-light transfer after global alignment.
+
 For a memory-limited workstation, contain the full extraction and mapping run:
 
 ```bash
@@ -139,7 +157,8 @@ For the first controlled experiment, stop the camera at repeatable pose marks
 and photograph every pose under at least four independently controlled lights.
 Do not move the camera while cycling lights. Lock the settings listed above,
 record the position and RGB power of every emitter, and capture a gray card for
-radiometric calibration. Use the same filenames in every light directory.
+radiometric calibration. Include one broad diffuse frame for dense stereo and
+use the same filenames in every light directory.
 
 Reserve several camera poses and one complete light before fitting. Pass the
 remaining aligned lights with paired `--normal-images` and

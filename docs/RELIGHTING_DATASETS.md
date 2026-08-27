@@ -289,6 +289,43 @@ The exact ignored runs are under
 All complete runs used the guarded 12 GiB scope; the final two-held run peaked
 at 1.1 GiB including its release rebuild, with zero swap, OOM, or GPU fault.
 
+### Broad-light dense geometry
+
+The decisive dense test uses lighting pattern 013 from the Friends-cup pattern
+capture as a broad stereo source while keeping all five official OLAT test
+cameras out of matching, fusion, alignment, and fitting. The published pattern
+poses do not fuse at two-view consistency. Joint feature matching is healthy:
+177 verified cross-capture pairs provide 8,820 matches. A calibrated joint SfM
+model registers 12 OLAT training images and 24 pattern images, and alignment
+through only the OLAT training cameras leaves 0.0058 scene-unit mean center
+error. Strict five-view stereo fusion then produces 24,036 oriented points.
+
+That apparently successful cloud is not registered accurately enough for the
+OLAT images. The joint rotations remain 3.98 degrees from the published OLAT
+orientations on average, and its first reconstruction has only 27.2% mask
+recall and 21.8% precision. A global similarity fit against the 17 training
+silhouettes raises raw point-cloud F1 from 0.49 to 0.74. On the five untouched
+cameras it independently raises F1 from 0.40 to 0.66, so the fit does recover
+real geometric alignment rather than merely memorizing the training views.
+Deterministic averaging to 2,500 points gives the strongest balanced rendered
+candidate:
+
+| Geometry | Held OLAT 000 whole / foreground | Held OLAT 086 whole / foreground |
+| --- | ---: | ---: |
+| Selected learned surface | 28.94/27.18; 20.48/18.49 dB | 22.81/21.01; 13.39/10.87 dB |
+| Aligned broad-light dense cloud | 28.45/25.94; 20.15/17.72 dB | 23.31/21.11; 13.88/10.95 dB |
+
+The dense candidate improves every OLAT-086 cell but regresses every OLAT-000
+cell, especially the held-camera tail, so it is not selected. Its silhouette
+is substantially more complete while its appearance remains visibly speckled.
+The useful conclusion is a capture constraint: broad-light geometry images
+must be taken in the same rigid session at the exact measured-light camera
+poses, not on a separately mounted object followed by a global registration.
+`etc/colmap.sh --dense-images PATH` now supports that separation without using
+the broad images to fit the captured appearance. The ignored experiment is
+under `target/audit-runs/openillumination/{lighting-pattern-audit,joint-pattern-dense,silhouette-align}/`;
+all GPU work stayed healthy inside the 12 GiB scope.
+
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact
 object/light selection. A result is useful only if it beats a capture-light
@@ -298,11 +335,12 @@ shadows and highlights in the right direction.
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable
-poses and cycle several independently controlled lights without moving the
-camera. A turntable or pose marks are adequate for the first object gate; a
-synchronized camera/light rig is better. Record light position, RGB power,
-exposure, ISO, aperture, white balance, and a gray-card frame in every session.
-Reserve one light and several poses before training.
+poses and cycle several independently controlled lights plus one broad diffuse
+geometry light without moving the camera. A turntable or pose marks are
+adequate for the first object gate; a synchronized camera/light rig is better.
+Record light position, RGB power, exposure, ISO, aperture, white balance, and a
+gray-card frame in every session. Reserve one light and several poses before
+training.
 
 A practical phone workflow eventually cannot require pixel-aligned repeated
 orbits. After the aligned gate passes, the trainer should accept a set of

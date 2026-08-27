@@ -7500,8 +7500,38 @@ follow its measured gate instead of forcing a shared geometry source.
 The selected command peaks at 367.5 MiB of host memory inside its 12 GiB scope,
 with zero swap, OOM, or GPU fault on the RTX 5070. This gate measures novel
 views under Bonsai's single captured illumination. It validates the missing
-geometry cue but cannot validate material/light separation. The next decisive
-experiment is the same training-camera-only dense construction on a calibrated
-multi-light scene, followed by held cameras under lights excluded from fusion
-and fitting. Ignored inputs, outputs, visual dumps, and telemetry remain under
+geometry cue but cannot validate material/light separation. Ignored inputs,
+outputs, visual dumps, and telemetry remain under
 `target/audit-runs/bonsai-dense-training-only/`.
+
+## Rejected cross-session broad-light dense surface (2026-08-27)
+
+The corresponding calibrated multi-light experiment is now complete. A broad
+OpenIllumination lighting-pattern capture provides strong cross-session
+features, and a joint training-only SfM model supplies a strict five-view fused
+cloud of 24,036 oriented points. Center-only alignment is insufficient: the
+joint OLAT camera rotations retain 3.98 degrees of mean error and the initial
+dense Gaussian reaches only 27.2%/21.8% mask recall/precision on the fitting
+cameras.
+
+A scratch global similarity fit uses only the 17 training silhouettes. It
+raises raw cloud F1 from 0.49 to 0.74 there and from 0.40 to 0.66 on the five
+untouched cameras. Averaging the aligned cloud from 24,117 to 2,500 points also
+removes much of the fragmented high-frequency support. The resulting persisted
+Gaussian improves the harder excluded OLAT 086 over the selected learned
+surface from 22.81/21.01 to 23.31/21.11 dB whole-frame and from 13.39/10.87 to
+13.88/10.95 dB foreground. It simultaneously regresses excluded OLAT 000 from
+28.94/27.18 to 28.45/25.94 dB whole-frame and from 20.48/18.49 to 20.15/17.72
+dB foreground. Higher point counts are visibly speckled; lower counts and a
+narrower local radius do not close the two-light gate. The aligner remains an
+ignored experiment rather than production complexity.
+
+This isolates capture registration as the next dense-surface requirement.
+`etc/colmap.sh --dense-images PATH` now lets PatchMatch consume broad diffuse
+images while pose recovery and appearance fitting retain the primary capture.
+It requires exact corresponding camera poses, locked intrinsics, a rigid scene,
+and matching basenames. The next calibrated gate should acquire that broad
+frame during each measured-light pose stop instead of registering a separate
+orbit. All ignored inputs, outputs, and telemetry remain under
+`target/audit-runs/openillumination/{lighting-pattern-audit,joint-pattern-dense,silhouette-align}/`;
+the 12 GiB scopes report no OOM or GPU fault.
