@@ -17,15 +17,18 @@ relightable surface is proven on controlled synthetic captures, but is not yet
 a convincing real-world result.
 
 - **Capture and poses — working.** A phone video or image burst goes through
-  COLMAP and becomes posed photographs plus sparse points. COLMAP is an offline
-  input stage; the output asset remains a point cloud.
+  COLMAP and becomes posed photographs plus sparse points. An opt-in dense MVS
+  stage now emits an oriented point cloud for the surface initializer. COLMAP
+  remains an offline input stage; the output asset remains a point cloud.
 - **Static light field — working, still soft.** Posed RGB images train a
   view-dependent anisotropic Gaussian cloud (`light-field.ply`) for novel views
   under the captured illumination. Real Room and Bonsai gates are recognizable
   but still lose fine detail and clean boundaries.
-- **Surface cloud — implemented.** The pipeline extracts point positions,
-  anisotropic support, opacity, and normals from the learned density field. It
-  does not convert the result to polygons.
+- **Surface cloud — implemented and dense-gated.** The pipeline extracts
+  point positions, anisotropic support, opacity, and normals from the learned
+  density field, or consumes an independently fused COLMAP point cloud and its
+  normals. A leakage-free Bonsai gate improves relightable Gaussian geometry
+  over its matched sparse control. It never converts the result to polygons.
 - **Surface properties and relighting — controlled proof.** With aligned
   captures under measured lights, the pipeline fits a shared PBR material table
   and renders held cameras under a light excluded from fitting. Recovering
@@ -66,12 +69,13 @@ blade-volume-train/    # Meganeura-backed appearance training (COLMAP → foam)
 ## Preparing a phone capture
 
 ```bash
-etc/colmap.sh phone.mov etc/data/my-capture 3
+etc/colmap.sh --dense phone.mov etc/data/my-capture 3
 ```
 
 This extracts video frames and runs COLMAP's sequential reconstruction into
-the `images/` + `sparse/0/` layout consumed below. It keeps only poses and
-sparse points; the runtime asset remains cloud-only. See
+the `images/` + `sparse/0/` layout consumed below. `--dense` additionally runs
+geometrically consistent stereo fusion and writes `dense/fused.ply`, never a
+mesh. Omit the flag when only poses and sparse points are wanted. See
 [`docs/CAPTURE.md`](docs/CAPTURE.md) for recording guidance, failure checks,
 and the direct Gaussian reconstruction command.
 
@@ -136,6 +140,7 @@ control; its disconnected blobs are the surface failure described below.
 | Synthetic (denser calibrated capture) | 9 / 3 | 26.80 / 24.88 dB | 24.47 / 23.24 dB | 55.1% |
 | Room (sparse COLMAP) | 18 / 2 | 20.30 / 19.61 dB | 14.94 / 13.54 dB | 69.3% |
 | Bonsai (sparse COLMAP) | 18 / 2 | 16.84 / 16.54 dB | 14.51 / 14.43 dB | 82.6% |
+| Bonsai (training-only dense MVS) | 17 / 3 | 18.52 / 14.59 dB | 15.80 / 11.66 dB | 63.8% |
 
 The first real two-axis gate is deliberately reported against trivial
 baselines. On OpenIllumination `obj_16_friends_cup`, the static Gaussian under
@@ -184,6 +189,18 @@ column uses the volumetric Gaussian rather than the older scalar-surface
 control. The exact commands, outputs, and cgroup/GPU telemetry are under
 `target/audit-runs/tile-allocation-profile/`; repeated controls reproduce the
 displayed values within the expected GPU-atomic band.
+
+The dense Bonsai row uses a separate COLMAP model containing only the 17
+training cameras; the three held cameras do not participate in PatchMatch or
+fusion. COLMAP fuses 168,170 oriented points, which deterministic spatial
+averaging and support filtering reduce to 49,844 PBR particles. A matched
+sparse-only control reaches 14.33/10.64 dB PBR at 62.2% coverage; dense reaches
+15.80/11.66 dB at 63.8%. The direct captured-light field deliberately retains
+the sparse track cloud, where it reaches 18.52/14.59 dB. Using dense geometry
+for both outputs regresses that static result to 18.13/13.59 dB, so the two
+cloud outputs keep their independently gated initializers. This validates
+dense surface support and normals, not relighting: Bonsai has no held-light
+ground truth. The exact protocol is recorded in the reconstruction plan.
 
 An independent full-resolution gate trains upstream 3DGRUT on Bonsai for
 30,000 steps (`32.10` dB with 3DGUT, `29.37` dB through its reference 3DGRT)

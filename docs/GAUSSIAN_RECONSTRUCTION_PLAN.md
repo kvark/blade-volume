@@ -7459,3 +7459,49 @@ with support and materials. The source remains at the previously gated equal
 blend. All 12 GiB scopes peak below 301 MiB with zero swap, OOM, validation
 error, Xid, or GPU fault. Ignored outputs and telemetry remain under
 `target/audit-runs/photometric-normal-blend/`.
+
+## Selected training-only dense MVS surface (2026-08-27)
+
+The real-scene geometry path now accepts the canonical binary
+`stereo_fusion` PLY emitted by COLMAP. A bounded pure-Rust reader retains the
+fused positions, normals, and colours, deterministic voxel averaging limits
+the input to 50,000 particles by default, and the existing local surface pass
+estimates disc support without replacing the independent fused normal. The
+capture wrapper exposes this as opt-in `--dense`: it runs geometrically
+consistent PatchMatch and point fusion, then stops before every meshing stage.
+
+The Bonsai gate prevents held-camera leakage at the source. From the 20 views
+selected by `--stride 4`, frames 00001, 00033, and 00065 are held out. A new
+COLMAP model contains only the other 17 registered cameras before image
+undistortion, PatchMatch, or fusion. Fusion produces 168,170 oriented points;
+spatial reduction retains 49,997 and local support filtering retains 49,844.
+The official CUDA COLMAP container completes the 17-view PatchMatch pass in
+3.57 minutes. The reconstruction itself uses the normal 1,500-update Gaussian
+schedule at 128x85.
+
+| Geometry/output | Persisted particles | Held PSNR mean/worst | Coverage | Where-hit PSNR |
+| --- | ---: | ---: | ---: | ---: |
+| Sparse scalar surface | 163,204 | 11.73/8.70 dB | 42.3% | 16.67 dB |
+| Dense scalar surface | 49,844 | 12.97/8.78 dB | 69.6% | 16.71 dB |
+| Sparse relightable Gaussian | 136,429 | 14.33/10.64 dB | 62.2% | 15.28 dB |
+| Dense relightable Gaussian, selected independent fit | 29,323 | 15.80/11.66 dB | 63.8% | 16.24 dB |
+| Sparse-seeded direct Gaussian, selected | 47,980 | 18.52/14.59 dB | 74.3% | 16.76 dB |
+| Dense-seeded direct Gaussian, rejected | 51,132 | 18.13/13.59 dB | — | — |
+
+Dense correspondence is therefore a real improvement to surface support: the
+selected Gaussian gains 1.47 dB mean, 1.02 dB in the worst held camera, 1.6
+coverage points, and 0.96 dB where hit over the matched sparse-only control.
+It is not a universal initializer. The direct light field is 0.39/1.00 dB
+better when initialized from sparse training tracks, so requesting both assets
+uses the dense cloud for the relightable surface and the sparse cloud for the
+captured-light field. This is still point-cloud-only and makes each output
+follow its measured gate instead of forcing a shared geometry source.
+
+The selected command peaks at 367.5 MiB of host memory inside its 12 GiB scope,
+with zero swap, OOM, or GPU fault on the RTX 5070. This gate measures novel
+views under Bonsai's single captured illumination. It validates the missing
+geometry cue but cannot validate material/light separation. The next decisive
+experiment is the same training-camera-only dense construction on a calibrated
+multi-light scene, followed by held cameras under lights excluded from fusion
+and fitting. Ignored inputs, outputs, visual dumps, and telemetry remain under
+`target/audit-runs/bonsai-dense-training-only/`.

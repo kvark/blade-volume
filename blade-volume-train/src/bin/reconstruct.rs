@@ -110,9 +110,17 @@ struct Args {
     specular_rounds: usize,
 
     /// disc radius as a multiple of the local point spacing (default 1.4).
-    /// Applies to the sparse-cloud geometry only.
+    /// Applies to sparse and dense input clouds.
     #[argh(option, default = "1.4")]
     radius_factor: f32,
+
+    /// COLMAP stereo_fusion fused.ply to use instead of sparse geometry
+    #[argh(option)]
+    dense_cloud: Option<String>,
+
+    /// maximum spatially averaged dense-cloud particles (default 50000)
+    #[argh(option, default = "50_000")]
+    dense_max_points: usize,
 
     /// a trained foam PLY to take the geometry from, instead of the sparse
     /// points. The surface is where each ray was absorbed, fused across views.
@@ -233,6 +241,10 @@ fn main() {
         eprintln!("{message}");
         std::process::exit(1);
     }
+    if let Err(message) = validate_geometry_source(&args) {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
 
     let known_light = args.environment.as_ref().map(|file| {
         vol::io::try_load_environment(path::Path::new(file)).unwrap_or_else(|error| {
@@ -300,6 +312,11 @@ fn main() {
         eprintln!("held-out-light scoring needs at least one held camera view");
         std::process::exit(1);
     }
+    if args.dense_cloud.is_some() && !test_views.is_empty() {
+        eprintln!(
+            "dense-cloud evaluation is valid only when fused.ply was built from the training cameras"
+        );
+    }
     if args.surface_powerfoam_steps_per_view > 0 && args.masks.is_none() {
         eprintln!("surface PowerFoam continuation requires --masks");
         std::process::exit(1);
@@ -340,7 +357,7 @@ fn main() {
 
     // ------------------------------------------------------------- geometry
     let started = std::time::Instant::now();
-    let mut sparse_gaussian_surface = if args.foam.is_none() && args.gaussian_output.is_some() {
+    let mut sparse_gaussian_surface = if uses_sparse_static_gaussian_surface(&args) {
         Some(surfels_from_training_sparse(
             &reconstruction,
             &capture,
@@ -351,8 +368,8 @@ fn main() {
         None
     };
     let (surfels, sparse_support, gaussian_sparse_support, mut density_normal_source) =
-        match args.foam {
-            Some(ref foam) => {
+        match (args.foam.as_deref(), args.dense_cloud.as_deref()) {
+            (Some(foam), None) => {
                 let (surfels, sparse_support, gaussian_sparse_support, source) = surfels_from_foam(
                     path::Path::new(foam),
                     &capture,
@@ -369,12 +386,19 @@ fn main() {
                     Some(source),
                 )
             }
-            None => (
+            (None, Some(dense)) => (
+                surfels_from_dense(path::Path::new(dense), &args),
+                Vec::new(),
+                Vec::new(),
+                None,
+            ),
+            (None, None) => (
                 surfels_from_sparse(&reconstruction, &capture, &args),
                 Vec::new(),
                 Vec::new(),
                 None,
             ),
+            (Some(_), Some(_)) => unreachable!("geometry source was validated"),
         };
     let kernel = if args.compact_kernel {
         vol::relight::ParticleKernel::Compact
@@ -1376,6 +1400,36 @@ fn surfels_from_sparse(
     surfels
 }
 
+/// Discs from COLMAP dense stereo fusion, retaining its independent normals.
+fn surfels_from_dense(dense: &path::Path, args: &Args) -> Vec<vol::relight::Surfel> {
+    let loaded = train::dense::try_load_colmap_fused(dense).unwrap_or_else(|error| {
+        eprintln!("cannot read dense cloud {}: {error}", dense.display());
+        std::process::exit(1);
+    });
+    let points = train::dense::downsample(&loaded, args.dense_max_points);
+    println!(
+        "geometry: spatially retained {} of {} COLMAP dense points",
+        points.len(),
+        loaded.len(),
+    );
+    let oriented: Vec<_> = points
+        .iter()
+        .map(|point| (point.position, point.normal))
+        .collect();
+    let (surfels, dropped) = train::inverse::surface::surfels_from_oriented_points(
+        &oriented,
+        train::inverse::surface::SurfaceOptions {
+            radius_factor: args.radius_factor,
+            ..Default::default()
+        },
+    );
+    println!(
+        "geometry: {dropped} of {} dense points dropped as unsupported outliers",
+        points.len(),
+    );
+    surfels
+}
+
 fn surfels_from_training_sparse(
     reconstruction: &train::colmap::Reconstruction,
     capture: &train::inverse::capture::Capture,
@@ -2182,6 +2236,27 @@ fn validate_lit_captures(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_geometry_source(args: &Args) -> Result<(), String> {
+    if args.foam.is_some() && args.dense_cloud.is_some() {
+        return Err("--foam and --dense-cloud are alternative geometry sources".to_string());
+    }
+    if args.dense_cloud.is_some()
+        && !(train::inverse::surface::SurfaceOptions::default().neighbours + 1..=u32::MAX as usize)
+            .contains(&args.dense_max_points)
+    {
+        return Err(format!(
+            "--dense-max-points must be between {} and {}",
+            train::inverse::surface::SurfaceOptions::default().neighbours + 1,
+            u32::MAX,
+        ));
+    }
+    Ok(())
+}
+
+fn uses_sparse_static_gaussian_surface(args: &Args) -> bool {
+    args.foam.is_none() && args.gaussian_output.is_some()
+}
+
 struct LitCapture {
     capture: train::inverse::capture::Capture,
     environment: vol::relight::Environment,
@@ -2721,6 +2796,8 @@ mod tests {
         .unwrap();
         assert!(defaults.environment.is_none());
         assert!(defaults.masks.is_none());
+        assert!(defaults.dense_cloud.is_none());
+        assert_eq!(defaults.dense_max_points, 50_000);
         assert_eq!(defaults.surface_powerfoam_steps_per_view, 0);
         assert!(defaults.surface_powerfoam_output.is_none());
         assert!(defaults.gaussian_output.is_none());
@@ -2743,6 +2820,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!(known.environment.as_deref(), Some("capture.f32"));
+    }
+
+    #[test]
+    fn dense_cloud_is_a_bounded_alternative_geometry_source() {
+        let parse = |extra: &[&str]| {
+            let mut arguments = vec!["--sparse", "sparse", "--images", "images"];
+            arguments.extend_from_slice(extra);
+            <Args as argh::FromArgs>::from_args(&["reconstruct"], &arguments).unwrap()
+        };
+
+        let dense = parse(&[
+            "--dense-cloud",
+            "dense/fused.ply",
+            "--dense-max-points",
+            "20000",
+        ]);
+        assert_eq!(dense.dense_cloud.as_deref(), Some("dense/fused.ply"));
+        assert_eq!(dense.dense_max_points, 20_000);
+        validate_geometry_source(&dense).unwrap();
+        assert!(!uses_sparse_static_gaussian_surface(&dense));
+
+        let dense_outputs = parse(&[
+            "--dense-cloud",
+            "dense/fused.ply",
+            "--gaussian-output",
+            "static.ply",
+            "--pbr-gaussian-output",
+            "pbr.ply",
+        ]);
+        assert!(uses_sparse_static_gaussian_surface(&dense_outputs));
+
+        let ambiguous = parse(&["--dense-cloud", "dense/fused.ply", "--foam", "trained.ply"]);
+        assert!(validate_geometry_source(&ambiguous)
+            .unwrap_err()
+            .contains("alternative geometry sources"));
+
+        let too_small = parse(&[
+            "--dense-cloud",
+            "dense/fused.ply",
+            "--dense-max-points",
+            "12",
+        ]);
+        assert!(validate_geometry_source(&too_small).is_err());
     }
 
     #[test]
