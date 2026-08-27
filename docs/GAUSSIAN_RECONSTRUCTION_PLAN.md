@@ -7629,8 +7629,64 @@ worst known-light camera to 20.27 dB whole-frame and 12.18 dB foreground.
 Quarter log-space covariance/opacity fusion and opacity-only fusion with the
 primary fit remain decisively negative. Broad illumination therefore exposes
 missing components, but independent fitted supports cannot be merged after the
-fact; a future improvement needs one joint multi-light support objective with
-light-specific nuisance appearance. A stratified eight-ray shader prototype
-is removed too: its small scalar gains do not preserve Gaussian quality. No
+fact; a future improvement needs one joint multi-light support objective whose
+gradients carry cross-view surface responsibility. Per-particle nuisance
+appearance is tested and rejected below. A stratified eight-ray shader
+prototype is removed too: its small scalar gains do not preserve Gaussian
+quality. No
 sidecar loader, support heuristic, shader change, model field, operation,
 backend variant, or dependency is retained from these negative screens.
+
+## Rejected per-light particle nuisance appearance (2026-08-27)
+
+A joint-support prototype first fitted 100 temporary SH-0 appearance updates for
+each known light, converted the result to one effective diffuse albedo per
+particle and light, and supplied those fixed nuisance tables to the existing
+shared geometry/normal graph. The physical paired-light contrast tail remained
+unchanged. This needed no new shader, graph operation, persistent model field,
+or renderer path, but it tested whether unmodelled print and transport were
+forcing opacity to explain colour.
+
+The exact five-light gate is mixed and fails the acceptance bar. Relative to
+the selected run, known-light Gaussian test quality changes from
+`24.27/23.41;16.29/14.48` to `24.35/23.14;16.56/14.72` dB
+whole/foreground: foreground improves, but the whole-frame tail loses 0.27 dB
+and mask recall falls from 66.4% to 65.1%. Excluded patterns 005/006 change
+from `23.01/20.72;13.73/11.90` and `22.39/19.47;12.91/10.61` to
+`23.02/20.75;13.90/11.99` and `22.37/19.55;12.95/10.70` dB. Those small
+foreground gains do not recover support and come with small scalar relighting
+tail losses. Multi-light fitting grows from 0.9 to 2.7 seconds; the complete
+run takes 33.7 seconds and peaks at 896,249,856 bytes, with zero swap, OOM,
+throttling, validation error, Xid, or GPU fault.
+
+The prototype is removed. A nuisance term broad enough to vary independently
+at every particle weakens the shared ownership cue that this stage needs. Any
+later nuisance model should be low-dimensional capture calibration (for
+example exposure or channel gain), while local residuals remain detached from
+geometry/support gradients.
+
+## Rejected fixed visibility-and-bounce transport factor (2026-08-27)
+
+A second production prototype used the existing point-cloud shadow maps and
+one existing indirect bounce for each of the five measured environments. It
+divided that transported diffuse irradiance by the open-sky irradiance at each
+particle, then applied the fixed factor around the differentiable normal
+shading. The paired-light contrast used its own transported difference, so the
+selected normal tail and optimizer schedule stayed intact. The experiment
+added one ordinary graph multiply and no shader, operation variant, model
+field, or renderer path.
+
+This also fails the exact gate. Gaussian mask recall rises from 66.4% to 67.2%,
+but precision falls from 87.2% to 84.7%. Known-light test quality falls from
+`24.27/23.41;16.29/14.48` to `23.77/22.85;16.35/14.64` dB
+whole/foreground, and where-hit quality loses 0.40 dB. Excluded patterns
+005/006 fall from `23.01/20.72;13.73/11.90` and
+`22.39/19.47;12.91/10.61` to `22.81/20.50;13.85/11.88` and
+`22.22/19.20;13.00/10.62` dB. The fixed transport term broadens support but
+does not establish which overlapping Gaussian owns a ray residual.
+Multi-light fitting grows from 0.9 to 5.2 seconds; the complete 36.2-second
+run peaks at 762,753,024 bytes with zero swap, OOM, throttling, validation
+error, Xid, or GPU fault. The implementation is removed. A future transport
+objective needs local per-ray ownership and must refresh visibility as support
+moves, rather than scaling every particle's diffuse response ahead of
+compositing.
