@@ -7535,3 +7535,60 @@ frame during each measured-light pose stop instead of registering a separate
 orbit. All ignored inputs, outputs, and telemetry remain under
 `target/audit-runs/openillumination/{lighting-pattern-audit,joint-pattern-dense,silhouette-align}/`;
 the 12 GiB scopes report no OOM or GPU fault.
+
+## Selected same-session grouped-light gate (2026-08-27)
+
+The same-session `obj_63-fabric-friends-cup` lighting-pattern capture removes
+the cross-session registration failure above. Registering only the broad
+all-LED pattern-013 training photographs yields 24 cameras, 623 sparse points,
+1.019-pixel reprojection error, 0.0104 mean camera-center error, and 0.91-degree
+mean rotation error against the official calibration. A filename-keyed
+pose-only merge adds ten untouched official evaluation poses without exposing
+their pixels. Strict five-view geometrically consistent stereo fusion uses
+only those 24 broad-light photographs and emits 26,223 oriented points.
+
+The official first six spatial lighting groups are recovered from the
+published pattern diagram and pinned 142-emitter calibration. A global
+assignment gives six disjoint groups of 23 and four unused emitters; all 142
+assignments remain stable under 12 projection/radius perturbations. Pattern
+013 is the all-emitter capture: removing any single emitter increases the
+diagram-fit error. A 48-way signed-axis/permutation sweep selected solely on
+patterns 001--004 retains the raw published light basis. The production Rust
+importer now accepts generic `LABEL=i,j,...` groups and `LABEL=all`; its seven
+maps agree with the independent generator to at most `4.6e-5` radiance per
+texel without adding a dependency, shader, operation, or backend variant.
+
+The reconstruction retains 2,500 spatially averaged fused points. Patterns
+001--004 plus 013 are known; patterns 005 and 006 and ten cameras remain
+excluded until final scoring. Three no-held-light repeats select the existing
+radius-plus-normal final-quality schedule from pattern-001 evaluation cameras.
+Clean versus selected medians are `15.32/13.99→15.99/14.45` dB scalar
+foreground with `84.5→87.8%` recall, and `16.33/14.53→16.47/14.80` dB
+Gaussian foreground. Whole-frame tails change by `-0.11/-0.08` dB; the
+schedule is selected for support recovery, not as a new default.
+
+On excluded patterns 005/006, the scalar point surface reaches
+`23.44/22.50;14.18/13.23` and `22.83/20.70;13.34/11.69` dB whole/foreground.
+The Gaussian reaches `22.96/20.69;13.82/11.92` and
+`22.30/19.30;12.92/10.62` dB. The scalar beats black and capture-copy on both
+foregrounds. The Gaussian passes pattern 005 and misses only the pattern-006
+foreground mean by 0.07 dB. Pattern 006 still loses whole-frame mean to the
+23.43 dB black baseline because only about 9% of the frame is object. The
+checked-in CE3 comparison shows the actual remaining failure: recognizable
+shape and light response, but speckled support and missing printed appearance.
+
+The attribution controls are negative but useful. Eight simultaneous position
+rounds and standalone normal refinement regress known-light Gaussian quality.
+Keeping the 917--928 low-opacity particles changes recall by only 0.4 point and
+lowers foreground PSNR, so final compaction is not the cause. Raising the cloud
+to 5,000 points is worse. Complete-render material fitting scales with all
+2,500 per-point materials and was stopped after eight minutes; exact
+position-plus-radius descent was stopped at twelve minutes. Both are rejected
+as production schedules. The next useful algorithm needs to batch missing
+foreground ownership into local multi-view Gaussian support updates, then add
+finite-light visibility and indirect transport on that contiguous cloud.
+
+The final selected run takes 30.1 seconds, peaks at 725 MB inside the 12 GiB
+scope, uses no swap, and reports no OOM, throttling, validation warning, Xid, or
+GPU fault. The 5070 finishes at 46 degrees C. Ignored outputs and telemetry are
+under `target/audit-runs/openillumination/lighting-pattern-audit/`.

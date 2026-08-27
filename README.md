@@ -39,18 +39,26 @@ a convincing real-world result.
   ordinary real capture remains weak and underconstrained.
 - **Cloud runtime — working.** The same viewer consumes static Gaussian and
   relightable Gaussian/RadFoam/PowerFoam assets; no mesh fallback is involved.
-- **Real measured relighting — integrated, not passed.** The selective
-  OpenIllumination gate now imports 17 official training cameras, five official
-  test cameras, masks, and selected OLAT directions without Python or a mesh.
-  One fitted asset can now be scored against several lights excluded from all
-  fitting, preventing a promising interpolation from being mistaken for broad
-  relighting. With five broad calibrated directions, one durable per-particle
-  albedo fit now improves both excluded directions; the harder one reaches
-  22.81/21.01 dB. The asset still does not pass every black/capture-copy
-  baseline, and its surface remains visibly fragmented. This is now the
-  blocking quality gate, not an unimplemented experiment. Exact commands,
+- **Real measured relighting — recognizable, not yet passed.** A same-session
+  OpenIllumination gate builds dense point geometry from a broad all-LED stage
+  capture, fits surface properties from five calibrated lighting patterns, and
+  excludes two other patterns plus ten cameras from every fitting stage. The
+  refined scalar cloud beats black and capture-light-copy on the object mask
+  under both excluded lights; the Gaussian misses one foreground mean by only
+  0.07 dB. Both still fail the dark whole-frame black baseline under one light,
+  and the image below remains visibly speckled. This is now the blocking
+  geometry/transport gate, not an unimplemented experiment. Exact commands,
   baselines, images, and next steps are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
+
+The next quality gate is deliberately narrow:
+
+- recover contiguous Gaussian support from multi-view foreground evidence
+  without globally widening or adding polygonal geometry;
+- fit finite-light visibility, indirect transport, and non-diffuse appearance
+  after the support is trustworthy;
+- pass two excluded lights on a second same-session object before broadening
+  the capture API toward a moving-phone sequence.
 
 The concise evidence is below. Detailed protocols, experiments, and rejected
 ideas live in
@@ -126,12 +134,15 @@ both the camera and the studio environment used for the reference.
 | Room light field<br>held camera, captured light | <img src="docs/images/reconstruction/room-held-reference.png" alt="Room held-view reference" width="320"> | <img src="docs/images/reconstruction/room-held-light-field.png" alt="Room held view rendered by the static Gaussian cloud" width="320"> |
 | Synthetic relighting<br>held camera, unseen studio light | <img src="docs/images/reconstruction/synthetic-held-light-reference.png" alt="Synthetic held-view and held-light reference" width="320"> | <img src="docs/images/reconstruction/synthetic-held-light-pbr.png" alt="Held view under an unseen light rendered by the relightable Gaussian cloud" width="320"> |
 | OpenIllumination relighting<br>held camera and OLAT 000 | <img src="docs/images/reconstruction/openillumination-olat000-reference.svg" alt="OpenIllumination friends-cup reference under held OLAT 000" width="320"> | <img src="docs/images/reconstruction/openillumination-olat000-pbr.svg" alt="OpenIllumination friends-cup rendered by the relightable Gaussian cloud under held OLAT 000" width="320"> |
+| OpenIllumination same-session relighting<br>held camera and lighting pattern 006 | <img src="docs/images/reconstruction/openillumination-pattern006-reference.png" alt="OpenIllumination fabric friends cup reference under excluded lighting pattern 006" width="320"> | <img src="docs/images/reconstruction/openillumination-pattern006-surface.png" alt="Excluded view and light rendered by the reconstructed scalar point surface" width="320"> |
 
 The pictures expose what PSNR alone hides: the light-field branch has the
-scene and viewpoint but remains blurry, while the relightable branch responds
-to the new light but loses sharp geometry, reflections, and support. The real
-OpenIllumination row is the selected five-training-light asset, not a best-case
-control; its disconnected blobs are the surface failure described below.
+scene and viewpoint but remains blurry, while the relightable branches respond
+to new lights but lose sharp geometry, reflections, and support. The final row
+is the strongest same-session result selected without looking at patterns 005
+or 006. It is a real PNG from the persisted 2,500-point scalar asset, not a
+diagram or best-view control; the speckled bowl is the remaining surface
+failure described below.
 
 | Gate | Training / held views | Static held PSNR | PBR held PSNR | Coverage |
 | --- | ---: | ---: | ---: | ---: |
@@ -144,8 +155,10 @@ control; its disconnected blobs are the surface failure described below.
 | Room (sparse COLMAP) | 18 / 2 | 20.30 / 19.61 dB | 14.94 / 13.54 dB | 69.3% |
 | Bonsai (sparse COLMAP) | 18 / 2 | 16.84 / 16.54 dB | 14.51 / 14.43 dB | 82.6% |
 | Bonsai (training-only dense MVS) | 17 / 3 | 18.52 / 14.59 dB | 15.80 / 11.66 dB | 63.8% |
+| OpenIllumination patterns (scalar, excluded 005 / 006) | 24 / 10 | 26.20 / 20.56 dB | 23.44 / 22.50; 22.83 / 20.70 dB | 9.0% |
+| OpenIllumination patterns (Gaussian, excluded 005 / 006) | 24 / 10 | 26.20 / 20.56 dB | 22.96 / 20.69; 22.30 / 19.30 dB | 7.0% |
 
-The first real two-axis gate is deliberately reported against trivial
+The earlier OLAT-only two-axis gate is deliberately reported against trivial
 baselines. On OpenIllumination `obj_16_friends_cup`, the static Gaussian under
 captured OLAT 062 reaches 31.51/28.98 dB on the five official held cameras,
 versus black at 31.10/28.46 dB. Under unseen OLAT 000, however, black scores
