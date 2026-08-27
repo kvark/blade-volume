@@ -28,7 +28,10 @@ a convincing real-world result.
   point positions, anisotropic support, opacity, and normals from the learned
   density field, or consumes an independently fused COLMAP point cloud and its
   normals. A leakage-free Bonsai gate improves relightable Gaussian geometry
-  over its matched sparse control. It never converts the result to polygons.
+  over its matched sparse control. A calibrated multi-light gate shows that a
+  broad-light dense capture must share the rigid session and camera poses;
+  registering a separately mounted object improves one held light but fails
+  the two-light quality gate. It never converts the result to polygons.
 - **Surface properties and relighting — controlled proof.** With aligned
   captures under measured lights, the pipeline fits a shared PBR material table
   and renders held cameras under a light excluded from fitting. Recovering
