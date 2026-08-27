@@ -28,9 +28,16 @@ struct Args {
     #[argh(option)]
     light_positions: String,
 
-    /// OLAT index to validate and convert; repeatable (default 000,062,082,092)
+    /// light label, optionally followed by = and comma-separated LED indices;
+    /// repeatable (default 000,062,082,092; use LABEL=all for every LED)
     #[argh(option)]
     light: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Light {
+    label: String,
+    indices: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -284,14 +291,14 @@ fn write_colmap(
     input: &path::Path,
     output: &path::Path,
     frames: &[Frame],
-    lights: &[String],
+    lights: &[Light],
 ) -> Result<(), String> {
     let sparse = output.join("sparse/0");
     let masks = output.join("masks");
     fs::create_dir_all(&sparse)
         .and_then(|()| fs::create_dir_all(&masks))
         .map_err(|error| format!("cannot create {}: {error}", output.display()))?;
-    let primary = input.join(format!("Lights/{}/raw_undistorted", lights[0]));
+    let primary = input.join(format!("Lights/{}/raw_undistorted", lights[0].label));
     let mut records = Vec::with_capacity(frames.len());
     for frame in frames {
         let primary_image = image_for(&primary, &frame.name)?;
@@ -311,7 +318,7 @@ fn write_colmap(
             ));
         }
         for light in lights.iter().skip(1) {
-            let directory = input.join(format!("Lights/{light}/raw_undistorted"));
+            let directory = input.join(format!("Lights/{}/raw_undistorted", light.label));
             let image = image_for(&directory, &frame.name)?;
             if image.file_name() != primary_image.file_name() {
                 return Err(format!(
@@ -407,29 +414,78 @@ fn parse_light_directions(bytes: &[u8]) -> Result<Vec<glam::Vec3>, String> {
 fn write_environments(
     output: &path::Path,
     source: &path::Path,
-    lights: &[String],
+    lights: &[Light],
 ) -> Result<(), String> {
     let bytes =
         fs::read(source).map_err(|error| format!("cannot read {}: {error}", source.display()))?;
     let directions = parse_light_directions(&bytes)?;
     for light in lights {
-        let index = light
-            .parse::<usize>()
-            .ok()
-            .filter(|&index| index < directions.len())
-            .ok_or_else(|| format!("OLAT index must be between 000 and 141: {light}"))?;
-        let environment = vol::relight::Environment::directional(
+        let environment = environment_for(&directions, &light.indices);
+        let destination = output.join(format!("light-{}.f32", light.label));
+        vol::io::try_save_environment(&destination, &environment)
+            .map_err(|error| format!("cannot write {}: {error}", destination.display()))?;
+    }
+    Ok(())
+}
+
+fn environment_for(directions: &[glam::Vec3], indices: &[usize]) -> vol::relight::Environment {
+    let mut environment =
+        vol::relight::Environment::uniform([0.0; 3], ENVIRONMENT_WIDTH, ENVIRONMENT_WIDTH / 2);
+    for &index in indices {
+        let emitter = vol::relight::Environment::directional(
             directions[index],
             [1.0; 3],
             LIGHT_ANGULAR_RADIUS,
             ENVIRONMENT_WIDTH,
             ENVIRONMENT_WIDTH / 2,
         );
-        let destination = output.join(format!("light-{index:03}.f32"));
-        vol::io::try_save_environment(&destination, &environment)
-            .map_err(|error| format!("cannot write {}: {error}", destination.display()))?;
+        for (target, source) in environment.texels.iter_mut().zip(&emitter.texels) {
+            for channel in 0..3 {
+                target[channel] += source[channel];
+            }
+        }
     }
-    Ok(())
+    environment
+}
+
+fn parse_light(value: &str) -> Result<Light, String> {
+    let (label, members) = value
+        .split_once('=')
+        .map_or((value, None), |(label, members)| (label, Some(members)));
+    if label.len() != 3 || !label.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!("light label must be three digits: {label}"));
+    }
+    let indices = match members {
+        None => vec![label
+            .parse::<usize>()
+            .ok()
+            .filter(|&index| index < 142)
+            .ok_or_else(|| format!("OLAT index must be between 000 and 141: {label}"))?],
+        Some("all") => (0..142).collect(),
+        Some(members) => {
+            let mut unique = collections::BTreeSet::new();
+            for member in members.split(',') {
+                let index = member
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|&index| index < 142)
+                    .ok_or_else(|| format!("LED index must be between 0 and 141: {member}"))?;
+                if !unique.insert(index) {
+                    return Err(format!(
+                        "LED index occurs more than once in {label}: {index}"
+                    ));
+                }
+            }
+            if unique.is_empty() {
+                return Err(format!("light group {label} has no LED indices"));
+            }
+            unique.into_iter().collect()
+        }
+    };
+    Ok(Light {
+        label: label.to_string(),
+        indices,
+    })
 }
 
 fn run(args: &Args) -> Result<(), String> {
@@ -441,7 +497,7 @@ fn run(args: &Args) -> Result<(), String> {
             output.display()
         ));
     }
-    let lights: Vec<String> = if args.light.is_empty() {
+    let light_values: Vec<String> = if args.light.is_empty() {
         DEFAULT_LIGHTS
             .iter()
             .map(|light| light.to_string())
@@ -449,18 +505,17 @@ fn run(args: &Args) -> Result<(), String> {
     } else {
         args.light.clone()
     };
+    let lights: Vec<_> = light_values
+        .iter()
+        .map(|light| parse_light(light))
+        .collect::<Result<_, _>>()?;
     let mut unique_lights = collections::BTreeSet::new();
     for light in &lights {
-        if light.len() != 3
-            || !light.bytes().all(|byte| byte.is_ascii_digit())
-            || light.parse::<usize>().unwrap() >= 142
-        {
+        if !unique_lights.insert(&light.label) {
             return Err(format!(
-                "OLAT index must be three digits from 000 to 141: {light}"
+                "light label was selected more than once: {}",
+                light.label
             ));
-        }
-        if !unique_lights.insert(light) {
-            return Err(format!("OLAT index was selected more than once: {light}"));
         }
     }
     let frames = load_frames(input)?;
@@ -471,7 +526,7 @@ fn run(args: &Args) -> Result<(), String> {
         return Err(message);
     }
     println!(
-        "prepared {} cameras and {} OLATs in {}",
+        "prepared {} cameras and {} lights in {}",
         frames.len(),
         lights.len(),
         output.display()
@@ -483,11 +538,13 @@ fn run(args: &Args) -> Result<(), String> {
     );
     for light in &lights {
         println!(
-            "light {light}: images={} environment={}",
+            "light {} ({} LEDs): images={} environment={}",
+            light.label,
+            light.indices.len(),
             input
-                .join(format!("Lights/{light}/raw_undistorted"))
+                .join(format!("Lights/{}/raw_undistorted", light.label))
                 .display(),
-            output.join(format!("light-{light}.f32")).display(),
+            output.join(format!("light-{}.f32", light.label)).display(),
         );
     }
     Ok(())
@@ -556,5 +613,51 @@ mod tests {
         let invalid = r#"{"frames":{"A1":{"camera_angle_x":0.3,"calib_imgw":3000,
             "transform_matrix":[[2,0,0,0],[0,1,0,0],[0,0,1,1],[0,0,0,1]]}}}"#;
         assert!(parse_frames(invalid, source, false).is_err());
+    }
+
+    #[test]
+    fn light_spec_accepts_olat_groups_and_all_emitters() {
+        assert_eq!(
+            parse_light("062").unwrap(),
+            Light {
+                label: "062".to_string(),
+                indices: vec![62],
+            }
+        );
+        assert_eq!(
+            parse_light("001=8,2,5").unwrap(),
+            Light {
+                label: "001".to_string(),
+                indices: vec![2, 5, 8],
+            }
+        );
+        let all = parse_light("013=all").unwrap();
+        assert_eq!(all.indices.len(), 142);
+        assert_eq!(all.indices[0], 0);
+        assert_eq!(all.indices[141], 141);
+    }
+
+    #[test]
+    fn light_spec_rejects_empty_duplicate_and_invalid_groups() {
+        assert!(parse_light("01=2").is_err());
+        assert!(parse_light("001=").is_err());
+        assert!(parse_light("001=2,2").is_err());
+        assert!(parse_light("001=142").is_err());
+        assert!(parse_light("142").is_err());
+    }
+
+    #[test]
+    fn grouped_environment_adds_individual_emitters() {
+        let directions = [glam::Vec3::X, glam::Vec3::Y];
+        let first = environment_for(&directions, &[0]);
+        let second = environment_for(&directions, &[1]);
+        let grouped = environment_for(&directions, &[0, 1]);
+        for ((grouped, first), second) in
+            grouped.texels.iter().zip(&first.texels).zip(&second.texels)
+        {
+            assert_eq!(grouped[0], first[0] + second[0]);
+            assert_eq!(grouped[1], first[1] + second[1]);
+            assert_eq!(grouped[2], first[2] + second[2]);
+        }
     }
 }

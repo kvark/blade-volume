@@ -326,6 +326,76 @@ the broad images to fit the captured appearance. The ignored experiment is
 under `target/audit-runs/openillumination/{lighting-pattern-audit,joint-pattern-dense,silhouette-align}/`;
 all GPU work stayed healthy inside the 12 GiB scope.
 
+### Same-session grouped-light reconstruction
+
+The follow-up removes the registration ambiguity above. It uses
+`lighting_patterns/obj_63-fabric-friends-cup`, where geometry and every
+lighting condition were recorded in one rigid session with identical exposure.
+The first six published patterns are disjoint 23-LED spatial groups; pattern
+013 is the broad all-142-LED geometry light. The checked-in fetcher carries the
+group memberships recovered by registering the official pattern diagram to the
+pinned 142-light calibration. The assignment remains identical under 12
+projection and sampling perturbations. The importer accepts those groups
+without a dataset-specific rendering path: `LABEL=i,j,...` sums ordinary
+calibrated emitters, while `LABEL=all` selects all 142.
+
+```bash
+etc/fetch_openillumination.sh --capture lighting_patterns
+# Run the import_openillumination command printed by the fetcher.
+```
+
+The leakage-free SfM stage registers 24 training cameras and no evaluation
+camera. Its centers differ from the official calibration by 0.0104 scene units
+on average and rotations by 0.91 degrees. Geometrically consistent PatchMatch
+and strict five-view fusion use only the broad pattern-013 training images and
+produce 26,223 oriented points. No pattern-001..006 evaluation image enters
+matching, stereo, fusion, or fitting. Deterministic spatial averaging retains
+2,500 points for the measured reconstruction.
+
+Patterns 001--004 plus the all-LED pattern 013 are the five known lights.
+Patterns 005 and 006 and ten camera poses are excluded from fitting. Refinement
+settings are selected only from those held cameras under known pattern 001;
+the excluded-light captures are loaded after the asset is final. Three matched
+repeats select `--render-refine-radii --render-refine-normals`: relative to the
+clean medians, scalar foreground PSNR moves 15.32/13.99→15.99/14.45 dB and
+recall 84.5%→87.8%; Gaussian foreground moves 16.33/14.53→16.47/14.80 dB.
+Whole-frame tails change by -0.11 and -0.08 dB respectively, so this is a
+support-focused final-quality schedule rather than a universal default.
+
+The selected persisted assets then give the following untouched-light result:
+
+| Asset | Excluded pattern 005 whole / foreground | Excluded pattern 006 whole / foreground |
+| --- | ---: | ---: |
+| Scalar point surface | 23.44/22.50; 14.18/13.23 dB | 22.83/20.70; 13.34/11.69 dB |
+| Full-covariance Gaussian | 22.96/20.69; 13.82/11.92 dB | 22.30/19.30; 12.92/10.62 dB |
+| Strongest black/capture-copy baseline | 22.78/20.66; 12.35/10.71 dB | 23.43/19.11; 12.99/8.48 dB |
+
+The scalar point surface beats both trivial baselines on the object foreground
+under both excluded lights. The Gaussian does the same under pattern 005 and
+misses the pattern-006 foreground mean by 0.07 dB while beating its tail by
+2.14 dB. Both representations still lose the pattern-006 whole-frame mean to
+black because roughly 91% of the frame is background; that easy baseline stays
+in the gate rather than being discarded. The checked-in pattern-006 PNG shows
+the more important failure directly: the relit bowl is recognizable, but its
+surface is speckled and its appearance lacks the reference's print and smooth
+shading.
+
+Existing controls narrow the next work. Eight simultaneous position rounds
+regress known-light Gaussian quality. Final opacity pruning is not responsible:
+retaining all 2,500 particles changes recall by only 0.4 point and lowers
+foreground PSNR. Per-point material refinement is inapplicable to a 2,500-entry
+material table, and exact position-plus-radius coordinate descent exceeds 12
+minutes without finishing where the selected bounded pass takes about 12
+seconds. The next algorithmic target is therefore a batched multi-view support
+objective that assigns missing foreground evidence to local Gaussian geometry,
+followed by finite-light visibility and indirect transport. More global radius,
+opacity, or iteration knobs are not supported by this gate.
+
+The final 30.1-second reconstruction peaks at 725 MB of scoped host memory,
+uses no swap, and records no OOM, socket throttling, or GPU fault. The RTX 5070
+finishes at 46 °C. Exact ignored outputs and telemetry are under
+`target/audit-runs/openillumination/lighting-pattern-audit/{grouped-five-importer-final,selector-*}`.
+
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact
 object/light selection. A result is useful only if it beats a capture-light
