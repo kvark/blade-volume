@@ -25,6 +25,41 @@ second**. Material, visibility, and illumination can compensate for wrong or
 missing geometry, so optimizing all of them together now would make the
 decomposition less identifiable rather than more accurate.
 
+## Execution plan
+
+Work advances in this order. Each row must pass its gate before the next row
+is allowed to add parameters.
+
+| Phase | Next implementation | Decision gate |
+| --- | --- | --- |
+| Capture integrity | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
+| Dense support | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on two objects; report any recall trade |
+| Missing support | Expand only verified multi-view tracks into continuous oriented point patches with one regularized material field per patch | Recall and covered quality rise without a precision or PSNR regression |
+| Representation scale | Make Gaussian opacity/support behavior stable as a filtered surface grows beyond 2,500 points; keep the scalar and Gaussian budgets separate until then | A denser cloud improves both scalar and Gaussian PBR, not just one backend |
+| Light transport | Recompute finite-light visibility after each accepted geometry stage, then fit diffuse material and one bounded bounce | Excluded-light shadows move correctly and beat black/capture-copy foreground baselines |
+| Radiometry | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
+| Materials and capture layout | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
+
+The current selected change is the dense-support row. On the fresh
+`obj_31_painted_toy` split, filtering 68,278 of 1,254,170 one-view fused samples
+before allocating the 2,500-point budget raises observed surfels from 1,887 to
+2,385. Known-light held-camera foreground mean/worst improves
+`16.46/15.38→17.54/16.87` dB and precision `78.9%→93.1%`; recall changes
+`98.4%→96.8%`. Excluded patterns 005/006 also improve by `0.32/0.24` and
+`0.13/0.08` dB foreground mean/worst, respectively, but pattern 006 still
+loses badly to black because its reference is directionally self-shadowed and
+the reconstruction is nearly uniformly lit.
+
+A 5,000-point filtered scalar control reaches `18.15/17.52` dB held-camera
+foreground with 97.7% recall and 93.5% precision, showing that denser surface
+support is useful. It is not selected for the Gaussian output: the current
+opacity fit/pruner becomes density-sensitive, while a stricter guard restores
+recall by over-expanding support and lowering foreground quality. A 3,500-point
+control is also worse for Gaussian PBR. Fix that scale behavior instead of
+tuning a point-count default. Nearest-view PatchMatch source generation,
+equal-weight radius-mask loss, and skipping the joint known-light material fit
+were isolated and removed after negative controls.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks

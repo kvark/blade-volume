@@ -527,6 +527,52 @@ shrinks the evidence points and drops recall to 2.3%, so that control was
 removed. The positive resampling remains diagnostic pending a regularized
 material and complete-render gate on fresh held data.
 
+### Fresh second-object surface-support gate
+
+`obj_31_painted_toy` is a different, concave painted figurine from the same
+lighting-pattern dataset. The importer writes all 48 official poses to
+`sparse/0`, but writes only 38 training poses to `sparse/train`; ten official
+test cameras are therefore absent from undistortion, PatchMatch, and fusion.
+It also canonicalizes the dataset's binary `0/1` masks to `0/255`. Before that
+normalization, image decoding interpreted foreground as 0.0039 coverage and
+produced zero usable observations.
+
+Pose-only COLMAP fusion contributes one-view samples by design. Filtering the
+fused cloud through at least 80% of the selected training silhouettes before
+voxel downsampling removes only 68,278 of 1,254,170 inputs, but prevents a
+small distant tail from consuming the fixed point budget. At 2,500 points the
+number observed by training photographs rises from 1,887 to 2,385.
+
+| 2,500-point scalar surface | Known-light held cameras foreground | Recall / precision | Excluded 005 foreground | Excluded 006 foreground |
+| --- | ---: | ---: | ---: | ---: |
+| Unfiltered | 16.46 / 15.38 dB | 98.4% / 78.9% | 15.00 / 13.82 dB | 13.48 / 11.98 dB |
+| Training-mask soft hull | 17.54 / 16.87 dB | 96.8% / 93.1% | 15.32 / 14.06 dB | 13.61 / 12.06 dB |
+| Strongest trivial baseline | — | — | 15.68 / 13.04 dB (capture copy) | 17.89 / 13.48 dB (black) |
+
+The surface cleanup transfers to both excluded lights but does not solve
+relighting. Pattern 006 is the useful counterexample: the photograph contains
+strong directional self-shadowing, while the render is broadly gray. This is
+not well described by a scalar exposure error, and it remains a transport and
+closed-support failure.
+
+A selection-only 5,000-point scalar run improves known-light held-camera
+foreground to 18.15/17.52 dB, 97.7% recall, and 93.5% precision. The matching
+Gaussian PBR path is not ready for that density: its fixed opacity persistence
+rule either removes most particles or, under a stricter guard control,
+over-expands them and loses precision. A 3,500-point control is also worse than
+the selected 2,500-point Gaussian. Consequently, the soft-hull filter is
+retained, 2,500 remains the Gaussian gate, and density-stable Gaussian support
+is now explicit work rather than a hidden point-count knob.
+
+Nearest-camera PatchMatch source selection produced a larger one-view cloud
+but did not improve the known-light reconstruction, so its importer changes
+were dropped. Global radius inflation, equal silhouette weighting in the local
+radius pass, and bypassing the five-light material fit were likewise rejected.
+The selected run peaks at 823 MB in its 8 GiB scope with no swap, OOM, or GPU
+fault. Outputs are under
+`target/audit-runs/openillumination/obj31-hull-final/`; the filtered scalar
+pattern-006 image is also shown in the README.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable
