@@ -556,13 +556,16 @@ not well described by a scalar exposure error, and it remains a transport and
 closed-support failure.
 
 A selection-only 5,000-point scalar run improves known-light held-camera
-foreground to 18.15/17.52 dB, 97.7% recall, and 93.5% precision. The matching
-Gaussian PBR path is not ready for that density: its fixed opacity persistence
-rule either removes most particles or, under a stricter guard control,
-over-expands them and loses precision. A 3,500-point control is also worse than
-the selected 2,500-point Gaussian. Consequently, the soft-hull filter is
-retained, 2,500 remains the Gaussian gate, and density-stable Gaussian support
-is now explicit work rather than a hidden point-count knob.
+foreground to 18.15/17.52 dB, 97.7% recall, and 93.5% precision. Its final
+complete run is mixed: excluded 005 changes `15.32/14.06→15.47/14.01` dB and
+excluded 006 changes `13.61/12.06→13.68/12.11` dB. The mean gains do not excuse
+the 005 tail regression. The matching Gaussian PBR path is not ready for that
+density: its fixed opacity persistence rule either removes most particles or,
+under a stricter guard control, over-expands them and loses precision. A
+3,500-point control is also worse than the selected 2,500-point Gaussian.
+Consequently, the soft-hull filter is retained, 2,500 remains the Gaussian
+gate, and density-stable Gaussian support is explicit work rather than a
+hidden point-count knob.
 
 Nearest-camera PatchMatch source selection produced a larger one-view cloud
 but did not improve the known-light reconstruction, so its importer changes
@@ -572,6 +575,41 @@ The selected run peaks at 823 MB in its 8 GiB scope with no swap, OOM, or GPU
 fault. Outputs are under
 `target/audit-runs/openillumination/obj31-hull-final/`; the filtered scalar
 pattern-006 image is also shown in the README.
+
+The fresh object also closes several post-processing routes. An
+all-foreground version of the calibrated matcher finds 1,827 tracks from
+47,621 descriptors; 1,711 pass selection-camera silhouettes and 1,654 belong
+to coherent image-space patches. The 3,804-sample diagnostic has a recognizable
+held-view outline and 93.2% foreground precision, but using it as geometry
+falls to 53.5% recall and 62.7% precision. Applying the ordinary all-camera
+soft hull leaves 882 samples and only 63.0% recall. The temporary selector and
+initializer were removed; the missing-alpha diagnostic remains unchanged.
+
+Three later controls improve the known-light render but fail excluded lights:
+
+- aligned-light descriptor agreement rejects 2,632 of 20,000 spatial depth
+  candidates and reaches `17.63/17.00` dB known-light foreground, but excluded
+  005 reaches only `15.40/13.95` and excluded 006 `13.58/11.99` dB;
+- one bounded normal-plane relaxation moves every point by 0.000713 world units
+  on average, raises observed support to 2,424, and reaches
+  `17.70/16.90` dB known-light foreground, but excluded lights fall to
+  `15.21/13.75` and `13.36/11.90` dB;
+- a visibility-aware multi-light albedo solve passes an exact cast-shadow unit
+  control, yet reaches only `17.48/16.72`, `15.26/14.05`, and
+  `13.52/11.96` dB on known/005/006. A one-radius shadow bias similarly gives
+  mixed hundredth-decibel changes and is rejected.
+
+Changing the capture schedule is not the escape hatch. Dropping the broad
+all-LED pattern and keeping the joint material solve reduces excluded 005/006
+foreground to `14.11/12.38` and `12.06/10.17` dB. Making the broad pattern the
+primary capture reaches only `14.58/13.00` and `13.08/11.61` dB. Five known
+lights with pattern 001 primary therefore remains the selected schedule.
+
+These controls leave a narrower next step: derive local depth from per-view
+photometric normals, anchor it with verified tracks, and require another
+camera to confirm the patch before fusion. A response descriptor, a normal, or
+the current cloud's visibility is evidence about a surface, but none alone is
+an independent depth measurement.
 
 ## Capture direction
 

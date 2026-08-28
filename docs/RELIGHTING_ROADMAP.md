@@ -12,13 +12,18 @@ not contain or fall back to polygonal geometry.
 - Novel-view rendering under the captured light works.
 - Controlled multi-light captures prove the material and relighting path end
   to end.
-- A same-session OpenIllumination capture produces a recognizable relit object,
-  but foreground support is sparse and the result is visibly speckled.
+- Training-mask filtering gives a clean, reproducible gain on a fresh
+  OpenIllumination object, but the excluded-light result remains too uniform
+  where the photograph contains directional self-shadowing.
 - Increasing opacity or radius globally, splitting a broad Gaussian by its
   missing-ray owner, and validating an owner-depth patch all improve mask
   recall but lose known-light or held-light image quality. These experiments
   show that the remaining surface cannot be invented from a current
   particle's footprint: it needs independent cross-view correspondence.
+- Independent all-foreground correspondences recover a recognizable outline,
+  but their depth layers are not accurate enough to initialize or replace the
+  production cloud. Appearance-based filtering and normal-guided point motion
+  improve known-light renders while regressing unseen lights.
 
 The current bottleneck is therefore **surface evidence first, light transport
 second**. Material, visibility, and illumination can compensate for wrong or
@@ -34,7 +39,7 @@ is allowed to add parameters.
 | --- | --- | --- |
 | Capture integrity | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on two objects; report any recall trade |
-| Missing support | Expand only verified multi-view tracks into continuous oriented point patches with one regularized material field per patch | Recall and covered quality rise without a precision or PSNR regression |
+| Missing support | Recover per-view photometric normal/depth patches anchored by verified tracks, then fuse only depth-consistent oriented points | Recall and covered quality rise without a precision or PSNR regression |
 | Representation scale | Make Gaussian opacity/support behavior stable as a filtered surface grows beyond 2,500 points; keep the scalar and Gaussian budgets separate until then | A denser cloud improves both scalar and Gaussian PBR, not just one backend |
 | Light transport | Recompute finite-light visibility after each accepted geometry stage, then fit diffuse material and one bounded bounce | Excluded-light shadows move correctly and beat black/capture-copy foreground baselines |
 | Radiometry | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
@@ -50,15 +55,50 @@ before allocating the 2,500-point budget raises observed surfels from 1,887 to
 loses badly to black because its reference is directionally self-shadowed and
 the reconstruction is nearly uniformly lit.
 
-A 5,000-point filtered scalar control reaches `18.15/17.52` dB held-camera
-foreground with 97.7% recall and 93.5% precision, showing that denser surface
-support is useful. It is not selected for the Gaussian output: the current
-opacity fit/pruner becomes density-sensitive, while a stricter guard restores
-recall by over-expanding support and lowering foreground quality. A 3,500-point
-control is also worse for Gaussian PBR. Fix that scale behavior instead of
-tuning a point-count default. Nearest-view PatchMatch source generation,
-equal-weight radius-mask loss, and skipping the joint known-light material fit
-were isolated and removed after negative controls.
+A 5,000-point filtered scalar selection control reaches `18.15/17.52` dB
+held-camera foreground with 97.7% recall and 93.5% precision, showing that
+denser surface support is useful. The complete held-light run is mixed:
+pattern 005 moves `15.32/14.06→15.47/14.01` dB and pattern 006 moves
+`13.61/12.06→13.68/12.11` dB. It is therefore not selected, and its Gaussian
+opacity fit is density-sensitive. A stricter guard restores recall by
+over-expanding support and lowering foreground quality; a 3,500-point control
+is also worse for Gaussian PBR. Fix that scale behavior instead of tuning a
+point-count default. Nearest-view PatchMatch source generation, equal-weight
+radius-mask loss, and skipping the joint known-light material fit were isolated
+and removed after negative controls.
+
+## Latest surface attribution
+
+The fresh-object split now rules out four tempting shortcuts:
+
+- Matching every textured foreground pixel across 26 construction cameras
+  yields 1,827 accepted tracks; 1,711 pass the independent selection-camera
+  visual hull and 1,654 form coherent shared-view patches. Their held-view
+  footprint is recognizable, but direct initialization falls to 53.5% recall
+  and 62.7% precision. The ordinary all-camera hull leaves only 882 points and
+  63.0% recall. The generic missing-alpha diagnostic remains useful; an
+  all-foreground production mode does not.
+- Filtering 20,000 dense hypotheses by agreement of aligned-light response
+  improves known-light foreground to `17.63/17.00` dB, but pattern 005's worst
+  view falls to 13.95 dB and pattern 006 falls to `13.58/11.99` dB. Response
+  similarity is not a depth or visibility certificate.
+- Moving all points a bounded distance towards planes implied by photometric
+  normals raises observed support to 2,424 and known-light foreground to
+  `17.70/16.90` dB, but held patterns fall to `15.21/13.75` and
+  `13.36/11.90` dB. Photometric normals cannot move geometry without an
+  independent depth anchor.
+- Using cast-shadow visibility in the five-light material solve is correct on
+  an exact occluder, but the reconstructed visibility makes every real score
+  worse. Reducing shadow bias from three radii to one changes openness
+  `46%→35%` and is nearly neutral, with mixed held-light tails. Transport must
+  follow an accepted surface update rather than supervise the current one.
+
+The next implementation is therefore a point-only normal/depth integration
+diagnostic: recover dense per-view photometric normals from aligned lights,
+integrate local depth while anchoring it to the verified multi-view tracks,
+and fuse only patches that agree in another camera. It must first improve a
+construction/selection/validation split; official cameras and excluded lights
+remain final gates, not tuning data.
 
 ## Milestones
 
@@ -168,9 +208,15 @@ a deterministic repeat agree within the measured training variance.
   reject and remove the append when its tiny internal gain does not transfer.
 - [x] Preserve the verified surfels and add deterministic half-radius samples
   on their two-nearest local cloud edges; repeat the track-only validation.
-- [ ] Expand the verified tracks into continuous oriented cloud support and fit
-  one regularized material field per patch; use fresh held data for its final
-  decision rather than retuning against the now-open OpenIllumination split.
+- [x] Run continuous shared-view patches and an all-foreground track
+  initializer on the fresh object; reject both when their recognizable
+  outlines fail complete-render precision and held-light gates.
+- [ ] Recover a dense photometric normal map independently in each aligned
+  training view, with confidence from directional-light conditioning.
+- [ ] Integrate only local point-depth patches anchored by verified tracks and
+  fuse them after an unused-camera depth/reprojection check.
+- [ ] Revisit 5,000-point Gaussian support only after the new surface passes;
+  point density is not a substitute for depth evidence.
 
 The leakage-free diagnostic uses 16 matching, four selection, and four
 validation cameras from the ordinary training set; the ten official test

@@ -65,15 +65,18 @@ a convincing real-world result.
 
 The next quality gate is deliberately narrow:
 
-- turn the verified sparse correspondences into continuous local point-cloud
-  patches, with shared or spatially regularized material parameters instead
-  of copying one nearby point or fitting one free material per new point;
+- recover dense photometric normals independently in each aligned training
+  view, integrate only local point-depth patches anchored by verified
+  correspondences, and fuse a patch only after another camera confirms it;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. The first
   fixed-base patch append passed the internal split twice but failed this final
-  gate, so its merge implementation was removed;
+  gate; an all-foreground track initializer and normal-guided point relaxation
+  also improved training evidence while regressing unseen lights, so their
+  implementations were removed;
 - fit finite-light visibility, indirect transport, and then spatially shared
-  roughness only after surface support passes on a second same-session object;
+  roughness only after the depth-anchored surface passes on a second
+  same-session object;
 - generalize the aligned capture layout to `(image, camera, light, exposure)`
   observations only after those geometry and transport gates pass.
 
