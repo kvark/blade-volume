@@ -161,3 +161,27 @@ repeat retains 73 of 79 selected tracks and reaches 5.1% validation missing
 recall, 66.2% missing-only precision, and 99.0% foreground precision. This is
 the first coherent patch primitive, not yet a production merge. Artifacts are
 under `target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v11r/`.
+
+The complete-render probe explains the remaining blocker. Appending the local
+patch after five-light normal/material fitting improves selection recall
+`65.05%→66.16%` and precision `92.11%→92.20%`, but foreground mean/worst fall
+`16.347/15.682→16.323/15.666` dB. Fitting the radiance left after subtracting
+the established cloud also fails (`16.184/15.788→16.166/15.733` dB), because
+one assumed behind-layer transmission cannot represent exact per-ray depth
+ordering. Both implementations were removed. The next production attempt must
+render the combined cloud end to end while freezing the established prefix and
+optimizing only new patch opacity, support, normals, and material. It should
+reuse the existing Gaussian graph through parameter partitioning rather than
+add a shader or a second renderer.
+
+That parameter-partitioning probe was implemented with existing split,
+concatenate, and stop-gradient nodes; a GPU test proved the prefix stayed
+bitwise fixed. The real selection gate still failed after 625 suffix-only
+updates: recall rose `65.14%→65.97%`, but precision fell
+`91.52%→91.26%` and foreground mean/worst fell
+`16.151/15.565→16.128/15.549` dB. The graph mode and merge plumbing were
+removed. The problem is therefore earlier than optimizer isolation: selected
+points still mix useful and harmful surface fragments. Next, form connected
+patches using shared-view image adjacency, fit each patch on matching cameras,
+and select whole patches by complete selection-camera renders. Only a patch
+that passes independently may enter a joint refinement.

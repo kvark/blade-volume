@@ -7951,3 +7951,25 @@ missing-only precision, and 99.0% foreground precision. It is intentionally
 still a diagnostic cloud; its next gate is the complete combined render, not
 track-only coverage. Ignored artifacts are under
 `target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v11r/`.
+
+That combined-render gate remains narrowly negative. Five-light normal and
+material fitting for the local patch raises selection recall
+`65.05%→66.16%` and precision `92.11%→92.20%`, while foreground mean/worst
+fall `16.347/15.682→16.323/15.666` dB. A residual-layer variant first renders
+the established cloud under every known light, subtracts it from each capture,
+and divides by remaining transmission; it still falls
+`16.184/15.788→16.166/15.733` dB because its fixed behind-layer assumption
+does not match exact per-ray ordering. Both experimental implementations are
+removed. The needed primitive is now explicit: freeze the established
+Gaussian prefix and optimize only the patch parameters through the existing
+complete compositing graph. This needs no new shader or persisted model field.
+
+A suffix-only graph using Meganeura's existing split/concat/stop-gradient
+nodes was then implemented and tested: the established prefix remained bitwise
+unchanged. It still failed the real gate after 625 updates. Selection recall
+rose `65.14%→65.97%`, while precision fell `91.52%→91.26%` and foreground
+mean/worst fell `16.151/15.565→16.128/15.549` dB. The graph mode and merge
+code are removed. The next discriminator belongs before joint optimization:
+build connected patches from tracks that are adjacent in shared source views,
+fit and score each complete patch independently, then refine only accepted
+patches together.

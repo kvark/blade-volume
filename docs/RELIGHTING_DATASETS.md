@@ -461,6 +461,19 @@ selected tracks and reaches 5.1% missing recall, 66.2% missing-only precision,
 and 99.0% foreground precision on the same validation slice. This remains a
 track-only diagnostic pending a complete combined-render gate.
 
+The first complete-render probe is still negative: the local patch improves
+selection recall/precision by 1.11/0.09 points but loses 0.024/0.016 dB
+foreground mean/worst. Subtracting the established render before fitting patch
+materials also loses 0.018/0.055 dB because a fixed layer order is not the
+renderer's exact per-ray order. Both probes were removed. The next step is a
+frozen-prefix, trainable-suffix fit through complete Gaussian compositing.
+
+That exact suffix fit was tested with the established prefix bitwise frozen.
+After 625 updates it raises recall 0.83 point, but loses 0.26 point precision
+and 0.023/0.016 dB foreground mean/worst on selection cameras. Its code was
+removed. Track selection must now operate on coherent shared-view components,
+with every component screened by a complete render before joint fitting.
+
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact
 object/light selection. A result is useful only if it beats a capture-light
