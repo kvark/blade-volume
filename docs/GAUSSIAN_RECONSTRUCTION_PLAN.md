@@ -7860,3 +7860,39 @@ next geometry proposal must first match missing rays across cameras (using
 calibrated epipolar proximity plus their multi-light appearance signature),
 then triangulate one point from each coherent ray group. Only after that should
 the ordinary point-cloud support and material fits evaluate the proposal.
+
+## Rejected owner-depth patch correspondence (2026-08-28)
+
+A final local control reused the existing deterministic multi-view plane sweep
+instead of averaging an owner's missing rays. Each repeated owner contributed
+only its strongest missing ray. That ray's exact Gaussian response point
+initialized one child, and the child survived only when the four-light
+gain-invariant response image produced a textured, geometrically consistent
+world-space patch in at least four cameras. Its center was refined along the
+surface normal before fitting a distinct five-light material. This directly
+reused the point-cloud patch matcher and Gaussian child rules; no new feature
+representation or renderer path was introduced.
+
+The matcher finds 73 coherent patches among 712 repeated owners, but the
+strict complete-mask screen selects zero: none of the 19/37/73-child prefixes
+improves F1 while preserving precision. A diagnostic F1-only screen selects all
+73 and moves CPU training recall `66.67%→68.07%`, but precision falls
+`90.95%→90.68%`. Production held-camera recall reaches 67.89% while precision
+falls to 86.31%. Known-light quality falls from
+`24.22/23.05;16.34/14.83` to `23.99/22.87;16.24/14.73` dB
+whole/foreground, and where-hit quality falls `14.09→13.83` dB. Patterns
+005/006 also fall to `22.91/20.73;13.84/12.04` and
+`22.32/19.42;12.94/10.61` dB, respectively.
+
+The code and scorer are removed. Both probes peak below 1.04 GB in separate
+12 GiB scopes with zero swap, OOM, throttling, Xid, or GPU fault. Ignored logs
+remain under `target/audit-runs/correspondence-split/`.
+
+A patch can look self-consistent at a depth inherited from the wrong broad
+owner. This is still validation of one hypothesized 3D point, not matching two
+independent image observations. Further support work should start with an
+explicit sparse feature track over missing foreground: match local descriptors
+or calibrated multi-light signatures along epipolar lines, require mutual
+agreement, then triangulate. The existing COLMAP track importer, point-cloud
+surface refinement, material solve, and Gaussian fitting can consume those
+points; the missing component is the correspondence source itself.
