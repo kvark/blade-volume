@@ -23,6 +23,8 @@ use std::{collections, path, sync};
 const PBR_SPARSE_CELL_POINTS: usize = 5;
 const STATIC_GAUSSIAN_SPARSE_CELL_POINTS: usize = 3;
 const STATIC_SPARSE_RADIUS_SCALE: f32 = 15.0 / 14.0;
+const MIN_TRACK_PATCH_MISSING_PRECISION: f64 = 0.75;
+const MIN_TRACK_PATCH_FOREGROUND_PRECISION: f64 = 0.98;
 
 fn require_compute_gpu(purpose: &str) -> sync::Arc<gpu::Context> {
     train::fit::try_init_gpu().unwrap_or_else(|| {
@@ -2205,42 +2207,87 @@ fn write_missing_tracks(
             .fold(0.0, f32::max),
     );
 
-    let points: Vec<_> = tracks.iter().map(|track| track.position).collect();
     let cameras: Vec<_> = match_views
         .iter()
         .map(|&view| glam::Vec3::from(capture.views[view].camera.cam_position))
         .collect();
-    let estimates = train::inverse::surface::estimate_surfaces(
-        &points,
-        &cameras,
-        train::inverse::surface::SurfaceOptions {
-            neighbours: 4,
-            radius_factor: 1.0,
-            outlier_factor: 3.0,
-        },
-    );
-    let mut surfels = Vec::with_capacity(tracks.len());
-    for (track, estimate) in tracks.iter().zip(estimates) {
-        let Some(estimate) = estimate else {
-            continue;
-        };
-        let mut pixel_radius = 0.0f32;
-        for observation in &track.observations {
-            let camera = &capture.views[observation.view].camera;
-            let distance = glam::Vec3::from(camera.cam_position).distance(track.position);
-            pixel_radius += distance * (0.5 * camera.fov[0]).tan() * 2.0 / capture.width as f32;
+    let patches =
+        train::inverse::tracks::patches(&tracks, train::inverse::tracks::PatchOptions::default())?;
+    let mut patch_surfels = Vec::with_capacity(patches.len());
+    for patch in &patches {
+        let points: Vec<_> = patch.iter().map(|&index| tracks[index].position).collect();
+        let estimates = train::inverse::surface::estimate_surfaces(
+            &points,
+            &cameras,
+            train::inverse::surface::SurfaceOptions {
+                neighbours: 4,
+                radius_factor: 1.0,
+                outlier_factor: 3.0,
+            },
+        );
+        let mut surfels = Vec::with_capacity(patch.len());
+        for (&index, estimate) in patch.iter().zip(estimates) {
+            let Some(estimate) = estimate else {
+                continue;
+            };
+            let track = &tracks[index];
+            let mut pixel_radius = 0.0f32;
+            for observation in &track.observations {
+                let camera = &capture.views[observation.view].camera;
+                let distance = glam::Vec3::from(camera.cam_position).distance(track.position);
+                pixel_radius += distance * (0.5 * camera.fov[0]).tan() * 2.0 / capture.width as f32;
+            }
+            pixel_radius /= track.observations.len() as f32;
+            surfels.push(vol::relight::Surfel {
+                center: track.position.to_array(),
+                radius: estimate.spacing.min(2.0 * pixel_radius),
+                normal: estimate.normal.to_array(),
+                material: 0,
+            });
         }
-        pixel_radius /= track.observations.len() as f32;
-        surfels.push(vol::relight::Surfel {
-            center: track.position.to_array(),
-            radius: estimate.spacing.min(2.0 * pixel_radius),
-            normal: estimate.normal.to_array(),
-            material: 0,
-        });
+        if !surfels.is_empty() {
+            patch_surfels.push(surfels);
+        }
     }
-    let dropped = tracks.len() - surfels.len();
+    let local_points = patch_surfels.iter().map(Vec::len).sum::<usize>();
+    let dropped = tracks.len() - local_points;
     println!(
-        "missing tracks: local surface retained {} points and dropped {dropped} isolated points",
+        "missing tracks: {} shared-view patches retained {} points and dropped {dropped} isolated points",
+        patch_surfels.len(),
+        local_points,
+    );
+    let mut surfels = Vec::new();
+    for (index, patch) in patch_surfels.into_iter().enumerate() {
+        let patch_surface = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: patch.clone(),
+            materials: vec![vol::relight::Material::default()],
+        };
+        let patch_model = train::gaussian_splat::from_surface(&patch_surface)?;
+        let coverage = missing_track_coverage(
+            &patch_model,
+            capture,
+            &selection_views,
+            train_views,
+            &alpha,
+            &missing,
+        )?;
+        let accepted = coverage.missing_precision >= MIN_TRACK_PATCH_MISSING_PRECISION
+            && coverage.foreground_precision >= MIN_TRACK_PATCH_FOREGROUND_PRECISION;
+        println!(
+            "missing tracks: selection patch {index} has {} points, {:.1}% missing recall, {:.1}% missing precision, {:.1}% foreground precision: {}",
+            patch.len(),
+            100.0 * coverage.missing_recall,
+            100.0 * coverage.missing_precision,
+            100.0 * coverage.foreground_precision,
+            if accepted { "accepted" } else { "rejected" },
+        );
+        if accepted {
+            surfels.extend_from_slice(&patch);
+        }
+    }
+    println!(
+        "missing tracks: selection footprint screen retained {} of {local_points} local points",
         surfels.len(),
     );
     if surfels.is_empty() {
@@ -2264,45 +2311,19 @@ fn write_missing_tracks(
         .map_err(|error| format!("cannot write {}: {error:?}", output.display()))?;
     println!("wrote {}", output.display());
     if !validation_views.is_empty() {
-        let track_alpha = train::gaussian_splat::render_alpha_views(
+        let coverage = missing_track_coverage(
             &model,
             capture,
             &validation_views,
-            64,
-            1.0e-5,
+            train_views,
+            &alpha,
+            &missing,
         )?;
-        let mut target_sum = 0.0f64;
-        let mut addition_sum = 0.0f64;
-        let mut intersection = 0.0f64;
-        let mut foreground_intersection = 0.0f64;
-        for (track_alpha, &view_index) in track_alpha.iter().zip(&validation_views) {
-            let position = train_views
-                .iter()
-                .position(|&view| view == view_index)
-                .expect("validation views are a subset of training views");
-            let mask = capture.views[view_index]
-                .mask
-                .as_ref()
-                .expect("missing-track masks were validated before reconstruction");
-            for ((&addition, &established), &foreground) in
-                track_alpha.iter().zip(&alpha[position]).zip(mask)
-            {
-                let target = if established < 0.5 && foreground > 0.5 {
-                    1.0
-                } else {
-                    0.0
-                };
-                target_sum += target as f64;
-                addition_sum += addition as f64;
-                intersection += addition.min(target) as f64;
-                foreground_intersection += addition.min(foreground) as f64;
-            }
-        }
         println!(
             "missing tracks: validation missing-foreground recall {:.1}%, missing precision {:.1}%, foreground precision {:.1}%",
-            100.0 * intersection / target_sum.max(f64::EPSILON),
-            100.0 * intersection / addition_sum.max(f64::EPSILON),
-            100.0 * foreground_intersection / addition_sum.max(f64::EPSILON),
+            100.0 * coverage.missing_recall,
+            100.0 * coverage.missing_precision,
+            100.0 * coverage.foreground_precision,
         );
     }
     let stem = output
@@ -2321,6 +2342,58 @@ fn write_missing_tracks(
     )?;
     println!("wrote diagnostic views to {}", images.display());
     Ok(())
+}
+
+struct MissingTrackCoverage {
+    missing_recall: f64,
+    missing_precision: f64,
+    foreground_precision: f64,
+}
+
+fn missing_track_coverage(
+    model: &vol::PointCloudModel,
+    capture: &train::inverse::capture::Capture,
+    views: &[usize],
+    train_views: &[usize],
+    established_alpha: &[Vec<f32>],
+    missing: &[Vec<bool>],
+) -> Result<MissingTrackCoverage, String> {
+    let rendered = train::gaussian_splat::render_alpha_views(model, capture, views, 64, 1.0e-5)?;
+    let mut target_sum = 0.0f64;
+    let mut addition_sum = 0.0f64;
+    let mut intersection = 0.0f64;
+    let mut foreground_intersection = 0.0f64;
+    for (alpha, &view_index) in rendered.iter().zip(views) {
+        let position = train_views
+            .iter()
+            .position(|&view| view == view_index)
+            .expect("track coverage views are a subset of training views");
+        let mask = capture.views[view_index]
+            .mask
+            .as_ref()
+            .expect("missing-track masks were validated before reconstruction");
+        for (((&addition, &established), &target), &foreground) in alpha
+            .iter()
+            .zip(&established_alpha[position])
+            .zip(&missing[position])
+            .zip(mask)
+        {
+            debug_assert_eq!(
+                target,
+                established < 0.5 && foreground > 0.5,
+                "cached missing foreground disagrees with its inputs",
+            );
+            target_sum += u8::from(target) as f64;
+            addition_sum += addition as f64;
+            intersection += addition.min(u8::from(target) as f32) as f64;
+            foreground_intersection += addition.min(foreground) as f64;
+        }
+    }
+    Ok(MissingTrackCoverage {
+        missing_recall: intersection / target_sum.max(f64::EPSILON),
+        missing_precision: intersection / addition_sum.max(f64::EPSILON),
+        foreground_precision: foreground_intersection / addition_sum.max(f64::EPSILON),
+    })
 }
 
 fn projected_pixel(

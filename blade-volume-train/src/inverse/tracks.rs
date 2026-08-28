@@ -123,6 +123,89 @@ pub struct TrackStats {
     pub accepted: usize,
 }
 
+/// Shared-view image adjacency used to turn isolated tracks into patches.
+#[derive(Clone, Copy, Debug)]
+pub struct PatchOptions {
+    /// Maximum pixel distance between neighboring observations.
+    pub max_pixel_distance: f32,
+    /// Distinct source views that must agree that two tracks are neighbors.
+    pub min_shared_views: usize,
+    /// Tracks required for a connected component to become a patch.
+    pub min_tracks: usize,
+}
+
+impl Default for PatchOptions {
+    fn default() -> Self {
+        Self {
+            max_pixel_distance: 4.0,
+            min_shared_views: 2,
+            min_tracks: 5,
+        }
+    }
+}
+
+/// Deterministic connected components of tracks adjacent in several images.
+pub fn patches(tracks: &[Track], options: PatchOptions) -> Result<Vec<Vec<usize>>, String> {
+    if !options.max_pixel_distance.is_finite()
+        || options.max_pixel_distance <= 0.0
+        || options.min_shared_views == 0
+        || options.min_tracks < 2
+    {
+        return Err("track patch thresholds are invalid".to_string());
+    }
+    let mut parent: Vec<_> = (0..tracks.len()).collect();
+    let maximum_squared = options.max_pixel_distance * options.max_pixel_distance;
+    for left in 0..tracks.len() {
+        for right in left + 1..tracks.len() {
+            let shared = tracks[left]
+                .observations
+                .iter()
+                .filter(|left| {
+                    tracks[right].observations.iter().any(|right| {
+                        left.view == right.view
+                            && glam::Vec2::from(left.pixel)
+                                .distance_squared(glam::Vec2::from(right.pixel))
+                                <= maximum_squared
+                    })
+                })
+                .count();
+            if shared >= options.min_shared_views {
+                union(&mut parent, left, right);
+            }
+        }
+    }
+    let mut components = collections::BTreeMap::<usize, Vec<usize>>::new();
+    for index in 0..tracks.len() {
+        let root = root(&mut parent, index);
+        components.entry(root).or_default().push(index);
+    }
+    Ok(components
+        .into_values()
+        .filter(|component| component.len() >= options.min_tracks)
+        .collect())
+}
+
+fn root(parent: &mut [usize], mut index: usize) -> usize {
+    while parent[index] != index {
+        parent[index] = parent[parent[index]];
+        index = parent[index];
+    }
+    index
+}
+
+fn union(parent: &mut [usize], left: usize, right: usize) {
+    let left = root(parent, left);
+    let right = root(parent, right);
+    if left != right {
+        let (first, second) = if left < right {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        parent[second] = first;
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Descriptor {
     values: [f32; DESCRIPTOR_VALUES],
@@ -825,6 +908,68 @@ mod tests {
             min_parallax_degrees: 1.0,
             max_reprojection_error: 0.01,
         }
+    }
+
+    fn patch_track(observations: &[(usize, [f32; 2])]) -> Track {
+        Track {
+            position: glam::Vec3::ZERO,
+            observations: observations
+                .iter()
+                .map(|&(view, pixel)| Observation { view, pixel })
+                .collect(),
+            mean_reprojection_error: 0.0,
+            mean_descriptor_error: 0.0,
+            parallax_degrees: 10.0,
+        }
+    }
+
+    #[test]
+    fn shared_view_adjacency_forms_transitive_patches() {
+        let tracks = vec![
+            patch_track(&[(0, [1.0, 1.0]), (1, [1.0, 1.0])]),
+            patch_track(&[(0, [3.0, 1.0]), (1, [3.0, 1.0])]),
+            patch_track(&[(0, [5.0, 1.0]), (1, [5.0, 1.0])]),
+            patch_track(&[(0, [20.0, 20.0]), (1, [20.0, 20.0])]),
+        ];
+        let patches = patches(
+            &tracks,
+            PatchOptions {
+                max_pixel_distance: 2.1,
+                min_shared_views: 2,
+                min_tracks: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(patches, [vec![0, 1, 2]]);
+    }
+
+    #[test]
+    fn one_close_shared_view_does_not_join_tracks() {
+        let tracks = [
+            patch_track(&[(0, [1.0, 1.0]), (1, [1.0, 1.0])]),
+            patch_track(&[(0, [2.0, 1.0]), (2, [2.0, 1.0])]),
+        ];
+        let patches = patches(
+            &tracks,
+            PatchOptions {
+                min_tracks: 2,
+                ..PatchOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(patches.is_empty());
+    }
+
+    #[test]
+    fn invalid_patch_thresholds_are_rejected() {
+        assert!(patches(
+            &[],
+            PatchOptions {
+                max_pixel_distance: 0.0,
+                ..PatchOptions::default()
+            },
+        )
+        .is_err());
     }
 
     fn bounds() -> WorldBounds {

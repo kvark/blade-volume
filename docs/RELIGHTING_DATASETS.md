@@ -480,6 +480,16 @@ object/light selection. A result is useful only if it beats a capture-light
 colour or average-image baseline on the held light and the images visibly move
 shadows and highlights in the right direction.
 
+The current missing-surface diagnostic now groups tracks by adjacency in at
+least two shared source views, estimates orientation within each connected
+component, and screens each component with selection-only alpha renders. A
+complete-render candidate once improved both selection and untouched
+validation metrics, but the adjacent end-to-end repeat retrained a different
+base Gaussian and regressed selection foreground mean/worst PSNR by
+0.013/0.009 dB. Automatic merging remains disabled and no held light was used.
+The next OpenIllumination run will persist one exact base Gaussian and demand
+two repeat passes from that fixed input before any excluded data is opened.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable

@@ -7973,3 +7973,30 @@ code are removed. The next discriminator belongs before joint optimization:
 build connected patches from tracks that are adjacent in shared source views,
 fit and score each complete patch independently, then refine only accepted
 patches together.
+
+The shared-view discriminator is now part of the diagnostic path. Two tracks
+are adjacent only when they land within four pixels in at least two common
+cameras, connected components need at least five tracks, and local covariance
+and support estimation are confined to each component. Before any expensive
+fit, a track-only render must reach 75% precision on missing foreground and
+98% precision on the full foreground in selection cameras. This removes the
+isolated fragments that the earlier global-neighborhood estimate mixed into
+otherwise useful surface support.
+
+The complete-render result is promising but not yet repeatable. A 90-point
+component reached 7.0% validation missing recall, 73.2% missing precision, and
+98.2% foreground precision before fitting. In a later run, one component
+slightly improved both selection and untouched validation foreground PSNR,
+recall, and precision. An adjacent repeat retrained the base PBR Gaussian,
+formed a different component, and failed the zero-regression selection gate:
+mean/worst foreground PSNR fell by 0.013/0.009 dB. Neither run inspected an
+official test camera or excluded light. The suffix fitter and model merge were
+removed again; the deterministic component builder, its tests, and diagnostic
+PLY/render output remain.
+
+Next, save and reload one exact base PBR Gaussian before track discovery, then
+run the same patch candidate twice against that immutable prefix. Require both
+runs to pass selection mean/worst PSNR and mask recall/precision before opening
+validation, and both validation runs before opening official held data. This
+fixed-input replay is the smallest experiment that can distinguish an unstable
+patch optimizer from ordinary variation in upstream reconstruction.

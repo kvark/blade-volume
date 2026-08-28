@@ -185,3 +185,24 @@ points still mix useful and harmful surface fragments. Next, form connected
 patches using shared-view image adjacency, fit each patch on matching cameras,
 and select whole patches by complete selection-camera renders. Only a patch
 that passes independently may enter a joint refinement.
+
+That pre-optimization discriminator is now implemented. Tracks belong to the
+same patch only when their observations are within four pixels in at least two
+shared cameras; components smaller than five tracks are discarded. Normals and
+support are estimated inside each component, and a selection-only alpha render
+keeps a component only above 75% missing-region precision and 98% foreground
+precision. One run produced a 90-point component whose track-only validation
+render reached 7.0% missing recall, 73.2% missing precision, and 98.2%
+foreground precision. A later run passed the complete-render selection and
+validation gates by small margins, but an immediately adjacent repeat from a
+newly trained base Gaussian lost 0.013 dB mean and 0.009 dB worst selection
+PSNR. No official test camera or excluded light was opened, and all automatic
+merge/fitting code was removed. The diagnostic patch builder and footprint
+screen remain because they reject isolated harmful tracks without altering the
+trained asset.
+
+The next experiment must persist one base PBR Gaussian, derive the missing mask
+and patches from that exact file, and replay patch fitting twice without
+retraining the prefix. Only a component that passes both identical-base runs
+may advance to excluded cameras and lights. This separates patch stability from
+the known run-to-run variation of upstream GPU reconstruction.

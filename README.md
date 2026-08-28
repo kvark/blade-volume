@@ -58,10 +58,10 @@ a convincing real-world result.
 
 The next quality gate is deliberately narrow:
 
-- turn the now-working missing-foreground tracks into coherent oriented cloud
-  patches and recover contiguous Gaussian support without globally widening
-  or adding polygonal geometry; independent fixed-radius track discs improve
-  recall but narrowly fail the zero-regression known-light gate;
+- replay the now-working shared-view track patches against one persisted PBR
+  Gaussian, then merge only components that pass the selection and validation
+  gates twice from that identical base; the diagnostic patch builder is in
+  place, but automatic merging remains disabled after a failed adjacent repeat;
 - fit finite-light visibility, indirect transport, and non-diffuse appearance
   after the support is trustworthy;
 - pass two excluded lights on a second same-session object before broadening
