@@ -427,6 +427,7 @@ impl RelightTracer {
             name: "relight-blas",
             ty: gpu::AccelerationStructureType::BottomLevel,
             size: blas_sizes.data,
+            updatable: false,
         });
 
         let instance_buf =
@@ -437,6 +438,7 @@ impl RelightTracer {
             name: "relight-tlas",
             ty: gpu::AccelerationStructureType::TopLevel,
             size: tlas_sizes.data,
+            updatable: false,
         });
 
         let (specular_texture, specular_view, specular_extent) =
