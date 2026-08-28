@@ -7399,8 +7399,9 @@ fault. Ignored outputs and telemetry remain under
 
 ## Dependency-head and frozen-scalar audit (2026-08-25)
 
-The workspace already pins the current merged heads of Blade (`95f5004`) and
-Meganeura (`0f87a8d`); fetching both upstreams finds no newer merged revision.
+At the time of this audit, the workspace pinned the current merged heads of
+Blade (`95f5004`) and Meganeura (`0f87a8d`); fetching both upstreams found no
+newer merged revision.
 A broad `cargo update --dry-run` proposes unrelated crates.io churn and is not
 applied. The dependency graph therefore remains stock and minimal.
 
@@ -7690,3 +7691,61 @@ error, Xid, or GPU fault. The implementation is removed. A future transport
 objective needs local per-ray ownership and must refresh visibility as support
 moves, rather than scaling every particle's diffuse response ahead of
 compositing.
+
+## Rejected COLMAP source-view responsibility (2026-08-28)
+
+COLMAP's `fused.ply.vis` is valid positive provenance: it names the images
+whose stereo evidence contributed to each fused point. It is not a negative
+visibility oracle. After deterministic voxel reduction, the 2,500-point
+pattern cloud retained source evidence for every particle, with 12.5 cameras
+per particle on average. Two exact five-light prototypes tested whether that
+provenance could localize PBR Gaussian support without changing the durable
+point-cloud model.
+
+The first stopped ordinary foreground scale and opacity gradients for a
+candidate when its point did not name the sampled camera. Relative to the
+selected Gaussian test result of
+`24.27/23.41;16.29/14.48` dB whole/foreground, it reaches only
+`23.84/22.55;16.43/14.04` dB. Recall/precision move
+`66.4/87.2%→66.1/85.2%`, and where-hit quality falls `14.17→13.84` dB.
+Excluded patterns 005/006 fall to
+`22.94/20.41;14.02/11.74` and `22.01/18.78;12.58/10.00` dB. A fused point
+can be genuinely visible in a camera that did not survive PatchMatch's source
+selection, so treating absence as a detached gradient is a false negative.
+
+The second left every stock gradient intact and added only a 0.05-weight
+one-sided opacity deficit over source-backed foreground candidates. It raises
+Gaussian test recall to 68.2%, but precision falls to 85.3%; whole-frame
+quality falls to `23.91/22.80` dB and where-hit quality to 13.90 dB. Pattern
+005 reaches `22.78/20.71;13.76/12.07` dB and pattern 006 reaches
+`22.27/19.20;12.89/10.54` dB. The extra opacity is again a recall/fidelity
+trade rather than better ownership.
+
+Both implementations are removed, including the `.vis` loader and all
+responsibility-aware fitting entry points. The exact runs take 32.6 and 32.4
+seconds and peak at 832,299,008 and 812,118,016 bytes in their 12 GiB scopes,
+with zero swap, OOM, throttling, validation error, Xid, or GPU fault. Ignored
+outputs remain under
+`target/audit-runs/openillumination/lighting-pattern-audit/{cross-view-responsibility-five-score64,cross-view-undercoverage05-five-score64}/`.
+
+## Rejected joint multi-light silhouette loss (2026-08-28)
+
+The existing five-light continuation already shares one opacity field and
+physical material table across aligned captures. Adding a weak 0.1 full-mask
+loss to that graph tests the remaining global silhouette signal without a new
+API, model field, shader, or operation. It again broadens support without
+resolving its owner. Gaussian test quality falls to
+`23.87/22.98;16.25/14.46` dB, where-hit quality falls to 14.05 dB, and
+recall/precision move `66.4/87.2%→67.4/84.9%`. Small foreground gains on the
+excluded lights do not offset the known-light regression: patterns 005/006
+reach `22.82/20.74;13.96/12.12` and
+`22.35/19.48;13.10/10.81` dB.
+
+The one-constant prototype is removed. Its exact gate takes 33.2 seconds and
+peaks at 886,345,728 bytes with the same clean cgroup and GPU counters. The
+ignored output is under
+`target/audit-runs/openillumination/lighting-pattern-audit/joint-mask010-five-score64/`.
+Together these controls narrow the next support algorithm: it must identify a
+local composited contributor on an actual missing ray (and cross-check that
+assignment in other cameras). Fusion provenance and whole-mask opacity are
+useful evidence, but neither is that ownership signal by itself.
