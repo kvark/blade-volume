@@ -455,6 +455,12 @@ telemetry are under
 `target/audit-runs/openillumination/lighting-pattern-audit/{missing-tracks-v4,missing-tracks-v9}/`;
 the latest run peaks at 700 MB with zero swap, OOM, throttling, or GPU fault.
 
+A bounded local-covariance follow-up drops isolated tracks and caps inferred
+support by the observed pixel footprint. Its adjacent repeat retains 73 of 79
+selected tracks and reaches 5.1% missing recall, 66.2% missing-only precision,
+and 99.0% foreground precision on the same validation slice. This remains a
+track-only diagnostic pending a complete combined-render gate.
+
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact
 object/light selection. A result is useful only if it beats a capture-light

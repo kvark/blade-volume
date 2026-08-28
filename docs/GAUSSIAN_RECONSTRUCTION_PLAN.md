@@ -7942,3 +7942,12 @@ fixed-radius discs. Ignored artifacts are under
 `target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v9/`;
 the isolated 12 GiB run peaks at 700 MB with zero swap, OOM, throttling, Xid,
 or GPU fault.
+
+A bounded local-surface follow-up reuses the existing covariance estimator
+with four-point neighborhoods, drops isolated tracks, and caps its radius by
+twice the point's measured pixel footprint. The adjacent repeat retains 73 of
+79 selected tracks and reaches 5.1% validation missing recall, 66.2%
+missing-only precision, and 99.0% foreground precision. It is intentionally
+still a diagnostic cloud; its next gate is the complete combined render, not
+track-only coverage. Ignored artifacts are under
+`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v11r/`.

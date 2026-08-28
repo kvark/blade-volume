@@ -152,3 +152,12 @@ diagnostics and telemetry are under
 `target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v9/`
 and `/tmp/blade-volume-missing-tracks-v9-gpu.log`; peak scoped memory is 700 MB
 with zero swap, OOM, throttling, or GPU fault.
+
+The next diagnostic now reuses the ordinary point-cloud surface estimator with
+four-point neighborhoods. It rejects isolated tracks, takes orientation from
+local covariance, and caps each support radius by twice its directly observed
+pixel footprint so sparse neighborhoods cannot create giant discs. An adjacent
+repeat retains 73 of 79 selected tracks and reaches 5.1% validation missing
+recall, 66.2% missing-only precision, and 99.0% foreground precision. This is
+the first coherent patch primitive, not yet a production merge. Artifacts are
+under `target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v11r/`.

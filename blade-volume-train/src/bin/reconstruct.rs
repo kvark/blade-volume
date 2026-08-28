@@ -2205,24 +2205,47 @@ fn write_missing_tracks(
             .fold(0.0, f32::max),
     );
 
+    let points: Vec<_> = tracks.iter().map(|track| track.position).collect();
+    let cameras: Vec<_> = match_views
+        .iter()
+        .map(|&view| glam::Vec3::from(capture.views[view].camera.cam_position))
+        .collect();
+    let estimates = train::inverse::surface::estimate_surfaces(
+        &points,
+        &cameras,
+        train::inverse::surface::SurfaceOptions {
+            neighbours: 4,
+            radius_factor: 1.0,
+            outlier_factor: 3.0,
+        },
+    );
     let mut surfels = Vec::with_capacity(tracks.len());
-    for track in &tracks {
-        let mut towards = glam::Vec3::ZERO;
-        let mut radius = 0.0f32;
+    for (track, estimate) in tracks.iter().zip(estimates) {
+        let Some(estimate) = estimate else {
+            continue;
+        };
+        let mut pixel_radius = 0.0f32;
         for observation in &track.observations {
             let camera = &capture.views[observation.view].camera;
-            let origin = glam::Vec3::from(camera.cam_position);
-            towards += (origin - track.position).normalize_or_zero();
-            let distance = origin.distance(track.position);
-            radius += distance * (0.5 * camera.fov[0]).tan() * 2.0 / capture.width as f32;
+            let distance = glam::Vec3::from(camera.cam_position).distance(track.position);
+            pixel_radius += distance * (0.5 * camera.fov[0]).tan() * 2.0 / capture.width as f32;
         }
-        let count = track.observations.len() as f32;
+        pixel_radius /= track.observations.len() as f32;
         surfels.push(vol::relight::Surfel {
             center: track.position.to_array(),
-            radius: 1.5 * radius / count,
-            normal: towards.try_normalize().unwrap_or(glam::Vec3::Z).to_array(),
+            radius: estimate.spacing.min(2.0 * pixel_radius),
+            normal: estimate.normal.to_array(),
             material: 0,
         });
+    }
+    let dropped = tracks.len() - surfels.len();
+    println!(
+        "missing tracks: local surface retained {} points and dropped {dropped} isolated points",
+        surfels.len(),
+    );
+    if surfels.is_empty() {
+        println!("missing tracks: no locally coherent diagnostic cloud written");
+        return Ok(());
     }
     let diagnostic = vol::relight::RelightModel {
         kernel: vol::relight::ParticleKernel::Gaussian,
