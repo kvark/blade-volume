@@ -302,6 +302,31 @@ fn write_colmap_splits(output: &path::Path, records: &[PreparedFrame]) -> io::Re
     write_colmap_files(&train, &training_records)
 }
 
+fn write_binary_mask(
+    source: &path::Path,
+    destination: &path::Path,
+    dimensions: (u32, u32),
+) -> Result<(), String> {
+    let mut mask = image::open(source)
+        .map_err(|error| format!("cannot read {}: {error}", source.display()))?
+        .into_luma8();
+    if mask.dimensions() != dimensions {
+        return Err(format!(
+            "{} is {}x{} but its photograph is {}x{}",
+            source.display(),
+            mask.width(),
+            mask.height(),
+            dimensions.0,
+            dimensions.1,
+        ));
+    }
+    for coverage in mask.as_mut() {
+        *coverage = u8::from(*coverage != 0) * u8::MAX;
+    }
+    mask.save(destination)
+        .map_err(|error| format!("cannot write {}: {error}", destination.display()))
+}
+
 fn write_colmap(
     input: &path::Path,
     output: &path::Path,
@@ -350,13 +375,7 @@ fn write_colmap(
         }
         let source_mask = input.join(format!("output/obj_masks/{}.png", frame.name));
         let destination_mask = masks.join(format!("{}.png", frame.name));
-        fs::copy(&source_mask, &destination_mask).map_err(|error| {
-            format!(
-                "cannot copy {} to {}: {error}",
-                source_mask.display(),
-                destination_mask.display()
-            )
-        })?;
+        write_binary_mask(&source_mask, &destination_mask, dimensions)?;
         records.push(PreparedFrame {
             frame: frame.clone(),
             image_name,
@@ -649,6 +668,30 @@ mod tests {
         assert_eq!(complete.images.len(), 2);
         assert_eq!(training.images.len(), 1);
         assert_eq!(training.images[0].name, "training.jpg");
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn imported_masks_are_canonical_binary_coverage() {
+        let temporary = std::env::temp_dir().join(format!(
+            "blade-volume-openillumination-mask-{}",
+            std::process::id(),
+        ));
+        let _ = fs::remove_dir_all(&temporary);
+        fs::create_dir_all(&temporary).unwrap();
+        let source = temporary.join("source.png");
+        let destination = temporary.join("destination.png");
+        image::GrayImage::from_raw(2, 2, vec![0, 1, 64, 255])
+            .unwrap()
+            .save(&source)
+            .unwrap();
+
+        write_binary_mask(&source, &destination, (2, 2)).unwrap();
+
+        assert_eq!(
+            image::open(&destination).unwrap().into_luma8().into_raw(),
+            vec![0, 255, 255, 255],
+        );
         fs::remove_dir_all(temporary).unwrap();
     }
 
