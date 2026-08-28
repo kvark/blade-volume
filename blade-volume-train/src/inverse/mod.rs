@@ -21,5 +21,6 @@ pub mod powerfoam;
 pub mod refine;
 pub mod score;
 pub mod surface;
+pub mod tracks;
 pub mod truth;
 pub mod visibility;

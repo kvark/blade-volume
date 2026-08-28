@@ -10,6 +10,11 @@ Training lives in a separate crate built on [meganeura](https://github.com/kvark
 no Python, no Burn. See `docs/AUDIT_AND_ROADMAP.md` for the audited status and
 stage gates.
 
+For the short, ordered path from today's result to a useful relightable asset,
+see [`docs/RELIGHTING_ROADMAP.md`](docs/RELIGHTING_ROADMAP.md). It separates
+the next surface, calibration, visibility, lighting, and material gates without
+the experiment-by-experiment history in the audit logs.
+
 ## Reconstruction Status
 
 Short version: capture-light novel-view reconstruction works end to end. A
