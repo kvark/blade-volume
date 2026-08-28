@@ -8000,3 +8000,24 @@ runs to pass selection mean/worst PSNR and mask recall/precision before opening
 validation, and both validation runs before opening official held data. This
 fixed-input replay is the smallest experiment that can distinguish an unstable
 patch optimizer from ordinary variation in upstream reconstruction.
+
+`reconstruct --missing-tracks-base BASE.ply` now provides that immutable input
+without entering Gaussian training. It cannot be combined with
+`--pbr-gaussian-output` for the same diagnostic, and at least six training
+cameras are required to preserve a separate selection phase. Two full runs on
+the exact v19 base produced byte-identical diagnostic PLYs (SHA-256
+`ab8296099ac5ea11be413e29746c7ac0674ebcec7f0a2ff4aa12e8a45f5cceb8`) and
+identical PNG directories. The rejection funnel and all metrics were also
+identical: 226 triangulated candidates became 66 selection-supported tracks,
+51 points in three shared-view patches, and 45 points after the footprint
+screen; validation reached 3.3% missing recall, 59.1% missing precision, and
+98.9% foreground precision. The two 12 GiB scoped runs peaked at 689/665 MB
+with zero swap, OOM, throttling, or GPU faults. Ignored artifacts are under
+`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-fixed-{a,b}/`
+and telemetry under `/tmp/blade-volume-fixed-replay-{a,b}.log`.
+
+This result removes upstream model variation from the experiment, but it does
+not validate a merge. The next implementation may expose complete-render patch
+fitting only as another diagnostic output. It must run twice against this same
+base and produce the same accept/reject decision before validation is opened;
+only then may a candidate be tested on official cameras and excluded lights.

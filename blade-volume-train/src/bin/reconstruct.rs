@@ -204,8 +204,12 @@ struct Args {
     #[argh(option)]
     pbr_gaussian_output: Option<String>,
 
+    /// persisted Gaussian used as immutable support for missing-track replay
+    #[argh(option)]
+    missing_tracks_base: Option<String>,
+
     /// diagnostic Gaussian PLY of mutually matched missing-surface tracks;
-    /// requires masks, a PBR Gaussian, and three aligned light captures
+    /// requires masks, one PBR Gaussian source, and three aligned light captures
     #[argh(option)]
     missing_tracks_output: Option<String>,
 
@@ -258,6 +262,15 @@ fn main() {
         eprintln!("{message}");
         std::process::exit(1);
     }
+
+    let fixed_missing_tracks_base = args.missing_tracks_base.as_ref().map(|file| {
+        let model = vol::io::try_load_gaussian(file).unwrap_or_else(|error| {
+            eprintln!("cannot read fixed missing-track base {file}: {error}");
+            std::process::exit(1);
+        });
+        println!("missing tracks: loaded fixed base from {file}");
+        model
+    });
 
     let known_light = args.environment.as_ref().map(|file| {
         vol::io::try_load_environment(path::Path::new(file)).unwrap_or_else(|error| {
@@ -323,6 +336,10 @@ fn main() {
         });
     if !args.held_out_images.is_empty() && test_views.is_empty() {
         eprintln!("held-out-light scoring needs at least one held camera view");
+        std::process::exit(1);
+    }
+    if args.missing_tracks_output.is_some() && train_views.len() < 6 {
+        eprintln!("missing-track replay needs at least six training cameras");
         std::process::exit(1);
     }
     if args.dense_cloud.is_some() && !test_views.is_empty() {
@@ -1211,8 +1228,9 @@ fn main() {
     }
 
     if let Some(ref output) = args.missing_tracks_output {
-        let gaussian = learned_pbr_gaussian
+        let gaussian = fixed_missing_tracks_base
             .as_ref()
+            .or(learned_pbr_gaussian.as_ref())
             .expect("missing-track inputs were validated before reconstruction");
         write_missing_tracks(
             gaussian,
@@ -2618,9 +2636,15 @@ fn validate_lit_captures(args: &Args) -> Result<(), String> {
     if args.render_refine_normals && args.environment.is_none() {
         return Err("rendered normal refinement needs --environment".to_string());
     }
+    if args.missing_tracks_base.is_some() && args.missing_tracks_output.is_none() {
+        return Err("--missing-tracks-base requires --missing-tracks-output".to_string());
+    }
     if args.missing_tracks_output.is_some() {
-        if args.pbr_gaussian_output.is_none() {
-            return Err("--missing-tracks-output requires --pbr-gaussian-output".to_string());
+        if args.pbr_gaussian_output.is_some() == args.missing_tracks_base.is_some() {
+            return Err(
+                "--missing-tracks-output requires exactly one of --pbr-gaussian-output or --missing-tracks-base"
+                    .to_string(),
+            );
         }
         if args.masks.is_none() {
             return Err("--missing-tracks-output requires --masks".to_string());
@@ -3214,6 +3238,7 @@ mod tests {
         assert!(defaults.surface_powerfoam_output.is_none());
         assert!(defaults.gaussian_output.is_none());
         assert!(defaults.pbr_gaussian_output.is_none());
+        assert!(defaults.missing_tracks_base.is_none());
         assert!(defaults.missing_tracks_output.is_none());
         assert!(defaults.held_out_images.is_empty());
         assert!(defaults.held_out_environment.is_empty());
@@ -3521,29 +3546,50 @@ mod tests {
         let output_only = parse(&["--missing-tracks-output", "tracks.ply"]);
         assert!(validate_lit_captures(&output_only).is_err());
 
-        let complete = parse(&[
-            "--masks",
-            "masks",
-            "--environment",
-            "light-0.f32",
-            "--pbr-gaussian-output",
-            "pbr.ply",
-            "--missing-tracks-output",
-            "tracks.ply",
-            "--normal-images",
-            "light-1",
-            "--normal-environment",
-            "light-1.f32",
-            "--normal-images",
-            "light-2",
-            "--normal-environment",
-            "light-2.f32",
-            "--normal-images",
-            "light-3",
-            "--normal-environment",
-            "light-3.f32",
-        ]);
+        let diagnostic = |source: &[&str]| {
+            let mut arguments = vec![
+                "--masks",
+                "masks",
+                "--environment",
+                "light-0.f32",
+                "--missing-tracks-output",
+                "tracks.ply",
+                "--normal-images",
+                "light-1",
+                "--normal-environment",
+                "light-1.f32",
+                "--normal-images",
+                "light-2",
+                "--normal-environment",
+                "light-2.f32",
+                "--normal-images",
+                "light-3",
+                "--normal-environment",
+                "light-3.f32",
+            ];
+            arguments.extend_from_slice(source);
+            parse(&arguments)
+        };
+        let complete = diagnostic(&["--pbr-gaussian-output", "pbr.ply"]);
         validate_lit_captures(&complete).unwrap();
+
+        let fixed = diagnostic(&["--missing-tracks-base", "fixed.ply"]);
+        validate_lit_captures(&fixed).unwrap();
+
+        let ambiguous = diagnostic(&[
+            "--pbr-gaussian-output",
+            "new.ply",
+            "--missing-tracks-base",
+            "fixed.ply",
+        ]);
+        assert!(validate_lit_captures(&ambiguous)
+            .unwrap_err()
+            .contains("exactly one"));
+
+        let unused = parse(&["--missing-tracks-base", "fixed.ply"]);
+        assert!(validate_lit_captures(&unused)
+            .unwrap_err()
+            .contains("requires --missing-tracks-output"));
     }
 
     #[test]

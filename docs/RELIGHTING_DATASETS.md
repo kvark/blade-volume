@@ -490,6 +490,14 @@ base Gaussian and regressed selection foreground mean/worst PSNR by
 The next OpenIllumination run will persist one exact base Gaussian and demand
 two repeat passes from that fixed input before any excluded data is opened.
 
+That replay boundary is now implemented as `--missing-tracks-base`. Two full
+runs against the exact v19 PBR Gaussian produce byte-identical 45-point PLYs
+and PNGs, with the same 3.3% validation missing recall, 59.1% missing
+precision, and 98.9% foreground precision. Peak scoped memory is 689/665 MB,
+with no swap, OOM, throttling, or GPU fault. This validates deterministic track
+and patch construction, not automatic integration; the complete-render patch
+fit remains the next repeat gate.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable

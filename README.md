@@ -58,10 +58,10 @@ a convincing real-world result.
 
 The next quality gate is deliberately narrow:
 
-- replay the now-working shared-view track patches against one persisted PBR
-  Gaussian, then merge only components that pass the selection and validation
-  gates twice from that identical base; the diagnostic patch builder is in
-  place, but automatic merging remains disabled after a failed adjacent repeat;
+- replay complete-render fitting of the now-byte-stable shared-view track
+  patches against one persisted PBR Gaussian, then merge only components that
+  pass selection and validation twice from that identical base; automatic
+  merging remains disabled;
 - fit finite-light visibility, indirect transport, and non-diffuse appearance
   after the support is trustworthy;
 - pass two excluded lights on a second same-session object before broadening

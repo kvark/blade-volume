@@ -139,6 +139,14 @@ clouds. `--dense-max-points` changes the bound; it is a memory/throughput limit,
 not a request to duplicate points. Omit `--dense-cloud` to use sparse geometry
 for both outputs.
 
+Missing-surface experiments can replay one exact trained Gaussian with
+`--missing-tracks-base my-capture-pbr.ply --missing-tracks-output tracks.ply`.
+This dedicated diagnostic input is mutually exclusive with
+`--pbr-gaussian-output`, so a repeat cannot accidentally retrain the base whose
+coverage defines the missing pixels. It additionally needs masks, at least
+three aligned `--normal-images`/`--normal-environment` pairs, and at least six
+training cameras. It writes a separate cloud and does not modify the base.
+
 When sampled visibility is enabled, `--diffuse-samples N` controls the forward
 model used while fitting. Use `--score-diffuse-samples M` to spend a larger ray
 budget only on final metrics and PNG dumps. It defaults to `N`, so existing

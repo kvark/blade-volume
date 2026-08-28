@@ -206,3 +206,16 @@ and patches from that exact file, and replay patch fitting twice without
 retraining the prefix. Only a component that passes both identical-base runs
 may advance to excluded cameras and lights. This separates patch stability from
 the known run-to-run variation of upstream GPU reconstruction.
+
+The fixed-input boundary is now available as `--missing-tracks-base`. It is
+mutually exclusive with training a new `--pbr-gaussian-output`, and the
+diagnostic also refuses fewer than six training cameras so matching and
+selection cannot silently share every view. Two complete OpenIllumination
+replays against the persisted v19 Gaussian produced byte-identical PLY files
+and identical diagnostic PNGs. Both retained the same 45 points and reported
+3.3% validation missing recall, 59.1% missing precision, and 98.9% foreground
+precision. The full runs peaked at 689 MB and 665 MB with no swap, OOM,
+throttling, or GPU fault. This clears reproducibility for track discovery and
+patch construction only. Next, replay the complete-render patch fit twice
+against this same immutable prefix; automatic merging remains disabled until
+both selection and validation gates repeat.
