@@ -7776,3 +7776,48 @@ wall times are 32.6 and 32.2 seconds versus 32.4 seconds for the control, and
 all three peak below 826 MiB with clean cgroup and GPU counters. Ignored
 outputs remain under
 `target/audit-runs/openillumination/lighting-pattern-audit/{blade-357777a-five-score64,blade-357777a-five-score64-repeat,blade-95f5004-adjacent-control}/`.
+
+## Rejected local composited opacity ownership (2026-08-28)
+
+The next prototype used the exact ordered Gaussian composite rather than a
+projected centre or a whole-mask proxy. Every under-covered training ray named
+only its largest current front-to-back Gaussian weight. A particle was
+eligible only when it repeated that role in at least one quarter of the
+training cameras. An analytic logit update balanced the nominated foreground
+rays against that same particle's exact background-ray sensitivity, and a
+complete-image screen accepted a step only when training-mask F1 rose without
+lowering precision. This added no graph operation, shader, model field, or
+dependency.
+
+The ownership signal is real. On a fixed saved control cloud, the conservative
+quarter step raises exact CPU training-mask recall `66.67%→68.58%` while
+precision rises `90.95%→91.04%`. Production rendering of the same paired
+models raises held-camera recall `66.32%→68.24%` and precision
+`86.86%→86.92%`. The unconstrained screened step raises training recall by
+seven points, but is clearly too large.
+
+Opacity remains the wrong update, however. In the deterministic paired
+production render, known-light quality changes from
+`24.22/23.05;16.34/14.83` to `24.09/22.95;16.20/14.62` dB
+whole/foreground, and where-hit quality falls `14.09→14.00` dB. Pattern 005
+is mixed at `23.04/20.80;13.90/12.06→23.03/20.80;13.93/12.08` dB and loses
+0.07 dB where-hit quality. Pattern 006 improves slightly to
+`22.39/19.47;13.00/10.65` dB. A current particle can correctly own the
+support deficit without its existing material being a valid explanation for
+the newly covered part of its footprint; raising opacity paints that material
+onto every ray the Gaussian already intersects.
+
+The roughly 340-line implementation, its unit test, and the temporary paired
+scorer are removed. The complete screens and paired scorer peak below 955 MB
+inside separate 12 GiB scopes, with zero swap, OOM, throttling, Xid, or GPU
+fault. Ignored evidence remains under
+`target/audit-runs/openillumination/lighting-pattern-audit/{ownership-five-score64,ownership-adjacent-control,ownership-step025-five-score64}/`
+and `target/audit-runs/ownership/paired-2.stdout.log`.
+
+This closes the opacity-only branch. The next local method must create or move
+point support and fit the responsible appearance together. A promising
+minimal route is an ownership-triggered Gaussian split: place one child along
+the missing ray near the owner's depth, retain the parent for its established
+rays, and accept the child only after cross-view geometry plus known-light
+appearance validation. It remains a point-cloud operation and can reuse the
+existing Gaussian split/remap machinery.
