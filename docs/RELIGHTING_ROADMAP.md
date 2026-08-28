@@ -126,8 +126,14 @@ a deterministic repeat agree within the measured training variance.
   do not mutate the fitted surface yet.
 - [x] Run it on the fixed OpenIllumination training split and inspect the cloud
   plus per-stage rejection counts.
-- [ ] Integrate only coherent track patches, then run the complete known/held
-  quality gate under the existing 12 GiB cgroup protocol.
+- [x] Group tracks by shared-view adjacency, replay them twice from one fixed
+  base, and screen every component through complete selection and validation
+  renders.
+- [x] Open the official camera and excluded-light gate only after the repeats;
+  reject and remove the append when its tiny internal gain does not transfer.
+- [ ] Expand the verified tracks into continuous oriented cloud support and fit
+  one regularized material field per patch; use fresh held data for its final
+  decision rather than retuning against the now-open OpenIllumination split.
 
 The leakage-free diagnostic uses 16 matching, four selection, and four
 validation cameras from the ordinary training set; the ten official test
@@ -216,6 +222,28 @@ and identical diagnostic PNGs. Both retained the same 45 points and reported
 3.3% validation missing recall, 59.1% missing precision, and 98.9% foreground
 precision. The full runs peaked at 689 MB and 665 MB with no swap, OOM,
 throttling, or GPU fault. This clears reproducibility for track discovery and
-patch construction only. Next, replay the complete-render patch fit twice
-against this same immutable prefix; automatic merging remains disabled until
-both selection and validation gates repeat.
+patch construction only.
+
+The fixed-base complete-render replay is now resolved. A conservative
+0.25-opacity component reuses the nearest established material and the common
+five-light normal refinement. Two adjacent runs made the same decision and
+emitted byte-identical 20-point candidates. Selection foreground mean/worst
+improved `16.318/15.723→16.326/15.737` dB and validation improved
+`16.561/16.218→16.569/16.242` dB; recall and precision also increased in both
+splits. The exact candidate then failed the official gate: known-light held
+camera mean moved `23.86→23.85` dB, and excluded patterns 005/006 contained
+mixed one-hundredth-decibel foreground and whole-frame changes. A variant that
+sampled radiance at exact track observations did not change that conclusion.
+The append, candidate CLI, and model-merge helper were therefore removed; no
+shader, Meganeura operation, dependency, or persisted field was added.
+
+This changes the immediate algorithmic target. Twenty isolated samples can
+slightly fill a silhouette without producing a visible surface or a reliable
+material estimate. The next implementation should interpolate a continuous
+local point patch from the verified multi-view component, optimize its tangent
+support and opacity through the existing complete renderer, and share material
+parameters spatially across that patch. It must use a fresh held split or
+second object for its final decision because the current official split has now
+served its one evaluation. Only after that surface gate passes do finite-light
+visibility, bounded indirect transport, and clustered roughness become
+identifiable enough to pursue.

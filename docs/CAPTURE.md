@@ -146,6 +146,9 @@ This dedicated diagnostic input is mutually exclusive with
 coverage defines the missing pixels. It additionally needs masks, at least
 three aligned `--normal-images`/`--normal-environment` pairs, and at least six
 training cameras. It writes a separate cloud and does not modify the base.
+When test cameras or `--held-out-images` are supplied, that same immutable base
+also goes through the ordinary Gaussian scoreboard after the diagnostic; this
+allows an exact before/after control without retraining it.
 
 When sampled visibility is enabled, `--diffuse-samples N` controls the forward
 model used while fitting. Use `--score-diffuse-samples M` to spend a larger ray

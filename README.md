@@ -58,14 +58,17 @@ a convincing real-world result.
 
 The next quality gate is deliberately narrow:
 
-- replay complete-render fitting of the now-byte-stable shared-view track
-  patches against one persisted PBR Gaussian, then merge only components that
-  pass selection and validation twice from that identical base; automatic
-  merging remains disabled;
-- fit finite-light visibility, indirect transport, and non-diffuse appearance
-  after the support is trustworthy;
-- pass two excluded lights on a second same-session object before broadening
-  the capture API toward a moving-phone sequence.
+- turn the verified sparse correspondences into continuous local point-cloud
+  patches, with shared or spatially regularized material parameters instead
+  of copying one nearby point or fitting one free material per new point;
+- require complete-render gains on separate construction/selection/validation
+  camera sets, then on fresh held cameras and two excluded lights. The first
+  fixed-base patch append passed the internal split twice but failed this final
+  gate, so its merge implementation was removed;
+- fit finite-light visibility, indirect transport, and then spatially shared
+  roughness only after surface support passes on a second same-session object;
+- generalize the aligned capture layout to `(image, camera, light, exposure)`
+  observations only after those geometry and transport gates pass.
 
 The concise evidence is below. Detailed protocols, experiments, and rejected
 ideas live in

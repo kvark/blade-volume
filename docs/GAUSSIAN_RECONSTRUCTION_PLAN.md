@@ -8017,7 +8017,37 @@ with zero swap, OOM, throttling, or GPU faults. Ignored artifacts are under
 and telemetry under `/tmp/blade-volume-fixed-replay-{a,b}.log`.
 
 This result removes upstream model variation from the experiment, but it does
-not validate a merge. The next implementation may expose complete-render patch
-fitting only as another diagnostic output. It must run twice against this same
-base and produce the same accept/reject decision before validation is opened;
-only then may a candidate be tested on official cameras and excluded lights.
+not validate a merge.
+
+The complete-render replay was implemented as a temporary diagnostic without
+adding a shader, Meganeura operation, dependency, or persisted model field.
+Each coherent component reused nearest established materials, applied the
+existing five-light normal refinement, and entered the production Gaussian
+renderer at 0.25 opacity. A component survived only if foreground mean/worst
+PSNR and mask recall/precision all did not regress on selection cameras; the
+accepted union faced the same validation test. Two adjacent runs from the v19
+base made identical decisions and emitted the same 20-point candidate
+(SHA-256 `b375a8c3bf364874e280ec44a55d4e86423e54680742b4fd0ed9c011a5b4a93e`).
+Selection moved `16.318/15.723→16.326/15.737` dB and validation moved
+`16.561/16.218→16.569/16.242` dB, with recall and precision non-regressing.
+
+That repeat opened the official ten-camera and patterns-005/006 report once.
+The exact fixed-base control scored 23.86 dB known-light held-camera mean; the
+candidate scored 23.85 dB. Excluded-light foreground and whole-frame results
+were mixed by about 0.01 dB and the 128-pixel renders showed no material visual
+repair. Restoring exact track-pixel photometric observations changed the known
+tail by only 0.01 dB and did not make the excluded-light result consistent.
+Consequently the candidate CLI, append helper, and both appearance variants
+were removed. The durable fixed-base path now only exposes the reproducible
+track/patch diagnostic and can feed the unchanged base through the ordinary
+held-data scoreboard.
+
+The next surface experiment must add coherent *area*, not another sparse disc
+heuristic. Interpolate a local tangent patch between verified tracks, represent
+it with point samples and anisotropic support, and give the patch a spatially
+shared or regularized material field. Optimize only that patch through complete
+renders while the established cloud stays fixed. Select it with a fresh camera
+split and reserve a second object or new capture for the final gate; the
+current official split has now been consumed for evaluation. Visibility,
+indirect transport, and clustered roughness remain downstream until this
+continuous-support gate passes.

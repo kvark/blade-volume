@@ -1243,6 +1243,10 @@ fn main() {
             eprintln!("cannot reconstruct missing-surface tracks: {error}");
             std::process::exit(1);
         });
+        if let Some(ref base) = fixed_missing_tracks_base {
+            println!("missing tracks: scoring fixed base on held data");
+            learned_pbr_gaussian = Some(base.clone());
+        }
     }
 
     if let Some(ref output) = args.output {

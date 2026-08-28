@@ -495,8 +495,23 @@ runs against the exact v19 PBR Gaussian produce byte-identical 45-point PLYs
 and PNGs, with the same 3.3% validation missing recall, 59.1% missing
 precision, and 98.9% foreground precision. Peak scoped memory is 689/665 MB,
 with no swap, OOM, throttling, or GPU fault. This validates deterministic track
-and patch construction, not automatic integration; the complete-render patch
-fit remains the next repeat gate.
+and patch construction, not automatic integration.
+
+The complete-render candidate was then replayed twice from that base. Both
+runs selected the same 20-point component and wrote the same PLY (SHA-256
+`b375a8c3bf364874e280ec44a55d4e86423e54680742b4fd0ed9c011a5b4a93e`).
+Selection foreground mean/worst moved `16.318/15.723→16.326/15.737` dB;
+validation moved `16.561/16.218→16.569/16.242` dB, with non-regressing mask
+recall and precision. That cleared the predeclared boundary for opening the
+official data, but the candidate did not clear the official gate. Relative to
+the exact fixed base, known-light held-camera mean rounded down
+`23.86→23.85` dB; excluded-light results contained mixed changes at the 0.01 dB
+level and no visible recovery of the fragmented surface. Exact track-pixel
+normal observations did not change the decision. The candidate and append
+implementation were removed. The 12 GiB candidate/base evaluations peaked at
+743/666 MB with zero swap, OOM, throttling, or GPU fault; ignored comparisons
+are under `missing-tracks-fixed-held{,-base}` and telemetry is in
+`/tmp/blade-volume-fixed-{candidate,base}-held.log`.
 
 ## Capture direction
 
@@ -516,13 +531,10 @@ cycled or strobed during one trajectory.
 
 ## Implementation order
 
-1. Build sparse tracks from missing foreground observations. Match a compact
-   local descriptor or four-light gain-invariant signature along calibrated
-   epipolar lines, require a mutual match in several cameras, and triangulate
-   one new point per coherent group. Treat current Gaussian ownership only as
-   a search-depth prior, never as the correspondence itself. Select additions
-   on withheld training cameras using foreground PSNR and mask
-   precision/recall.
+1. Expand the verified sparse tracks into continuous oriented point-cloud
+   patches. Infer tangent support from shared-view neighborhoods, share or
+   regularize material parameters within each patch, and select additions on
+   withheld training cameras using foreground PSNR and mask precision/recall.
 2. Once that surface gate passes, revisit visibility and indirect transport
    together. The current scalar control proves they are not useful while the
    support is fragmented; enabling only one half can also trade an over-bright
