@@ -8067,3 +8067,30 @@ denser centers is a negative control—it shrinks the original discs and lowers
 recall to 2.3%—and its code was removed. Peak 12 GiB scoped memory is 659/672
 MB with no swap, OOM, throttling, or GPU fault. This validates deterministic
 point interpolation, not appearance or a production merge.
+
+## Fresh-object dense provenance audit (2026-08-28)
+
+The selected fresh-object `fused-min1` input contains 1,254,170 points, and
+its canonical paired COLMAP visibility stream records exactly one source image
+for every point. All 38 construction images occur, but no point is itself a
+multi-view fusion. A separately persisted `min5` control verifies the format
+and interpretation: its 24,117 points have 8.096 source images on average,
+100% have more than one source, and the maximum is 24.
+
+A temporary view-balanced voxel reducer averaged each source image separately,
+gave each source equal weight, and required at least two distinct sources per
+output cell. This does not establish geometric agreement. At the selected
+2,500-point budget it changes the scalar held-camera foreground mean/worst
+from `18.38/17.32` to `18.28/17.19` dB. Its Gaussian control changes
+`16.68/15.63` to `16.65/15.86` dB but loses precision
+`89.8%→88.4%`, so the mixed tail improvement is rejected. At 5,000 points the
+PBR fit still prunes 3,263 particles and leaves only 1,332; its foreground
+result is `17.30/15.40` dB. Requiring four sources is worse. The reducer and
+flag are removed.
+
+The compact `.vis` parser remains because it validates a reconstruction input
+and preserves the positive provenance needed by the next experiment. That
+experiment must map COLMAP image indices to calibrated cameras and compare
+front-most reprojected depth layers before downsampling. An absent source index
+must not be treated as negative visibility, and source count alone must not
+change a production cloud.

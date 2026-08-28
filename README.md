@@ -71,7 +71,8 @@ The next quality gate is deliberately narrow:
   point-only sheet is already stable under deterministic 2× resampling, while
   the real 5,000-point cloud contains contradictory depth layers that its
   opacity optimizer correctly suppresses. The selected 2,500-point surface
-  therefore remains the production checkpoint;
+  therefore remains the production checkpoint. Its paired COLMAP provenance
+  confirms that every `min1` dense sample came from only one source image;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and

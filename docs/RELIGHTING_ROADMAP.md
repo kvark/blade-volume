@@ -53,7 +53,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | active | Preserve dense-sample camera/pixel provenance and select one view-consistent local depth layer before allocating the point budget | A 5,000-point cloud retains useful support instead of pruning 72% of its PBR particles |
+| Representation scale | active; provenance audited | Map fused source-image indices back to calibrated cameras, then select one front-most cross-view depth layer before allocating the point budget | A 5,000-point cloud retains useful support instead of pruning 72% of its PBR particles |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
@@ -129,6 +129,15 @@ The fresh-object split now rules out seven tempting shortcuts:
   `0.0167/0.0338`. After 90 staged updates, whole-image mean alpha is
   `0.0550/0.0555` with `0.0050` mean image error. Normalizing the clean case
   would conceal the real input-layer problem.
+- COLMAP's paired visibility stream confirms that the selected `fused-min1`
+  input is not multi-view support: all 1,254,170 points have exactly one source
+  image. A `min5` control has 24,117 points with 8.1 sources on average, so the
+  parser and the input are behaving as specified. Equalizing source images in
+  each output voxel and requiring two sources was tested and removed. At 2,500
+  points its scalar result loses 0.10/0.13 dB foreground mean/worst, and its
+  Gaussian result loses mean quality and 1.4 points of precision. At 5,000
+  points it still leaves only 1,332 useful Gaussian particles. Source count is
+  provenance, not evidence that samples belong to the same surface layer.
 
 The next implementation moves the decision upstream of downsampling. Preserve
 which camera, pixel, depth estimate, and confidence produced each dense point;
@@ -268,7 +277,11 @@ a deterministic repeat agree within the measured training variance.
   extra real samples are inconsistent layers rather than clean resampling.
 - [x] Enable coupled sampled visibility and one bounce for PBR Gaussians, and
   gate four/eight samples on known and two excluded lights.
-- [ ] Preserve source-view provenance through dense fusion and assign local
+- [x] Parse and validate COLMAP's paired dense source-view provenance; record
+  that the selected `min1` cloud contains exactly one source per point.
+- [x] Test and reject equal source weighting plus a minimum-source voxel rule;
+  it does not establish cross-view depth agreement and loses the adjacent gate.
+- [ ] Map source-image indices to calibrated cameras and assign front-most
   cross-view surface ownership before spatial downsampling.
 - [ ] Repeat the fixed 2,500/5,000-point gate from one persisted candidate set;
   require both scalar and Gaussian PBR to improve before changing the default.

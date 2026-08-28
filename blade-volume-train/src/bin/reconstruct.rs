@@ -1468,6 +1468,30 @@ fn surfels_from_dense(
         eprintln!("cannot read dense cloud {}: {error}", dense.display());
         std::process::exit(1);
     });
+    let mut visibility_name = dense.as_os_str().to_os_string();
+    visibility_name.push(".vis");
+    let visibility_path = path::PathBuf::from(visibility_name);
+    if visibility_path.is_file() {
+        let visibility =
+            train::dense::try_load_colmap_fused_visibility(&visibility_path, loaded.len())
+                .unwrap_or_else(|error| {
+                    eprintln!(
+                        "cannot read dense visibility {}: {error}",
+                        visibility_path.display()
+                    );
+                    std::process::exit(1);
+                });
+        let observations = visibility.iter().map(<[u32]>::len).sum::<usize>();
+        let shared = visibility.iter().filter(|views| views.len() > 1).count();
+        let maximum = visibility.iter().map(<[u32]>::len).max().unwrap_or(0);
+        let source_images: collections::HashSet<_> = visibility.iter().flatten().copied().collect();
+        println!(
+            "geometry: dense provenance covers {} source images, {:.1} observations per point, {:.1}% multi-view (at most {maximum})",
+            source_images.len(),
+            observations as f64 / visibility.len().max(1) as f64,
+            100.0 * shared as f64 / visibility.len().max(1) as f64,
+        );
+    }
     if let Some(rejected) = train::dense::retain_soft_visual_hull(&mut loaded, capture, views) {
         println!(
             "geometry: masks rejected {rejected} of {} COLMAP dense points outside the soft visual hull",

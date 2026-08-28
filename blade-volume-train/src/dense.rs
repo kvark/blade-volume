@@ -30,6 +30,35 @@ pub struct DensePoint {
     pub color: [u8; 3],
 }
 
+/// Source-image indices recorded beside a COLMAP fused point cloud.
+///
+/// COLMAP stores this as a compact `fused.ply.vis` stream in the same point
+/// order as `fused.ply`. Keeping the flattened representation avoids one heap
+/// allocation per dense point on million-point captures.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DenseVisibility {
+    offsets: Vec<usize>,
+    image_indices: Vec<u32>,
+}
+
+impl DenseVisibility {
+    pub fn len(&self) -> usize {
+        self.offsets.len() - 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, point: usize) -> &[u32] {
+        &self.image_indices[self.offsets[point]..self.offsets[point + 1]]
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &[u32]> {
+        (0..self.len()).map(|point| self.get(point))
+    }
+}
+
 /// Remove dense samples outside the soft visual hull of the training masks.
 ///
 /// Pose-only stereo fusion can retain a depth from a single source image. A
@@ -161,6 +190,18 @@ fn float(record: &[u8], offset: usize) -> f32 {
     f32::from_le_bytes(record[offset..offset + 4].try_into().unwrap())
 }
 
+fn read_u32(reader: &mut impl io::Read) -> io::Result<u32> {
+    let mut bytes = [0u8; 4];
+    reader.read_exact(&mut bytes)?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_u64(reader: &mut impl io::Read) -> io::Result<u64> {
+    let mut bytes = [0u8; 8];
+    reader.read_exact(&mut bytes)?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
 /// Read the canonical `fused.ply` written by COLMAP `stereo_fusion`.
 pub fn try_load_colmap_fused(path: &path::Path) -> io::Result<Vec<DensePoint>> {
     let file = fs::File::open(path)?;
@@ -205,6 +246,77 @@ pub fn try_load_colmap_fused(path: &path::Path) -> io::Result<Vec<DensePoint>> {
         });
     }
     Ok(points)
+}
+
+/// Read the canonical `fused.ply.vis` written beside a COLMAP fused cloud.
+pub fn try_load_colmap_fused_visibility(
+    path: &path::Path,
+    point_count: usize,
+) -> io::Result<DenseVisibility> {
+    let file = fs::File::open(path)?;
+    let file_bytes = file.metadata()?.len();
+    let minimum_bytes = 8u64
+        .checked_add(
+            4u64.checked_mul(point_count as u64)
+                .ok_or_else(|| invalid("COLMAP visibility size overflows u64"))?,
+        )
+        .ok_or_else(|| invalid("COLMAP visibility size overflows u64"))?;
+    if file_bytes < minimum_bytes || (file_bytes - minimum_bytes) % 4 != 0 {
+        return Err(invalid(format!(
+            "COLMAP visibility has {file_bytes} bytes, smaller than or unaligned to its {point_count} records"
+        )));
+    }
+    let observation_count = usize::try_from((file_bytes - minimum_bytes) / 4)
+        .map_err(|_| invalid("COLMAP visibility observations do not fit usize"))?;
+    let mut reader = io::BufReader::new(file);
+    let stored_count = usize::try_from(read_u64(&mut reader)?)
+        .map_err(|_| invalid("COLMAP visibility point count does not fit usize"))?;
+    if stored_count != point_count {
+        return Err(invalid(format!(
+            "COLMAP visibility has {stored_count} points, expected {point_count}"
+        )));
+    }
+
+    let offset_count = point_count
+        .checked_add(1)
+        .ok_or_else(|| invalid("COLMAP visibility point count overflows usize"))?;
+    let mut offsets = Vec::new();
+    offsets.try_reserve_exact(offset_count).map_err(|error| {
+        invalid(format!(
+            "cannot allocate COLMAP visibility offsets: {error}"
+        ))
+    })?;
+    let mut image_indices = Vec::new();
+    image_indices
+        .try_reserve_exact(observation_count)
+        .map_err(|error| {
+            invalid(format!(
+                "cannot allocate COLMAP visibility indices: {error}"
+            ))
+        })?;
+    offsets.push(0);
+    for point in 0..point_count {
+        let count = read_u32(&mut reader)? as usize;
+        if count > observation_count - image_indices.len() {
+            return Err(invalid(format!(
+                "COLMAP visibility point {point} exceeds the remaining observation count"
+            )));
+        }
+        for _ in 0..count {
+            image_indices.push(read_u32(&mut reader)?);
+        }
+        offsets.push(image_indices.len());
+    }
+    if image_indices.len() != observation_count {
+        return Err(invalid(format!(
+            "COLMAP visibility contains {} unclaimed observations",
+            observation_count - image_indices.len()
+        )));
+    }
+    Ok(DenseVisibility {
+        offsets,
+        image_indices,
+    })
 }
 
 fn cell(position: glam::Vec3, origin: glam::Vec3, voxel: f32) -> [i64; 3] {
@@ -336,6 +448,18 @@ mod tests {
         }
     }
 
+    fn write_visibility(path: &path::Path, visibility: &[&[u32]]) {
+        let mut file = fs::File::create(path).unwrap();
+        file.write_all(&(visibility.len() as u64).to_le_bytes())
+            .unwrap();
+        for views in visibility {
+            file.write_all(&(views.len() as u32).to_le_bytes()).unwrap();
+            for view in *views {
+                file.write_all(&view.to_le_bytes()).unwrap();
+            }
+        }
+    }
+
     #[test]
     fn reads_canonical_colmap_fused_cloud() {
         let path = temp("canonical");
@@ -353,6 +477,42 @@ mod tests {
         ];
         write_fused(&path, &points);
         assert_eq!(try_load_colmap_fused(&path).unwrap(), points);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reads_canonical_colmap_fused_visibility() {
+        let path = temp("visibility");
+        write_visibility(&path, &[&[2, 14, 0], &[], &[7]]);
+        let visibility = try_load_colmap_fused_visibility(&path, 3).unwrap();
+        assert_eq!(visibility.len(), 3);
+        assert!(!visibility.is_empty());
+        assert_eq!(visibility.get(0), [2, 14, 0]);
+        assert!(visibility.get(1).is_empty());
+        assert_eq!(visibility.get(2), [7]);
+        assert_eq!(
+            visibility.iter().collect::<Vec<_>>(),
+            vec![&[2, 14, 0][..], &[][..], &[7][..]]
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_misaligned_colmap_fused_visibility() {
+        let path = temp("visibility-count");
+        write_visibility(&path, &[&[0], &[1]]);
+        assert!(try_load_colmap_fused_visibility(&path, 3)
+            .unwrap_err()
+            .to_string()
+            .contains("expected 3"));
+
+        write_visibility(&path, &[&[0], &[1]]);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(&[0]).unwrap();
+        assert!(try_load_colmap_fused_visibility(&path, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("unaligned"));
         fs::remove_file(path).unwrap();
     }
 
