@@ -47,7 +47,10 @@ The checked-in selective fetch downloads 22 cameras of one object under four
 OLATs, about 24 MB rather than the complete 900 GB corpus. Revisions are pinned
 in the script. The Rust importer converts the published camera-to-world
 matrices to pose-only COLMAP binaries, copies PNG masks, writes the official
-five-camera split, and creates distant-light `.f32` environments:
+five-camera split, and creates distant-light `.f32` environments. `sparse/0`
+contains every pose for final scoring; `sparse/train` physically excludes the
+official test cameras and is the input for geometry initialization or dense
+reconstruction:
 
 ```bash
 etc/fetch_openillumination.sh
@@ -68,10 +71,9 @@ initialization and fitting:
 
 ```bash
 cargo run --release -p blade-volume-train --bin train_colmap -- \
-    --sparse etc/data/openillumination/prepared/obj_16_friends_cup/sparse/0 \
+    --sparse etc/data/openillumination/prepared/obj_16_friends_cup/sparse/train \
     --images etc/data/openillumination/OLAT/obj_16_friends_cup/Lights/062/raw_undistorted \
     --masks etc/data/openillumination/prepared/obj_16_friends_cup/masks \
-    --test-list etc/data/openillumination/prepared/obj_16_friends_cup/test.txt \
     --output target/audit-runs/openillumination/foam.ply \
     --initialization camera-lattice --max-points 4096 --views 0 \
     --width 128 --height 174 --pixel-batch 1024 --views-per-batch 16 \

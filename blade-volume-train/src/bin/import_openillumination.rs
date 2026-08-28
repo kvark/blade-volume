@@ -49,6 +49,7 @@ struct Frame {
     world_from_camera: glam::DMat4,
 }
 
+#[derive(Clone)]
 struct PreparedFrame {
     frame: Frame,
     image_name: String,
@@ -287,16 +288,28 @@ fn write_colmap_files(sparse: &path::Path, records: &[PreparedFrame]) -> io::Res
     io::Write::flush(&mut points)
 }
 
+fn write_colmap_splits(output: &path::Path, records: &[PreparedFrame]) -> io::Result<()> {
+    let complete = output.join("sparse/0");
+    let train = output.join("sparse/train");
+    fs::create_dir_all(&complete)?;
+    fs::create_dir_all(&train)?;
+    write_colmap_files(&complete, records)?;
+    let training_records = records
+        .iter()
+        .filter(|record| !record.frame.held_out)
+        .cloned()
+        .collect::<Vec<_>>();
+    write_colmap_files(&train, &training_records)
+}
+
 fn write_colmap(
     input: &path::Path,
     output: &path::Path,
     frames: &[Frame],
     lights: &[Light],
 ) -> Result<(), String> {
-    let sparse = output.join("sparse/0");
     let masks = output.join("masks");
-    fs::create_dir_all(&sparse)
-        .and_then(|()| fs::create_dir_all(&masks))
+    fs::create_dir_all(&masks)
         .map_err(|error| format!("cannot create {}: {error}", output.display()))?;
     let primary = input.join(format!("Lights/{}/raw_undistorted", lights[0].label));
     let mut records = Vec::with_capacity(frames.len());
@@ -350,8 +363,8 @@ fn write_colmap(
             dimensions,
         });
     }
-    write_colmap_files(&sparse, &records)
-        .map_err(|error| format!("cannot write {}: {error}", sparse.display()))?;
+    write_colmap_splits(output, &records)
+        .map_err(|error| format!("cannot write COLMAP splits: {error}"))?;
     let test_names = records
         .iter()
         .filter(|record| record.frame.held_out)
@@ -604,6 +617,38 @@ mod tests {
         assert_eq!(reconstruction.cameras[&1].width, 3_000);
         assert_eq!(reconstruction.cameras[&1].height, 4_096);
         assert!(reconstruction.points.is_empty());
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn training_colmap_split_excludes_held_cameras() {
+        let temporary = std::env::temp_dir().join(format!(
+            "blade-volume-openillumination-split-{}",
+            std::process::id(),
+        ));
+        let _ = fs::remove_dir_all(&temporary);
+        let frame = |name: &str, held_out| PreparedFrame {
+            frame: Frame {
+                name: name.to_string(),
+                held_out,
+                fov_x: 0.6,
+                calibrated_width: 32,
+                world_from_camera: glam::DMat4::IDENTITY,
+            },
+            image_name: format!("{name}.jpg"),
+            dimensions: (32, 48),
+        };
+        write_colmap_splits(&temporary, &[frame("training", false), frame("held", true)]).unwrap();
+
+        let complete =
+            blade_volume_train::colmap::try_load_reconstruction(&temporary.join("sparse/0"))
+                .unwrap();
+        let training =
+            blade_volume_train::colmap::try_load_reconstruction(&temporary.join("sparse/train"))
+                .unwrap();
+        assert_eq!(complete.images.len(), 2);
+        assert_eq!(training.images.len(), 1);
+        assert_eq!(training.images[0].name, "training.jpg");
         fs::remove_dir_all(temporary).unwrap();
     }
 
