@@ -24,26 +24,39 @@ not contain or fall back to polygonal geometry.
   but their depth layers are not accurate enough to initialize or replace the
   production cloud. Appearance-based filtering and normal-guided point motion
   improve known-light renders while regressing unseen lights.
+- Dense calibrated-light normals are coherent at object scale, but integrating
+  them away from verified track depths fails the independent-camera precision
+  gate. Normals are surface evidence, not a substitute for correspondence.
+- A uniform Gaussian sheet remains image-stable under deterministic 2× point
+  resampling, both before and after the staged support fit. Real 5,000-point
+  failure is therefore not a generic opacity-density law; it comes from adding
+  mutually inconsistent surface layers.
+- The final PBR Gaussian now supports the existing coupled sampled-visibility
+  and one-bounce renderer. On the selected fresh object this improves every
+  held-light mean/tail at four and eight samples, although it cannot repair the
+  wrong surface beneath those shadows.
 
-The current bottleneck is therefore **surface evidence first, light transport
-second**. Material, visibility, and illumination can compensate for wrong or
-missing geometry, so optimizing all of them together now would make the
-decomposition less identifiable rather than more accurate.
+The current bottleneck is therefore **cross-view surface ownership first,
+radiometry and unknown-light estimation second**. Coupled transport is now an
+available renderer, but material, visibility, and illumination can still
+compensate for wrong or missing geometry. Optimizing all of them together now
+would make the decomposition less identifiable rather than more accurate.
 
 ## Execution plan
 
-Work advances in this order. Each row must pass its gate before the next row
-is allowed to add parameters.
+The rows are ordered by reconstruction dependency. Independent renderer work
+may land early, but no later parameter family may supervise an unaccepted
+surface.
 
-| Phase | Next implementation | Decision gate |
-| --- | --- | --- |
-| Capture integrity | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Dense support | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on two objects; report any recall trade |
-| Missing support | Recover per-view photometric normal/depth patches anchored by verified tracks, then fuse only depth-consistent oriented points | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | Make Gaussian opacity/support behavior stable as a filtered surface grows beyond 2,500 points; keep the scalar and Gaussian budgets separate until then | A denser cloud improves both scalar and Gaussian PBR, not just one backend |
-| Light transport | Recompute finite-light visibility after each accepted geometry stage, then fit diffuse material and one bounded bounce | Excluded-light shadows move correctly and beat black/capture-copy foreground baselines |
-| Radiometry | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
-| Materials and capture layout | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
+| Phase | Status | Next action | Decision gate |
+| --- | --- | --- | --- |
+| Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
+| Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
+| Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
+| Representation scale | active | Preserve dense-sample camera/pixel provenance and select one view-consistent local depth layer before allocating the point budget | A 5,000-point cloud retains useful support instead of pruning 72% of its PBR particles |
+| Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
+| Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
+| Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
 
 The current selected change is the dense-support row. On the fresh
 `obj_31_painted_toy` split, filtering 68,278 of 1,254,170 one-view fused samples
@@ -59,17 +72,19 @@ A 5,000-point filtered scalar selection control reaches `18.15/17.52` dB
 held-camera foreground with 97.7% recall and 93.5% precision, showing that
 denser surface support is useful. The complete held-light run is mixed:
 pattern 005 moves `15.32/14.06→15.47/14.01` dB and pattern 006 moves
-`13.61/12.06→13.68/12.11` dB. It is therefore not selected, and its Gaussian
-opacity fit is density-sensitive. A stricter guard restores recall by
-over-expanding support and lowering foreground quality; a 3,500-point control
-is also worse for Gaussian PBR. Fix that scale behavior instead of tuning a
-point-count default. Nearest-view PatchMatch source generation, equal-weight
-radius-mask loss, and skipping the joint known-light material fit were isolated
-and removed after negative controls.
+`13.61/12.06→13.68/12.11` dB. It is therefore not selected. The Gaussian fit
+retains only 1,390 of its 5,000 inputs; disabling pruning leaves a median
+opacity of 0.019, which says the optimizer does not want most added layers.
+Raising per-pixel candidates from 64 to 128, scoring at twice the image width,
+and expanding survivor support do not reverse that decision: support expansion
+raises recall but loses precision and foreground PSNR. A 3,500-point control is
+also worse for Gaussian PBR. Nearest-view PatchMatch source generation,
+equal-weight radius-mask loss, and skipping the joint known-light material fit
+were isolated and removed after negative controls.
 
 ## Latest surface attribution
 
-The fresh-object split now rules out four tempting shortcuts:
+The fresh-object split now rules out seven tempting shortcuts:
 
 - Matching every textured foreground pixel across 26 construction cameras
   yields 1,827 accepted tracks; 1,711 pass the independent selection-camera
@@ -87,18 +102,41 @@ The fresh-object split now rules out four tempting shortcuts:
   `17.70/16.90` dB, but held patterns fall to `15.21/13.75` and
   `13.36/11.90` dB. Photometric normals cannot move geometry without an
   independent depth anchor.
+- Anchoring local tangent-plane integration at verified tracks produces 1,450
+  cross-camera candidates, but the three components reach only 84.6–89.8%
+  selection foreground precision and are all rejected. Tight conditioning
+  leaves only two accepted points and 0.0% validation missing recall; a 3×3
+  normal consensus is no better. Dense normals remain valid evidence once a
+  depth is independently confirmed, but the unused estimator, rejected depth
+  propagation, and all tuning hooks were removed.
+- A track-local multi-view plane sweep fits 8,552 neighboring depths and
+  cross-validates 2,155 of them. One 495-point component passes the footprint
+  screen at 5.3% validation missing recall, 67.6% missing precision, and 99.3%
+  foreground precision. At 0.25 opacity it improves selection recall/precision
+  but loses 0.07/0.06 dB foreground mean/worst; at 0.05 opacity it is nearly
+  neutral but still negative. A five-light shared patch material does not
+  rescue it, and an anchor-scale descriptor threshold rejects every component.
+  The sweep, append, and fitting code were removed.
 - Using cast-shadow visibility in the five-light material solve is correct on
   an exact occluder, but the reconstructed visibility makes every real score
   worse. Reducing shadow bias from three radii to one changes openness
   `46%→35%` and is nearly neutral, with mixed held-light tails. Transport must
   follow an accepted surface update rather than supervise the current one.
+- Treating the 5,000-point failure as a generic density-normalization problem
+  is contradicted by the point-only sheet oracle. Its 9×9 and 17×17
+  initializations have central mean alpha `0.3714/0.3799`, integrated mean
+  alpha `0.0312/0.0276`, peak alpha `0.4144/0.4054`, and mean/max central error
+  `0.0167/0.0338`. After 90 staged updates, whole-image mean alpha is
+  `0.0550/0.0555` with `0.0050` mean image error. Normalizing the clean case
+  would conceal the real input-layer problem.
 
-The next implementation is therefore a point-only normal/depth integration
-diagnostic: recover dense per-view photometric normals from aligned lights,
-integrate local depth while anchoring it to the verified multi-view tracks,
-and fuse only patches that agree in another camera. It must first improve a
-construction/selection/validation split; official cameras and excluded lights
-remain final gates, not tuning data.
+The next implementation moves the decision upstream of downsampling. Preserve
+which camera, pixel, depth estimate, and confidence produced each dense point;
+form local point-only compatibility groups by reprojection, normal agreement,
+and front-most depth ordering; then allocate the 2,500/5,000-point budget from
+one consistent layer per group. The selected 2,500-point model remains fixed
+until that ownership pass improves the construction/selection/validation split
+and both excluded lights. No polygonal intermediate or fallback is introduced.
 
 ## Milestones
 
@@ -146,8 +184,10 @@ paint lighting into the recovered diffuse albedo.
 
 ### 4. Alternate geometry and finite-light visibility
 
-Once support is contiguous, alternate small stages instead of freezing a
-transport factor:
+The renderer now evaluates arbitrary environments with coupled sampled
+visibility and one bounded bounce for both scalar surfels and the final PBR
+Gaussian. Once support is contiguous, use that same estimator while
+alternating small fitting stages instead of freezing a transport factor:
 
 1. recompute direct visibility from the current point cloud;
 2. fit diffuse material and the known/low-dimensional light;
@@ -211,12 +251,54 @@ a deterministic repeat agree within the measured training variance.
 - [x] Run continuous shared-view patches and an all-foreground track
   initializer on the fresh object; reject both when their recognizable
   outlines fail complete-render precision and held-light gates.
-- [ ] Recover a dense photometric normal map independently in each aligned
+- [x] Recover a dense photometric normal map independently in each aligned
   training view, with confidence from directional-light conditioning.
-- [ ] Integrate only local point-depth patches anchored by verified tracks and
-  fuse them after an unused-camera depth/reprojection check.
-- [ ] Revisit 5,000-point Gaussian support only after the new surface passes;
-  point density is not a substitute for depth evidence.
+- [x] Test local tangent-plane depth integration from verified tracks; reject
+  and remove it when all useful components fail selection-camera precision.
+- [x] Extend verified tracks with a bounded local multi-view depth sweep;
+  remove it when the dense component passes footprint but fails complete
+  renders at both useful and conservative opacity.
+- [x] Add a synthetic Gaussian-sheet density-invariance oracle and record peak
+  alpha, integrated alpha, covered pixels, and image error at 1×/2× sampling.
+- [x] Repeat staged support fitting at 1×/2× sheet density; reject generic
+  normalization because the fitted images already agree within 0.005 mean
+  alpha error.
+- [x] Isolate the real 5,000-point collapse with candidate-count, image-scale,
+  no-prune, and support-expansion controls; retain 2,500 points because the
+  extra real samples are inconsistent layers rather than clean resampling.
+- [x] Enable coupled sampled visibility and one bounce for PBR Gaussians, and
+  gate four/eight samples on known and two excluded lights.
+- [ ] Preserve source-view provenance through dense fusion and assign local
+  cross-view surface ownership before spatial downsampling.
+- [ ] Repeat the fixed 2,500/5,000-point gate from one persisted candidate set;
+  require both scalar and Gaussian PBR to improve before changing the default.
+
+The calibrated-light estimator fits per-pixel diffuse albedo analytically,
+searches world-space orientation, and reports both normalized residual and the
+loss margin to a direction at least 15 degrees away. Six real maps have median
+confidence `0.14–0.43` and median normalized residual `0.12–0.19`; synthetic
+directional lights recover a known normal above 0.995 cosine agreement. The
+standalone implementation is not retained without a depth-confirmed consumer.
+The rejected integration and plane-sweep runs used only the ordinary 16/4/4
+construction, selection, and validation cameras. They never opened the ten
+official cameras or patterns 005/006. Ignored artifacts are under
+`target/audit-runs/openillumination/lighting-pattern-audit/depth-patches-v1/`
+through `depth-patches-v7/`; scoped runs peaked below 671 MB with zero swap,
+OOM, throttling, or GPU fault.
+
+The sampled Gaussian transport gate uses the persisted selected 2,500-point
+asset, not a retrained checkpoint. Against analytic direct lighting, eight
+samples move known-light whole/foreground mean-worst
+`25.64/24.14, 16.03/14.43→26.42/25.65, 16.57/15.84` dB. Excluded pattern 005
+moves `24.40/23.31, 14.36/13.14→24.98/24.44, 14.82/14.08` dB; pattern 006
+moves `22.98/21.87, 12.73/11.73→23.54/22.88, 13.24/12.40` dB. Four samples
+already improve every mean and tail at 16.7–20.7 ms per view; eight take
+26.2–33.9 ms. Mask recall/precision stays `92.9%/90.1%`. A first shader that
+restarted a ray query to sort and de-duplicate every Gaussian proxy hit was
+removed after its extreme traversal cost triggered NVIDIA Xid 109. The retained
+path culls each closed proxy's exit faces and applies its opacity once; the full
+gate peaked at 1.13 GB with zero swap, OOM, pressure, throttle, Xid, or GPU
+fault.
 
 The leakage-free diagnostic uses 16 matching, four selection, and four
 validation cameras from the ordinary training set; the ten official test

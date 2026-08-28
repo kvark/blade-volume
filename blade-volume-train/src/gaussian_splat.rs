@@ -3820,6 +3820,26 @@ mod tests {
         }
     }
 
+    fn sheet_surface(samples: usize) -> vol::relight::RelightModel {
+        let spacing = 2.0 / (samples - 1) as f32;
+        let mut surfels = Vec::with_capacity(samples * samples);
+        for y in 0..samples {
+            for x in 0..samples {
+                surfels.push(vol::relight::Surfel {
+                    center: [-1.0 + x as f32 * spacing, -1.0 + y as f32 * spacing, 4.0],
+                    radius: 1.7 * spacing,
+                    normal: glam::Vec3::NEG_Z.to_array(),
+                    material: 0,
+                });
+            }
+        }
+        vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels,
+            materials: vec![vol::relight::Material::default()],
+        }
+    }
+
     #[test]
     fn static_gaussian_split_is_deterministic_and_preserves_survivors() {
         let mut source = model(
@@ -4032,6 +4052,142 @@ mod tests {
             match_pbr_surface_extent(&mut gaussian, &surface).unwrap();
             assert_eq!(gaussian.transforms.unwrap().scales[0], scale);
         }
+    }
+
+    #[test]
+    fn pbr_sheet_initializer_is_stable_under_two_x_resampling() {
+        let width = 96;
+        let height = 96;
+        let capture = crate::inverse::capture::Capture {
+            width,
+            height,
+            views: vec![crate::inverse::capture::View {
+                name: "sheet".to_string(),
+                camera: camera(),
+                pixels: vec![[0.0; 3]; width * height],
+                mask: None,
+            }],
+        };
+        let coarse = pbr_from_surface(&sheet_surface(9), MIN_SH1_VIEWS).unwrap();
+        let fine = pbr_from_surface(&sheet_surface(17), MIN_SH1_VIEWS).unwrap();
+        let coarse = render_alpha_views(&coarse, &capture, &[0], 64, PBR_RENDER_MIN_ALPHA)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let fine = render_alpha_views(&fine, &capture, &[0], 64, PBR_RENDER_MIN_ALPHA)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let mean = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
+        let peak = |values: &[f32]| values.iter().copied().fold(0.0f32, f32::max);
+        let covered = |values: &[f32]| values.iter().filter(|&&alpha| alpha > 0.01).count();
+        let mut difference = 0.0f32;
+        let mut maximum = 0.0f32;
+        let mut coarse_mean = 0.0f32;
+        let mut fine_mean = 0.0f32;
+        let mut pixels = 0;
+        for y in 40..56 {
+            for x in 40..56 {
+                let index = y * width + x;
+                let delta = (coarse[index] - fine[index]).abs();
+                difference += delta;
+                maximum = maximum.max(delta);
+                coarse_mean += coarse[index];
+                fine_mean += fine[index];
+                pixels += 1;
+            }
+        }
+        difference /= pixels as f32;
+        coarse_mean /= pixels as f32;
+        fine_mean /= pixels as f32;
+        eprintln!(
+            "Gaussian sheet 1x/2x: central mean {coarse_mean:.4}/{fine_mean:.4}, integrated mean {:.4}/{:.4}, peak {:.4}/{:.4}, covered {}/{}, mean/max delta {difference:.4}/{maximum:.4}",
+            mean(&coarse),
+            mean(&fine),
+            peak(&coarse),
+            peak(&fine),
+            covered(&coarse),
+            covered(&fine),
+        );
+        assert!(difference < 0.05);
+        assert!(maximum < 0.1);
+        assert!((coarse_mean - fine_mean).abs() < 0.03);
+        assert!((mean(&coarse) - mean(&fine)).abs() < 0.01);
+        assert!((peak(&coarse) - peak(&fine)).abs() < 0.05);
+        assert!(covered(&coarse).abs_diff(covered(&fine)) < width * height / 20);
+    }
+
+    #[test]
+    fn pbr_sheet_support_fit_is_stable_under_two_x_resampling() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping Gaussian sheet support-fit test: no GPU");
+            return;
+        };
+        let width = 64;
+        let height = 64;
+        let camera = camera();
+        let pixels: Vec<_> = (0..height)
+            .flat_map(|y| {
+                (0..width).map(move |x| {
+                    let ray =
+                        crate::inverse::capture::pixel_direction(&camera, width, height, x, y);
+                    let point = 4.0 / ray.z * ray;
+                    if point.x.abs() <= 1.0 && point.y.abs() <= 1.0 {
+                        [0.4; 3]
+                    } else {
+                        [0.0; 3]
+                    }
+                })
+            })
+            .collect();
+        let mask: Vec<_> = pixels
+            .iter()
+            .map(|pixel| f32::from(pixel[0] > 0.0))
+            .collect();
+        let capture = crate::inverse::capture::Capture {
+            width,
+            height,
+            views: (0..8)
+                .map(|index| crate::inverse::capture::View {
+                    name: format!("sheet-{index}"),
+                    camera,
+                    pixels: pixels.clone(),
+                    mask: Some(mask.clone()),
+                })
+                .collect(),
+        };
+        let views: Vec<_> = (0..capture.views.len()).collect();
+        let mut coarse = from_surface(&sheet_surface(9)).unwrap();
+        let mut fine = from_surface(&sheet_surface(17)).unwrap();
+        fit_staged(&mut coarse, &capture, &views, 90, gpu.clone()).unwrap();
+        fit_staged(&mut fine, &capture, &views, 90, gpu).unwrap();
+        let coarse_alpha = render_alpha_views(&coarse, &capture, &[0], 64, PBR_RENDER_MIN_ALPHA)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let fine_alpha = render_alpha_views(&fine, &capture, &[0], 64, PBR_RENDER_MIN_ALPHA)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let difference = coarse_alpha
+            .iter()
+            .zip(&fine_alpha)
+            .map(|(coarse, fine)| (coarse - fine).abs())
+            .sum::<f32>()
+            / coarse_alpha.len() as f32;
+        let mean = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
+        let coarse_opacity =
+            coarse.points.iter().map(|point| point.w).sum::<f32>() / coarse.points.len() as f32;
+        let fine_opacity =
+            fine.points.iter().map(|point| point.w).sum::<f32>() / fine.points.len() as f32;
+        eprintln!(
+            "Gaussian fitted sheet 1x/2x: mean alpha {:.4}/{:.4}, mean opacity {coarse_opacity:.4}/{fine_opacity:.4}, image delta {difference:.4}",
+            mean(&coarse_alpha),
+            mean(&fine_alpha),
+        );
+        assert!(difference < 0.05);
+        assert!((mean(&coarse_alpha) - mean(&fine_alpha)).abs() < 0.03);
     }
 
     #[test]

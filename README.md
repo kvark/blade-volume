@@ -55,28 +55,32 @@ a convincing real-world result.
   geometry/transport gate, not an unimplemented experiment. Exact commands,
   baselines, images, and next steps are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
-- **Fresh-object support result — selected, transport still failing.** On a
+- **Fresh-object support result — selected; sampled transport now works.** On a
   second painted, concave object, rejecting dense samples outside the training
   silhouettes before downsampling raises held-camera foreground quality by
   1.08/1.49 dB mean/worst and precision by 14.2 points. Both excluded lights
-  improve, but the dark pattern-006 render remains far too uniformly lit. This
-  separates useful surface cleanup from the next visibility/indirect-light
-  task.
+  improve. The PBR Gaussian renderer now evaluates visibility and one bounded
+  bounce together under an arbitrary novel environment: eight samples improve
+  excluded pattern 006 by 0.56/1.01 dB whole-frame and 0.51/0.67 dB foreground
+  mean/worst. The result is still visibly speckled and too bright, so this
+  clears a renderer boundary rather than the reconstruction-quality gate.
 
 The next quality gate is deliberately narrow:
 
-- recover dense photometric normals independently in each aligned training
-  view, integrate only local point-depth patches anchored by verified
-  correspondences, and fuse a patch only after another camera confirms it;
+- assign cross-view ownership before increasing point count. A synthetic
+  point-only sheet is already stable under deterministic 2× resampling, while
+  the real 5,000-point cloud contains contradictory depth layers that its
+  opacity optimizer correctly suppresses. The selected 2,500-point surface
+  therefore remains the production checkpoint;
 - require complete-render gains on separate construction/selection/validation
-  camera sets, then on fresh held cameras and two excluded lights. The first
-  fixed-base patch append passed the internal split twice but failed this final
-  gate; an all-foreground track initializer and normal-guided point relaxation
-  also improved training evidence while regressing unseen lights, so their
-  implementations were removed;
-- fit finite-light visibility, indirect transport, and then spatially shared
-  roughness only after the depth-anchored surface passes on a second
-  same-session object;
+  camera sets, then on fresh held cameras and two excluded lights. Dense
+  photometric normals, normal-guided integration, all-foreground tracks, and
+  local multi-view depth sweeps have now all been screened without weakening
+  this gate;
+- keep the coupled visibility/one-bounce Gaussian path at four to eight samples
+  in fitting and evaluation; after surface ownership improves, calibrate
+  per-capture exposure and unknown light before adding spatially shared
+  roughness;
 - generalize the aligned capture layout to `(image, camera, light, exposure)`
   observations only after those geometry and transport gates pass.
 
@@ -156,15 +160,18 @@ both the camera and the studio environment used for the reference.
 | OpenIllumination relighting<br>held camera and OLAT 000 | <img src="docs/images/reconstruction/openillumination-olat000-reference.svg" alt="OpenIllumination friends-cup reference under held OLAT 000" width="320"> | <img src="docs/images/reconstruction/openillumination-olat000-pbr.svg" alt="OpenIllumination friends-cup rendered by the relightable Gaussian cloud under held OLAT 000" width="320"> |
 | OpenIllumination same-session relighting<br>held camera and lighting pattern 006 | <img src="docs/images/reconstruction/openillumination-pattern006-reference.png" alt="OpenIllumination fabric friends cup reference under excluded lighting pattern 006" width="320"> | <img src="docs/images/reconstruction/openillumination-pattern006-surface.png" alt="Excluded view and light rendered by the reconstructed scalar point surface" width="320"> |
 | OpenIllumination fresh-object diagnostic<br>held camera and excluded pattern 006 | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-reference.png" alt="OpenIllumination painted toy reference under excluded lighting pattern 006" width="320"> | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-surface.png" alt="Excluded view and light rendered by the filtered scalar point surface" width="320"> |
+| OpenIllumination sampled-transport diagnostic<br>same held camera and excluded pattern 006 | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-reference.png" alt="OpenIllumination painted toy reference under excluded lighting pattern 006" width="320"> | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-gaussian-transport.png" alt="Excluded view and light rendered by the PBR Gaussian cloud with sampled visibility and one bounce" width="320"> |
 
 The pictures expose what PSNR alone hides: the light-field branch has the
 scene and viewpoint but remains blurry, while the relightable branches respond
-to new lights but lose sharp geometry, reflections, and support. The final row
-is the strongest same-session result selected without looking at patterns 005
-or 006. It is a real PNG from the persisted 2,500-point scalar asset, not a
-diagram or best-view control. Its eight-ray dump includes evaluation noise as
-well as surface error; `reconstruct --score-diffuse-samples 64` now produces a
-cleaner final dump without silently changing the eight-ray training model.
+to new lights but lose sharp geometry, reflections, and support. The
+fresh-object scalar row remains the strongest same-session surface checkpoint
+selected without looking at patterns 005 or 006. The row below it holds the
+same reference and shows the persisted PBR Gaussian with eight sampled
+visibility/one-bounce rays: directional structure improves, but noise and
+incorrect depth layers remain obvious. `--score-diffuse-samples 64` can clean
+up scalar score dumps; Gaussian scoring deliberately stays at
+`--diffuse-samples`, matching the transport used by the PBR reconstruction.
 
 | Gate | Training / held views | Static held PSNR | PBR held PSNR | Coverage |
 | --- | ---: | ---: | ---: | ---: |

@@ -789,6 +789,103 @@ mod tests {
     }
 
     #[test]
+    fn gaussian_pbr_transport_avoids_self_shadow_and_sees_blockers() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Ok(mut renderer) = Renderer::new(32, 32) else {
+            eprintln!("skipping Gaussian sampled-transport test: no ray-tracing GPU");
+            return;
+        };
+        let material = vol::relight::Material {
+            albedo: [0.6, 0.4, 0.2],
+            roughness: 1.0,
+            specular_f0: [0.0; 3],
+            ..Default::default()
+        };
+        let model = vol::PointCloudModel {
+            points: vec![glam::Vec4::new(0.0, 0.0, 4.0, 0.8)],
+            sh_coefficients: vec![0.0; 3],
+            sh_degree: 0,
+            transforms: Some(vol::Transforms {
+                rotations: vec![glam::Quat::IDENTITY],
+                scales: vec![glam::Vec3::splat(0.2)],
+                pbr: Some(vol::PbrAttributes {
+                    normals: vec![glam::Vec3::NEG_Z],
+                    material_indices: vec![0],
+                    materials: vec![material],
+                }),
+            }),
+            adjacency: None,
+            radii: None,
+            surface_normals: None,
+            surface_offsets: None,
+            surface_detail: None,
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+        };
+        model.validate().unwrap();
+        let scene = Scene::new(
+            vol::relight::RelightModel {
+                kernel: vol::relight::ParticleKernel::Gaussian,
+                surfels: Vec::new(),
+                materials: Vec::new(),
+            },
+            vol::relight::Environment::uniform([0.5; 3], 16, 8),
+        );
+        let camera = vol::CameraParams {
+            cam_position: [0.0; 3],
+            cam_orientation: glam::Quat::IDENTITY.to_array(),
+            fov: [0.5; 2],
+            depth: 100.0,
+            principal: [0.0; 2],
+        };
+
+        let mut analytic_tracer = renderer.gaussian_tracer(&scene, &model, 0, false);
+        let analytic = renderer.render_prepared_views(&mut analytic_tracer, &[camera]);
+        renderer.destroy_prepared_scene(analytic_tracer);
+        let mut sampled_tracer = renderer.gaussian_tracer(&scene, &model, 64, false);
+        let sampled = renderer.render_prepared_views(&mut sampled_tracer, &[camera]);
+        renderer.destroy_prepared_scene(sampled_tracer);
+
+        let center = 16 * 32 + 16;
+        let analytic = analytic[0][center];
+        let sampled = sampled[0][center];
+        assert!(analytic.iter().all(|value| value.is_finite()));
+        assert!(sampled.iter().all(|value| value.is_finite()));
+        assert!(sampled[0] > 0.5 * analytic[0]);
+        assert!((sampled[3] - analytic[3]).abs() < 1.0e-5);
+
+        // This particle misses the camera ray but lies in the visible
+        // particle's outward hemisphere, so only sampled transport sees it.
+        let mut blocked_model = model.clone();
+        blocked_model
+            .points
+            .push(glam::Vec4::new(0.7, 0.0, 0.5, 0.8));
+        blocked_model.sh_coefficients.extend([0.0; 3]);
+        let transforms = blocked_model.transforms.as_mut().unwrap();
+        transforms.rotations.push(glam::Quat::IDENTITY);
+        transforms.scales.push(glam::Vec3::splat(0.25));
+        let pbr = transforms.pbr.as_mut().unwrap();
+        pbr.normals.push(glam::Vec3::Z);
+        pbr.material_indices.push(1);
+        pbr.materials.push(vol::relight::Material {
+            albedo: [0.0; 3],
+            roughness: 1.0,
+            specular_f0: [0.0; 3],
+            ..Default::default()
+        });
+        blocked_model.validate().unwrap();
+        let mut clear_tracer = renderer.gaussian_tracer(&scene, &model, 256, false);
+        let clear = renderer.render_prepared_views(&mut clear_tracer, &[camera]);
+        renderer.destroy_prepared_scene(clear_tracer);
+        let mut blocked_tracer = renderer.gaussian_tracer(&scene, &blocked_model, 256, false);
+        let blocked = renderer.render_prepared_views(&mut blocked_tracer, &[camera]);
+        renderer.destroy_prepared_scene(blocked_tracer);
+        assert!(blocked[0][center][0] < 0.99 * clear[0][center][0]);
+        assert!((blocked[0][center][3] - clear[0][center][3]).abs() < 1.0e-5);
+        renderer.destroy();
+    }
+
+    #[test]
     fn an_exact_reproduction_scores_at_the_ceiling() {
         let reference = vec![[0.2, 0.5, 0.8]; 16];
         let rendered: Vec<[f32; 4]> = reference.iter().map(|c| [c[0], c[1], c[2], 1.0]).collect();

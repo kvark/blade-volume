@@ -24,11 +24,10 @@
 //! - **No spherical harmonics.** With a material and a light, view dependence
 //!   is derived rather than stored, and a primitive costs eleven floats instead
 //!   of sixty-two.
-//! - **No shadowing, and no indirect light.** Not for want of either: leaving
-//!   out visibility makes the result too bright and leaving out interreflection
-//!   makes it too dark, by about the same amount, so a model with neither sits
-//!   closer to a path traced reference than one with only the first. They have
-//!   to arrive together.
+//! - **Visibility and indirect light are coupled.** The default analytic path
+//!   has neither. The sampled path adds both because visibility alone makes
+//!   the result too dark while indirect light supplies what the blocker sends
+//!   back. A sample cannot enable one without the other.
 //!
 //! Materials are shared rather than stored per primitive, which is what a patch
 //! of surface can actually support: one patch does not determine a BRDF.

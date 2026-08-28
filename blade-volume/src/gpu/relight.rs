@@ -298,7 +298,9 @@ impl RelightTracer {
 
     /// Render learned anisotropic Gaussian geometry with explicit PBR surface
     /// normals and materials. Particle correspondence is by index; transparent
-    /// Gaussians are omitted from the acceleration structure.
+    /// Gaussians are omitted from the acceleration structure. Non-zero diffuse
+    /// samples use the same coupled visibility and one-bounce path as compact
+    /// surfels.
     pub fn new_gaussian(
         model: &PointCloudModel,
         environment: &relight::Environment,
@@ -307,10 +309,6 @@ impl RelightTracer {
         context: &gpu::Context,
         encoder: &mut gpu::CommandEncoder,
     ) -> Self {
-        assert_eq!(
-            settings.diffuse_samples, 0,
-            "volumetric PBR Gaussians currently support analytic direct lighting only"
-        );
         Self::new_impl(
             GeometrySource::Gaussian(model),
             environment,

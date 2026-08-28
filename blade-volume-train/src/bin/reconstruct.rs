@@ -161,9 +161,9 @@ struct Args {
     #[argh(option, default = "0")]
     diffuse_samples: u32,
 
-    /// shadow rays per shading point when scoring and dumping. Defaults to
-    /// --diffuse-samples, so fitting and evaluation still match unless this is
-    /// explicitly requested.
+    /// shadow rays per shading point when scoring and dumping the scalar
+    /// surface. Defaults to --diffuse-samples. PBR Gaussian scores retain
+    /// --diffuse-samples so their transport matches fitting.
     #[argh(option)]
     score_diffuse_samples: Option<u32>,
 
@@ -1348,8 +1348,13 @@ fn main() {
         print_reconstruction_summary(name, summary);
     }
     if let Some(ref gaussian) = learned_pbr_gaussian {
-        let summaries =
-            renderer.score_gaussian_splits(&fitted.scene, gaussian, &capture, &splits, 0);
+        let summaries = renderer.score_gaussian_splits(
+            &fitted.scene,
+            gaussian,
+            &capture,
+            &splits,
+            args.diffuse_samples,
+        );
         for ((name, indices), summary) in [("g-train", &train_views), ("g-test", &test_views)]
             .into_iter()
             .zip(summaries)
@@ -1403,7 +1408,7 @@ fn main() {
                 gaussian,
                 &held.capture,
                 &gaussian_splits,
-                0,
+                args.diffuse_samples,
             )[0];
             let label = if held_out_captures.len() == 1 {
                 "g-relight".to_string()

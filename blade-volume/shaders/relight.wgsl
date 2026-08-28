@@ -5,12 +5,9 @@
 // whatever environment is bound, instead of having been baked in when the
 // model was made.
 //
-// Direct lighting only: no shadow rays and no indirect term. That is a
-// measured choice rather than a simplification to be fixed later — leaving out
-// visibility makes the image too bright and leaving out interreflection makes
-// it too dark by about as much, so a renderer with neither lands closer to a
-// path traced reference than one with only the first. The two have to be added
-// together or not at all.
+// The default analytic path has no shadow rays or indirect term. The sampled
+// path adds both together: visibility alone makes the image too dark, while
+// the same blocker supplies the one-bounce light that fills its shadow.
 
 enable wgpu_ray_query;
 
@@ -278,18 +275,18 @@ struct Occlusion {
 
 // What a ray meets on its way out to the environment.
 //
-// Unlike the camera ray this needs no sorting: transmittance is a product over
-// the surfels in the way and multiplication does not care what order they come
-// in, so the candidates can be consumed exactly as the traversal produces
-// them. Only the nearest one is singled out, and a minimum needs no sort
-// either. That is what makes a shadow ray so much cheaper than a camera ray
-// rather than merely cheaper by the shading it skips.
+// A compact surface proxy contains one triangle. A Gaussian proxy is a closed,
+// consistently wound icosahedron, so back-face culling keeps only its entry
+// triangle and applies that particle's opacity exactly once. Transmittance is a
+// product and therefore does not require the camera path's sorting.
 fn trace_occlusion(origin: vec3<f32>, dir: vec3<f32>, t_min: f32) -> Occlusion {
     var rq: ray_query;
-    rayQueryInitialize(&rq, g_tlas, RayDesc(0u, 0xFFu, t_min, g_camera.depth, origin, dir));
+    let flags = select(0u, RAY_FLAG_CULL_BACK_FACING, g_params.kernel == 2u);
+    let t_end = select(g_camera.depth, 1.0e30, g_params.kernel == 2u);
+    rayQueryInitialize(&rq, g_tlas, RayDesc(flags, 0xFFu, t_min, t_end, origin, dir));
 
     var result = Occlusion(1.0, 0u, false);
-    var nearest = g_camera.depth;
+    var nearest = t_end;
     var in_progress = true;
     while (in_progress) {
         in_progress = rayQueryProceed(&rq);
@@ -297,7 +294,7 @@ fn trace_occlusion(origin: vec3<f32>, dir: vec3<f32>, t_min: f32) -> Occlusion {
         if (intersection.kind != RAY_QUERY_INTERSECTION_TRIANGLE) {
             continue;
         }
-        let hit = intersect_surfel(intersection.instance_index, origin, dir);
+        let hit = intersect_surfel(intersection.instance_index, origin, dir, t_end);
         if (hit.coverage <= 0.0 || hit.t <= t_min) {
             continue;
         }
@@ -340,7 +337,7 @@ fn coverage_of(normalized_radius_squared: f32) -> f32 {
 }
 
 // Where a ray meets a surfel's disc, and how much of it that disc covers.
-fn intersect_surfel(index: u32, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> Hit {
+fn intersect_surfel(index: u32, ray_origin: vec3<f32>, ray_dir: vec3<f32>, t_end: f32) -> Hit {
     var miss = Hit(0.0, index, 0.0);
     let surfel = g_surfels[index];
     if (g_params.kernel == 2u) {
@@ -350,7 +347,7 @@ fn intersect_surfel(index: u32, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> Hi
         let local_direction = qrot(qinv(gaussian.rotation), ray_dir) / gaussian.scale;
         let t = -dot(local_origin, local_direction)
             / dot(local_direction, local_direction);
-        if (t <= 0.0 || t >= g_camera.depth) {
+        if (t <= 0.0 || t >= t_end) {
             return miss;
         }
         let local_position = local_origin + t * local_direction;
@@ -576,7 +573,9 @@ fn trace_blended(ray_origin: vec3<f32>, ray_dir: vec3<f32>, seed: u32) -> vec4<f
             if (intersection.kind != RAY_QUERY_INTERSECTION_TRIANGLE) {
                 continue;
             }
-            var candidate = intersect_surfel(intersection.instance_index, ray_origin, ray_dir);
+            var candidate = intersect_surfel(
+                intersection.instance_index, ray_origin, ray_dir, g_camera.depth
+            );
             if (candidate.coverage <= 0.0) {
                 continue;
             }
