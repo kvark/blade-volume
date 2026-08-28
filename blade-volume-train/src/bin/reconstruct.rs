@@ -2136,30 +2136,39 @@ fn write_missing_tracks(
             let supported = selection_views
                 .iter()
                 .filter(|&&view_index| {
-                    let Some((pixel, _)) = train::inverse::capture::project(
-                        &capture.views[view_index].camera,
-                        capture.width,
-                        capture.height,
-                        track.position,
-                    ) else {
-                        return false;
-                    };
-                    let x = (pixel[0] - 0.5).round() as isize;
-                    let y = (pixel[1] - 0.5).round() as isize;
-                    x >= 0
-                        && y >= 0
-                        && x < capture.width as isize
-                        && y < capture.height as isize
-                        && capture.views[view_index]
+                    projected_pixel(capture, view_index, track.position).is_some_and(|pixel| {
+                        capture.views[view_index]
                             .mask
                             .as_ref()
-                            .is_some_and(|mask| mask[y as usize * capture.width + x as usize] > 0.5)
+                            .is_some_and(|mask| mask[pixel] > 0.5)
+                    })
                 })
                 .count();
             supported * 4 >= selection_views.len() * 3
         });
         println!(
             "missing tracks: selection-camera visual hull retained {} of {raw}",
+            tracks.len()
+        );
+        let visual_hull = tracks.len();
+        tracks.retain(|track| {
+            let supported = selection_views
+                .iter()
+                .filter(|&&view_index| {
+                    let Some(pixel) = projected_pixel(capture, view_index, track.position) else {
+                        return false;
+                    };
+                    let position = train_views
+                        .iter()
+                        .position(|&view| view == view_index)
+                        .expect("selection views are a subset of training views");
+                    missing[position][pixel]
+                })
+                .count();
+            supported * 4 >= selection_views.len() * 3
+        });
+        println!(
+            "missing tracks: selection-camera missing support retained {} of {visual_hull}",
             tracks.len()
         );
     }
@@ -2289,6 +2298,23 @@ fn write_missing_tracks(
     )?;
     println!("wrote diagnostic views to {}", images.display());
     Ok(())
+}
+
+fn projected_pixel(
+    capture: &train::inverse::capture::Capture,
+    view: usize,
+    point: glam::Vec3,
+) -> Option<usize> {
+    let (pixel, _) = train::inverse::capture::project(
+        &capture.views[view].camera,
+        capture.width,
+        capture.height,
+        point,
+    )?;
+    let x = (pixel[0] - 0.5).round() as isize;
+    let y = (pixel[1] - 0.5).round() as isize;
+    (x >= 0 && y >= 0 && x < capture.width as isize && y < capture.height as isize)
+        .then_some(y as usize * capture.width + x as usize)
 }
 
 fn dump_static_gaussian(

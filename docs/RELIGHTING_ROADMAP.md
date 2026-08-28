@@ -129,14 +129,26 @@ a deterministic repeat agree within the measured training variance.
 - [ ] Integrate only coherent track patches, then run the complete known/held
   quality gate under the existing 12 GiB cgroup protocol.
 
-The first leakage-free diagnostic uses 16 matching, four selection, and four
+The leakage-free diagnostic uses 16 matching, four selection, and four
 validation cameras from the ordinary training set; the ten official test
-cameras and patterns 005/006 remain untouched. It accepts 219 tracks with 3.8
-observations, 0.342-pixel reprojection error, and 50-degree parallax on average.
-On the four validation cameras the track-only cloud places 96.9% of its
-coverage inside the object foreground and covers 9.3% of the foreground the
-current Gaussian misses. Only 47.4% lands specifically in missing rather than
-already covered foreground, so integration must de-duplicate established
-support and screen complete renders instead of appending every track blindly.
-The diagnostic PLY and validation renders are under the ignored
-`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v4/`.
+cameras and patterns 005/006 remain untouched. The first pass accepted 219
+tracks with 3.8 observations, 0.342-pixel reprojection error, and 50-degree
+parallax on average. A selection-only de-duplication screen now also requires
+a track to land in foreground missed by the current Gaussian in at least 75%
+of the selection cameras. A representative run retains 81 tracks; on the four
+validation cameras their footprints have 98.8% foreground precision, 62.7%
+missing-only precision, and 4.3% recall of the missing foreground.
+
+A direct append was tested but not retained. Five-light photometric normals
+and materials plus conservative 0.25 opacity move selection recall
+`65.2%→66.0%` and precision `92.3%→92.4%`, while foreground mean stays at
+16.14 dB to displayed precision and the worst view falls `15.39→15.38` dB.
+That violates the zero-regression gate, so neither the append API nor the
+candidate asset is shipped, and no official test camera or excluded light was
+loaded to tune it. The next implementation should turn neighboring tracks into
+one coherent oriented patch and optimize its support through complete renders,
+not treat every correspondence as an independent fixed-radius disc. Ignored
+diagnostics and telemetry are under
+`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v9/`
+and `/tmp/blade-volume-missing-tracks-v9-gpu.log`; peak scoped memory is 700 MB
+with zero swap, OOM, throttling, or GPU fault.

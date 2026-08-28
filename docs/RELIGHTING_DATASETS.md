@@ -437,16 +437,23 @@ reprojection error is 0.751 pixels.
 On the four validation cameras, 96.9% of track-cloud coverage stays inside the
 foreground and it covers 9.3% of the current Gaussian's missing foreground.
 Missing-only precision is 47.4% because about half the finite track footprints
-overlap foreground the Gaussian already covers. The validation renders trace
-the cup body, rim, and handle from unseen matching views, with some isolated
-dust. This passes the correspondence-source milestone but not the integration
-gate: the next experiment must remove support duplicates, fit the new
-materials, and accept a subset only through complete known-light renders
-before patterns 005/006 are loaded. The exact ignored PLY, renders, and clean
-12 GiB telemetry are under
-`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v4/`
-and `/tmp/blade-volume-missing-tracks-v4-gpu.log`; the run peaks below 1 GiB
-with zero swap, OOM, throttling, or GPU fault.
+overlap foreground the Gaussian already covers. Requiring missing support in
+three of four separate selection cameras retains 81 tracks in a representative
+repeat and moves validation foreground precision to 98.8%, missing-only
+precision to 62.7%, and missing recall to 4.3%.
+
+The validation renders trace the cup body, rim, and handle from unseen
+matching views, with some isolated dust. This passes the correspondence-source
+milestone but not the integration gate. Fitting five-light normals/materials
+and appending the selected points at 0.25 opacity improves selection recall
+`65.2%→66.0%` and precision `92.3%→92.4%`, but the worst foreground PSNR
+falls `15.39→15.38` dB, so the append implementation was removed. No official
+test camera or excluded pattern was loaded for that decision. The next
+experiment must combine neighboring tracks into coherent oriented support and
+optimize its complete render. Exact ignored PLYs, renders, and clean 12 GiB
+telemetry are under
+`target/audit-runs/openillumination/lighting-pattern-audit/{missing-tracks-v4,missing-tracks-v9}/`;
+the latest run peaks at 700 MB with zero swap, OOM, throttling, or GPU fault.
 
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact

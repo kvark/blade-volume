@@ -7923,11 +7923,22 @@ support even though the 3D locations themselves respect the object silhouette.
 
 The track-only renders visibly trace the cup, rim, and handle and transfer to
 the reserved cameras, so explicit correspondence clears the diagnostic
-milestone that owner-depth hypotheses did not. It does not yet clear the asset
-gate. The next prototype should reject additions too close to established
-support, fit a separate multi-light material for the remainder, and screen the
-complete combined render on the four selection cameras before loading official
-test cameras or patterns 005/006. Ignored artifacts are under
-`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v4/`;
-the isolated 12 GiB run peaks below 1 GiB with zero swap, OOM, throttling, Xid,
+milestone that owner-depth hypotheses did not. A second selection-only screen
+now requires a point to project into foreground missed by the established
+Gaussian in at least three of four selection cameras. A representative repeat
+keeps 81 tracks and raises validation missing-only precision from 47.4% to
+62.7%, at the cost of reducing missing recall from 9.3% to 4.3%; foreground
+precision rises from 96.9% to 98.8%.
+
+This still does not clear the asset gate. After five-light photometric normal
+and material fitting, a conservative 0.25-opacity append improves selection
+recall `65.2%→66.0%` and precision `92.3%→92.4%`, but lowers the worst
+foreground view `15.39→15.38` dB while leaving the 16.14 dB mean unchanged to
+displayed precision. The append code was therefore removed without loading
+official test cameras or patterns 005/006 for selection. The next prototype
+should join spatially coherent neighboring tracks into an oriented patch and
+fit its support against complete renders, rather than append independent
+fixed-radius discs. Ignored artifacts are under
+`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v9/`;
+the isolated 12 GiB run peaks at 700 MB with zero swap, OOM, throttling, Xid,
 or GPU fault.

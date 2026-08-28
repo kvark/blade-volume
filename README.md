@@ -58,10 +58,10 @@ a convincing real-world result.
 
 The next quality gate is deliberately narrow:
 
-- match missing-foreground observations across cameras, triangulate them into
-  new point tracks, and recover contiguous Gaussian support without globally
-  widening or adding polygonal geometry; local opacity and owner-derived child
-  heuristics have already failed the known/held-light gate;
+- turn the now-working missing-foreground tracks into coherent oriented cloud
+  patches and recover contiguous Gaussian support without globally widening
+  or adding polygonal geometry; independent fixed-radius track discs improve
+  recall but narrowly fail the zero-regression known-light gate;
 - fit finite-light visibility, indirect transport, and non-diffuse appearance
   after the support is trustworthy;
 - pass two excluded lights on a second same-session object before broadening
