@@ -8051,3 +8051,19 @@ split and reserve a second object or new capture for the final gate; the
 current official split has now been consumed for evaluation. Visibility,
 indirect transport, and clustered roughness remain downstream until this
 continuous-support gate passes.
+
+The first cloud-only resampling control is positive. For each shared-view
+component, every measured oriented surfel is retained exactly and a smaller
+sample is placed at each unique edge to its two nearest neighbors. The added
+radius is half the two endpoints' mean; normals are interpolated and no mesh,
+shader, graph operation, model field, or dependency is involved. The v19 replay
+retains 51 tracks, generates 68 midpoint samples, and keeps 105 points after
+selection. Two runs write the same PLY (SHA-256
+`197d15fd46248282f97b61434cf0272d938fe565b1862c4bba0ba670391d799b`) and
+PNG set. Against the untouched internal validation cameras, missing recall
+improves from 3.3% to 3.8%, missing-only precision from 59.1% to 59.6%, and
+foreground precision from 98.9% to 99.0%. Re-estimating all support from the
+denser centers is a negative control—it shrinks the original discs and lowers
+recall to 2.3%—and its code was removed. Peak 12 GiB scoped memory is 659/672
+MB with no swap, OOM, throttling, or GPU fault. This validates deterministic
+point interpolation, not appearance or a production merge.

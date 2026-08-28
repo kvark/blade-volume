@@ -131,6 +131,8 @@ a deterministic repeat agree within the measured training variance.
   renders.
 - [x] Open the official camera and excluded-light gate only after the repeats;
   reject and remove the append when its tiny internal gain does not transfer.
+- [x] Preserve the verified surfels and add deterministic half-radius samples
+  on their two-nearest local cloud edges; repeat the track-only validation.
 - [ ] Expand the verified tracks into continuous oriented cloud support and fit
   one regularized material field per patch; use fresh held data for its final
   decision rather than retuning against the now-open OpenIllumination split.
@@ -247,3 +249,18 @@ second object for its final decision because the current official split has now
 served its one evaluation. Only after that surface gate passes do finite-light
 visibility, bounded indirect transport, and clustered roughness become
 identifiable enough to pursue.
+
+The first interpolation step is now in the diagnostic. Each oriented track
+surfel stays byte-for-byte unchanged; one half-radius point sample is added at
+each unique edge to its two nearest neighbors inside the shared-view component.
+This is point-cloud resampling, not a polygonal intermediate. The fixed replay
+retains 51 evidence tracks, adds 68 samples, and selection keeps 105 points.
+Two runs emit byte-identical PLYs (SHA-256
+`197d15fd46248282f97b61434cf0272d938fe565b1862c4bba0ba670391d799b`) and
+PNGs. Track-only validation improves missing recall `3.3%→3.8%`, missing
+precision `59.1%→59.6%`, and foreground precision `98.9%→99.0%`; peak memory
+is 659/672 MB with zero swap, OOM, throttling, or GPU fault. A control that
+re-estimated every support radius after interpolation fell to 2.3% recall and
+was removed. This clears deterministic local resampling only. It does not
+resurrect the rejected append: area coverage and a regularized patch material
+still need a fresh complete-render gate.

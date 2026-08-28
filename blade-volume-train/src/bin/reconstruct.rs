@@ -2235,6 +2235,7 @@ fn write_missing_tracks(
         .collect();
     let patches =
         train::inverse::tracks::patches(&tracks, train::inverse::tracks::PatchOptions::default())?;
+    let retained_tracks = patches.iter().map(Vec::len).sum::<usize>();
     let mut patch_surfels = Vec::with_capacity(patches.len());
     for patch in &patches {
         let points: Vec<_> = patch.iter().map(|&index| tracks[index].position).collect();
@@ -2267,16 +2268,20 @@ fn write_missing_tracks(
                 material: 0,
             });
         }
+        // Keep every evidence-backed surfel unchanged. Re-estimating all
+        // spacing after interpolation shrinks the originals and loses validation
+        // coverage; half-radius midpoint samples fill only their local gaps.
+        let surfels = densify_track_patch(&surfels);
         if !surfels.is_empty() {
             patch_surfels.push(surfels);
         }
     }
     let local_points = patch_surfels.iter().map(Vec::len).sum::<usize>();
-    let dropped = tracks.len() - local_points;
+    let dropped = tracks.len() - retained_tracks;
     println!(
-        "missing tracks: {} shared-view patches retained {} points and dropped {dropped} isolated points",
+        "missing tracks: {} shared-view patches retained {retained_tracks} tracks, interpolated {} points, and dropped {dropped} isolated tracks",
         patch_surfels.len(),
-        local_points,
+        local_points.saturating_sub(retained_tracks),
     );
     let mut surfels = Vec::new();
     for (index, patch) in patch_surfels.into_iter().enumerate() {
@@ -2364,6 +2369,45 @@ fn write_missing_tracks(
     )?;
     println!("wrote diagnostic views to {}", images.display());
     Ok(())
+}
+
+fn densify_track_patch(surfels: &[vol::relight::Surfel]) -> Vec<vol::relight::Surfel> {
+    let mut edges = collections::BTreeSet::new();
+    for (left, surfel) in surfels.iter().enumerate() {
+        let center = glam::Vec3::from(surfel.center);
+        let mut nearest: Vec<_> = surfels
+            .iter()
+            .enumerate()
+            .filter(|&(right, _)| right != left)
+            .map(|(right, other)| {
+                (
+                    center.distance_squared(glam::Vec3::from(other.center)),
+                    right,
+                )
+            })
+            .collect();
+        nearest.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+        for &(_, right) in nearest.iter().take(2) {
+            edges.insert((left.min(right), left.max(right)));
+        }
+    }
+    let mut dense = surfels.to_vec();
+    dense.extend(edges.into_iter().map(|(left, right)| {
+        let left = surfels[left];
+        let right = surfels[right];
+        let normal = glam::Vec3::from(left.normal) + glam::Vec3::from(right.normal);
+        vol::relight::Surfel {
+            center: (0.5 * (glam::Vec3::from(left.center) + glam::Vec3::from(right.center)))
+                .to_array(),
+            radius: 0.25 * (left.radius + right.radius),
+            normal: normal
+                .try_normalize()
+                .unwrap_or(glam::Vec3::from(left.normal))
+                .to_array(),
+            material: left.material,
+        }
+    }));
+    dense
 }
 
 struct MissingTrackCoverage {
@@ -2895,6 +2939,34 @@ fn describe_light(environment: &vol::relight::Environment) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn track_patch_densification_adds_each_nearest_edge_once() {
+        let make = |center: [f32; 3]| vol::relight::Surfel {
+            center,
+            radius: 1.0,
+            normal: [0.0, 0.0, 1.0],
+            material: 0,
+        };
+        let surfels = [
+            make([0.0, 0.0, 0.0]),
+            make([1.0, 0.0, 0.0]),
+            make([0.0, 1.0, 0.0]),
+            make([1.0, 1.0, 0.0]),
+        ];
+        let dense = densify_track_patch(&surfels);
+        assert_eq!(
+            dense[..surfels.len()]
+                .iter()
+                .map(|surfel| surfel.center)
+                .collect::<Vec<_>>(),
+            surfels.map(|surfel| surfel.center),
+        );
+        assert_eq!(dense.len(), 8);
+        assert!(dense[surfels.len()..]
+            .iter()
+            .all(|surfel| surfel.radius == 0.5));
+    }
 
     #[test]
     fn density_source_refines_only_foam_surface_prefix() {

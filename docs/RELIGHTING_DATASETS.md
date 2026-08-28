@@ -513,6 +513,17 @@ implementation were removed. The 12 GiB candidate/base evaluations peaked at
 are under `missing-tracks-fixed-held{,-base}` and telemetry is in
 `/tmp/blade-volume-fixed-{candidate,base}-held.log`.
 
+A diagnostic-only point resampling step now preserves those oriented track
+surfels and adds a half-radius sample on each unique two-nearest-neighbor edge
+inside a shared-view component. It adds no polygonal intermediate and does not
+alter the fixed base. The two replay PLYs and PNG directories are byte
+identical; their selected 105-point cloud improves track-only validation
+missing recall `3.3%→3.8%`, missing precision `59.1%→59.6%`, and foreground
+precision `98.9%→99.0%`. Recomputing all support after interpolation instead
+shrinks the evidence points and drops recall to 2.3%, so that control was
+removed. The positive resampling remains diagnostic pending a regularized
+material and complete-render gate on fresh held data.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable
