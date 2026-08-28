@@ -5,6 +5,7 @@
 //! meshes and general-purpose PLY files belong outside the reconstruction
 //! boundary.
 
+use crate::inverse::capture;
 use std::{collections, fs, io, path};
 
 const HEADER_LIMIT: usize = 1024 * 1024;
@@ -27,6 +28,53 @@ pub struct DensePoint {
     pub position: glam::Vec3,
     pub normal: glam::Vec3,
     pub color: [u8; 3],
+}
+
+/// Remove dense samples outside the soft visual hull of the training masks.
+///
+/// Pose-only stereo fusion can retain a depth from a single source image. A
+/// fused point is still object geometry only if its projection lies in the
+/// object silhouette from almost every training camera. The one-in-five
+/// tolerance covers mask resampling and small calibration errors at contours.
+/// Unmasked captures are left unchanged.
+pub fn retain_soft_visual_hull(
+    points: &mut Vec<DensePoint>,
+    capture: &capture::Capture,
+    views: &[usize],
+) -> Option<usize> {
+    let masked_views: Vec<_> = views
+        .iter()
+        .filter_map(|&index| {
+            let view = &capture.views[index];
+            view.mask.as_deref().map(|mask| {
+                (
+                    capture::PixelProjection::new(&view.camera, capture.width, capture.height),
+                    mask,
+                )
+            })
+        })
+        .collect();
+    if masked_views.is_empty() {
+        return None;
+    }
+
+    let before = points.len();
+    points.retain(|point| {
+        let mut support = 0;
+        for &(ref projection, mask) in &masked_views {
+            let Some((pixel, _)) = projection.project(point.position) else {
+                continue;
+            };
+            let x = pixel[0].floor() as isize;
+            let y = pixel[1].floor() as isize;
+            if x < 0 || y < 0 || x >= capture.width as isize || y >= capture.height as isize {
+                continue;
+            }
+            support += (mask[y as usize * capture.width + x as usize] > 0.5) as usize;
+        }
+        support * 5 >= masked_views.len() * 4
+    });
+    Some(before - points.len())
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -358,5 +406,84 @@ mod tests {
         assert!(first
             .iter()
             .all(|point| (point.normal.length() - 1.0).abs() < 1.0e-6));
+    }
+
+    fn masked_capture(masks: impl IntoIterator<Item = Option<Vec<f32>>>) -> capture::Capture {
+        let camera = blade_volume::CameraParams {
+            cam_position: [0.0, 0.0, -2.0],
+            depth: 100.0,
+            cam_orientation: glam::Quat::IDENTITY.to_array(),
+            fov: [1.0; 2],
+            principal: [0.0; 2],
+        };
+        capture::Capture {
+            width: 4,
+            height: 4,
+            views: masks
+                .into_iter()
+                .enumerate()
+                .map(|(index, mask)| capture::View {
+                    name: format!("view-{index}"),
+                    camera,
+                    pixels: vec![[0.0; 3]; 16],
+                    mask,
+                })
+                .collect(),
+        }
+    }
+
+    fn centre_mask(foreground: bool) -> Vec<f32> {
+        let mut mask = vec![0.0; 16];
+        mask[10] = foreground as u8 as f32;
+        mask
+    }
+
+    fn dense_point(position: glam::Vec3) -> DensePoint {
+        DensePoint {
+            position,
+            normal: glam::Vec3::Z,
+            color: [128; 3],
+        }
+    }
+
+    #[test]
+    fn soft_visual_hull_tolerates_one_mask_disagreement() {
+        let capture = masked_capture((0..5).map(|index| Some(centre_mask(index != 4))));
+        let mut points = vec![
+            dense_point(glam::Vec3::ZERO),
+            dense_point(glam::Vec3::new(10.0, 0.0, 0.0)),
+        ];
+
+        assert_eq!(
+            retain_soft_visual_hull(&mut points, &capture, &[0, 1, 2, 3, 4]),
+            Some(1)
+        );
+        assert_eq!(points, [dense_point(glam::Vec3::ZERO)]);
+    }
+
+    #[test]
+    fn soft_visual_hull_uses_only_selected_masked_views() {
+        let capture = masked_capture([
+            Some(centre_mask(true)),
+            Some(centre_mask(true)),
+            Some(centre_mask(false)),
+            None,
+        ]);
+        let mut selected = vec![dense_point(glam::Vec3::ZERO)];
+        let mut all = selected.clone();
+        let mut unmasked = selected.clone();
+
+        assert_eq!(
+            retain_soft_visual_hull(&mut selected, &capture, &[0, 1, 3]),
+            Some(0)
+        );
+        assert_eq!(
+            retain_soft_visual_hull(&mut all, &capture, &[0, 1, 2, 3]),
+            Some(1)
+        );
+        assert_eq!(retain_soft_visual_hull(&mut unmasked, &capture, &[3]), None);
+        assert_eq!(selected.len(), 1);
+        assert!(all.is_empty());
+        assert_eq!(unmasked.len(), 1);
     }
 }

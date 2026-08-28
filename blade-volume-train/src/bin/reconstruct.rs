@@ -416,7 +416,7 @@ fn main() {
                 )
             }
             (None, Some(dense)) => (
-                surfels_from_dense(path::Path::new(dense), &args),
+                surfels_from_dense(path::Path::new(dense), &capture, &train_views, &args),
                 Vec::new(),
                 Vec::new(),
                 None,
@@ -1453,11 +1453,22 @@ fn surfels_from_sparse(
 }
 
 /// Discs from COLMAP dense stereo fusion, retaining its independent normals.
-fn surfels_from_dense(dense: &path::Path, args: &Args) -> Vec<vol::relight::Surfel> {
-    let loaded = train::dense::try_load_colmap_fused(dense).unwrap_or_else(|error| {
+fn surfels_from_dense(
+    dense: &path::Path,
+    capture: &train::inverse::capture::Capture,
+    views: &[usize],
+    args: &Args,
+) -> Vec<vol::relight::Surfel> {
+    let mut loaded = train::dense::try_load_colmap_fused(dense).unwrap_or_else(|error| {
         eprintln!("cannot read dense cloud {}: {error}", dense.display());
         std::process::exit(1);
     });
+    if let Some(rejected) = train::dense::retain_soft_visual_hull(&mut loaded, capture, views) {
+        println!(
+            "geometry: masks rejected {rejected} of {} COLMAP dense points outside the soft visual hull",
+            loaded.len() + rejected,
+        );
+    }
     let points = train::dense::downsample(&loaded, args.dense_max_points);
     println!(
         "geometry: spatially retained {} of {} COLMAP dense points",
