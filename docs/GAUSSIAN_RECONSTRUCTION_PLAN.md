@@ -7896,3 +7896,38 @@ or calibrated multi-light signatures along epipolar lines, require mutual
 agreement, then triangulate. The existing COLMAP track importer, point-cloud
 surface refinement, material solve, and Gaussian fitting can consume those
 points; the missing component is the correspondence source itself.
+
+## Explicit missing-surface track diagnostic (2026-08-28)
+
+That correspondence source is now implemented without changing a production
+asset. Exact Gaussian alpha identifies masked foreground below 50% coverage.
+Compact normalized 3x3 patches in the existing four-light gain-invariant
+response are matched only along the calibrated epipolar segment inside the
+current cloud bounds. A pair must be mutual; a track needs at least three
+cameras, useful parallax, robust multi-ray agreement, sub-pixel reprojection,
+and unique source observations. Synthetic CPU tests cover exact recovery,
+parallel-ray rejection, inconsistent signatures, missing-view support, and
+held-camera exclusion.
+
+The real same-session gate reserves the ordinary training cameras 16/4/4 for
+matching, visual-hull selection, and validation. No official test camera or
+excluded-light image participates. Of 2,026 sampled missing anchors, 2,114
+mutual pairs form 534 multi-view groups; 390 triangulate, 220 survive shared
+observation removal, and 219 survive the four selection masks. Tracks average
+3.8 observations, 0.342-pixel reprojection error, 0.050 response-patch error,
+and 50.0-degree parallax. On the independent four-camera validation slice,
+their finite Gaussian footprints have 96.9% foreground precision and cover
+9.3% of the foreground the established PBR Gaussian misses. Missing-only
+precision is 47.4%, revealing substantial overlap with valid established
+support even though the 3D locations themselves respect the object silhouette.
+
+The track-only renders visibly trace the cup, rim, and handle and transfer to
+the reserved cameras, so explicit correspondence clears the diagnostic
+milestone that owner-depth hypotheses did not. It does not yet clear the asset
+gate. The next prototype should reject additions too close to established
+support, fit a separate multi-light material for the remainder, and screen the
+complete combined render on the four selection cameras before loading official
+test cameras or patterns 005/006. Ignored artifacts are under
+`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v4/`;
+the isolated 12 GiB run peaks below 1 GiB with zero swap, OOM, throttling, Xid,
+or GPU fault.

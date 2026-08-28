@@ -2257,6 +2257,66 @@ pub fn evaluate_views(
     min_alpha: f32,
     background: [f32; 3],
 ) -> Result<Vec<f32>, String> {
+    let rendered = render_views(
+        model,
+        capture,
+        view_indices,
+        candidates_per_pixel,
+        min_alpha,
+        background,
+    )?;
+    Ok(rendered
+        .iter()
+        .zip(view_indices)
+        .map(|(rendered, &view_index)| {
+            let squared_error: f64 = rendered
+                .iter()
+                .zip(&capture.views[view_index].pixels)
+                .map(|(actual, expected)| {
+                    let expected =
+                        glam::Vec3::from(*expected).map(crate::inverse::capture::linear_to_srgb);
+                    (actual.truncate() - expected).length_squared() as f64
+                })
+                .sum();
+            let mse = squared_error / (3 * rendered.len()) as f64;
+            (-10.0 * mse.log10()) as f32
+        })
+        .collect())
+}
+
+/// Render exact composited opacity for complete capture views on the CPU.
+///
+/// This uses the same candidates, response oracle, sort, and alpha composite
+/// as [`evaluate_views`]. It is intended for diagnostics that need to identify
+/// foreground observations a current Gaussian does not explain.
+pub fn render_alpha_views(
+    model: &vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    candidates_per_pixel: usize,
+    min_alpha: f32,
+) -> Result<Vec<Vec<f32>>, String> {
+    Ok(render_views(
+        model,
+        capture,
+        view_indices,
+        candidates_per_pixel,
+        min_alpha,
+        [0.0; 3],
+    )?
+    .into_iter()
+    .map(|view| view.into_iter().map(|pixel| pixel.w).collect())
+    .collect())
+}
+
+fn render_views(
+    model: &vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+    candidates_per_pixel: usize,
+    min_alpha: f32,
+    background: [f32; 3],
+) -> Result<Vec<Vec<glam::Vec4>>, String> {
     model.validate()?;
     if model.sh_degree > 2 || model.transforms.is_none() {
         return Err(
@@ -2288,7 +2348,7 @@ pub fn evaluate_views(
 
     let pixels = capture.width * capture.height;
     let index = CandidateIndex::new(model, capture, view_indices, min_alpha);
-    let mut scores = Vec::with_capacity(view_indices.len());
+    let mut rendered_views = Vec::with_capacity(view_indices.len());
     for &view_index in view_indices {
         let view = &capture.views[view_index];
         let origin = glam::Vec3::from(view.camera.cam_position);
@@ -2308,7 +2368,7 @@ pub fn evaluate_views(
         };
         let candidates =
             record_indexed_candidates(model, &batch, &index, candidates_per_pixel, min_alpha);
-        let rendered = render_candidate_rows(
+        rendered_views.push(render_candidate_rows(
             model,
             &batch.origins,
             &batch.directions,
@@ -2316,20 +2376,9 @@ pub fn evaluate_views(
             &candidates.mask,
             candidates_per_pixel,
             background,
-        );
-        let squared_error: f64 = rendered
-            .iter()
-            .zip(&view.pixels)
-            .map(|(actual, expected)| {
-                let expected =
-                    glam::Vec3::from(*expected).map(crate::inverse::capture::linear_to_srgb);
-                (actual.truncate() - expected).length_squared() as f64
-            })
-            .sum();
-        let mse = squared_error / (3 * pixels) as f64;
-        scores.push((-10.0 * mse.log10()) as f32);
+        ));
     }
-    Ok(scores)
+    Ok(rendered_views)
 }
 
 /// Build a direct, differentiable anisotropic-Gaussian renderer using only
@@ -4460,6 +4509,27 @@ mod tests {
         let capture = synthetic_capture(&truth);
         let scores = evaluate_views(&truth, &capture, &[0, 1], 1, 0.0, [0.0; 3]).unwrap();
         assert!(scores.iter().all(|score| *score > 100.0), "{scores:?}");
+    }
+
+    #[test]
+    fn exact_view_alpha_reports_gaussian_coverage() {
+        let mut truth = model(vec![glam::Vec4::new(0.0, 0.0, 4.0, 0.8)]);
+        truth.transforms.as_mut().unwrap().scales[0] = glam::Vec3::splat(0.5);
+        let capture = synthetic_capture(&truth);
+
+        let alpha = render_alpha_views(&truth, &capture, &[0, 1], 1, 0.0).unwrap();
+
+        assert_eq!(alpha.len(), 2);
+        assert!(alpha
+            .iter()
+            .all(|view| view.len() == capture.width * capture.height));
+        assert!(alpha
+            .iter()
+            .flatten()
+            .all(|value| (0.0..=1.0).contains(value)));
+        assert!(alpha
+            .iter()
+            .all(|view| view.iter().copied().fold(0.0, f32::max) > 0.5));
     }
 
     #[test]

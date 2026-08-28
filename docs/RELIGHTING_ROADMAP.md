@@ -118,14 +118,25 @@ a deterministic repeat agree within the measured training variance.
 
 ## Immediate implementation
 
-- [ ] Add a small Rust module for calibrated ray triangulation, epipolar
+- [x] Add a small Rust module for calibrated ray triangulation, epipolar
   candidate search, mutual descriptor matching, and track validation.
-- [ ] Cover exact synthetic points, weak-parallax rejection, mismatched
+- [x] Cover exact synthetic points, weak-parallax rejection, mismatched
   descriptors, masks, and held-view exclusion with CPU tests.
-- [ ] Add an opt-in diagnostic to `reconstruct` that writes proposed tracks;
+- [x] Add an opt-in diagnostic to `reconstruct` that writes proposed tracks;
   do not mutate the fitted surface yet.
-- [ ] Run it on the fixed OpenIllumination training split and inspect the cloud
+- [x] Run it on the fixed OpenIllumination training split and inspect the cloud
   plus per-stage rejection counts.
 - [ ] Integrate only coherent track patches, then run the complete known/held
   quality gate under the existing 12 GiB cgroup protocol.
 
+The first leakage-free diagnostic uses 16 matching, four selection, and four
+validation cameras from the ordinary training set; the ten official test
+cameras and patterns 005/006 remain untouched. It accepts 219 tracks with 3.8
+observations, 0.342-pixel reprojection error, and 50-degree parallax on average.
+On the four validation cameras the track-only cloud places 96.9% of its
+coverage inside the object foreground and covers 9.3% of the foreground the
+current Gaussian misses. Only 47.4% lands specifically in missing rather than
+already covered foreground, so integration must de-duplicate established
+support and screen complete renders instead of appending every track blindly.
+The diagnostic PLY and validation renders are under the ignored
+`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v4/`.

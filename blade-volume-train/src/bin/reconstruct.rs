@@ -202,6 +202,11 @@ struct Args {
     #[argh(option)]
     pbr_gaussian_output: Option<String>,
 
+    /// diagnostic Gaussian PLY of mutually matched missing-surface tracks;
+    /// requires masks, a PBR Gaussian, and three aligned light captures
+    #[argh(option)]
+    missing_tracks_output: Option<String>,
+
     /// direct Gaussian updates, one third appearance then support (default 1500)
     #[argh(option, default = "1500")]
     gaussian_steps: usize,
@@ -1203,6 +1208,23 @@ fn main() {
         }
     }
 
+    if let Some(ref output) = args.missing_tracks_output {
+        let gaussian = learned_pbr_gaussian
+            .as_ref()
+            .expect("missing-track inputs were validated before reconstruction");
+        write_missing_tracks(
+            gaussian,
+            &capture,
+            &normal_captures,
+            &train_views,
+            path::Path::new(output),
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("cannot reconstruct missing-surface tracks: {error}");
+            std::process::exit(1);
+        });
+    }
+
     if let Some(ref output) = args.output {
         let output = path::Path::new(output);
         if let Err(e) = vol::io::try_save_relight(output, &fitted.scene.model) {
@@ -2021,6 +2043,254 @@ fn score_gaussian_test(
     )))
 }
 
+fn write_missing_tracks(
+    gaussian: &vol::PointCloudModel,
+    capture: &train::inverse::capture::Capture,
+    normal_captures: &[LitCapture],
+    train_views: &[usize],
+    output: &path::Path,
+) -> Result<(), String> {
+    let select = |phase| {
+        train_views
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(position, view)| (position % 6 == phase).then_some(view))
+            .collect::<Vec<_>>()
+    };
+    let selection_views = select(4);
+    let validation_views = select(5);
+    let match_views: Vec<_> = train_views
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(position, view)| (position % 6 < 4).then_some(view))
+        .collect();
+    let response = train::inverse::capture::photometric_response([
+        capture,
+        &normal_captures[0].capture,
+        &normal_captures[1].capture,
+        &normal_captures[2].capture,
+    ])?;
+    let alpha =
+        train::gaussian_splat::render_alpha_views(gaussian, capture, train_views, 64, 1.0e-5)?;
+    let missing: Vec<Vec<bool>> = alpha
+        .iter()
+        .zip(train_views)
+        .map(|(alpha, &view_index)| {
+            let mask = capture.views[view_index]
+                .mask
+                .as_ref()
+                .expect("missing-track masks were validated before reconstruction");
+            alpha
+                .iter()
+                .zip(mask)
+                .map(|(&coverage, &foreground)| coverage < 0.5 && foreground > 0.5)
+                .collect()
+        })
+        .collect();
+    let views: Vec<_> = match_views
+        .iter()
+        .map(|&capture_index| {
+            let position = train_views
+                .iter()
+                .position(|&view| view == capture_index)
+                .expect("match views are a subset of training views");
+            train::inverse::tracks::TrackView {
+                capture_index,
+                missing: &missing[position],
+            }
+        })
+        .collect();
+    let points: Vec<_> = gaussian
+        .points
+        .iter()
+        .map(|point| point.truncate())
+        .collect();
+    let bounds = train::inverse::tracks::WorldBounds::from_points(&points, 0.05)
+        .ok_or_else(|| "cannot derive finite track bounds from the PBR Gaussian".to_string())?;
+    let started = std::time::Instant::now();
+    let (mut tracks, stats) = train::inverse::tracks::find(
+        &response,
+        &views,
+        bounds,
+        train::inverse::tracks::TrackOptions::default(),
+    )?;
+    println!(
+        "missing tracks: {} match / {} selection / {} validation cameras, {} descriptors, {} anchors, {} one-way / {} mutual matches, {} multi-view groups, {} triangulated, {} accepted in {:.1} s",
+        match_views.len(),
+        selection_views.len(),
+        validation_views.len(),
+        stats.eligible_descriptors,
+        stats.anchors,
+        stats.one_way_matches,
+        stats.mutual_matches,
+        stats.multiview_groups,
+        stats.triangulated,
+        stats.accepted,
+        started.elapsed().as_secs_f64(),
+    );
+    if !selection_views.is_empty() {
+        let raw = tracks.len();
+        tracks.retain(|track| {
+            let supported = selection_views
+                .iter()
+                .filter(|&&view_index| {
+                    let Some((pixel, _)) = train::inverse::capture::project(
+                        &capture.views[view_index].camera,
+                        capture.width,
+                        capture.height,
+                        track.position,
+                    ) else {
+                        return false;
+                    };
+                    let x = (pixel[0] - 0.5).round() as isize;
+                    let y = (pixel[1] - 0.5).round() as isize;
+                    x >= 0
+                        && y >= 0
+                        && x < capture.width as isize
+                        && y < capture.height as isize
+                        && capture.views[view_index]
+                            .mask
+                            .as_ref()
+                            .is_some_and(|mask| mask[y as usize * capture.width + x as usize] > 0.5)
+                })
+                .count();
+            supported * 4 >= selection_views.len() * 3
+        });
+        println!(
+            "missing tracks: selection-camera visual hull retained {} of {raw}",
+            tracks.len()
+        );
+    }
+    if tracks.is_empty() {
+        println!("missing tracks: no diagnostic cloud written");
+        return Ok(());
+    }
+    let count = tracks.len() as f32;
+    println!(
+        "missing tracks: {:.1} observations, {:.3} px reprojection, {:.3} descriptor error, {:.1}° parallax on average; {:.3} px worst reprojection",
+        tracks
+            .iter()
+            .map(|track| track.observations.len() as f32)
+            .sum::<f32>()
+            / count,
+        tracks
+            .iter()
+            .map(|track| track.mean_reprojection_error)
+            .sum::<f32>()
+            / count,
+        tracks
+            .iter()
+            .map(|track| track.mean_descriptor_error)
+            .sum::<f32>()
+            / count,
+        tracks
+            .iter()
+            .map(|track| track.parallax_degrees)
+            .sum::<f32>()
+            / count,
+        tracks
+            .iter()
+            .map(|track| track.mean_reprojection_error)
+            .fold(0.0, f32::max),
+    );
+
+    let mut surfels = Vec::with_capacity(tracks.len());
+    for track in &tracks {
+        let mut towards = glam::Vec3::ZERO;
+        let mut radius = 0.0f32;
+        for observation in &track.observations {
+            let camera = &capture.views[observation.view].camera;
+            let origin = glam::Vec3::from(camera.cam_position);
+            towards += (origin - track.position).normalize_or_zero();
+            let distance = origin.distance(track.position);
+            radius += distance * (0.5 * camera.fov[0]).tan() * 2.0 / capture.width as f32;
+        }
+        let count = track.observations.len() as f32;
+        surfels.push(vol::relight::Surfel {
+            center: track.position.to_array(),
+            radius: 1.5 * radius / count,
+            normal: towards.try_normalize().unwrap_or(glam::Vec3::Z).to_array(),
+            material: 0,
+        });
+    }
+    let diagnostic = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Gaussian,
+        surfels,
+        materials: vec![vol::relight::Material::default()],
+    };
+    let model = train::gaussian_splat::from_surface(&diagnostic)?;
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    convert::save_ply(output, &model)
+        .map_err(|error| format!("cannot write {}: {error:?}", output.display()))?;
+    println!("wrote {}", output.display());
+    if !validation_views.is_empty() {
+        let track_alpha = train::gaussian_splat::render_alpha_views(
+            &model,
+            capture,
+            &validation_views,
+            64,
+            1.0e-5,
+        )?;
+        let mut target_sum = 0.0f64;
+        let mut addition_sum = 0.0f64;
+        let mut intersection = 0.0f64;
+        let mut foreground_intersection = 0.0f64;
+        for (track_alpha, &view_index) in track_alpha.iter().zip(&validation_views) {
+            let position = train_views
+                .iter()
+                .position(|&view| view == view_index)
+                .expect("validation views are a subset of training views");
+            let mask = capture.views[view_index]
+                .mask
+                .as_ref()
+                .expect("missing-track masks were validated before reconstruction");
+            for ((&addition, &established), &foreground) in
+                track_alpha.iter().zip(&alpha[position]).zip(mask)
+            {
+                let target = if established < 0.5 && foreground > 0.5 {
+                    1.0
+                } else {
+                    0.0
+                };
+                target_sum += target as f64;
+                addition_sum += addition as f64;
+                intersection += addition.min(target) as f64;
+                foreground_intersection += addition.min(foreground) as f64;
+            }
+        }
+        println!(
+            "missing tracks: validation missing-foreground recall {:.1}%, missing precision {:.1}%, foreground precision {:.1}%",
+            100.0 * intersection / target_sum.max(f64::EPSILON),
+            100.0 * intersection / addition_sum.max(f64::EPSILON),
+            100.0 * foreground_intersection / addition_sum.max(f64::EPSILON),
+        );
+    }
+    let stem = output
+        .file_stem()
+        .map_or_else(|| "tracks".into(), |stem| stem.to_string_lossy());
+    let images = output.with_file_name(format!("{stem}-images"));
+    dump_static_gaussian(
+        &model,
+        capture,
+        if validation_views.is_empty() {
+            &match_views[..match_views.len().min(4)]
+        } else {
+            &validation_views
+        },
+        &images,
+    )?;
+    println!("wrote diagnostic views to {}", images.display());
+    Ok(())
+}
+
 fn dump_static_gaussian(
     model: &vol::PointCloudModel,
     capture: &train::inverse::capture::Capture,
@@ -2225,6 +2495,20 @@ fn validate_lit_captures(args: &Args) -> Result<(), String> {
     }
     if args.render_refine_normals && args.environment.is_none() {
         return Err("rendered normal refinement needs --environment".to_string());
+    }
+    if args.missing_tracks_output.is_some() {
+        if args.pbr_gaussian_output.is_none() {
+            return Err("--missing-tracks-output requires --pbr-gaussian-output".to_string());
+        }
+        if args.masks.is_none() {
+            return Err("--missing-tracks-output requires --masks".to_string());
+        }
+        if args.normal_images.len() < 3 {
+            return Err(
+                "--missing-tracks-output requires at least three --normal-images captures"
+                    .to_string(),
+            );
+        }
     }
     if args.held_out_images.len() != args.held_out_environment.len() {
         return Err(format!(
@@ -2808,6 +3092,7 @@ mod tests {
         assert!(defaults.surface_powerfoam_output.is_none());
         assert!(defaults.gaussian_output.is_none());
         assert!(defaults.pbr_gaussian_output.is_none());
+        assert!(defaults.missing_tracks_output.is_none());
         assert!(defaults.held_out_images.is_empty());
         assert!(defaults.held_out_environment.is_empty());
         assert_eq!(defaults.gaussian_steps, 1_500);
@@ -3102,6 +3387,41 @@ mod tests {
         ]);
         validate_lit_captures(&paired).unwrap();
         assert_eq!(paired.normal_images.len(), 2);
+    }
+
+    #[test]
+    fn missing_track_diagnostic_requires_independent_inputs() {
+        let parse = |extra: &[&str]| {
+            let mut arguments = vec!["--sparse", "sparse", "--images", "images"];
+            arguments.extend_from_slice(extra);
+            <Args as argh::FromArgs>::from_args(&["reconstruct"], &arguments).unwrap()
+        };
+        let output_only = parse(&["--missing-tracks-output", "tracks.ply"]);
+        assert!(validate_lit_captures(&output_only).is_err());
+
+        let complete = parse(&[
+            "--masks",
+            "masks",
+            "--environment",
+            "light-0.f32",
+            "--pbr-gaussian-output",
+            "pbr.ply",
+            "--missing-tracks-output",
+            "tracks.ply",
+            "--normal-images",
+            "light-1",
+            "--normal-environment",
+            "light-1.f32",
+            "--normal-images",
+            "light-2",
+            "--normal-environment",
+            "light-2.f32",
+            "--normal-images",
+            "light-3",
+            "--normal-environment",
+            "light-3.f32",
+        ]);
+        validate_lit_captures(&complete).unwrap();
     }
 
     #[test]

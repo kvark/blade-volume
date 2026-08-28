@@ -415,6 +415,39 @@ scoped host memory, uses no swap, and records no OOM, socket throttling, or GPU
 fault. The RTX 5070 finishes at 49 °C. Exact ignored outputs and telemetry are under
 `target/audit-runs/openillumination/lighting-pattern-audit/{fit8-score64-final,grouped-five-importer-final,selector-*}`.
 
+### Explicit missing-surface tracks
+
+The first implementation after that boundary is diagnostic-only. It computes
+the exact current Gaussian alpha, takes masked foreground below 50% coverage,
+and matches 3x3 four-light gain-invariant response patches along calibrated
+epipolar lines. Matches must be mutual, triangulate with at least three
+cameras, stay below one-pixel reprojection error, and pass a separately
+reserved visual-hull screen. It adds no graph operation, shader, model field,
+or dependency and does not mutate either production asset.
+
+The fixed training set is split 16/4/4 into matching, selection, and validation
+cameras. The ten official test cameras and excluded patterns 005/006 remain
+untouched. The rejection funnel is 7,990 eligible descriptors, 2,026 sampled
+anchors, 2,114 mutual pair matches, 534 multi-view groups, 390 triangulations,
+220 observation-unique tracks, and 219 after the selection-camera visual hull.
+Accepted tracks average 3.8 observations, 0.342 pixels reprojection error,
+0.050 normalized descriptor error, and 50.0 degrees parallax; the worst mean
+reprojection error is 0.751 pixels.
+
+On the four validation cameras, 96.9% of track-cloud coverage stays inside the
+foreground and it covers 9.3% of the current Gaussian's missing foreground.
+Missing-only precision is 47.4% because about half the finite track footprints
+overlap foreground the Gaussian already covers. The validation renders trace
+the cup body, rim, and handle from unseen matching views, with some isolated
+dust. This passes the correspondence-source milestone but not the integration
+gate: the next experiment must remove support duplicates, fit the new
+materials, and accept a subset only through complete known-light renders
+before patterns 005/006 are loaded. The exact ignored PLY, renders, and clean
+12 GiB telemetry are under
+`target/audit-runs/openillumination/lighting-pattern-audit/missing-tracks-v4/`
+and `/tmp/blade-volume-missing-tracks-v4-gpu.log`; the run peaks below 1 GiB
+with zero swap, OOM, throttling, or GPU fault.
+
 The initial pass must report mean and worst held-camera PSNR, coverage, image
 comparisons, point count, training time, peak cgroup memory, and the exact
 object/light selection. A result is useful only if it beats a capture-light
