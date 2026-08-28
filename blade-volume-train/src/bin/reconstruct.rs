@@ -1485,6 +1485,29 @@ fn surfels_from_dense(
         let shared = visibility.iter().filter(|views| views.len() > 1).count();
         let maximum = visibility.iter().map(<[u32]>::len).max().unwrap_or(0);
         let source_images: collections::HashSet<_> = visibility.iter().flatten().copied().collect();
+        if let Some(workspace) = dense.parent() {
+            let images_path = workspace.join("sparse/images.bin");
+            if images_path.is_file() {
+                let images = train::colmap::try_load_images(&images_path).unwrap_or_else(|error| {
+                    eprintln!(
+                        "cannot map dense provenance through {}: {error}",
+                        images_path.display()
+                    );
+                    std::process::exit(1);
+                });
+                if let Some(source) = source_images
+                    .iter()
+                    .copied()
+                    .find(|&source| source as usize >= images.len())
+                {
+                    eprintln!(
+                        "dense provenance image index {source} is outside the {} workspace images",
+                        images.len()
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
         println!(
             "geometry: dense provenance covers {} source images, {:.1} observations per point, {:.1}% multi-view (at most {maximum})",
             source_images.len(),

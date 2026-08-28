@@ -33,8 +33,9 @@ pub struct DensePoint {
 /// Source-image indices recorded beside a COLMAP fused point cloud.
 ///
 /// COLMAP stores this as a compact `fused.ply.vis` stream in the same point
-/// order as `fused.ply`. Keeping the flattened representation avoids one heap
-/// allocation per dense point on million-point captures.
+/// order as `fused.ply`. An index addresses the registered-image order in the
+/// dense workspace's `sparse/images.bin`. Keeping the flattened representation
+/// avoids one heap allocation per dense point on million-point captures.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DenseVisibility {
     offsets: Vec<usize>,

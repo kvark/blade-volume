@@ -49,7 +49,7 @@ const HIGH_VIEW_PBR_INITIAL_OPACITY: f32 = 0.25;
 // Matches the production PBR Gaussian renderer's response cutoff.
 const PBR_RENDER_MIN_ALPHA: f32 = 3.0e-2;
 const PBR_MIN_PERSISTED_OPACITY: f32 = 0.05;
-const PBR_MIN_RETAINED_DIVISOR: usize = 4;
+const PBR_MIN_RETAINED_DIVISOR: usize = 3;
 const STATIC_CONTINUATION_MIN_VALIDATION_GAIN_DB: f32 = 0.05;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
@@ -965,7 +965,7 @@ fn initialize_pbr_opacity(model: &mut vol::PointCloudModel, view_count: usize) {
 /// Restore established opacity and scale when fitting would persist a nearly
 /// empty PBR cloud.
 ///
-/// The quarter-cloud threshold is deliberately permissive: selected synthetic
+/// The one-third-cloud threshold is deliberately permissive: selected synthetic
 /// and production fits retain more than four fifths of their inputs, while a
 /// collapse below this bound no longer represents the reconstructed surface.
 /// Learned appearance and later center updates remain intact.
@@ -4227,7 +4227,7 @@ mod tests {
             .all(|&scale| scale == glam::Vec3::splat(0.3)));
 
         let mut bounded = established.clone();
-        for point in &mut bounded.points[2..] {
+        for point in &mut bounded.points[3..] {
             point.w = 0.01;
         }
         bounded
@@ -4238,7 +4238,7 @@ mod tests {
             .fill(glam::Vec3::splat(0.02));
         let guard = guard_pbr_support(&mut bounded, &established).unwrap();
         assert!(!guard.restored);
-        assert_eq!(guard.retained, 2);
+        assert_eq!(guard.retained, 3);
         assert!(bounded
             .transforms
             .unwrap()

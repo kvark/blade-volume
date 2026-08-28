@@ -8089,8 +8089,59 @@ result is `17.30/15.40` dB. Requiring four sources is worse. The reducer and
 flag are removed.
 
 The compact `.vis` parser remains because it validates a reconstruction input
-and preserves the positive provenance needed by the next experiment. That
-experiment must map COLMAP image indices to calibrated cameras and compare
-front-most reprojected depth layers before downsampling. An absent source index
-must not be treated as negative visibility, and source count alone must not
-change a production cloud.
+and preserves positive provenance through later surface experiments. An absent
+source index must not be treated as negative visibility, and source count alone
+must not change a production cloud.
+
+The source indices map exactly through the registered-image order written in
+the dense workspace's `sparse/images.bin`; reconstruction now validates that
+mapping when the workspace accompanies the PLY. A temporary front-most depth
+counter then projected all masked dense candidates into the construction
+cameras. At a 0.25% relative depth tolerance, requiring eight supporting
+cameras improves the internal scalar foreground mean/worst from
+`18.38/17.32` to `18.58/17.70` dB. It is nevertheless a decisive Gaussian
+failure: 1,773 of 2,499 particles are pruned and recall falls to 37.0%.
+Requiring twelve cameras lowers scalar quality and reaches only 43.7% Gaussian
+recall. A 5,000-point eight-camera control still prunes 3,428 particles and
+reaches 35.8% recall. The counter, filter, test, and CLI flag are removed.
+
+The audit exposed the upstream cause of the one-source cloud. The imported
+OpenIllumination sparse model supplies calibrated poses but zero sparse tracks;
+COLMAP derives its stereo-fusion traversal graph from shared sparse tracks, so
+the graph is empty and even compatible depth maps are never compared. Merely
+raising `StereoFusion.min_num_pixels` therefore emits zero points. For a
+bounded external diagnostic, one non-geometric all-image track was supplied
+only to the MVS workspace as an overlap hint. It does not enter blade-volume
+or the reconstructed asset. The unchanged COLMAP depth, reprojection, and
+normal checks then produce 121,346 `min2` points supported by 3.7 images on
+average and 64,025 `min3` points supported by 5.2 images on average.
+
+Both genuine multi-view inputs fail the complete selection bar. With all 38
+authorized construction cameras, `min2` reaches
+`26.23/25.37;16.56/16.05` dB known-light whole/foreground, pattern 005 reaches
+`24.81/24.27;14.80/14.05`, and pattern 006 reaches
+`23.34/22.65;13.16/12.43`. `min3` improves several excluded-light foreground
+tails but reaches `26.16/25.13;16.58/15.96` on the known light,
+`24.80/24.31;14.86/14.20` on pattern 005, and
+`23.40/22.82;13.19/12.46` on pattern 006. Relative to the selected sampled
+Gaussian, both lose whole-frame means and roughly two points of precision;
+neither is selected. A separate 33-camera construction-only control similarly
+passes an internal tail but is mixed on the untouched official cameras.
+
+These controls also reveal a discontinuity in the existing PBR support guard.
+The selected one-source fit retains 24% of its particles, trips the old
+quarter-cloud guard, and restores full established support. The clean fusion
+fits retain 27–30%, evade that guard, and render only 36–37% recall. The guard
+now rejects fits below one third. Successful synthetic and production fits
+retain over 80%, and the selected checkpoint was already rejected by the old
+threshold, so its output is unchanged. This is retained as a robustness fix;
+the overlap hint, source filters, diagnostic binaries, and new cloud inputs
+remain outside version control.
+
+The next surface implementation should represent overlap explicitly without a
+fake sparse point, retain each fused observation group through initialization,
+and optimize one Gaussian support per group through complete renders before
+global spatial reduction. A fresh scene or new camera split must choose it;
+the official painted-toy split has now served this diagnostic. Lighting
+calibration, roughness, and unknown-environment fitting remain blocked on that
+surface gate.

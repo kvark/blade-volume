@@ -53,7 +53,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | active; provenance audited | Map fused source-image indices back to calibrated cameras, then select one front-most cross-view depth layer before allocating the point budget | A 5,000-point cloud retains useful support instead of pruning 72% of its PBR particles |
+| Representation scale | active; fusion cause isolated | Supply a real image-overlap graph to pose-only MVS, retain its grouped depth evidence, and let complete Gaussian renders select support before spatial reduction | A denser cloud improves whole-frame and foreground mean/tail on fresh cameras and two excluded lights without losing precision |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
@@ -138,14 +138,36 @@ The fresh-object split now rules out seven tempting shortcuts:
   Gaussian result loses mean quality and 1.4 points of precision. At 5,000
   points it still leaves only 1,332 useful Gaussian particles. Source count is
   provenance, not evidence that samples belong to the same surface layer.
+- Reprojected front-most counts do not fix ownership either. Requiring eight
+  cameras raises the internal scalar foreground result from `18.38/17.32` to
+  `18.58/17.70` dB, but the Gaussian retains only 726 of 2,499 particles and
+  recall falls to 37.0%. At twelve cameras recall is 43.7% with a scalar
+  regression. Both the flag and implementation were removed.
+- The pose-only OpenIllumination model has no sparse tracks, so COLMAP's fusion
+  overlap graph is empty and `min1` cannot traverse to another image. An
+  external all-camera overlap hint makes the unchanged depth/reprojection/
+  normal checks produce 121,346 genuine `min2` points (3.7 source images on
+  average) or 64,025 `min3` points (5.2 on average). Both are mixed on the
+  official ten-camera/two-light gate: they improve several foreground tails
+  but lose whole-frame means and about two points of precision. They are not
+  selected. The durable fix is an explicit capture-stage overlap graph, not a
+  synthetic geometry track.
+- The PBR support guard previously accepted a fit when exactly one quarter of
+  its particles survived. The clean controls retain 27–30% yet render only
+  37% recall, so the permissive boundary moves to one third. Established
+  successful fits retain more than 80%; the selected cloud was already below
+  the old boundary and is unchanged. This removes an arbitrary quality cliff
+  without selecting either new fusion input.
 
-The next implementation moves the decision upstream of downsampling. Preserve
-which camera, pixel, depth estimate, and confidence produced each dense point;
-form local point-only compatibility groups by reprojection, normal agreement,
-and front-most depth ordering; then allocate the 2,500/5,000-point budget from
-one consistent layer per group. The selected 2,500-point model remains fixed
-until that ownership pass improves the construction/selection/validation split
-and both excluded lights. No polygonal intermediate or fallback is introduced.
+The next implementation moves the decision upstream of downsampling. Build an
+explicit image-overlap graph from calibrated point-cloud observations even when
+the imported pose model has no sparse tracks. Preserve each fused group's
+camera, pixel, depth, normal, and confidence evidence; initialize one Gaussian
+support from that group instead of averaging unrelated samples in a voxel; and
+accept it only through complete point-cloud renders. The selected 2,500-point
+model remains fixed until that ownership pass improves a fresh
+construction/selection/validation split and both excluded lights. No polygonal
+intermediate or fallback is introduced.
 
 ## Milestones
 
@@ -281,8 +303,12 @@ a deterministic repeat agree within the measured training variance.
   that the selected `min1` cloud contains exactly one source per point.
 - [x] Test and reject equal source weighting plus a minimum-source voxel rule;
   it does not establish cross-view depth agreement and loses the adjacent gate.
-- [ ] Map source-image indices to calibrated cameras and assign front-most
-  cross-view surface ownership before spatial downsampling.
+- [x] Map source-image indices through the dense workspace and test/reject a
+  front-most projection-count filter at adjacent thresholds.
+- [x] Isolate the empty-overlap failure in pose-only COLMAP fusion and test
+  genuine two/three-view fused controls on the full official scoreboard.
+- [ ] Produce an explicit overlap graph without synthetic geometry and retain
+  grouped fusion observations through Gaussian support initialization.
 - [ ] Repeat the fixed 2,500/5,000-point gate from one persisted candidate set;
   require both scalar and Gaussian PBR to improve before changing the default.
 

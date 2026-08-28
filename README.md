@@ -72,7 +72,9 @@ The next quality gate is deliberately narrow:
   the real 5,000-point cloud contains contradictory depth layers that its
   opacity optimizer correctly suppresses. The selected 2,500-point surface
   therefore remains the production checkpoint. Its paired COLMAP provenance
-  confirms that every `min1` dense sample came from only one source image;
+  confirms that every `min1` dense sample came from only one source image.
+  Pose-only MVS has no sparse overlap graph; genuine two/three-view fusion was
+  recovered diagnostically but remains mixed on the official image gate;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and
