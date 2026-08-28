@@ -7821,3 +7821,42 @@ the missing ray near the owner's depth, retain the parent for its established
 rays, and accept the child only after cross-view geometry plus known-light
 appearance validation. It remains a point-cloud operation and can reuse the
 existing Gaussian split/remap machinery.
+
+## Rejected ownership-triggered Gaussian child (2026-08-28)
+
+A follow-up separated geometry and appearance instead of changing the owner's
+opacity. Repeated owners were capped to the existing 5% densification budget.
+Each retained parent received at most one child at the deficit-weighted mean of
+its exact maximum-response points, with the established child covariance
+scale. The child received a distinct diffuse material solved from the same
+pixels across all five aligned known lights. Complete training masks selected
+a child prefix with non-decreasing precision. The experiment ran after PBR
+attachment, so it needed no surface/point index fork, shader, graph operation,
+or new persisted field.
+
+On the exact saved control, the screen selects 19 children. CPU training-mask
+recall moves `66.67%→68.41%` with precision `90.95%→90.99%`; production
+held-camera recall moves `66.32%→68.51%` while precision is effectively flat
+at `86.86%`. The spatial signal again transfers, but appearance does not clear
+the gate. Known-light quality falls from
+`24.22/23.05;16.34/14.83` to `24.03/23.04;16.15/14.71` dB
+whole/foreground, and where-hit quality falls `14.09→13.95` dB.
+Pattern 005 is mixed at `23.02/20.82;13.92/12.10` dB and loses 0.10 dB
+where-hit quality. Pattern 006 improves to
+`22.42/19.44;13.03/10.62` dB and gains 0.07 dB where-hit quality. Blending
+only one quarter of the fitted child albedo into the parent material makes the
+known-light regression larger, so raw material-step magnitude is not the
+cause.
+
+The implementation and paired scorer are removed. Both deterministic probes
+peak below 1.14 GB in isolated 12 GiB scopes with zero swap, OOM, throttling,
+Xid, or GPU fault. Ignored logs remain under
+`target/audit-runs/ownership-split/{paired,paired-blend025}.stdout.log`.
+
+Repeated ownership of one parent is not a cross-view correspondence: different
+missing pixels around a broad Gaussian can describe different physical surface
+points, and averaging their response points invents a child between them. The
+next geometry proposal must first match missing rays across cameras (using
+calibrated epipolar proximity plus their multi-light appearance signature),
+then triangulate one point from each coherent ray group. Only after that should
+the ordinary point-cloud support and material fits evaluate the proposal.
