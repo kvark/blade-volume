@@ -162,6 +162,7 @@ impl MeshReferenceTracer {
             name: "mesh-ref-blas",
             ty: gpu::AccelerationStructureType::BottomLevel,
             size: blas_sizes.data,
+            updatable: false,
         });
 
         // The mesh is already in world space, so one identity instance.
@@ -184,6 +185,7 @@ impl MeshReferenceTracer {
             name: "mesh-ref-tlas",
             ty: gpu::AccelerationStructureType::TopLevel,
             size: tlas_sizes.data,
+            updatable: false,
         });
 
         let tlas_scratch_offset =

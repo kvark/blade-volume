@@ -169,6 +169,7 @@ impl GaussianGpuCloud {
             name: "blas",
             ty: gpu::AccelerationStructureType::BottomLevel,
             size: blas_sizes.data,
+            updatable: false,
         });
 
         // Build instances
@@ -210,6 +211,7 @@ impl GaussianGpuCloud {
             name: "TLAS",
             ty: gpu::AccelerationStructureType::TopLevel,
             size: tlas_sizes.data,
+            updatable: false,
         });
 
         let tlas_scratch_offset =

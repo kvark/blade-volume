@@ -7749,3 +7749,30 @@ Together these controls narrow the next support algorithm: it must identify a
 local composited contributor on an actual missing ray (and cross-check that
 assignment in other cameras). Fusion provenance and whole-mask opacity are
 useful evidence, but neither is that ownership signal by itself.
+
+## Blade dependency synchronization (2026-08-28)
+
+Blade advanced to merged revision `357777a`, which adds an explicit
+`AccelerationStructureDesc::updatable` contract. Meganeura `main` still
+named the previous Blade revision, so updating blade-volume alone produced two
+incompatible `blade-graphics` types. The minimal Meganeura dependency-only
+update is pushed as `deps/blade-357777a` at `e4debf3`; it changes two revisions
+and no Rust or shader source. Formatting, all-target check, clippy with denied
+warnings, and the serialized all-target RTX 5070 suite pass. The test scope
+peaks at 8,955,150,336 bytes inside 12 GiB with zero swap, OOM, throttling, or
+GPU fault.
+
+This workspace pins that exact tested Meganeura commit together with Blade
+`357777a` and its matching `blade-egui`. Its three static acceleration paths
+declare their BLAS and TLAS non-updatable; no allocation or build behavior
+otherwise changes. Once the Meganeura branch lands, the next routine uprev
+should name the merged revision so no dependency fork remains.
+
+Two exact five-light replicas and an adjacent old-dependency control show no
+quality regression beyond the existing atomic-fit spread. The old control's
+Gaussian known-light/held-light tails are `22.85/20.60/19.23` dB; the two
+updated runs reach `23.18/20.71/19.37` and `23.18/20.82/19.39` dB. Updated
+wall times are 32.6 and 32.2 seconds versus 32.4 seconds for the control, and
+all three peak below 826 MiB with clean cgroup and GPU counters. Ignored
+outputs remain under
+`target/audit-runs/openillumination/lighting-pattern-audit/{blade-357777a-five-score64,blade-357777a-five-score64-repeat,blade-95f5004-adjacent-control}/`.
