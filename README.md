@@ -53,8 +53,10 @@ a convincing real-world result.
 
 The next quality gate is deliberately narrow:
 
-- recover contiguous Gaussian support from multi-view foreground evidence
-  without globally widening or adding polygonal geometry;
+- match missing-foreground observations across cameras, triangulate them into
+  new point tracks, and recover contiguous Gaussian support without globally
+  widening or adding polygonal geometry; local opacity and owner-derived child
+  heuristics have already failed the known/held-light gate;
 - fit finite-light visibility, indirect transport, and non-diffuse appearance
   after the support is trustworthy;
 - pass two excluded lights on a second same-session object before broadening

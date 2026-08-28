@@ -393,11 +393,22 @@ seconds. Production screens also reject one temporary appearance table per
 particle and light: it gains small foreground PSNR but loses 1.3 recall points
 and a known-light tail. Applying finite-light visibility plus one bounce as a
 fixed per-particle factor raises recall by 0.8 point but loses 0.50/0.56 dB on
-known-light Gaussian mean/tail and lowers precision. The next algorithmic
-target is therefore a batched multi-view support
-objective that assigns missing foreground evidence to local Gaussian geometry,
-followed by finite-light visibility and indirect transport. More global radius,
-opacity, or iteration knobs are not supported by this gate.
+known-light Gaussian mean/tail and lowers precision.
+
+Exact missing-ray ownership narrows the boundary further. Updating only the
+largest current compositing weight on repeated camera rays does improve recall
+and precision, but paints that particle's established appearance over new
+support and loses known-light quality. Giving an owner a separate child and a
+five-light material still fails because its missing rays are not necessarily
+one physical point. Even an owner-depth child whose gain-invariant image patch
+is consistent across four cameras fails the complete silhouette screen; when
+forced, it lowers both precision and every known/held whole-frame mean. The
+next target is therefore not another ownership-weighted update. It is an
+explicit correspondence source: mutually match missing-foreground descriptors
+or calibrated multi-light signatures across cameras, triangulate coherent
+tracks into points, then let the existing point-cloud geometry, support, and
+material fits evaluate them. More global radius, opacity, or iteration knobs
+are not supported by this gate.
 
 The final converged-evaluation run takes 32.1 seconds and peaks at 801 MB of
 scoped host memory, uses no swap, and records no OOM, socket throttling, or GPU
@@ -428,11 +439,13 @@ cycled or strobed during one trajectory.
 
 ## Implementation order
 
-1. Replace global support widening with per-ray surface responsibility. A
-   candidate must identify which depth layer owns a foreground observation,
-   using multi-view mask and foam evidence without treating every silhouette
-   pixel as a request to widen every overlapping point. Select it on withheld
-   training cameras using foreground PSNR and mask precision/recall.
+1. Build sparse tracks from missing foreground observations. Match a compact
+   local descriptor or four-light gain-invariant signature along calibrated
+   epipolar lines, require a mutual match in several cameras, and triangulate
+   one new point per coherent group. Treat current Gaussian ownership only as
+   a search-depth prior, never as the correspondence itself. Select additions
+   on withheld training cameras using foreground PSNR and mask
+   precision/recall.
 2. Once that surface gate passes, revisit visibility and indirect transport
    together. The current scalar control proves they are not useful while the
    support is fragmented; enabling only one half can also trade an over-bright
