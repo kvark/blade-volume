@@ -13,6 +13,15 @@ use std::thread;
 const MAX_RENDERED_ALBEDO_COORDINATES: usize = 96;
 const RENDERED_NORMAL_COVERAGE_WEIGHT: f32 = 0.1;
 
+/// Whether the final Gaussian material pass is the bounded, independently
+/// validated large-table transfer rather than the shared-palette solver.
+pub fn automatic_gaussian_material_transfer(
+    material_count: usize,
+    individual_materials: bool,
+) -> bool {
+    individual_materials && material_count > MAX_RENDERED_ALBEDO_COORDINATES / 3
+}
+
 /// One photograph used by [`refine`].
 #[derive(Clone, Copy)]
 pub struct RefinementView<'a> {
@@ -2193,6 +2202,13 @@ mod tests {
         let gain = fit_global_albedo_gain(&base, &response, &target, 2.0);
         assert!((gain - 0.375).abs() < 1.0e-4, "recovered {gain}");
         assert!((conservative_global_albedo_gain(gain) - 0.6875).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn only_a_large_individual_table_transfers_automatically() {
+        assert!(automatic_gaussian_material_transfer(33, true));
+        assert!(!automatic_gaussian_material_transfer(32, true));
+        assert!(!automatic_gaussian_material_transfer(33, false));
     }
 
     #[test]

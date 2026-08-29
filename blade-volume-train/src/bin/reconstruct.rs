@@ -242,7 +242,8 @@ struct Args {
     #[argh(switch)]
     render_refine_radii: bool,
 
-    /// refine final diffuse materials against complete renders
+    /// explicitly refine shared diffuse materials against complete renders;
+    /// large individual Gaussian tables transfer automatically
     #[argh(switch)]
     render_refine_materials: bool,
 
@@ -1205,7 +1206,13 @@ fn main() {
             eprintln!("cannot attach final PBR attributes to Gaussian geometry: {error}");
             std::process::exit(1);
         });
-        if args.render_refine_materials && multilight_geometry_fitted {
+        if multilight_geometry_fitted
+            && (args.render_refine_materials
+                || train::inverse::refine::automatic_gaussian_material_transfer(
+                    fitted.scene.model.materials.len(),
+                    args.materials == 0,
+                ))
+        {
             let stats = train::inverse::refine::polish_gaussian_materials(
                 &fitted.scene,
                 gaussian,

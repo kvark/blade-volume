@@ -651,12 +651,12 @@ coverage. Missing foreground accounts for only 1.5%; false support accounts
 for 18.7%. Covered foreground is substantially too bright, so adding more
 points is not the first correction for this residual.
 
-`--render-refine-materials` now gives a large one-per-particle table one
-bounded final-Gaussian proposal. Current and zero diffuse renders define a
-secant surrogate under identical transport samples. A scalar is fitted only on
-covered construction foreground, half of its displacement from identity is
-applied, and an exact complete construction render accepts or rejects it.
-Small shared palettes retain their existing joint solver. Scalar geometry and
+A large table created in individual-material mode now receives one bounded final-Gaussian
+proposal automatically. Current and zero diffuse renders define a secant
+surrogate under identical transport samples. A scalar is fitted only on covered
+construction foreground, half of its displacement from identity is applied,
+and an exact complete construction render accepts or rejects it. Small shared
+palettes retain their existing explicit joint solver. Scalar geometry and
 large-table material assignments do not move.
 
 | Gaussian transfer | Known-light whole / foreground | Excluded 005 whole / foreground | Excluded 006 whole / foreground | Recall / precision |
@@ -665,16 +665,34 @@ large-table material assignments do not move.
 | Fabric toy, gain `0.631581` | `27.54/26.47;18.76/17.60` | `24.35/23.24;14.80/13.39` | `25.04/22.71;15.43/13.25` | `96.1/89.1%` |
 | Painted toy, matched before | `26.38/25.60;16.56/15.77` | `24.98/24.47;14.87/14.07` | `23.45/22.87;13.19/12.38` | `93.3/89.5%` |
 | Painted toy, gain `0.765983` | `26.91/25.98;17.03/16.18` | `25.63/25.15;15.52/14.58` | `24.32/23.24;14.07/12.97` | `93.3/89.5%` |
+| Fresh metal sculpture, exact before | `25.57/23.33;16.39/14.36` | `23.78/22.16;13.33/12.75` | `24.02/22.56;13.55/12.73` | `87.2/74.5%` |
+| Fresh metal sculpture, gain `0.616812` | `26.46/24.04;17.05/14.80` | `24.77/23.27;14.33/13.26` | `25.11/23.09;14.64/13.34` | `87.2/74.5%` |
 
-Every matched image mean/tail improves on both objects and geometry metrics
-are identical. The full painted-toy training optimum was rejected after a
-0.05 dB known-light whole-frame tail loss; the halfway correction clears that
+Every matched image mean/tail improves on all three objects and geometry
+metrics are identical. The full painted-toy training optimum was rejected
+after a 0.05 dB known-light whole-frame tail loss; the halfway correction clears that
 tail. These gains still leave both objects below their strongest trivial
 excluded-light foreground baselines. This is a representation-transfer fix,
 not evidence that the recovered lighting and surface properties are yet good.
+The third object, `obj_45_metal_lizard`, was selected before inspecting any
+photographs or results. Its 61,648 native depth groups come from 233,072
+construction-only observations; the hull rejects 17,480 groups and retains a
+fixed 2,499-point surface. Only 1,664 particles are observed by the training
+photographs. The exact control removes the accepted gain from the same
+persisted Gaussian and scores both variants in one process, so its unchanged
+87.2/74.5% recall/precision is not obscured by atomic fitting variance. It
+selects the automatic large-individual-table path, but the render still misses
+thin disconnected parts and loses badly to both excluded-light foreground
+baselines. The next problem is surface ownership and specular material, not
+another global colour correction.
+
 The exact runs and telemetry are under
 `target/audit-runs/openillumination/obj{29,31}-conservative-gaussian-material/`;
-they peak at 1.00/0.93 GiB with zero swap, OOM, or GPU fault.
+the fresh exact comparison is under `obj45-global-material/`, and its no-flag
+automatic-path confirmation is under `obj45-auto-confirm2/`. Reconstruction
+peaks at 1.00/0.93/0.82 GiB with zero swap, OOM, or GPU fault. PatchMatch runs
+in a separate 10 GiB container scope and completes in 6.9 minutes without a
+CUDA or GPU fault.
 
 These controls leave a narrower next step: derive local depth from per-view
 photometric normals, anchor it with verified tracks, and require another

@@ -177,7 +177,8 @@ struct Args {
     #[argh(switch)]
     render_refine_radii: bool,
 
-    /// refine final diffuse materials against complete renders
+    /// explicitly refine shared diffuse materials against complete renders;
+    /// large individual Gaussian tables transfer automatically
     #[argh(switch)]
     render_refine_materials: bool,
 
@@ -1716,7 +1717,13 @@ fn main() {
         }
         train::gaussian_splat::attach_pbr(gaussian, &fitted.scene.model)
             .unwrap_or_else(|error| fail(error));
-        if args.render_refine_materials && multilight_geometry_fitted {
+        if multilight_geometry_fitted
+            && (args.render_refine_materials
+                || train::inverse::refine::automatic_gaussian_material_transfer(
+                    fitted.scene.model.materials.len(),
+                    args.materials == 0,
+                ))
+        {
             let stats = train::inverse::refine::polish_gaussian_materials(
                 &fitted.scene,
                 gaussian,

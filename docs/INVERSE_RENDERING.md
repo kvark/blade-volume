@@ -261,18 +261,20 @@ the same for `--pbr-gaussian-output`. This is the production counterpart of
 the synthetic held-light gate; the ranked real datasets and first protocol are
 in [Relighting capture and dataset ladder](RELIGHTING_DATASETS.md).
 
-`--render-refine-materials` optionally finishes diffuse materials against
-complete production renders of every training view. A table of at most 32
-shared materials uses the bounded joint response solve and coordinate polish. A
-larger table is left unchanged by the scalar passes, then receives one bounded
-global diffuse-gain proposal in the final PBR Gaussian compositor. The gain is
-fit only on covered training foreground, shrunk halfway toward identity, and
-accepted only when the ordinary complete-render objective falls. This keeps a
-one-per-particle table practical without pretending to solve thousands of
-independent material coordinates. Geometry, light, assignments, roughness,
-specular response, acceleration structures, shaders, operations, bindings,
-and pipelines remain unchanged. The pass remains explicit pending a fresh
-real-object validation.
+`--render-refine-materials` explicitly finishes a table of at most 32 shared
+materials against complete production renders of every training view, using
+the bounded joint response solve and coordinate polish. A larger table created
+in individual-material mode is left unchanged by the scalar passes, then
+automatically receives one bounded global diffuse-gain proposal in the final
+PBR Gaussian compositor. The gain is fit only on covered training foreground,
+shrunk halfway toward identity, and accepted only when the ordinary
+complete-render objective falls. This keeps an individual table practical
+without pretending to solve thousands of independent material coordinates.
+Geometry, light, assignments, roughness, specular response, acceleration
+structures, shaders, operations, bindings, and pipelines remain unchanged. A
+fresh metal-sculpture gate reproduced every known/excluded-light mean and tail
+gain on the exact same cloud before the automatic path was selected. Automatic
+transfer currently follows the calibrated multi-light Gaussian geometry pass.
 
 ### visibility, and why the bounce is not optional
 

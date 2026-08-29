@@ -69,15 +69,17 @@ a convincing real-world result.
   `91.1→93.2%`. Its Gaussian whole-frame score and one excluded light remain
   mixed, so the hull is selected only as scalar geometric cleanup—not as
   evidence that Gaussian transfer or relighting is solved.
-- **Final Gaussian colour transfer — selected as an explicit pass.** The final
-  compositor attributes about 71% of fabric-toy RGB error to already covered
-  foreground, not missing support. For one-per-surfel material tables,
-  `--render-refine-materials` now fits one conservative global diffuse gain in
-  the final Gaussian renderer instead of issuing thousands of material
-  proposals. Exact matched controls improve known-view and both excluded-light
-  mean/tail PSNR on the painted and fabric toys with unchanged geometry
-  metrics. It remains opt-in until a genuinely fresh real object confirms it,
-  and neither object yet beats the trivial held-light foreground baselines.
+- **Final Gaussian colour transfer — selected and automatic for large
+  individual tables.** The final compositor attributes about 71% of fabric-toy
+  RGB error to already covered foreground, not missing support. A large table
+  created in individual-material mode now fits one
+  conservative global diffuse gain in the final Gaussian renderer instead of
+  issuing thousands of material proposals. Exact matched controls improve
+  known-view and both excluded-light mean/tail PSNR on the painted and fabric
+  toys. A predeclared fresh metal sculpture then improves all twelve image
+  aggregates with exactly unchanged geometry, selecting the transfer as an
+  automatic final pass. All three objects still lose to trivial held-light
+  foreground baselines, so light/surface recovery remains unsolved.
 
 The next quality gate is deliberately narrow:
 
@@ -107,7 +109,9 @@ The next quality gate is deliberately narrow:
   final-compositor diagnostic finds the dominant residual on correctly covered
   foreground and selects one conservative diffuse transfer for large material
   tables. It improves matched means and tails on two real objects without
-  changing geometry; a fresh-object gate remains before making it automatic;
+  changing geometry. A predeclared metal-sculpture gate repeats every metric
+  gain on the exact same cloud, so the large individual-table path is now
+  automatic;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and
@@ -224,6 +228,7 @@ up scalar score dumps; Gaussian scoring deliberately stays at
 | OpenIllumination patterns (Gaussian, excluded 005 / 006) | 24 / 10 | 26.20 / 20.56 dB | 22.96 / 20.69; 22.30 / 19.30 dB | 7.0% |
 | OpenIllumination painted toy (filtered scalar, excluded 005 / 006) | 38 / 10 | 31.56 / 28.02 dB | 25.62 / 24.45; 24.04 / 23.04 dB | 8.8% |
 | OpenIllumination painted toy (Gaussian material transfer, excluded 005 / 006) | 38 / 10 | 31.60 / 28.02 dB | 25.63 / 25.15; 24.32 / 23.24 dB | 8.8% |
+| OpenIllumination metal sculpture (Gaussian automatic transfer, excluded 005 / 006) | 38 / 10 | 31.53 / 29.42 dB | 24.77 / 23.27; 25.11 / 23.09 dB | 8.1% |
 
 The earlier OLAT-only two-axis gate is deliberately reported against trivial
 baselines. On OpenIllumination `obj_16_friends_cup`, the static Gaussian under

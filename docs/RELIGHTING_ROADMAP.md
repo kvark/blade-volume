@@ -47,13 +47,13 @@ not contain or fall back to polygonal geometry.
   compositor.
 
 The current bottleneck is therefore **cross-view surface ownership first,
-representation-aware colour/visibility transfer second, radiometry and
-unknown-light estimation third**. Coupled transport is now an available
-renderer, but material, visibility, and illumination can still compensate for
-wrong or missing geometry. Optimizing all of them together now would make the
-decomposition less identifiable rather than more accurate. The scalar surfel
-asset remains a valid cloud-only quality path while Gaussian transfer is
-improved; no polygonal fallback is needed.
+non-diffuse material recovery second, radiometry and unknown-light estimation
+third**. The selected representation-aware diffuse transfer and coupled
+transport renderer remove two implementation gaps, but material, visibility,
+and illumination can still compensate for wrong or missing geometry.
+Optimizing all of them together now would make the decomposition less
+identifiable rather than more accurate. The scalar surfel asset remains a
+valid cloud-only geometry control; no polygonal fallback is needed.
 
 ## Execution plan
 
@@ -66,12 +66,12 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | final-compositor diffuse transfer selected as opt-in; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal large-table transfer behind `--render-refine-materials` until a genuinely fresh real object confirms it; keep small shared palettes on their bounded joint solver | Fresh-camera and two excluded-light mean/tail improve with identical geometry metrics; then consider enabling it by default for one-per-particle material tables |
+| Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
 
-The current selected change is the dense-support row. On the fresh
+The selected dense-support prerequisite remains the training-mask hull. On the
 `obj_31_painted_toy` split, filtering 68,278 of 1,254,170 one-view fused samples
 before allocating the 2,500-point budget raises observed surfels from 1,887 to
 2,385. Known-light held-camera foreground mean/worst improves
@@ -436,9 +436,9 @@ table in the renderer that actually consumes it.
 
 The existing `--render-refine-materials` path could solve at most 32 shared
 materials jointly. With 2,500 one-per-surfel materials it instead attempted
-thousands of full renders and was not practical. Large tables now receive one
-bounded proposal after Gaussian geometry, opacity, covariance, normals, and
-materials are final:
+thousands of full renders and was not practical. Large individual-mode tables
+now receive one bounded proposal automatically after Gaussian geometry,
+opacity, covariance, normals, and materials are final:
 
 1. render the final cloud with its current and zero diffuse albedo using the
    same deterministic transport samples;
@@ -450,8 +450,8 @@ materials are final:
    ordinary objective.
 
 Small shared palettes keep their existing joint solve and coordinate polish.
-Large scalar-surface passes stay unchanged, and one-material-per-particle
-tables skip meaningless material reassignment. There is no new option, shader,
+Large scalar-surface passes stay unchanged, and exact identity-mapped tables
+skip meaningless material reassignment. There is no new option, shader,
 graph operation, binding, model field, format, or dependency.
 
 | Exact matched Gaussian | Known-light held camera | Excluded 005 | Excluded 006 | Recall / precision |
@@ -460,15 +460,22 @@ graph operation, binding, model field, format, or dependency.
 | Fabric toy, gain `0.631581` | `27.54/26.47; 18.76/17.60` | `24.35/23.24; 14.80/13.39` | `25.04/22.71; 15.43/13.25` | `96.1/89.1%` |
 | Painted toy, matched before | `26.38/25.60; 16.56/15.77` | `24.98/24.47; 14.87/14.07` | `23.45/22.87; 13.19/12.38` | `93.3/89.5%` |
 | Painted toy, gain `0.765983` | `26.91/25.98; 17.03/16.18` | `25.63/25.15; 15.52/14.58` | `24.32/23.24; 14.07/12.97` | `93.3/89.5%` |
+| Fresh metal sculpture, exact before | `25.57/23.33; 16.39/14.36` | `23.78/22.16; 13.33/12.75` | `24.02/22.56; 13.55/12.73` | `87.2/74.5%` |
+| Fresh metal sculpture, gain `0.616812` | `26.46/24.04; 17.05/14.80` | `24.77/23.27; 14.33/13.26` | `25.11/23.09; 14.64/13.34` | `87.2/74.5%` |
 
-Values are whole-frame mean/worst; foreground mean/worst. Both objects improve
-every image metric under the known light and both excluded lights; matched
-geometry metrics are identical. The full unregularized painted-toy optimum was
+Values are whole-frame mean/worst; foreground mean/worst. All three objects
+improve every image metric under the known light and both excluded lights;
+matched geometry metrics are identical. The full unregularized painted-toy optimum was
 rejected because it lost 0.05 dB on one known-light whole-frame tail. The
 conservative transfer still does not beat the trivial excluded-light
 foreground baselines, so it closes a Gaussian representation mismatch—not the
-real relighting gate. The two objects are now consumed development cases; one
-fresh real object is required before making the fallback automatic.
+real relighting gate. The metal sculpture was predeclared before its images or
+scores were inspected. Its exact control removes the accepted gain from the
+same persisted cloud and scores both variants in one process: every known and
+excluded-light mean/tail improves with identical recall and precision. This
+passes the automatic-enablement gate, but its low precision and badly missing
+thin parts make improved surface ownership and non-diffuse material recovery
+the next quality problem.
 
 ## Milestones
 
@@ -633,8 +640,11 @@ a deterministic repeat agree within the measured training variance.
 - [x] Diagnose the final Gaussian compositor's colour/visibility residual on a
   fixed surface; retain one conservative construction-only diffuse transfer
   that improves matched known and excluded-light tails on two real objects.
-- [ ] Validate the conservative large-table transfer on a genuinely fresh real
-  object before considering it as a default rather than an explicit final pass.
+- [x] Validate the conservative large-table transfer on the predeclared fresh
+  metal sculpture with an exact same-cloud control; make only large
+  individual-mode tables automatic after every image metric improves.
+- [ ] Improve thin/disconnected surface ownership on the fresh metal sculpture
+  without trading its 87.2% recall against the current 74.5% precision.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

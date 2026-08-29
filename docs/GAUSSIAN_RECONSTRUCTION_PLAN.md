@@ -8310,9 +8310,8 @@ one ordinary complete construction render accepts it only if total loss falls.
 The shrink is measured: the full painted-toy optimum improves means but loses
 0.05 dB on one matched known-light whole-frame tail; the halfway proposal
 improves that tail by 0.38 dB. Small shared tables retain the selected joint
-linear solve and coordinate polish. Large scalar passes stay unchanged, and a
-one-material-per-particle table no longer enters the meaningless assignment
-search.
+linear solve and coordinate polish. Large scalar passes stay unchanged, and an
+exact identity-mapped table no longer enters the meaningless assignment search.
 
 | Exact matched Gaussian | Known-light whole / foreground | Excluded 005 whole / foreground | Excluded 006 whole / foreground | Recall / precision |
 | --- | ---: | ---: | ---: | ---: |
@@ -8329,7 +8328,44 @@ at 1.00/0.93 GiB with zero swap, OOM, validation error, Xid, or GPU fault. A
 physical-GPU regression exercises the large-table branch; a host oracle locks
 the scalar fit on an affine fixture. The implementation adds no option, shader,
 graph operation, binding, acceleration-structure rebuild, model field, format,
-or dependency. It remains behind `--render-refine-materials` because both real
-objects are now consumed development cases and both still fail the strongest
-trivial excluded-light foreground baselines. A genuinely fresh real object is
-the next default-enablement gate.
+or dependency. At this point it remains behind `--render-refine-materials`
+because both real objects are consumed development cases and both still fail
+the strongest trivial excluded-light foreground baselines. A genuinely fresh
+real object is the next default-enablement gate.
+
+## Fresh large-table transfer validation (2026-08-29)
+
+`obj_45_metal_lizard` was chosen before its photographs or results were
+inspected. It is materially and geometrically different from the development
+objects: a reflective sculpture with thin, disconnected parts. The same
+leakage-free split feeds broad-light PatchMatch only 38 construction cameras;
+ten official cameras and patterns 005/006 remain excluded from geometry,
+fitting, and selection. Native fusion forms 61,648 groups from 233,072
+observations, the selected hull rejects 17,480, and 2,499 particles survive the
+fixed point budget and surface initialization. Only 1,664 are seen in the
+training photographs, making this a hard support test rather than a favorable
+object choice.
+
+The integrated proposal accepts gain `0.616812` and lowers the final
+construction objective `0.0029622→0.0024664` in 0.6 seconds. A separate scorer
+then divides that gain out of the persisted candidate and scores the control
+and candidate in one process. Geometry, Gaussian sampling, recall, and
+precision are therefore exactly matched:
+
+| Exact persisted Gaussian | Known-light whole / foreground | Excluded 005 whole / foreground | Excluded 006 whole / foreground | Recall / precision |
+| --- | ---: | ---: | ---: | ---: |
+| Gain removed | `25.57/23.33;16.39/14.36` | `23.78/22.16;13.33/12.75` | `24.02/22.56;13.55/12.73` | `87.2/74.5%` |
+| Gain `0.616812` | `26.46/24.04;17.05/14.80` | `24.77/23.27;14.33/13.26` | `25.11/23.09;14.64/13.34` | `87.2/74.5%` |
+
+All twelve image aggregates improve, including both unseen-light tails. Large
+individual-mode material tables therefore receive the bounded transfer
+automatically; small/shared palettes remain behind the existing explicit flag
+and joint solver. This promotion adds one host predicate, not a new shader,
+operation, option, format, or dependency. The reconstruction peaks at 0.82 GiB
+with zero swap or OOM, and 6.9 minutes of 5070 PatchMatch complete without a
+CUDA/GPU fault in a separate 10 GiB container scope.
+
+The result closes only representation-level brightness transfer. The candidate
+still loses badly to black/capture-copy foreground baselines and visibly misses
+thin parts; the next selected work is improving point ownership/support and
+recovering non-diffuse material response on this fixed fresh gate.
