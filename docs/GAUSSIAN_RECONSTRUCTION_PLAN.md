@@ -8728,3 +8728,36 @@ batches in one optimizer, record candidates for each exact ray, and withhold
 complete source cameras when choosing weight and cadence. If that still loses
 independent light/camera tails, replace metric depth with ordinal visibility
 rather than another center or covariance heuristic.
+
+## Rejected exact-source-ray metric depth (2026-08-29)
+
+The original-resolution follow-up reconstructs the persisted 7,500 source
+cells with the exact 38-view construction hull, then admits depth observations
+from only the 30 optimizer cameras. The cell-index assertion passes at `1e-6`;
+509 low-RMS, 12-source cells yield 336,113 calibrated
+`(origin, direction, ray depth)` observations. Eight complete cameras remain
+absent from the loss. Unlike the preceding arm, no observations collide on a
+128x192 training grid and no nearest-depth front reduction occurs.
+
+One temporary graph alternates 512 exhaustive-candidate source rays every four
+ordinary image steps. Its relative-depth loss is weighted by the existing
+front-to-back Gaussian ownership. A zero-loss control executes the same graph,
+sampling, extra steps, and Adam schedule. Weights `0.001` and `0.0001` were
+screened at 0.125/0.25/0.5/1.0 parameter blends. Both improve many whole-frame
+and foreground means, but neither passes every construction, disjoint-camera,
+and unseen-light tail. At `0.001`, for example, the 0.5 blend passes both rows
+for lights 001 and 013 but regresses held-camera foreground tails for lights
+002--004.
+
+The tracked observation type, alternating fit API, graph loss, and session
+inputs are removed. The corrected 8 GB zero-swap runs peak at 0.73 GB without
+OOM, pressure, throttle, Xid, or GPU fault. No official camera or excluded
+light was opened, and no production result or dependency was added.
+
+The next test changes the geometry signal rather than weakening this loss
+again. For each exact ray, a tolerance band around the fused first surface
+defines only an ordering constraint: accumulated opacity in front is invalid,
+while some response in the band is required. This avoids forcing all
+contributors onto noisy metric depth. It must use the same alternating
+same-graph control and pass every internal mean/tail cell before a second
+object or official split is considered.

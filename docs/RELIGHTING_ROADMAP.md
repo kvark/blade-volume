@@ -793,6 +793,48 @@ updates. No per-particle assignment is supplied. Hold complete source cameras
 out when selecting weight and cadence; if exact observations still lose the
 same tails, close metric-depth supervision and move to ordinal visibility.
 
+### Rejected exact-source-ray metric depth
+
+The follow-up preserves every accepted fusion observation as its original
+calibrated source-camera ray and ray-parameter depth. Reproducing the persisted
+7,500-cell model requires the same 38-view soft hull used at construction; the
+cell centers then match the stored surfels within `1e-6`. Only the 30 fit
+cameras are allowed to emit depth observations, leaving eight complete cameras
+out of the loss. The 509 tight cells provide 336,113 exact observations, with
+no image resizing, pixel collision reduction, nearest-depth selection, or
+particle preassignment.
+
+A temporary tracked graph alternates one 512-ray depth-only batch after every
+four ordinary RGB/mask steps in the same Adam session. It rebuilds the complete
+Gaussian candidate record for each sampled ray and minimizes the
+front-to-back-opacity-weighted per-contributor relative depth error. Candidate
+and zero-weight control execute the same graph and the same extra optimizer
+steps. The temporary implementation adds no Meganeura operation or shader.
+
+At weight `0.001`, the 0.5 control-to-candidate blend improves all four metrics
+for both light-001 rows and both unseen-light-013 rows. Whole-frame and
+foreground means generally improve elsewhere, but the held-camera foreground
+tail regresses for lights 002, 003, and 004; no tested blend passes every row.
+Reducing weight to `0.0001` changes which rows fail rather than approaching a
+safe identity: all 0.125/0.25/0.5/1.0 blends still lose at least one
+construction or held-camera tail. This repeats the low-resolution result
+without its raster-collapse ambiguity. The failure is in metric-depth
+supervision, not in loss of exact source provenance.
+
+No official camera or excluded light is opened. The corrected runs peak at
+0.73 GB in 8 GB zero-swap scopes and report no OOM, pressure, throttle, Xid, or
+GPU fault. The observation API, graph inputs and loss, and alternating session
+path are removed; no production code, dependency, format, shader, or result
+asset remains.
+
+Metric depth is now closed for this milestone. The next bounded experiment is
+an ordinal free-space/visibility objective on the same exact rays: penalize
+opacity strictly in front of the measured first surface and require support in
+a tolerance band, without pulling every contributor to one noisy metric depth.
+Keep ordinary image batches and complete held cameras unchanged. Advance only
+if a same-graph zero arm passes every construction, held-camera, and unseen-
+light mean and tail before opening a second object.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -988,9 +1030,11 @@ a deterministic repeat agree within the measured training variance.
 - [x] Test opacity-mean, per-contributor, and position-only contributor depth
   losses after low-resolution front reduction; remove them when all weights and
   blends lose independent tails.
-- [ ] Preserve original source camera/pixel/depth observations in alternating
-  depth-only batches with exact ray candidates and held source cameras; do not
-  collapse them onto the RGB training grid.
+- [x] Preserve original source camera/pixel/depth observations in alternating
+  depth-only batches with exact ray candidates and held source cameras; reject
+  metric depth when two weights and all blends lose independent tails.
+- [ ] Replace metric depth with an exact-ray ordinal free-space/support-band
+  objective; keep the graph, optimizer cadence, and held-camera gate matched.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
