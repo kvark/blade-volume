@@ -910,6 +910,24 @@ acquire or adapt a multi-light capture whose untouched split contains a
 non-empty coherent missing-surface component, replay this fixed recipe once,
 and retain production merge plumbing only if every final metric passes.
 
+### Predeclared Hugging Face final gate
+
+Before downloading or viewing another object, select OpenIllumination
+`obj_33_fabric_basket` from its published directory name alone. Its opaque,
+textured material should support response matching without transparent or
+mirror-like confounds, while a basket is a useful thin/concave surface test.
+This rationale is fixed before seeing any image or reconstruction result.
+
+Use patterns 001--004 and 013 from the 38 ordinary training cameras to build
+one 2,500-point, minimum-two-source Gaussian and its missing-track proposal.
+Keep the ten official cameras and patterns 005/006 out of loading, dense
+fusion, candidate construction, threshold selection, and replay. If and only
+if a non-empty coherent patch passes every existing internal complete-render
+mean, tail, recall, and precision gate, persist the exact base and candidate,
+replay once, and open the official camera/light cross-product for one final
+decision. Do not weaken a threshold or choose a different point budget when
+the object produces no proposal.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
