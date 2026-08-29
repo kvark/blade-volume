@@ -12,6 +12,7 @@ use std::{collections, fs, io, path};
 const DEFAULT_LIGHTS: [&str; 4] = ["000", "062", "082", "092"];
 const ENVIRONMENT_WIDTH: usize = 64;
 const LIGHT_ANGULAR_RADIUS: f32 = 0.08;
+const PATCH_MATCH_SOURCES: usize = 12;
 
 #[derive(argh::FromArgs)]
 /// Convert one downloaded OpenIllumination object to the training layout.
@@ -302,6 +303,42 @@ fn write_colmap_splits(output: &path::Path, records: &[PreparedFrame]) -> io::Re
     write_colmap_files(&train, &training_records)
 }
 
+fn patch_match_config(records: &[PreparedFrame]) -> String {
+    let training = records
+        .iter()
+        .filter(|record| !record.frame.held_out)
+        .collect::<Vec<_>>();
+    let mut output = String::new();
+    for (reference_index, reference) in training.iter().enumerate() {
+        let reference_position = reference.frame.world_from_camera.w_axis.truncate();
+        let mut sources = training
+            .iter()
+            .enumerate()
+            .filter(|&(index, _)| index != reference_index)
+            .map(|(_, source)| {
+                let source_position = source.frame.world_from_camera.w_axis.truncate();
+                (
+                    reference_position.distance_squared(source_position),
+                    source.image_name.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        sources.sort_by(|left, right| left.0.total_cmp(&right.0).then_with(|| left.1.cmp(right.1)));
+        sources.truncate(PATCH_MATCH_SOURCES);
+        output.push_str(&reference.image_name);
+        output.push('\n');
+        output.push_str(
+            &sources
+                .iter()
+                .map(|source| source.1)
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        output.push('\n');
+    }
+    output
+}
+
 fn write_binary_mask(
     source: &path::Path,
     destination: &path::Path,
@@ -384,6 +421,11 @@ fn write_colmap(
     }
     write_colmap_splits(output, &records)
         .map_err(|error| format!("cannot write COLMAP splits: {error}"))?;
+    fs::write(
+        output.join("patch-match-train.cfg"),
+        patch_match_config(&records),
+    )
+    .map_err(|error| format!("cannot write PatchMatch overlap graph: {error}"))?;
     let test_names = records
         .iter()
         .filter(|record| record.frame.held_out)
@@ -568,6 +610,10 @@ fn run(args: &Args) -> Result<(), String> {
         "official held cameras: {}",
         output.join("test.txt").display()
     );
+    println!(
+        "training PatchMatch graph: {}",
+        output.join("patch-match-train.cfg").display()
+    );
     for light in &lights {
         println!(
             "light {} ({} LEDs): images={} environment={}",
@@ -669,6 +715,34 @@ mod tests {
         assert_eq!(training.images.len(), 1);
         assert_eq!(training.images[0].name, "training.jpg");
         fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn patch_match_graph_is_explicit_nearest_camera_and_training_only() {
+        let frame = |name: &str, x: f64, held_out| PreparedFrame {
+            frame: Frame {
+                name: name.to_string(),
+                held_out,
+                fov_x: 0.6,
+                calibrated_width: 32,
+                world_from_camera: glam::DMat4::from_translation(glam::DVec3::new(x, 0.0, 0.0)),
+            },
+            image_name: format!("{name}.jpg"),
+            dimensions: (32, 48),
+        };
+        let graph = patch_match_config(&[
+            frame("a", 0.0, false),
+            frame("b", 1.0, false),
+            frame("c", 3.0, false),
+            frame("held", 0.5, true),
+        ]);
+
+        assert_eq!(
+            graph,
+            "a.jpg\nb.jpg, c.jpg\nb.jpg\na.jpg, c.jpg\nc.jpg\nb.jpg, a.jpg\n"
+        );
+        assert!(!graph.contains("held"));
+        assert!(!graph.contains("__auto__"));
     }
 
     #[test]

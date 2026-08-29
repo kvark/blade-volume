@@ -47,8 +47,9 @@ The checked-in selective fetch downloads 22 cameras of one object under four
 OLATs, about 24 MB rather than the complete 900 GB corpus. Revisions are pinned
 in the script. The Rust importer converts the published camera-to-world
 matrices to pose-only COLMAP binaries, canonicalizes the published binary masks
-to full `0/255` coverage, writes the official five-camera split, and creates
-distant-light `.f32` environments. `sparse/0`
+to full `0/255` coverage, writes the official five-camera split, emits an
+explicit nearest-12 `patch-match-train.cfg` containing training cameras only,
+and creates distant-light `.f32` environments. `sparse/0`
 contains every pose for final scoring; `sparse/train` physically excludes the
 official test cameras and is the input for geometry initialization or dense
 reconstruction:
