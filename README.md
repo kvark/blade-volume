@@ -126,9 +126,21 @@ a convincing real-world result.
   also fails at 2.5%, 0.5%, and 0.1% total motion before any held observation
   is opened. A fixed-center covariance screen then finds only numerically
   neutral axes and no validation-safe update. Center and endpoint heuristics
-  are closed. A first composited-depth loss also fails after collapsing source
-  samples to the low-resolution RGB grid. The next gate must preserve original
-  source camera/pixel/depth rays in separate depth-only batches.
+  are closed. Composited-depth loss fails both after low-resolution reduction
+  and on 336,113 exact original source rays; one-sided free-space and local
+  support-band losses fail independently as well. Dense fusion depth is useful
+  provenance, but is closed as a regularizer on the fitted Gaussian basin.
+- **Coherent point patch — internally positive, awaiting a fresh proposal.** A
+  deterministic shared-view component keeps measured oriented points and adds
+  point samples at local neighbor midpoints—no mesh intermediate. On the fixed
+  painted-toy Gaussian, a 105-point patch at 0.05 opacity with one shared,
+  conservatively scaled material improves every construction and disjoint-
+  camera/light mean, tail, recall, and precision in an exact repeat. The gains
+  are small and the official split was deliberately not reopened. Independent
+  38-camera fabric and metal checks produce no points in actually missing
+  foreground, so there is no second-object candidate and no production merge.
+  The next gate is a new capture or dataset that supplies a non-empty coherent
+  patch for an untouched final decision.
 
 The next quality gate is deliberately narrow:
 

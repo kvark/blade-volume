@@ -8792,3 +8792,40 @@ deterministic shared-view patch path: resample a verified component entirely as
 points, share material parameters spatially across it, freeze the established
 prefix, and use complete renders on a fresh split or second object as the
 selection gate.
+
+## Internally selected shared-material point patch (2026-08-29)
+
+The deterministic 105-point midpoint patch was appended to the exact fixed
+painted-toy Gaussian in an ignored complete-render harness. It remains entirely
+point sampled. All added points share one material formed by averaging their
+nearest established materials; diffuse albedo and `F0` are scaled together,
+while roughness stays shared at the measured maximum of 1.0.
+
+The construction screen tests opacity `0.025/0.05/0.1/0.25`. The first is
+below the production 0.03 response cutoff and is an identity, while the latter
+two regress. At the smallest visible opacity `0.05`, shared response scales
+`0/0.25/0.5` pass lights 001--003 and `0.75/1.0` fail light 002. Scale `0.5`
+is selected without reading validation. It then improves all four image
+metrics plus mask recall and precision for unseen lights 004/013 on selection
+cameras and known lights 001--003 on four disjoint cameras. Gains span roughly
+`0.001--0.009` dB and `+0.074--0.082` recall points. An exact adjacent replay
+prints identical values.
+
+The other two real objects cannot supply the required final gate. Using only
+their 38 construction cameras, fabric accepts 35 triangulated mask-valid tracks
+and metal accepts 19, but neither has a track in foreground missed by its fixed
+Gaussian. No threshold is weakened and no patch is fabricated. The painted-
+toy official split is not reopened after its earlier sparse-patch evaluation.
+
+No tracked merge, option, model change, shader, graph operation, or dependency
+is added. The ignored candidate and paired renders are under
+`target/audit-runs/openillumination/lighting-pattern-audit/patch-shared-response-selected/`;
+the candidate SHA-256 is
+`a3be5829c14f9f13b4b23ea341869075c12f4a735aa6cdf50b3cc9192cd0a5ff`.
+Repeated 8 GB zero-swap scopes peak at 1.0 GB without OOM, pressure, throttle,
+Xid, or GPU fault.
+
+Production is intentionally blocked on new evidence. The next capture or
+dataset must produce a non-empty coherent missing patch on an untouched split.
+Replay the fixed 0.05-opacity, shared-response recipe once; add merge plumbing
+only if every complete-render final metric passes.

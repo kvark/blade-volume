@@ -869,6 +869,47 @@ optimize it through complete renders against a fixed persisted prefix. Use a
 fresh held split or second object for the decision; do not reopen the exhausted
 painted-toy official split.
 
+### Internally selected shared-material point patch
+
+The existing deterministic patch supplies the next bounded proposal without a
+new representation. It retains its verified oriented tracks, adds half-radius
+point samples at unique local neighbor midpoints, and contains 105 points. An
+ignored complete-render harness appends those points to the exact persisted
+painted-toy PBR Gaussian. Every addition shares one material: the mean of the
+nearest established materials, with diffuse albedo and `F0` scaled together.
+There is no per-point appearance, new shader, graph mode, operation, field, or
+dependency.
+
+Construction-only screens establish the narrow setting. Opacity `0.025` is a
+runtime no-op below the 0.03 response cutoff; `0.1` and `0.25` fail, making
+`0.05` the smallest visible choice. At that opacity, shared response scales
+`0`, `0.25`, and `0.5` pass patterns 001--003 on four selection cameras;
+`0.75` and `1.0` fail light 002. The highest passing scale, `0.5`, then passes
+patterns 004/013 on selection cameras and patterns 001--003 on four disjoint
+cameras. Across those five hidden rows, every whole-frame and foreground mean
+and tail plus recall and precision improves. The exact adjacent repeat is
+metric-identical. Improvements are deliberately described as small: roughly
+`0.001--0.009` dB and `0.074--0.082` recall points.
+
+This clears the internal construction/validation gate, not production. The
+painted-toy official cameras and excluded lights are not reopened because they
+already served an earlier sparse-patch evaluation. Fresh 38-camera-only checks
+on fabric and metal accept 35 and 19 multi-view tracks respectively, but zero
+land in foreground that their persisted Gaussians miss. Their selection
+threshold is not weakened to manufacture a candidate, so a second-object gate
+cannot yet run.
+
+The tracked tree remains unchanged. The ignored combined asset has SHA-256
+`a3be5829c14f9f13b4b23ea341869075c12f4a735aa6cdf50b3cc9192cd0a5ff` and
+is under `target/audit-runs/openillumination/lighting-pattern-audit/patch-shared-response-selected/`
+with paired control/candidate renders. Repeated 8 GB zero-swap runs peak at
+1.0 GB and report no OOM, pressure, throttle, Xid, or GPU fault.
+
+The remaining gate is now a data requirement, not an implementation excuse:
+acquire or adapt a multi-light capture whose untouched split contains a
+non-empty coherent missing-surface component, replay this fixed recipe once,
+and retain production merge plumbing only if every final metric passes.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -1069,8 +1110,10 @@ a deterministic repeat agree within the measured training variance.
   metric depth when two weights and all blends lose independent tails.
 - [x] Replace metric depth with exact-ray ordinal free-space and support-band
   objectives; remove all three arms when every blend loses independent tails.
-- [ ] Expand one verified shared-view component by cloud-only local resampling,
-  share patch material parameters, and gate complete renders on fresh data.
+- [x] Expand one verified shared-view component by cloud-only local resampling,
+  share one patch material, and pass repeated internal complete-render gates.
+- [ ] Acquire a fresh non-empty patch proposal and repeat the fixed recipe on
+  an untouched final split before adding any production merge/API.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
