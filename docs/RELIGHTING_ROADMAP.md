@@ -959,6 +959,29 @@ likely to form one coherent missing patch than fine flower structure. Apply
 the same fixed protocol. If it forms no internally passing patch, stop object
 screening rather than selecting a favorable dataset after the fact.
 
+The bag closes that screen without opening held data. Its 2,499-point Gaussian
+reaches 88.3% construction-camera foreground recall at 95.1% precision. The
+independent matcher accepts 72 tracks; the selection hull keeps 70, and 13 lie
+in foreground missed by the fixed Gaussian. Five tracks form one shared-view
+component, expanded to an 11-point diagnostic patch, but it covers only 0.9%
+of missing foreground and the local footprint gate retains zero points. No
+candidate is written, so the official cameras and patterns 005/006 remain
+unloaded. The fixed base SHA-256 is
+`0aba83f2b30b67b618fd02544d481bb40162af476b3945721894c4acf8a4f571`.
+Base fitting and track diagnosis peak at 1.05 GB and 731 MB respectively; dense
+reconstruction peaks at 181 MB. Every scope uses zero swap and reports no OOM,
+throttling, Xid, or GPU fault.
+
+This is the declared stopping condition. Three name-selected Hugging Face
+objects span concave texture, thin overlapping surfaces, and an occluded
+handle/interior; none supplies a coherent patch that passes the unchanged
+construction-only footprint gate. Do not continue screening OpenIllumination
+objects. The next final gate needs a capture or dataset split designed to hide
+a contiguous surface region from the base reconstruction while exposing it to
+separate proposal cameras under calibrated repeated lighting. This is a data
+protocol requirement; weakening track, footprint, or point-budget thresholds
+would only select retrospectively favorable noise.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -1161,6 +1184,9 @@ a deterministic repeat agree within the measured training variance.
   objectives; remove all three arms when every blend loses independent tails.
 - [x] Expand one verified shared-view component by cloud-only local resampling,
   share one patch material, and pass repeated internal complete-render gates.
+- [x] Screen three predeclared Hugging Face OpenIllumination objects with fixed
+  construction-only thresholds; stop when none yields a coherent proposal and
+  leave every official camera and excluded light unopened.
 - [ ] Acquire a fresh non-empty patch proposal and repeat the fixed recipe on
   an untouched final split before adding any production merge/API.
 
