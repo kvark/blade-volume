@@ -8408,6 +8408,50 @@ field, format, or dependency. It does add the explicit
 the same quarter allocation lowers a painted-toy primary-light held-camera
 whole/foreground tail by 0.30/0.34 dB even while its five-light aggregate and
 both excluded lights improve. This is a bounded response diagnostic, not
-recovered metalness. Next, cluster lobe parameters spatially, fit on a
-construction-light subset, and require every withheld known-light tail before
-opening excluded lights.
+recovered metalness. The following gate therefore clusters lobe parameters
+spatially, fits on a construction-light subset, and requires every withheld
+known-light tail before opening excluded lights.
+
+## Spatial response and radiometric attribution (2026-08-29)
+
+The proposed spatial-lobe gate is negative. The persisted paint and metal
+Gaussians were partitioned into four deterministic Euclidean Voronoi regions.
+Each region had one binary choice: retain its rough dielectric or apply the
+already bounded quarter diffuse-to-specular allocation. A greedy fit used
+patterns 001--003 on 30 construction cameras. Every fitted prefix was then
+screened independently on patterns 004/013 and all five known patterns at
+eight orbit-spread training cameras. Ten official cameras and patterns 005/006
+remained unopened until both validation axes passed.
+
+Every region was selected on both objects. The candidate is therefore the
+existing global allocation with four times the fitting work, not spatial
+material recovery. The untouched painted cameras expose why. Under pattern
+001, `CB8` foreground falls `16.481→15.920` dB; the same camera rises by
+1.066, 1.033, 0.868, and 0.061 dB under patterns 002/003/004/013. Each region
+alone hurts `CB8` under 001. The failure depends jointly on light and view,
+not on a separable surface partition. A frozen roughness sweep is more
+decisive: roughness 0.75 and 0.5 are substantially worse even with the
+dielectric F0 and no coloured allocation. The useful capacity is maximally
+broad and is not evidence for a recovered physical lobe.
+
+A light-scale sweep then chooses approximately 0.5 for spatial patterns
+001--004 and 0.625--0.75 for the all-emitter pattern on three objects. Those
+numbers are not promoted as calibration: the material/light gauge and the
+deliberately halfway diffuse transfer produce the same symptom. The separating
+control modifies only persisted diffuse albedo. An extra factor of 0.875
+improves all 42 foreground mean/tail checks across seven patterns and three
+objects. The equivalent production change, 50% to 60% of the analytic
+correction, improves 83 of 84 complete whole/foreground mean/tail metrics on
+the exact fixed clouds. It still lowers the painted primary-light whole-frame
+tail from `25.98202` dB; even a 0.99 relative factor lowers it to `25.97649`
+dB. The code experiment is reverted and the halfway transfer stays selected.
+
+A clean, cgrouped metal replay confirms the mechanism rather than rescuing the
+gate. The stronger formula and explicit broad response accept gain `0.542290`
+plus allocation `0.25`, peak at 961.3 MB, and improve the integrated image
+scores, but that independently trained geometry moves slightly. The exact
+same-cloud painted counterexample has priority under the declared contract.
+No production shader, operation, option, representation field, format, or
+dependency is added. The next diagnostic freezes geometry and materials and
+separates a view-wide light residual from directional visibility and indirect
+transport residuals.

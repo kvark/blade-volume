@@ -719,6 +719,23 @@ and peaks at 0.86 GiB with no swap, OOM, or GPU fault. Because the same
 proposal regresses a painted-toy primary-light tail, it is available only as
 `--render-transfer-specular` and must not be read as recovered metalness.
 
+The spatial follow-up does not repair that tail. Four deterministic regions
+are fitted on patterns 001--003 and screened on patterns 004/013 plus reserved
+training cameras; every region is selected on both paint and metal, reducing
+to the same global proposal. Painted view `CB8` loses 0.56 dB only under
+pattern 001 while improving under the other four known lights, and every
+region alone hurts that 001 view. Roughness 0.75/0.5 is substantially worse.
+This is directional transport error rather than evidence for a bad spatial
+material cluster.
+
+An attempted three-fifths-of-correction diffuse safety factor improves 83 of 84 exact
+whole/foreground mean/tail metrics across fabric, paint, and metal. The missing
+metric is still disqualifying: painted pattern 001 whole-frame worst falls
+from `25.98202` dB, and even a 1% extra darkening changes it to `25.97649` dB.
+The production factor remains one half. Ignored tools and image dumps are under
+`target/audit-tools/{spatial_lobe_gate,obj45_lobe_sweep}/` and
+`target/audit-runs/openillumination/spatial-lobe-view-31/`.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable

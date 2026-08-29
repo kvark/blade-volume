@@ -285,7 +285,9 @@ per-surfel lobe solver and does not affect the automatic diffuse transfer.
 This is deliberately called a response transfer rather than metalness
 recovery: it improves every fixed-cloud metric on the metal sculpture, but a
 painted-toy known-light held-camera tail regresses. The switch therefore stays
-explicit until spatially shared lobes pass a per-light validation gate.
+explicit. A follow-up four-region fit selects every region and retains that
+tail regression, while roughness below one is substantially worse. Transport
+and radiometric attribution now precede any additional material capacity.
 
 ### visibility, and why the bounce is not optional
 

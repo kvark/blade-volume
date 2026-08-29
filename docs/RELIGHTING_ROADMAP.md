@@ -68,8 +68,8 @@ surface.
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
-| Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
-| Materials and capture layout | broad-response diagnostic only | Replace the global opt-in response transfer with spatially shared lobes selected on withheld known lights; then accept sparse `(camera, light, exposure)` observations | Every known-light tail plus two held lights and a second object improve; otherwise keep the feature off |
+| Radiometry and transport | attribution next | Separate view-wide light scale from directional visibility/bounce residual with geometry and materials fixed | A correction repeats across objects and every known-light tail before either excluded light is opened |
+| Materials and capture layout | capacity increase rejected | Keep the global broad-response diagnostic opt-in; do not add spatial or sharper lobes until transport attribution leaves stable material evidence | Every known-light tail plus two held lights and a second object improve; otherwise keep the feature off |
 
 The selected dense-support prerequisite remains the training-mask hull. On the
 `obj_31_painted_toy` split, filtering 68,278 of 1,254,170 one-view fused samples
@@ -503,9 +503,46 @@ both excluded lights on the fabric and painted toys. It nevertheless regresses
 the painted toy's primary-light held-camera whole/foreground tails by
 0.30/0.34 dB. `--render-transfer-specular` therefore exposes one exact-render-
 accepted proposal for large rough-dielectric tables, but it is opt-in and is
-not physical metalness evidence. The next implementation gate is a spatially
-shared response fitted on construction lights and accepted independently on
-each withheld known light before excluded lights are opened.
+not physical metalness evidence. The following gate therefore fits a spatially
+shared response on construction lights and accepts it independently on each
+withheld known light before excluded lights are opened.
+
+### Spatial-lobe and diffuse-margin bounds
+
+The next gate rejects extra material capacity rather than adding it. Four
+deterministic Euclidean regions of the fixed Gaussian were allowed only the
+same binary 25% response transfer. Choices were fitted on patterns 001--003
+and 30 construction cameras, then screened on patterns 004/013 and eight
+orbit-spread training cameras before the ten official cameras were opened. On
+both the metal sculpture and painted toy, all four regions were selected in
+sequence. The spatial model therefore reduces exactly to the global proposal;
+it supplies no evidence for four material lobes.
+
+The painted result explains the failed tail. Official view `CB8` changes
+`16.481→15.920` dB foreground under pattern 001, but improves to
+`19.209`, `17.339`, `18.122`, and `14.454` dB under patterns
+002/003/004/013. Activating each spatial region alone also hurts pattern 001,
+landing at `16.361`, `16.292`, `16.406`, and `16.407` dB. This is a
+view/light interaction rather than one bad surface region. Sharpening the
+roughness is not the missing dimension: on the painted object, changing only
+the dielectric initializer from 1.0 to 0.75 drops the five-light held-camera
+foreground aggregate from `16.70/13.63` to `15.00/10.45` dB and is worse
+under both excluded patterns; roughness 0.5 collapses further.
+
+A separate scale diagnostic initially looks stronger. Additional diffuse
+darkening improves all foreground means/tails across seven patterns and three
+objects. Moving the production interpolation from 50% to 60% of the fitted
+global correction, however, improves only 83 of 84 complete fixed-cloud
+mean/tail metrics: the painted primary-light whole-frame tail changes
+`25.98202→25.94` dB. A fine bound shows even a 1% additional albedo reduction
+changes it to `25.97649` dB. The one-line production experiment and its test
+fixture were reverted. The exact half correction remains the selected point.
+
+These controls close the immediate material branch. Next, keep the accepted
+cloud and material table frozen and measure which residual is common per light
+versus dependent on `(light, view)`. Only the former can become capture
+radiometry; the latter must be explained by visibility, finite-light geometry,
+or indirect transport before material capacity is revisited.
 
 ## Milestones
 
@@ -678,8 +715,13 @@ a deterministic repeat agree within the measured training variance.
   Gaussian alpha rather than supplying a coherent missing patch.
 - [x] Bound broad specular capacity on the exact cloud and retain the
   conservative transfer as explicit-only after a painted-toy tail regression.
-- [ ] Fit spatially shared lobes without regressing any withheld known-light
-  tail; keep the established diffuse table and point-cloud support fixed.
+- [x] Reject four spatial response regions and sharper roughness: the regions
+  collapse to the global proposal and the directional tail remains.
+- [x] Bound a stronger diffuse transfer; retain the halfway correction because
+  even the smallest tested 1% extra step regresses one fixed-cloud
+  whole-frame tail.
+- [ ] Attribute the fixed-cloud residual between per-light radiometry,
+  visibility, and bounded indirect transport before adding material capacity.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

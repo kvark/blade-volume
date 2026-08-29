@@ -89,6 +89,17 @@ a convincing real-world result.
   automatic or reported as recovered metalness: the same transfer regresses a
   painted-toy known-light tail, while the free per-surfel lobe solver collapses
   below 20 dB under both excluded lights.
+- **More material capacity — rejected for now.** A deterministic four-region
+  lobe fit selects every region on both metal and paint, reducing exactly to
+  the global diagnostic while retaining the painted primary-light tail loss.
+  Every region alone hurts that same view, and sharpening roughness to 0.75 or
+  0.5 is substantially worse. Moving the automatic diffuse fit from half to
+  three fifths of the correction toward its optimum improves 83 of 84
+  fixed-cloud mean/tail metrics,
+  but the remaining painted whole-frame tail regresses even after a 1% move.
+  The production safety factor is therefore unchanged. The next useful split
+  is transport/radiometry versus surface response, not more per-point or
+  spatial material parameters.
 
 The next quality gate is deliberately narrow:
 
@@ -96,9 +107,10 @@ The next quality gate is deliberately narrow:
   sculpture to 5,000 groups raises recall but loses 6.4 precision points;
   requiring three fusion views removes occluded layers but loses known-light
   quality. At 256 px, every independently triangulated selection-valid track
-  already lies under the fitted Gaussian alpha. The next material step is a
-  spatially shared lobe selected on withheld known lights—not free metalness
-  per point;
+  already lies under the fitted Gaussian alpha. Four spatially shared response
+  regions and sharper lobes also fail their independent gates. Keep geometry
+  and materials fixed next; attribute the residual between calibrated light,
+  visibility, and bounded indirect transport before adding capacity;
 - assign cross-view ownership before increasing point count. A synthetic
   point-only sheet is already stable under deterministic 2× resampling, while
   the real 5,000-point cloud contains contradictory depth layers that its
