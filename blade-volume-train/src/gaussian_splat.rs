@@ -1028,9 +1028,9 @@ pub fn guard_pbr_support(
 /// fits. Recovery activates only when fewer than three quarters of the input
 /// particles would survive persistence, after the existing half-cloud guard
 /// has had an opportunity to reject a degenerate fit. A low-opacity particle
-/// recovers its initialized opacity, scale, and rotation only when the center
-/// and six two-sigma axis endpoints land inside at least 97.5% of construction
-/// masks. Held views do not enter this decision.
+/// recovers its initialized opacity and scale only when the center and six
+/// two-sigma axis endpoints land inside at least 97.5% of construction masks.
+/// Held views do not enter this decision.
 pub fn recover_masked_pbr_support(
     model: &mut vol::PointCloudModel,
     initialized: &vol::PointCloudModel,
@@ -1125,7 +1125,6 @@ pub fn recover_masked_pbr_support(
         }
         model.points[index].w = initialized.points[index].w;
         transforms.scales[index] = initialized_transforms.scales[index];
-        transforms.rotations[index] = initialized_transforms.rotations[index];
         outcome.restored += 1;
     }
     model.validate()?;
@@ -4426,12 +4425,9 @@ mod tests {
             for point in &mut learned.points[5..] {
                 point.w = 0.01;
             }
-            learned
-                .transforms
-                .as_mut()
-                .unwrap()
-                .scales
-                .fill(glam::Vec3::splat(0.001));
+            let transforms = learned.transforms.as_mut().unwrap();
+            transforms.scales.fill(glam::Vec3::splat(0.001));
+            transforms.rotations.fill(glam::Quat::from_rotation_z(0.25));
             learned
         };
 
@@ -4449,6 +4445,13 @@ mod tests {
         assert!(scales[5..]
             .iter()
             .all(|&scale| scale == glam::Vec3::splat(0.01)));
+        assert!(recovered
+            .transforms
+            .as_ref()
+            .unwrap()
+            .rotations
+            .iter()
+            .all(|&rotation| rotation == glam::Quat::from_rotation_z(0.25)));
 
         let mut outside = learned();
         let outcome =

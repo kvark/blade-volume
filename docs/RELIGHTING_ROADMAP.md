@@ -1123,6 +1123,16 @@ nothing. The nine internal held cameras score `23.35/18.70;15.00/9.19 dB` with
 81.2% recall and 98.3% precision. No Apple ground-truth relighting pair entered
 selection or this control.
 
+Foreground-stratified photo batches do not replace recovery. Sampling 50% of
+support updates from construction foreground lowers the held Gaussian to
+`25.59/21.56;19.91/15.90 dB;67.8/95.5%`. At 25%, foreground quality and recall
+rise to `20.27/16.65 dB;72.8%`, but whole-frame mean falls to 26.17 dB and
+precision to 96.7%. Both arms fail the fixed all-metric gate, and the sampler
+is removed. A separate field ablation shows why the retained recovery is
+small: opacity alone is insufficient, opacity plus initialized scale is
+byte-identical to restoring opacity, scale, and rotation. Rotation was never
+trained on this path, so the redundant write is removed.
+
 The selected evidence is deliberately narrow: an all-cloud pipeline can
 recover a recognizable surface and react to an independent natural environment,
 but appearance is grey, soft, and missing high-frequency texture. The local
