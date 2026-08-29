@@ -64,6 +64,11 @@ a convincing real-world result.
   excluded pattern 006 by 0.56/1.01 dB whole-frame and 0.51/0.67 dB foreground
   mean/worst. The result is still visibly speckled and too bright, so this
   clears a renderer boundary rather than the reconstruction-quality gate.
+  An independent fabric-toy run confirms the narrower surface result: scalar
+  known-light foreground improves `18.22/16.00→18.27/16.14` dB and precision
+  `91.1→93.2%`. Its Gaussian whole-frame score and one excluded light remain
+  mixed, so the hull is selected only as scalar geometric cleanup—not as
+  evidence that Gaussian transfer or relighting is solved.
 
 The next quality gate is deliberately narrow:
 
@@ -91,7 +96,9 @@ The next quality gate is deliberately narrow:
   recall while lowering held-photo tails and precision. That code is removed
   too. The scalar surfel remains a cloud-only quality output; the next Gaussian
   transfer must match final colour/visibility semantics and beat an untouched
-  photo control, not merely imitate scalar alpha;
+  photo control, not merely imitate scalar alpha. The selected soft hull has
+  separately reproduced its scalar held-camera gain on a fabric toy, while
+  its Gaussian and excluded-light results remain explicitly unselected;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and

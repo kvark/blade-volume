@@ -606,6 +606,43 @@ foreground to `14.11/12.38` and `12.06/10.17` dB. Making the broad pattern the
 primary capture reaches only `14.58/13.00` and `13.08/11.61` dB. Five known
 lights with pattern 001 primary therefore remains the selected schedule.
 
+### Independent soft-hull validation
+
+`obj_29_fabric_toy` is a third geometry/material class and uses the same
+leakage-free protocol: 38 construction poses enter the pose-only PatchMatch
+graph, while ten official test poses remain absent from undistortion, stereo,
+fusion, fitting, and selection. The native fusion cache contains 213,642
+groups from 1,511,977 observations (3.6 distinct views per group). Applying
+the selected training-mask hull rejects 5,772 groups before the fixed
+2,500-point reduction and raises the number of photograph-observed surfels
+from 2,289 to 2,378.
+
+| Fabric-toy surface | Scalar known-light whole / foreground | Scalar recall / precision | Gaussian known-light whole / foreground | Gaussian recall / precision |
+| --- | ---: | ---: | ---: | ---: |
+| Unfiltered | `27.27/25.26; 18.22/16.00` dB | `97.0/91.1%` | `26.85/26.02; 18.04/16.71` dB | `95.8/90.0%` |
+| Training-mask hull | `27.58/25.70; 18.27/16.14` dB | `96.8/93.2%` | `26.73–26.81/25.73–25.82; 18.10–18.14/16.77` dB | `96.0–96.1/88.9–89.2%` |
+
+Two filtered repeats agree within 0.01 dB for the scalar checkpoint. Every
+scalar whole-frame and foreground mean/tail improves, precision rises by 2.1
+points, and recall falls by 0.2 points. That independently passes the filter's
+intended surface-cleanup gate. It does not pass a Gaussian gate: foreground
+tail and recall improve, but whole-frame quality and precision regress.
+
+The excluded-light result is also deliberately mixed. Filtered scalar pattern
+006 improves `23.77/22.81;14.01/12.72→23.99/22.97;14.12/12.75` dB. Pattern
+005 changes `24.55/22.82;14.90/13.17→24.62/22.82;14.81/13.11` dB: the
+whole-frame mean rises while foreground quality falls. Both remain below
+their strongest trivial foreground baselines. The hull therefore stays as an
+upstream scalar-cloud cleanup; representation transfer and light recovery
+remain separate open problems.
+
+The ignored inputs, cache, runs, and telemetry are under
+`target/audit-runs/openillumination/obj29-{prepared,dense,native-cache}*` and
+the matching filtered/unfiltered output directories. PatchMatch ran in a
+10 GiB container scope; reconstruction peaked at 1.11 GiB with no swap, OOM,
+or GPU fault. The temporary skip-filter control was removed after the exact
+comparison.
+
 These controls leave a narrower next step: derive local depth from per-view
 photometric normals, anchor it with verified tracks, and require another
 camera to confirm the patch before fusion. A response descriptor, a normal, or

@@ -64,7 +64,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
+| Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
 | Representation scale | grouped fusion implemented; replacement, additive, and scalar-alpha distillation rejected | Keep the exact scalar and Gaussian renderers as paired controls; change Gaussian support only with a representation-matched colour/visibility objective, not scalar alpha alone | Fresh-camera photo mean/tail and precision improve together with representation agreement; only then may new groups return |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
@@ -103,6 +103,31 @@ sparse track or any polygonal
 intermediate. The implementation is useful and remains opt-in, but it does not
 yet change the selected reconstruction: its fixed scale gate is mixed, as
 recorded below.
+
+The same hull filter now passes its intended independent-object scalar gate on
+`obj_29_fabric_toy`. COLMAP receives only 38 construction poses; ten official
+test poses are absent from its byte-identical nearest-12 graph. Native Rust
+fusion produces 213,642 groups from 1,511,977 observations. The hull removes
+5,772 groups before the fixed 2,500-point selection and raises observed surfels
+from 2,289 to 2,378. Two filtered runs reproduce scalar held-camera scores
+within 0.01 dB:
+
+| Fabric-toy surface | Scalar known-light test | Scalar recall / precision | Gaussian known-light test | Gaussian recall / precision |
+| --- | --- | --- | --- | --- |
+| Unfiltered | `27.27/25.26; 18.22/16.00` | `97.0/91.1%` | `26.85/26.02; 18.04/16.71` | `95.8/90.0%` |
+| Training-mask hull | `27.58/25.70; 18.27/16.14` | `96.8/93.2%` | `26.73–26.81/25.73–25.82; 18.10–18.14/16.77` | `96.0–96.1/88.9–89.2%` |
+
+Values are whole-frame mean/worst; foreground mean/worst. This validates the
+surface cleanup for the scalar cloud: every scalar image metric and precision
+improves, at a 0.2-point recall cost. It does not validate the complete
+relightable Gaussian. Gaussian foreground improves, but whole-frame quality and
+precision regress. Under excluded pattern 006 the filtered scalar improves
+from `23.77/22.81;14.01/12.72` to
+`23.99/22.97;14.12/12.75`; under pattern 005 whole-frame mean rises 0.07 dB
+while foreground falls 0.09/0.06 dB. Both excluded-light outputs remain well
+below trivial foreground baselines. The hull therefore stays selected as an
+upstream geometric cleanup, while representation transfer and relighting remain
+separate open gates.
 
 ## Grouped dense-fusion gate
 
@@ -557,8 +582,11 @@ a deterministic repeat agree within the measured training variance.
 - [x] Measure fixed-cloud scalar-to-Gaussian alpha/radiance parity and test
   uniform plus foreground-balanced alpha continuations; reject scalar alpha as
   a standalone target when stronger parity loses photo tails and precision.
-- [ ] Validate the selected training-mask surface filter on another object,
-  retaining the scalar surfel output as the cloud-only quality control.
+- [x] Validate the selected training-mask surface filter on another object,
+  retaining the scalar surfel output as the cloud-only quality control; record
+  that Gaussian whole-frame/precision and one excluded light remain mixed.
+- [ ] Diagnose the final Gaussian compositor's colour/visibility residual on a
+  fixed surface without using scalar alpha or held-light feedback as a target.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

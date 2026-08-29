@@ -8248,3 +8248,36 @@ entry point are removed. No API, operation, shader, format, model field, or
 dependency survives. The 12 GiB runs peak at 0.76 GiB with zero swap, OOM,
 validation error, Xid, or GPU fault; ignored artifacts remain under
 `target/audit-runs/openillumination/gaussian-parity-*`.
+
+## Independent soft-hull validation (2026-08-29)
+
+The selected training-mask hull was replayed on OpenIllumination
+`obj_29_fabric_toy`, a third geometry/material class. Ten official test poses
+remain absent from the 38-camera PatchMatch graph, undistortion, fusion,
+fitting, and selection. Rust-native fusion records 213,642 exact groups from
+1,511,977 observations, averaging 3.6 distinct views per group. The hull
+rejects 5,772 groups before the fixed 2,500-point selection and raises the
+number of observed surfels from 2,289 to 2,378.
+
+The unfiltered scalar known-light test scores
+`27.27/25.26;18.22/16.00` dB whole/foreground mean/worst with
+`97.0/91.1%` recall/precision. Two filtered runs reproduce
+`27.58–27.59/25.70–25.71;18.27–18.28/16.14–16.15` dB and
+`96.8/93.2%`. This passes the intended scalar surface gate: all four image
+scores and precision improve at a 0.2-point recall cost.
+
+The result is not promoted beyond that boundary. The unfiltered Gaussian
+scores `26.85/26.02;18.04/16.71` dB and `95.8/90.0%`; filtered repeats score
+`26.73–26.81/25.73–25.82;18.10–18.14/16.77` dB and
+`96.0–96.1/88.9–89.2%`. Pattern 006 improves under the scalar filter, while
+pattern 005 gains 0.07 dB whole-frame mean and loses 0.09/0.06 dB foreground.
+Both excluded-light outputs remain below trivial foreground baselines. Thus
+the production hull is independently validated as scalar geometric cleanup,
+not as a Gaussian-transfer or relighting solution.
+
+The exact native cache hash is
+`1a036fe5b4a3f9a8d69217edced3c237018c9355fd3ec369c96390bb89a84ef7`.
+Reconstruction scopes peak at 1.11 GiB with zero swap, OOM, or GPU fault. The
+temporary skip-filter environment hook was removed; no experimental code,
+shader, operation, model field, dependency, or tracked benchmark artifact
+survives.
