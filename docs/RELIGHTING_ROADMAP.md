@@ -982,6 +982,52 @@ separate proposal cameras under calibrated repeated lighting. This is a data
 protocol requirement; weakening track, footprint, or point-budget thresholds
 would only select retrospectively favorable noise.
 
+### Dataset availability and next protocol
+
+The 2026-08-29 Hugging Face survey finds one official copy of the requested
+datasets: `OpenIllumination/OpenIllumination`, already consumed above. There is
+no Hub repository matching MIT Multi-Illumination, FAU Multi-Illuminant,
+Flash/Ambient, MILL, OLATverse, ReNé, DiLiGenT-MV, or OpenSubstance. MIT, FAU,
+Flash/Ambient, and MILL also hold the camera fixed; they can train or test an
+appearance prior, but cannot validate a novel-view surface reconstruction.
+The Hub-hosted M2AD alternative has 12 angle labels and 10 illumination labels,
+but its complete metadata archive contains no camera or light calibration, so
+its 15--17 GB category archives are not downloaded.
+
+The strongest future source is OLATverse: 35 calibrated fixed cameras, 331
+fixed light-stage OLATs, masks, normals, and diffuse albedo. Its official
+release currently requires an account and packages training data in roughly
+70-object archives, so access must be arranged before an object can be selected
+and fetched. OpenSubstance is larger and similarly request-gated. Objects With
+Lighting is a compact 2.35 GB calibrated benchmark for *unknown* natural
+environments, but its reconstruction inputs use one environment rather than
+aligned repeated lights; reserve it for the later unknown-light evaluation.
+DiLiGenT-MV is public and compact, but its 96 lights move with each camera, so
+using it now would require a new per-image-light contract rather than a dataset
+adapter.
+
+ReNé is the next autonomous surface screen. Its 50 camera poses and 40 robot
+light poses have exactly the aligned multi-view/multi-light product needed by
+the existing diagnostic. The public 73.7 GB ZIP supports byte ranges, allowing
+one object to be materialized without vendoring the archive. Before listing or
+viewing its contents, select `lunch` from the published scene names alone: a
+multi-part ordinary object is more likely to expose a contiguous occluded
+surface than another thin flower, without choosing a reflective category.
+
+Keep the official blacked-out cameras `{4,8,15}` and lights `{2,21,34}` absent.
+From the remaining cameras, reserve `{0,5,10,16,22,27,32,38,44}` as an unopened
+final set and use the other 38 for the existing match/selection/validation
+partition. Use lights `{0,10,20,30}` for the primary and three aligned response
+captures; reserve `{13,33}` unopened. Generate masks only from exact black
+background pixels shared by those four construction lights—no learned mask or
+threshold sweep. Before reconstruction, compare light distance with the object
+radius and stop if the worst directional variation exceeds five degrees; in
+that case implement point lights instead of pretending that a nearby source is
+an environment. Otherwise reuse the 2,500-point, minimum-two-source base and
+every unchanged patch threshold above. Open the nine-camera/two-light final
+cross-product only after a non-empty internally passing proposal and its exact
+replay.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
