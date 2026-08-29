@@ -1104,7 +1104,7 @@ fn sampling_converges_to_the_analytic_irradiance_with_nothing_in_the_way() {
     let camera = camera(4.0);
 
     let mut images = Vec::new();
-    for diffuse_samples in [0u32, 512] {
+    for diffuse_samples in [0u32, 1, 2, 512] {
         let mut tracer = vol::gpu::RelightTracer::new(
             &model,
             &environment,
@@ -1126,7 +1126,8 @@ fn sampling_converges_to_the_analytic_irradiance_with_nothing_in_the_way() {
     let mut analytic = [0.0f64; 3];
     let mut sampled = [0.0f64; 3];
     let mut lit = 0usize;
-    for (a, b) in images[0].iter().zip(&images[1]) {
+    let mut single_two_delta = 0.0f32;
+    for (index, (a, b)) in images[0].iter().zip(&images[3]).enumerate() {
         if a[0] + a[1] + a[2] <= 1.0e-4 {
             continue;
         }
@@ -1134,9 +1135,15 @@ fn sampling_converges_to_the_analytic_irradiance_with_nothing_in_the_way() {
         for channel in 0..3 {
             analytic[channel] += a[channel] as f64;
             sampled[channel] += b[channel] as f64;
+            single_two_delta =
+                single_two_delta.max((images[1][index][channel] - images[2][index][channel]).abs());
         }
     }
     assert!(lit > 1000, "the surfel barely covered the frame: {lit}");
+    assert!(
+        single_two_delta > 0.001,
+        "one requested ray still behaves like the two-ray MIS split"
+    );
 
     for channel in 0..3 {
         analytic[channel] /= lit as f64;

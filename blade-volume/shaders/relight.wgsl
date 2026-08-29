@@ -405,8 +405,8 @@ fn shaded_diffuse(position: vec3<f32>, normal: vec3<f32>, radius: f32, seed: u32
     // nothing about where the light is; sampling the environment handles that
     // and is poor at broad sky, where the cosine is exactly right. The balance
     // heuristic takes whichever was more likely to find each direction.
-    let light_count = max(1u, count / 2u);
-    let cosine_count = max(1u, count - light_count);
+    let light_count = count / 2u + count % 2u;
+    let cosine_count = count / 2u;
     var total = vec3<f32>(0.0);
 
     for (var i = 0u; i < light_count; i += 1u) {

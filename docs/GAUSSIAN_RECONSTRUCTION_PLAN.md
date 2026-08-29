@@ -8455,3 +8455,59 @@ No production shader, operation, option, representation field, format, or
 dependency is added. The next diagnostic freezes geometry and materials and
 separates a view-wide light residual from directional visibility and indirect
 transport residuals.
+
+## Fixed-cloud transport and response attribution (2026-08-29)
+
+That separation is complete. An eight-stage sample sweep on the exact fabric,
+painted, and metal Gaussians compares analytic lighting with 1/2/4/8/16/32/64
+requested samples under all five known and both excluded patterns. Eight to 64
+samples costs approximately 6--9× per view for only `0.01--0.37` dB of mean
+foreground improvement; worst views remain mixed. Randomized one-dimensional
+stratification of the environment and cosine proposals was evaluated both
+separately and together. It improves several means but loses known-light tails
+at four and eight samples. All sampler changes are reverted. The sweep also
+exposed that a request for one ray used `max(1)` on both MIS halves and
+therefore launched two rays. The split now uses ceil/floor halves: one means
+one environment proposal, while every selected even count is byte-for-byte
+unchanged.
+
+The radiometric hypothesis fails a stronger camera split. A gain is fitted per
+known light on 30 construction cameras and evaluated on eight orbit-spread
+cameras. Depending on the object and light, it improves only 5--8 of those
+eight cameras. Per-camera optima span `0.375--1.125` for one fixed emitter
+group, and the optimum pattern repeats by physical camera and light across all
+three objects. The same variation remains with analytic transport. It cannot
+be represented by emitter power (which is view-independent) or camera exposure
+(which is light-independent), so neither nuisance parameter is added.
+
+A constrained material bound carries genuine signal. At roughness one, the
+host renderer supplies exact diffuse and `F0` response bases for patterns
+001--003 and 30 construction cameras. A two-by-two solve per channel and
+material is regularized toward the persisted table. Patterns 004/013 and all
+five patterns on the eight untouched cameras improve every complete
+whole/foreground mean and tail for every tested regularization. The strongest
+candidate then improves all official metrics under patterns 002--006 and 013,
+but pattern 001 exposes the unresolved geometry boundary:
+
+| Painted fixed Gaussian | Pattern 001 whole | Pattern 001 foreground | Excluded 005 foreground | Excluded 006 foreground |
+| --- | ---: | ---: | ---: | ---: |
+| Existing table | `26.906/25.982` | `17.029/16.182` | `15.520/14.583` | `14.073/12.970` |
+| Diffuse/F0 solve, ridge 0.25 | `27.571/25.888` | `17.618/16.487` | `16.606/15.864` | `15.563/14.353` |
+| Diffuse/F0 solve, ridge 16 | `26.959/25.954` | `17.081/16.365` | `15.614/14.720` | `14.212/13.131` |
+
+Values are mean/worst dB. The improved foreground response brightens Gaussian
+support that lies outside the held mask, so one whole-frame tail regresses even
+under the conservative solve. Requiring a material to have at least 16 of 30
+construction-camera observations leaves only seven changes and no more than
+0.001 dB improvement. A quarter blend toward the Gaussian covariance normal
+also loses construction quality. These controls reject both a broad
+per-material production continuation and a covariance-normal substitution.
+
+The ignored diagnostics peak below 0.83 GB in 8 GB zero-swap cgroups, with no
+OOM, pressure, throttle, Xid, or GPU fault. Apart from correcting the one-ray
+count, no sampler experiment, tracked benchmark result, operation, option,
+representation field, format, dependency, or solver survives. The next
+geometry milestone is no longer “add points”: it is to reduce false extent and
+assign existing Gaussian support to a consistent cross-view surface. The
+bounded diffuse/F0 solve becomes worth revisiting only after a better
+foreground material cannot worsen the whole frame.

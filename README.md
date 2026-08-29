@@ -97,9 +97,21 @@ a convincing real-world result.
   three fifths of the correction toward its optimum improves 83 of 84
   fixed-cloud mean/tail metrics,
   but the remaining painted whole-frame tail regresses even after a 1% move.
-  The production safety factor is therefore unchanged. The next useful split
-  is transport/radiometry versus surface response, not more per-point or
-  spatial material parameters.
+  The production safety factor is therefore unchanged.
+- **Residual attribution — closed; surface ownership still blocks response
+  recovery.** On three fixed clouds, a light-wide gain selected on construction
+  cameras improves only 5--8 of 8 untouched cameras; the per-camera optimum
+  spans 0.375--1.125 under the same emitters and repeats by camera/light across
+  different objects. The same pattern remains on the analytic path, while
+  8→64 transport samples cost roughly 6× more for only 0.01--0.37 dB mean
+  improvement. This is not one exposure scalar or insufficient sampling. A
+  regularized diffuse/F0 solve then improves every complete known-light
+  validation cell and six of seven official light groups, but brightens false
+  support enough to lose one whole-frame tail. Requiring stable multi-view
+  evidence leaves only seven changed materials and a numerically neutral gain.
+  No new material or radiometry path is selected: the next useful change is
+  more precise cross-view surface ownership, after which the bounded response
+  solve can be reconsidered.
 
 The next quality gate is deliberately narrow:
 
@@ -139,16 +151,21 @@ The next quality gate is deliberately narrow:
   tables. It improves matched means and tails on two real objects without
   changing geometry. A predeclared metal-sculpture gate repeats every metric
   gain on the exact same cloud, so the large individual-table path is now
-  automatic;
+  automatic. Fixed-cloud attribution now also rejects a light-wide scale,
+  more transport samples, covariance-derived normals, and a per-point broad
+  response continuation: the last one improves the object but exposes false
+  Gaussian extent in one held whole-frame tail. Geometry precision therefore
+  remains ahead of more material capacity;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and
   local multi-view depth sweeps have now all been screened without weakening
   this gate;
 - keep the coupled visibility/one-bounce Gaussian path at four to eight samples
-  in fitting and evaluation; after surface ownership improves, calibrate
-  per-capture exposure and unknown light before adding spatially shared
-  roughness;
+  in fitting and evaluation. Sixty-four samples and same-cost stratification
+  do not pass the complete fixed-cloud gate. After surface ownership improves,
+  calibrate per-capture exposure and unknown light before adding spatially
+  shared roughness;
 - generalize the aligned capture layout to `(image, camera, light, exposure)`
   observations only after those geometry and transport gates pass.
 

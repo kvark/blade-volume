@@ -68,8 +68,8 @@ surface.
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
-| Radiometry and transport | attribution next | Separate view-wide light scale from directional visibility/bounce residual with geometry and materials fixed | A correction repeats across objects and every known-light tail before either excluded light is opened |
-| Materials and capture layout | capacity increase rejected | Keep the global broad-response diagnostic opt-in; do not add spatial or sharper lobes until transport attribution leaves stable material evidence | Every known-light tail plus two held lights and a second object improve; otherwise keep the feature off |
+| Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
+| Materials and capture layout | bounded response fit rejected by geometry tail | Keep the global broad-response diagnostic opt-in; improve false-support ownership before revisiting the validated diffuse/F0 basis | Every known-light and whole-frame tail plus two held lights and a second object improve; otherwise keep the feature off |
 
 The selected dense-support prerequisite remains the training-mask hull. On the
 `obj_31_painted_toy` split, filtering 68,278 of 1,254,170 one-view fused samples
@@ -538,11 +538,59 @@ mean/tail metrics: the painted primary-light whole-frame tail changes
 changes it to `25.97649` dB. The one-line production experiment and its test
 fixture were reverted. The exact half correction remains the selected point.
 
-These controls close the immediate material branch. Next, keep the accepted
-cloud and material table frozen and measure which residual is common per light
-versus dependent on `(light, view)`. Only the former can become capture
-radiometry; the latter must be explained by visibility, finite-light geometry,
-or indirect transport before material capacity is revisited.
+These controls close the immediate spatial-capacity branch. The following
+fixed-cloud attribution now separates the common and directional residuals.
+
+### Fixed-cloud transport, radiometry, and response attribution
+
+The sampled renderer is already close to its practical convergence point.
+Across the painted, fabric, and metal fixed clouds, moving from eight to 64
+diffuse samples costs roughly 6--9× as much per view. Mean foreground quality
+changes by only `0.01--0.37` dB, with mixed worst-view changes. Randomized
+stratification of the environment and cosine halves, separately and together,
+improves several means but regresses known-light tails at the same ray count;
+the sampler experiments are reverted. The sweep did expose one count bug: a
+one-ray request launched one environment and one cosine ray. The split now
+uses ceil/floor halves, so one means one ray and all selected even counts are
+unchanged. Four samples remain the iteration point and eight the
+selected-output point. More rays do not explain the residual.
+
+A construction-only light-scale sweep is not calibration either. On each
+object, 30 cameras select one scalar per known pattern; eight orbit-spread
+cameras then remain untouched. The selected scalar improves only
+`5/8, 6/8, 5/8, 5/8, 6/8` painted validation cameras for patterns
+001/002/003/004/013. Fabric improves `5/8, 8/8, 6/8, 7/8, 8/8`; metal
+improves `6/8, 6/8, 6/8, 7/8, 7/8`. Individual camera optima span
+`0.375--1.125` under the same emitter group. They repeat by physical
+camera/light across objects: for `NF4`, patterns 001--004 prefer approximately
+`0.375, 0.375, 0.875--1.0, 0.375` on all three objects. The analytic
+zero-sample path retains the same split. A true emitter-power scalar cannot
+change with view, and a camera exposure scalar cannot change with light. No
+per-light or per-camera nuisance gain is added.
+
+The remaining response is real but not yet safe to persist. A fixed-roughness
+two-basis solve fits diffuse albedo and `F0` jointly from patterns 001--003 and
+30 cameras, with diagonal regularization toward the current material. Patterns
+004/013 and all five patterns on eight other cameras improve every complete
+whole/foreground mean and tail for regularization factors 0.25 through 16.
+The strongest painted candidate then improves six of seven official pattern
+groups, including both excluded lights, but pattern-001 whole-frame tail moves
+`25.982→25.888` dB while its foreground tail improves
+`16.182→16.487` dB. Even the 16×-regularized candidate changes that whole tail
+to `25.954` dB while raising the foreground tail to `16.365` dB. The material
+is improving the object and simultaneously brightening inaccurate Gaussian
+extent outside its mask. Requiring at least 16 of 30 construction-camera
+observations leaves only seven eligible materials and gains at most 0.001 dB;
+that is numerically safe but not useful evidence for a production feature.
+
+A 25% blend toward each Gaussian covariance normal already loses construction
+quality, so the failure is not repaired by deriving shading orientation from
+the ellipsoid. Apart from correcting the one-ray count, no sampler experiment,
+operation, option, model field, format, dependency, or response solver is
+retained. The next accepted step must improve cross-view ownership/precision
+of the existing support. Once false extent no longer converts a better
+foreground material into a worse whole frame, the same bounded diffuse/F0
+basis is the first material continuation to revisit.
 
 ## Milestones
 
@@ -720,8 +768,10 @@ a deterministic repeat agree within the measured training variance.
 - [x] Bound a stronger diffuse transfer; retain the halfway correction because
   even the smallest tested 1% extra step regresses one fixed-cloud
   whole-frame tail.
-- [ ] Attribute the fixed-cloud residual between per-light radiometry,
-  visibility, and bounded indirect transport before adding material capacity.
+- [x] Attribute the fixed-cloud residual between per-light radiometry,
+  visibility, and bounded indirect transport; reject scalar gains, extra
+  samples, and same-cost stratification, and bound the remaining diffuse/F0
+  response by the false-support whole-frame tail.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
