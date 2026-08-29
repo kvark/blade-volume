@@ -928,6 +928,23 @@ replay once, and open the official camera/light cross-product for one final
 decision. Do not weaken a threshold or choose a different point budget when
 the object produces no proposal.
 
+The basket produces no proposal. The fixed construction-only reconstruction
+fuses 318,297 depth groups, retains 2,500, and reaches 96.3% foreground recall
+at 93.0% precision. Matching accepts 12 tracks and the visual hull keeps 11,
+but the selection cameras place none in foreground missed by the persisted
+Gaussian. Patterns 005/006 and the ten official cameras remain unopened. The
+base PLY has SHA-256
+`1db4937a528940387610a4ce585e40ff4c20e467b0441d8c48ef14274582fef3`.
+The fit and diagnostic peak at 1.14 GB and 639 MB respectively, with zero
+swap, OOM, throttling, Xid, or GPU fault.
+
+Predeclare `obj_15_flower` as the next construction-only screen before
+downloading it. Its thin overlapping petals and leaves are a stronger test of
+coherent missing support than the already well-covered basket. Reuse the exact
+camera/light isolation, 2,500-point budget, thresholds, and one final-decision
+rule above; do not inspect an official camera or excluded light unless the
+internal fixed-base proposal is non-empty and passes.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
