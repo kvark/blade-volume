@@ -8603,3 +8603,41 @@ construction and independent known-light/camera mean and tail across two
 optimizer basins on both painted and fabric objects. Otherwise reject centre
 regularization and constrain covariance at measured depth discontinuities
 instead.
+
+## Rejected co-optimized source-plane center feedback (2026-08-29)
+
+The follow-up tested the latter requirement without expanding the graph. One
+bounded plane correction was divided across the existing geometry-sync points,
+so the same multi-light Adam state continued after each small proximal update.
+Opacity and learned normals remained trainable; the ordinary final material
+polish followed. This added no graph operation, shader, candidate path, format,
+dependency, or persistent field. Of 2,500 painted-toy centers, 509 met the
+predeclared 12-source-view and 5%-of-radius plane-RMS criteria.
+
+The leakage-free internal split fitted patterns 001--003 on 30 cameras, then
+scored patterns 004/013 on those cameras and all five lights on eight disjoint
+cameras. No official camera or excluded pattern was loaded. At 2.5% total
+feedback every one of ten light/split rows contains a mean or tail regression,
+and an adjacent repeat gives the same decision. A zero-feedback arm quantifies
+the GPU atomic basin variance: most changes stay below 0.02 dB. Feedback totals
+of 0.5% and 0.1% remain decisively outside that envelope rather than converging
+to a safe identity. The 0.1% arm lowers pattern-013 fit whole-frame tail
+`21.0944→20.9162` dB, pattern-003 camera tail `24.7419→24.6146` dB, and
+pattern-004 camera tail `24.5388→24.4215` dB.
+
+Tiny calibrated-normal movement therefore perturbs the discrete candidate and
+ownership basin more strongly than it regularizes depth. The first object's
+failure terminates the declared two-object gate; fabric and held observations
+remain unopened. The temporary API and its bounded-compounding test are
+removed. Ignored diagnostics live in `target/audit-tools/plane_cofit/` and the
+matching `target/audit-runs/openillumination/plane-cofit-*` logs. Their 8 GB,
+zero-swap scopes peak at 0.80 GB and report no OOM, pressure, throttle, Xid, or
+GPU fault.
+
+Center regularization is now closed for this milestone. Preserve fitted centers
+and construct a source-view covariance bound instead: identify only ellipsoid
+support crossing a measured depth or mask discontinuity, shrink the offending
+axis one-sidedly, and compensate opacity to preserve established foreground
+response. That separates false spatial extent from center responsibility and
+can be screened on the exact fixed cloud before another optimizer basin is
+introduced.

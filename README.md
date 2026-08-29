@@ -122,9 +122,10 @@ a convincing real-world result.
   `1.2–1.6` local radii away from tight multi-view depth planes. A bounded
   post-fit correction improves two established real checkpoints, but an exact
   paired fresh reconstruction regresses every light group. It is therefore
-  not in production. The next gate puts the same confidence-weighted plane
-  term inside geometry training and requires repeatability across objects and
-  optimizer basins before any held-light result is opened.
+  not in production. Distributing the correction through geometry training
+  also fails at 2.5%, 0.5%, and 0.1% total motion before any held observation
+  is opened. Center regularization is closed; the next gate constrains only
+  covariance that crosses calibrated depth or silhouette discontinuities.
 
 The next quality gate is deliberately narrow:
 
@@ -175,7 +176,9 @@ The next quality gate is deliberately narrow:
   local multi-view depth sweeps have now all been screened without weakening
   this gate. A post-fit calibrated source-plane correction passes two stored
   checkpoints but fails a paired fresh optimizer basin, so the next candidate
-  must co-optimize that evidence rather than mutate a finished cloud;
+  co-optimizes that evidence rather than mutating a finished cloud. That test
+  also fails down to 0.1% total center motion; keep centers fixed and test a
+  source-view covariance bound next;
 - keep the coupled visibility/one-bounce Gaussian path at four to eight samples
   in fitting and evaluation. Sixty-four samples and same-cost stratification
   do not pass the complete fixed-cloud gate. After surface ownership improves,

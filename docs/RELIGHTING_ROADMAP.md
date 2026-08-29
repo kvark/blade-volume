@@ -679,6 +679,35 @@ replica. If that fails, close depth-centre regularization and move to a
 depth-discontinuity covariance bound rather than adding another post-fit
 heuristic.
 
+That co-optimization gate is now closed too. A minimal prototype introduced no
+loss graph or shader: it distributed the requested correction over the existing
+20-update geometry synchronization points, preserving one Adam trajectory while
+opacity, normals, later material fitting, and candidate-index rebuilds adapted.
+Only 509 of 2,500 painted-toy centers carried the established 12-view/5%-RMS
+confidence. Patterns 001--003 on 30 cameras trained each arm; patterns 004/013
+and eight disjoint cameras were validation. No official camera or excluded
+pattern was loaded.
+
+The 2.5% candidate fails every one of the ten light/split rows in two adjacent
+runs. A zero-feedback arm measures the ordinary atomic variance at mostly less
+than 0.02 dB, but reducing feedback to 0.5% and 0.1% still produces much larger
+losses. At 0.1%, pattern-013 fit-view whole-frame tail falls
+`21.0944→20.9162` dB and the pattern-003 camera tail falls
+`24.7419→24.6146` dB. The response is neither monotonic nor inside measured
+noise: tiny center motion changes discrete Gaussian responsibility. Because the
+first object fails the predeclared all-cell gate, the second object and all held
+observations stay unopened.
+
+The temporary public API and unit fixture are removed. Ignored runs peak below
+0.80 GB in 8 GB zero-swap scopes with no OOM, throttle, Xid, or GPU fault.
+Calibrated planes remain diagnostic evidence, but neither post-fit nor
+co-optimized center feedback is a stable consumer. The next implementation
+keeps centers fixed and asks a one-sided question in each source view: does a
+Gaussian's finite response ellipsoid cross a measured depth or foreground-mask
+discontinuity? Only the offending covariance direction may shrink, and it must
+retain foreground response through a coupled opacity adjustment before any
+material solve is revisited.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -862,9 +891,12 @@ a deterministic repeat agree within the measured training variance.
 - [x] Reconstruct exact dense source-plane evidence and test a bounded post-fit
   centre correction on two established checkpoints plus a paired fresh basin;
   remove it when the fresh basin regresses every light group.
-- [ ] Co-optimize a confidence-weighted source-plane term during multi-light
-  geometry fitting and require paired, two-object, multi-basin internal gates
-  before opening official cameras or excluded lights.
+- [x] Co-optimize calibrated source-plane feedback during multi-light geometry;
+  remove it when 2.5%, 0.5%, and 0.1% total corrections all exceed zero-arm
+  variance and fail the first object's independent internal gate.
+- [ ] Keep centers fixed and constrain only covariance support that crosses a
+  calibrated source-view depth or silhouette discontinuity, coupled to opacity
+  so the established foreground response is preserved.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
