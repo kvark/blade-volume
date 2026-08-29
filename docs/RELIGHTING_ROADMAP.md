@@ -1028,6 +1028,32 @@ every unchanged patch threshold above. Open the nine-camera/two-light final
 cross-product only after a non-empty internally passing proposal and its exact
 replay.
 
+The ReNé screen stops before reconstruction. Range extraction materializes
+only the predeclared `lunch` span (3.27 GiB); all 4,161 archive entries pass
+CRC. The first permitted construction photograph has nonzero content over the
+complete 1440x1080 frame because the object sits inside a textured calibration
+enclosure, so the fixed exact-black mask rule yields no background. The four
+selected light translations are only 0.368--0.412 m from the world origin,
+confirming that this is also a near-field point-light capture rather than the
+distant environment assumed by the current renderer. No mask threshold,
+background subtraction, or distant-light approximation is chosen after seeing
+the image; no reconstruction is run, and the nine reserved cameras, two
+reserved lights, and official blacked-out observations remain unopened.
+
+ReNé becomes useful only after two explicit capabilities exist: deterministic
+background subtraction against its separately captured empty enclosure, and a
+calibrated point-light training renderer with spatially varying direction and
+falloff. Do not add those solely as an importer workaround. First run the
+existing unknown-environment path on Objects With Lighting, whose official
+2.35 GB release already supplies calibrated cameras, object masks, and held
+HDR environments. Before listing that archive, define its first gate as the
+lexicographically first object directory. Use all input cameras except every
+fifth sorted camera for one internal same-environment test, reconstruct only a
+2,500-point minimum-two-source cloud, estimate the input environment, and open
+the official ground-truth views/environments once after the fixed fit. Ignore
+all provided polygonal geometry. This gate tests novel view and novel lighting;
+it is separate from the still-blocked coherent missing-patch merge.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
