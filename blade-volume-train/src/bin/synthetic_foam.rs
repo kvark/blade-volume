@@ -672,7 +672,7 @@ fn refine_photometric_normals(
         .zip(&observations)
         .map(
             |(irradiance, observations)| train::inverse::decompose::KnownLightObservations {
-                irradiance,
+                light: train::inverse::decompose::CalibratedLight::Distant(irradiance),
                 observations,
             },
         )
@@ -1679,7 +1679,7 @@ fn main() {
                     .zip(&environments)
                     .map(|(capture, environment)| train::gaussian_splat::KnownLightCapture {
                         capture,
-                        environment,
+                        light: train::gaussian_splat::KnownLight::Distant(environment),
                     })
                     .collect();
                 let started = std::time::Instant::now();

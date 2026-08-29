@@ -1160,14 +1160,16 @@ fn main() {
             let mut lights = Vec::with_capacity(normal_captures.len() + 1);
             lights.push(train::gaussian_splat::KnownLightCapture {
                 capture: &capture,
-                environment: known_light
-                    .as_ref()
-                    .expect("known light validated for additional captures"),
+                light: train::gaussian_splat::KnownLight::Distant(
+                    known_light
+                        .as_ref()
+                        .expect("known light validated for additional captures"),
+                ),
             });
             lights.extend(normal_captures.iter().map(|entry| {
                 train::gaussian_splat::KnownLightCapture {
                     capture: &entry.capture,
-                    environment: &entry.environment,
+                    light: train::gaussian_splat::KnownLight::Distant(&entry.environment),
                 }
             }));
             let gpu = compute_gpu
@@ -3135,7 +3137,7 @@ fn refine_normals_from_captures(
         .zip(&observations)
         .map(
             |(irradiance, observations)| train::inverse::decompose::KnownLightObservations {
-                irradiance,
+                light: train::inverse::decompose::CalibratedLight::Distant(irradiance),
                 observations,
             },
         )
@@ -3164,10 +3166,12 @@ fn refine_materials_from_captures(
         .collect();
     let mut lights = Vec::with_capacity(secondary.len() + 1);
     lights.push(train::inverse::decompose::KnownLightObservations {
-        irradiance: train::relight::Irradiance::project(
-            &primary_light.texels,
-            primary_light.width,
-            primary_light.height,
+        light: train::inverse::decompose::CalibratedLight::Distant(
+            train::relight::Irradiance::project(
+                &primary_light.texels,
+                primary_light.width,
+                primary_light.height,
+            ),
         ),
         observations: primary_observations,
     });
@@ -3177,10 +3181,12 @@ fn refine_materials_from_captures(
             .zip(&observations)
             .map(
                 |(entry, observations)| train::inverse::decompose::KnownLightObservations {
-                    irradiance: train::relight::Irradiance::project(
-                        &entry.environment.texels,
-                        entry.environment.width,
-                        entry.environment.height,
+                    light: train::inverse::decompose::CalibratedLight::Distant(
+                        train::relight::Irradiance::project(
+                            &entry.environment.texels,
+                            entry.environment.width,
+                            entry.environment.height,
+                        ),
                     ),
                     observations,
                 },

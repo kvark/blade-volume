@@ -165,6 +165,84 @@ impl RelightModel {
 
 // ------------------------------------------------------------------- lighting
 
+/// One finite-distance emitter, optionally with a directional falloff.
+///
+/// `direction` points away from the emitter along its brightest axis and
+/// `exponent` controls the cosine-power falloff around that axis. An exponent
+/// of zero makes an ordinary isotropic point light. `intensity / distance^2`
+/// is the normal-incidence diffuse response of a unit-albedo surface, in the
+/// caller's radiometric and world-distance units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointLight {
+    pub position: [f32; 3],
+    pub direction: [f32; 3],
+    pub intensity: [f32; 3],
+    pub exponent: f32,
+}
+
+/// Incident radiance and direction from a sampled finite light.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointLightSample {
+    /// Unit direction from the shaded point towards the emitter.
+    pub towards: glam::Vec3,
+    pub radiance: [f32; 3],
+}
+
+impl PointLight {
+    /// Move a camera- or rig-local calibration into world space.
+    pub fn to_world(self, orientation: glam::Quat, position: glam::Vec3) -> Self {
+        Self {
+            position: (orientation * glam::Vec3::from(self.position) + position).to_array(),
+            direction: (orientation * glam::Vec3::from(self.direction)).to_array(),
+            ..self
+        }
+    }
+
+    /// Sample the emitter at one world-space point.
+    pub fn sample(self, point: glam::Vec3) -> Option<PointLightSample> {
+        let position = glam::Vec3::from(self.position);
+        let from_light = point - position;
+        let distance_squared = from_light.length_squared();
+        if !point.is_finite()
+            || !position.is_finite()
+            || !distance_squared.is_finite()
+            || distance_squared <= f32::EPSILON
+            || !self.exponent.is_finite()
+            || self.exponent < 0.0
+            || self
+                .intensity
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return None;
+        }
+        let away = from_light / distance_squared.sqrt();
+        let angular = if self.exponent == 0.0 {
+            1.0
+        } else {
+            let direction = glam::Vec3::from(self.direction).try_normalize()?;
+            direction.dot(away).max(0.0).powf(self.exponent)
+        };
+        Some(PointLightSample {
+            towards: -away,
+            radiance: self
+                .intensity
+                .map(|intensity| intensity * angular / distance_squared),
+        })
+    }
+
+    /// Diffuse response before multiplying by surface albedo.
+    pub fn diffuse(self, point: glam::Vec3, normal: glam::Vec3) -> [f32; 3] {
+        let Some(sample) = self.sample(point) else {
+            return [0.0; 3];
+        };
+        let cosine = normal
+            .try_normalize()
+            .map_or(0.0, |normal| normal.dot(sample.towards).max(0.0));
+        sample.radiance.map(|radiance| radiance * cosine)
+    }
+}
+
 /// Real spherical harmonic basis for bands 0..=2.
 pub fn sh9(n: glam::Vec3) -> [f32; 9] {
     [
@@ -863,6 +941,50 @@ pub fn shade(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_point_light_has_distance_and_angular_falloff() {
+        let light = PointLight {
+            position: [0.0; 3],
+            direction: glam::Vec3::Z.to_array(),
+            intensity: [4.0, 8.0, 12.0],
+            exponent: 2.0,
+        };
+        let on_axis = light.sample(glam::Vec3::new(0.0, 0.0, 2.0)).unwrap();
+        assert_eq!(on_axis.towards, glam::Vec3::NEG_Z);
+        assert_eq!(on_axis.radiance, [1.0, 2.0, 3.0]);
+
+        let diagonal = light.sample(glam::Vec3::new(0.0, 2.0, 2.0)).unwrap();
+        for (actual, expected) in diagonal.radiance.into_iter().zip([0.25, 0.5, 0.75]) {
+            assert!((actual - expected).abs() < 1.0e-6);
+        }
+        assert_eq!(
+            light.diffuse(glam::Vec3::new(0.0, 0.0, 2.0), glam::Vec3::Z),
+            [0.0; 3]
+        );
+        assert_eq!(
+            light.diffuse(glam::Vec3::new(0.0, 0.0, 2.0), glam::Vec3::NEG_Z),
+            [1.0, 2.0, 3.0]
+        );
+    }
+
+    #[test]
+    fn a_camera_local_point_light_moves_rigidly() {
+        let local = PointLight {
+            position: [1.0, 0.0, 0.0],
+            direction: [0.0, 0.0, 1.0],
+            intensity: [1.0; 3],
+            exponent: 1.0,
+        };
+        let orientation = glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let world = local.to_world(orientation, glam::Vec3::new(2.0, 3.0, 4.0));
+        assert!(
+            glam::Vec3::from(world.position).abs_diff_eq(glam::Vec3::new(2.0, 3.0, 3.0), 1.0e-6)
+        );
+        assert!(glam::Vec3::from(world.direction).abs_diff_eq(glam::Vec3::X, 1.0e-6));
+        assert_eq!(world.intensity, local.intensity);
+        assert_eq!(world.exponent, local.exponent);
+    }
 
     #[test]
     fn a_uniform_environment_lights_a_unit_albedo_to_itself() {

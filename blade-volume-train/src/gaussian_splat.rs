@@ -428,12 +428,19 @@ pub struct PbrSupportRecovery {
     pub restored: usize,
 }
 
+/// A calibrated light model associated with an image capture.
+#[derive(Clone, Copy)]
+pub enum KnownLight<'a> {
+    Distant(&'a vol::relight::Environment),
+    Near(&'a [vol::relight::PointLight]),
+}
+
 /// One calibrated image capture used to separate Gaussian geometry from
 /// illumination-dependent appearance.
 #[derive(Clone, Copy)]
 pub struct KnownLightCapture<'a> {
     pub capture: &'a crate::inverse::capture::Capture,
-    pub environment: &'a vol::relight::Environment,
+    pub light: KnownLight<'a>,
 }
 
 /// Statistics for the selected appearance-then-support training schedule.
@@ -1314,6 +1321,37 @@ fn set_diffuse_appearance(
         .collect();
 }
 
+fn validate_calibrated_light(
+    light: KnownLight<'_>,
+    capture: &crate::inverse::capture::Capture,
+) -> Result<(), String> {
+    let KnownLight::Near(lights) = light else {
+        return Ok(());
+    };
+    if lights.len() != capture.views.len() {
+        return Err(format!(
+            "near-field capture has {} lights for {} views",
+            lights.len(),
+            capture.views.len()
+        ));
+    }
+    for (index, light) in lights.iter().enumerate() {
+        if !glam::Vec3::from(light.position).is_finite()
+            || !glam::Vec3::from(light.direction).is_finite()
+            || glam::Vec3::from(light.direction).length_squared() <= f32::EPSILON
+            || light
+                .intensity
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+            || !light.exponent.is_finite()
+            || light.exponent < 0.0
+        {
+            return Err(format!("near-field light {index} is invalid: {light:?}"));
+        }
+    }
+    Ok(())
+}
+
 fn capture_has_masks(capture: &crate::inverse::capture::Capture, view_indices: &[usize]) -> bool {
     view_indices
         .iter()
@@ -1346,7 +1384,7 @@ fn multilight_opacity_learning_rate(view_count: usize, learn_normals: bool) -> f
 /// opacity update so the physical light response can recalibrate the volume.
 ///
 /// Each pass predicts a diffuse color from the current PBR surface and one
-/// measured environment. The color is scratch supervision: the Gaussian's
+/// measured distant or finite light. The color is scratch supervision: the Gaussian's
 /// learned coefficients are restored before returning. Fully masked captures
 /// also update explicit diffuse shading normals in the same graph; maskless
 /// captures retain their established position-only path. On masked foreground
@@ -1357,9 +1395,9 @@ fn multilight_opacity_learning_rate(view_count: usize, learn_normals: bool) -> f
 /// mixed captures retain their display-referred residual for low-radiance
 /// coverage. It interleaves paired rays from the lights in forward/reverse
 /// order, avoiding an order prior while retaining joint Adam state and
-/// compiling the image-formation graph only once. A short normals-only tail
-/// subtracts aligned light pairs, cancelling their shared opacity response
-/// without moving geometry.
+/// compiling the image-formation graph only once. For distant lights, a short
+/// normals-only tail subtracts aligned light pairs, cancelling their shared
+/// opacity response without moving geometry.
 pub fn fit_multilight_geometry(
     gaussian: &mut vol::PointCloudModel,
     surface: &mut vol::relight::RelightModel,
@@ -1375,15 +1413,53 @@ pub fn fit_multilight_geometry(
     if lights.len() < 2 {
         return Err("multi-light Gaussian geometry requires at least two known lights".to_string());
     }
+    if view_indices.is_empty() {
+        return Err("multi-light Gaussian geometry needs at least one view".to_string());
+    }
 
-    let saved_degree = gaussian.sh_degree;
-    let saved_appearance = mem::take(&mut gaussian.sh_coefficients);
-    let saved_positions = gaussian.points.clone();
+    for light in lights {
+        validate_calibrated_light(light.light, light.capture)?;
+        if let Some(&view) = view_indices
+            .iter()
+            .find(|&&view| view >= light.capture.views.len())
+        {
+            return Err(format!(
+                "capture view {view} is outside {} available views",
+                light.capture.views.len()
+            ));
+        }
+    }
     let learn_normals = lights
         .iter()
         .all(|light| capture_has_masks(light.capture, view_indices));
-    let result =
-        fit_joint_multilight_positions(gaussian, surface, lights, view_indices, learn_normals, gpu);
+    let near_lights = matches!(lights[0].light, KnownLight::Near(_));
+    if lights
+        .iter()
+        .any(|light| matches!(light.light, KnownLight::Near(_)) != near_lights)
+    {
+        return Err("multi-light Gaussian geometry cannot mix distant and near lights".to_string());
+    }
+    if near_lights && !learn_normals {
+        return Err(
+            "near-field Gaussian geometry requires masks on every selected view".to_string(),
+        );
+    }
+    let saved_degree = gaussian.sh_degree;
+    let saved_appearance = mem::take(&mut gaussian.sh_coefficients);
+    if near_lights {
+        let scratch_len = gaussian.points.len() * gaussian.sh_component_count() * 3;
+        gaussian.sh_coefficients.resize(scratch_len, 0.0);
+    }
+    let saved_positions = gaussian.points.clone();
+    let result = fit_joint_multilight_positions(
+        gaussian,
+        surface,
+        lights,
+        view_indices,
+        learn_normals,
+        near_lights,
+        gpu,
+    );
     gaussian.sh_degree = saved_degree;
     gaussian.sh_coefficients = saved_appearance;
     match result {
@@ -1408,6 +1484,7 @@ fn fit_joint_multilight_positions(
     lights: &[KnownLightCapture<'_>],
     view_indices: &[usize],
     learn_normals: bool,
+    near_lights: bool,
     gpu: sync::Arc<gpu::Context>,
 ) -> Result<MultilightFit, String> {
     let opacity_learning_rate = multilight_opacity_learning_rate(view_indices.len(), learn_normals);
@@ -1424,7 +1501,9 @@ fn fit_joint_multilight_positions(
         opacity_loss_weight: 0.0,
         background: [0.0; 3],
     };
-    set_diffuse_appearance(gaussian, surface, lights[0].environment, true);
+    if let KnownLight::Distant(environment) = lights[0].light {
+        set_diffuse_appearance(gaussian, surface, environment, true);
+    }
     for light in lights {
         validate_fit(gaussian, light.capture, view_indices, options)?;
         if !captures_are_aligned(lights[0].capture, light.capture) {
@@ -1441,24 +1520,35 @@ fn fit_joint_multilight_positions(
             "joint multi-light Gaussian normals require masks on every selected view".to_string(),
         );
     }
-    set_diffuse_appearance(gaussian, surface, lights[0].environment, encode_srgb);
+    if let KnownLight::Distant(environment) = lights[0].light {
+        set_diffuse_appearance(gaussian, surface, environment, encode_srgb);
+    }
 
     let appearances = if learn_normals {
         Vec::new()
     } else {
         let mut appearances = Vec::with_capacity(lights.len());
         for light in lights {
-            set_diffuse_appearance(gaussian, surface, light.environment, encode_srgb);
+            let KnownLight::Distant(environment) = light.light else {
+                unreachable!("near-field fitting always learns physical normals")
+            };
+            set_diffuse_appearance(gaussian, surface, environment, encode_srgb);
             appearances.push(sh_parameters(gaussian));
         }
-        set_diffuse_appearance(gaussian, surface, lights[0].environment, encode_srgb);
+        let KnownLight::Distant(environment) = lights[0].light else {
+            unreachable!("near-field fitting always learns physical normals")
+        };
+        set_diffuse_appearance(gaussian, surface, environment, encode_srgb);
         appearances
     };
     let normal_albedo = learn_normals.then(|| diffuse_albedo(surface));
-    let normal_irradiance = learn_normals.then(|| {
+    let normal_irradiance = (learn_normals && !near_lights).then(|| {
         lights
             .iter()
-            .map(|light| diffuse_irradiance(light.environment))
+            .filter_map(|light| match light.light {
+                KnownLight::Distant(environment) => Some(diffuse_irradiance(environment)),
+                KnownLight::Near(_) => None,
+            })
             .collect::<Vec<_>>()
     });
     let normal_contrasts = normal_irradiance.as_ref().map(|irradiance| {
@@ -1488,6 +1578,7 @@ fn fit_joint_multilight_positions(
         OpacityLoss::Mask,
         MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING,
         learn_normals,
+        near_lights,
         false,
     );
     let (mut session, _report) = mn::build(
@@ -1509,10 +1600,17 @@ fn fit_joint_multilight_positions(
         session.set_parameter("opacity_logits", &opacity_logits);
         set_surface_normal_parameters(&mut session, surface);
         session.set_input("diffuse_albedo", normal_albedo.as_ref().unwrap());
-        session.set_input(
-            "diffuse_irradiance",
-            &normal_irradiance.as_ref().unwrap()[0],
-        );
+        match lights[0].light {
+            KnownLight::Distant(_) => session.set_input(
+                "diffuse_irradiance",
+                &normal_irradiance.as_ref().unwrap()[0],
+            ),
+            KnownLight::Near(view_lights) => set_near_light_inputs(
+                &mut session,
+                view_lights[view_indices[0]],
+                gaussian.points.len(),
+            ),
+        }
     } else {
         set_model_parameters(&mut session, gaussian);
     }
@@ -1525,10 +1623,17 @@ fn fit_joint_multilight_positions(
         view_indices,
         options.candidate_min_alpha,
     );
+    let audit_view;
+    let audit_views = if near_lights {
+        audit_view = [view_indices[0]];
+        &audit_view
+    } else {
+        view_indices
+    };
     let audit = sample_rays_with_color_space(
         lights[0].capture,
         &pixel_rays,
-        view_indices,
+        audit_views,
         options.batch_size,
         u32::MAX,
         encode_srgb,
@@ -1558,17 +1663,30 @@ fn fit_joint_multilight_positions(
         }
         let (light_index, sequence) = multilight_sample(lights.len(), step);
         if learn_normals {
-            session.set_input(
-                "diffuse_irradiance",
-                &normal_irradiance.as_ref().unwrap()[light_index],
-            );
+            match lights[light_index].light {
+                KnownLight::Distant(_) => session.set_input(
+                    "diffuse_irradiance",
+                    &normal_irradiance.as_ref().unwrap()[light_index],
+                ),
+                KnownLight::Near(view_lights) => {
+                    let view = view_indices[(step / lights.len()) % view_indices.len()];
+                    set_near_light_inputs(&mut session, view_lights[view], gaussian.points.len());
+                }
+            }
         } else {
             set_sh_parameters(&mut session, &appearances[light_index]);
         }
+        let selected_view;
+        let sampled_views = if near_lights {
+            selected_view = [view_indices[(step / lights.len()) % view_indices.len()]];
+            &selected_view
+        } else {
+            view_indices
+        };
         let batch = sample_rays_with_color_space(
             lights[light_index].capture,
             &pixel_rays,
-            view_indices,
+            sampled_views,
             options.batch_size,
             sequence,
             encode_srgb,
@@ -1577,7 +1695,7 @@ fn fit_joint_multilight_positions(
         session.step();
         session.wait();
     }
-    let contrast_steps = if learn_normals {
+    let contrast_steps = if learn_normals && !near_lights {
         MULTI_LIGHT_NORMAL_CONTRAST_STEPS * lights.len()
     } else {
         0
@@ -1659,10 +1777,17 @@ fn fit_joint_multilight_positions(
         options.candidate_min_alpha,
     );
     if learn_normals {
-        session.set_input(
-            "diffuse_irradiance",
-            &normal_irradiance.as_ref().unwrap()[0],
-        );
+        match lights[0].light {
+            KnownLight::Distant(_) => session.set_input(
+                "diffuse_irradiance",
+                &normal_irradiance.as_ref().unwrap()[0],
+            ),
+            KnownLight::Near(view_lights) => set_near_light_inputs(
+                &mut session,
+                view_lights[view_indices[0]],
+                gaussian.points.len(),
+            ),
+        }
     } else {
         set_sh_parameters(&mut session, &appearances[0]);
     }
@@ -2534,6 +2659,7 @@ pub fn build_graph(
         0.0,
         false,
         false,
+        false,
     )
 }
 
@@ -2589,6 +2715,10 @@ fn build_diffuse_normal_colors(g: &mut mn::Graph, particles: usize) -> [mn::Node
     let albedo = g.input("diffuse_albedo", &[particles, 3]);
     let lighting = g.matmul(basis, irradiance);
     let color = g.mul(lighting, albedo);
+    split_rgb(g, color, particles)
+}
+
+fn split_rgb(g: &mut mn::Graph, color: mn::NodeId, particles: usize) -> [mn::NodeId; 3] {
     let color = g.reshape(color, &[particles * 3]);
     let r = g.split_a(color, particles as u32, 1, 2, 1);
     let r = g.reshape(r, &[particles, 1]);
@@ -2599,6 +2729,50 @@ fn build_diffuse_normal_colors(g: &mut mn::Graph, particles: usize) -> [mn::Node
     let b = g.split_b(gb, particles as u32, 1, 1, 1);
     let b = g.reshape(b, &[particles, 1]);
     [r, g_channel, b]
+}
+
+fn build_near_diffuse_normal_colors(
+    g: &mut mn::Graph,
+    particles: usize,
+    positions: mn::NodeId,
+) -> [mn::NodeId; 3] {
+    let normals = g.parameter("surface_normals", &[particles, 3]);
+    let unit_scale = 1.0 / 3.0_f32.sqrt();
+    let unit_weight = g.constant(vec![unit_scale; 3], &[3]);
+    let normals = g.rms_norm(normals, unit_weight, 1.0e-12);
+
+    let light_position = g.input("near_light_position", &[particles, 3]);
+    let light_direction = g.input("near_light_direction", &[particles, 3]);
+    let light_intensity = g.input("near_light_intensity", &[particles, 3]);
+    let light_exponent = g.input("near_light_exponent", &[particles, 1]);
+    let negative_positions = g.neg(positions);
+    let to_light = g.add(light_position, negative_positions);
+    let distance_squared = g.mul(to_light, to_light);
+    let distance_squared = g.sum_inner(distance_squared);
+    let distance_floor = g.constant(vec![1.0e-8; particles], &[particles, 1]);
+    let distance_squared = g.add(distance_squared, distance_floor);
+    let towards = g.rms_norm(to_light, unit_weight, 1.0e-12);
+
+    let away = g.neg(towards);
+    let angular = g.mul(away, light_direction);
+    let angular = g.sum_inner(angular);
+    let angular = g.relu(angular);
+    let angular_floor = g.constant(vec![1.0e-8; particles], &[particles, 1]);
+    let angular = g.add(angular, angular_floor);
+    let angular = g.log(angular);
+    let angular = g.mul(angular, light_exponent);
+    let angular = g.exp(angular);
+
+    let cosine = g.mul(normals, towards);
+    let cosine = g.sum_inner(cosine);
+    let cosine = g.relu(cosine);
+    let response = g.mul(angular, cosine);
+    let response = g.div(response, distance_squared);
+    let response = g.broadcast_inner(response, 3);
+    let lighting = g.mul(light_intensity, response);
+    let albedo = g.input("diffuse_albedo", &[particles, 3]);
+    let color = g.mul(lighting, albedo);
+    split_rgb(g, color, particles)
 }
 
 fn build_rotation_axes(
@@ -2689,6 +2863,7 @@ fn build_graph_with_losses(
     opacity_loss: OpacityLoss,
     opacity_conditioned_color_ceiling: f32,
     diffuse_normals: bool,
+    near_lights: bool,
     train_rotations: bool,
 ) -> GaussianGraph {
     assert!(particles > 0);
@@ -2698,6 +2873,7 @@ fn build_graph_with_losses(
     assert!(opacity_loss_weight.is_finite() && opacity_loss_weight >= 0.0);
     assert!(opacity_conditioned_color_ceiling.is_finite());
     assert!((0.0..=1.0).contains(&opacity_conditioned_color_ceiling));
+    assert!(!near_lights || diffuse_normals);
     let rows = pixels * candidates_per_pixel;
     let sh_components = vol::get_sh_component_count(sh_degree);
 
@@ -2715,7 +2891,11 @@ fn build_graph_with_losses(
     let log_scales = g.parameter("log_scales", &[particles, 3]);
     let opacity_logits = g.parameter("opacity_logits", &[particles, 1]);
     let sh = ["sh_r", "sh_g", "sh_b"].map(|name| g.parameter(name, &[particles, sh_components]));
-    let diffuse_colors = diffuse_normals.then(|| build_diffuse_normal_colors(g, particles));
+    let diffuse_colors = if near_lights {
+        Some(build_near_diffuse_normal_colors(g, particles, positions))
+    } else {
+        diffuse_normals.then(|| build_diffuse_normal_colors(g, particles))
+    };
 
     let centers = g.embedding(candidate_indices, positions);
     let origins = g.embedding(pixel_indices, ray_origins);
@@ -3033,6 +3213,23 @@ fn set_surface_normal_parameters(session: &mut mn::Session, surface: &vol::relig
         .flat_map(|surfel| surfel.normal)
         .collect();
     session.set_parameter("surface_normals", &values);
+}
+
+fn set_near_light_inputs(
+    session: &mut mn::Session,
+    light: vol::relight::PointLight,
+    particles: usize,
+) {
+    let direction = glam::Vec3::from(light.direction)
+        .try_normalize()
+        .expect("validated point-light direction");
+    session.set_input("near_light_position", &light.position.repeat(particles));
+    session.set_input(
+        "near_light_direction",
+        &direction.to_array().repeat(particles),
+    );
+    session.set_input("near_light_intensity", &light.intensity.repeat(particles));
+    session.set_input("near_light_exponent", &vec![light.exponent; particles]);
 }
 
 fn diffuse_albedo(surface: &vol::relight::RelightModel) -> Vec<f32> {
@@ -3456,6 +3653,7 @@ fn build_fit_session(
         options.background,
         opacity_loss,
         0.0,
+        false,
         false,
         train_rotations,
     );
@@ -4776,6 +4974,50 @@ mod tests {
         }
     }
 
+    fn synthetic_near_light_capture(
+        model: &vol::PointCloudModel,
+        surface: &vol::relight::RelightModel,
+        lights: &[vol::relight::PointLight],
+    ) -> crate::inverse::capture::Capture {
+        let mut capture = synthetic_capture(model);
+        assert_eq!(capture.views.len(), lights.len());
+        let point = model.points[0];
+        let transforms = model.transforms.as_ref().unwrap();
+        let surfel = surface.surfels[0];
+        let albedo = surface.materials[surfel.material as usize].albedo;
+        let width = capture.width;
+        let height = capture.height;
+        for (view, &light) in capture.views.iter_mut().zip(lights) {
+            let camera = view.camera;
+            let origin = glam::Vec3::from(camera.cam_position);
+            let lighting = light.diffuse(point.truncate(), glam::Vec3::from(surfel.normal));
+            view.pixels = (0..height)
+                .flat_map(|y| {
+                    (0..width).map(move |x| {
+                        let direction =
+                            crate::inverse::capture::pixel_direction(&camera, width, height, x, y);
+                        let response = ray_response(
+                            origin,
+                            direction,
+                            point.truncate(),
+                            transforms.rotations[0],
+                            transforms.scales[0],
+                        )
+                        .unwrap();
+                        let alpha = if response.depth > 0.0 {
+                            point.w * response.response
+                        } else {
+                            0.0
+                        };
+                        std::array::from_fn(|channel| alpha * lighting[channel] * albedo[channel])
+                    })
+                })
+                .collect();
+            view.mask = Some(vec![1.0; width * height]);
+        }
+        capture
+    }
+
     #[test]
     fn joint_multilight_fit_restores_durable_appearance() {
         let _gpu_test_guard = crate::fit::gpu_test_guard();
@@ -4820,11 +5062,11 @@ mod tests {
         let lights = [
             KnownLightCapture {
                 capture: &capture,
-                environment: &environment,
+                light: KnownLight::Distant(&environment),
             },
             KnownLightCapture {
                 capture: &capture,
-                environment: &environment,
+                light: KnownLight::Distant(&environment),
             },
         ];
 
@@ -4838,6 +5080,70 @@ mod tests {
         assert_eq!(candidate.sh_degree, 0);
         assert_eq!(candidate.sh_coefficients, durable_appearance);
         candidate.validate().unwrap();
+    }
+
+    #[test]
+    fn joint_near_light_fit_accepts_view_specific_lights() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping joint near-light Gaussian fit test: no GPU");
+            return;
+        };
+        let mut surface = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0, 0.0, 4.0],
+                radius: 0.5,
+                normal: glam::Vec3::Z.to_array(),
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material {
+                albedo: [0.6; 3],
+                ..vol::relight::Material::default()
+            }],
+        };
+        let truth = from_surface(&surface).unwrap();
+        let make_light = |position: glam::Vec3| vol::relight::PointLight {
+            position: position.to_array(),
+            direction: (glam::Vec3::from(surface.surfels[0].center) - position)
+                .normalize()
+                .to_array(),
+            intensity: [4.0; 3],
+            exponent: 1.5,
+        };
+        let first_lights = [
+            make_light(glam::Vec3::new(1.0, 0.0, 6.0)),
+            make_light(glam::Vec3::new(1.2, 0.2, 6.0)),
+        ];
+        let second_lights = [
+            make_light(glam::Vec3::new(-1.0, 0.0, 6.0)),
+            make_light(glam::Vec3::new(-1.2, 0.2, 6.0)),
+        ];
+        let first = synthetic_near_light_capture(&truth, &surface, &first_lights);
+        let second = synthetic_near_light_capture(&truth, &surface, &second_lights);
+        let mut candidate = truth.clone();
+        candidate.sh_coefficients.fill(-0.25);
+        let durable_appearance = candidate.sh_coefficients.clone();
+        let lights = [
+            KnownLightCapture {
+                capture: &first,
+                light: KnownLight::Near(&first_lights),
+            },
+            KnownLightCapture {
+                capture: &second,
+                light: KnownLight::Near(&second_lights),
+            },
+        ];
+
+        let stats =
+            fit_multilight_geometry(&mut candidate, &mut surface, &lights, &[0, 1], gpu).unwrap();
+
+        assert_eq!(stats.len(), 1);
+        assert!(stats[0].initial_loss.is_finite());
+        assert!(stats[0].final_loss.is_finite());
+        assert_eq!(candidate.sh_coefficients, durable_appearance);
+        candidate.validate().unwrap();
+        surface.validate().unwrap();
     }
 
     #[test]
@@ -4875,6 +5181,60 @@ mod tests {
         }
         let updated = session.read_params(&["surface_normals"]);
         assert_ne!(updated[0], [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn near_diffuse_graph_matches_point_light_and_has_position_gradient() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = crate::fit::try_init_gpu() else {
+            eprintln!("skipping near-field diffuse graph test: no GPU");
+            return;
+        };
+        let light = vol::relight::PointLight {
+            position: [0.0; 3],
+            direction: glam::Vec3::Z.to_array(),
+            intensity: [2.0, 3.0, 4.0],
+            exponent: 2.0,
+        };
+        let position = glam::Vec3::new(0.0, 0.0, 2.0);
+        let normal = -glam::Vec3::Z;
+        let albedo = [0.7, 0.5, 0.3];
+
+        let mut graph = mn::Graph::new();
+        let positions = graph.parameter("positions", &[1, 3]);
+        let colors = build_near_diffuse_normal_colors(&mut graph, 1, positions);
+        let loss = graph.mean_all(colors[0]);
+        graph.set_outputs(vec![loss, colors[0], colors[1], colors[2]]);
+        let (mut session, _report) = mn::build(
+            &graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        session.set_parameter("positions", &position.to_array());
+        session.set_parameter("surface_normals", &normal.to_array());
+        session.set_input("diffuse_albedo", &albedo);
+        set_near_light_inputs(&mut session, light, 1);
+        session.step();
+        session.wait();
+
+        let expected = light.diffuse(position, normal);
+        for (output, expected) in (1..=3).zip(
+            expected
+                .into_iter()
+                .zip(albedo)
+                .map(|(lighting, albedo)| lighting * albedo),
+        ) {
+            let mut actual = [0.0];
+            session.read_output_by_index(output, &mut actual);
+            assert_close(actual[0], expected, 1.0e-5);
+        }
+        let mut gradient = [0.0; 3];
+        session.read_param_grad("positions", &mut gradient);
+        assert!(gradient.iter().all(|value| value.is_finite()));
+        assert!(gradient[2].abs() > 1.0e-5, "{gradient:?}");
     }
 
     #[test]
@@ -5494,6 +5854,7 @@ mod tests {
             OpacityLoss::BackgroundOnly,
             0.0,
             false,
+            false,
             true,
         );
         let (mut session, _report) = mn::build(
@@ -5630,6 +5991,7 @@ mod tests {
             [0.0; 3],
             OpacityLoss::Mask,
             MULTI_LIGHT_OPACITY_CONDITIONED_COLOR_CEILING,
+            false,
             false,
             false,
         );

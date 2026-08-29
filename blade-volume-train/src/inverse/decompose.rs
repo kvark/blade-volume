@@ -242,9 +242,53 @@ impl Observations {
     }
 }
 
+/// Illumination attached to a set of surface observations.
+///
+/// A distant environment is shared by every view. A near-field capture has
+/// one world-space point light per view, which covers camera-mounted light
+/// rigs and sparse image/camera/light observations without pretending the
+/// emitter is fixed at infinity.
+#[derive(Clone, Copy)]
+pub enum CalibratedLight<'a> {
+    Distant(crate::relight::Irradiance),
+    Near(&'a [vol::relight::PointLight]),
+}
+
+#[derive(Clone, Copy)]
+enum DiffuseProbe {
+    Distant(crate::relight::Irradiance),
+    Near(vol::relight::PointLightSample),
+}
+
+impl DiffuseProbe {
+    fn shade(self, normal: glam::Vec3) -> [f32; 3] {
+        match self {
+            Self::Distant(irradiance) => irradiance.shade(normal),
+            Self::Near(sample) => {
+                let cosine = normal
+                    .try_normalize()
+                    .map_or(0.0, |normal| normal.dot(sample.towards).max(0.0));
+                sample.radiance.map(|radiance| radiance * cosine)
+            }
+        }
+    }
+}
+
+impl CalibratedLight<'_> {
+    fn probe(self, point: glam::Vec3, view: u32) -> Option<DiffuseProbe> {
+        match self {
+            Self::Distant(irradiance) => Some(DiffuseProbe::Distant(irradiance)),
+            Self::Near(lights) => lights
+                .get(view as usize)
+                .and_then(|light| light.sample(point))
+                .map(DiffuseProbe::Near),
+        }
+    }
+}
+
 /// Observations of one fixed surface under a known illumination.
 pub struct KnownLightObservations<'a> {
-    pub irradiance: crate::relight::Irradiance,
+    pub light: CalibratedLight<'a>,
     pub observations: &'a Observations,
 }
 
@@ -277,7 +321,7 @@ fn normal_candidates(count: usize) -> Vec<glam::Vec3> {
 fn photometric_normal_score(
     normal: glam::Vec3,
     towards: glam::Vec3,
-    readings: &[(crate::relight::Irradiance, [f32; 3])],
+    readings: &[(DiffuseProbe, [f32; 3])],
 ) -> f64 {
     if normal.dot(towards) <= 0.05 {
         return f64::INFINITY;
@@ -337,7 +381,7 @@ fn distinct_known_lights<'a, 'b>(
         if distinct
             .iter()
             .all(|existing: &&KnownLightObservations<'_>| {
-                irradiance_shapes_differ(&existing.irradiance, &light.irradiance)
+                calibrated_lights_differ(existing.light, light.light)
             })
         {
             distinct.push(light);
@@ -346,10 +390,20 @@ fn distinct_known_lights<'a, 'b>(
     distinct
 }
 
+fn calibrated_lights_differ(left: CalibratedLight<'_>, right: CalibratedLight<'_>) -> bool {
+    match (left, right) {
+        (CalibratedLight::Distant(left), CalibratedLight::Distant(right)) => {
+            irradiance_shapes_differ(&left, &right)
+        }
+        (CalibratedLight::Near(left), CalibratedLight::Near(right)) => left != right,
+        _ => true,
+    }
+}
+
 fn best_photometric_normal(
     current: glam::Vec3,
     towards: glam::Vec3,
-    readings: &[(crate::relight::Irradiance, [f32; 3])],
+    readings: &[(DiffuseProbe, [f32; 3])],
     candidates: &[glam::Vec3],
 ) -> (glam::Vec3, f64) {
     let mut best = current;
@@ -384,22 +438,37 @@ pub fn refine_normals_known_lights(
     for index in 0..model.surfels.len() {
         let mut readings = Vec::new();
         let mut towards = glam::Vec3::ZERO;
+        let point = glam::Vec3::from(model.surfels[index].center);
         for &light in &distinct {
             let samples = light.observations.of(index);
             if samples.is_empty() {
                 continue;
             }
-            let mut radiance = [0.0f32; 3];
-            for sample in samples {
-                for (sum, value) in radiance.iter_mut().zip(sample.radiance) {
-                    *sum += value;
+            match light.light {
+                CalibratedLight::Distant(_) => {
+                    let mut radiance = [0.0f32; 3];
+                    for sample in samples {
+                        for (sum, value) in radiance.iter_mut().zip(sample.radiance) {
+                            *sum += value;
+                        }
+                        towards += sample.towards;
+                    }
+                    for value in &mut radiance {
+                        *value /= samples.len() as f32;
+                    }
+                    if let Some(probe) = light.light.probe(point, samples[0].view) {
+                        readings.push((probe, radiance));
+                    }
                 }
-                towards += sample.towards;
+                CalibratedLight::Near(_) => {
+                    for sample in samples {
+                        towards += sample.towards;
+                        if let Some(probe) = light.light.probe(point, sample.view) {
+                            readings.push((probe, sample.radiance));
+                        }
+                    }
+                }
             }
-            for value in &mut radiance {
-                *value /= samples.len() as f32;
-            }
-            readings.push((light.irradiance, radiance));
         }
         let Some(towards) = towards.try_normalize() else {
             continue;
@@ -439,6 +508,7 @@ pub fn refine_normals_known_lights_per_view(
     let mut stats = NormalRefinement::default();
     for index in 0..model.surfels.len() {
         let current = glam::Vec3::from(model.surfels[index].normal);
+        let point = glam::Vec3::from(model.surfels[index].center);
         let mut views = Vec::new();
         for &light in &distinct {
             for sample in light.observations.of(index) {
@@ -461,7 +531,9 @@ pub fn refine_normals_known_lights_per_view(
                     continue;
                 };
                 towards = sample.towards;
-                readings.push((light.irradiance, sample.radiance));
+                if let Some(probe) = light.light.probe(point, sample.view) {
+                    readings.push((probe, sample.radiance));
+                }
             }
             if readings.len() < 2 {
                 continue;
@@ -519,10 +591,14 @@ pub fn refine_materials_known_lights(
         for (index, surfel) in model.surfels.iter().enumerate() {
             let material = surfel.material as usize;
             assert!(material < model.materials.len());
-            let shade = light
-                .irradiance
-                .shade(glam::Vec3::from(surfel.normal).normalize_or_zero());
             for sample in light.observations.of(index) {
+                let Some(probe) = light
+                    .light
+                    .probe(glam::Vec3::from(surfel.center), sample.view)
+                else {
+                    continue;
+                };
+                let shade = probe.shade(glam::Vec3::from(surfel.normal));
                 let weight = sample.facing.max(0.0) as f64;
                 for channel in 0..3 {
                     let response = shade[channel] as f64;
@@ -2100,7 +2176,7 @@ mod tests {
             .into_iter()
             .zip(&observations)
             .map(|(irradiance, observations)| KnownLightObservations {
-                irradiance,
+                light: CalibratedLight::Distant(irradiance),
                 observations,
             })
             .collect();
@@ -2124,6 +2200,92 @@ mod tests {
                 changed: 1
             }
         );
+        assert!(
+            recovered.dot(truth) > 0.995,
+            "normal {recovered:?} against {truth:?}"
+        );
+    }
+
+    #[test]
+    fn moving_near_lights_recover_a_diffuse_normal() {
+        let truth = glam::Vec3::new(0.25, -0.15, 0.956_556).normalize();
+        let albedo = [0.6, 0.4, 0.25];
+        let positions = [
+            [
+                glam::Vec3::new(0.8, 0.0, 1.2),
+                glam::Vec3::new(0.7, 0.1, 1.2),
+            ],
+            [
+                glam::Vec3::new(-0.8, 0.0, 1.2),
+                glam::Vec3::new(-0.7, 0.1, 1.2),
+            ],
+            [
+                glam::Vec3::new(0.0, 0.8, 1.2),
+                glam::Vec3::new(0.1, 0.7, 1.2),
+            ],
+            [
+                glam::Vec3::new(0.0, -0.8, 1.2),
+                glam::Vec3::new(0.1, -0.7, 1.2),
+            ],
+        ];
+        let near_lights: Vec<Vec<vol::relight::PointLight>> = positions
+            .iter()
+            .map(|views| {
+                views
+                    .iter()
+                    .map(|&position| vol::relight::PointLight {
+                        position: position.to_array(),
+                        direction: (-position).normalize().to_array(),
+                        intensity: [position.length_squared(); 3],
+                        exponent: 1.0,
+                    })
+                    .collect()
+            })
+            .collect();
+        let observations: Vec<_> = near_lights
+            .iter()
+            .map(|views| Observations {
+                samples: views
+                    .iter()
+                    .enumerate()
+                    .map(|(view, &light)| {
+                        let shade = light.diffuse(glam::Vec3::ZERO, truth);
+                        Sample {
+                            view: view as u32,
+                            radiance: std::array::from_fn(|channel| {
+                                albedo[channel] * shade[channel]
+                            }),
+                            towards: glam::Vec3::Z,
+                            facing: truth.z,
+                        }
+                    })
+                    .collect(),
+                offsets: vec![0, views.len() as u32],
+            })
+            .collect();
+        let lights: Vec<_> = near_lights
+            .iter()
+            .zip(&observations)
+            .map(|(lights, observations)| KnownLightObservations {
+                light: CalibratedLight::Near(lights),
+                observations,
+            })
+            .collect();
+        let mut model = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0; 3],
+                radius: 1.0,
+                normal: glam::Vec3::new(-0.5, 0.5, 0.7).normalize().to_array(),
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material::default()],
+        };
+
+        let stats = refine_normals_known_lights_per_view(&mut model, &lights, 4096);
+        let recovered = glam::Vec3::from(model.surfels[0].normal);
+        assert_eq!(stats.supported, 1);
+        assert_eq!(stats.changed, 1);
         assert!(
             recovered.dot(truth) > 0.995,
             "normal {recovered:?} against {truth:?}"
@@ -2161,7 +2323,7 @@ mod tests {
             .into_iter()
             .zip(&observations)
             .map(|(irradiance, observations)| KnownLightObservations {
-                irradiance,
+                light: CalibratedLight::Distant(irradiance),
                 observations,
             })
             .collect();
@@ -2224,7 +2386,7 @@ mod tests {
             .into_iter()
             .zip(&observations)
             .map(|(irradiance, observations)| KnownLightObservations {
-                irradiance,
+                light: CalibratedLight::Distant(irradiance),
                 observations,
             })
             .collect();
@@ -2298,7 +2460,7 @@ mod tests {
             .into_iter()
             .zip(&observations)
             .map(|(irradiance, observations)| KnownLightObservations {
-                irradiance,
+                light: CalibratedLight::Distant(irradiance),
                 observations,
             })
             .collect();
@@ -2343,11 +2505,11 @@ mod tests {
         let observations = from_means(&[[0.5, 0.25, 0.125]]);
         let lights = [
             KnownLightObservations {
-                irradiance,
+                light: CalibratedLight::Distant(irradiance),
                 observations: &observations,
             },
             KnownLightObservations {
-                irradiance: scaled,
+                light: CalibratedLight::Distant(scaled),
                 observations: &observations,
             },
         ];
