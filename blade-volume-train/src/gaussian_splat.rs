@@ -49,7 +49,7 @@ const HIGH_VIEW_PBR_INITIAL_OPACITY: f32 = 0.25;
 // Matches the production PBR Gaussian renderer's response cutoff.
 const PBR_RENDER_MIN_ALPHA: f32 = 3.0e-2;
 const PBR_MIN_PERSISTED_OPACITY: f32 = 0.05;
-const PBR_MIN_RETAINED_DIVISOR: usize = 3;
+const PBR_MIN_RETAINED_DIVISOR: usize = 2;
 const STATIC_CONTINUATION_MIN_VALIDATION_GAIN_DB: f32 = 0.05;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
@@ -965,9 +965,9 @@ fn initialize_pbr_opacity(model: &mut vol::PointCloudModel, view_count: usize) {
 /// Restore established opacity and scale when fitting would persist a nearly
 /// empty PBR cloud.
 ///
-/// The one-third-cloud threshold is deliberately permissive: selected synthetic
-/// and production fits retain more than four fifths of their inputs, while a
-/// collapse below this bound no longer represents the reconstructed surface.
+/// The half-cloud threshold remains permissive: selected synthetic and
+/// production fits retain more than four fifths of their inputs, while every
+/// measured fit below one half loses most foreground coverage.
 /// Learned appearance and later center updates remain intact.
 pub fn guard_pbr_support(
     model: &mut vol::PointCloudModel,
@@ -4237,9 +4237,29 @@ mod tests {
             .scales
             .fill(glam::Vec3::splat(0.02));
         let guard = guard_pbr_support(&mut bounded, &established).unwrap();
-        assert!(!guard.restored);
+        assert!(guard.restored);
         assert_eq!(guard.retained, 3);
         assert!(bounded
+            .transforms
+            .unwrap()
+            .scales
+            .iter()
+            .all(|&scale| scale == glam::Vec3::splat(0.3)));
+
+        let mut threshold = established.clone();
+        for point in &mut threshold.points[4..] {
+            point.w = 0.01;
+        }
+        threshold
+            .transforms
+            .as_mut()
+            .unwrap()
+            .scales
+            .fill(glam::Vec3::splat(0.02));
+        let guard = guard_pbr_support(&mut threshold, &established).unwrap();
+        assert!(!guard.restored);
+        assert_eq!(guard.retained, 4);
+        assert!(threshold
             .transforms
             .unwrap()
             .scales

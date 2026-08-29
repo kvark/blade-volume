@@ -53,7 +53,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | grouped fusion implemented; scale gate rejected | Use the fixed 5,000-group proposal pool only as a complete-render responsibility selector, then rebuild a 2,500-point cloud from accepted groups | Scalar and Gaussian whole-frame/foreground mean/tail improve on fresh cameras before either excluded light is opened, with no precision loss |
+| Representation scale | grouped fusion implemented; static-light selector rejected | Attribute proposal ownership after calibrated multi-light PBR fitting, choose replacements only within the fixed raw 2,500-cell partition, then rebuild and refit | Scalar and Gaussian whole-frame/foreground mean/tail improve twice on fresh cameras before either excluded light is opened, with no precision loss |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
@@ -203,24 +203,53 @@ The fresh-object split now rules out seven tempting shortcuts:
   selected. The durable fix is an explicit capture-stage overlap graph, not a
   synthetic geometry track.
 - The PBR support guard previously accepted a fit when exactly one quarter of
-  its particles survived. The clean controls retain 27–30% yet render only
-  37% recall, so the permissive boundary moves to one third. Established
-  successful fits retain more than 80%; the selected cloud was already below
-  the old boundary and is unchanged. This removes an arbitrary quality cliff
-  without selecting either new fusion input.
+  its particles survived. Fusion and responsibility controls retain 27–40%
+  yet render only 36–39% recall, so the permissive boundary moves to one half.
+  Established successful fits retain more than 80%; the selected cloud was
+  already below the old boundary and is unchanged. This removes an arbitrary
+  quality cliff without selecting a new reconstruction input.
 
-The ownership decision now sits upstream of downsampling: the explicit graph,
-native fusion, intact observation groups, mask filtering, deterministic cache,
-and group-preserving initialization are implemented. The fixed gate says that
-view count and geometric confidence are still insufficient to choose a useful
-Gaussian mixture. The next implementation will fit the fixed 5,000-group pool
-only as a proposal set, measure each group's responsibility in complete
-construction renders, rebuild a fresh 2,500-point surface from the accepted
-groups, and then replay the scalar and Gaussian selection split. Low opacity is
-not by itself acceptance: a group must explain foreground residual without
-increasing background coverage. The official cameras and excluded lights stay
-closed until that internal gate passes. No polygonal intermediate or fallback
-is introduced.
+The ownership decision now sits upstream of final downsampling: the explicit
+graph, native fusion, intact observation groups, mask filtering, deterministic
+cache, and group-preserving initialization are implemented. The fixed gate says
+that view count and geometric confidence are still insufficient to choose a
+useful Gaussian mixture.
+
+### Rejected static-light responsibility gate
+
+An exact leave-one-out complete-render score was tested as a selector over a
+fixed 5,000-group proposal pool. Early controls exposed two invalid comparisons:
+recomputing the output grid changed the spatial partition, and subsetting the
+proposal Gaussian retained radii estimated at 5,000-point spacing. The corrected
+experiment nests the selected 2,500 groups inside the proposal pool, ranks
+replacements only within the original raw-cloud 2,500-cell grid, and rebuilds
+positions, radii, orientation, and PBR support from the chosen groups.
+
+The following internal results use 33 construction and five test cameras; the
+official cameras and excluded lighting patterns 005/006 remain unopened. Values
+are whole-frame mean/worst, foreground mean/worst, then recall/precision:
+
+| Selection | Scalar test | Gaussian test | Gaussian recall/precision |
+| --- | --- | --- | --- |
+| Zero-score rebuild control | `28.00/26.20; 18.36/17.38` | `26.10/24.94; 16.87/16.00` | `92.1/89.6%` |
+| Static responsibility, repeat 1 | `28.03/26.27; 18.38/17.40` | `26.03/24.87; 16.63/15.99` | `92.3/90.1%` |
+| Static responsibility, repeat 2 | `27.98/26.24; 18.35/17.39` | `26.18/25.13; 16.79/15.86` | `92.1/89.6%` |
+
+The zero-score control reproduces the direct 2,500-point checkpoint within run
+variance, validating the corrected rebuild. Static-light responsibility is
+neutral for the scalar cloud but lowers Gaussian foreground mean and/or tail in
+both repeats, so the selector, CLI surface, and scoring code were removed. Low
+static opacity is descriptive, not evidence that a proposal is unnecessary
+under a different light after normals, material, visibility, and overlap have
+exchanged responsibility.
+
+The next diagnostic therefore measures ownership in the calibrated multi-light
+PBR renderer after normal and material fitting. It may replace a baseline group
+only with another proposal from the same fixed raw-cloud cell, then must rebuild
+and refit a fresh 2,500-point cloud. Two independent construction/selection/test
+repeats must improve scalar and Gaussian whole-frame and foreground mean/tail
+without losing precision before the official cameras or excluded lights are
+opened. No polygonal intermediate or fallback is introduced.
 
 ## Milestones
 
@@ -364,9 +393,11 @@ a deterministic repeat agree within the measured training variance.
   grouped fusion observations through Gaussian support initialization.
 - [x] Repeat the fixed 2,500/5,000-point gate from one persisted candidate set;
   require both scalar and Gaussian PBR to improve before changing the default.
-- [ ] Select a fixed 5,000-group pool from the cache as a proposal-only Gaussian, select
-  groups by complete-render foreground responsibility and background harm, and
-  replay a rebuilt 2,500-point surface twice before opening held lights.
+- [x] Build and repeat the fixed 5,000-group static-light responsibility
+  selector; reject and remove it because rebuilt PBR Gaussian foreground
+  quality loses to its zero-score control in both repeats.
+- [ ] Attribute support with calibrated multi-light PBR complete renders inside
+  fixed raw-cloud cells; rebuild and refit twice before opening held lights.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

@@ -8130,18 +8130,47 @@ passes an internal tail but is mixed on the untouched official cameras.
 
 These controls also reveal a discontinuity in the existing PBR support guard.
 The selected one-source fit retains 24% of its particles, trips the old
-quarter-cloud guard, and restores full established support. The clean fusion
-fits retain 27–30%, evade that guard, and render only 36–37% recall. The guard
-now rejects fits below one third. Successful synthetic and production fits
-retain over 80%, and the selected checkpoint was already rejected by the old
-threshold, so its output is unchanged. This is retained as a robustness fix;
-the overlap hint, source filters, diagnostic binaries, and new cloud inputs
-remain outside version control.
+quarter-cloud guard, and restores full established support. Fusion and later
+responsibility controls retain 27–40%, evade that guard, and render only
+36–39% recall. The guard now rejects fits below one half. Successful synthetic
+and production fits retain over 80%, and the selected checkpoint was already
+rejected by the old threshold, so its output is unchanged. This is retained as
+a robustness fix; the rejected input and selection experiments remain outside
+version control.
 
-The next surface implementation should represent overlap explicitly without a
-fake sparse point, retain each fused observation group through initialization,
-and optimize one Gaussian support per group through complete renders before
-global spatial reduction. A fresh scene or new camera split must choose it;
-the official painted-toy split has now served this diagnostic. Lighting
-calibration, roughness, and unknown-environment fitting remain blocked on that
-surface gate.
+The production importer now writes an explicit pose-only overlap graph, and the
+native fusion path retains each exact observation group through deterministic
+caching and Gaussian initialization. No fake sparse point is required. A fixed
+2,500/5,000-group replay is mixed, so neither the higher count nor grouped
+fusion becomes the default.
+
+## Rejected grouped static-light responsibility (2026-08-29)
+
+An exact leave-one-out complete-render score was implemented temporarily over
+the fixed 5,000-group proposal pool. The first global and spatial selectors
+were invalid controls: selecting globally destroyed surface coverage;
+recomputing a 2,500-cell grid from the proposal cloud changed the partition;
+and subsetting its fitted Gaussian retained radii estimated at 5,000-point
+spacing. The corrected experiment guarantees that the direct 2,500 groups are
+in the pool, ranks alternatives only inside those original raw-cloud cells, and
+rebuilds positions, radii, orientation, and PBR support at the selected count.
+
+A zero-score selection then reproduces the direct checkpoint on the internal
+33-construction/five-test-camera split. Scalar whole/foreground mean/worst is
+`28.00/26.20;18.36/17.38` dB; Gaussian is
+`26.10/24.94;16.87/16.00` dB with `92.1/89.6%` recall/precision. Two static
+responsibility repeats produce scalar
+`28.03/26.27;18.38/17.40` and `27.98/26.24;18.35/17.39` dB. Their Gaussian
+results are `26.03/24.87;16.63/15.99` and
+`26.18/25.13;16.79/15.86` dB, respectively. Gaussian foreground quality is
+below the zero-score control in both repeats. The selector, CLI option, and
+scoring API are removed. No official camera or excluded lighting pattern was
+opened.
+
+The next surface diagnostic must attribute ownership after calibrated
+multi-light PBR fitting, where normals, material, visibility, and overlapping
+support have assumed their actual roles. Replacements remain local to the
+fixed raw-cloud cell, followed by a fresh 2,500-point rebuild and PBR refit.
+Two independent internal repeats must improve scalar and Gaussian whole-frame
+and foreground mean/tail without losing precision before any held-light gate.
+Unknown-light and roughness work remains blocked on that surface decision.
