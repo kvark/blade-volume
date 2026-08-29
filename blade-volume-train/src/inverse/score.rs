@@ -408,6 +408,22 @@ impl Renderer {
         frames
     }
 
+    /// Draw a persisted Gaussian with explicit PBR appearance from a set of
+    /// poses, with no reference to compare against.
+    pub fn render_gaussian_views(
+        &mut self,
+        scene: &Scene,
+        gaussian: &vol::PointCloudModel,
+        cameras: &[vol::CameraParams],
+        diffuse_samples: u32,
+        show_environment: bool,
+    ) -> Vec<Vec<[f32; 4]>> {
+        let mut tracer = self.gaussian_tracer(scene, gaussian, diffuse_samples, show_environment);
+        let frames = self.render_prepared_views(&mut tracer, cameras);
+        tracer.deinit(&self.context);
+        frames
+    }
+
     /// Build one scene tracer for repeated renders while its particle geometry
     /// is updated between calls.
     pub(crate) fn prepare_scene(
@@ -839,12 +855,8 @@ mod tests {
             principal: [0.0; 2],
         };
 
-        let mut analytic_tracer = renderer.gaussian_tracer(&scene, &model, 0, false);
-        let analytic = renderer.render_prepared_views(&mut analytic_tracer, &[camera]);
-        renderer.destroy_prepared_scene(analytic_tracer);
-        let mut sampled_tracer = renderer.gaussian_tracer(&scene, &model, 64, false);
-        let sampled = renderer.render_prepared_views(&mut sampled_tracer, &[camera]);
-        renderer.destroy_prepared_scene(sampled_tracer);
+        let analytic = renderer.render_gaussian_views(&scene, &model, &[camera], 0, false);
+        let sampled = renderer.render_gaussian_views(&scene, &model, &[camera], 64, false);
 
         let center = 16 * 32 + 16;
         let analytic = analytic[0][center];
