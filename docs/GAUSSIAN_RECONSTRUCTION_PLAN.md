@@ -8367,5 +8367,47 @@ CUDA/GPU fault in a separate 10 GiB container scope.
 
 The result closes only representation-level brightness transfer. The candidate
 still loses badly to black/capture-copy foreground baselines and visibly misses
-thin parts; the next selected work is improving point ownership/support and
-recovering non-diffuse material response on this fixed fresh gate.
+thin parts; the next diagnostic must separate point ownership/support from
+non-diffuse material response on this fixed fresh gate.
+
+## Fresh-object support and lobe attribution (2026-08-29)
+
+The first follow-up rejects two global geometry knobs. A 5,000-group replay
+raises Gaussian recall from 87.2% to 90.2%, but precision falls from 74.8% to
+68.4%; held-light foreground improves while several whole-frame means/tails
+regress. Native `min3` fusion reduces initial unseen surfels from 835 to 427,
+but known-light Gaussian whole/foreground quality, recall, and precision all
+fall. Every unseen surfel in the fixed-cloud diagnostic has at least one
+facing foreground camera and is hidden by a competing depth layer. More groups
+or a global source-count threshold do not establish ownership.
+
+The existing missing-track path was then replayed against the exact persisted
+Gaussian. At 128 px it retains only one missing selection-valid track; at 256
+px it accepts 48 selection-valid triangulations, but every one is already
+covered by Gaussian alpha. This is evidence that the sculpture's conspicuous
+dark gaps are primarily appearance on existing support, while its low precision
+still records false extent.
+
+The old independent lobe solver is decisively negative. Four
+`--specular-rounds` collapse excluded-pattern Gaussian whole-frame mean/worst
+to `18.69/15.38` and `19.53/13.77` dB. A frozen-cloud sweep finds useful
+capacity at the opposite end: keep roughness at one and transfer a global
+quarter of base colour from diffuse albedo to `F0`. The exact same-cloud result
+is:
+
+| Response | Known light | Excluded 005 | Excluded 006 |
+| --- | ---: | ---: | ---: |
+| Diffuse only | `26.46/24.01;17.08/14.92` | `24.80/23.27;14.34/13.34` | `25.14/23.11;14.64/13.28` |
+| Quarter broad specular | `27.25/25.03;17.56/15.49` | `26.05/24.57;15.59/14.37` | `26.39/24.31;15.88/14.46` |
+
+The integrated proposal lowers its exact construction objective
+`0.0030006→0.0020293` and peaks at 0.86 GiB with zero swap, OOM, validation
+error, Xid, or GPU fault. It adds no shader, graph operation, binding, model
+field, format, or dependency. It does add the explicit
+`--render-transfer-specular` switch: automatic promotion is rejected because
+the same quarter allocation lowers a painted-toy primary-light held-camera
+whole/foreground tail by 0.30/0.34 dB even while its five-light aggregate and
+both excluded lights improve. This is a bounded response diagnostic, not
+recovered metalness. Next, cluster lobe parameters spatially, fit on a
+construction-light subset, and require every withheld known-light tail before
+opening excluded lights.

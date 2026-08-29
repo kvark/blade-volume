@@ -80,9 +80,25 @@ a convincing real-world result.
   aggregates with exactly unchanged geometry, selecting the transfer as an
   automatic final pass. All three objects still lose to trivial held-light
   foreground baselines, so light/surface recovery remains unsolved.
+- **Broad specular response — promising, explicit diagnostic.** On the fixed
+  metal-sculpture Gaussian, `--render-transfer-specular` conservatively moves
+  25% of base colour from diffuse albedo into the rough specular response.
+  Known-light foreground improves `17.08/14.92→17.56/15.49` dB; excluded
+  patterns 005/006 improve to `15.59/14.37` and `15.88/14.46` dB. The latter
+  two now beat capture-light-copy on the foreground, but not black. This is not
+  automatic or reported as recovered metalness: the same transfer regresses a
+  painted-toy known-light tail, while the free per-surfel lobe solver collapses
+  below 20 dB under both excluded lights.
 
 The next quality gate is deliberately narrow:
 
+- distinguish support from appearance before adding points. Doubling the
+  sculpture to 5,000 groups raises recall but loses 6.4 precision points;
+  requiring three fusion views removes occluded layers but loses known-light
+  quality. At 256 px, every independently triangulated selection-valid track
+  already lies under the fitted Gaussian alpha. The next material step is a
+  spatially shared lobe selected on withheld known lights—not free metalness
+  per point;
 - assign cross-view ownership before increasing point count. A synthetic
   point-only sheet is already stable under deterministic 2× resampling, while
   the real 5,000-point cloud contains contradictory depth layers that its
@@ -229,6 +245,7 @@ up scalar score dumps; Gaussian scoring deliberately stays at
 | OpenIllumination painted toy (filtered scalar, excluded 005 / 006) | 38 / 10 | 31.56 / 28.02 dB | 25.62 / 24.45; 24.04 / 23.04 dB | 8.8% |
 | OpenIllumination painted toy (Gaussian material transfer, excluded 005 / 006) | 38 / 10 | 31.60 / 28.02 dB | 25.63 / 25.15; 24.32 / 23.24 dB | 8.8% |
 | OpenIllumination metal sculpture (Gaussian automatic transfer, excluded 005 / 006) | 38 / 10 | 31.53 / 29.42 dB | 24.77 / 23.27; 25.11 / 23.09 dB | 8.1% |
+| OpenIllumination metal sculpture (explicit broad-specular transfer, excluded 005 / 006) | 38 / 10 | 31.54 / 29.36 dB | 26.09 / 24.65; 26.40 / 24.40 dB | 8.1% |
 
 The earlier OLAT-only two-axis gate is deliberately reported against trivial
 baselines. On OpenIllumination `obj_16_friends_cup`, the static Gaussian under

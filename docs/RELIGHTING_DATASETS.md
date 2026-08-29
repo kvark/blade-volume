@@ -700,6 +700,25 @@ camera to confirm the patch before fusion. A response descriptor, a normal, or
 the current cloud's visibility is evidence about a surface, but none alone is
 an independent depth measurement.
 
+The metal sculpture changes the immediate ordering. A 5,000-group replay gains
+3.0 recall points but loses 6.4 precision points and several whole-frame
+scores. A three-view fusion threshold halves the number of occluded particles
+but loses the known-light gate. At 256 px, 48 independently triangulated tracks
+survive the selection visual hull and every one already overlaps the fixed
+Gaussian alpha. The remaining visible failure is therefore not repaired by a
+point-budget or source-count rule.
+
+An exact-cloud response bound keeps roughness fixed at one and allocates 25%
+of base colour to the broad specular term. Known-light whole/foreground moves
+`26.46/24.01;17.08/14.92→27.25/25.03;17.56/15.49` dB. Patterns 005/006 move
+to `26.05/24.57;15.59/14.37` and `26.39/24.31;15.88/14.46` dB, respectively;
+both beat capture-light-copy on foreground mean/tail for the first time, but
+remain below black. The clean integrated run is under the ignored diagnostics
+directory at `target/audit-runs/openillumination/obj45-specular-transfer-clean/`
+and peaks at 0.86 GiB with no swap, OOM, or GPU fault. Because the same
+proposal regresses a painted-toy primary-light tail, it is available only as
+`--render-transfer-specular` and must not be read as recovered metalness.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable

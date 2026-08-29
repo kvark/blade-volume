@@ -247,6 +247,11 @@ struct Args {
     #[argh(switch)]
     render_refine_materials: bool,
 
+    /// try one bounded diffuse-to-specular response transfer on a large
+    /// rough-dielectric Gaussian material table
+    #[argh(switch)]
+    render_transfer_specular: bool,
+
     /// refine Gaussian normals against complete renders from the primary measured light
     #[argh(switch)]
     render_refine_normals: bool,
@@ -1208,6 +1213,7 @@ fn main() {
         });
         if multilight_geometry_fitted
             && (args.render_refine_materials
+                || args.render_transfer_specular
                 || train::inverse::refine::automatic_gaussian_material_transfer(
                     fitted.scene.model.materials.len(),
                     args.materials == 0,
@@ -1219,13 +1225,14 @@ fn main() {
                 &capture,
                 &train_views,
                 0.025,
+                args.render_transfer_specular,
             )
             .unwrap_or_else(|error| {
                 eprintln!("cannot polish final Gaussian materials: {error}");
                 std::process::exit(1);
             });
             println!(
-                "final Gaussian materials: changed {} of {} coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.1} s",
+                "final Gaussian materials: changed {} of {} diffuse coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.1} s",
                 stats.changed,
                 stats.coordinates,
                 stats.proposals,
@@ -1235,6 +1242,11 @@ fn main() {
             );
             if let Some(gain) = stats.global_gain {
                 println!("final Gaussian materials: global diffuse gain {gain:.6}");
+            }
+            if let Some(amount) = stats.global_specular_allocation {
+                println!(
+                    "final Gaussian materials: global diffuse-to-specular allocation {amount:.6}"
+                );
             }
         }
         let removed = train::gaussian_splat::prune_low_opacity(gaussian).unwrap_or_else(|error| {
@@ -3834,6 +3846,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(defaults.specular_rounds, 0);
+        assert!(!defaults.render_transfer_specular);
 
         let experimental = <Args as argh::FromArgs>::from_args(
             &["reconstruct"],
@@ -3848,6 +3861,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(experimental.specular_rounds, 3);
+
+        let transferred = <Args as argh::FromArgs>::from_args(
+            &["reconstruct"],
+            &[
+                "--sparse",
+                "sparse",
+                "--images",
+                "images",
+                "--render-transfer-specular",
+            ],
+        )
+        .unwrap();
+        assert!(transferred.render_transfer_specular);
     }
 
     #[test]

@@ -276,6 +276,17 @@ fresh metal-sculpture gate reproduced every known/excluded-light mean and tail
 gain on the exact same cloud before the automatic path was selected. Automatic
 transfer currently follows the calibrated multi-light Gaussian geometry pass.
 
+`--render-transfer-specular` adds one separate, explicit large-table
+diagnostic. It applies only while every entry still has the rough-dielectric
+initializer (`roughness = 1`, `F0 = 0.04`), moves 25% of each base colour from
+diffuse albedo into `F0`, and keeps the proposal only when an exact final
+Gaussian render lowers the construction objective. It does not run the older
+per-surfel lobe solver and does not affect the automatic diffuse transfer.
+This is deliberately called a response transfer rather than metalness
+recovery: it improves every fixed-cloud metric on the metal sculpture, but a
+painted-toy known-light held-camera tail regresses. The switch therefore stays
+explicit until spatially shared lobes pass a per-light validation gate.
+
 ### visibility, and why the bounce is not optional
 
 Without shadowing, a patch of floor in a sphere's shadow has one way to be

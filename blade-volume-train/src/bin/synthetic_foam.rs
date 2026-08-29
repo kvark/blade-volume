@@ -182,6 +182,11 @@ struct Args {
     #[argh(switch)]
     render_refine_materials: bool,
 
+    /// try one bounded diffuse-to-specular response transfer on a large
+    /// rough-dielectric Gaussian material table
+    #[argh(switch)]
+    render_transfer_specular: bool,
+
     /// refine Gaussian normals against complete renders from the known lights
     #[argh(switch)]
     render_refine_normals: bool,
@@ -1719,6 +1724,7 @@ fn main() {
             .unwrap_or_else(|error| fail(error));
         if multilight_geometry_fitted
             && (args.render_refine_materials
+                || args.render_transfer_specular
                 || train::inverse::refine::automatic_gaussian_material_transfer(
                     fitted.scene.model.materials.len(),
                     args.materials == 0,
@@ -1730,10 +1736,11 @@ fn main() {
                 &training_capture,
                 &training_indices,
                 0.025,
+                args.render_transfer_specular,
             )
             .unwrap_or_else(|error| fail(error));
             println!(
-                "final Gaussian materials: changed {} of {} coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.3} s",
+                "final Gaussian materials: changed {} of {} diffuse coordinates in {} proposals, loss {:.7} -> {:.7}, in {:.3} s",
                 stats.changed,
                 stats.coordinates,
                 stats.proposals,
@@ -1743,6 +1750,11 @@ fn main() {
             );
             if let Some(gain) = stats.global_gain {
                 println!("final Gaussian materials: global diffuse gain {gain:.6}");
+            }
+            if let Some(amount) = stats.global_specular_allocation {
+                println!(
+                    "final Gaussian materials: global diffuse-to-specular allocation {amount:.6}"
+                );
             }
         }
         let removed = train::gaussian_splat::prune_low_opacity(gaussian)
@@ -1920,6 +1932,7 @@ mod tests {
         assert!(args.surface_powerfoam_output.is_none());
         assert!(args.gaussian_output.is_none());
         assert_eq!(args.gaussian_steps, 1_500);
+        assert!(!args.render_transfer_specular);
     }
 
     #[test]

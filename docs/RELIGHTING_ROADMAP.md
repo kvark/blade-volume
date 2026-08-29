@@ -69,7 +69,7 @@ surface.
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
-| Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
+| Materials and capture layout | broad-response diagnostic only | Replace the global opt-in response transfer with spatially shared lobes selected on withheld known lights; then accept sparse `(camera, light, exposure)` observations | Every known-light tail plus two held lights and a second object improve; otherwise keep the feature off |
 
 The selected dense-support prerequisite remains the training-mask hull. On the
 `obj_31_painted_toy` split, filtering 68,278 of 1,254,170 one-view fused samples
@@ -477,6 +477,36 @@ passes the automatic-enablement gate, but its low precision and badly missing
 thin parts make improved surface ownership and non-diffuse material recovery
 the next quality problem.
 
+### Explicit broad-specular response diagnostic
+
+The fresh object separates two failures that looked like missing geometry.
+Doubling native groups to 5,000 raises Gaussian recall `87.2→90.2%`, but drops
+precision `74.8→68.4%` and regresses several whole-frame means/tails. Refusing
+two-view fusion groups cuts unseen particles `835→427`, but loses known-light
+Gaussian mean/tail, foreground, recall, and precision. At 256 px the independent
+photometric matcher accepts 48 selection-valid triangulations; all already lie
+under the persisted Gaussian's alpha, so none forms a missing-support patch.
+
+The existing free lobe solver is also rejected: four rounds lower the fitted
+residual but collapse the metal sculpture to `18.69/15.38` and `19.53/13.77`
+dB whole-frame mean/worst under excluded patterns 005/006. A fixed-cloud bound
+instead keeps roughness at one and transfers a conservative quarter of base
+colour from diffuse response to `F0`:
+
+| Exact metal-sculpture Gaussian | Known light | Excluded 005 | Excluded 006 |
+| --- | ---: | ---: | ---: |
+| Diffuse transfer only | `26.46/24.01; 17.08/14.92` | `24.80/23.27; 14.34/13.34` | `25.14/23.11; 14.64/13.28` |
+| + 25% broad-specular allocation | `27.25/25.03; 17.56/15.49` | `26.05/24.57; 15.59/14.37` | `26.39/24.31; 15.88/14.46` |
+
+The same exact-cloud allocation improves the five-known-light aggregate and
+both excluded lights on the fabric and painted toys. It nevertheless regresses
+the painted toy's primary-light held-camera whole/foreground tails by
+0.30/0.34 dB. `--render-transfer-specular` therefore exposes one exact-render-
+accepted proposal for large rough-dielectric tables, but it is opt-in and is
+not physical metalness evidence. The next implementation gate is a spatially
+shared response fitted on construction lights and accepted independently on
+each withheld known light before excluded lights are opened.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -643,8 +673,13 @@ a deterministic repeat agree within the measured training variance.
 - [x] Validate the conservative large-table transfer on the predeclared fresh
   metal sculpture with an exact same-cloud control; make only large
   individual-mode tables automatic after every image metric improves.
-- [ ] Improve thin/disconnected surface ownership on the fresh metal sculpture
-  without trading its 87.2% recall against the current 74.5% precision.
+- [x] Reject point-count and source-count thresholds on the metal sculpture;
+  confirm at 256 px that selection-valid independent tracks already overlap
+  Gaussian alpha rather than supplying a coherent missing patch.
+- [x] Bound broad specular capacity on the exact cloud and retain the
+  conservative transfer as explicit-only after a painted-toy tail regression.
+- [ ] Fit spatially shared lobes without regressing any withheld known-light
+  tail; keep the established diffuse table and point-cloud support fixed.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

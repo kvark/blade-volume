@@ -111,7 +111,7 @@ pub struct RenderedStats {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RenderedMaterialStats {
-    /// Scalar albedo coordinates in scope.
+    /// Scalar diffuse-albedo coordinates in scope.
     pub coordinates: usize,
     /// Distinct material-table proposals scored.
     pub proposals: usize,
@@ -120,6 +120,9 @@ pub struct RenderedMaterialStats {
     pub changed: usize,
     /// Accepted global diffuse gain for a large table, otherwise `None`.
     pub global_gain: Option<f32>,
+    /// Accepted diffuse-to-specular allocation for a large rough-dielectric
+    /// table, otherwise `None`.
+    pub global_specular_allocation: Option<f32>,
     pub initial_loss: f64,
     pub final_loss: f64,
     pub seconds: f64,
@@ -481,7 +484,16 @@ pub fn refine_rendered_materials(
     diffuse_samples: u32,
     step: f32,
 ) -> Result<RenderedMaterialStats, String> {
-    refine_rendered_materials_impl(scene, None, capture, indices, diffuse_samples, step, true)
+    refine_rendered_materials_impl(
+        scene,
+        None,
+        capture,
+        indices,
+        diffuse_samples,
+        step,
+        true,
+        false,
+    )
 }
 
 /// Re-polish a rendered material fit after geometry or particle support moved.
@@ -497,7 +509,16 @@ pub fn polish_rendered_materials(
     diffuse_samples: u32,
     step: f32,
 ) -> Result<RenderedMaterialStats, String> {
-    refine_rendered_materials_impl(scene, None, capture, indices, diffuse_samples, step, false)
+    refine_rendered_materials_impl(
+        scene,
+        None,
+        capture,
+        indices,
+        diffuse_samples,
+        step,
+        false,
+        false,
+    )
 }
 
 /// Reassign a conservative prefix of particles to existing shared materials.
@@ -657,14 +678,16 @@ fn material_observation_error(
 
 /// Re-polish diffuse materials through the exact learned-Gaussian PBR renderer
 /// after its geometry and support have reached their final values. Large
-/// one-per-particle tables receive one global diffuse gain instead of an
-/// unbounded coordinate pass.
+/// individual-mode tables receive bounded global proposals instead of an
+/// unbounded coordinate pass. `transfer_specular` opts a still-rough-dielectric
+/// table into one conservative diffuse-to-specular response proposal.
 pub fn polish_gaussian_materials(
     scene: &score::Scene,
     gaussian: &mut vol::PointCloudModel,
     capture: &capture::Capture,
     indices: &[usize],
     step: f32,
+    transfer_specular: bool,
 ) -> Result<RenderedMaterialStats, String> {
     gaussian.validate()?;
     let material_count = gaussian
@@ -686,6 +709,7 @@ pub fn polish_gaussian_materials(
         0,
         step,
         false,
+        transfer_specular,
     )?;
     gaussian
         .transforms
@@ -707,6 +731,7 @@ fn refine_rendered_materials_impl(
     diffuse_samples: u32,
     step: f32,
     initialize_linear: bool,
+    transfer_specular: bool,
 ) -> Result<RenderedMaterialStats, String> {
     if !step.is_finite() || step <= 0.0 || step >= 1.0 {
         return Err("rendered material step must be finite and between zero and one".to_string());
@@ -766,10 +791,12 @@ fn refine_rendered_materials_impl(
         }
     }
     let coordinates;
-    let proposals;
+    let mut proposals;
     let global_gain;
+    let global_specular_allocation;
     if let Some(ref basis) = basis {
         global_gain = None;
+        global_specular_allocation = None;
         let before_coordinates = scene.model.materials.clone();
         let (next_coordinates, next_proposals) = refine_albedo_from_basis(scene, basis, step);
         coordinates = next_coordinates;
@@ -796,6 +823,22 @@ fn refine_rendered_materials_impl(
         coordinates = result.1;
         proposals = result.2;
         global_gain = result.3;
+        if transfer_specular {
+            let result = refine_rendered_global_specular_allocation(
+                scene,
+                &mut renderer,
+                &mut tracer,
+                capture,
+                indices,
+                &cameras,
+                loss,
+            );
+            loss = result.0;
+            proposals += result.1;
+            global_specular_allocation = result.2;
+        } else {
+            global_specular_allocation = None;
+        }
     }
     let changed = initial_materials
         .iter()
@@ -810,6 +853,7 @@ fn refine_rendered_materials_impl(
         proposals,
         changed,
         global_gain,
+        global_specular_allocation,
         initial_loss,
         final_loss: loss,
         seconds: started.elapsed().as_secs_f64(),
@@ -1087,6 +1131,53 @@ fn refine_rendered_global_albedo(
         scene.model.materials = original;
         renderer.update_prepared_materials(tracer, &scene.model.materials);
         (loss, scene.model.materials.len() * 3, 1, None)
+    }
+}
+
+const CONSERVATIVE_SPECULAR_ALLOCATION: f32 = 0.25;
+
+fn allocate_global_specular(materials: &mut [vol::relight::Material], amount: f32) {
+    for material in materials {
+        for channel in 0..3 {
+            let albedo = material.albedo[channel];
+            material.albedo[channel] = albedo * (1.0 - amount);
+            material.specular_f0[channel] =
+                material.specular_f0[channel] * (1.0 - amount) + albedo * amount;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn refine_rendered_global_specular_allocation(
+    scene: &mut score::Scene,
+    renderer: &mut score::Renderer,
+    tracer: &mut vol::gpu::RelightTracer,
+    capture: &capture::Capture,
+    indices: &[usize],
+    cameras: &[vol::CameraParams],
+    loss: f64,
+) -> (f64, usize, Option<f32>) {
+    let is_rough_dielectric = scene.model.materials.iter().all(|material| {
+        (material.roughness - 1.0).abs() <= 1.0e-6
+            && material
+                .specular_f0
+                .iter()
+                .all(|&value| (value - 0.04).abs() <= 1.0e-6)
+    });
+    if !is_rough_dielectric {
+        return (loss, 0, None);
+    }
+
+    let original = scene.model.materials.clone();
+    allocate_global_specular(&mut scene.model.materials, CONSERVATIVE_SPECULAR_ALLOCATION);
+    renderer.update_prepared_materials(tracer, &scene.model.materials);
+    let candidate_loss = rendered_loss(renderer, tracer, capture, indices, cameras);
+    if candidate_loss < loss {
+        (candidate_loss, 1, Some(CONSERVATIVE_SPECULAR_ALLOCATION))
+    } else {
+        scene.model.materials = original;
+        renderer.update_prepared_materials(tracer, &scene.model.materials);
+        (loss, 1, None)
     }
 }
 
@@ -2205,6 +2296,20 @@ mod tests {
     }
 
     #[test]
+    fn global_specular_allocation_blends_base_color_into_f0() {
+        let mut materials = [vol::relight::Material {
+            albedo: [0.8, 0.4, 0.2],
+            specular_f0: [0.04; 3],
+            ..vol::relight::Material::default()
+        }];
+        allocate_global_specular(&mut materials, 0.25);
+        assert_eq!(materials[0].albedo, [0.6, 0.3, 0.15]);
+        for (&actual, expected) in materials[0].specular_f0.iter().zip([0.23, 0.13, 0.08]) {
+            assert!((actual - expected).abs() < 1.0e-6);
+        }
+    }
+
+    #[test]
     fn only_a_large_individual_table_transfers_automatically() {
         assert!(automatic_gaussian_material_transfer(33, true));
         assert!(!automatic_gaussian_material_transfer(32, true));
@@ -2751,6 +2856,7 @@ mod tests {
             &gaussian_capture,
             &[0, 1],
             0.1,
+            false,
         )
         .expect("Gaussian material re-polish");
         assert_eq!(stats.coordinates, 6);
@@ -2789,6 +2895,7 @@ mod tests {
             &gaussian_capture,
             &[0, 1],
             0.1,
+            false,
         )
         .expect("large Gaussian material transfer");
         assert_eq!(stats.coordinates, 99);
@@ -2796,6 +2903,57 @@ mod tests {
         assert!(stats.changed > 0);
         assert!(stats.final_loss < stats.initial_loss);
         assert!((stats.global_gain.unwrap() - 1.5).abs() < 1.0e-4);
+        assert_eq!(stats.global_specular_allocation, None);
+
+        let mut specular_truth = gaussian_truth.clone();
+        allocate_global_specular(
+            &mut specular_truth.model.materials,
+            CONSERVATIVE_SPECULAR_ALLOCATION,
+        );
+        let mut truth_gaussian =
+            crate::gaussian_splat::from_surface(&specular_truth.model).unwrap();
+        crate::gaussian_splat::attach_pbr(&mut truth_gaussian, &specular_truth.model).unwrap();
+        let mut renderer = score::Renderer::new(SIZE, SIZE).unwrap();
+        let mut tracer = renderer.prepare_gaussian_scene(&specular_truth, &truth_gaussian, false);
+        let rendered = renderer.render_prepared_views(&mut tracer, &cameras);
+        renderer.destroy_prepared_scene(tracer);
+        renderer.destroy();
+        let specular_capture = capture::Capture {
+            width: SIZE,
+            height: SIZE,
+            views: cameras
+                .iter()
+                .enumerate()
+                .map(|(index, &camera)| capture::View {
+                    name: format!("specular-truth-{index}"),
+                    camera,
+                    pixels: rendered[index]
+                        .iter()
+                        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+                        .collect(),
+                    mask: None,
+                })
+                .collect(),
+        };
+        let mut rough_scene = gaussian_truth.clone();
+        let rough_material = rough_scene.model.materials[0];
+        rough_scene.model.materials.resize(33, rough_material);
+        let mut rough_gaussian = crate::gaussian_splat::from_surface(&rough_scene.model).unwrap();
+        crate::gaussian_splat::attach_pbr(&mut rough_gaussian, &rough_scene.model).unwrap();
+        let stats = polish_gaussian_materials(
+            &rough_scene,
+            &mut rough_gaussian,
+            &specular_capture,
+            &[0, 1],
+            0.1,
+            true,
+        )
+        .expect("large Gaussian specular allocation");
+        assert_eq!(
+            stats.global_specular_allocation,
+            Some(CONSERVATIVE_SPECULAR_ALLOCATION)
+        );
+        assert!(stats.final_loss < stats.initial_loss);
 
         let mut first = make_scene(0.075);
         let mut second = first.clone();
