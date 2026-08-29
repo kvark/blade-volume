@@ -8190,8 +8190,27 @@ grouped-index API, environment hook, and synthetic test are removed. The
 official cameras and excluded lighting patterns remain unopened. Each scoped
 run stayed below 0.9 GiB with zero swap, OOM, or GPU fault.
 
-The next surface diagnostic must score fixed-cell alternatives in the learned
-PBR Gaussian compositor itself, after calibrated normal, material, and support
-fitting. A chosen intact group still has to survive a fresh 2,500-point rebuild
-and improve both scalar and Gaussian fresh-camera mean/tail twice. Unknown-light
-and roughness work remains blocked on that surface decision.
+## Rejected Gaussian-PBR fixed-cell ownership (2026-08-29)
+
+The representation-matched follow-up scored the same local alternatives in the
+learned PBR Gaussian compositor after normal, material, opacity, covariance,
+and center fitting. A temporary count-preserving upload refreshed the existing
+Gaussian buffers and TLAS without changing a shader. Its physical-GPU oracle
+selects a known-correct center and rejects a known-wrong one.
+
+The real model has 1,093 observed particles with one nested alternate. Neither
+the all-alternate nor localized complete five-light proposal beats the fitted
+baseline: both repeats select zero, leaving objectives `0.0045062` and
+`0.0044915` unchanged. No fresh replay is necessary because the group indices
+are identical to the zero-score control. The Gaussian updater, selector,
+grouped-index API, environment hook, and test are removed. Both 12 GiB scopes
+peak below 0.9 GiB with zero swap, OOM, or GPU fault; the official cameras and
+excluded lights remain unopened.
+
+Fixed-cell replacement is exhausted. The next surface diagnostic should select
+a bounded set of intact depth groups only when they project onto foreground
+rays that the fitted Gaussian under-covers in several construction cameras.
+Add them temporarily, fit their opacity and covariance jointly with established
+support, and require two complete fresh-camera scalar/Gaussian gains before
+attempting any budget-preserving merge. Unknown-light and roughness work remains
+blocked on that surface decision.

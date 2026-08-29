@@ -78,9 +78,10 @@ The next quality gate is deliberately narrow:
   fixed 2,500/5,000-point gate is still mixed, so this remains opt-in. A
   complete-render static-light and calibrated scalar-PBR selectors were each
   tested twice and removed: scalar quality improves slightly, but rebuilt PBR
-  Gaussians remain mixed or lose foreground quality. The next selector must
-  attribute support in the same learned PBR Gaussian compositor that it is
-  expected to improve, within the fixed raw 2,500-cell partition;
+  Gaussians remain mixed or lose foreground quality. Scoring the same local
+  alternatives in the learned Gaussian PBR compositor then selects none in two
+  fits. The next gate must add candidates specifically on under-covered rays
+  and fit them jointly, instead of replacing the best group in every fixed cell;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and

@@ -53,7 +53,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | grouped fusion implemented; static and scalar-PBR selectors rejected | Attribute proposal ownership in the learned PBR Gaussian compositor, choose replacements only within the fixed raw 2,500-cell partition, then rebuild and refit | Scalar and Gaussian whole-frame/foreground mean/tail improve twice on fresh cameras before either excluded light is opened, with no precision loss |
+| Representation scale | grouped fusion implemented; fixed-cell selectors rejected | Add a bounded set of grouped candidates only on multi-view under-covered foreground rays, fit support jointly, then keep additions only if complete renders improve | Scalar and Gaussian whole-frame/foreground mean/tail improve twice on fresh cameras before either excluded light is opened, with no precision loss |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
@@ -268,14 +268,32 @@ tail and precision. The selector, grouped-index API, environment hook, and test
 were removed. All runs stayed below 0.9 GiB scoped memory with no swap, OOM, or
 GPU fault.
 
-The next diagnostic must make the same fixed-cell ownership decision in the
-learned PBR Gaussian compositor itself, after calibrated normal, material, and
-support fitting. It must still write intact groups and replay a fresh
-2,500-point rebuild; optimizing the proposal Gaussian is not acceptance by
-itself. Two independent internal repeats must improve both scalar and Gaussian
-whole-frame and foreground mean/tail without losing precision before the
-official cameras or excluded lights are opened. No polygonal intermediate or
-fallback is introduced.
+### Rejected Gaussian-PBR fixed-cell ownership gate
+
+The same one-alternate cells were then scored in the learned PBR Gaussian
+compositor after calibrated normal, material, opacity, covariance, and center
+fitting. A temporary count-preserving Gaussian upload updated its existing
+buffers and TLAS; no shader or render variant was added. The physical-GPU
+oracle selected a known-correct center and rejected a known-wrong one.
+
+On the real capture, 1,093 of the 1,128 local alternatives correspond to an
+observed fitted particle. Neither the all-alternate nor localized complete
+multi-light proposal improves the baseline in either fit: zero alternatives are
+selected, at unchanged objectives `0.0045062` and `0.0044915`. With no changed
+group set there is nothing to rebuild or score on fresh cameras. The updater,
+selector, grouped-index API, environment hook, and test were removed. Both runs
+stay below 0.9 GiB scoped memory with zero swap, OOM, or GPU fault.
+
+This closes the fixed-cell replacement branch: confidence already chose the
+best useful group in those cells, and selecting another existing layer does not
+recover missing support. The next diagnostic instead proposes a small bounded
+set of intact groups whose projections land on foreground rays under-covered by
+the fitted Gaussian in several cameras. They are added temporarily and support
+is fit jointly; only complete-render gains on a fresh camera split may retain
+them. A later accepted gate may merge redundant support back to budget, but may
+not remove coverage before the addition is proven. The official cameras and
+excluded lights remain closed. No polygonal intermediate or fallback is
+introduced.
 
 ## Milestones
 
@@ -425,8 +443,11 @@ a deterministic repeat agree within the measured training variance.
 - [x] Attribute support with calibrated multi-light scalar PBR renders inside
   fixed raw-cloud cells; reject and remove it because its small scalar gain does
   not transfer to rebuilt Gaussian foreground quality in two repeats.
-- [ ] Attribute fixed-cell alternatives in the learned PBR Gaussian compositor;
-  rebuild and refit twice before opening held lights.
+- [x] Attribute fixed-cell alternatives in the learned PBR Gaussian compositor;
+  reject and remove it because neither repeat selects one useful alternative.
+- [ ] Add bounded grouped candidates only where several construction cameras
+  agree the fitted Gaussian under-covers foreground; jointly refit and replay
+  twice before opening held lights.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
