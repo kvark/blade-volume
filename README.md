@@ -109,8 +109,13 @@ a convincing real-world result.
   validation cell and six of seven official light groups, but brightens false
   support enough to lose one whole-frame tail. Requiring stable multi-view
   evidence leaves only seven changed materials and a numerically neutral gain.
-  No new material or radiometry path is selected: the next useful change is
-  more precise cross-view surface ownership, after which the bounded response
+  Exact Gaussian ownership narrows this further but does not remove it: even
+  materials with 100% foreground contribution at full resolution in all 30
+  construction cameras still lose the same held whole-frame tail by less than
+  0.001 dB while improving the other 27 of 28 official metric cells. Mask-only
+  scale, scale/opacity, and tangent-plane controls fail too. No new material or
+  radiometry path is selected: the next useful evidence is calibrated 3D
+  correspondence at surface boundaries, after which the bounded response
   solve can be reconsidered.
 
 The next quality gate is deliberately narrow:

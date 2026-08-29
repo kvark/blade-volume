@@ -69,7 +69,7 @@ surface.
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
-| Materials and capture layout | bounded response fit rejected by geometry tail | Keep the global broad-response diagnostic opt-in; improve false-support ownership before revisiting the validated diffuse/F0 basis | Every known-light and whole-frame tail plus two held lights and a second object improve; otherwise keep the feature off |
+| Materials and capture layout | ownership-filtered response improves 27/28 official cells but remains rejected | Keep the global broad-response diagnostic opt-in; use calibrated depth/correspondence rather than more mask heuristics before revisiting the validated diffuse/F0 basis | Every known-light and whole-frame tail plus two held lights and a second object improve; otherwise keep the feature off |
 
 The selected dense-support prerequisite remains the training-mask hull. On the
 `obj_31_painted_toy` split, filtering 68,278 of 1,254,170 one-view fused samples
@@ -591,6 +591,51 @@ retained. The next accepted step must improve cross-view ownership/precision
 of the existing support. Once false extent no longer converts a better
 foreground material into a worse whole frame, the same bounded diffuse/F0
 basis is the first material continuation to revisit.
+
+### Mask-only false-extent bound
+
+The next fixed-cloud diagnostic differentiates the exact ordered production
+Gaussian alpha composite with respect to each covariance axis. Only shrink
+directions whose mask-loss sign repeats across at least one quarter of 30
+construction cameras are considered. Shrinking the best 3--52 axes improves
+whole-frame quality and precision monotonically, but the smallest prefix loses
+one construction foreground tail by about `0.0001` dB. Screening coordinates
+individually leaves 13 that improve every construction metric. Their best
+eight-axis prefix moves whole-frame mean/tail
+`26.844531/26.005165→26.846105/26.005695` dB and precision
+`90.8357→90.8517%`, but no individual coordinate passes the separate
+known-light/camera gate. Supplying all training masks does not change that
+result. Raising opacity to preserve each shrunken axis's typical foreground
+response leaves 15 construction-safe coordinates, and all fail the same
+validation. Mask gradients identify false extent but cannot establish which
+physical response owns an unseen ray.
+
+Filtering the bounded diffuse/F0 solve by actual composited ownership gets
+closer. At every pixel, each material accumulates its front-to-back Gaussian
+contribution on foreground and background. The definitive bound evaluates
+every pixel and requires a material to contribute to foreground in all 30
+construction cameras with exactly 100% measured precision. It changes 544 of
+2,500 materials at ridge 16. Construction and independent light/camera
+validation pass; official means and tails improve in patterns 002, 003, 004,
+013, 005, and 006. Pattern 001 also improves its whole and foreground means
+and its foreground tail, but its whole-frame tail moves backward by less than
+0.001 dB. That is the only failing cell out of 28, and it remains a failure
+under the strict held-view rule.
+
+Evaluating PBR Gaussians at their learned tangent-plane intersection instead
+of their volumetric maximum is not the missing boundary prior: pattern-013
+foreground mean falls `14.72→13.17` dB. The shader experiment is reverted.
+Earlier all-axis, tangent-axis, and normal-axis covariance controls already
+bound simpler sheet priors. No tracked implementation survives this stage.
+
+This closes mask-only ownership. The next geometry experiment must bring in
+calibrated 3D evidence at boundaries: group source-camera depth samples into a
+consistent tangent patch, constrain covariance not to cross a depth or mask
+discontinuity in those source views, and screen the resulting fixed cloud
+before refitting response. It remains a point-cloud operation; it does not
+introduce polygonal geometry. Only after one covariance proposal passes
+construction, independent cameras/lights, and a second object should the
+already validated diffuse/F0 solve be attached and opened on excluded lights.
 
 ## Milestones
 

@@ -8511,3 +8511,48 @@ geometry milestone is no longer “add points”: it is to reduce false extent a
 assign existing Gaussian support to a consistent cross-view surface. The
 bounded diffuse/F0 solve becomes worth revisiting only after a better
 foreground material cannot worsen the whole frame.
+
+## Rejected mask-only false-extent corrections (2026-08-29)
+
+The fixed painted Gaussian now has an exact production-composite ownership
+bound. A CPU diagnostic differentiates mask MSE through the depth-ordered
+Gaussian alpha union, including the runtime 0.03 response cutoff and 1.1 core
+opacity remap. It ranks individual covariance axes only when shrinking has the
+same sign in at least one quarter of 30 construction cameras. Prefixes of
+3--52 axes improve whole-frame PSNR and mask precision monotonically, but the
+smallest loses one construction foreground tail by approximately 0.0001 dB.
+An exact complete-render screen leaves 13 individually construction-safe axes;
+the best eight together change construction whole mean/tail from
+`26.844531/26.005165` to `26.846105/26.005695` dB and precision from
+`90.8357%` to `90.8517%`. Every individual axis fails the independent
+light/camera gate. Using all training masks as geometry evidence repeats the
+result. A coupled sharpening coordinate that shrinks an axis while increasing
+opacity to preserve its typical foreground response leaves 15 safe
+construction axes and no validation-safe axis.
+
+The material continuation is then filtered by the same exact compositor rather
+than by observation count. The full-resolution bound accepts a material only
+when all of its measured contribution lies on foreground and it contributes
+in all 30 construction cameras. At ridge 16, 544 of 2,500 materials change.
+The candidate passes all construction metrics and every separate known-light
+and camera-validation cell. On official cameras it improves all four metrics
+for patterns 002, 003, 004, 013, 005, and 006. Pattern 001 improves whole mean
+and all foreground metrics, but its whole-frame tail falls by less than 0.001
+dB. Thus 27 of 28 official metric cells improve, still short of the explicit
+non-regression gate. Denser ownership measurement and stronger view-count
+requirements monotonically reduce the failure but do not remove it.
+
+Finally, replacing volumetric maximum-response depth with the existing learned
+tangent-plane intersection loses substantial response, including pattern-013
+foreground mean `14.72→13.17` dB. It is reverted. Together with the earlier
+normal-axis/tangent-axis scale controls, this rejects another runtime sheet
+heuristic.
+
+All experiments run in 8 GB zero-swap cgroups, peak below 0.78 GB, and report
+no pressure, OOM, throttle, Xid, or GPU fault. The diagnostic remains ignored;
+no shader, graph operation, option, field, format, dependency, benchmark
+result, or solver is retained. Mask-only ownership is closed. The next bounded
+proposal must use calibrated source-view depth/correspondence to construct a
+3D tangent support patch and prevent an existing Gaussian covariance from
+crossing an observed depth or silhouette discontinuity. It remains point
+cloud geometry; no polygonal representation is introduced.
