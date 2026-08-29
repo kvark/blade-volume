@@ -8641,3 +8641,48 @@ axis one-sidedly, and compensate opacity to preserve established foreground
 response. That separates false spatial extent from center responsibility and
 can be screened on the exact fixed cloud before another optimizer basin is
 introduced.
+
+## Rejected source-depth covariance endpoint bound (2026-08-29)
+
+The fixed-cloud follow-up projects each axis's finite ellipsoid endpoints at
+the production 0.03 response cutoff into its exact dense-fusion source cameras.
+The cell's tight multi-view plane predicts depth at each projected pixel. A
+crossing requires a foreground, depth-consistent center followed by either a
+background endpoint or more than 1% disagreement between plane-predicted and
+measured COLMAP depth. This retains 244 of 7,500 axes at 12 valid views and 50%
+agreement; 240 have a depth crossing and 70 have a silhouette crossing.
+
+A 54-cell batch sweep spans 8/12 minimum views, 50/75/100% agreement,
+1/2.5/5% scale shrink, and zero/half/full opacity compensation. No candidate
+passes patterns 001--003 on 30 construction cameras. Four individual settings
+on the 64 highest-agreement axes produce two construction-safe coordinates.
+Axis `1854.1` (2.5% shrink, no compensation) fails light 004; axis `1980.0`
+(1% shrink, full compensation) fails the first disjoint-camera cell. Ranking
+only the intersection with a positive exact-compositor mask derivative in at
+least eight construction cameras leaves 29 axes and three construction-safe
+proposals. The two particle-1619 proposals fail camera 001 or light 013, and
+particle 1980 repeats its camera failure.
+
+Exact focused scores show why no weaker threshold is justified. Axis `1854.1`
+changes construction means/tails by only `0.000000--0.000019` dB, then loses
+light-004 whole/foreground means by `0.000005` dB. Axis `1980.0` improves its
+largest construction tail by `0.000179` dB, but lowers camera-001 foreground
+tail by `0.000023` dB and camera-002 whole tail by `0.000129` dB. Recall is
+unchanged at reported precision and precision moves at most 0.0001 percentage
+points. These are numerical near-identities, not a reconstruction improvement.
+
+No official camera or excluded light is loaded. Ignored diagnostics extend
+`target/audit-tools/spatial_lobe_gate/`; cgroup logs are
+`target/audit-runs/openillumination/depth-covariance-*`. Eight-GB zero-swap
+scopes peak below 0.77 GB and report no OOM, pressure, throttle, Xid, or GPU
+fault. No model edit, graph operation, shader, option, format, dependency, or
+result file is retained.
+
+Independent center and ellipsoid-endpoint heuristics are now closed. The next
+bounded experiment uses the fusion records as ray supervision instead of
+preassigning them to parameters. Sample an exact source camera/pixel/depth,
+composite the current Gaussian weights on that ray, and compare the rendered
+depth to the calibrated target with a robust scale-normalized residual. Hold a
+source-camera subset out when choosing the loss weight. This directly tests
+which current Gaussian owns an observed surface and lets center, covariance,
+and opacity co-adapt through the existing renderer.

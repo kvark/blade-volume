@@ -124,8 +124,10 @@ a convincing real-world result.
   paired fresh reconstruction regresses every light group. It is therefore
   not in production. Distributing the correction through geometry training
   also fails at 2.5%, 0.5%, and 0.1% total motion before any held observation
-  is opened. Center regularization is closed; the next gate constrains only
-  covariance that crosses calibrated depth or silhouette discontinuities.
+  is opened. A fixed-center covariance screen then finds only numerically
+  neutral axes and no validation-safe update. Center and endpoint heuristics
+  are closed; the next gate supervises composited per-ray depth at exact
+  multi-view-consistent source observations.
 
 The next quality gate is deliberately narrow:
 
@@ -178,7 +180,9 @@ The next quality gate is deliberately narrow:
   checkpoints but fails a paired fresh optimizer basin, so the next candidate
   co-optimizes that evidence rather than mutating a finished cloud. That test
   also fails down to 0.1% total center motion; keep centers fixed and test a
-  source-view covariance bound next;
+  source-view covariance bound next. The covariance bound also fails before
+  held data: use the calibrated observations as renderer depth targets rather
+  than converting them to independent center or axis corrections;
 - keep the coupled visibility/one-bounce Gaussian path at four to eight samples
   in fitting and evaluation. Sixty-four samples and same-cost stratification
   do not pass the complete fixed-cloud gate. After surface ownership improves,

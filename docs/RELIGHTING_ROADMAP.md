@@ -708,6 +708,47 @@ discontinuity? Only the offending covariance direction may shrink, and it must
 retain foreground response through a coupled opacity adjustment before any
 material solve is revisited.
 
+### Rejected calibrated covariance endpoint bound
+
+That fixed-cloud question is now answered. At the production `0.03` response
+cutoff, each Gaussian axis is projected to both finite endpoints in every
+paired source camera. A local cell plane predicts the depth at each projected
+pixel; an axis is flagged only when the measured COLMAP depth differs by more
+than 1%, or the endpoint crosses the source silhouette, while the center itself
+remains foreground and depth-consistent. Among 7,500 painted-toy axes, 244
+have at least 12 valid cameras and cross a discontinuity in at least half of
+them. Of these, 240 have a depth crossing and only 70 a mask crossing, so the
+screen is not a disguised repeat of the rejected mask gradient.
+
+Broad candidates sweep 8/12 minimum views, 50/75/100% agreement, 1/2.5/5%
+scale shrink, and zero/half/full bounded opacity compensation. None of 54
+combinations passes all three construction lights. Screening the 64 strongest
+axes individually at 1/2.5% with and without compensation leaves two complete
+construction passes. One fails light 004 and one fails the first disjoint
+camera. Intersecting the calibrated set with the exact compositor's
+construction-mask derivative reduces it to 29 image-owning axes and finds
+three construction-safe proposals; all three fail independent light/camera
+validation.
+
+The apparent finalists are numerical identities rather than useful capacity.
+Axis `1854.1` improves construction cells by roughly `0.00001` dB and loses
+light-004 whole/foreground means by about `0.000005` dB. Axis `1980.0` gains at
+most `0.00018` dB on construction tails, then loses the first disjoint-camera
+foreground tail by `0.000023` dB and another camera tail by `0.000129` dB.
+Recall is unchanged to reported precision; precision moves at most 0.0001
+points. No production threshold can turn those into a meaningful surface gain.
+
+All candidates keep centers and materials fixed. No official camera or
+excluded pattern is loaded. The ignored 8 GB, zero-swap runs peak below 0.77 GB
+with no OOM, throttle, Xid, or GPU fault, and no tracked code survives. This
+closes independent center and endpoint corrections. The next consumer of the
+calibrated evidence must operate on ownership directly: sample only exact
+multi-view-consistent fusion observations, render the Gaussian composited
+depth on those rays, and add a robust normalized depth residual beside RGB and
+mask loss. A held source-camera subset selects its weight. This allows
+position, covariance, and opacity to explain one observed surface jointly
+without hand-assigning a particle or axis.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -894,9 +935,15 @@ a deterministic repeat agree within the measured training variance.
 - [x] Co-optimize calibrated source-plane feedback during multi-light geometry;
   remove it when 2.5%, 0.5%, and 0.1% total corrections all exceed zero-arm
   variance and fail the first object's independent internal gate.
-- [ ] Keep centers fixed and constrain only covariance support that crosses a
+- [x] Keep centers fixed and constrain only covariance support that crosses a
   calibrated source-view depth or silhouette discontinuity, coupled to opacity
   so the established foreground response is preserved.
+- [x] Screen calibrated depth/mask endpoint crossings broadly, individually,
+  and after exact-compositor ownership ranking; remove the diagnostic when all
+  construction survivors remain numerically neutral and fail validation.
+- [ ] Supervise composited Gaussian depth on exact multi-view-consistent fusion
+  observation rays with a robust normalized residual and a held source-camera
+  weight gate; do not preassign the observation to a particle.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
