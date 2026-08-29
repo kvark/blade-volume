@@ -45,14 +45,19 @@ not contain or fall back to polygonal geometry.
   while lowering held-photo tails and precision. The scalar renderer is a
   useful geometric control, not ground-truth opacity for the volumetric
   compositor.
+- The first Objects With Lighting gate now holds out both camera and natural
+  HDR environment independently. A 25,000-point scalar cloud is recognizable
+  and reaches 21.88/20.16 dB foreground mean/worst on nine official pairs, but
+  remains grey and texture-poor. The ordinarily trained Gaussian suppresses
+  useful foreground support; retaining the initialized support improves it,
+  but does not yet produce a validation-safe training change.
 
-The current bottleneck is therefore **cross-view surface ownership first,
-non-diffuse material recovery second, radiometry and unknown-light estimation
-third**. The selected representation-aware diffuse transfer and coupled
-transport renderer remove two implementation gaps, but material, visibility,
-and illumination can still compensate for wrong or missing geometry.
-Optimizing all of them together now would make the decomposition less
-identifiable rather than more accurate. The scalar surfel asset remains a
+The current bottleneck is therefore **preserving cross-view surface support in
+the Gaussian objective first, separating material from unknown illumination
+second, and adding non-diffuse capacity third**. The selected
+representation-aware diffuse transfer and coupled transport renderer remove two
+implementation gaps, but material, visibility, and illumination can still
+compensate for wrong or missing geometry. The scalar surfel asset remains a
 valid cloud-only geometry control; no polygonal fallback is needed.
 
 ## Execution plan
@@ -70,6 +75,7 @@ surface.
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
 | Materials and capture layout | ownership-filtered response improves 27/28 official cells but remains rejected | Keep the global broad-response diagnostic opt-in; use calibrated depth/correspondence rather than more mask heuristics before revisiting the validated diffuse/F0 basis | Every known-light and whole-frame tail plus two held lights and a second object improve; otherwise keep the feature off |
+| Unknown natural illumination | independent OWL gate complete; quality fails | Preserve initialized Gaussian coverage with a construction-mask objective before changing material or light capacity | Improve official mean/worst PSNR and recall without losing precision on the fixed nine-pair gate |
 
 The selected dense-support prerequisite remains the training-mask hull. On the
 `obj_31_painted_toy` split, filtering 68,278 of 1,254,170 one-view fused samples
@@ -1053,6 +1059,63 @@ fifth sorted camera for one internal same-environment test, reconstruct only a
 the official ground-truth views/environments once after the fixed fit. Ignore
 all provided polygonal geometry. This gate tests novel view and novel lighting;
 it is separate from the still-blocked coherent missing-patch merge.
+
+### Objects With Lighting result
+
+The lexicographically first object is `antman`. Only its 64 input photographs,
+calibrated cameras, and masks enter reconstruction; all polygonal assets are
+ignored. Every fifth sorted input camera forms a 12-view internal test, leaving
+52 construction cameras. Their explicit nearest-12 PatchMatch graph produces
+photometric and geometric depths for all 52 views without loading a held
+camera. Fusion contains 413,305 depth groups with 4.7 source views on average;
+the fixed 2,500-point minimum-two-source surface retains 1,659 points observed
+by construction photographs.
+
+The fixed 2,500-point exact arm reaches 25.01/21.02 dB whole-frame and
+18.73/15.32 dB foreground mean/worst on the 12 internal cameras. Its Gaussian
+reaches 24.50/18.75 and 18.04/12.88 dB, with only 67.6% recall. Exact serial
+point proposals take 44.3 minutes; eight simultaneous refinement rounds reach
+within 0.19 dB on the scalar surface and 0.51 dB on the Gaussian in 30.6
+seconds. The serial path is therefore an analysis oracle, not a production
+default.
+
+Only after that fit was fixed were the nine official camera/environment pairs
+opened. The evaluator renders each persisted cloud at the published camera,
+reprojects the published HDR environment into Blade's convention, and follows
+the benchmark's exposure and per-channel colour alignment on the full native
+resolution. Results are foreground mean/worst PSNR followed by mask
+recall/precision:
+
+| Fixed output | Official result |
+| --- | ---: |
+| 2.5k scalar | `20.85/18.84 dB; 98.8/94.3%` |
+| 2.5k ordinarily fitted Gaussian | `19.64/17.73 dB; 68.3/96.8%` |
+| 25k scalar | `21.88/20.16 dB; 99.6/95.7%` |
+| 25k ordinarily fitted Gaussian | `19.28/17.39 dB; 60.8/95.8%` |
+| 25k support-preserving Gaussian diagnostic | `20.44/17.95 dB; 87.1/92.5%` |
+| Black | `10.84/8.60 dB` |
+
+Density is useful for the scalar cloud: 25k adds 1.03 dB mean over 2.5k and
+visibly improves the silhouette. It does not cure the Gaussian objective. The
+two-update initialization diagnostic beats the normally trained 25k Gaussian
+by 1.16/0.56 dB mean/worst and 26.3 recall points. Raising the generic support
+survival guard from 50% to 80% restores 98.7% recall, but scores only
+20.32/18.03 dB and reduces precision to 89.8%; that code was removed. A global
+particle-count guard is not the required coverage objective.
+
+The selected evidence is deliberately narrow: an all-cloud pipeline can
+recover a recognizable surface and react to an independent natural environment,
+but appearance is grey, soft, and missing high-frequency texture. The next
+implementation must use construction masks and views to penalize lost Gaussian
+foreground ownership while jointly fitting opacity and covariance. It may
+advance only if official mean, tail, recall, and precision improve together.
+After support is stable, constrain the material/light decomposition with shared
+material structure or calibrated repeated environments; one unknown input
+environment cannot by itself identify arbitrary per-point BRDFs. Batch point
+proposals before revisiting the exact 44-minute refinement. ReNé remains behind
+near-field point-light and deterministic background-subtraction work, while
+OLATverse is the best repeated-light final gate once release access is
+available.
 
 ## Milestones
 

@@ -55,6 +55,16 @@ a convincing real-world result.
   geometry/transport gate, not an unimplemented experiment. Exact commands,
   baselines, images, and next steps are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
+- **Independent natural-light relighting — first honest result, not yet
+  passed.** The Objects With Lighting Ant-Man gate trains on 52 cameras under
+  one unknown HDR environment, reserves 12 same-environment cameras, then
+  scores nine official camera/environment pairs that were never loaded during
+  fitting. A 25,000-point scalar cloud reaches 21.88/20.16 dB foreground
+  mean/worst with 99.6% mask recall. The image is recognizably relit, but its
+  grey, soft appearance loses most texture and material detail. Ordinary
+  Gaussian fitting collapses foreground support; preserving initialization
+  raises recall from 60.8% to 87.1%, but remains only a diagnostic until a
+  coverage-aware fit improves quality and precision together.
 - **Fresh-object support result — selected; sampled transport now works.** On a
   second painted, concave object, rejecting dense samples outside the training
   silhouettes before downsampling raises held-camera foreground quality by
@@ -283,6 +293,8 @@ both the camera and the studio environment used for the reference.
 | OpenIllumination same-session relighting<br>held camera and lighting pattern 006 | <img src="docs/images/reconstruction/openillumination-pattern006-reference.png" alt="OpenIllumination fabric friends cup reference under excluded lighting pattern 006" width="320"> | <img src="docs/images/reconstruction/openillumination-pattern006-surface.png" alt="Excluded view and light rendered by the reconstructed scalar point surface" width="320"> |
 | OpenIllumination fresh-object diagnostic<br>held camera and excluded pattern 006 | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-reference.png" alt="OpenIllumination painted toy reference under excluded lighting pattern 006" width="320"> | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-surface.png" alt="Excluded view and light rendered by the filtered scalar point surface" width="320"> |
 | OpenIllumination sampled-transport diagnostic<br>same held camera and excluded pattern 006 | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-reference.png" alt="OpenIllumination painted toy reference under excluded lighting pattern 006" width="320"> | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-gaussian-transport.png" alt="Excluded view and light rendered by the PBR Gaussian cloud with sampled visibility and one bounce" width="320"> |
+| Objects With Lighting surface<br>independent camera and unseen natural HDR environment | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-reference.png" alt="Objects With Lighting Ant-Man official reference under unseen environment 7" width="320"> | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-surface.png" alt="Unseen view and natural environment rendered by the 25,000-point scalar cloud" width="320"> |
+| Objects With Lighting Gaussian diagnostic<br>same independent camera and unseen environment | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-reference.png" alt="Objects With Lighting Ant-Man official reference under unseen environment 7" width="320"> | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-gaussian.png" alt="Unseen view and natural environment rendered by the support-preserving Gaussian diagnostic" width="320"> |
 
 The pictures expose what PSNR alone hides: the light-field branch has the
 scene and viewpoint but remains blurry, while the relightable branches respond
@@ -294,6 +306,26 @@ visibility/one-bounce rays: directional structure improves, but noise and
 incorrect depth layers remain obvious. `--score-diffuse-samples 64` can clean
 up scalar score dumps; Gaussian scoring deliberately stays at
 `--diffuse-samples`, matching the transport used by the PBR reconstruction.
+
+Objects With Lighting is the first row here where both the camera and natural
+HDR environment come from an independent official test capture rather than a
+held subset of the reconstruction session. Scores use the benchmark's
+full-resolution object masks and its per-image exposure and colour-balance
+alignment, so they are not directly comparable to the whole-frame table below:
+
+| Ant-Man official unseen camera/environment | Foreground PSNR | Recall / precision |
+| --- | ---: | ---: |
+| 25k scalar surface (shown) | 21.88 / 20.16 dB | 99.6% / 95.7% |
+| 25k support-preserving Gaussian diagnostic (shown) | 20.44 / 17.95 dB | 87.1% / 92.5% |
+| 25k ordinarily fitted Gaussian | 19.28 / 17.39 dB | 60.8% / 95.8% |
+| Black | 10.84 / 8.60 dB | — |
+
+Each PSNR cell is mean / worst over nine official pairs. The large margin over
+black establishes real signal, not acceptable decomposition quality. Increasing
+the point budget from 2,500 to 25,000 improves the scalar mean by 1.03 dB. By
+contrast, the current single-environment Gaussian objective prunes or dims
+useful foreground support. A stricter global survival threshold restores recall
+but loses mean quality and precision, so that attempted change is rejected.
 
 | Gate | Training / held views | Static held PSNR | PBR held PSNR | Coverage |
 | --- | ---: | ---: | ---: | ---: |

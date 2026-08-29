@@ -19,11 +19,25 @@ Fixed-camera multi-illumination data is still useful for exposure, white
 balance, and flash/ambient experiments, but it cannot measure novel-view
 reconstruction.
 
+## Hugging Face availability
+
+As of 2026-08-29, the only official Hugging Face copy among the requested
+datasets is
+[`OpenIllumination/OpenIllumination`](https://huggingface.co/datasets/OpenIllumination/OpenIllumination).
+No official Hub repository was found for MIT Multi-Illumination, FAU
+Multi-Illuminant, Flash/Ambient, MILL, OLATverse, ReNé, DiLiGenT-MV, Objects
+With Lighting, or OpenSubstance; use their official project releases instead.
+The Hub-hosted [`whcfang/M2AD`](https://huggingface.co/datasets/whcfang/M2AD)
+has angle and illumination labels but no published camera or light calibration,
+so it cannot support the camera/light reconstruction gate without additional
+metadata.
+
 ## Ranked datasets
 
 | Dataset | Camera/light coverage | Best use here | Limitation |
 | --- | --- | --- | --- |
 | [OpenIllumination](https://oppo-us-research.github.io/OpenIllumination/) | 64 objects, 70 views, 13 multi-LED patterns and 142 OLAT conditions | **First real gate.** It has camera poses, light calibration, masks, official train/test views, CC BY 4.0 data, and selective downloads. | Roughly 900 GB in full. The LEDs are finite-distance emitters, while the current renderer accepts a distant environment map. |
+| [Objects With Lighting](https://github.com/isl-org/objects-with-lighting) | 64 input cameras under one unknown natural environment, plus nine official camera/environment test pairs per object | **First independent natural-environment gate.** Compact, calibrated, masked, and directly compatible with the distant-HDR renderer. | One input environment leaves material and illumination strongly ambiguous; it is an evaluation gate, not repeated-light training data. |
 | [ReNé](https://eyecan-ai.github.io/rene/) | 20 objects, 50 views by 40 OLAT conditions | Second object-level cross-check with calibrated camera and light poses. | Also uses local point lights; access and preprocessing are less convenient. |
 | [DiLiGenT-MV](https://sites.google.com/site/photometricstereodata/mv) | 5 objects, 20 views by 96 calibrated lights | Smallest serious photometric-geometry gate; good for normals and diffuse material. | Only five object-centric scenes and point-light illumination. |
 | [OLATverse](https://vcai.mpi-inf.mpg.de/projects/OLATverse/) | 765 objects, 35 cameras by 331 OLATs, plus environment and gradient lights | Eventual broad material/generalization benchmark. | Huge and registration-gated; inappropriate for the first integration. |
