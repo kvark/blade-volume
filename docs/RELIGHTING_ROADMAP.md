@@ -835,6 +835,40 @@ Keep ordinary image batches and complete held cameras unchanged. Advance only
 if a same-graph zero arm passes every construction, held-camera, and unseen-
 light mean and tail before opening a second object.
 
+### Rejected exact-ray ordinal visibility
+
+The ordinal follow-up keeps the same 336,113 original source rays, 30/8 camera
+split, 512-ray alternating cadence, exhaustive current-cloud candidates, and
+same-graph zero control. It tests three bounded objectives at weight `0.001`:
+one-sided free-space suppression for opacity-weighted response more than 1% in
+front of the fused first surface, a 0.25-opacity minimum from candidates whose
+maximum response is already within a 1% support band, and their sum. Candidates
+behind the surface are never pulled to its metric depth.
+
+All three arms fail every 0.125/0.25/0.5/1.0 blend. Free-space suppression is
+the clearest rejection: even its 0.125 blend lowers light-001 fit and camera
+foreground tails and loses additional 002--004/013 rows. The support-only arm
+passes every light-001/002 metric at its 0.125 blend, but lowers foreground
+tails for lights 003, 004, and 013. Combining the terms merely combines those
+failure modes; broad image means often rise while independently held rays get
+worse. The fitted volumetric response therefore cannot treat fused depth as a
+universal first-hit boundary, even when the loss is ordinal rather than
+metric.
+
+No official camera, excluded light, or second object is opened. All corrected
+runs peak below 0.73 GB in 8 GB zero-swap scopes with no OOM, pressure,
+throttle, Xid, or GPU fault. The observation wrapper, graph mode and inputs,
+alternating steps, and support masks are removed. No code, shader, Meganeura
+operation, format, dependency, or result asset is retained.
+
+This closes dense-fusion depth as a training constraint on an already fitted
+Gaussian for this milestone. Return to independently verified point support:
+the next surface gate should expand a coherent shared-view track component by
+cloud-only local resampling, share material parameters across that patch, and
+optimize it through complete renders against a fixed persisted prefix. Use a
+fresh held split or second object for the decision; do not reopen the exhausted
+painted-toy official split.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -1033,8 +1067,10 @@ a deterministic repeat agree within the measured training variance.
 - [x] Preserve original source camera/pixel/depth observations in alternating
   depth-only batches with exact ray candidates and held source cameras; reject
   metric depth when two weights and all blends lose independent tails.
-- [ ] Replace metric depth with an exact-ray ordinal free-space/support-band
-  objective; keep the graph, optimizer cadence, and held-camera gate matched.
+- [x] Replace metric depth with exact-ray ordinal free-space and support-band
+  objectives; remove all three arms when every blend loses independent tails.
+- [ ] Expand one verified shared-view component by cloud-only local resampling,
+  share patch material parameters, and gate complete renders on fresh data.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

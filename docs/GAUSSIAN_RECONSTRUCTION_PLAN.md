@@ -8761,3 +8761,34 @@ while some response in the band is required. This avoids forcing all
 contributors onto noisy metric depth. It must use the same alternating
 same-graph control and pass every internal mean/tail cell before a second
 object or official split is considered.
+
+## Rejected exact-ray ordinal visibility (2026-08-29)
+
+The same exact observation and optimizer harness then tested the weaker depth
+claim. A one-sided hinge penalizes opacity-weighted Gaussian response more than
+1% in front of the fused first surface. A separate support term requires 0.25
+opacity from candidates whose current maximum-response depth is already within
+1% of that surface. Neither term pulls behind-surface candidates to an exact
+depth. Free-space-only, support-only, and combined arms use weight `0.001` and
+the same 0.125/0.25/0.5/1.0 blend screen.
+
+No arm passes. The smallest free-space blend already loses light-001 fit and
+held-camera foreground tails. The smallest support-only blend passes every
+light-001/002 row, but loses 003, 004, and 013 foreground tails. The combined
+arm has both patterns. Means often improve, so this is not a missing gradient;
+the calibrated fused sample is simply not a safe universal first-hit boundary
+for the fitted volumetric compositor.
+
+All tracked visibility types, graph inputs, alternating updates, and band masks
+are removed. The 8 GB zero-swap scopes peak below 0.73 GB and report no OOM,
+pressure, throttle, Xid, or GPU fault. No official camera, excluded light, or
+second object was opened.
+
+Dense depth has now failed as a post-fit center correction, co-optimized
+proximal correction, fixed-covariance bound, low-resolution metric loss, exact
+metric loss, and exact ordinal loss. The next experiment must change the
+surface proposal rather than regularize this basin again. Continue the
+deterministic shared-view patch path: resample a verified component entirely as
+points, share material parameters spatially across it, freeze the established
+prefix, and use complete renders on a fresh split or second object as the
+selection gate.
