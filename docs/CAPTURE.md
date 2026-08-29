@@ -139,6 +139,30 @@ clouds. `--dense-max-points` changes the bound; it is a memory/throughput limit,
 not a request to duplicate points. Omit `--dense-cloud` to use sparse geometry
 for both outputs.
 
+Pose-only calibrated datasets need an explicit PatchMatch overlap graph because
+COLMAP cannot infer `__auto__` sources from absent sparse tracks. The
+OpenIllumination importer writes `patch-match-train.cfg` from the nearest 12
+training camera centers and excludes the official held cameras. After
+`image_undistorter`, copy that file over `dense/stereo/patch-match.cfg` before
+running `patch_match_stereo`. `reconstruct` can then fuse the geometric depth
+and normal maps directly, without a synthetic sparse track or a mesh:
+
+```bash
+cargo run --release -p blade-volume-train --bin reconstruct -- \
+    --sparse prepared/sparse/train --images images --masks prepared/masks \
+    --dense-workspace dense --dense-cache target/grouped-fusion.bvf \
+    --dense-max-points 2500 --min-views 2 \
+    --pbr-gaussian-output capture-pbr.ply
+```
+
+The first run writes the raw grouped fusion cache; later runs require the same
+ordered training-image list and fusion thresholds, then reapply the current
+masks before selecting a point budget. Every selected voxel keeps one real
+depth-consistent group and all of its camera/pixel/depth/normal/confidence
+observations instead of averaging unrelated layers. This path remains opt-in:
+the current fresh-object gate is mixed, so ordinary captures still use
+`dense/fused.ply` by default.
+
 Missing-surface experiments can replay one exact trained Gaussian with
 `--missing-tracks-base my-capture-pbr.ply --missing-tracks-output tracks.ply`.
 This dedicated diagnostic input is mutually exclusive with

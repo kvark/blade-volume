@@ -120,6 +120,16 @@ struct Args {
     #[argh(option)]
     dense_cloud: Option<String>,
 
+    /// COLMAP dense workspace whose depth maps are fused through its explicit
+    /// patch-match camera graph, instead of sparse geometry
+    #[argh(option)]
+    dense_workspace: Option<String>,
+
+    /// grouped native-fusion cache to reuse or create; requires
+    /// --dense-workspace and binds the training images and fusion settings
+    #[argh(option)]
+    dense_cache: Option<String>,
+
     /// maximum spatially averaged dense-cloud particles (default 50000)
     #[argh(option, default = "50_000")]
     dense_max_points: usize,
@@ -396,39 +406,60 @@ fn main() {
     } else {
         None
     };
-    let (surfels, sparse_support, gaussian_sparse_support, mut density_normal_source) =
-        match (args.foam.as_deref(), args.dense_cloud.as_deref()) {
-            (Some(foam), None) => {
-                let (surfels, sparse_support, gaussian_sparse_support, source) = surfels_from_foam(
-                    path::Path::new(foam),
-                    &capture,
-                    &reconstruction,
-                    &train_views,
-                    &normal_captures,
-                    &args,
-                    compute_gpu.clone(),
-                );
-                (
-                    surfels,
-                    sparse_support,
-                    gaussian_sparse_support,
-                    Some(source),
-                )
-            }
-            (None, Some(dense)) => (
-                surfels_from_dense(path::Path::new(dense), &capture, &train_views, &args),
-                Vec::new(),
-                Vec::new(),
+    let (
+        surfels,
+        sparse_support,
+        gaussian_sparse_support,
+        mut density_normal_source,
+        dense_fusion_support,
+    ) = match (
+        args.foam.as_deref(),
+        args.dense_cloud.as_deref(),
+        args.dense_workspace.as_deref(),
+    ) {
+        (Some(foam), None, None) => {
+            let (surfels, sparse_support, gaussian_sparse_support, source) = surfels_from_foam(
+                path::Path::new(foam),
+                &capture,
+                &reconstruction,
+                &train_views,
+                &normal_captures,
+                &args,
+                compute_gpu.clone(),
+            );
+            (
+                surfels,
+                sparse_support,
+                gaussian_sparse_support,
+                Some(source),
                 None,
-            ),
-            (None, None) => (
-                surfels_from_sparse(&reconstruction, &capture, &args),
-                Vec::new(),
-                Vec::new(),
-                None,
-            ),
-            (Some(_), Some(_)) => unreachable!("geometry source was validated"),
-        };
+            )
+        }
+        (None, Some(dense), None) => (
+            surfels_from_dense(path::Path::new(dense), &capture, &train_views, &args),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        ),
+        (None, None, Some(workspace)) => {
+            let (surfels, fusion) = surfels_from_dense_workspace(
+                path::Path::new(workspace),
+                &capture,
+                &train_views,
+                &args,
+            );
+            (surfels, Vec::new(), Vec::new(), None, Some(fusion))
+        }
+        (None, None, None) => (
+            surfels_from_sparse(&reconstruction, &capture, &args),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        ),
+        _ => unreachable!("geometry source was validated"),
+    };
     let kernel = if args.compact_kernel {
         vol::relight::ParticleKernel::Compact
     } else {
@@ -803,6 +834,22 @@ fn main() {
         );
     }
 
+    let initialize_pbr_gaussian = |surface: &vol::relight::RelightModel| {
+        if let Some(ref fusion) = dense_fusion_support {
+            assert_eq!(
+                surface.surfels.len(),
+                fusion.len(),
+                "dense evidence must stay aligned with Gaussian support",
+            );
+            println!(
+                "Gaussian support: initializing {} particles from {} retained depth groups ({} observations)",
+                surface.surfels.len(),
+                fusion.len(),
+                fusion.observation_count(),
+            );
+        }
+        train::gaussian_splat::pbr_from_surface(surface, train_views.len())
+    };
     let mut learned_pbr_gaussian = None;
     let mut pbr_support_baseline = None;
     if fit_gaussians && args.gaussian_output.is_none() {
@@ -810,11 +857,10 @@ fn main() {
             .get_or_insert_with(|| require_compute_gpu("PBR Gaussian training"))
             .clone();
         let mut pbr_gaussian =
-            train::gaussian_splat::pbr_from_surface(&fitted.scene.model, train_views.len())
-                .unwrap_or_else(|error| {
-                    eprintln!("cannot initialize PBR support Gaussian field: {error}");
-                    std::process::exit(1);
-                });
+            initialize_pbr_gaussian(&fitted.scene.model).unwrap_or_else(|error| {
+                eprintln!("cannot initialize PBR support Gaussian field: {error}");
+                std::process::exit(1);
+            });
         let established_support = pbr_gaussian.clone();
         let started = std::time::Instant::now();
         let stats = train::gaussian_splat::fit_staged(
@@ -879,7 +925,7 @@ fn main() {
         let independent_outputs =
             sparse_gaussian_surface.is_some() || static_gaussian_surface.is_some();
         let mut pbr_gaussian = if independent_outputs {
-            train::gaussian_splat::pbr_from_surface(&fitted.scene.model, train_views.len())
+            initialize_pbr_gaussian(&fitted.scene.model)
         } else {
             train::gaussian_splat::from_surface(&fitted.scene.model)
         }
@@ -1543,6 +1589,130 @@ fn surfels_from_dense(
         points.len(),
     );
     surfels
+}
+
+/// Point groups fused directly from a COLMAP depth workspace.
+///
+/// Only selected training image names are supplied to the fusion loader. This
+/// keeps held cameras out even when a broader workspace happens to be present.
+fn surfels_from_dense_workspace(
+    workspace: &path::Path,
+    capture: &train::inverse::capture::Capture,
+    views: &[usize],
+    args: &Args,
+) -> (Vec<vol::relight::Surfel>, train::dense::DenseFusion) {
+    let image_names: Vec<_> = views
+        .iter()
+        .map(|&view| capture.views[view].name.as_str())
+        .collect();
+    let cache = args.dense_cache.as_deref().map(path::Path::new);
+    let cached = cache.is_some_and(path::Path::exists);
+    let fusion_options = train::dense::WorkspaceFusionOptions {
+        min_views: args.min_views,
+        ..Default::default()
+    };
+    let mut fusion = if let Some(cache) = cache.filter(|_| cached) {
+        train::dense::try_load_fusion_cache(cache, &image_names, fusion_options).unwrap_or_else(
+            |error| {
+                eprintln!(
+                    "cannot load dense fusion cache {}: {error}",
+                    cache.display()
+                );
+                std::process::exit(1);
+            },
+        )
+    } else {
+        train::dense::try_fuse_colmap_workspace(workspace, &image_names, fusion_options)
+            .unwrap_or_else(|error| {
+                eprintln!(
+                    "cannot fuse dense workspace {}: {error}",
+                    workspace.display()
+                );
+                std::process::exit(1);
+            })
+    };
+    let observations = fusion.observation_count();
+    let view_count = fusion.view_count();
+    let mean_confidence = fusion
+        .iter_observations()
+        .map(|observation| observation.confidence as f64)
+        .sum::<f64>()
+        / observations.max(1) as f64;
+    println!(
+        "geometry: {} {} explicit depth groups from {} observations ({:.1} distinct views per group, {mean_confidence:.3} mean confidence)",
+        if cached { "loaded" } else { "fused" },
+        fusion.len(),
+        observations,
+        view_count as f64 / fusion.len().max(1) as f64,
+    );
+    if !cached {
+        if let Some(cache) = cache {
+            if let Some(parent) = cache
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent).unwrap_or_else(|error| {
+                    eprintln!("cannot create {}: {error}", parent.display());
+                    std::process::exit(1);
+                });
+            }
+            train::dense::try_save_fusion_cache(cache, &fusion, &image_names, fusion_options)
+                .unwrap_or_else(|error| {
+                    let _ = std::fs::remove_file(cache);
+                    eprintln!(
+                        "cannot write dense fusion cache {}: {error}",
+                        cache.display()
+                    );
+                    std::process::exit(1);
+                });
+            println!(
+                "geometry: cached {} grouped candidates in {}",
+                fusion.len(),
+                cache.display()
+            );
+        }
+    }
+    if let Some(rejected) =
+        train::dense::retain_fusion_soft_visual_hull(&mut fusion, capture, views)
+    {
+        println!(
+            "geometry: masks rejected {rejected} of {} fused depth groups outside the soft visual hull",
+            fusion.len() + rejected,
+        );
+    }
+    let mut selected = fusion.select_groups(args.dense_max_points);
+    let selected_count = selected.len();
+    println!(
+        "geometry: group-preserving retained {} of {} fused depth groups",
+        selected_count,
+        fusion.len(),
+    );
+    let oriented: Vec<_> = selected
+        .points()
+        .iter()
+        .map(|point| (point.position, point.normal))
+        .collect();
+    let (surfels, dropped) = train::inverse::surface::surfels_from_oriented_points(
+        &oriented,
+        train::inverse::surface::SurfaceOptions {
+            radius_factor: args.radius_factor,
+            ..Default::default()
+        },
+    );
+    println!(
+        "geometry: {dropped} of {} grouped depth points dropped as unsupported outliers",
+        selected_count,
+    );
+    let mut surfel = 0;
+    selected.retain(|point| {
+        let retained = surfels
+            .get(surfel)
+            .is_some_and(|entry| entry.center == point.position.to_array());
+        surfel += retained as usize;
+        retained
+    });
+    assert_eq!(surfel, surfels.len(), "surface output changed point order");
+    (surfels, selected)
 }
 
 fn surfels_from_training_sparse(
@@ -2784,10 +2954,19 @@ fn validate_lit_captures(args: &Args) -> Result<(), String> {
 }
 
 fn validate_geometry_source(args: &Args) -> Result<(), String> {
-    if args.foam.is_some() && args.dense_cloud.is_some() {
-        return Err("--foam and --dense-cloud are alternative geometry sources".to_string());
+    let source_count = args.foam.is_some() as usize
+        + args.dense_cloud.is_some() as usize
+        + args.dense_workspace.is_some() as usize;
+    if source_count > 1 {
+        return Err(
+            "--foam, --dense-cloud, and --dense-workspace are alternative geometry sources"
+                .to_string(),
+        );
     }
-    if args.dense_cloud.is_some()
+    if args.dense_cache.is_some() && args.dense_workspace.is_none() {
+        return Err("--dense-cache requires --dense-workspace".to_string());
+    }
+    if (args.dense_cloud.is_some() || args.dense_workspace.is_some())
         && !(train::inverse::surface::SurfaceOptions::default().neighbours + 1..=u32::MAX as usize)
             .contains(&args.dense_max_points)
     {
@@ -3372,6 +3551,8 @@ mod tests {
         assert!(defaults.environment.is_none());
         assert!(defaults.masks.is_none());
         assert!(defaults.dense_cloud.is_none());
+        assert!(defaults.dense_workspace.is_none());
+        assert!(defaults.dense_cache.is_none());
         assert_eq!(defaults.dense_max_points, 50_000);
         assert_eq!(defaults.surface_powerfoam_steps_per_view, 0);
         assert!(defaults.surface_powerfoam_output.is_none());
@@ -3439,6 +3620,23 @@ mod tests {
         validate_geometry_source(&dense).unwrap();
         assert!(!uses_sparse_static_gaussian_surface(&dense));
 
+        let workspace = parse(&[
+            "--dense-workspace",
+            "dense",
+            "--dense-cache",
+            "dense/groups.bvf",
+            "--dense-max-points",
+            "5000",
+            "--min-views",
+            "3",
+        ]);
+        assert_eq!(workspace.dense_workspace.as_deref(), Some("dense"));
+        assert_eq!(workspace.dense_cache.as_deref(), Some("dense/groups.bvf"));
+        assert_eq!(workspace.dense_max_points, 5_000);
+        assert_eq!(workspace.min_views, 3);
+        validate_geometry_source(&workspace).unwrap();
+        assert!(!uses_sparse_static_gaussian_surface(&workspace));
+
         let dense_outputs = parse(&[
             "--dense-cloud",
             "dense/fused.ply",
@@ -3453,6 +3651,21 @@ mod tests {
         assert!(validate_geometry_source(&ambiguous)
             .unwrap_err()
             .contains("alternative geometry sources"));
+
+        let two_dense = parse(&[
+            "--dense-cloud",
+            "dense/fused.ply",
+            "--dense-workspace",
+            "dense",
+        ]);
+        assert!(validate_geometry_source(&two_dense)
+            .unwrap_err()
+            .contains("alternative geometry sources"));
+
+        let orphan_cache = parse(&["--dense-cache", "dense/groups.bvf"]);
+        assert!(validate_geometry_source(&orphan_cache)
+            .unwrap_err()
+            .contains("requires --dense-workspace"));
 
         let too_small = parse(&[
             "--dense-cloud",
