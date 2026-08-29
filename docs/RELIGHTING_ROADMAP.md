@@ -637,6 +637,48 @@ introduce polygonal geometry. Only after one covariance proposal passes
 construction, independent cameras/lights, and a second object should the
 already validated diffuse/F0 solve be attached and opened on excluded lights.
 
+### Calibrated source-plane bound
+
+The paired COLMAP provenance is now reconstructed exactly for both dense paths.
+On the established painted-toy cloud, 1,185,892 retained raw observations form
+the 2,500 selected cells. A cell sees a median of 12 source cameras and its
+source samples fit a plane with median RMS `0.0505` surfel radii, yet the final
+Gaussian centre is a median `1.6419` radii away from that plane. The native
+grouped-fusion fabric checkpoint independently measures 9 cameras, `0.0262`
+plane RMS, and `1.2243` radii of final centre displacement. Nearest depth alone
+and broad plane projection both fail, so the useful signal is specifically a
+tight, repeated source plane rather than another global center prior.
+
+A deliberately small post-fit control moves only particles with at least 12
+source views and plane RMS at most `0.05` radii by 2.5% of their signed plane
+offset. Retaining 12.5% of a construction-camera diffuse polish then improves
+every complete official metric cell on the two established checkpoints. For
+painted toy, excluded-pattern foreground mean/worst move
+`15.5202/14.5827→15.5518/14.6167` and
+`14.0725/12.9700→14.1222/12.9995` dB. Fabric moves
+`14.7964/13.3860→14.8519/13.4110` and
+`15.4255/13.2458→15.5250/13.2719` dB.
+
+That apparent selection does not survive a paired reconstruction. Candidate
+and control were dumped from the same fresh optimizer trajectory and scored in
+one process. The material polish accepted no changes, and the plane-only
+candidate regressed all seven known/excluded light groups. This is an optimizer
+basin dependency, not run-to-run scoring noise. The 600-line production
+prototype, temporary model dump, and tests are removed; no option, field,
+format, shader, operation, or dependency is retained.
+
+The next candidate must apply source-plane evidence during the existing
+multi-light geometry stage, not after it. Use a robust signed-distance loss
+whose confidence comes only from source-view count and normalized plane RMS;
+keep covariance, opacity, and appearance free to co-adapt. First compare paired
+controls from identical initial clouds across at least two optimizer basins on
+painted and fabric objects. Construction cameras fit the candidate; independent
+known-light and camera splits select it. Official cameras and excluded lights
+remain unopened until every internal mean and tail is non-regressing in every
+replica. If that fails, close depth-centre regularization and move to a
+depth-discontinuity covariance bound rather than adding another post-fit
+heuristic.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -817,6 +859,12 @@ a deterministic repeat agree within the measured training variance.
   visibility, and bounded indirect transport; reject scalar gains, extra
   samples, and same-cost stratification, and bound the remaining diffuse/F0
   response by the false-support whole-frame tail.
+- [x] Reconstruct exact dense source-plane evidence and test a bounded post-fit
+  centre correction on two established checkpoints plus a paired fresh basin;
+  remove it when the fresh basin regresses every light group.
+- [ ] Co-optimize a confidence-weighted source-plane term during multi-light
+  geometry fitting and require paired, two-object, multi-basin internal gates
+  before opening official cameras or excluded lights.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

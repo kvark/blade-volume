@@ -8556,3 +8556,50 @@ proposal must use calibrated source-view depth/correspondence to construct a
 3D tangent support patch and prevent an existing Gaussian covariance from
 crossing an observed depth or silhouette discontinuity. It remains point
 cloud geometry; no polygonal representation is introduced.
+
+## Rejected post-fit calibrated source-plane feedback (2026-08-29)
+
+The next diagnostic recovered dense source provenance rather than estimating
+ownership from rendered masks. The legacy painted-toy fusion retains
+1,185,892 paired point/source records before reducing them to 2,500 exact
+cells. Their median source-view count is 12 and their median local plane RMS is
+`0.0505` surfel radii. The fitted Gaussian centre nevertheless lies a median
+`1.6419` radii from its cell's source plane. Reconstructing observations from
+the native grouped-fusion cache repeats the discrepancy on fabric: median 9
+views, `0.0262` normalized plane RMS, and `1.2243` radii of centre displacement.
+This confirms a calibrated geometric signal that is independent of masks and
+of the final renderer.
+
+Nearest grouped depth, unfiltered plane projection, and individual plane
+corrections fail construction or independent validation. A tight control keeps
+only particles with at least 12 source cameras and plane RMS no greater than
+5% of their surfel radius, applies 2.5% of the signed normal correction, and
+retains 12.5% of a diffuse-only polish fitted on 30 construction cameras. On
+the two exact stored checkpoints it passes construction, separate known-light
+and camera validation, and every official metric cell. Painted excluded-light
+foreground mean/worst improve by `+0.0316/+0.0340` and `+0.0497/+0.0295` dB;
+fabric improves by `+0.0555/+0.0250` and `+0.0995/+0.0261` dB.
+
+The required paired fresh-basin test reverses the conclusion. A control was
+serialized immediately before feedback and the candidate immediately after,
+so both share one atomic optimizer trajectory. The bounded material polish
+accepted zero parameters; the remaining plane correction regressed all seven
+known and excluded light groups, including painted pattern 001 whole-frame
+mean `26.8627→26.8159` dB. The effect is therefore conditional on the fitted
+geometry/material basin and cannot be promoted by checkpoint-only validation.
+
+All prototype production changes are removed: there is no dense-evidence
+model field, reconstruction branch, post-fit nudge, shader, graph operation,
+dependency, or vendored result. Ignored diagnostics remain under
+`target/audit-tools/{depth_extent_gate,pair_score}/` and
+`target/audit-runs/openillumination/`; they are not release artifacts.
+
+The next experiment moves this evidence into the existing multi-light geometry
+objective so geometry, covariance, opacity, and material can settle together.
+Use a robust normalized point-to-plane residual, confidence only from source
+view count and plane RMS, and no official observation for fitting or selection.
+Advance only if paired controls from identical initial models pass every
+construction and independent known-light/camera mean and tail across two
+optimizer basins on both painted and fabric objects. Otherwise reject centre
+regularization and constrain covariance at measured depth discontinuities
+instead.

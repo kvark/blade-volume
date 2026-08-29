@@ -117,6 +117,14 @@ a convincing real-world result.
   radiometry path is selected: the next useful evidence is calibrated 3D
   correspondence at surface boundaries, after which the bounded response
   solve can be reconsidered.
+- **Calibrated depth planes — useful evidence, not yet a stable update.** Exact
+  source-camera provenance shows that the selected Gaussians sit roughly
+  `1.2–1.6` local radii away from tight multi-view depth planes. A bounded
+  post-fit correction improves two established real checkpoints, but an exact
+  paired fresh reconstruction regresses every light group. It is therefore
+  not in production. The next gate puts the same confidence-weighted plane
+  term inside geometry training and requires repeatability across objects and
+  optimizer basins before any held-light result is opened.
 
 The next quality gate is deliberately narrow:
 
@@ -165,7 +173,9 @@ The next quality gate is deliberately narrow:
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and
   local multi-view depth sweeps have now all been screened without weakening
-  this gate;
+  this gate. A post-fit calibrated source-plane correction passes two stored
+  checkpoints but fails a paired fresh optimizer basin, so the next candidate
+  must co-optimize that evidence rather than mutate a finished cloud;
 - keep the coupled visibility/one-bounce Gaussian path at four to eight samples
   in fitting and evaluation. Sixty-four samples and same-cost stratification
   do not pass the complete fixed-cloud gate. After surface ownership improves,
