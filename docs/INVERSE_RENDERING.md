@@ -261,20 +261,18 @@ the same for `--pbr-gaussian-output`. This is the production counterpart of
 the synthetic held-light gate; the ranked real datasets and first protocol are
 in [Relighting capture and dataset ladder](RELIGHTING_DATASETS.md).
 
-`--render-refine-materials` optionally finishes a small shared material table
-against complete production renders of every training view. It coordinate
-descends the three diffuse albedo channels by a fixed 0.025 step while holding
-geometry, light, assignments, roughness, and specular response fixed, then
-repeats at 0.0125 to resolve values between the coarse candidates. Each
-proposal updates only the existing material buffer; it does not rebuild the
-acceleration structures or add a shader, operation, bind-group, or pipeline
-variant. This is deliberately a final pass for a small palette, not a scalable
-per-particle material optimizer and not a default. When `--gaussian-output`
-changes the PBR support afterward, the same option finishes with a finer
-coordinate-only polish against the final cloud. It deliberately retains the
-first fit instead of repeating its linear initializer: support has moved only
-slightly, while reinitializing the whole table reintroduced a held-light
-regression on one synthetic cloud.
+`--render-refine-materials` optionally finishes diffuse materials against
+complete production renders of every training view. A table of at most 32
+shared materials uses the bounded joint response solve and coordinate polish. A
+larger table is left unchanged by the scalar passes, then receives one bounded
+global diffuse-gain proposal in the final PBR Gaussian compositor. The gain is
+fit only on covered training foreground, shrunk halfway toward identity, and
+accepted only when the ordinary complete-render objective falls. This keeps a
+one-per-particle table practical without pretending to solve thousands of
+independent material coordinates. Geometry, light, assignments, roughness,
+specular response, acceleration structures, shaders, operations, bindings,
+and pipelines remain unchanged. The pass remains explicit pending a fresh
+real-object validation.
 
 ### visibility, and why the bounce is not optional
 

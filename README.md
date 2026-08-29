@@ -69,6 +69,15 @@ a convincing real-world result.
   `91.1→93.2%`. Its Gaussian whole-frame score and one excluded light remain
   mixed, so the hull is selected only as scalar geometric cleanup—not as
   evidence that Gaussian transfer or relighting is solved.
+- **Final Gaussian colour transfer — selected as an explicit pass.** The final
+  compositor attributes about 71% of fabric-toy RGB error to already covered
+  foreground, not missing support. For one-per-surfel material tables,
+  `--render-refine-materials` now fits one conservative global diffuse gain in
+  the final Gaussian renderer instead of issuing thousands of material
+  proposals. Exact matched controls improve known-view and both excluded-light
+  mean/tail PSNR on the painted and fabric toys with unchanged geometry
+  metrics. It remains opt-in until a genuinely fresh real object confirms it,
+  and neither object yet beats the trivial held-light foreground baselines.
 
 The next quality gate is deliberately narrow:
 
@@ -94,11 +103,11 @@ The next quality gate is deliberately narrow:
   Gaussian renderers differ, but making Gaussian alpha closer to the scalar is
   not sufficient: a foreground-balanced continuation raises teacher PSNR and
   recall while lowering held-photo tails and precision. That code is removed
-  too. The scalar surfel remains a cloud-only quality output; the next Gaussian
-  transfer must match final colour/visibility semantics and beat an untouched
-  photo control, not merely imitate scalar alpha. The selected soft hull has
-  separately reproduced its scalar held-camera gain on a fabric toy, while
-  its Gaussian and excluded-light results remain explicitly unselected;
+  too. The scalar surfel remains a cloud-only quality output. A subsequent
+  final-compositor diagnostic finds the dominant residual on correctly covered
+  foreground and selects one conservative diffuse transfer for large material
+  tables. It improves matched means and tails on two real objects without
+  changing geometry; a fresh-object gate remains before making it automatic;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and
@@ -214,6 +223,7 @@ up scalar score dumps; Gaussian scoring deliberately stays at
 | OpenIllumination patterns (scalar, excluded 005 / 006, 64-ray score) | 24 / 10 | 26.25 / 20.58 dB | 23.78 / 22.66; 22.97 / 20.81 dB | 9.0% |
 | OpenIllumination patterns (Gaussian, excluded 005 / 006) | 24 / 10 | 26.20 / 20.56 dB | 22.96 / 20.69; 22.30 / 19.30 dB | 7.0% |
 | OpenIllumination painted toy (filtered scalar, excluded 005 / 006) | 38 / 10 | 31.56 / 28.02 dB | 25.62 / 24.45; 24.04 / 23.04 dB | 8.8% |
+| OpenIllumination painted toy (Gaussian material transfer, excluded 005 / 006) | 38 / 10 | 31.60 / 28.02 dB | 25.63 / 25.15; 24.32 / 23.24 dB | 8.8% |
 
 The earlier OLAT-only two-axis gate is deliberately reported against trivial
 baselines. On OpenIllumination `obj_16_friends_cup`, the static Gaussian under

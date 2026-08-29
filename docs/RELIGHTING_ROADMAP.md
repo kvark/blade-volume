@@ -66,7 +66,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | grouped fusion implemented; replacement, additive, and scalar-alpha distillation rejected | Keep the exact scalar and Gaussian renderers as paired controls; change Gaussian support only with a representation-matched colour/visibility objective, not scalar alpha alone | Fresh-camera photo mean/tail and precision improve together with representation agreement; only then may new groups return |
+| Representation scale | final-compositor diffuse transfer selected as opt-in; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal large-table transfer behind `--render-refine-materials` until a genuinely fresh real object confirms it; keep small shared palettes on their bounded joint solver | Fresh-camera and two excluded-light mean/tail improve with identical geometry metrics; then consider enabling it by default for one-per-particle material tables |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
@@ -425,6 +425,51 @@ or dependency remains. The cgrouped runs peak at 0.76 GiB with zero swap, OOM,
 validation error, Xid, or GPU fault. Ignored logs and artifacts remain under
 `target/audit-runs/openillumination/gaussian-parity-*`.
 
+## Selected final-compositor diffuse transfer
+
+An RGBA error-budget diagnostic on the fixed fabric-toy Gaussian locates
+70.9% of held-camera RGB error on correctly covered foreground and only 1.5%
+on missing foreground; false-positive support contributes another 18.7%.
+The rendered covered foreground is roughly twice as bright as the photograph.
+This changes the next action from adding support to correcting the material
+table in the renderer that actually consumes it.
+
+The existing `--render-refine-materials` path could solve at most 32 shared
+materials jointly. With 2,500 one-per-surfel materials it instead attempted
+thousands of full renders and was not practical. Large tables now receive one
+bounded proposal after Gaussian geometry, opacity, covariance, normals, and
+materials are final:
+
+1. render the final cloud with its current and zero diffuse albedo using the
+   same deterministic transport samples;
+2. use its zero-to-current secant response to fit one scalar gain on covered
+   construction-camera foreground only;
+3. apply half of the fitted correction toward identity, protecting unseen-view
+   tails from the full training optimum;
+4. retain it only when one exact complete construction render lowers the
+   ordinary objective.
+
+Small shared palettes keep their existing joint solve and coordinate polish.
+Large scalar-surface passes stay unchanged, and one-material-per-particle
+tables skip meaningless material reassignment. There is no new option, shader,
+graph operation, binding, model field, format, or dependency.
+
+| Exact matched Gaussian | Known-light held camera | Excluded 005 | Excluded 006 | Recall / precision |
+| --- | ---: | ---: | ---: | ---: |
+| Fabric toy, before | `26.73–26.81/25.73–25.82; 18.10–18.14/16.77` | `23.55–23.59/22.74–22.81; 13.97–14.01/12.99–13.02` | `23.72–23.75/22.21; 14.08–14.10/12.76–12.79` | `96.0–96.1/88.9–89.2%` |
+| Fabric toy, gain `0.631581` | `27.54/26.47; 18.76/17.60` | `24.35/23.24; 14.80/13.39` | `25.04/22.71; 15.43/13.25` | `96.1/89.1%` |
+| Painted toy, matched before | `26.38/25.60; 16.56/15.77` | `24.98/24.47; 14.87/14.07` | `23.45/22.87; 13.19/12.38` | `93.3/89.5%` |
+| Painted toy, gain `0.765983` | `26.91/25.98; 17.03/16.18` | `25.63/25.15; 15.52/14.58` | `24.32/23.24; 14.07/12.97` | `93.3/89.5%` |
+
+Values are whole-frame mean/worst; foreground mean/worst. Both objects improve
+every image metric under the known light and both excluded lights; matched
+geometry metrics are identical. The full unregularized painted-toy optimum was
+rejected because it lost 0.05 dB on one known-light whole-frame tail. The
+conservative transfer still does not beat the trivial excluded-light
+foreground baselines, so it closes a Gaussian representation mismatch—not the
+real relighting gate. The two objects are now consumed development cases; one
+fresh real object is required before making the fallback automatic.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -585,8 +630,11 @@ a deterministic repeat agree within the measured training variance.
 - [x] Validate the selected training-mask surface filter on another object,
   retaining the scalar surfel output as the cloud-only quality control; record
   that Gaussian whole-frame/precision and one excluded light remain mixed.
-- [ ] Diagnose the final Gaussian compositor's colour/visibility residual on a
-  fixed surface without using scalar alpha or held-light feedback as a target.
+- [x] Diagnose the final Gaussian compositor's colour/visibility residual on a
+  fixed surface; retain one conservative construction-only diffuse transfer
+  that improves matched known and excluded-light tails on two real objects.
+- [ ] Validate the conservative large-table transfer on a genuinely fresh real
+  object before considering it as a default rather than an explicit final pass.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

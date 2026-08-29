@@ -10,6 +10,7 @@ use crate::inverse::{capture, decompose, depth, score};
 use blade_volume as vol;
 use std::thread;
 
+const MAX_RENDERED_ALBEDO_COORDINATES: usize = 96;
 const RENDERED_NORMAL_COVERAGE_WEIGHT: f32 = 0.1;
 
 /// One photograph used by [`refine`].
@@ -101,13 +102,15 @@ pub struct RenderedStats {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RenderedMaterialStats {
-    /// Scalar albedo coordinates visited.
+    /// Scalar albedo coordinates in scope.
     pub coordinates: usize,
-    /// Distinct lower/upper proposals scored.
+    /// Distinct material-table proposals scored.
     pub proposals: usize,
     /// Coordinates whose final albedo differs from its input by more than
     /// numerical noise.
     pub changed: usize,
+    /// Accepted global diffuse gain for a large table, otherwise `None`.
+    pub global_gain: Option<f32>,
     pub initial_loss: f64,
     pub final_loss: f64,
     pub seconds: f64,
@@ -459,9 +462,9 @@ pub fn refine_rendered_radii(
     })
 }
 
-/// Refine the small shared diffuse-material table against complete production
-/// renders of the training photographs, first at `step` and then at half that
-/// step.
+/// Refine a small shared diffuse-material table against complete production
+/// renders of the training photographs. Larger tables are left unchanged here;
+/// their final Gaussian output receives a bounded global transfer instead.
 pub fn refine_rendered_materials(
     scene: &mut score::Scene,
     capture: &capture::Capture,
@@ -509,7 +512,14 @@ pub fn refine_rendered_material_assignments(
             return Err(format!("rendered material view {index} is out of bounds"));
         }
     }
-    if scene.model.materials.len() < 2 || indices.is_empty() {
+    let one_material_per_particle = scene.model.materials.len() == scene.model.surfels.len()
+        && scene
+            .model
+            .surfels
+            .iter()
+            .enumerate()
+            .all(|(index, surfel)| surfel.material as usize == index);
+    if scene.model.materials.len() < 2 || one_material_per_particle || indices.is_empty() {
         return Ok(RenderedMaterialAssignmentStats {
             particles: scene.model.surfels.len(),
             ..RenderedMaterialAssignmentStats::default()
@@ -636,8 +646,10 @@ fn material_observation_error(
         .sum()
 }
 
-/// Re-polish shared diffuse materials through the exact learned-Gaussian PBR
-/// renderer after its geometry and support have reached their final values.
+/// Re-polish diffuse materials through the exact learned-Gaussian PBR renderer
+/// after its geometry and support have reached their final values. Large
+/// one-per-particle tables receive one global diffuse gain instead of an
+/// unbounded coordinate pass.
 pub fn polish_gaussian_materials(
     scene: &score::Scene,
     gaussian: &mut vol::PointCloudModel,
@@ -698,6 +710,12 @@ fn refine_rendered_materials_impl(
     if scene.model.materials.is_empty() || indices.is_empty() {
         return Ok(RenderedMaterialStats::default());
     }
+    if gaussian.is_none() && scene.model.materials.len() * 3 > MAX_RENDERED_ALBEDO_COORDINATES {
+        return Ok(RenderedMaterialStats {
+            coordinates: scene.model.materials.len() * 3,
+            ..RenderedMaterialStats::default()
+        });
+    }
     let cameras: Vec<_> = indices
         .iter()
         .map(|&index| capture.views[index].camera)
@@ -740,7 +758,9 @@ fn refine_rendered_materials_impl(
     }
     let coordinates;
     let proposals;
+    let global_gain;
     if let Some(ref basis) = basis {
+        global_gain = None;
         let before_coordinates = scene.model.materials.clone();
         let (next_coordinates, next_proposals) = refine_albedo_from_basis(scene, basis, step);
         coordinates = next_coordinates;
@@ -754,19 +774,19 @@ fn refine_rendered_materials_impl(
             renderer.update_prepared_materials(&mut tracer, &scene.model.materials);
         }
     } else {
-        let result = refine_rendered_albedo_fallback(
+        let result = refine_rendered_global_albedo(
             scene,
             &mut renderer,
             &mut tracer,
             capture,
             indices,
             &cameras,
-            step,
             loss,
         );
         loss = result.0;
         coordinates = result.1;
         proposals = result.2;
+        global_gain = result.3;
     }
     let changed = initial_materials
         .iter()
@@ -780,6 +800,7 @@ fn refine_rendered_materials_impl(
         coordinates,
         proposals,
         changed,
+        global_gain,
         initial_loss,
         final_loss: loss,
         seconds: started.elapsed().as_secs_f64(),
@@ -841,10 +862,8 @@ fn build_rendered_albedo_basis(
     indices: &[usize],
     cameras: &[vol::CameraParams],
 ) -> Option<RenderedAlbedoBasis> {
-    const MAX_COORDINATES: usize = 96;
-
     let coordinates = scene.model.materials.len() * 3;
-    if coordinates == 0 || coordinates > MAX_COORDINATES {
+    if coordinates == 0 || coordinates > MAX_RENDERED_ALBEDO_COORDINATES {
         return None;
     }
     for material in &mut scene.model.materials {
@@ -942,53 +961,124 @@ fn refine_albedo_from_basis(
     (coordinates, proposals)
 }
 
+fn fit_global_albedo_gain(base: &[f32], response: &[f32], target: &[f32], maximum: f32) -> f32 {
+    debug_assert_eq!(base.len(), response.len());
+    debug_assert_eq!(base.len(), target.len());
+    if base.is_empty() {
+        return 1.0;
+    }
+    let error = |gain: f32| {
+        base.iter()
+            .zip(response)
+            .zip(target)
+            .map(|((&base, &response), &target)| {
+                let rendered = capture::linear_to_srgb(base + gain * response);
+                let difference = rendered - capture::linear_to_srgb(target);
+                f64::from(difference * difference)
+            })
+            .sum::<f64>()
+    };
+    let ratio = 0.5 * (5.0f32.sqrt() - 1.0);
+    let mut low = 0.0f32;
+    let mut high = maximum;
+    let mut left = high - ratio * (high - low);
+    let mut right = low + ratio * (high - low);
+    let mut left_error = error(left);
+    let mut right_error = error(right);
+    for _ in 0..48 {
+        if left_error <= right_error {
+            high = right;
+            right = left;
+            right_error = left_error;
+            left = high - ratio * (high - low);
+            left_error = error(left);
+        } else {
+            low = left;
+            left = right;
+            left_error = right_error;
+            right = low + ratio * (high - low);
+            right_error = error(right);
+        }
+    }
+    0.5 * (low + high)
+}
+
+fn conservative_global_albedo_gain(fitted: f32) -> f32 {
+    0.5 * (1.0 + fitted)
+}
+
 #[allow(clippy::too_many_arguments)]
-fn refine_rendered_albedo_fallback(
+fn refine_rendered_global_albedo(
     scene: &mut score::Scene,
     renderer: &mut score::Renderer,
     tracer: &mut vol::gpu::RelightTracer,
     capture: &capture::Capture,
     indices: &[usize],
     cameras: &[vol::CameraParams],
-    step: f32,
-    mut loss: f64,
-) -> (f64, usize, usize) {
-    let mut coordinates = 0;
-    let mut proposals = 0;
-    for step in [step, 0.5 * step] {
-        for material in 0..scene.model.materials.len() {
+    loss: f64,
+) -> (f64, usize, usize, Option<f32>) {
+    let original = scene.model.materials.clone();
+    tracer.reset_sampling();
+    let current = renderer.render_prepared_flat(tracer, cameras).to_vec();
+    for material in &mut scene.model.materials {
+        material.albedo = [0.0; 3];
+    }
+    renderer.update_prepared_materials(tracer, &scene.model.materials);
+    tracer.reset_sampling();
+    let zero = renderer.render_prepared_flat(tracer, cameras).to_vec();
+
+    let frame_pixels = capture.width * capture.height;
+    let mut base = Vec::new();
+    let mut response = Vec::new();
+    let mut target = Vec::new();
+    for ((current, zero), &index) in current
+        .chunks(frame_pixels)
+        .zip(zero.chunks(frame_pixels))
+        .zip(indices)
+    {
+        let view = &capture.views[index];
+        for (pixel, (&current, &zero)) in current.iter().zip(zero).enumerate() {
+            let foreground = view.mask.as_ref().is_none_or(|mask| mask[pixel] >= 0.5);
+            if !foreground || current[3] < 0.5 {
+                continue;
+            }
             for channel in 0..3 {
-                coordinates += 1;
-                let original = scene.model.materials[material].albedo[channel];
-                let candidates = [(original - step).max(0.0), (original + step).min(1.0)];
-                let mut best = original;
-                let mut best_loss = loss;
-                let mut uploaded = original;
-                for candidate in candidates {
-                    if candidate == original {
-                        continue;
-                    }
-                    scene.model.materials[material].albedo[channel] = candidate;
-                    renderer.update_prepared_materials(tracer, &scene.model.materials);
-                    uploaded = candidate;
-                    let candidate_loss = rendered_loss(renderer, tracer, capture, indices, cameras);
-                    proposals += 1;
-                    if candidate_loss < best_loss {
-                        best_loss = candidate_loss;
-                        best = candidate;
-                    }
-                }
-                scene.model.materials[material].albedo[channel] = best;
-                if uploaded != best {
-                    renderer.update_prepared_materials(tracer, &scene.model.materials);
-                }
-                if best != original {
-                    loss = best_loss;
-                }
+                base.push(zero[channel]);
+                response.push(current[channel] - zero[channel]);
+                target.push(view.pixels[pixel][channel]);
             }
         }
     }
-    (loss, coordinates, proposals)
+    let maximum_albedo = original
+        .iter()
+        .flat_map(|material| material.albedo)
+        .fold(0.0f32, f32::max);
+    let maximum_gain = if maximum_albedo > 0.0 {
+        (1.0 / maximum_albedo).min(2.0)
+    } else {
+        1.0
+    };
+    let fitted_gain = fit_global_albedo_gain(&base, &response, &target, maximum_gain);
+    // A one-dimensional training optimum can still over-darken one unseen
+    // camera. Apply only half of the correction toward that optimum; the exact
+    // complete-render loss below retains it only when the construction images
+    // improve.
+    let gain = conservative_global_albedo_gain(fitted_gain);
+    scene.model.materials.clone_from(&original);
+    for material in &mut scene.model.materials {
+        for channel in &mut material.albedo {
+            *channel *= gain;
+        }
+    }
+    renderer.update_prepared_materials(tracer, &scene.model.materials);
+    let candidate_loss = rendered_loss(renderer, tracer, capture, indices, cameras);
+    if candidate_loss < loss {
+        (candidate_loss, original.len() * 3, 1, Some(gain))
+    } else {
+        scene.model.materials = original;
+        renderer.update_prepared_materials(tracer, &scene.model.materials);
+        (loss, scene.model.materials.len() * 3, 1, None)
+    }
 }
 
 fn solve_dense(matrix: &mut [f64], right: &mut [f64]) -> bool {
@@ -1036,10 +1126,11 @@ fn solve_dense(matrix: &mut [f64], right: &mut [f64]) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Solve the shared albedos from the production renderer's affine response.
-/// Geometry, material assignments, light, and every non-albedo parameter stay
-/// fixed. The ridge keeps correlated palette entries near their observation-
-/// based initializer; the exact sRGB objective still decides acceptance.
+/// Solve shared albedos from a linear-response surrogate of the production
+/// renderer. Geometry, material assignments, light, and every non-albedo
+/// parameter stay fixed. The ridge keeps correlated palette entries near their
+/// observation-based initializer; an exact production render decides
+/// acceptance because sampled one-bounce transport is not strictly affine.
 fn fit_rendered_linear_albedo(
     scene: &mut score::Scene,
     renderer: &mut score::Renderer,
@@ -2091,6 +2182,20 @@ mod tests {
     }
 
     #[test]
+    fn global_albedo_gain_recovers_an_affine_target() {
+        let base = [0.05, 0.1, 0.2, 0.15, 0.05, 0.1];
+        let response = [0.4, 0.3, 0.2, 0.2, 0.5, 0.4];
+        let target: Vec<_> = base
+            .iter()
+            .zip(response)
+            .map(|(&base, response)| base + 0.375 * response)
+            .collect();
+        let gain = fit_global_albedo_gain(&base, &response, &target, 2.0);
+        assert!((gain - 0.375).abs() < 1.0e-4, "recovered {gain}");
+        assert!((conservative_global_albedo_gain(gain) - 0.6875).abs() < 1.0e-4);
+    }
+
+    #[test]
     fn encoded_basis_descent_recovers_a_material() {
         let mut scene = score::Scene::new(
             vol::relight::RelightModel {
@@ -2653,6 +2758,28 @@ mod tests {
         {
             assert!((actual - expected).abs() < 2.0e-5);
         }
+
+        let mut large_scene = gaussian_truth.clone();
+        large_scene.model.materials[0].albedo = [0.35, 0.15, 0.1];
+        large_scene
+            .model
+            .materials
+            .resize(33, vol::relight::Material::default());
+        let mut large_gaussian = crate::gaussian_splat::from_surface(&large_scene.model).unwrap();
+        crate::gaussian_splat::attach_pbr(&mut large_gaussian, &large_scene.model).unwrap();
+        let stats = polish_gaussian_materials(
+            &large_scene,
+            &mut large_gaussian,
+            &gaussian_capture,
+            &[0, 1],
+            0.1,
+        )
+        .expect("large Gaussian material transfer");
+        assert_eq!(stats.coordinates, 99);
+        assert_eq!(stats.proposals, 1);
+        assert!(stats.changed > 0);
+        assert!(stats.final_loss < stats.initial_loss);
+        assert!((stats.global_gain.unwrap() - 1.5).abs() < 1.0e-4);
 
         let mut first = make_scene(0.075);
         let mut second = first.clone();

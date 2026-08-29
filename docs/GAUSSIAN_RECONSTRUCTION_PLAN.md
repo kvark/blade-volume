@@ -1533,13 +1533,14 @@ inside a spatial voxel retain camera-ray depth uncertainty; their covariance
 is not reliable surface-tangent evidence.
 
 The selected rendered-material pass now begins with a joint linear solve over
-the small shared albedo table. With geometry, assignments, light, roughness,
-and specular response fixed, the production renderer is affine in diffuse
-albedo: an all-zero render supplies the intercept and one unit render per
-albedo coordinate supplies the basis. Normal equations solve the overlapping
-Gaussian pixel mixtures directly, with a `1e-4` ridge toward the observation-
-based initializer; the existing exact sRGB coordinate descent then polishes
-and accepts the result. The host-only implementation caps the system at 96
+the small shared albedo table. An all-zero render supplies the intercept and
+one unit render per albedo coordinate supplies a linear-response basis. This
+basis is exact for analytic direct diffuse transport; sampled one-bounce
+transport also contains bilinear albedo terms, so the solve is a surrogate and
+a fresh production render decides acceptance. Normal equations solve the
+overlapping Gaussian pixel mixtures with a `1e-4` ridge toward the
+observation-based initializer; sRGB coordinate descent on the same basis then
+polishes the result. The host-only implementation caps the system at 96
 coordinates (32 materials) and adds no WGSL, operation, binding, shader entry,
 or pipeline variant.
 
@@ -4031,10 +4032,10 @@ loss, private parameter, and call branches are removed; logs remain under
 
 ## Grouped RGB basis for rendered material fitting (2026-08-23)
 
-The accepted affine material initializer now renders one white diffuse basis
-per shared material instead of one basis per RGB coordinate. PBR diffuse
-transport is channel-diagonal: the red albedo affects only red radiance, and
-likewise for green and blue. Splitting the three channels of one `[1,1,1]`
+The accepted linear-response material initializer now renders one white
+diffuse basis per shared material instead of one basis per RGB coordinate. PBR
+diffuse transport is channel-diagonal: the red albedo affects only red
+radiance, and likewise for green and blue. Splitting the three channels of one `[1,1,1]`
 render therefore produces the same three response columns while reducing the
 12-material basis from 36 production renders to 12. The intercept, normal
 equations, ridge, exact sRGB acceptance, and following coordinate descent are
@@ -4049,9 +4050,9 @@ the scalar control, a 4.5% reduction. The change adds no API, option, shader,
 operation, binding, pipeline, model field, format, or dependency. Logs remain
 under `target/audit-runs/current-synthetic-v1/rendered-material-rgb-basis-{probe,control-after}/`.
 
-## Incremental affine material scoring (2026-08-23)
+## Incremental linear-response material scoring (2026-08-23)
 
-The rendered-material coordinate passes now reuse that same affine diffuse
+The rendered-material coordinate passes now reuse that same diffuse-response
 basis instead of dispatching a complete GPU render for every lower and upper
 albedo proposal. One black-diffuse render supplies the fixed specular/base
 term, and one white-diffuse render per material supplies all three RGB
@@ -7233,7 +7234,7 @@ Rendered material coordinate descent repeatedly encoded each unchanged capture
 channel from linear radiance to sRGB for both sides of every coordinate
 proposal. With twelve materials, nine to eleven cameras, and three material
 stages, that meant tens of millions of redundant `powf` evaluations. The
-existing affine response basis now stores one encoded target beside the linear
+existing linear-response basis now stores one encoded target beside the linear
 target required by its solver. Its lower and upper coordinate proposals also
 share one walk over the current rendered error instead of encoding and
 subtracting the same value twice. Each candidate accumulator retains the exact
@@ -8281,3 +8282,54 @@ Reconstruction scopes peak at 1.11 GiB with zero swap, OOM, or GPU fault. The
 temporary skip-filter environment hook was removed; no experimental code,
 shader, operation, model field, dependency, or tracked benchmark artifact
 survives.
+
+## Selected large-table Gaussian diffuse transfer (2026-08-29)
+
+The next fixed-surface diagnostic renders raw RGBA through the final PBR
+Gaussian compositor and partitions RGB error by photograph mask and Gaussian
+alpha. On `obj_29_fabric_toy`, correctly covered held-camera foreground
+accounts for 70.9% of error; missing foreground only 1.5%; false support 18.7%.
+The mean display-space value on covered foreground is `0.161` versus `0.079`
+in the photograph. This is chiefly a colour/material transfer error on support
+the renderer already has, not a reason to add more points.
+
+The existing complete-render material pass constructs one linear-response
+basis per shared material and caps that joint system at 96 albedo coordinates.
+A 2,500-material real surface therefore fell back to roughly 15,000 full-scene
+coordinate renders. A guarded replay was stopped after telemetry proved the
+fallback was healthy but unbounded for this use. The temporary diagnostic and
+raw-render API were removed.
+
+Large tables now take one final-Gaussian proposal instead. With geometry,
+opacity, covariance, normals, assignments, light, roughness, and F0 fixed, a
+zero-diffuse and current-diffuse render under identical deterministic transport
+samples define a zero-to-current secant surrogate. A scalar gain minimizes sRGB
+error only where a construction photograph says foreground and final Gaussian
+alpha is at least 0.5. Half of its displacement from identity is applied, then
+one ordinary complete construction render accepts it only if total loss falls.
+The shrink is measured: the full painted-toy optimum improves means but loses
+0.05 dB on one matched known-light whole-frame tail; the halfway proposal
+improves that tail by 0.38 dB. Small shared tables retain the selected joint
+linear solve and coordinate polish. Large scalar passes stay unchanged, and a
+one-material-per-particle table no longer enters the meaningless assignment
+search.
+
+| Exact matched Gaussian | Known-light whole / foreground | Excluded 005 whole / foreground | Excluded 006 whole / foreground | Recall / precision |
+| --- | ---: | ---: | ---: | ---: |
+| Fabric toy, before | `26.73–26.81/25.73–25.82;18.10–18.14/16.77` | `23.55–23.59/22.74–22.81;13.97–14.01/12.99–13.02` | `23.72–23.75/22.21;14.08–14.10/12.76–12.79` | `96.0–96.1/88.9–89.2%` |
+| Fabric toy, gain `0.631581` | `27.54/26.47;18.76/17.60` | `24.35/23.24;14.80/13.39` | `25.04/22.71;15.43/13.25` | `96.1/89.1%` |
+| Painted toy, before | `26.38/25.60;16.56/15.77` | `24.98/24.47;14.87/14.07` | `23.45/22.87;13.19/12.38` | `93.3/89.5%` |
+| Painted toy, gain `0.765983` | `26.91/25.98;17.03/16.18` | `25.63/25.15;15.52/14.58` | `24.32/23.24;14.07/12.97` | `93.3/89.5%` |
+
+Every matched image mean and tail improves under the known and both excluded
+lights. Geometry metrics are byte-for-byte invariant in the matched controls.
+The integrated fabric and painted runs reduce final construction objectives
+`0.0026968→0.0022158` and `0.0026788→0.0024285` in 0.5/0.6 seconds. They peak
+at 1.00/0.93 GiB with zero swap, OOM, validation error, Xid, or GPU fault. A
+physical-GPU regression exercises the large-table branch; a host oracle locks
+the scalar fit on an affine fixture. The implementation adds no option, shader,
+graph operation, binding, acceleration-structure rebuild, model field, format,
+or dependency. It remains behind `--render-refine-materials` because both real
+objects are now consumed development cases and both still fail the strongest
+trivial excluded-light foreground baselines. A genuinely fresh real object is
+the next default-enablement gate.

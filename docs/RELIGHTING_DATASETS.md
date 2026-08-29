@@ -643,6 +643,39 @@ the matching filtered/unfiltered output directories. PatchMatch ran in a
 or GPU fault. The temporary skip-filter control was removed after the exact
 comparison.
 
+### Final Gaussian diffuse transfer
+
+A raw final-compositor attribution on the fabric toy assigns 70.9% of held
+known-light RGB error to foreground pixels with at least half Gaussian
+coverage. Missing foreground accounts for only 1.5%; false support accounts
+for 18.7%. Covered foreground is substantially too bright, so adding more
+points is not the first correction for this residual.
+
+`--render-refine-materials` now gives a large one-per-particle table one
+bounded final-Gaussian proposal. Current and zero diffuse renders define a
+secant surrogate under identical transport samples. A scalar is fitted only on
+covered construction foreground, half of its displacement from identity is
+applied, and an exact complete construction render accepts or rejects it.
+Small shared palettes retain their existing joint solver. Scalar geometry and
+large-table material assignments do not move.
+
+| Gaussian transfer | Known-light whole / foreground | Excluded 005 whole / foreground | Excluded 006 whole / foreground | Recall / precision |
+| --- | ---: | ---: | ---: | ---: |
+| Fabric toy, before | `26.73–26.81/25.73–25.82;18.10–18.14/16.77` | `23.55–23.59/22.74–22.81;13.97–14.01/12.99–13.02` | `23.72–23.75/22.21;14.08–14.10/12.76–12.79` | `96.0–96.1/88.9–89.2%` |
+| Fabric toy, gain `0.631581` | `27.54/26.47;18.76/17.60` | `24.35/23.24;14.80/13.39` | `25.04/22.71;15.43/13.25` | `96.1/89.1%` |
+| Painted toy, matched before | `26.38/25.60;16.56/15.77` | `24.98/24.47;14.87/14.07` | `23.45/22.87;13.19/12.38` | `93.3/89.5%` |
+| Painted toy, gain `0.765983` | `26.91/25.98;17.03/16.18` | `25.63/25.15;15.52/14.58` | `24.32/23.24;14.07/12.97` | `93.3/89.5%` |
+
+Every matched image mean/tail improves on both objects and geometry metrics
+are identical. The full painted-toy training optimum was rejected after a
+0.05 dB known-light whole-frame tail loss; the halfway correction clears that
+tail. These gains still leave both objects below their strongest trivial
+excluded-light foreground baselines. This is a representation-transfer fix,
+not evidence that the recovered lighting and surface properties are yet good.
+The exact runs and telemetry are under
+`target/audit-runs/openillumination/obj{29,31}-conservative-gaussian-material/`;
+they peak at 1.00/0.93 GiB with zero swap, OOM, or GPU fault.
+
 These controls leave a narrower next step: derive local depth from per-view
 photometric normals, anchor it with verified tracks, and require another
 camera to confirm the patch before fusion. A response descriptor, a normal, or

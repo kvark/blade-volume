@@ -177,7 +177,7 @@ struct Args {
     #[argh(switch)]
     render_refine_radii: bool,
 
-    /// refine the shared diffuse material table against complete renders
+    /// refine final diffuse materials against complete renders
     #[argh(switch)]
     render_refine_materials: bool,
 
@@ -1734,6 +1734,9 @@ fn main() {
                 stats.final_loss,
                 stats.seconds,
             );
+            if let Some(gain) = stats.global_gain {
+                println!("final Gaussian materials: global diffuse gain {gain:.6}");
+            }
         }
         let removed = train::gaussian_splat::prune_low_opacity(gaussian)
             .unwrap_or_else(|error| fail(error));
