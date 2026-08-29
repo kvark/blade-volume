@@ -55,6 +55,18 @@ a convincing real-world result.
   geometry/transport gate, not an unimplemented experiment. Exact commands,
   baselines, images, and next steps are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
+- **Next controlled-light route — LUCES-MV, not OLATverse.** The public
+  calibrated Owl capture supplies masks, linear RGB16 images, ground-truth
+  depth/normals, and 15 near-field LEDs at each of 12 poses. The CPU material
+  solve and Gaussian Meganeura graph now share one finite point-light model,
+  including inverse-square and directional falloff, with one calibrated light
+  per view. Synthetic moving-rig tests pass on the RTX 5070, and a simple
+  15-light real-data calibration check reaches 13.69°--19.69° mean normal error
+  on three views. The pure-Rust LUCES adapter now loads all 180 Owl images,
+  masks, camera poses, and camera-local LEDs without adding a ZIP/NPY
+  dependency. The remaining step is the predeclared 9/3-camera and 12/3-light
+  training gate. DiLiGenT-MV is the fallback; progress does not depend on
+  OLATverse access.
 - **Independent natural-light relighting — first honest result, not yet
   passed.** The Objects With Lighting Ant-Man gate trains on 52 cameras under
   one unknown HDR environment, reserves 12 same-environment cameras, then

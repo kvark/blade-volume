@@ -17,6 +17,7 @@
 pub mod capture;
 pub mod decompose;
 pub mod depth;
+pub mod luces;
 pub mod powerfoam;
 pub mod refine;
 pub mod score;

@@ -25,7 +25,7 @@ As of 2026-08-29, the only official Hugging Face copy among the requested
 datasets is
 [`OpenIllumination/OpenIllumination`](https://huggingface.co/datasets/OpenIllumination/OpenIllumination).
 No official Hub repository was found for MIT Multi-Illumination, FAU
-Multi-Illuminant, Flash/Ambient, MILL, OLATverse, ReNé, DiLiGenT-MV, Objects
+Multi-Illuminant, Flash/Ambient, MILL, LUCES-MV, ReNé, DiLiGenT-MV, Objects
 With Lighting, or OpenSubstance; use their official project releases instead.
 The Hub-hosted [`whcfang/M2AD`](https://huggingface.co/datasets/whcfang/M2AD)
 has angle and illumination labels but no published camera or light calibration,
@@ -36,14 +36,85 @@ metadata.
 
 | Dataset | Camera/light coverage | Best use here | Limitation |
 | --- | --- | --- | --- |
-| [OpenIllumination](https://oppo-us-research.github.io/OpenIllumination/) | 64 objects, 70 views, 13 multi-LED patterns and 142 OLAT conditions | **First real gate.** It has camera poses, light calibration, masks, official train/test views, CC BY 4.0 data, and selective downloads. | Roughly 900 GB in full. The LEDs are finite-distance emitters, while the current renderer accepts a distant environment map. |
+| [LUCES-MV](https://arxiv.org/abs/2412.16737) | Public calibrated subset: 10 objects, 12 views by 15 near-field LEDs | **Current controlled-light gate.** It has linear 16-bit RGB, masks, camera/LED calibration, depth, normals, and ground-truth shape. One object is about 1.9 GB. | Non-commercial research licence; the calibrated public subset is smaller than the paper's complete capture. |
+| [DiLiGenT-MV](https://sites.google.com/site/photometricstereodata/mv) | 5 objects, 20 views by 96 calibrated lights | **Fallback/control.** Compact, masked, 16-bit, and well established for photometric geometry. | Only five object-centric scenes; the per-view point-light importer still needs to be connected. |
+| [OpenIllumination](https://oppo-us-research.github.io/OpenIllumination/) | 64 objects, 70 views, 13 multi-LED patterns and 142 OLAT conditions | Existing broad-light real gate, with camera poses, masks, and official train/test views. | Roughly 900 GB in full; its public positions do not provide the complete finite-light radiometric calibration needed here. |
 | [Objects With Lighting](https://github.com/isl-org/objects-with-lighting) | 64 input cameras under one unknown natural environment, plus nine official camera/environment test pairs per object | **First independent natural-environment gate.** Compact, calibrated, masked, and directly compatible with the distant-HDR renderer. | One input environment leaves material and illumination strongly ambiguous; it is an evaluation gate, not repeated-light training data. |
-| [ReNé](https://eyecan-ai.github.io/rene/) | 20 objects, 50 views by 40 OLAT conditions | Second object-level cross-check with calibrated camera and light poses. | Also uses local point lights; access and preprocessing are less convenient. |
-| [DiLiGenT-MV](https://sites.google.com/site/photometricstereodata/mv) | 5 objects, 20 views by 96 calibrated lights | Smallest serious photometric-geometry gate; good for normals and diffuse material. | Only five object-centric scenes and point-light illumination. |
-| [OLATverse](https://vcai.mpi-inf.mpg.de/projects/OLATverse/) | 765 objects, 35 cameras by 331 OLATs, plus environment and gradient lights | Eventual broad material/generalization benchmark. | Huge and registration-gated; inappropriate for the first integration. |
+| [ReNé](https://eyecan-ai.github.io/rene/) | 20 objects, 50 views by 40 OLAT conditions | Possible later cross-check for calibrated camera/light poses. | The public object capture has no masks and fills a textured enclosure; the referenced empty-scene capture is not in the public archive, so honest background subtraction is currently blocked. |
 | [Stanford-ORB](https://stanfordorb.github.io/) | 14 objects captured in multiple real environments with HDR environment maps and registered poses | Best match for the current distant-environment renderer and an important in-the-wild relighting check. | It does not provide a dense aligned camera/light grid for each background environment. |
 | [DTU robot data](https://roboimagedata.compute.dtu.dk/?page_id=24) | 60 scenes, 119 cameras by 19 LEDs | Larger, more scene-like multi-view/multi-light stress test. | Approximately 730 GB in full and built around local LEDs. |
 | [OpenSubstance](https://opensubstance.github.io/) | 187 objects, 270 views and 1,637 lighting conditions | Later high-resolution material and specular benchmark. | Multi-terabyte scale and access by request. |
+
+OLATverse is not part of the active plan. Its registration-gated release may
+never be available to this project, so no milestone or quality claim depends
+on it.
+
+## Current alternative route: LUCES-MV
+
+LUCES-MV replaces OLATverse and the blocked public ReNé capture for the next
+controlled-light work. The official calibrated release provides twelve poses
+per object and fifteen individually calibrated LEDs per pose. Each LED has a
+camera-local position, brightest outgoing direction, RGB scale, and
+cosine-power exponent. This is exactly the missing observation model: a
+finite emitter whose direction and inverse-square attenuation vary over the
+point cloud and whose world pose changes with the camera rig.
+
+The first implementation slice is complete:
+
+- `blade_volume::relight::PointLight` defines the finite light and its rigid
+  camera-to-world transform;
+- analytical normal/material refinement accepts either a distant irradiance or
+  one calibrated point light per view;
+- the Gaussian support optimizer evaluates the same light model inside one
+  mutated Meganeura graph. It adds no Meganeura operation, shader group, or
+  shader-entry variant;
+- exact CPU/GPU and end-to-end synthetic tests cover distance, angular falloff,
+  position gradients, and view-specific moving lights.
+
+The checked-in fetch is intentionally one-object and licence gated. It pins the
+official Owl archive and both camera calibration files by SHA-256, and writes
+only below ignored `target/` storage:
+
+```bash
+# Read the licence linked by the script before accepting it.
+etc/cgroup_run.sh --mem 2G -- \
+    etc/fetch_luces_mv_owl.sh --accept-license
+```
+
+The downloaded Owl object contains 12 × 15 RGB16 images plus masks, camera
+extrinsics, ground-truth depth and normals. A pure-Rust calibration sanity
+check fits a diffuse normal independently at every fourth masked pixel from
+all fifteen images. Against ground truth it obtains:
+
+| View | Samples | Mean angular error | Median | P90 |
+| --- | ---: | ---: | ---: | ---: |
+| 000 | 9,466 | 13.69° | 10.01° | 28.58° |
+| 018 | 8,964 | 16.77° | 13.04° | 36.39° |
+| 060 | 9,583 | 19.69° | 17.41° | 34.89° |
+
+This is not the reconstruction result. It is an intentionally simple linear
+diffuse oracle which confirms the published units, LED orientation, RGB
+normalization, and 16-bit image convention before they supervise geometry.
+Generated normal images remain ignored under
+`target/audit-runs/luces-mv/`; dataset imagery cannot be copied into the
+repository under its licence.
+
+The Rust adapter now groups the official directory as fifteen aligned
+`Capture`s, parses the stored NumPy camera extrinsics without adding a ZIP/NPY
+dependency, transforms each camera-local LED into the existing world frame,
+and downsamples RGB/masks without display decoding. A real all-image load
+produces 15 × 12 views at 80×60, with a 0.329 normalized peak and plausible
+camera/light baselines. The warm loader peaks at 1,138,884,608 bytes in a 2 GiB
+cgroup with zero swap, limit, OOM, or GPU event. The preceding cold build was
+not used as evidence because it touched its 3 GiB limit while compiling a
+separate audit target.
+
+Next, connect these captures to a fixed gate: use nine poses for construction,
+reserve three cameras, fit at least ten LEDs, and reserve three LEDs spanning
+the rig. Score normal angular error and masked novel-camera/novel-light PSNR
+before opening ground-truth shape error. DiLiGenT-MV is the predeclared fallback
+if the LUCES licence blocks that run; Stanford-ORB remains the later
+distant-HDR cross-check.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
@@ -779,9 +850,11 @@ cycled or strobed during one trajectory.
 3. Require every candidate to beat black and capture-light-copy baselines on
    foreground mean/worst PSNR, mask recall/precision, covered-pixel quality,
    and visible shadow/highlight motion.
-4. Generalize aligned directories to sparse `(camera, light)` observations so
-   every light need not be photographed at every pose.
+4. Run the LUCES-MV adapter through the implemented per-view finite-light
+   contract, then generalize aligned directories to sparse `(camera, light)`
+   observations so every light need not be photographed at every pose.
 5. Fit diffuse albedo and normals first. Enable roughness and reflectance only
    after multiple lights improve held-light quality consistently.
-6. Confirm the selected method on DiLiGenT-MV or ReNé, then scale to
-   OLATverse/OpenSubstance only if the smaller gates justify it.
+6. Confirm the selected method on LUCES-MV Owl and then DiLiGenT-MV. Use
+   Stanford-ORB for the independent distant-HDR check; do not make progress
+   contingent on OLATverse access.

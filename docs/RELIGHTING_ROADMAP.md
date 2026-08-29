@@ -994,24 +994,22 @@ would only select retrospectively favorable noise.
 The 2026-08-29 Hugging Face survey finds one official copy of the requested
 datasets: `OpenIllumination/OpenIllumination`, already consumed above. There is
 no Hub repository matching MIT Multi-Illumination, FAU Multi-Illuminant,
-Flash/Ambient, MILL, OLATverse, ReNé, DiLiGenT-MV, or OpenSubstance. MIT, FAU,
+Flash/Ambient, MILL, LUCES-MV, ReNé, DiLiGenT-MV, or OpenSubstance. MIT, FAU,
 Flash/Ambient, and MILL also hold the camera fixed; they can train or test an
 appearance prior, but cannot validate a novel-view surface reconstruction.
 The Hub-hosted M2AD alternative has 12 angle labels and 10 illumination labels,
 but its complete metadata archive contains no camera or light calibration, so
 its 15--17 GB category archives are not downloaded.
 
-The strongest future source is OLATverse: 35 calibrated fixed cameras, 331
-fixed light-stage OLATs, masks, normals, and diffuse albedo. Its official
-release currently requires an account and packages training data in roughly
-70-object archives, so access must be arranged before an object can be selected
-and fetched. OpenSubstance is larger and similarly request-gated. Objects With
-Lighting is a compact 2.35 GB calibrated benchmark for *unknown* natural
-environments, but its reconstruction inputs use one environment rather than
-aligned repeated lights; reserve it for the later unknown-light evaluation.
-DiLiGenT-MV is public and compact, but its 96 lights move with each camera, so
-using it now would require a new per-image-light contract rather than a dataset
-adapter.
+Do not plan around OLATverse access. LUCES-MV is the active controlled-light
+route: its official Drive exposes object archives separately, and each public
+calibrated object contains 12 masked views under 15 near-field LEDs plus
+camera/light calibration and ground-truth normals/depth/shape. DiLiGenT-MV is
+the smaller fallback with 20 views by 96 calibrated lights. Stanford-ORB is the
+later distant-HDR cross-check. OpenSubstance remains a request-gated,
+multi-terabyte option rather than a milestone. Objects With Lighting is the
+compact benchmark for one *unknown* natural environment and is evaluated
+separately below.
 
 ReNé is the next autonomous surface screen. Its 50 camera poses and 40 robot
 light poses have exactly the aligned multi-view/multi-light product needed by
@@ -1047,10 +1045,11 @@ background subtraction, or distant-light approximation is chosen after seeing
 the image; no reconstruction is run, and the nine reserved cameras, two
 reserved lights, and official blacked-out observations remain unopened.
 
-ReNé becomes useful only after two explicit capabilities exist: deterministic
-background subtraction against its separately captured empty enclosure, and a
-calibrated point-light training renderer with spatially varying direction and
-falloff. Do not add those solely as an importer workaround. First run the
+ReNé still needs deterministic background subtraction against its separately
+captured empty enclosure; that empty capture is not present in the public
+archive. The calibrated point-light training renderer with spatially varying
+direction and falloff is now implemented independently through LUCES-MV, so it
+is no longer the ReNé blocker. First run the
 existing unknown-environment path on Objects With Lighting, whose official
 2.35 GB release already supplies calibrated cameras, object masks, and held
 HDR environments. Before listing that archive, define its first gate as the
@@ -1143,9 +1142,43 @@ improve over the recovered cloud together. Then constrain material/light
 decomposition with shared material structure or calibrated repeated
 environments; one unknown input environment cannot by itself identify arbitrary
 per-point BRDFs. Batch point proposals before revisiting the exact 44-minute
-refinement. ReNé remains behind near-field point-light and deterministic
-background-subtraction work, while OLATverse is the best repeated-light final
-gate once release access is available.
+refinement. ReNé remains behind unavailable empty-enclosure data and honest
+background subtraction. The next repeated-light gate is public LUCES-MV; no
+result depends on OLATverse access.
+
+### LUCES-MV finite-light route
+
+The point-light capability is implemented independently of the dataset
+adapter. A public `PointLight` carries world position, outgoing axis, RGB
+intensity, and cosine-power exponent; it supplies inverse-square diffuse
+response on the CPU. Analytical material/normal refinement and the Gaussian
+support optimizer accept one such light per view. The Gaussian path constructs
+the response from existing Meganeura graph operations, with no new operation,
+shader group, or shader-entry variant. Exact graph/oracle and moving-rig
+end-to-end synthetic tests execute on the RTX 5070.
+
+The official LUCES-MV Owl archive and calibration files have been downloaded
+under a 2 GiB cgroup into ignored storage. The 1,893,639,182-byte archive is
+SHA-256 `ced6a0fb5a6e8ac4fa447ebfcd965ee4c6a74e20fe61dbef4722a3db1942bc2f`;
+the download peaks at 1,467,895,808 bytes with no swap, OOM, pressure, or GPU
+fault. A simple pure-Rust fifteen-light diffuse solve confirms the public
+calibration before geometry work: views 000/018/060 have mean normal errors
+13.69°/16.77°/19.69°, medians 10.01°/13.04°/17.41°, and P90
+28.58°/36.39°/34.89° against the provided normals at every fourth masked
+pixel. These are calibration sanity results, not reconstruction quality.
+
+The LUCES directory adapter is now complete. It loads RGB16 and masks without
+display decoding, parses the release's stored NumPy camera extrinsics without
+a ZIP/NPY dependency, transforms each camera-local LED into world coordinates,
+and forms fifteen aligned captures. Loading all 180 Owl images at 80×60 gives a
+0.329 normalized radiance peak and a 1,138,884,608-byte warm peak in a 2 GiB
+cgroup, with zero swap, limit, OOM, or GPU event.
+
+Predeclare a 9/3 camera split and a 12/3 LED split before fitting Owl. First
+score normal angular error and masked novel-camera/novel-light PSNR; open
+ground-truth shape error only after that fixed split. If the non-commercial
+licence prevents continued use, apply the same already-implemented finite-light
+contract to public DiLiGenT-MV rather than waiting for OLATverse.
 
 ## Milestones
 
