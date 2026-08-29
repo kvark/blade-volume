@@ -945,6 +945,20 @@ camera/light isolation, 2,500-point budget, thresholds, and one final-decision
 rule above; do not inspect an official camera or excluded light unless the
 internal fixed-base proposal is non-empty and passes.
 
+The flower also stops before the final gate. Its 2,500-point Gaussian reaches
+91.5% construction-camera foreground recall at 86.9% precision. Of 71 accepted
+tracks, 69 pass the visual hull and three land in missing foreground, but they
+are isolated: shared-view adjacency forms no five-track patch. The official
+cameras and patterns 005/006 remain unopened. The base PLY has SHA-256
+`3f10df09d6919e305a11ba0253a9b09f8811af6d1d9701eb99c35acce53c2f09`;
+fit and diagnostic peak at 1.04 GB and 731 MB with clean zero-swap telemetry.
+
+Use `obj_12_bag` for one terminal OpenIllumination construction screen,
+predeclared before download because a handle and occluded interior are more
+likely to form one coherent missing patch than fine flower structure. Apply
+the same fixed protocol. If it forms no internally passing patch, stop object
+screening rather than selecting a favorable dataset after the fact.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
