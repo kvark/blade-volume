@@ -80,8 +80,14 @@ The next quality gate is deliberately narrow:
   tested twice and removed: scalar quality improves slightly, but rebuilt PBR
   Gaussians remain mixed or lose foreground quality. Scoring the same local
   alternatives in the learned Gaussian PBR compositor then selects none in two
-  fits. The next gate must add candidates specifically on under-covered rays
-  and fit them jointly, instead of replacing the best group in every fixed cell;
+  fits. A bounded additive follow-up then keeps only groups that under-cover
+  foreground in a majority of their actual fusion source cameras. Its 76
+  additions improve the scalar surface, but Gaussian training suppresses 72;
+  the four fresh-rebuild survivors are image-neutral for Gaussian PBR and
+  slightly regress the scalar surface. All temporary selection code is
+  removed. The next gate must first make the PBR Gaussian reproduce the scalar
+  renderer on one fixed cloud, so representation transfer is not confused with
+  another geometry-selection experiment;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and

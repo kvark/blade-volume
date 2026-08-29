@@ -35,12 +35,17 @@ not contain or fall back to polygonal geometry.
   and one-bounce renderer. On the selected fresh object this improves every
   held-light mean/tail at four and eight samples, although it cannot repair the
   wrong surface beneath those shadows.
+- Observation-backed additive groups can improve the scalar point surface, but
+  the PBR Gaussian fit either perturbs the established cloud or suppresses the
+  additions. Restoring the exact established Gaussian prefix leaves only four
+  useful-opacity additions and no measurable Gaussian image gain.
 
-The current bottleneck is therefore **cross-view surface ownership first,
-radiometry and unknown-light estimation second**. Coupled transport is now an
-available renderer, but material, visibility, and illumination can still
-compensate for wrong or missing geometry. Optimizing all of them together now
-would make the decomposition less identifiable rather than more accurate.
+The current bottleneck is therefore **cross-view surface ownership and
+scalar-to-Gaussian representation parity first, radiometry and unknown-light
+estimation second**. Coupled transport is now an available renderer, but
+material, visibility, and illumination can still compensate for wrong or
+missing geometry. Optimizing all of them together now would make the
+decomposition less identifiable rather than more accurate.
 
 ## Execution plan
 
@@ -53,7 +58,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | grouped fusion implemented; fixed-cell selectors rejected | Add a bounded set of grouped candidates only on multi-view under-covered foreground rays, fit support jointly, then keep additions only if complete renders improve | Scalar and Gaussian whole-frame/foreground mean/tail improve twice on fresh cameras before either excluded light is opened, with no precision loss |
+| Representation scale | grouped fusion implemented; replacement and additive selectors rejected | Distill one fixed scalar surface into the PBR Gaussian support path without changing its geometry or material, then repeat the additive gate only if renderer parity improves | Gaussian alpha/radiance approaches the scalar teacher on fresh cameras without lowering photo quality or precision; only then may new groups return |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
@@ -286,14 +291,55 @@ stay below 0.9 GiB scoped memory with zero swap, OOM, or GPU fault.
 
 This closes the fixed-cell replacement branch: confidence already chose the
 best useful group in those cells, and selecting another existing layer does not
-recover missing support. The next diagnostic instead proposes a small bounded
-set of intact groups whose projections land on foreground rays under-covered by
-the fitted Gaussian in several cameras. They are added temporarily and support
-is fit jointly; only complete-render gains on a fresh camera split may retain
-them. A later accepted gate may merge redundant support back to budget, but may
-not remove coverage before the addition is proven. The official cameras and
+recover missing support. The bounded additive diagnostic below tests missing
+support without replacing that established ownership. The official cameras and
 excluded lights remain closed. No polygonal intermediate or fallback is
 introduced.
+
+### Rejected observation-backed additive-support gate
+
+The additive diagnostic starts with the exact selected 2,500-group prefix and
+a nested 5,000-cell proposal set. It renders final Gaussian alpha on the 33
+construction cameras, then considers an alternate only in cameras that are
+named by that group's retained fusion observations. This visibility boundary
+matters: merely counting every camera where a point projects selected occluded
+depth layers and was discarded as an invalid control. A candidate must
+under-cover foreground in at least three and a majority of its actual source
+cameras. At most one addition is retained near any established point.
+
+Of 3,604 non-baseline proposals, 99 pass that observation-backed test and 76
+remain after spatial separation. They are appended rather than substituted. A
+stage-matched checkpoint keeps the original surface and Gaussian prefix exact,
+while the suffix learns opacity, covariance, position, orientation, and PBR
+appearance through the ordinary pipeline. Values below are internal fresh
+cameras: whole-frame mean/worst; foreground mean/worst, then recall/precision.
+
+| Support | Scalar test | Scalar recall/precision | Gaussian test | Gaussian recall/precision |
+| --- | --- | --- | --- | --- |
+| Exact 2,500 baseline | `28.00/26.19; 18.36/17.37` | `97.3/93.8%` | `26.07/24.99; 16.83/15.93` | `92.3/89.6%` |
+| 76 additions, ordinary joint fit | `28.06/26.30; 18.42/17.48` | `97.6/93.8%` | `25.72/24.42; 16.76/15.94` | `93.4/86.4%` |
+| 76 additions, exact final Gaussian prefix | `28.02/26.30; 18.38/17.47` | `97.6/93.7%` | `26.07/24.98; 16.83/15.94` | `92.4/89.5%` |
+| Fresh rebuild of four learned survivors | `27.99/26.25; 18.34/17.36` | `97.3/93.9%` | `26.07/24.99; 16.83/15.93` | `92.3/89.6%` |
+
+The scalar result says the observation-backed geometry contains a small amount
+of useful surface. The ordinary Gaussian fit, however, removes 72 of 76
+additions and loses 3.2 points of precision while perturbing the established
+mixture. Restoring every established Gaussian field makes the remaining four
+additions image-neutral. Selecting those four by learned opacity and rebuilding
+from their intact evidence groups does not transfer the scalar gain: Gaussian
+metrics reproduce baseline and scalar foreground falls slightly. A scale cap
+is not causal—the suffix already shrinks to `0.76×` after the first support fit
+and reaches only `1.00×` after the multi-light fit.
+
+This rejects undercoverage alone as the next production selector. More raw
+groups are not useful until the PBR Gaussian can reproduce the better scalar
+surface without changing that surface's ownership. The next gate therefore
+holds one cloud, material table, cameras, and lights fixed and trains only the
+Gaussian representation against scalar-rendered alpha/radiance. It must improve
+fresh-camera scalar-to-Gaussian parity without losing photo quality or mask
+precision before any additive candidates return. All selector, checkpoint,
+prefix-isolation, survivor-cache, grouped-index, and scale-cap code was removed.
+The scoped GPU runs peak below 0.80 GiB, with zero swap, OOM, or GPU fault.
 
 ## Milestones
 
@@ -445,9 +491,12 @@ a deterministic repeat agree within the measured training variance.
   not transfer to rebuilt Gaussian foreground quality in two repeats.
 - [x] Attribute fixed-cell alternatives in the learned PBR Gaussian compositor;
   reject and remove it because neither repeat selects one useful alternative.
-- [ ] Add bounded grouped candidates only where several construction cameras
-  agree the fitted Gaussian under-covers foreground; jointly refit and replay
-  twice before opening held lights.
+- [x] Add bounded grouped candidates only where several actual fusion source
+  cameras agree the fitted Gaussian under-covers foreground; reject and remove
+  the selector because 72 of 76 are suppressed and the four fresh-rebuild
+  survivors do not improve Gaussian images.
+- [ ] Establish fixed-cloud scalar-to-Gaussian alpha/radiance parity before
+  reopening support selection or radiometry.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
