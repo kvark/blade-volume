@@ -85,9 +85,13 @@ The next quality gate is deliberately narrow:
   additions improve the scalar surface, but Gaussian training suppresses 72;
   the four fresh-rebuild survivors are image-neutral for Gaussian PBR and
   slightly regress the scalar surface. All temporary selection code is
-  removed. The next gate must first make the PBR Gaussian reproduce the scalar
-  renderer on one fixed cloud, so representation transfer is not confused with
-  another geometry-selection experiment;
+  removed. A fixed-cloud alpha distillation then confirms that the scalar and
+  Gaussian renderers differ, but making Gaussian alpha closer to the scalar is
+  not sufficient: a foreground-balanced continuation raises teacher PSNR and
+  recall while lowering held-photo tails and precision. That code is removed
+  too. The scalar surfel remains a cloud-only quality output; the next Gaussian
+  transfer must match final colour/visibility semantics and beat an untouched
+  photo control, not merely imitate scalar alpha;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and

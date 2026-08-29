@@ -39,13 +39,21 @@ not contain or fall back to polygonal geometry.
   the PBR Gaussian fit either perturbs the established cloud or suppresses the
   additions. Restoring the exact established Gaussian prefix leaves only four
   useful-opacity additions and no measurable Gaussian image gain.
+- A fixed-cloud scalar-alpha distillation probe confirms a real representation
+  gap, but reducing it is not a valid reconstruction objective by itself.
+  Foreground-balanced fitting raises Gaussian recall and scalar-teacher PSNR
+  while lowering held-photo tails and precision. The scalar renderer is a
+  useful geometric control, not ground-truth opacity for the volumetric
+  compositor.
 
-The current bottleneck is therefore **cross-view surface ownership and
-scalar-to-Gaussian representation parity first, radiometry and unknown-light
-estimation second**. Coupled transport is now an available renderer, but
-material, visibility, and illumination can still compensate for wrong or
-missing geometry. Optimizing all of them together now would make the
-decomposition less identifiable rather than more accurate.
+The current bottleneck is therefore **cross-view surface ownership first,
+representation-aware colour/visibility transfer second, radiometry and
+unknown-light estimation third**. Coupled transport is now an available
+renderer, but material, visibility, and illumination can still compensate for
+wrong or missing geometry. Optimizing all of them together now would make the
+decomposition less identifiable rather than more accurate. The scalar surfel
+asset remains a valid cloud-only quality path while Gaussian transfer is
+improved; no polygonal fallback is needed.
 
 ## Execution plan
 
@@ -58,7 +66,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | grouped fusion implemented; replacement and additive selectors rejected | Distill one fixed scalar surface into the PBR Gaussian support path without changing its geometry or material, then repeat the additive gate only if renderer parity improves | Gaussian alpha/radiance approaches the scalar teacher on fresh cameras without lowering photo quality or precision; only then may new groups return |
+| Representation scale | grouped fusion implemented; replacement, additive, and scalar-alpha distillation rejected | Keep the exact scalar and Gaussian renderers as paired controls; change Gaussian support only with a representation-matched colour/visibility objective, not scalar alpha alone | Fresh-camera photo mean/tail and precision improve together with representation agreement; only then may new groups return |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
@@ -341,6 +349,57 @@ precision before any additive candidates return. All selector, checkpoint,
 prefix-isolation, survivor-cache, grouped-index, and scale-cap code was removed.
 The scoped GPU runs peak below 0.80 GiB, with zero swap, OOM, or GPU fault.
 
+### Rejected scalar-alpha distillation gate
+
+The follow-up freezes one reconstructed 2,500-point surface, its material
+table, cameras, lights, Gaussian centers, rotations, and durable appearance.
+The scalar production renderer supplies an in-memory RGB/alpha teacher at the
+same 128-pixel resolution and eight-sample transport setting. The untouched
+PBR Gaussian is scored against both photographs and that teacher in the same
+process, eliminating reconstruction and renderer-startup variation.
+
+The fixed cloud has a measurable representation gap. On the five fresh
+cameras, the scalar surface scores `28.00/26.20;18.36/17.39` dB and
+`97.3/93.8%` recall/precision. The untouched Gaussian scores
+`26.06/24.84;16.86/15.99` dB and `92.5/89.3%` against photographs, while its
+scalar-teacher score is `28.05/26.75;19.21/17.95` dB and `91.4/91.5%`. Across
+all 38 cameras, 65,000--66,000 pixels have scalar alpha more than 0.01 above
+the Gaussian and roughly 40,000--42,000 differ in the other direction.
+
+The valid continuation uses the pointwise maximum of established Gaussian and
+scalar alpha, so it can fill scalar coverage but cannot erase established
+support. Neutral SH-0 colour is premultiplied consistently with alpha, and only
+opacity plus the existing three anisotropic scales learn. An ordinary uniform
+sampler is nearly neutral. A deterministic sampler then draws half of every
+batch from the target support and half from the full frame, using the same
+graph, operations, candidates, and optimizer:
+
+| Matched candidate | Photo test | Photo recall / precision | Scalar-teacher test | Teacher recall / precision |
+| --- | --- | --- | --- | --- |
+| Untouched control, 25-step run | `26.08/24.88;16.89/16.03` | `92.4/89.2%` | `28.03/26.71;19.21/17.89` | `91.3/91.4%` |
+| 25 balanced updates | `26.07/24.85;16.89/15.98` | `92.7/89.1%` | `28.04/26.72;19.24/17.88` | `91.6/91.4%` |
+| Untouched control, 100-step run | `26.09/24.80;16.87/16.01` | `92.3/89.5%` | `28.02/26.58;19.15/17.87` | `91.2/91.7%` |
+| 100 balanced updates | `26.04/24.68;16.87/15.91` | `93.5/89.1%` | `28.07/26.62;19.26/17.89` | `92.5/91.5%` |
+
+Values are whole-frame mean/worst; foreground mean/worst. The longer fit
+lowers its sampled objective `0.1321805→0.1187916` and clearly improves
+teacher means and recall, yet loses photo whole-frame mean/tail, foreground
+tail, and precision. Earlier symmetric targets were invalid controls: the
+mostly black frame drove opacity toward zero, and a black RGB target was
+inconsistent with the existing neutral-grey SH convention. They are excluded
+from the decision rather than presented as negative evidence.
+
+This closes scalar alpha as a standalone distillation target. The two
+renderers deliberately use different response and same-sheet composition
+semantics, so closer alpha is not necessarily closer photographic radiance.
+Future transfer must match the final Gaussian compositor's colour and
+visibility response, and must beat the untouched photo control rather than
+only its scalar teacher. The sampler, teacher, environment hook, matched clone,
+and scoring code are all removed; no API, shader, graph operation, model field,
+or dependency remains. The cgrouped runs peak at 0.76 GiB with zero swap, OOM,
+validation error, Xid, or GPU fault. Ignored logs and artifacts remain under
+`target/audit-runs/openillumination/gaussian-parity-*`.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -495,8 +554,11 @@ a deterministic repeat agree within the measured training variance.
   cameras agree the fitted Gaussian under-covers foreground; reject and remove
   the selector because 72 of 76 are suppressed and the four fresh-rebuild
   survivors do not improve Gaussian images.
-- [ ] Establish fixed-cloud scalar-to-Gaussian alpha/radiance parity before
-  reopening support selection or radiometry.
+- [x] Measure fixed-cloud scalar-to-Gaussian alpha/radiance parity and test
+  uniform plus foreground-balanced alpha continuations; reject scalar alpha as
+  a standalone target when stronger parity loses photo tails and precision.
+- [ ] Validate the selected training-mask surface filter on another object,
+  retaining the scalar surfel output as the cloud-only quality control.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

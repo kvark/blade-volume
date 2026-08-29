@@ -8214,3 +8214,37 @@ Add them temporarily, fit their opacity and covariance jointly with established
 support, and require two complete fresh-camera scalar/Gaussian gains before
 attempting any budget-preserving merge. Unknown-light and roughness work remains
 blocked on that surface decision.
+
+## Rejected fixed-cloud scalar-alpha distillation (2026-08-29)
+
+After the bounded additive gate was also rejected, one exact 2,500-point cloud,
+material table, camera set, and light set were frozen. The production scalar
+renderer generated an in-memory teacher, and an untouched PBR Gaussian clone
+was scored beside every continuation in the same process. The baseline reaches
+`26.06/24.84;16.86/15.99` dB whole/foreground mean/worst on the five fresh
+photographs and `28.05/26.75;19.21/17.95` against the scalar teacher. Its mask
+recall/precision is `92.5/89.3%` against photographs and `91.4/91.5%` against
+the teacher.
+
+The valid target takes the pointwise maximum of scalar and established
+Gaussian alpha, so learning can fill scalar support but cannot remove existing
+support. Neutral-grey premultiplied RGB keeps the frozen zero SH table
+consistent. With deterministic half-target/half-uniform ray sampling, 25
+updates move the photo control from `26.08/24.88;16.89/16.03` to
+`26.07/24.85;16.89/15.98`, while scalar-teacher quality moves from
+`28.03/26.71;19.21/17.89` to `28.04/26.72;19.24/17.88`. At 100 updates the
+sampled loss falls `0.1321805→0.1187916`, teacher quality improves from
+`28.02/26.58;19.15/17.87` to `28.07/26.62;19.26/17.89`, and teacher recall
+rises `91.2→92.5%`; photo quality falls from
+`26.09/24.80;16.87/16.01` to `26.04/24.68;16.87/15.91`, with precision also
+falling `89.5→89.1%`.
+
+The optimization is therefore doing what was requested and the request is
+wrong: scalar alpha alone is not photographic ground truth for a volumetric
+same-sheet compositor. Symmetric mostly-background and black-colour targets
+were identified as invalid controls and excluded from the decision. The
+teacher, sampler, environment hook, matched clone, score labels, and fitting
+entry point are removed. No API, operation, shader, format, model field, or
+dependency survives. The 12 GiB runs peak at 0.76 GiB with zero swap, OOM,
+validation error, Xid, or GPU fault; ignored artifacts remain under
+`target/audit-runs/openillumination/gaussian-parity-*`.
