@@ -73,8 +73,11 @@ The next quality gate is deliberately narrow:
   opacity optimizer correctly suppresses. The selected 2,500-point surface
   therefore remains the production checkpoint. Its paired COLMAP provenance
   confirms that every `min1` dense sample came from only one source image.
-  Pose-only MVS has no sparse overlap graph; genuine two/three-view fusion was
-  recovered diagnostically but remains mixed on the official image gate;
+  Pose-only MVS now gets an explicit training-camera graph, Rust-native grouped
+  depth fusion, and a replayable observation cache without fake geometry. The
+  fixed 2,500/5,000-point gate is still mixed, so this remains opt-in. Next the
+  5,000 groups serve only as proposals: complete renders select useful surface
+  responsibility before a fresh 2,500-point cloud is rebuilt;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and

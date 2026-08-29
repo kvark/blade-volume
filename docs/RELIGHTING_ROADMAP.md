@@ -53,7 +53,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | active; fusion cause isolated | Supply a real image-overlap graph to pose-only MVS, retain its grouped depth evidence, and let complete Gaussian renders select support before spatial reduction | A denser cloud improves whole-frame and foreground mean/tail on fresh cameras and two excluded lights without losing precision |
+| Representation scale | grouped fusion implemented; scale gate rejected | Use the fixed 5,000-group proposal pool only as a complete-render responsibility selector, then rebuild a 2,500-point cloud from accepted groups | Scalar and Gaussian whole-frame/foreground mean/tail improve on fresh cameras before either excluded light is opened, with no precision loss |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
@@ -81,6 +81,56 @@ raises recall but loses precision and foreground PSNR. A 3,500-point control is
 also worse for Gaussian PBR. Nearest-view PatchMatch source generation,
 equal-weight radius-mask loss, and skipping the joint known-light material fit
 were isolated and removed after negative controls.
+
+The pose-only path now emits that nearest-camera graph directly from calibrated
+training poses, fuses COLMAP depth/normal maps in Rust, keeps each point's
+camera/pixel/depth/normal/confidence observations together, and can persist the
+raw candidate set. Masks are reapplied on every replay. It does not use a fake
+sparse track or any polygonal
+intermediate. The implementation is useful and remains opt-in, but it does not
+yet change the selected reconstruction: its fixed scale gate is mixed, as
+recorded below.
+
+## Grouped dense-fusion gate
+
+`import_openillumination` now writes `patch-match-train.cfg` with the nearest
+12 calibrated training cameras per reference. On the fresh painted-toy
+capture, the Rust output is byte-identical to the independently generated
+configuration (SHA-256
+`96e835239a90b1b92097dfc60f07338a60b0116ab895137d3ef8d1cd01102e88`).
+Held cameras never occur in that file. Native fusion through the graph produces
+163,693 depth-consistent groups from 1,108,042 observations; the training-mask
+soft visual hull leaves 151,969 groups and 1,072,403 observations. The 41.2 MB
+raw-fusion cache binds the ordered 33-image construction split and fusion
+thresholds, while deliberately reapplying the current masks on every replay.
+It has SHA-256
+`4b875b0be0c77aab16c1558c9905d0896dbd598521bbdc3f7defcfb35694ab5d`.
+
+The adjacent one-view control and two replays from that exact cache give:
+
+| Candidate | Scalar test whole | Scalar test foreground | Scalar recall / precision | Gaussian test whole | Gaussian test foreground | Gaussian recall / precision |
+| --- | --- | --- | --- | --- | --- | --- |
+| one-view control, 2,500 | 28.08 / 26.35 | 18.39 / 17.29 | 97.2% / 94.2% | 25.97 / 24.67 | 16.74 / 15.65 | 92.5% / 88.6% |
+| grouped, 2,500 replay 1 | 28.00 / 26.20 | 18.36 / 17.39 | 97.3% / 93.8% | 26.02 / 24.84 | 16.73 / 15.91 | 92.2% / 89.9% |
+| grouped, 2,500 replay 2 | 27.99 / 26.20 | 18.35 / 17.38 | 97.3% / 93.8% | 26.02 / 24.78 | 16.90 / 15.96 | 92.1% / 89.2% |
+| grouped, 5,000 | 28.34 / 26.65 | 18.55 / 17.53 | 97.3% / 94.7% | 25.18 / 23.85 | 17.02 / 15.77 | 95.2% / 80.3% |
+
+Values are mean/worst dB. At 2,500 points the scalar whole-frame and foreground
+means regress slightly, while the Gaussian foreground mean straddles the
+control across repeats; at 5,000 points the scalar improves while Gaussian
+precision loses 8.3 points and whole-frame quality falls sharply. Neither
+passes the contract, so the official cameras and
+excluded patterns 005/006 remain closed and the default stays on the selected
+one-view input. Ranking by confidence before view count, multiplying confidence
+by view count, and giving each camera one vote in the fused representative were
+all tested from the same cache and removed after worse internal results.
+
+The fixed runs peak at 0.76--1.46 GB cgroup memory with zero swap, OOM, or GPU
+fault. A later unclean host reboot left one Cargo output as a correctly sized
+but zero-filled sparse file; it was detected before execution. A clean build in
+an isolated target produced a valid x86-64 ELF and subsequent cgrouped GPU runs
+completed normally. This is build-artifact corruption across a reboot, not an
+accepted reconstruction result.
 
 ## Latest surface attribution
 
@@ -159,15 +209,18 @@ The fresh-object split now rules out seven tempting shortcuts:
   the old boundary and is unchanged. This removes an arbitrary quality cliff
   without selecting either new fusion input.
 
-The next implementation moves the decision upstream of downsampling. Build an
-explicit image-overlap graph from calibrated point-cloud observations even when
-the imported pose model has no sparse tracks. Preserve each fused group's
-camera, pixel, depth, normal, and confidence evidence; initialize one Gaussian
-support from that group instead of averaging unrelated samples in a voxel; and
-accept it only through complete point-cloud renders. The selected 2,500-point
-model remains fixed until that ownership pass improves a fresh
-construction/selection/validation split and both excluded lights. No polygonal
-intermediate or fallback is introduced.
+The ownership decision now sits upstream of downsampling: the explicit graph,
+native fusion, intact observation groups, mask filtering, deterministic cache,
+and group-preserving initialization are implemented. The fixed gate says that
+view count and geometric confidence are still insufficient to choose a useful
+Gaussian mixture. The next implementation will fit the fixed 5,000-group pool
+only as a proposal set, measure each group's responsibility in complete
+construction renders, rebuild a fresh 2,500-point surface from the accepted
+groups, and then replay the scalar and Gaussian selection split. Low opacity is
+not by itself acceptance: a group must explain foreground residual without
+increasing background coverage. The official cameras and excluded lights stay
+closed until that internal gate passes. No polygonal intermediate or fallback
+is introduced.
 
 ## Milestones
 
@@ -307,10 +360,13 @@ a deterministic repeat agree within the measured training variance.
   front-most projection-count filter at adjacent thresholds.
 - [x] Isolate the empty-overlap failure in pose-only COLMAP fusion and test
   genuine two/three-view fused controls on the full official scoreboard.
-- [ ] Produce an explicit overlap graph without synthetic geometry and retain
+- [x] Produce an explicit overlap graph without synthetic geometry and retain
   grouped fusion observations through Gaussian support initialization.
-- [ ] Repeat the fixed 2,500/5,000-point gate from one persisted candidate set;
+- [x] Repeat the fixed 2,500/5,000-point gate from one persisted candidate set;
   require both scalar and Gaussian PBR to improve before changing the default.
+- [ ] Select a fixed 5,000-group pool from the cache as a proposal-only Gaussian, select
+  groups by complete-render foreground responsibility and background harm, and
+  replay a rebuilt 2,500-point surface twice before opening held lights.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
