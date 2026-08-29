@@ -1207,6 +1207,30 @@ fn main() {
                     std::process::exit(1);
                 });
         }
+        if !multilight_geometry_fitted {
+            let initialized =
+                train::gaussian_splat::pbr_from_surface(&fitted.scene.model, train_views.len())
+                    .unwrap_or_else(|error| {
+                        eprintln!("cannot rebuild initialized PBR support: {error}");
+                        std::process::exit(1);
+                    });
+            let recovery = train::gaussian_splat::recover_masked_pbr_support(
+                gaussian,
+                &initialized,
+                &capture,
+                &train_views,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("cannot recover mask-supported PBR geometry: {error}");
+                std::process::exit(1);
+            });
+            if recovery.restored != 0 {
+                println!(
+                    "PBR support: restored {} mask-supported particles after {} of {} survived fitting",
+                    recovery.restored, recovery.retained, recovery.particles,
+                );
+            }
+        }
         train::gaussian_splat::attach_pbr(gaussian, &fitted.scene.model).unwrap_or_else(|error| {
             eprintln!("cannot attach final PBR attributes to Gaussian geometry: {error}");
             std::process::exit(1);

@@ -62,9 +62,13 @@ a convincing real-world result.
   fitting. A 25,000-point scalar cloud reaches 21.88/20.16 dB foreground
   mean/worst with 99.6% mask recall. The image is recognizably relit, but its
   grey, soft appearance loses most texture and material detail. Ordinary
-  Gaussian fitting collapses foreground support; preserving initialization
-  raises recall from 60.8% to 87.1%, but remains only a diagnostic until a
-  coverage-aware fit improves quality and precision together.
+  Gaussian fitting collapses foreground support. Restoring only initialized
+  two-sigma footprints that agree with at least 97.5% of construction-mask
+  samples raises official recall from 60.8% to 69.6%, precision from 95.8% to
+  96.0%, and mean/worst quality from 19.28/17.39 to 19.64/18.07 dB. This is a
+  selected safety recovery, not a solution to the grey appearance.
+  On the independently prepared OWL Apple split, the healthy fit retains 86.1%
+  of its inputs and recovery is an exact no-op.
 - **Fresh-object support result — selected; sampled transport now works.** On a
   second painted, concave object, rejecting dense samples outside the training
   silhouettes before downsampling raises held-camera foreground quality by
@@ -294,7 +298,7 @@ both the camera and the studio environment used for the reference.
 | OpenIllumination fresh-object diagnostic<br>held camera and excluded pattern 006 | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-reference.png" alt="OpenIllumination painted toy reference under excluded lighting pattern 006" width="320"> | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-surface.png" alt="Excluded view and light rendered by the filtered scalar point surface" width="320"> |
 | OpenIllumination sampled-transport diagnostic<br>same held camera and excluded pattern 006 | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-reference.png" alt="OpenIllumination painted toy reference under excluded lighting pattern 006" width="320"> | <img src="docs/images/reconstruction/openillumination-painted-toy-pattern006-gaussian-transport.png" alt="Excluded view and light rendered by the PBR Gaussian cloud with sampled visibility and one bounce" width="320"> |
 | Objects With Lighting surface<br>independent camera and unseen natural HDR environment | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-reference.png" alt="Objects With Lighting Ant-Man official reference under unseen environment 7" width="320"> | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-surface.png" alt="Unseen view and natural environment rendered by the 25,000-point scalar cloud" width="320"> |
-| Objects With Lighting Gaussian diagnostic<br>same independent camera and unseen environment | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-reference.png" alt="Objects With Lighting Ant-Man official reference under unseen environment 7" width="320"> | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-gaussian.png" alt="Unseen view and natural environment rendered by the support-preserving Gaussian diagnostic" width="320"> |
+| Objects With Lighting Gaussian<br>same independent camera and unseen environment | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-reference.png" alt="Objects With Lighting Ant-Man official reference under unseen environment 7" width="320"> | <img src="docs/images/reconstruction/objects-with-lighting-antman-env7-gaussian.png" alt="Unseen view and natural environment rendered by the mask-recovered Gaussian cloud" width="320"> |
 
 The pictures expose what PSNR alone hides: the light-field branch has the
 scene and viewpoint but remains blurry, while the relightable branches respond
@@ -316,7 +320,8 @@ alignment, so they are not directly comparable to the whole-frame table below:
 | Ant-Man official unseen camera/environment | Foreground PSNR | Recall / precision |
 | --- | ---: | ---: |
 | 25k scalar surface (shown) | 21.88 / 20.16 dB | 99.6% / 95.7% |
-| 25k support-preserving Gaussian diagnostic (shown) | 20.44 / 17.95 dB | 87.1% / 92.5% |
+| 25k mask-recovered Gaussian (shown) | 19.64 / 18.07 dB | 69.6% / 96.0% |
+| 25k support-preserving Gaussian diagnostic | 20.44 / 17.95 dB | 87.1% / 92.5% |
 | 25k ordinarily fitted Gaussian | 19.28 / 17.39 dB | 60.8% / 95.8% |
 | Black | 10.84 / 8.60 dB | — |
 
@@ -325,7 +330,11 @@ black establishes real signal, not acceptable decomposition quality. Increasing
 the point budget from 2,500 to 25,000 improves the scalar mean by 1.03 dB. By
 contrast, the current single-environment Gaussian objective prunes or dims
 useful foreground support. A stricter global survival threshold restores recall
-but loses mean quality and precision, so that attempted change is rejected.
+but loses mean quality and precision, so that attempted change is rejected. The
+selected local recovery restores 3,664 of those supports only after their
+initialized footprints pass the construction silhouettes; it improves every
+internal and official production metric while leaving healthy, maskless, and
+multi-light fits unchanged.
 
 | Gate | Training / held views | Static held PSNR | PBR held PSNR | Coverage |
 | --- | ---: | ---: | ---: | ---: |

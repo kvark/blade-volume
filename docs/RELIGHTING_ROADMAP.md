@@ -48,9 +48,10 @@ not contain or fall back to polygonal geometry.
 - The first Objects With Lighting gate now holds out both camera and natural
   HDR environment independently. A 25,000-point scalar cloud is recognizable
   and reaches 21.88/20.16 dB foreground mean/worst on nine official pairs, but
-  remains grey and texture-poor. The ordinarily trained Gaussian suppresses
-  useful foreground support; retaining the initialized support improves it,
-  but does not yet produce a validation-safe training change.
+  remains grey and texture-poor. A local construction-mask recovery now
+  restores 3,664 of the supports suppressed by ordinary Gaussian fitting and
+  improves official mean, tail, recall, and precision together. It does not
+  recover the missing material detail.
 
 The current bottleneck is therefore **preserving cross-view surface support in
 the Gaussian objective first, separating material from unknown illumination
@@ -75,7 +76,7 @@ surface.
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
 | Materials and capture layout | ownership-filtered response improves 27/28 official cells but remains rejected | Keep the global broad-response diagnostic opt-in; use calibrated depth/correspondence rather than more mask heuristics before revisiting the validated diffuse/F0 basis | Every known-light and whole-frame tail plus two held lights and a second object improve; otherwise keep the feature off |
-| Unknown natural illumination | independent OWL gate complete; quality fails | Preserve initialized Gaussian coverage with a construction-mask objective before changing material or light capacity | Improve official mean/worst PSNR and recall without losing precision on the fixed nine-pair gate |
+| Unknown natural illumination | local support recovery selected; appearance quality fails | Replace safety restoration with an ownership-aware training objective before changing material or light capacity | Improve over the recovered cloud's official mean/worst PSNR and recall without losing precision on the fixed nine-pair gate |
 
 The selected dense-support prerequisite remains the training-mask hull. On the
 `obj_31_painted_toy` split, filtering 68,278 of 1,254,170 one-view fused samples
@@ -1092,6 +1093,7 @@ recall/precision:
 | 2.5k ordinarily fitted Gaussian | `19.64/17.73 dB; 68.3/96.8%` |
 | 25k scalar | `21.88/20.16 dB; 99.6/95.7%` |
 | 25k ordinarily fitted Gaussian | `19.28/17.39 dB; 60.8/95.8%` |
+| 25k mask-recovered Gaussian | `19.64/18.07 dB; 69.6/96.0%` |
 | 25k support-preserving Gaussian diagnostic | `20.44/17.95 dB; 87.1/92.5%` |
 | Black | `10.84/8.60 dB` |
 
@@ -1103,19 +1105,37 @@ survival guard from 50% to 80% restores 98.7% recall, but scores only
 20.32/18.03 dB and reduces precision to 89.8%; that code was removed. A global
 particle-count guard is not the required coverage objective.
 
+A narrower recovery is selected. It activates only when the single-light fit
+would retain fewer than three quarters of its evidence-backed inputs, after the
+existing half-cloud collapse guard. Each low-opacity point recovers initialized
+opacity and covariance only if its center and six two-sigma axis endpoints lie
+inside at least 97.5% of construction-mask samples. This restores 3,664 points.
+On the 12 internal cameras it moves the ordinary Gaussian from
+`25.81/21.44;19.51/15.54 dB;60.3/97.6%` to
+`26.24/22.28;19.98/16.42 dB;68.6/97.7%`. On the nine official pairs it improves
+19.28/17.39→19.64/18.07 dB, recall 60.8→69.6%, and precision 95.8→96.0%.
+Healthy fits above the three-quarter boundary, maskless captures, multilight
+continuations, and full restores are exact no-ops.
+
+The independently prepared OWL Apple split is the real-capture no-op control.
+Its ordinary fit retains 21,512 of 24,996 particles (86.1%), so recovery changes
+nothing. The nine internal held cameras score `23.35/18.70;15.00/9.19 dB` with
+81.2% recall and 98.3% precision. No Apple ground-truth relighting pair entered
+selection or this control.
+
 The selected evidence is deliberately narrow: an all-cloud pipeline can
 recover a recognizable surface and react to an independent natural environment,
-but appearance is grey, soft, and missing high-frequency texture. The next
-implementation must use construction masks and views to penalize lost Gaussian
-foreground ownership while jointly fitting opacity and covariance. It may
-advance only if official mean, tail, recall, and precision improve together.
-After support is stable, constrain the material/light decomposition with shared
-material structure or calibrated repeated environments; one unknown input
-environment cannot by itself identify arbitrary per-point BRDFs. Batch point
-proposals before revisiting the exact 44-minute refinement. ReNé remains behind
-near-field point-light and deterministic background-subtraction work, while
-OLATverse is the best repeated-light final gate once release access is
-available.
+but appearance is grey, soft, and missing high-frequency texture. The local
+recovery bounds damage after fitting; the next implementation should make
+foreground ownership part of the Gaussian objective so useful supports never
+need restoration. It may advance only if mean, tail, recall, and precision
+improve over the recovered cloud together. Then constrain material/light
+decomposition with shared material structure or calibrated repeated
+environments; one unknown input environment cannot by itself identify arbitrary
+per-point BRDFs. Batch point proposals before revisiting the exact 44-minute
+refinement. ReNé remains behind near-field point-light and deterministic
+background-subtraction work, while OLATverse is the best repeated-light final
+gate once release access is available.
 
 ## Milestones
 

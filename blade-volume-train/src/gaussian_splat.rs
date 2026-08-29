@@ -50,6 +50,11 @@ const HIGH_VIEW_PBR_INITIAL_OPACITY: f32 = 0.25;
 const PBR_RENDER_MIN_ALPHA: f32 = 3.0e-2;
 const PBR_MIN_PERSISTED_OPACITY: f32 = 0.05;
 const PBR_MIN_RETAINED_DIVISOR: usize = 2;
+const PBR_MASK_RECOVERY_RETAINED_NUMERATOR: usize = 3;
+const PBR_MASK_RECOVERY_RETAINED_DENOMINATOR: usize = 4;
+const PBR_MASK_RECOVERY_FOOTPRINT_NUMERATOR: usize = 39;
+const PBR_MASK_RECOVERY_FOOTPRINT_DENOMINATOR: usize = 40;
+const PBR_MASK_RECOVERY_SIGMA: f32 = 2.0;
 const STATIC_CONTINUATION_MIN_VALIDATION_GAIN_DB: f32 = 0.05;
 
 /// Screen-space mean and covariance estimated from the seven 3DGUT sigma
@@ -412,6 +417,15 @@ pub struct PbrSupportGuard {
     pub particles: usize,
     pub retained: usize,
     pub restored: bool,
+}
+
+/// Outcome of restoring only initialized supports that remain inside the
+/// construction silhouettes.
+#[derive(Clone, Copy, Debug)]
+pub struct PbrSupportRecovery {
+    pub particles: usize,
+    pub retained: usize,
+    pub restored: usize,
 }
 
 /// One calibrated image capture used to separate Gaussian geometry from
@@ -1005,6 +1019,117 @@ pub fn guard_pbr_support(
         retained,
         restored,
     })
+}
+
+/// Restore strongly mask-supported particles after a partial PBR support
+/// collapse.
+///
+/// The ordinary background-only objective remains responsible for healthy
+/// fits. Recovery activates only when fewer than three quarters of the input
+/// particles would survive persistence, after the existing half-cloud guard
+/// has had an opportunity to reject a degenerate fit. A low-opacity particle
+/// recovers its initialized opacity, scale, and rotation only when the center
+/// and six two-sigma axis endpoints land inside at least 97.5% of construction
+/// masks. Held views do not enter this decision.
+pub fn recover_masked_pbr_support(
+    model: &mut vol::PointCloudModel,
+    initialized: &vol::PointCloudModel,
+    capture: &crate::inverse::capture::Capture,
+    view_indices: &[usize],
+) -> Result<PbrSupportRecovery, String> {
+    model.validate()?;
+    initialized.validate()?;
+    if model.points.len() != initialized.points.len() {
+        return Err("PBR support recovery requires matching particle counts".to_string());
+    }
+    if view_indices
+        .iter()
+        .any(|&index| index >= capture.views.len())
+    {
+        return Err("PBR support recovery view is outside the capture".to_string());
+    }
+    let particles = model.points.len();
+    let retained = model
+        .points
+        .iter()
+        .filter(|point| point.w >= PBR_MIN_PERSISTED_OPACITY)
+        .count();
+    let mut outcome = PbrSupportRecovery {
+        particles,
+        retained,
+        restored: 0,
+    };
+    if view_indices.is_empty()
+        || view_indices
+            .iter()
+            .any(|&index| capture.views[index].mask.is_none())
+        || retained * PBR_MASK_RECOVERY_RETAINED_DENOMINATOR
+            >= particles * PBR_MASK_RECOVERY_RETAINED_NUMERATOR
+    {
+        return Ok(outcome);
+    }
+    let initialized_transforms = initialized
+        .transforms
+        .as_ref()
+        .ok_or_else(|| "PBR support recovery requires initialized transforms".to_string())?;
+    let transforms = model
+        .transforms
+        .as_mut()
+        .ok_or_else(|| "PBR support recovery requires learned transforms".to_string())?;
+    for index in 0..particles {
+        if model.points[index].w >= PBR_MIN_PERSISTED_OPACITY {
+            continue;
+        }
+        let center = model.points[index].truncate();
+        let rotation = initialized_transforms.rotations[index];
+        let scale = initialized_transforms.scales[index];
+        let mut samples = [center; 7];
+        for (axis_index, axis) in [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z]
+            .into_iter()
+            .enumerate()
+        {
+            let offset = rotation * (axis * scale) * PBR_MASK_RECOVERY_SIGMA;
+            samples[1 + 2 * axis_index] = center - offset;
+            samples[2 + 2 * axis_index] = center + offset;
+        }
+        let mut inside = 0usize;
+        let total = view_indices.len() * samples.len();
+        for &view_index in view_indices {
+            let view = &capture.views[view_index];
+            let mask = view.mask.as_ref().unwrap();
+            for &sample in &samples {
+                let Some(([x, y], _)) = crate::inverse::capture::project(
+                    &view.camera,
+                    capture.width,
+                    capture.height,
+                    sample,
+                ) else {
+                    continue;
+                };
+                let x = x.floor() as isize;
+                let y = y.floor() as isize;
+                if x >= 0
+                    && y >= 0
+                    && x < capture.width as isize
+                    && y < capture.height as isize
+                    && mask[y as usize * capture.width + x as usize] > 0.5
+                {
+                    inside += 1;
+                }
+            }
+        }
+        if inside * PBR_MASK_RECOVERY_FOOTPRINT_DENOMINATOR
+            < total * PBR_MASK_RECOVERY_FOOTPRINT_NUMERATOR
+        {
+            continue;
+        }
+        model.points[index].w = initialized.points[index].w;
+        transforms.scales[index] = initialized_transforms.scales[index];
+        transforms.rotations[index] = initialized_transforms.rotations[index];
+        outcome.restored += 1;
+    }
+    model.validate()?;
+    Ok(outcome)
 }
 
 /// Transfer learned Gaussian support back to the corresponding PBR surfels.
@@ -4265,6 +4390,79 @@ mod tests {
             .scales
             .iter()
             .all(|&scale| scale == glam::Vec3::splat(0.02)));
+    }
+
+    #[test]
+    fn masked_pbr_recovery_is_local_and_requires_partial_collapse() {
+        let mut initialized = model(
+            (0..8)
+                .map(|index| glam::Vec4::new((index as f32 - 3.5) * 0.01, 0.0, 2.0, 0.25))
+                .collect(),
+        );
+        initialized
+            .transforms
+            .as_mut()
+            .unwrap()
+            .scales
+            .fill(glam::Vec3::splat(0.01));
+        let capture = |mask: Vec<f32>| crate::inverse::capture::Capture {
+            width: 8,
+            height: 8,
+            views: vec![crate::inverse::capture::View {
+                name: "mask.png".to_string(),
+                camera: vol::CameraParams {
+                    cam_position: [0.0; 3],
+                    cam_orientation: glam::Quat::IDENTITY.to_array(),
+                    fov: [1.0; 2],
+                    depth: 10.0,
+                    principal: [0.0; 2],
+                },
+                pixels: vec![[0.0; 3]; 64],
+                mask: Some(mask),
+            }],
+        };
+        let learned = || {
+            let mut learned = initialized.clone();
+            for point in &mut learned.points[5..] {
+                point.w = 0.01;
+            }
+            learned
+                .transforms
+                .as_mut()
+                .unwrap()
+                .scales
+                .fill(glam::Vec3::splat(0.001));
+            learned
+        };
+
+        let mut recovered = learned();
+        let outcome =
+            recover_masked_pbr_support(&mut recovered, &initialized, &capture(vec![1.0; 64]), &[0])
+                .unwrap();
+        assert_eq!(outcome.retained, 5);
+        assert_eq!(outcome.restored, 3);
+        assert!(recovered.points[5..].iter().all(|point| point.w == 0.25));
+        let scales = &recovered.transforms.as_ref().unwrap().scales;
+        assert!(scales[..5]
+            .iter()
+            .all(|&scale| scale == glam::Vec3::splat(0.001)));
+        assert!(scales[5..]
+            .iter()
+            .all(|&scale| scale == glam::Vec3::splat(0.01)));
+
+        let mut outside = learned();
+        let outcome =
+            recover_masked_pbr_support(&mut outside, &initialized, &capture(vec![0.0; 64]), &[0])
+                .unwrap();
+        assert_eq!(outcome.restored, 0);
+
+        let mut healthy = learned();
+        healthy.points[5].w = 0.1;
+        let outcome =
+            recover_masked_pbr_support(&mut healthy, &initialized, &capture(vec![1.0; 64]), &[0])
+                .unwrap();
+        assert_eq!(outcome.retained, 6);
+        assert_eq!(outcome.restored, 0);
     }
 
     #[test]
