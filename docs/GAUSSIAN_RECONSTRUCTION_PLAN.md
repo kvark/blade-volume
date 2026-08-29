@@ -8167,10 +8167,31 @@ below the zero-score control in both repeats. The selector, CLI option, and
 scoring API are removed. No official camera or excluded lighting pattern was
 opened.
 
-The next surface diagnostic must attribute ownership after calibrated
-multi-light PBR fitting, where normals, material, visibility, and overlapping
-support have assumed their actual roles. Replacements remain local to the
-fixed raw-cloud cell, followed by a fresh 2,500-point rebuild and PBR refit.
-Two independent internal repeats must improve scalar and Gaussian whole-frame
-and foreground mean/tail without losing precision before any held-light gate.
-Unknown-light and roughness work remains blocked on that surface decision.
+## Rejected calibrated scalar-PBR ownership (2026-08-29)
+
+The next prototype retained the corrected nested pool and chose at most one
+alternate inside each fixed raw-cloud cell after calibrated normal and material
+fitting. Existing multi-light scalar PBR rendering supplied one complete
+all-alternate/all-baseline error pair, localized each decision to the projected
+point footprint, and accepted the mixed proposal with a third complete render.
+It considered 1,128 alternatives and chose 69 in each run. The chosen intact
+groups were persisted, then positions, radii, orientation, materials, and
+Gaussian support were rebuilt and refitted from scratch.
+
+The scalar objective improves from `0.0031346→0.0031269` and
+`0.0031364→0.0031276`. Fresh scalar test whole/foreground mean/worst improves
+from the zero-score control's `28.00/26.20;18.36/17.38` dB to
+`28.05/26.28;18.41/17.44` and `28.03/26.24;18.41/17.43` dB. The Gaussian
+result does not transfer: the `26.10/24.94;16.87/16.00` dB control becomes
+`26.08/24.55;16.84/15.79` and `26.17/24.91;16.81/16.03` dB. Recall/precision
+is `92.1/89.6%` for the control, `92.5/89.4%` for repeat one, and
+`91.9/90.3%` for repeat two. This fails the joint gate, so the selector,
+grouped-index API, environment hook, and synthetic test are removed. The
+official cameras and excluded lighting patterns remain unopened. Each scoped
+run stayed below 0.9 GiB with zero swap, OOM, or GPU fault.
+
+The next surface diagnostic must score fixed-cell alternatives in the learned
+PBR Gaussian compositor itself, after calibrated normal, material, and support
+fitting. A chosen intact group still has to survive a fresh 2,500-point rebuild
+and improve both scalar and Gaussian fresh-camera mean/tail twice. Unknown-light
+and roughness work remains blocked on that surface decision.

@@ -76,10 +76,11 @@ The next quality gate is deliberately narrow:
   Pose-only MVS now gets an explicit training-camera graph, Rust-native grouped
   depth fusion, and a replayable observation cache without fake geometry. The
   fixed 2,500/5,000-point gate is still mixed, so this remains opt-in. A
-  complete-render static-light responsibility selector was also tested twice
-  and removed: scalar quality stayed neutral, but rebuilt PBR Gaussians lost
-  foreground quality. The next selector must attribute support after calibrated
-  multi-light material fitting, within the fixed raw 2,500-cell partition;
+  complete-render static-light and calibrated scalar-PBR selectors were each
+  tested twice and removed: scalar quality improves slightly, but rebuilt PBR
+  Gaussians remain mixed or lose foreground quality. The next selector must
+  attribute support in the same learned PBR Gaussian compositor that it is
+  expected to improve, within the fixed raw 2,500-cell partition;
 - require complete-render gains on separate construction/selection/validation
   camera sets, then on fresh held cameras and two excluded lights. Dense
   photometric normals, normal-guided integration, all-foreground tracks, and

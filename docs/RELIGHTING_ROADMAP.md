@@ -53,7 +53,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Dense support | selected on fresh object | Reject samples outside the training-mask soft visual hull before spatial downsampling | Better held-camera foreground mean/worst and precision on a second object; report any recall trade |
 | Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
-| Representation scale | grouped fusion implemented; static-light selector rejected | Attribute proposal ownership after calibrated multi-light PBR fitting, choose replacements only within the fixed raw 2,500-cell partition, then rebuild and refit | Scalar and Gaussian whole-frame/foreground mean/tail improve twice on fresh cameras before either excluded light is opened, with no precision loss |
+| Representation scale | grouped fusion implemented; static and scalar-PBR selectors rejected | Attribute proposal ownership in the learned PBR Gaussian compositor, choose replacements only within the fixed raw 2,500-cell partition, then rebuild and refit | Scalar and Gaussian whole-frame/foreground mean/tail improve twice on fresh cameras before either excluded light is opened, with no precision loss |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry | blocked on surface | Measure one scalar exposure residual per capture; fit it only if the residual is view-wide rather than directional | A constrained gain transfers to held lights and does not enter albedo |
 | Materials and capture layout | later | Add spatially shared roughness only after diffuse transfer; then accept sparse `(camera, light, exposure)` observations | Two held lights and a second object improve; otherwise keep the feature off |
@@ -243,13 +243,39 @@ static opacity is descriptive, not evidence that a proposal is unnecessary
 under a different light after normals, material, visibility, and overlap have
 exchanged responsibility.
 
-The next diagnostic therefore measures ownership in the calibrated multi-light
-PBR renderer after normal and material fitting. It may replace a baseline group
-only with another proposal from the same fixed raw-cloud cell, then must rebuild
-and refit a fresh 2,500-point cloud. Two independent construction/selection/test
-repeats must improve scalar and Gaussian whole-frame and foreground mean/tail
-without losing precision before the official cameras or excluded lights are
-opened. No polygonal intermediate or fallback is introduced.
+### Rejected calibrated scalar-PBR ownership gate
+
+The follow-up evaluated one nested alternate per fixed raw-cloud cell after
+normal and material fitting. One antithetic pair of complete scalar PBR renders
+across all five calibrated lights supplied a local error difference for every
+projected point; a third complete render accepted the mixed proposal only when
+it lowered the full objective. Both runs considered 1,128 cell-local
+alternatives and selected 69. The selected intact depth groups were written to
+a cache, then replayed through a fresh surface, material, support, and Gaussian
+fit rather than reusing proposal radii or appearance.
+
+| Selection | Scalar test | Scalar recall/precision | Gaussian test | Gaussian recall/precision |
+| --- | --- | --- | --- | --- |
+| Zero-score rebuild control | `28.00/26.20; 18.36/17.38` | `97.3/93.8%` | `26.10/24.94; 16.87/16.00` | `92.1/89.6%` |
+| Scalar PBR ownership, repeat 1 | `28.05/26.28; 18.41/17.44` | `97.5/93.7%` | `26.08/24.55; 16.84/15.79` | `92.5/89.4%` |
+| Scalar PBR ownership, repeat 2 | `28.03/26.24; 18.41/17.43` | `97.5/93.7%` | `26.17/24.91; 16.81/16.03` | `91.9/90.3%` |
+
+The calibrated scalar objective falls from `0.0031346→0.0031269` and
+`0.0031364→0.0031276`, and scalar fresh-camera quality improves slightly. It
+does not transfer consistently to volumetric PBR support: repeat 1 loses both
+Gaussian foreground metrics and repeat 2 trades foreground mean and recall for
+tail and precision. The selector, grouped-index API, environment hook, and test
+were removed. All runs stayed below 0.9 GiB scoped memory with no swap, OOM, or
+GPU fault.
+
+The next diagnostic must make the same fixed-cell ownership decision in the
+learned PBR Gaussian compositor itself, after calibrated normal, material, and
+support fitting. It must still write intact groups and replay a fresh
+2,500-point rebuild; optimizing the proposal Gaussian is not acceptance by
+itself. Two independent internal repeats must improve both scalar and Gaussian
+whole-frame and foreground mean/tail without losing precision before the
+official cameras or excluded lights are opened. No polygonal intermediate or
+fallback is introduced.
 
 ## Milestones
 
@@ -396,8 +422,11 @@ a deterministic repeat agree within the measured training variance.
 - [x] Build and repeat the fixed 5,000-group static-light responsibility
   selector; reject and remove it because rebuilt PBR Gaussian foreground
   quality loses to its zero-score control in both repeats.
-- [ ] Attribute support with calibrated multi-light PBR complete renders inside
-  fixed raw-cloud cells; rebuild and refit twice before opening held lights.
+- [x] Attribute support with calibrated multi-light scalar PBR renders inside
+  fixed raw-cloud cells; reject and remove it because its small scalar gain does
+  not transfer to rebuilt Gaussian foreground quality in two repeats.
+- [ ] Attribute fixed-cell alternatives in the learned PBR Gaussian compositor;
+  rebuild and refit twice before opening held lights.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
