@@ -749,6 +749,50 @@ mask loss. A held source-camera subset selects its weight. This allows
 position, covariance, and opacity to explain one observed surface jointly
 without hand-assigning a particle or axis.
 
+### Rejected low-resolution composited-depth supervision
+
+The first ownership graph reused only existing primitives. It exposes the
+candidate maximum-response depths and front-to-back weights, then evaluates
+three alternatives: relative error of the opacity-normalized mean depth,
+front-to-back-weighted relative error for every contributor, and the same
+per-contributor loss with ownership weights detached so depth updates positions
+only. A scalar input makes the zero and fitted arms compile the identical
+graph. There is no new Meganeura operation, shader entry/group, format, model
+field, dependency, or runtime path.
+
+The input reduction is deliberately recorded because it bounds the result.
+Only cells with at least 12 source cameras and plane RMS no greater than 5% of
+surfel radius contribute. Their raw points are projected to the 128×192 RGB
+capture; collisions keep the nearest depth. This produces 26,024 target pixels
+across 38 views. It is calibrated and multi-view filtered, but it is not an
+exact observation batch: many original-resolution samples collapse to one
+pixel, and nearest reduction biases the target toward the front layer.
+
+Patterns 001--003 on 30 cameras fit each arm; patterns 004/013 and eight
+disjoint cameras validate. The zero arm quantifies the atomic optimizer spread.
+Mean-depth weights `0.0001`, `0.001`, and `0.01` all produce mixed tails outside
+that spread. Weight `0.01` improves many whole-frame means by `0.1--0.4` dB,
+but even a 12.5% blend loses pattern-001 and pattern-004 tails. The
+per-contributor loss is more coherent: at weight `0.001`, a 12.5% blend passes
+every pattern-001/002 construction and camera cell and the pattern-003
+construction cell. It still lowers the pattern-003 disjoint-camera foreground
+tail `14.6405→14.6383` dB and loses light-004/013 tails. Detaching weights does
+not rescue any blend.
+
+No official camera or excluded pattern is loaded. Runs stay below 0.74 GB in
+8 GB zero-swap scopes and report no OOM, throttle, Xid, or GPU fault. The public
+depth structs, graph outputs/loss, session inputs, and tests are removed. The
+negative decision applies to low-resolution front-reduced targets, not to exact
+source rays.
+
+The next implementation must sample original fusion observations directly as
+`(camera, pixel, depth, confidence)` depth-only batches. It should record exact
+Gaussian candidates for those rays, set RGB/mask loss to zero for that batch,
+and retain one optimizer state while alternating ordinary image and depth
+updates. No per-particle assignment is supplied. Hold complete source cameras
+out when selecting weight and cadence; if exact observations still lose the
+same tails, close metric-depth supervision and move to ordinal visibility.
+
 ## Milestones
 
 ### 1. Recover missing surface tracks
@@ -941,9 +985,12 @@ a deterministic repeat agree within the measured training variance.
 - [x] Screen calibrated depth/mask endpoint crossings broadly, individually,
   and after exact-compositor ownership ranking; remove the diagnostic when all
   construction survivors remain numerically neutral and fail validation.
-- [ ] Supervise composited Gaussian depth on exact multi-view-consistent fusion
-  observation rays with a robust normalized residual and a held source-camera
-  weight gate; do not preassign the observation to a particle.
+- [x] Test opacity-mean, per-contributor, and position-only contributor depth
+  losses after low-resolution front reduction; remove them when all weights and
+  blends lose independent tails.
+- [ ] Preserve original source camera/pixel/depth observations in alternating
+  depth-only batches with exact ray candidates and held source cameras; do not
+  collapse them onto the RGB training grid.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

@@ -8686,3 +8686,45 @@ depth to the calibrated target with a robust scale-normalized residual. Hold a
 source-camera subset out when choosing the loss weight. This directly tests
 which current Gaussian owns an observed surface and lets center, covariance,
 and opacity co-adapt through the existing renderer.
+
+## Rejected low-resolution Gaussian depth loss (2026-08-29)
+
+A temporary graph exposes the existing per-candidate maximum-response depth
+and front-to-back weights. It tests (1) relative L1 error of opacity-normalized
+mean depth, (2) the weighted relative error of every contributing candidate so
+front/back layers cannot cancel, and (3) the contributor loss with compositing
+weights detached so calibrated depth sends gradients only through candidate
+depth/position. Control and candidate compile the same graph; one scalar input
+sets loss weight zero or nonzero. Every tensor operation already exists in
+Meganeura.
+
+The diagnostic uses the 509 tight, 12-view legacy cells. Their source points
+project into 26,024 pixels across the 38 128×192 capture views; when several
+original points hit one low-resolution pixel, the nearest depth wins. This is
+the key limitation: it preserves calibrated camera/depth values but not exact
+source rays, and front reduction turns many valid samples into a nearer target.
+
+Patterns 001--003 and 30 cameras fit; patterns 004/013 and eight disjoint
+cameras validate. Mean-depth weights `1e-4`, `1e-3`, and `1e-2` are all mixed.
+At `1e-2`, whole-frame means often gain `0.1--0.4` dB, but pattern/light tails
+regress at every 0.125/0.25/0.5/1.0 control-to-candidate blend. The
+per-contributor loss at `1e-3` is the strongest arm. Its 0.125 blend passes all
+pattern-001/002 construction and camera cells plus pattern-003 construction;
+the pattern-003 camera foreground tail still changes
+`14.6405→14.6383` dB, while light-004 and light-013 lose larger tails. Detaching
+ownership weights is worse and no blend passes.
+
+All runs use identical-graph zero controls, stay below 0.74 GB in 8 GB
+zero-swap scopes, and report no OOM, pressure, throttle, Xid, or GPU fault. No
+official camera or excluded light is opened. The prototype leaves no graph
+output, API, model field, shader, operation, option, dependency, or test.
+Ignored code and logs remain under `target/audit-tools/plane_cofit/` and
+`target/audit-runs/openillumination/depth-{ray,owner}-*`.
+
+Do not infer that exact ray supervision is rejected. The next bounded arm
+samples original `(camera, pixel, depth, confidence)` fusion observations
+without raster reduction. Alternate depth-only batches with ordinary RGB/mask
+batches in one optimizer, record candidates for each exact ray, and withhold
+complete source cameras when choosing weight and cadence. If that still loses
+independent light/camera tails, replace metric depth with ordinal visibility
+rather than another center or covariance heuristic.

@@ -126,8 +126,9 @@ a convincing real-world result.
   also fails at 2.5%, 0.5%, and 0.1% total motion before any held observation
   is opened. A fixed-center covariance screen then finds only numerically
   neutral axes and no validation-safe update. Center and endpoint heuristics
-  are closed; the next gate supervises composited per-ray depth at exact
-  multi-view-consistent source observations.
+  are closed. A first composited-depth loss also fails after collapsing source
+  samples to the low-resolution RGB grid. The next gate must preserve original
+  source camera/pixel/depth rays in separate depth-only batches.
 
 The next quality gate is deliberately narrow:
 
@@ -182,7 +183,9 @@ The next quality gate is deliberately narrow:
   also fails down to 0.1% total center motion; keep centers fixed and test a
   source-view covariance bound next. The covariance bound also fails before
   held data: use the calibrated observations as renderer depth targets rather
-  than converting them to independent center or axis corrections;
+  than converting them to independent center or axis corrections. Do not
+  front-reduce them onto the 128×192 RGB grid: that first attempt improves
+  means but loses tails;
 - keep the coupled visibility/one-bounce Gaussian path at four to eight samples
   in fitting and evaluation. Sixty-four samples and same-cost stratification
   do not pass the complete fixed-cloud gate. After surface ownership improves,
