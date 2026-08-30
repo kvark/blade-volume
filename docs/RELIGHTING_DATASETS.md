@@ -579,6 +579,57 @@ at about 1.1 GiB with zero swap, memory event, or GPU fault. The next route is
 a calibrated-light image-formation objective with shared material response,
 not another unconstrained appearance table.
 
+The existing physical Gaussian objective is deterministic on the persisted
+Pot2 surface: a clean replay matches the selected baseline to six decimals.
+Halving its position rate lowers every complete-matrix metric. A more useful
+control alternates one extra measured-light geometry round after refreshing
+the shared normal/material fit. The full second round over-prunes support, but
+5%, 10%, and 15% interpolated checkpoints improve every construction selection
+and validation mean, tail, recall, and precision; 20% first loses selection
+recall. The 15% checkpoint is fixed before held data is opened. It then
+improves every whole-frame mean/tail, every recall/precision cell, every
+foreground tail, and seven foreground means. Held-light/held-camera foreground
+mean alone moves `23.5994→23.5953` dB while its tail improves
+`20.5232→20.5408` dB. The checkpoint is rejected, and the extra round and
+interpolation are removed. This narrows the next physical route to bounded
+point-patch updates selected on construction cameras, not another global
+continuation.
+
+An eight-region localization control turns that near miss into a complete Pot2
+pass. Median planes define fixed spatial octants; each proposal applies 15% of
+the second-round position, opacity, and normal delta while preserving the
+established material table. Selection admits octants 1/2/4, 718 particles in
+their union, and untouched construction validation improves every metric. The
+frozen union then improves all final fitted/held aggregates. Held/held
+whole-frame mean/worst moves `33.241601/30.711132→33.243049/30.720442` dB,
+foreground `23.599410/20.523180→23.599503/20.529617` dB, recall
+`90.502525→90.534994%`, and precision `95.184561→95.216615%`.
+
+This remains diagnostic rather than production code. Under the identical
+policy Cow admits no octant and is an exact six-decimal no-op. LUCES-MV Owl
+admits octants 2/3 independently but rejects their union on construction
+validation, also restoring the exact selected result. A generic guarded
+implementation adds more than 300 lines and about 7.5 seconds (47% of the
+clean Pot2 fitter runtime) for a held/held foreground-mean gain of only
+`0.00009` dB. It is removed along with the extra second round, scoring helper,
+and test. The next useful unit is a connected point patch generated from
+calibrated-light residual/displacement, not an exhaustive octant partition.
+
+That connected-component control is now measured. It keeps points above the
+median support-normalized second-round displacement, joins nearby updates only
+when their directions agree within 60 degrees, and discards components below
+five points. Pot2 produces 31 components; selection admits four totaling 52
+points, and the fixed union improves every final aggregate. Held/held
+foreground mean/worst reaches `23.600485/20.523332` dB with 90.512968% recall
+and 95.193802% precision, all above the base. Cow produces 21 components and
+admits none. Owl admits two of 13 components (21 points), but their union
+lowers construction-validation whole mean `34.443301→34.441890` dB and
+precision `89.65755→89.65186%`. The component route remains ignored: it is a
+cleaner Pot2 explanation, not a two-object reconstruction improvement, and 31
+complete-render probes take about 13.4 seconds. The next control needs
+per-point physical loss/gradient attribution from the existing optimizer, not
+another external component sweep.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is

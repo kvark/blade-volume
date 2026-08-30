@@ -125,8 +125,20 @@ a convincing real-world result.
   removed. Per-light appearance can explain the photographs without
   identifying better geometry, so the next surface route must use measured
   lights and shared material response in the image-formation objective, not
-  another free appearance table or proxy image. A fresh Buddha repeat also
-  rejects the correspondence route
+  another free appearance table or proxy image. One extra physical
+  geometry/material round validates that direction—it improves every internal
+  mean and tail at a 15% checkpoint—but is still removed after held/held
+  foreground mean slips by 0.0041 dB. Localizing that checkpoint to three of
+  eight construction-selected spatial regions clears every Pot2 metric, but
+  Cow selects no region and Owl rejects the union; the generic selector adds
+  over 300 lines and about 47% to the clean Pot2 fit for a 0.00009 dB held/held
+  foreground-mean gain. It stays diagnostic. The next version needs connected
+  point patches derived from the physical residual, not a global octant scan.
+  That control shrinks Pot2's safe update to four connected components and 52
+  points while improving every final metric, but Cow accepts none and Owl's
+  21-point union fails internal validation. Complete-render component probing
+  therefore also stays diagnostic. A fresh Buddha repeat also rejects the
+  correspondence route
   before held data: calibrated-albedo tracks form no complete-render-safe
   patch under the default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices

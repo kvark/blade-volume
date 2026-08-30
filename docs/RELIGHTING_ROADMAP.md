@@ -1470,9 +1470,21 @@ a deterministic repeat agree within the measured training variance.
   in one optimizer session with independent per-light nuisance SH; reject and
   remove it because frozen density improves averages but loses fitted-camera
   tails, while trainable density also loses held-camera support.
-- [ ] Replace free per-light appearance with a calibrated-light, shared-
-  material image-formation objective for the point surface. Select geometry on
-  construction-camera tails before opening another object/light gate.
+- [x] Alternate a second calibrated-light geometry round with a refreshed
+  shared material fit; reject the construction-selected 15% checkpoint when
+  one held/held foreground mean regresses by 0.0041 dB.
+- [x] Attribute the second-round update to eight bounded spatial regions;
+  retain the Pot2 result as a positive diagnostic, but remove the generic
+  selector because Cow/Owl select no output change and its cost dwarfs the
+  final gain.
+- [x] Form connected point patches from the second-round displacement and
+  screen them through construction cameras. Retain the 52-point Pot2 pass as a
+  diagnostic, but remove the route because Cow selects none and Owl's union
+  fails validation.
+- [ ] Expose per-point physical loss/gradient attribution from the existing
+  optimizer so useful support can be ranked in one pass. Require the ranking
+  to identify a safe component on two objects before adding another complete-
+  render selector or production continuation.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
@@ -1634,6 +1646,74 @@ experiment must render measured light against a shared diffuse material (and
 only later bounded reflectance) while updating point positions/normals. It
 should extend the existing physical Gaussian multi-light objective or the
 surface PowerFoam continuation, not add another renderer.
+
+That physical alternation is now measured directly. Starting from the exact
+persisted Pot2 surface, a current-code replay reproduces every baseline metric
+to six decimals. A second measured-light Gaussian geometry round, separated by
+the existing shared normal/material refit, improves most complete renders but
+retains only 1,700 of 1,870 particles. Interpolating the second-round geometry,
+opacity, normals, and shared material back toward the established model gives
+a clean construction boundary: 5%, 10%, and 15% improve every selection and
+validation mean, tail, recall, and precision; 20% is the first checkpoint to
+lose selection recall. The largest safe 15% checkpoint is fixed before held
+data is opened.
+
+On the final matrix that checkpoint improves all whole-frame means/tails, all
+recall and precision cells, every foreground tail, and seven of eight
+foreground means. Held-light/held-camera foreground mean alone moves
+`23.5994→23.5953` dB, despite its tail improving
+`20.5232→20.5408` dB. The strict gate rejects it. Halving the first-round
+position rate had already lowered every matrix cell, and restoring base
+opacity in the interpolated model loses internal validation tails. The second
+round, interpolation, and rate experiments remain ignored and no production
+control is added. The useful conclusion is narrower: calibrated-light
+residuals contain additional geometry signal, but a global continuation moves
+already-correct and incorrect surface together. The next proposal must select
+spatially bounded point updates using construction renders.
+
+A fixed localization control confirms that conclusion. Median planes split the
+established cloud into eight octants; each receives 15% of only the
+second-round position, opacity, and normal delta while keeping the established
+shared material. Octants 1, 2, and 4 independently dominate Pot2 construction
+selection. Their 718-point union also improves every untouched construction
+validation metric, so it is frozen before the final split. It then improves
+all 24 fitted/held mean, tail, recall, and precision aggregates. Held/held
+whole mean/worst moves `33.241601/30.711132→33.243049/30.720442` dB,
+foreground `23.599410/20.523180→23.599503/20.529617` dB, recall
+`90.502525→90.534994%`, and precision `95.184561→95.216615%`.
+
+The generic implementation is nevertheless not retained. Cow accepts no
+octant and reproduces its one-round model exactly to six decimals. Owl accepts
+two octants independently but rejects their union on construction validation,
+also reproducing the selected model exactly. Both still pay for another
+physical fit and region renders. On Pot2 that adds about 7.5 seconds, roughly
+47% of the clean fitter runtime, and the guarded implementation exceeds 300
+lines for a held/held foreground-mean gain of `0.00009` dB. This is valuable
+evidence but a poor production abstraction. The ignored artifacts are under
+`target/audit-runs/diligent-mv/{pot2-physical-two-round,pot2-physical-spatial-production,cow/16k/physical-spatial-production}/`
+and `target/audit-runs/luces-mv/far-foreground-16k-rust-v1/physical-spatial-production/`.
+The next implementation should derive a small connected support from the
+physical residual itself, eliminating eight complete generic probes.
+
+The first displacement-derived version is also closed. Points above the median
+second-round displacement, normalized by Gaussian support, are connected only
+within 1.25 summed support radii and 60 degrees of update direction. Components
+smaller than five points are discarded. Pot2 yields 31 components; four
+independently safe components of 17/14/13/8 points survive. Their 52-point union
+improves every construction validation and final metric. Held/held foreground
+mean/worst moves `23.599410/20.523180→23.600485/20.523332` dB and recall/
+precision moves `90.502525/95.184561→90.512968/95.193802%`.
+
+The independent controls stop it from becoming production policy. Cow yields
+21 components and accepts none. Owl yields 13; two components totaling 21
+points dominate selection, but their fixed union lowers validation whole mean
+`34.443301→34.441890` dB and precision `89.65755→89.65186%`. Screening 31
+Pot2 components also takes about 13.4 seconds, almost twice the already
+over-expensive octant screen. All code remains ignored. The result says the
+optimizer displacement is spatially coherent, but complete-render trial of
+every component is not the missing abstraction. A useful implementation must
+attribute per-point physical loss or gradient during the existing optimizer
+pass, then validate one ranked proposal on at least two objects.
 
 DiLiGenT-MV Buddha is the fourth predeclared object gate. Its unchanged 16k
 route extracts 2,143 point surfels and the calibrated Gaussian fit retains
