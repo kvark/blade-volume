@@ -472,8 +472,9 @@ is rejected before its official matrix.
 
 A one-shot seeded control inserts the same nine surfels into the unfitted
 surface, then reruns the ordinary calibrated normal/material solve and Gaussian
-continuation. The result retains 1,859 Gaussians and improves all four final
-means, recall, and precision. Its exact Gaussian matrix is:
+continuation. The result persists 1,879 Gaussians, 1,859 above the reported
+opacity-retention threshold, and improves all four final means, recall, and
+precision. Its exact Gaussian matrix is:
 
 | Lights / cameras | Control whole | Seeded whole | Control foreground | Seeded foreground | Recall | Precision |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -490,6 +491,16 @@ extraction hit its initial 2 GiB `memory.max` through page cache without an OOM,
 so all subsequent scopes used a raised cap. The next experiment keeps the same
 points and appearance policy and changes only continuation acceptance so an
 average loss cannot trade away a camera/light tail.
+
+A bounded construction-only checkpoint audit then separates geometry from
+opacity. The 87.5% all-parameter checkpoint reaches
+`34.446/30.171;25.020/20.071` dB, 90.96% recall, and 95.10% precision: every
+quality/recall number beats the unseeded control, but precision does not. Full
+trained opacity with checkpointed position reaches 95.31% precision but lowers
+foreground worst to 20.053 dB. Normal interpolation is inert after final PBR
+attachment. No checkpoint is retained, and all instrumentation is removed.
+The next narrow diagnostic fits only the proposed patch's material in the
+final Gaussian compositor; it does not reopen geometry, opacity, or matching.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

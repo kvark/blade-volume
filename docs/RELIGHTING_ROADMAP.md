@@ -36,7 +36,9 @@ not contain or fall back to polygonal geometry.
   exact Bear repeat produces no internally valid patch. A fresh Pot2 repeat
   shows the productive route: seed nine surfels before joint fitting and every
   Gaussian mean plus coverage improves, but two fitted-camera foreground tails
-  still lose 0.0054/0.0028 dB. It remains rejected pending tail-aware training.
+  still lose 0.0054/0.0028 dB. A global continuation checkpoint cannot resolve
+  the opacity/tail frontier; only patch-local final-compositor appearance
+  remains open.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -97,7 +99,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Controlled-light diversity | LUCES-MV and DiLiGenT-MV routes selected | Keep their near- and distant-light models shared with the production renderer; do not depend on OLATverse | Improve whole-frame and foreground mean/worst, recall, and precision on both fixed camera/light splits |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
-| Missing support | Cow diagnostic passes; Bear and Pot2 production gates reject | Preserve calibrated albedo and seed proposals before joint fitting; make continuation acceptance tail-aware before another object gate | Recall, precision, and every complete-render mean/tail rise on two controlled objects |
+| Missing support | Cow diagnostic passes; Bear and Pot2 production gates reject | Preserve calibrated albedo and seeded geometry; fit only proposed-patch appearance in the final Gaussian compositor before another object gate | Recall, precision, and every complete-render mean/tail rise on two controlled objects |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
@@ -1451,8 +1453,10 @@ a deterministic repeat agree within the measured training variance.
 - [x] Run an untouched Pot2 reconstruction and seed its selected patch before
   normal/material/Gaussian fitting; reject when two final foreground tails
   still regress despite every mean and coverage metric improving.
-- [ ] Make seeded continuation acceptance guard the worst fitted-camera cells,
-  then repeat without changing correspondence or appearance thresholds before
+- [x] Test construction-only geometry/opacity continuation checkpoints; reject
+  them when foreground tail and precision cross at different checkpoints.
+- [ ] Fit only proposed-patch appearance in the final Gaussian compositor,
+  then repeat without changing correspondence or geometry thresholds before
   adding any merge API.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
@@ -1509,8 +1513,18 @@ improve; held/held whole/foreground mean moves
 held-light/fitted-camera foreground worst regress, by 0.0054 and 0.0028 dB.
 The strict gate rejects the candidate at
 `target/audit-runs/diligent-mv/pot2-16k/missing-surface-joint/scene.ply`.
-This isolates the next change to tail-aware joint continuation rather than a
-broader matcher or post-fit merge.
+This motivates a tail-aware continuation control rather than a broader matcher
+or post-fit merge.
+
+A construction-only continuation checkpoint does not resolve the last trade.
+At 87.5% interpolation from the seeded initializer to the trained model, all
+four PSNR aggregates and recall beat the unseeded control, but precision is
+`95.10%` versus `95.30%`. Restoring full learned opacity raises precision to
+`95.31%` but moves foreground worst to `20.0533` dB, below the `20.0594` dB
+control. Holding position or normals at the checkpoint does not change that
+boundary. The diagnostic instrumentation is removed; the remaining degree of
+freedom is patch appearance in the final Gaussian compositor, not a global
+geometry/opacity rollback.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
