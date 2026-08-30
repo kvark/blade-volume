@@ -1481,10 +1481,11 @@ fn train_colmap_appearance_split_optional_masks(
             .unwrap_or(0),
     );
     log::info!(
-        "loaded {} COLMAP points, {} images; training {} views at {:?}",
+        "initialized {} cells from {} COLMAP points and {} images; training {} views at {:?}",
         model.points.len(),
+        recon.points.len(),
         recon.images.len(),
-        config.max_views.unwrap_or(recon.images.len()),
+        views.len(),
         config.resolution,
     );
 

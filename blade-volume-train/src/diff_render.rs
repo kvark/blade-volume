@@ -2455,6 +2455,11 @@ pub struct AppearanceFitConfig {
     /// train opacity to that mask, including transparent background rays.
     /// `0.0` (default) disables the term.
     pub opacity_weight: f32,
+    /// Requested share of random rays drawn from mask foreground. The
+    /// remainder is drawn from mask background. `0.0` (default) preserves
+    /// uniform image sampling. Views without both classes remain uniform.
+    /// This applies only to random-pixel batches, not patches or full images.
+    pub foreground_fraction: f32,
     /// Weight on a smooth per-ray weighted depth-variance loss. `0.0`
     /// disables it. Small values such as `1e-4` discourage contribution
     /// spread across floaters without requiring a non-differentiable sampled
@@ -2685,6 +2690,7 @@ impl Default for AppearanceFitConfig {
             patch_size: 0,
             grad_loss_weight: 0.0,
             opacity_weight: 0.0,
+            foreground_fraction: 0.0,
             distortion_weight: 0.0,
             quantile_weight: 0.0,
             interpenetration_weight: 0.0,
@@ -2738,6 +2744,46 @@ fn sample_training_views(state: &mut u64, num_views: usize, count: usize) -> Vec
 
 fn batch_view_range(slot: usize, count: usize, pixel_batch: usize) -> std::ops::Range<usize> {
     slot * pixel_batch / count..(slot + 1) * pixel_batch / count
+}
+
+#[derive(Default)]
+struct MaskPixelClasses {
+    foreground: Vec<u32>,
+    background: Vec<u32>,
+}
+
+fn classify_mask_pixels(target_alpha: Option<&[f32]>) -> MaskPixelClasses {
+    let mut classes = MaskPixelClasses::default();
+    let Some(target) = target_alpha else {
+        return classes;
+    };
+    for (index, &alpha) in target.iter().enumerate() {
+        if alpha > 0.5 {
+            classes.foreground.push(index as u32);
+        } else {
+            classes.background.push(index as u32);
+        }
+    }
+    classes
+}
+
+fn sample_masked_pixel(
+    random: u32,
+    image_size: u32,
+    classes: &MaskPixelClasses,
+    foreground_fraction: f32,
+) -> u32 {
+    if foreground_fraction == 0.0 || classes.foreground.is_empty() || classes.background.is_empty()
+    {
+        return random % image_size;
+    }
+    let foreground_threshold = foreground_fraction as f64 * (u32::MAX as f64 + 1.0);
+    let candidates = if (random as f64) < foreground_threshold {
+        &classes.foreground
+    } else {
+        &classes.background
+    };
+    candidates[random as usize % candidates.len()]
 }
 
 fn next_quantile(state: &mut u64) -> f32 {
@@ -3458,6 +3504,15 @@ pub(crate) fn fit_appearance_multi_view_outcome(
     assert!(
         config.opacity_weight.is_finite() && config.opacity_weight >= 0.0,
         "opacity_weight must be finite and non-negative"
+    );
+    assert!(
+        config.foreground_fraction.is_finite() && (0.0..=1.0).contains(&config.foreground_fraction),
+        "foreground_fraction must be finite and in [0, 1]"
+    );
+    assert!(
+        config.foreground_fraction == 0.0
+            || (config.pixel_batch.is_some() && config.patch_size == 0),
+        "foreground sampling requires random-pixel batches"
     );
     assert!(
         config.distortion_weight.is_finite() && config.distortion_weight >= 0.0,
@@ -6261,6 +6316,10 @@ fn fit_appearance_pixel_batched(
     let mut target_buf = vec![0.0f32; pixel_batch * 3];
     let mut target_alpha_buf = vec![1.0f32; pixel_batch];
     let mut pixel_indices = vec![0u32; pixel_batch];
+    let mask_pixel_classes = views
+        .iter()
+        .map(|view| classify_mask_pixels(view.target_alpha.as_deref()))
+        .collect::<Vec<_>>();
     let mut quantile_near = vec![0.0_f32; pixel_batch];
     let mut quantile_far = vec![0.0_f32; pixel_batch];
     let mut basis_inputs: Vec<Vec<f32>> = (1..num_components)
@@ -6653,7 +6712,12 @@ fn fit_appearance_pixel_batched(
                     let cam_ray_constants = ray_constants(&v.camera);
                     let img_size = v.width * v.height;
                     for k in batch_view_range(slot, views_per_batch, pixel_batch) {
-                        let pidx = next_lcg_u32(&mut sampling_rng) % img_size;
+                        let pidx = sample_masked_pixel(
+                            next_lcg_u32(&mut sampling_rng),
+                            img_size,
+                            &mask_pixel_classes[vi],
+                            config.foreground_fraction,
+                        );
                         pixel_indices[k] = pidx;
                         let base = (pidx as usize) * 3;
                         target_buf[k * 3] = v.target_rgb[base];
@@ -10290,6 +10354,29 @@ mod tests {
 
         let ranges: Vec<_> = (0..4).map(|slot| batch_view_range(slot, 4, 10)).collect();
         assert_eq!(ranges, [0..2, 2..5, 5..7, 7..10]);
+    }
+
+    #[test]
+    fn masked_pixel_sampling_balances_small_foregrounds_without_changing_uniform_mode() {
+        let alpha = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        let classes = classify_mask_pixels(Some(&alpha));
+        assert_eq!(classes.foreground, [2, 4]);
+        assert_eq!(classes.background, [0, 1, 3, 5, 6, 7]);
+
+        for random in [0, 1, u32::MAX / 2, u32::MAX] {
+            assert_eq!(sample_masked_pixel(random, 8, &classes, 0.0), random % 8);
+        }
+        for random in [0, 1, u32::MAX / 2, u32::MAX] {
+            assert!(classes
+                .foreground
+                .contains(&sample_masked_pixel(random, 8, &classes, 1.0)));
+        }
+        assert!(classes
+            .foreground
+            .contains(&sample_masked_pixel(0, 8, &classes, 0.5)));
+        assert!(classes
+            .background
+            .contains(&sample_masked_pixel(u32::MAX, 8, &classes, 0.5)));
     }
 
     #[test]

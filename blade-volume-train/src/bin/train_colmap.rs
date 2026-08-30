@@ -111,6 +111,10 @@ struct Args {
     #[argh(option, default = "128")]
     max_steps: usize,
 
+    /// ray far plane in reconstruction units (default 100)
+    #[argh(option, default = "100.0")]
+    far_plane: f32,
+
     /// minimum PowerFoam sphere candidates per ray (default 0 = automatic:
     /// max of four times --max-steps and 1024). Increase independently when
     /// many supports overlap before radical-plane clipping.
@@ -302,6 +306,11 @@ struct Args {
     /// 0). A mask targets its foreground coverage instead of opaque rays.
     #[argh(option)]
     opacity_weight: Option<f32>,
+
+    /// fraction of random rays drawn from mask foreground (default 0 =
+    /// uniform image sampling; requires masks and pixel batching)
+    #[argh(option, default = "0.0")]
+    foreground_fraction: f32,
 
     /// weight on smooth per-ray depth variance (default 0 = off). Small
     /// values such as 1e-4 discourage floaters and thick multi-surface rays.
@@ -789,6 +798,20 @@ fn main() {
     } else {
         Some(args.pixel_batch)
     };
+    if !args.far_plane.is_finite() || args.far_plane <= 0.0 {
+        eprintln!("--far-plane must be finite and positive");
+        std::process::exit(2);
+    }
+    if !args.foreground_fraction.is_finite() || !(0.0..=1.0).contains(&args.foreground_fraction) {
+        eprintln!("--foreground-fraction must be in [0, 1]");
+        std::process::exit(2);
+    }
+    if args.foreground_fraction > 0.0
+        && (args.masks.is_none() || pixel_batch.is_none() || args.patch_size > 0)
+    {
+        eprintln!("--foreground-fraction requires --masks and random-pixel batching");
+        std::process::exit(2);
+    }
     if args.test_list.is_some() && (args.test_every > 0 || args.test_views > 0) {
         eprintln!("--test-list cannot be combined with --test-every or --test-views");
         std::process::exit(2);
@@ -965,6 +988,7 @@ fn main() {
             patch_size: args.patch_size,
             grad_loss_weight: args.grad_loss_weight,
             opacity_weight: resolve_opacity_weight(args.opacity_weight, args.masks.is_some()),
+            foreground_fraction: args.foreground_fraction,
             distortion_weight: args.distortion_weight,
             quantile_weight: args.quantile_weight,
             interpenetration_weight: args.interpenetration_weight,
@@ -1032,7 +1056,7 @@ fn main() {
             },
             ..diff_render::AppearanceFitConfig::default()
         },
-        far_plane: 100.0,
+        far_plane: args.far_plane,
         initial_density: args.initial_density,
         adjacency,
         oriented_powerfoam: args.oriented_powerfoam,
@@ -1428,6 +1452,7 @@ mod tests {
         .unwrap();
         assert_eq!(default.pixel_batch, 1024);
         assert_eq!(default.views_per_batch, 0);
+        assert_eq!(default.far_plane, 100.0);
         assert!(!default.skip_eval);
         assert!(default.masks.is_none());
         assert!(default.geometry_images.is_none());
@@ -1436,6 +1461,7 @@ mod tests {
         assert_eq!(default.initialization, "radfoam-v1");
         assert!(default.test_list.is_none());
         assert_eq!(default.opacity_weight, None);
+        assert_eq!(default.foreground_fraction, 0.0);
         assert_eq!(resolve_opacity_weight(default.opacity_weight, false), 0.0);
         assert_eq!(
             resolve_views_per_batch(default.views_per_batch, Some(default.pixel_batch), 0),
@@ -1457,12 +1483,15 @@ mod tests {
                 "16",
                 "--initialization",
                 "camera-lattice",
+                "--foreground-fraction",
+                "0.5",
             ],
         )
         .unwrap();
         assert_eq!(explicit.pixel_batch, 256);
         assert_eq!(explicit.views_per_batch, 16);
         assert_eq!(explicit.initialization, "camera-lattice");
+        assert_eq!(explicit.foreground_fraction, 0.5);
         assert!(!explicit.skip_eval);
 
         let skip_eval = <Args as argh::FromArgs>::from_args(
