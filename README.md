@@ -78,7 +78,12 @@ a convincing real-world result.
   with 94.9% recall. This passes the finite-light transport/plumbing gate; the
   visibly soft result still does not pass the final surface-detail bar. Results
   are under `target/audit-runs/luces-mv/far-foreground-16k-rust-v1/`.
-  DiLiGenT-MV is the fallback; progress does not depend on OLATverse access.
+  Matched follow-ups rule out higher raster resolution, globally denser or
+  locally resized support, construction-light averaging, subpixel colour
+  reads, and naive epipolar light signatures: each improves a partial metric
+  but loses a held camera/light tail. The next target is cross-view surface
+  correspondence and point ownership, not simply more points. DiLiGenT-MV is
+  the fallback; progress does not depend on OLATverse access.
 - **Independent natural-light relighting — first honest result, not yet
   passed.** The Objects With Lighting Ant-Man gate trains on 52 cameras under
   one unknown HDR environment, reserves 12 same-environment cameras, then

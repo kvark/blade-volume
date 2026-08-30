@@ -203,6 +203,55 @@ precision—not another light representation—the next controlled target.
 DiLiGenT-MV remains the fallback/control; Stanford-ORB remains the later
 distant-HDR cross-check.
 
+### LUCES spatial-detail screen
+
+The first adjacent surface screen is closed. It changes one source of spatial
+capacity at a time while keeping the 9/3-camera and 12/3-light split fixed:
+
+- Training the same 16,384 cells at 320 rather than 128 pixels raises static
+  held-camera PSNR from `33.19` to `35.12` dB, but the 3,925-surfel calibrated
+  surface falls to `23.81/22.34` dB held-light/held-camera foreground
+  mean/worst. Pooling that field at the old physical support scale is also
+  worse at `23.97/22.19` dB. Projected ground-truth depth is worse, not merely
+  more finely sampled: median absolute discrepancy moves from `5.31` to
+  `6.02` world units (`7.10` after matched-scale pooling).
+- Extracting 1,028 rather than 589 surfels from the selected 128-pixel field
+  exposes the radius tradeoff directly. A 2.5-cell footprint reaches
+  `94.9%/92.6%` source-light recall/precision, but its final Gaussian reaches
+  only `23.08/21.51` dB held-light/held-camera foreground with `92.1%` recall.
+  Fixed, doubled, intermediate, and four-neighbour adaptive footprints all
+  fail a complete scalar gate.
+- Observation diagnostics explain why density alone stops transferring. Only
+  `10.4%` of the selected 589-surface samples share an exact center pixel; the
+  3,925-surface raises that to `82.0%`. Bilinear subpixel reads improve several
+  means but lose the fitted-light/held-camera whole-frame tail by `0.09` dB and
+  the held/held tail by `0.11` dB, so the prototype is removed rather than
+  treating interpolation as correspondence.
+- Averaging only the twelve construction LEDs raises static held-camera PSNR
+  to `33.86` dB. The final scalar held/held row becomes
+  `34.21/32.89` dB whole-frame and `24.76/22.59` dB foreground: better tails
+  in some cells, but lower whole-frame mean and foreground worst. Its Gaussian
+  similarly trades mean for tail and loses recall/precision, so the importer
+  change is removed.
+- The existing strict epipolar tracker finds only five accepted 128-pixel
+  tracks from a four-light response. Captured-light RGB gives 72 tracks at
+  320 pixels, but their projected-depth discrepancy is worse than the foam
+  surface. No matching threshold is weakened and no tracks are merged.
+
+These are ignored diagnostics, not vendored benchmark artifacts. Heavy runs
+stay in 4--8 GiB scopes; representative peaks are 0.16 GB for 320-pixel
+training, 2.04 GB for calibrated scoring, and 1.64 GB for the averaged-light
+Gaussian continuation, with zero swap, OOM, throttle, or GPU fault. The
+production code is unchanged by every rejected arm.
+
+The remaining problem is a correspondence-aware surface proposal. The next
+implementation should make several calibrated cameras agree on a point before
+adding it, while retaining continuous render responsibility instead of giving
+every projected center the whole pixel. It must be selected on construction
+lights/cameras, then improve whole-frame and foreground mean/worst plus recall
+and precision on both excluded axes. More resolution, a global radius sweep,
+or a looser pair matcher is not a new experiment.
+
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
 

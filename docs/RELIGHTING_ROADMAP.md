@@ -1192,9 +1192,20 @@ The 589-particle Gaussian reaches 34.01/32.66 dB whole-frame and 24.13/22.66 dB
 foreground, with 94.9% recall. This clears the finite-light transport and split
 gate with complete production renders, not projected-center samples. The
 visibly soft ridges make spatial surface detail and correspondence precision
-the next target. Ground-truth shape remains unopened until that quality step.
-If the non-commercial licence prevents continued use, apply the same contract
-to public DiLiGenT-MV rather than waiting for OLATverse.
+the next target. Ground-truth depth was opened only after that gate, as an
+offline diagnosis of rejected surfaces rather than a fitting input. If the
+non-commercial licence prevents continued use, apply the same contract to
+public DiLiGenT-MV rather than waiting for OLATverse.
+
+That first quality step is now bounded. Higher training resolution improves
+the static field but worsens projected depth and calibrated relighting; dense,
+matched-scale, fixed-radius, adaptive-radius, subpixel-read, and
+construction-light-average controls all trade one metric for another. Strict
+four-light and RGB epipolar tracks remain too sparse and depth-inconsistent to
+merge. The next proposal therefore has to establish cross-view responsibility
+before adding point support. It may use the calibrated light set, but it may
+not loosen pair matching, choose from excluded cameras/lights, or add a mesh
+fallback.
 
 ## Milestones
 
@@ -1401,6 +1412,9 @@ a deterministic repeat agree within the measured training variance.
 - [x] Screen three predeclared Hugging Face OpenIllumination objects with fixed
   construction-only thresholds; stop when none yields a coherent proposal and
   leave every official camera and excluded light unopened.
+- [x] Bound LUCES raster resolution, point density, global/adaptive support,
+  construction-light averaging, subpixel reads, and strict epipolar tracks;
+  remove every arm that loses a complete camera/light metric cell.
 - [ ] Acquire a fresh non-empty patch proposal and repeat the fixed recipe on
   an untouched final split before adding any production merge/API.
 
