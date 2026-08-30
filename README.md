@@ -137,8 +137,16 @@ a convincing real-world result.
   That control shrinks Pot2's safe update to four connected components and 52
   points while improving every final metric, but Cow accepts none and Owl's
   21-point union fails internal validation. Complete-render component probing
-  therefore also stays diagnostic. A fresh Buddha repeat also rejects the
-  correspondence route
+  therefore also stays diagnostic. One-pass physical attribution removes the
+  probe cost but not the gate failure: raw position-gradient magnitude picks
+  an unsafe Pot2 patch, while compositing-weighted residual identifies one of
+  the previously safe selection patches yet loses validation worst-case PSNR
+  by 0.00013 dB. Cow similarly gains means but loses tails, and Owl has no
+  connected update whose full Gaussian footprint stays inside every
+  construction mask. The attribution graph and API are removed. The next
+  physical proposal must require agreement across camera groups instead of
+  ranking residual averaged over all rays. A fresh Buddha repeat also rejects
+  the correspondence route
   before held data: calibrated-albedo tracks form no complete-render-safe
   patch under the default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices

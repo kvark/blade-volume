@@ -630,6 +630,30 @@ complete-render probes take about 13.4 seconds. The next control needs
 per-point physical loss/gradient attribution from the existing optimizer, not
 another external component sweep.
 
+That one-pass attribution control is also complete. Meganeura first accumulates
+each position row's temporal gradient norm inside the existing Adam dispatch.
+Ranking coherent components by that signal picks a 17-point Pot2 patch, but it
+loses construction selection and validation foreground tails and recall. A
+strict two-sigma construction-mask footprint removes 27 of 31 components; the
+top surviving 15-point patch still lowers validation worst-case PSNR
+`30.141529→30.140759` dB.
+
+A more direct zero-forward probe then assigns each Gaussian its exact detached
+L1 residual times its compositing weight. It does not change the physical
+forward loss and adds no per-step readback. This correctly ranks component 13,
+one of the four Pot2 patches admitted by the earlier expensive selection
+screen. Its 14-point proposal improves every selection metric and five of six
+validation metrics, but validation worst-case PSNR still moves
+`30.141529→30.141397` dB. On Cow, means, recall, and precision improve while
+selection/validation worst-case PSNR moves `30.113402→30.112116` and
+`28.942884→28.942081` dB; foreground selection tail also declines. Owl has no
+component whose entire two-sigma footprint reaches the established 97.5%
+construction-mask support threshold. Peak host RSS stays below 1.1 GiB with
+zero swap. Both attribution branches and their public diagnostic API are
+removed. Average residual magnitude is useful localization evidence, but the
+next proposal must require consistent evidence across independent camera
+groups before it can move a point.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is

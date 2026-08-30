@@ -1481,10 +1481,13 @@ a deterministic repeat agree within the measured training variance.
   screen them through construction cameras. Retain the 52-point Pot2 pass as a
   diagnostic, but remove the route because Cow selects none and Owl's union
   fails validation.
-- [ ] Expose per-point physical loss/gradient attribution from the existing
-  optimizer so useful support can be ranked in one pass. Require the ranking
-  to identify a safe component on two objects before adding another complete-
-  render selector or production continuation.
+- [x] Expose per-point physical loss/gradient attribution from the existing
+  optimizer. Remove it after the best one-pass residual ranking still loses a
+  Pot2 validation tail, Cow tails, and finds no mask-interior Owl component.
+- [ ] Attribute physical residual separately across construction-camera groups
+  and move a component only when its support and update direction agree. Keep
+  the one-pass/no-complete-render-probe constraint and require a safe component
+  on two objects before adding production code.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
@@ -1711,9 +1714,39 @@ points dominate selection, but their fixed union lowers validation whole mean
 Pot2 components also takes about 13.4 seconds, almost twice the already
 over-expensive octant screen. All code remains ignored. The result says the
 optimizer displacement is spatially coherent, but complete-render trial of
-every component is not the missing abstraction. A useful implementation must
-attribute per-point physical loss or gradient during the existing optimizer
-pass, then validate one ranked proposal on at least two objects.
+every component is not the missing abstraction. This motivates attributing
+per-point physical loss or gradient during the existing optimizer pass, then
+validating one ranked proposal on at least two objects.
+
+The one-pass attribution version is now measured and removed. Its first score
+uses Meganeura's in-dispatch temporal norm of each three-coordinate position
+gradient. The highest Pot2 component has 17 points and improves means and
+whole-frame tails, but loses selection/validation foreground tails and recall.
+Requiring every two-sigma Gaussian axis sample to remain inside at least 97.5%
+of construction masks leaves four of 31 components. The top survivor still
+lowers validation worst-case PSNR `30.141529→30.140759` dB.
+
+The second score is the direct PowerFoam-style quantity: a frozen zero-forward
+parameter receives each Gaussian's detached per-channel L1 residual multiplied
+by its exact compositing weight, and the existing Adam dispatch accumulates the
+per-point totals without readback. This ranks Pot2 component 13 first, matching
+one of the four components found by the earlier 31-render selection screen.
+Applying 15% of that 14-point update improves every construction-selection
+metric. It improves validation whole mean `33.742434→33.742683` dB, foreground
+mean/tail `24.221938/20.059425→24.222202/20.059820` dB, recall, and precision,
+but worst-case whole PSNR slips `30.141529→30.141397` dB. The gate rejects it.
+
+The independent controls explain why the tiny miss is not waived. Cow's
+eight-point top component improves averages, recall, and precision while
+selection worst/tail falls `30.113402/18.768772→30.112116/18.767455` dB and
+validation worst falls `28.942884→28.942081` dB. Owl has 13 displacement
+components but none whose full two-sigma footprint meets the construction-mask
+interior threshold. Runs peak below 1.1 GiB with zero swap. The graph branch,
+public attribution result, and audit selector are removed. The residual is a
+good localization signal, but averaging it over all rays hides the camera that
+loses the tail. The next bounded test should collect responsibility by
+construction-camera group and require cross-group agreement before proposing a
+single component; it still gets only one untouched validation render.
 
 DiLiGenT-MV Buddha is the fourth predeclared object gate. Its unchanged 16k
 route extracts 2,143 point surfels and the calibrated Gaussian fit retains
