@@ -52,6 +52,10 @@ struct Args {
     #[argh(option, default = "320")]
     width: usize,
 
+    /// override the capture far plane in world units
+    #[argh(option)]
+    far_plane: Option<f32>,
+
     /// keep every n-th image (default 4)
     #[argh(option, default = "4")]
     stride: usize,
@@ -316,20 +320,26 @@ fn main() {
     };
 
     let started = std::time::Instant::now();
-    let (capture, reconstruction) = match train::inverse::capture::Capture::from_colmap_with_masks(
-        sparse,
-        images,
-        args.masks.as_deref().map(path::Path::new),
-        args.width,
-        height,
-        args.stride,
-    ) {
-        Ok(pair) => pair,
-        Err(message) => {
-            eprintln!("{message}");
-            std::process::exit(1);
+    let (mut capture, reconstruction) =
+        match train::inverse::capture::Capture::from_colmap_with_masks(
+            sparse,
+            images,
+            args.masks.as_deref().map(path::Path::new),
+            args.width,
+            height,
+            args.stride,
+        ) {
+            Ok(pair) => pair,
+            Err(message) => {
+                eprintln!("{message}");
+                std::process::exit(1);
+            }
+        };
+    if let Some(depth) = args.far_plane {
+        for view in &mut capture.views {
+            view.camera.depth = depth;
         }
-    };
+    }
     let test_names = args
         .test_list
         .as_deref()
@@ -3002,6 +3012,12 @@ fn validate_lit_captures(args: &Args) -> Result<(), String> {
 }
 
 fn validate_geometry_source(args: &Args) -> Result<(), String> {
+    if args
+        .far_plane
+        .is_some_and(|depth| !depth.is_finite() || depth <= 0.0)
+    {
+        return Err("--far-plane must be finite and positive".to_string());
+    }
     let source_count = args.foam.is_some() as usize
         + args.dense_cloud.is_some() as usize
         + args.dense_workspace.is_some() as usize;
@@ -3601,6 +3617,7 @@ mod tests {
         )
         .unwrap();
         assert!(defaults.environment.is_none());
+        assert!(defaults.far_plane.is_none());
         assert!(defaults.masks.is_none());
         assert!(defaults.dense_cloud.is_none());
         assert!(defaults.dense_workspace.is_none());
@@ -3726,6 +3743,13 @@ mod tests {
             "12",
         ]);
         assert!(validate_geometry_source(&too_small).is_err());
+
+        let far = parse(&["--far-plane", "4000"]);
+        validate_geometry_source(&far).unwrap();
+        let invalid_far = parse(&["--far-plane", "0"]);
+        assert!(validate_geometry_source(&invalid_far)
+            .unwrap_err()
+            .contains("--far-plane"));
     }
 
     #[test]

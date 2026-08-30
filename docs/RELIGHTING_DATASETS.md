@@ -27,6 +27,12 @@ datasets is
 No official Hub repository was found for MIT Multi-Illumination, FAU
 Multi-Illuminant, Flash/Ambient, MILL, LUCES-MV, ReNé, DiLiGenT-MV, Objects
 With Lighting, or OpenSubstance; use their official project releases instead.
+The additional official
+[`cyberagent/mvscps`](https://huggingface.co/datasets/cyberagent/mvscps)
+release provides six multi-view OLAT scenes, masks, and camera projection
+matrices. It is a useful later unknown-light capture gate, but its 65.1 GB
+release deliberately has no light calibration and its photogrammetry mesh is
+qualitative only.
 The Hub-hosted [`whcfang/M2AD`](https://huggingface.co/datasets/whcfang/M2AD)
 has angle and illumination labels but no published camera or light calibration,
 so it cannot support the camera/light reconstruction gate without additional
@@ -37,7 +43,8 @@ metadata.
 | Dataset | Camera/light coverage | Best use here | Limitation |
 | --- | --- | --- | --- |
 | [LUCES-MV](https://arxiv.org/abs/2412.16737) | Public calibrated subset: 10 objects, 12 views by 15 near-field LEDs | **Current controlled-light gate.** It has linear 16-bit RGB, masks, camera/LED calibration, depth, normals, and ground-truth shape. One object is about 1.9 GB. | Non-commercial research licence; the calibrated public subset is smaller than the paper's complete capture. |
-| [DiLiGenT-MV](https://sites.google.com/site/photometricstereodata/mv) | 5 objects, 20 views by 96 calibrated lights | **Fallback/control.** Compact, masked, 16-bit, and well established for photometric geometry. | Only five object-centric scenes; the per-view point-light importer still needs to be connected. |
+| [DiLiGenT-MV](https://sites.google.com/site/photometricstereodata/mv) | 5 objects, 20 views by 96 calibrated lights | **Second active controlled-light gate.** The pure-Rust Bear route below reconstructs and scores a fixed 16/4-camera, 24/8-light split. | Only five object-centric scenes; the lights are distant and the objects are mostly diffuse. |
+| [MVSCPS capture](https://huggingface.co/datasets/cyberagent/mvscps) | 6 scenes, generally 24 camera poses under each of 6 moving-rig OLATs | Later unknown-light reconstruction and capture-practice gate with RAW/JPEG, masks, and camera projection matrices. | 65.1 GB, CC BY-NC; no measured lights and no quantitative ground-truth mesh. |
 | [OpenIllumination](https://oppo-us-research.github.io/OpenIllumination/) | 64 objects, 70 views, 13 multi-LED patterns and 142 OLAT conditions | Existing broad-light real gate, with camera poses, masks, and official train/test views. | Roughly 900 GB in full; its public positions do not provide the complete finite-light radiometric calibration needed here. |
 | [Objects With Lighting](https://github.com/isl-org/objects-with-lighting) | 64 input cameras under one unknown natural environment, plus nine official camera/environment test pairs per object | **First independent natural-environment gate.** Compact, calibrated, masked, and directly compatible with the distant-HDR renderer. | One input environment leaves material and illumination strongly ambiguous; it is an evaluation gate, not repeated-light training data. |
 | [ReNé](https://eyecan-ai.github.io/rene/) | 20 objects, 50 views by 40 OLAT conditions | Possible later cross-check for calibrated camera/light poses. | The public object capture has no masks and fills a textured enclosure; the referenced empty-scene capture is not in the public archive, so honest background subtraction is currently blocked. |
@@ -237,6 +244,13 @@ capacity at a time while keeping the 9/3-camera and 12/3-light split fixed:
   tracks from a four-light response. Captured-light RGB gives 72 tracks at
   320 pixels, but their projected-depth discrepancy is worse than the foam
   surface. No matching threshold is weakened and no tracks are merged.
+- Inverting all twelve calibrated construction LEDs at each pixel against a
+  coarse depth plane does not create a useful invariant descriptor. Diffuse
+  albedo yields 19 strict tracks at 128 pixels, but their ground-truth depth
+  discrepancy is `27.31` world units at the median versus `5.31` for the
+  selected surface; recovered world normals yield only three tracks. The
+  ignored prototype is removed rather than weakening mutual-match or
+  reprojection thresholds.
 - Sharing appearance across 64 materials slightly improves the scalar
   held/held foreground mean/tail to `24.76/22.76` dB, but loses whole-frame
   tail and recall; its Gaussian falls to `24.03/22.46` dB foreground. A
@@ -262,6 +276,90 @@ every projected center the whole pixel. It must be selected on construction
 lights/cameras, then improve whole-frame and foreground mean/worst plus recall
 and precision on both excluded axes. More resolution, a global radius sweep,
 or a looser pair matcher is not a new experiment.
+
+## Second controlled-light gate: DiLiGenT-MV
+
+DiLiGenT-MV is now an independent distant-light control, not a contingency on
+OLATverse. The checked-in fetch pins the official 6.85 GB archive and extracts
+only Bear. The loader parses its compressed MATLAB camera calibration in Rust,
+divides linear RGB16 by the published per-channel light intensity, and maps the
+photometric directions into the existing point-light renderer as emitters at
+effectively infinite distance. No shader, Meganeura operation, or model variant
+is added. Ground-truth normals and the released mesh are never opened by the
+training path.
+
+```bash
+etc/cgroup_run.sh --mem 2G -- \
+    etc/fetch_diligent_mv_bear.sh --accept-license
+
+cargo run --release -p blade-volume-train --bin import_diligent_mv -- \
+    --input target/datasets/diligent-mv/data/DiLiGenT-MV/mvpmsData/bearPNG \
+    --output target/audit-runs/diligent-mv/prepared-320 --width 320
+
+cargo run --release -p blade-volume-train --bin train_colmap -- \
+    --sparse target/audit-runs/diligent-mv/prepared-320/sparse/0 \
+    --images target/audit-runs/diligent-mv/prepared-320/light-004/images \
+    --masks target/audit-runs/diligent-mv/prepared-320/masks \
+    --test-list target/audit-runs/diligent-mv/prepared-320/test-views.txt \
+    --output target/audit-runs/diligent-mv/bear-16k/foam.ply \
+    --initialization camera-lattice --max-points 16384 \
+    --width 128 --height 107 --views 0 --far-plane 4000 --max-steps 384 \
+    --pixel-batch 1024 --views-per-batch 16 --steps-per-view 200 \
+    --sh-degree 2 --foreground-fraction 0.5
+
+cargo run --release -p blade-volume-train --bin reconstruct -- \
+    --sparse target/audit-runs/diligent-mv/prepared-320/sparse/0 \
+    --images target/audit-runs/diligent-mv/prepared-320/light-004/images \
+    --masks target/audit-runs/diligent-mv/prepared-320/masks \
+    --test-list target/audit-runs/diligent-mv/prepared-320/test-views.txt \
+    --foam target/audit-runs/diligent-mv/bear-16k/foam.ply \
+    --width 128 --far-plane 4000 --stride 1 --voxel-factor 2 --no-shadows \
+    --output target/audit-runs/diligent-mv/bear-16k/reconstruct-vf2/scene.rply
+
+cargo run --release -p blade-volume-train --bin fit_diligent_mv -- \
+    --input target/datasets/diligent-mv/data/DiLiGenT-MV/mvpmsData/bearPNG \
+    --surface target/audit-runs/diligent-mv/bear-16k/reconstruct-vf2/scene.rply \
+    --output target/audit-runs/diligent-mv/bear-16k/calibrated-production/scene.rply \
+    --gaussian-output target/audit-runs/diligent-mv/bear-16k/calibrated-production/scene.ply \
+    --dump target/audit-runs/diligent-mv/bear-16k/calibrated-production/images \
+    --width 128 --rounds 3 --normal-candidates 1024
+```
+
+The split is fixed before fitting: cameras 1/6/11/16 and lights
+1/13/25/37/49/61/73/85 are excluded. Twenty-four evenly spaced remaining
+lights keep the real gate practical without weakening its angular coverage.
+The source-light field reaches `29.63/29.30` dB whole-frame and
+`24.28/23.66` dB foreground mean/worst on the four excluded cameras. The
+2-pixel surface merge produces 2,267 surfels. After fitting, complete
+production renders are:
+
+| Backend | Lights / cameras | sRGB mean/worst | Foreground mean/worst | Recall | Precision |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Surface | fitted / fitted | 29.37 / 25.30 dB | 21.63 / 16.29 dB | 96.2% | 93.9% |
+| Surface | fitted / held | 28.92 / 25.67 dB | 20.97 / 16.71 dB | 95.0% | 94.4% |
+| Surface | held / fitted | 29.85 / 26.28 dB | 21.86 / 17.48 dB | 96.2% | 93.9% |
+| Surface | held / held | 29.23 / 26.70 dB | 21.13 / 17.95 dB | 95.0% | 94.4% |
+| Gaussian | fitted / fitted | 30.14 / 25.44 dB | 21.67 / 16.32 dB | 93.1% | 97.0% |
+| Gaussian | fitted / held | 29.40 / 25.49 dB | 20.84 / 16.41 dB | 92.0% | 97.1% |
+| Gaussian | held / fitted | 30.12 / 26.49 dB | 21.47 / 17.45 dB | 93.1% | 97.0% |
+| Gaussian | held / held | 29.32 / 26.67 dB | 20.65 / 17.71 dB | 92.0% | 97.1% |
+
+The Gaussian runs 2,400 geometry updates and retains 2,233 of 2,267 particles.
+It improves held/held whole-frame mean and precision, but loses foreground
+quality and recall, so it does not replace the scalar result. The complete run
+peaks at 1.09 GB host memory with no swap, cgroup event, or GPU fault.
+
+The dataset also localizes the next error. An ignored per-pixel Lambertian
+control, using the same 24 construction and eight excluded lights, reaches
+`33.57` dB foreground on excluded lights. The production surface is roughly
+12.5 dB behind even before asking it to move to another camera. A one-pixel
+merge raises the surface to 5,511 points but drops held/held foreground to
+`19.27/17.05` dB and recall to 84.8%; per-camera normal combination is also
+slightly worse. Using all 88 available construction lights improves the oracle
+by 0.37 dB but gives the surface only `+0.10` dB foreground mean while losing
+its worst view and recall. All three controls are removed or remain ignored.
+The active target is therefore cross-view point ownership and continuous
+surface coverage, not more lights, points, or shader capacity.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

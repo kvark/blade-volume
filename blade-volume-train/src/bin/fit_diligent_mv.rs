@@ -1,8 +1,7 @@
-//! Fit calibrated near-field surface properties on a reconstructed LUCES-MV cloud.
+//! Fit surface properties on the fixed DiLiGenT-MV camera/light split.
 //!
-//! Training uses the fixed 9-camera/12-light split. The three excluded LEDs
-//! are not loaded until the fitted scalar and Gaussian point clouds have been
-//! serialized, keeping the held-light cross-product out of model selection.
+//! Training uses 16 cameras and 24 lights. The four excluded cameras and eight
+//! excluded lights are not loaded until the models have been serialized.
 
 use blade_volume_train as train;
 use std::path;
@@ -11,19 +10,11 @@ use std::path;
 mod calibrated;
 
 #[derive(argh::FromArgs)]
-/// Fit LUCES-MV normals, diffuse materials, and optional Gaussian geometry.
+/// Fit DiLiGenT-MV normals, diffuse materials, and optional Gaussian geometry.
 struct Args {
-    /// object directory containing the calibrated views
+    /// object directory such as `mvpmsData/bearPNG`
     #[argh(option)]
     input: String,
-
-    /// first official camera parameter text file
-    #[argh(option)]
-    camera_one: String,
-
-    /// second official camera parameter text file
-    #[argh(option)]
-    camera_two: String,
 
     /// reconstructed relightable surfel cloud
     #[argh(option)]
@@ -37,7 +28,7 @@ struct Args {
     #[argh(option)]
     gaussian_output: Option<String>,
 
-    /// optional directory for production held-light/held-camera renders
+    /// optional directory for held-light/held-camera renders
     #[argh(option)]
     dump: Option<String>,
 
@@ -58,7 +49,7 @@ struct Args {
     albedo_ceiling: f32,
 }
 
-fn dataset(value: train::inverse::luces::Dataset) -> calibrated::Dataset {
+fn dataset(value: train::inverse::diligent_mv::Dataset) -> calibrated::Dataset {
     calibrated::Dataset {
         captures: value.captures,
         lights: value.lights,
@@ -68,26 +59,20 @@ fn dataset(value: train::inverse::luces::Dataset) -> calibrated::Dataset {
 
 fn run(args: &Args) -> Result<(), String> {
     let input = path::Path::new(&args.input);
-    let camera_one = path::Path::new(&args.camera_one);
-    let camera_two = path::Path::new(&args.camera_two);
     calibrated::fit(
         || {
-            train::inverse::luces::load(
+            train::inverse::diligent_mv::load(
                 input,
-                camera_one,
-                camera_two,
                 args.width,
-                &train::inverse::luces::TRAIN_LIGHT_INDICES,
+                &train::inverse::diligent_mv::TRAIN_LIGHT_INDICES,
             )
             .map(dataset)
         },
         || {
-            train::inverse::luces::load(
+            train::inverse::diligent_mv::load(
                 input,
-                camera_one,
-                camera_two,
                 args.width,
-                &train::inverse::luces::HELD_LIGHT_INDICES,
+                &train::inverse::diligent_mv::HELD_LIGHT_INDICES,
             )
             .map(dataset)
         },
@@ -100,9 +85,9 @@ fn run(args: &Args) -> Result<(), String> {
             rounds: args.rounds,
             normal_candidates: args.normal_candidates,
             albedo_ceiling: args.albedo_ceiling,
-            train_views: &train::inverse::luces::TRAIN_VIEW_INDICES,
-            held_views: &train::inverse::luces::HELD_VIEW_INDICES,
-            light_digits: 2,
+            train_views: &train::inverse::diligent_mv::TRAIN_VIEW_INDICES,
+            held_views: &train::inverse::diligent_mv::HELD_VIEW_INDICES,
+            light_digits: 3,
         },
     )
 }

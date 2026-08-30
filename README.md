@@ -82,8 +82,22 @@ a convincing real-world result.
   locally resized support, construction-light averaging, subpixel colour
   reads, and naive epipolar light signatures: each improves a partial metric
   but loses a held camera/light tail. The next target is cross-view surface
-  correspondence and point ownership, not simply more points. DiLiGenT-MV is
-  the fallback; progress does not depend on OLATverse access.
+  correspondence and point ownership, not simply more points. Progress does
+  not depend on OLATverse access.
+- **Independent distant-light control — DiLiGenT-MV is connected.** A pinned,
+  pure-Rust Bear route now imports 20 calibrated cameras and a fixed subset of
+  32 out of 96 distant lights without reading the released mesh or normals.
+  Twenty-four lights and 16 cameras fit the model; eight lights and four
+  cameras remain closed until serialization. On their 32-way cross-product,
+  the 2,267-surfel surface reaches `29.23/26.70` dB whole-frame and
+  `21.13/17.95` dB foreground mean/worst, with 95.0% recall and 94.4%
+  precision. Its Gaussian trades foreground/recall for whole-frame quality and
+  precision, so the scalar remains the stronger control. A same-pixel diffuse
+  oracle reaches 33.57 dB on the excluded lights, while denser extraction and
+  all 88 construction lights fail the complete gate. This independently
+  confirms that cross-view point ownership—not missing light samples—is the
+  next reconstruction bottleneck. Commands and the full matrix are in
+  [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 - **Independent natural-light relighting — first honest result, not yet
   passed.** The Objects With Lighting Ant-Man gate trains on 52 cameras under
   one unknown HDR environment, reserves 12 same-environment cameras, then

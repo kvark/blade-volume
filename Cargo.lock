@@ -560,6 +560,7 @@ dependencies = [
  "blade-volume",
  "blade-volume-convert",
  "env_logger",
+ "flate2",
  "glam",
  "half",
  "image",
