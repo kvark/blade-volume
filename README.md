@@ -117,7 +117,10 @@ a convincing real-world result.
   with the original view, also fails novel-camera transfer; mask pruning and a
   matched particle budget do not repair it. The next surface experiment must
   optimize one shared cloud against calibrated lights directly instead of
-  collapsing them into one proxy image. Commands and the full matrices are in
+  collapsing them into one proxy image. A first alternating-light prototype
+  improves all Pot2 means but loses fitted-camera tails and regresses Cow; it
+  is removed. The next version needs one joint optimizer, not one restarted
+  fit per light. Commands and the full matrices are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV

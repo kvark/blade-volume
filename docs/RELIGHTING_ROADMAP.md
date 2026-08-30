@@ -1461,8 +1461,8 @@ a deterministic repeat agree within the measured training variance.
   reject all three when novel-camera means regress, including after mask
   pruning and particle-budget matching.
 - [ ] Train one shared point-cloud geometry against the calibrated light stack
-  directly. Keep per-light appearance as nuisance state; do not first reduce
-  the observations to a proxy image.
+  in one optimizer session. Keep per-light appearance as nuisance state; do
+  not reduce the observations to a proxy image or restart Adam per light.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
@@ -1567,6 +1567,30 @@ surface displacement from appearance. The next bounded implementation must
 share geometry across calibrated captures while letting each light keep its
 own predicted appearance. It remains cloud-only and should reuse the existing
 Meganeura renderer rather than add another shader or backend.
+
+Two lower bounds clarify that implementation. Training on foreground masks as
+both color and opacity supervision yields a 1,942-particle Pot2 surface, but
+held-light/held-camera Gaussian quality reaches only
+`33.09/23.53` dB whole/foreground mean with 94.7% precision. Silhouette-only
+geometry is insufficient.
+
+An ignored four-light prototype then keeps one position/density cloud and one
+SH nuisance field per light. It warms each appearance independently and
+alternates two forward/reverse geometry rounds. Allowing every light to update
+density collapses Pot2 to 1,829 particles and 88.9% held-camera recall. Freezing
+density retains 1,850 fitted particles and improves all eight Pot2 means plus
+every held-camera cell, but fitted-camera worst frames regress by
+`0.010–0.063` dB. Replaying the unchanged schedule on Cow is decisively
+negative: held/held Gaussian whole/foreground mean falls from about
+`30.81/19.74` to `30.64/19.63` dB and recall also falls. The temporary density
+rate control is removed.
+
+The failure mode is structural: every per-light call recreates Adam and lets
+one light move shared geometry before the next one is visible. The next
+prototype must place multiple light-conditioned observations in the same
+Meganeura session and optimizer step, with shared density/position parameters
+and explicitly separate nuisance appearance. That is a graph/training change,
+not a new renderer or runtime representation.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

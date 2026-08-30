@@ -539,6 +539,21 @@ tune another precombined image against this official split. The next fresh
 gate should optimize a shared cloud against the calibrated light stack itself,
 keeping light-conditioned appearance separate while geometry remains common.
 
+A silhouette-only lower bound and an alternating multi-light prototype do not
+change that conclusion. Using masks as both RGB and opacity supervision
+produces a 1,942-particle Pot2 surface but only `33.09/23.53` dB held/held
+Gaussian whole/foreground mean and 94.7% precision. An alternating four-light
+foam fit stores separate SH nuisance fields while sharing positions/density.
+With density trainable it collapses to 1,829 particles and 88.9% held-camera
+recall. With density frozen it retains 1,850 fitted particles and its exact
+matrix improves every mean; held/held moves to
+`33.3631/23.6920;20.5791` dB with 90.70% recall and 95.58% precision. It still
+loses four fitted-camera tails by `0.010–0.063` dB. The unchanged replay on Cow
+falls to `30.64/19.63` dB held/held whole/foreground mean and 83.9% recall.
+This rejects sequential light windows and the temporary density-rate control.
+The next implementation needs one optimizer session in which multiple lights
+contribute to the same shared-geometry update.
+
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
 
