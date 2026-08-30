@@ -55,7 +55,7 @@ a convincing real-world result.
   geometry/transport gate, not an unimplemented experiment. Exact commands,
   baselines, images, and next steps are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
-- **Next controlled-light route — LUCES-MV, not OLATverse.** The public
+- **Controlled near-field route — first LUCES-MV result, not yet passed.** The public
   calibrated Owl capture supplies masks, linear RGB16 images, ground-truth
   depth/normals, and 15 near-field LEDs at each of 12 poses. The CPU material
   solve and Gaussian Meganeura graph now share one finite point-light model,
@@ -64,9 +64,19 @@ a convincing real-world result.
   15-light real-data calibration check reaches 13.69°--19.69° mean normal error
   on three views. The pure-Rust LUCES adapter now loads all 180 Owl images,
   masks, camera poses, and camera-local LEDs without adding a ZIP/NPY
-  dependency. The remaining step is the predeclared 9/3-camera and 12/3-light
-  training gate. DiLiGenT-MV is the fallback; progress does not depend on
-  OLATverse access.
+  dependency. A pure-Rust importer now feeds a predeclared 9/3-camera and
+  12/3-light split into the ordinary pose-only cloud trainer. Fixing its
+  dataset-scale far plane and sampling half of each masked batch on foreground
+  raises held-camera static PSNR from 21.56 to 33.21 dB; the matched uniform
+  control is 32.43 dB. The extracted 114-surfel cloud reaches 19.81 dB
+  foreground PSNR with 99.8% recall but only 74.1% precision under its source
+  light, so geometry is recognizable and coarse. After the held LEDs are kept
+  out of fitting, calibrated diffuse center samples reach 28.19 dB sRGB at the
+  held-light/held-camera cross-product versus an 8.29 dB black baseline. This
+  proves the finite-light decomposition path, not complete image relighting:
+  a production near-light renderer and denser surface remain the next gate.
+  Results are under `target/audit-runs/luces-mv/far-foreground-v1/`. DiLiGenT-MV
+  is the fallback; progress does not depend on OLATverse access.
 - **Independent natural-light relighting — first honest result, not yet
   passed.** The Objects With Lighting Ant-Man gate trains on 52 cameras under
   one unknown HDR environment, reserves 12 same-environment cameras, then
@@ -287,6 +297,10 @@ defaults to the selected `0.01` ratio and can be overridden with
 `--geometry-position-lr-ratio` for constant/cosine schedules (the exact
 `radfoam-v1` schedule keeps its absolute position rate); the ordinary
 single-capture path is unchanged.
+Object captures with a small masked foreground can opt into
+`--foreground-fraction 0.5` to balance random foreground/background rays;
+uniform image sampling remains the default. Set `--far-plane` in the scene's
+own reconstruction units when the default 100 does not reach the object.
 See `docs/PIPELINE.md` for the design and
 `docs/MESH_TO_FOAM.md` for the parallel mesh-to-foam path.
 

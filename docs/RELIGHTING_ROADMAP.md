@@ -1174,10 +1174,24 @@ and forms fifteen aligned captures. Loading all 180 Owl images at 80×60 gives a
 0.329 normalized radiance peak and a 1,138,884,608-byte warm peak in a 2 GiB
 cgroup, with zero swap, limit, OOM, or GPU event.
 
-Predeclare a 9/3 camera split and a 12/3 LED split before fitting Owl. First
-score normal angular error and masked novel-camera/novel-light PSNR; open
-ground-truth shape error only after that fixed split. If the non-commercial
-licence prevents continued use, apply the same already-implemented finite-light
+The predeclared Owl split is now live: cameras 000/024/048 and LEDs 03/09/15
+are held out. A pose-only 4,096-site cloud reaches 33.21 dB whole-frame on the
+three held cameras after correcting the 100-unit far plane and drawing half of
+each masked training batch from foreground; its matched uniform control reaches
+32.43 dB. Surface extraction leaves only 114 broad surfels. They reach
+19.81/19.00 dB foreground mean/worst under the source light with 99.8% recall
+and 74.1% precision, which is recognizable but not a passed surface.
+
+The calibrated diffuse fit loads only the twelve construction LEDs until the
+scalar and Gaussian clouds are serialized. Visible surfel centers at the
+held-light/held-camera cross-product then reach 32.21 dB linear and 28.19 dB
+sRGB versus an 8.29 dB black baseline. The Gaussian continuation improves its
+training loss from 0.005857 to 0.003876 and retains 111/114 particles. This
+clears the finite-light data and optimization plumbing, not full-image
+relighting: the next controlled gate is a denser point surface, a production
+near-point-light renderer, and masked held-cross image PSNR. Ground-truth shape
+remains unopened until that image-space gate is in place. If the
+non-commercial licence prevents continued use, apply the same finite-light
 contract to public DiLiGenT-MV rather than waiting for OLATverse.
 
 ## Milestones

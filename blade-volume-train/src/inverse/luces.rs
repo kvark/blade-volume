@@ -9,8 +9,12 @@
 use blade_volume as vol;
 use std::{fs, path};
 
-const VIEW_IDS: [usize; 12] = [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66];
-const LIGHT_COUNT: usize = 15;
+pub const VIEW_IDS: [usize; 12] = [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66];
+pub const LIGHT_COUNT: usize = 15;
+pub const TRAIN_VIEW_INDICES: [usize; 9] = [1, 2, 3, 5, 6, 7, 9, 10, 11];
+pub const HELD_VIEW_INDICES: [usize; 3] = [0, 4, 8];
+pub const TRAIN_LIGHT_INDICES: [usize; 12] = [0, 1, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13];
+pub const HELD_LIGHT_INDICES: [usize; 3] = [2, 8, 14];
 
 #[derive(Clone, Copy)]
 struct LocalLight {

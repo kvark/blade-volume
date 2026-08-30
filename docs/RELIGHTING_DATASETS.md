@@ -99,7 +99,7 @@ Generated normal images remain ignored under
 `target/audit-runs/luces-mv/`; dataset imagery cannot be copied into the
 repository under its licence.
 
-The Rust adapter now groups the official directory as fifteen aligned
+The Rust adapter groups the official directory as fifteen aligned
 `Capture`s, parses the stored NumPy camera extrinsics without adding a ZIP/NPY
 dependency, transforms each camera-local LED into the existing world frame,
 and downsamples RGB/masks without display decoding. A real all-image load
@@ -109,12 +109,87 @@ cgroup with zero swap, limit, OOM, or GPU event. The preceding cold build was
 not used as evidence because it touched its 3 GiB limit while compiling a
 separate audit target.
 
-Next, connect these captures to a fixed gate: use nine poses for construction,
-reserve three cameras, fit at least ten LEDs, and reserve three LEDs spanning
-the rig. Score normal angular error and masked novel-camera/novel-light PSNR
-before opening ground-truth shape error. DiLiGenT-MV is the predeclared fallback
-if the LUCES licence blocks that run; Stanford-ORB remains the later
-distant-HDR cross-check.
+The fixed gate is now executable. Cameras 000/024/048 and LEDs 03/09/15 are
+excluded; the other nine cameras and twelve lights fit the model. The importer
+writes only normalized photographs, masks, pose-only COLMAP binaries, and the
+four split lists. Ground-truth shape, depth, and normals are neither read nor
+converted by this path:
+
+```bash
+cargo run --release -p blade-volume-train --bin import_luces_mv -- \
+    --input target/audit-runs/luces-mv/data/Owl \
+    --camera-one target/audit-runs/luces-mv/source/cam1_params.txt \
+    --camera-two target/audit-runs/luces-mv/source/cam2_params.txt \
+    --output target/audit-runs/luces-mv/prepared-320 --width 320
+
+cargo run --release -p blade-volume-train --bin train_colmap -- \
+    --sparse target/audit-runs/luces-mv/prepared-320/sparse/0 \
+    --images target/audit-runs/luces-mv/prepared-320/light-08/images \
+    --masks target/audit-runs/luces-mv/prepared-320/masks \
+    --test-list target/audit-runs/luces-mv/prepared-320/test-views.txt \
+    --output target/audit-runs/luces-mv/far-foreground-v1/foam.ply \
+    --initialization camera-lattice --max-points 4096 \
+    --width 128 --height 96 --views 0 --far-plane 1000 --max-steps 192 \
+    --pixel-batch 1024 --views-per-batch 9 --steps-per-view 200 \
+    --sh-degree 2 --foreground-fraction 0.5
+```
+
+The explicit far plane is required because LUCES uses millimetre-like world
+units and its cameras are roughly 400 units from the object. The old fixed
+100-unit plane ended every ray in the unbounded black camera cell; its 21.56 dB
+score was only the 95% black background. With the corrected plane, uniform
+sampling reaches 32.43 dB on the three held cameras. Drawing half of each batch
+from mask foreground reaches 33.21 dB, with 35.74 dB on construction cameras.
+Both runs use identical 4,096-site lattices and fixed topology.
+
+Extract the point surface, then fit the calibrated lights:
+
+```bash
+cargo run --release -p blade-volume-train --bin reconstruct -- \
+    --sparse target/audit-runs/luces-mv/prepared-320/sparse/0 \
+    --images target/audit-runs/luces-mv/prepared-320/light-08/images \
+    --masks target/audit-runs/luces-mv/prepared-320/masks \
+    --test-list target/audit-runs/luces-mv/prepared-320/test-views.txt \
+    --width 128 --stride 1 \
+    --foam target/audit-runs/luces-mv/far-foreground-v1/foam.ply \
+    --no-shadows \
+    --output target/audit-runs/luces-mv/far-foreground-v1/reconstruct/scene.rply
+
+cargo run --release -p blade-volume-train --bin fit_luces_mv -- \
+    --input target/audit-runs/luces-mv/data/Owl \
+    --camera-one target/audit-runs/luces-mv/source/cam1_params.txt \
+    --camera-two target/audit-runs/luces-mv/source/cam2_params.txt \
+    --surface target/audit-runs/luces-mv/far-foreground-v1/reconstruct/scene.rply \
+    --output target/audit-runs/luces-mv/far-foreground-v1/calibrated-v3/scene.rply \
+    --gaussian-output target/audit-runs/luces-mv/far-foreground-v1/calibrated-v3/pbr.ply \
+    --dump target/audit-runs/luces-mv/far-foreground-v1/calibrated-v3/images \
+    --width 128
+```
+
+The source-light surface render is recognizable but coarse: 114 Gaussian
+surfels reach 24.88/24.35 dB whole-frame mean/worst and 19.81/19.00 dB on the
+held-camera foreground, with 99.8% recall and 74.1% precision. Calibrated
+normal/material fitting uses only the twelve construction LEDs and nine
+construction cameras. The held-light data is opened only after both point
+clouds are serialized. Diffuse surfel-center measurements score as follows:
+
+| Lights / cameras | Surface/view samples | Linear PSNR | sRGB PSNR | Black sRGB |
+| --- | ---: | ---: | ---: | ---: |
+| fitted / fitted | 4,788 | 33.87 dB | 29.45 dB | 8.46 dB |
+| fitted / held | 1,488 | 32.89 dB | 28.61 dB | 8.60 dB |
+| held / fitted | 1,197 | 32.85 dB | 28.45 dB | 8.13 dB |
+| held / held | 372 | 32.21 dB | 28.19 dB | 8.29 dB |
+
+These are physical-response scores at visible surfel centers, not full-image
+relighting PSNR. The dumped held-cross renders are a deliberately simple
+z-buffered disc diagnostic: they show that the recovered normals/materials
+move shading in the right direction, but also expose the sparse, oversized
+surface. The Gaussian near-light continuation runs 1,200 updates, improves its
+training loss from 0.005857 to 0.003876, and retains 111/114 particles. The next
+gate is therefore denser, more precise point-surface ownership followed by a
+production near-point-light render and masked full-image held-cross score.
+DiLiGenT-MV remains the predeclared fallback/control; Stanford-ORB remains the
+later distant-HDR cross-check.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
