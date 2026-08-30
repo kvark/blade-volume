@@ -237,6 +237,17 @@ capacity at a time while keeping the 9/3-camera and 12/3-light split fixed:
   tracks from a four-light response. Captured-light RGB gives 72 tracks at
   320 pixels, but their projected-depth discrepancy is worse than the foam
   surface. No matching threshold is weakened and no tracks are merged.
+- Sharing appearance across 64 materials slightly improves the scalar
+  held/held foreground mean/tail to `24.76/22.76` dB, but loses whole-frame
+  tail and recall; its Gaussian falls to `24.03/22.46` dB foreground. A
+  32-material control is also mixed. An exact temporary image-space solve then
+  optimized those 32 diffuse colours through complete finite-light surface
+  and Gaussian renders. The scalar cloud reaches `34.57/32.19` dB whole-frame
+  and `24.87/22.67` dB foreground, but precision drops to `93.2%`. Optimizing
+  the Gaussian compositor raises foreground to `24.37/23.12` dB while lowering
+  whole-frame mean/tail to `33.90/32.54` dB and precision to `88.4%`. This is a
+  backend-specific appearance trade rather than recovered geometry, so the
+  solver, renderer hook, and test are removed.
 
 These are ignored diagnostics, not vendored benchmark artifacts. Heavy runs
 stay in 4--8 GiB scopes; representative peaks are 0.16 GB for 320-pixel

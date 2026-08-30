@@ -1415,6 +1415,9 @@ a deterministic repeat agree within the measured training variance.
 - [x] Bound LUCES raster resolution, point density, global/adaptive support,
   construction-light averaging, subpixel reads, and strict epipolar tracks;
   remove every arm that loses a complete camera/light metric cell.
+- [x] Bound 32/64-way shared appearance and exact finite-light image-space
+  material polishing; remove it when scalar gains trade against coverage and
+  Gaussian whole-frame transfer.
 - [ ] Acquire a fresh non-empty patch proposal and repeat the fixed recipe on
   an untouched final split before adding any production merge/API.
 
