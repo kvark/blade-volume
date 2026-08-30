@@ -409,6 +409,69 @@ fn gpu_shading_matches_the_cpu_reference() {
 }
 
 #[test]
+fn gpu_point_light_matches_the_cpu_distance_and_spotlight_model() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let material = vol::relight::Material {
+        albedo: [0.5, 0.25, 0.75],
+        roughness: 0.5,
+        specular_f0: [0.04; 3],
+        _padding: 0.0,
+    };
+    let model = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
+        surfels: vec![vol::relight::Surfel {
+            center: [0.0; 3],
+            radius: 1.0,
+            normal: [0.0, 0.0, -1.0],
+            material: 0,
+        }],
+        materials: vec![material],
+    };
+    let environment = vol::relight::Environment::uniform([4.0; 3], 8, 4);
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 8, 4);
+    let mut tracer = vol::gpu::RelightTracer::new(
+        &model,
+        &environment,
+        &specular,
+        vol::gpu::RelightSettings::default(),
+        &harness.context,
+        &mut harness.encoder,
+    );
+    let light = vol::relight::PointLight {
+        position: [0.0, 0.0, -4.0],
+        direction: [0.0, 0.0, 1.0],
+        intensity: [16.0, 8.0, 4.0],
+        exponent: 2.0,
+    };
+    tracer.set_point_light(light);
+    let camera = camera(4.0);
+    let rendered = harness.render(&mut tracer, camera);
+
+    let x = SIZE[0] / 2;
+    let y = SIZE[1] / 2;
+    let direction = ray_direction(&camera, x, y);
+    let origin = glam::Vec3::from(camera.cam_position);
+    let distance = -origin.z / direction.z;
+    let point = origin + distance * direction;
+    let diffuse = light.diffuse(point, glam::Vec3::NEG_Z);
+    let expected: [f32; 3] =
+        std::array::from_fn(|channel| material.albedo[channel] * diffuse[channel]);
+    let actual = rendered[(y * SIZE[0] + x) as usize];
+    let worst = actual[..3]
+        .iter()
+        .zip(expected)
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0f32, f32::max);
+    assert!(worst < 0.002, "GPU point light differs from CPU by {worst}");
+    assert!((actual[3] - 1.0).abs() < 0.001);
+
+    tracer.deinit(&harness.context);
+    harness.destroy();
+}
+
+#[test]
 fn surface_gaussian_groups_across_traversal_batches() {
     let Some(mut harness) = Harness::new() else {
         return;

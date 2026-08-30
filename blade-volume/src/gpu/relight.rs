@@ -91,6 +91,12 @@ struct RelightParams {
     env_height: u32,
     kernel: u32,
     pad: [u32; 2],
+    point_position: [f32; 3],
+    point_exponent: f32,
+    point_direction: [f32; 3],
+    point_enabled: u32,
+    point_intensity: [f32; 3],
+    point_pad: f32,
 }
 
 #[derive(blade_macros::ShaderData)]
@@ -594,6 +600,12 @@ impl RelightTracer {
                 env_height: environment.height as u32,
                 kernel: geometry.kernel,
                 pad: [0; 2],
+                point_position: [0.0; 3],
+                point_exponent: 0.0,
+                point_direction: [0.0, 0.0, 1.0],
+                point_enabled: 0,
+                point_intensity: [0.0; 3],
+                point_pad: 0.0,
             },
             mesh_buf,
             surfel_buf,
@@ -811,6 +823,40 @@ impl RelightTracer {
         self.params.irradiance = environment.diffuse_irradiance();
         self.params.env_width = environment.width as u32;
         self.params.env_height = environment.height as u32;
+        self.params.point_enabled = 0;
+        self.params.frame_index = 0;
+    }
+
+    /// Replace environment illumination with one finite-distance emitter.
+    ///
+    /// The emitter is evaluated analytically at every particle hit. This
+    /// changes only the uniform light parameters; geometry, materials,
+    /// acceleration structures, and shader pipelines remain untouched.
+    /// Environment sampling and the prefiltered specular ladder are bypassed
+    /// while the point light is active, so [`RelightSettings::diffuse_samples`]
+    /// has no effect.
+    pub fn set_point_light(&mut self, light: relight::PointLight) {
+        let direction = glam::Vec3::from(light.direction);
+        assert!(
+            light.position.iter().all(|value| value.is_finite())
+                && light
+                    .intensity
+                    .iter()
+                    .all(|value| value.is_finite() && *value >= 0.0)
+                && light.exponent.is_finite()
+                && light.exponent >= 0.0
+                && (light.exponent == 0.0 || direction.length_squared() > f32::EPSILON),
+            "invalid point light",
+        );
+        self.params.point_position = light.position;
+        self.params.point_exponent = light.exponent;
+        self.params.point_direction = if light.exponent == 0.0 {
+            [0.0, 0.0, 1.0]
+        } else {
+            direction.normalize().to_array()
+        };
+        self.params.point_enabled = 1;
+        self.params.point_intensity = light.intensity;
         self.params.frame_index = 0;
     }
 
@@ -945,7 +991,7 @@ mod tests {
     fn the_uniform_layout_matches_the_shader() {
         // `vec4` arrays pack tight, and everything after them is padded out to
         // land on a multiple of sixteen, which is what the binding requires.
-        assert_eq!(mem::size_of::<RelightParams>(), 12 * 16);
+        assert_eq!(mem::size_of::<RelightParams>(), 15 * 16);
     }
 
     #[test]

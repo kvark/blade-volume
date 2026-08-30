@@ -127,9 +127,9 @@ cargo run --release -p blade-volume-train --bin train_colmap -- \
     --images target/audit-runs/luces-mv/prepared-320/light-08/images \
     --masks target/audit-runs/luces-mv/prepared-320/masks \
     --test-list target/audit-runs/luces-mv/prepared-320/test-views.txt \
-    --output target/audit-runs/luces-mv/far-foreground-v1/foam.ply \
-    --initialization camera-lattice --max-points 4096 \
-    --width 128 --height 96 --views 0 --far-plane 1000 --max-steps 192 \
+    --output target/audit-runs/luces-mv/far-foreground-16k-rust-v1/foam.ply \
+    --initialization camera-lattice --max-points 16384 \
+    --width 128 --height 96 --views 0 --far-plane 1000 --max-steps 384 \
     --pixel-batch 1024 --views-per-batch 9 --steps-per-view 200 \
     --sh-degree 2 --foreground-fraction 0.5
 ```
@@ -139,8 +139,10 @@ units and its cameras are roughly 400 units from the object. The old fixed
 100-unit plane ended every ray in the unbounded black camera cell; its 21.56 dB
 score was only the 95% black background. With the corrected plane, uniform
 sampling reaches 32.43 dB on the three held cameras. Drawing half of each batch
-from mask foreground reaches 33.21 dB, with 35.74 dB on construction cameras.
-Both runs use identical 4,096-site lattices and fixed topology.
+from mask foreground reaches 33.21 dB, with 35.74 dB on construction cameras,
+on the matched 4,096-site ablation. The final 16,384-site run uses the stock
+Rust Delaunay implementation—no Qhull feature or new dependency—and reaches
+33.19 dB on the same held cameras.
 
 Extract the point surface, then fit the calibrated lights:
 
@@ -150,46 +152,56 @@ cargo run --release -p blade-volume-train --bin reconstruct -- \
     --images target/audit-runs/luces-mv/prepared-320/light-08/images \
     --masks target/audit-runs/luces-mv/prepared-320/masks \
     --test-list target/audit-runs/luces-mv/prepared-320/test-views.txt \
-    --width 128 --stride 1 \
-    --foam target/audit-runs/luces-mv/far-foreground-v1/foam.ply \
+    --width 128 --stride 1 --voxel-factor 2 \
+    --foam target/audit-runs/luces-mv/far-foreground-16k-rust-v1/foam.ply \
     --no-shadows \
-    --output target/audit-runs/luces-mv/far-foreground-v1/reconstruct/scene.rply
+    --output target/audit-runs/luces-mv/far-foreground-16k-rust-v1/reconstruct-vf2/scene.rply
 
 cargo run --release -p blade-volume-train --bin fit_luces_mv -- \
     --input target/audit-runs/luces-mv/data/Owl \
     --camera-one target/audit-runs/luces-mv/source/cam1_params.txt \
     --camera-two target/audit-runs/luces-mv/source/cam2_params.txt \
-    --surface target/audit-runs/luces-mv/far-foreground-v1/reconstruct/scene.rply \
-    --output target/audit-runs/luces-mv/far-foreground-v1/calibrated-v3/scene.rply \
-    --gaussian-output target/audit-runs/luces-mv/far-foreground-v1/calibrated-v3/pbr.ply \
-    --dump target/audit-runs/luces-mv/far-foreground-v1/calibrated-v3/images \
-    --width 128
+    --surface target/audit-runs/luces-mv/far-foreground-16k-rust-v1/reconstruct-vf2/scene.rply \
+    --output target/audit-runs/luces-mv/far-foreground-16k-rust-v1/calibrated-production/scene.rply \
+    --gaussian-output target/audit-runs/luces-mv/far-foreground-16k-rust-v1/calibrated-production/pbr.ply \
+    --dump target/audit-runs/luces-mv/far-foreground-16k-rust-v1/calibrated-production/images \
+    --width 128 --rounds 3
 ```
 
-The source-light surface render is recognizable but coarse: 114 Gaussian
-surfels reach 24.88/24.35 dB whole-frame mean/worst and 19.81/19.00 dB on the
-held-camera foreground, with 99.8% recall and 74.1% precision. Calibrated
-normal/material fitting uses only the twelve construction LEDs and nine
-construction cameras. The held-light data is opened only after both point
-clouds are serialized. Diffuse surfel-center measurements score as follows:
+The two-pixel point merge produces 589 surfels, compared with 114 at the old
+five-pixel default. Under the source light it reaches 29.46/28.86 dB
+whole-frame and 20.54/20.00 dB foreground mean/worst on held cameras, with
+98.4% recall and 91.0% precision. Calibrated normal/material fitting uses only
+the twelve construction LEDs and nine construction cameras. The held-light
+data is opened only after both point clouds are serialized.
 
-| Lights / cameras | Surface/view samples | Linear PSNR | sRGB PSNR | Black sRGB |
-| --- | ---: | ---: | ---: | ---: |
-| fitted / fitted | 4,788 | 33.87 dB | 29.45 dB | 8.46 dB |
-| fitted / held | 1,488 | 32.89 dB | 28.61 dB | 8.60 dB |
-| held / fitted | 1,197 | 32.85 dB | 28.45 dB | 8.13 dB |
-| held / held | 372 | 32.21 dB | 28.19 dB | 8.29 dB |
+The ordinary production tracer now evaluates the same finite point-light model
+as the CPU solve. It mutates one uniform at runtime rather than adding a shader
+group, shader entry, or point-light-specific pipeline. Direct point-light
+shading is diffuse-only, matching the identified material model; environment
+specular and sampled indirect transport are bypassed. Complete image-space
+scores are:
 
-These are physical-response scores at visible surfel centers, not full-image
-relighting PSNR. The dumped held-cross renders are a deliberately simple
-z-buffered disc diagnostic: they show that the recovered normals/materials
-move shading in the right direction, but also expose the sparse, oversized
-surface. The Gaussian near-light continuation runs 1,200 updates, improves its
-training loss from 0.005857 to 0.003876, and retains 111/114 particles. The next
-gate is therefore denser, more precise point-surface ownership followed by a
-production near-point-light render and masked full-image held-cross score.
-DiLiGenT-MV remains the predeclared fallback/control; Stanford-ORB remains the
-later distant-HDR cross-check.
+| Backend | Lights / cameras | sRGB mean/worst | Foreground mean/worst | Recall | Precision |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Surface | fitted / fitted | 34.84 / 32.29 dB | 25.21 / 21.48 dB | 98.2% | 93.8% |
+| Surface | fitted / held | 34.96 / 31.79 dB | 25.36 / 22.02 dB | 98.0% | 93.3% |
+| Surface | held / fitted | 34.40 / 32.66 dB | 24.71 / 22.10 dB | 98.2% | 93.8% |
+| Surface | held / held | 34.42 / 32.16 dB | 24.72 / 22.61 dB | 98.0% | 93.3% |
+| Gaussian | fitted / fitted | 34.77 / 32.51 dB | 25.38 / 22.45 dB | 94.5% | 88.8% |
+| Gaussian | fitted / held | 34.39 / 32.20 dB | 24.62 / 22.21 dB | 94.9% | 88.5% |
+| Gaussian | held / fitted | 34.41 / 32.90 dB | 24.81 / 23.20 dB | 94.5% | 88.8% |
+| Gaussian | held / held | 34.01 / 32.66 dB | 24.13 / 22.66 dB | 94.9% | 88.5% |
+
+The Gaussian continuation runs 1,200 updates, improves its construction loss
+from 0.003958 to 0.002280, and retains all 589 particles. These numbers are
+full production renders, not projected-center samples; the held/held row is
+nine camera/light combinations excluded from every fitting stage. The result
+clears the finite-light transport and split-integrity gate. It is still visibly
+soft at the object's ridges, making spatial surface detail and correspondence
+precision—not another light representation—the next controlled target.
+DiLiGenT-MV remains the fallback/control; Stanford-ORB remains the later
+distant-HDR cross-check.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

@@ -40,10 +40,17 @@ struct Parameters {
     // Relightable particle footprint: zero compact surfel, one surface
     // Gaussian, two learned volumetric Gaussian.
     kernel: u32,
-    // Two scalars of tail, so the block lands on a multiple of sixteen and
-    // matches what the host lays out.
+    // Complete the environment-mode portion on a sixteen-byte boundary.
     pad0: u32,
     pad1: u32,
+    // Optional finite emitter. It is a runtime light mode rather than a
+    // shader variant: setting `point_enabled` bypasses environment shading.
+    point_position: vec3<f32>,
+    point_exponent: f32,
+    point_direction: vec3<f32>,
+    point_enabled: u32,
+    point_intensity: vec3<f32>,
+    point_pad: f32,
 }
 var<uniform> g_params: Parameters;
 
@@ -177,6 +184,21 @@ fn sh9_dot_irradiance(n: vec3<f32>) -> vec3<f32> {
     total += g_params.irradiance[7].xyz * (1.092548 * n.x * n.z);
     total += g_params.irradiance[8].xyz * (0.546274 * (n.x * n.x - n.y * n.y));
     return total;
+}
+
+fn point_light_diffuse(position: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let from_light = position - g_params.point_position;
+    let distance_squared = dot(from_light, from_light);
+    if (distance_squared <= 1.1920929e-7) {
+        return vec3<f32>(0.0);
+    }
+    let away = from_light * inverseSqrt(distance_squared);
+    var angular = 1.0;
+    if (g_params.point_exponent != 0.0) {
+        angular = pow(max(dot(g_params.point_direction, away), 0.0), g_params.point_exponent);
+    }
+    let cosine = max(dot(normal, -away), 0.0);
+    return g_params.point_intensity * (angular * cosine / distance_squared);
 }
 
 // Lazarov's analytic fit to the environment BRDF, so no lookup table is needed
@@ -485,6 +507,9 @@ fn shade_surfel_sampled(index: u32, position: vec3<f32>, ray_dir: vec3<f32>, see
         normal = -normal;
     }
     let material = g_materials[surfel.material];
+    if (g_params.point_enabled != 0u) {
+        return material.albedo * point_light_diffuse(position, normal);
+    }
     var out = material.albedo * shaded_diffuse(position, normal, surfel.radius, seed);
 
     let view = -ray_dir;

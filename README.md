@@ -55,7 +55,7 @@ a convincing real-world result.
   geometry/transport gate, not an unimplemented experiment. Exact commands,
   baselines, images, and next steps are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
-- **Controlled near-field route — first LUCES-MV result, not yet passed.** The public
+- **Controlled near-field route — first full-image LUCES-MV result.** The public
   calibrated Owl capture supplies masks, linear RGB16 images, ground-truth
   depth/normals, and 15 near-field LEDs at each of 12 poses. The CPU material
   solve and Gaussian Meganeura graph now share one finite point-light model,
@@ -68,15 +68,17 @@ a convincing real-world result.
   12/3-light split into the ordinary pose-only cloud trainer. Fixing its
   dataset-scale far plane and sampling half of each masked batch on foreground
   raises held-camera static PSNR from 21.56 to 33.21 dB; the matched uniform
-  control is 32.43 dB. The extracted 114-surfel cloud reaches 19.81 dB
-  foreground PSNR with 99.8% recall but only 74.1% precision under its source
-  light, so geometry is recognizable and coarse. After the held LEDs are kept
-  out of fitting, calibrated diffuse center samples reach 28.19 dB sRGB at the
-  held-light/held-camera cross-product versus an 8.29 dB black baseline. This
-  proves the finite-light decomposition path, not complete image relighting:
-  a production near-light renderer and denser surface remain the next gate.
-  Results are under `target/audit-runs/luces-mv/far-foreground-v1/`. DiLiGenT-MV
-  is the fallback; progress does not depend on OLATverse access.
+  control is 32.43 dB. A stock-Rust 16,384-cell run extracts 589 point surfels.
+  The production relight tracer now accepts a finite emitter by mutating one
+  uniform—no new shader group or shader entry—and renders the complete fixed
+  light/camera cross-product. On the nine combinations excluded from every fit,
+  the scalar cloud reaches 34.42/32.16 dB whole-frame and 24.72/22.61 dB masked
+  foreground mean/worst, with 98.0% recall and 93.3% precision. The relightable
+  Gaussian reaches 34.01/32.66 dB whole-frame and 24.13/22.66 dB foreground,
+  with 94.9% recall. This passes the finite-light transport/plumbing gate; the
+  visibly soft result still does not pass the final surface-detail bar. Results
+  are under `target/audit-runs/luces-mv/far-foreground-16k-rust-v1/`.
+  DiLiGenT-MV is the fallback; progress does not depend on OLATverse access.
 - **Independent natural-light relighting — first honest result, not yet
   passed.** The Objects With Lighting Ant-Man gate trains on 52 cameras under
   one unknown HDR environment, reserves 12 same-environment cameras, then

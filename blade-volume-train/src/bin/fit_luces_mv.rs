@@ -36,7 +36,7 @@ struct Args {
     #[argh(option)]
     gaussian_output: Option<String>,
 
-    /// optional directory for held-light/held-camera reference and diagnostic renders
+    /// optional directory for production held-light/held-camera renders
     #[argh(option)]
     dump: Option<String>,
 
@@ -44,8 +44,8 @@ struct Args {
     #[argh(option, default = "128")]
     width: usize,
 
-    /// alternating normal/material rounds (default 2)
-    #[argh(option, default = "2")]
+    /// alternating normal/material rounds (default 3)
+    #[argh(option, default = "3")]
     rounds: usize,
 
     /// hemisphere candidates tested per normal update (default 1024)
@@ -57,190 +57,121 @@ struct Args {
     albedo_ceiling: f32,
 }
 
-#[derive(Clone, Copy)]
-struct PhysicalScore {
-    samples: usize,
-    linear_psnr: f64,
-    srgb_psnr: f64,
-    black_srgb_psnr: f64,
-}
-
-fn psnr(error: f64, samples: usize) -> f64 {
-    if samples == 0 {
-        return 0.0;
-    }
-    let mean = error / samples as f64;
-    if mean <= 1.0e-12 {
-        99.0
-    } else {
-        -10.0 * mean.log10()
-    }
-}
-
-fn score_physical_samples(
-    surface: &vol::relight::RelightModel,
-    dataset: &train::inverse::luces::Dataset,
-    views: &[usize],
-) -> PhysicalScore {
-    let mut linear_error = 0.0f64;
-    let mut encoded_error = 0.0f64;
-    let mut black_error = 0.0f64;
-    let mut samples = 0usize;
-    for (capture, lights) in dataset.captures.iter().zip(&dataset.lights) {
-        let observations = train::inverse::decompose::observe(surface, capture, views, 0.15);
-        for (surfel_index, surfel) in surface.surfels.iter().enumerate() {
-            let material = surface.materials[surfel.material as usize];
-            let normal = glam::Vec3::from(surfel.normal).normalize_or_zero();
-            let point = glam::Vec3::from(surfel.center);
-            for observation in observations.of(surfel_index) {
-                let Some(light) = lights[observation.view as usize].sample(point) else {
-                    continue;
-                };
-                let cosine = normal.dot(light.towards).max(0.0);
-                for channel in 0..3 {
-                    let prediction = material.albedo[channel] * light.radiance[channel] * cosine;
-                    let reference = observation.radiance[channel];
-                    linear_error += f64::from(prediction - reference).powi(2);
-                    let encoded_prediction =
-                        train::inverse::capture::linear_to_srgb(prediction) as f64;
-                    let encoded_reference =
-                        train::inverse::capture::linear_to_srgb(reference) as f64;
-                    encoded_error += (encoded_prediction - encoded_reference).powi(2);
-                    black_error += encoded_reference.powi(2);
-                    samples += 1;
-                }
-            }
-        }
-    }
-    PhysicalScore {
-        samples: samples / 3,
-        linear_psnr: psnr(linear_error, samples),
-        srgb_psnr: psnr(encoded_error, samples),
-        black_srgb_psnr: psnr(black_error, samples),
-    }
-}
-
-fn print_score(label: &str, score: PhysicalScore) {
+fn print_render_summaries(label: &str, summaries: &[train::inverse::score::Summary]) {
+    let views = summaries.iter().map(|summary| summary.views).sum::<usize>();
+    let mean = |get: fn(&train::inverse::score::Summary) -> f64| {
+        summaries
+            .iter()
+            .map(|summary| get(summary) * summary.views as f64)
+            .sum::<f64>()
+            / views.max(1) as f64
+    };
+    let worst = summaries
+        .iter()
+        .map(|summary| summary.worst_srgb_psnr)
+        .fold(f64::INFINITY, f64::min);
+    let foreground_worst = summaries
+        .iter()
+        .filter_map(|summary| summary.worst_foreground_srgb_psnr)
+        .fold(f64::INFINITY, f64::min);
     println!(
-        "{label}: {} surface/view samples, {:.2} dB linear, {:.2} dB sRGB (black {:.2} dB)",
-        score.samples, score.linear_psnr, score.srgb_psnr, score.black_srgb_psnr,
+        "{label}: {views} views, {:.2} dB linear, {:.2}/{worst:.2} dB sRGB mean/worst, \
+         {:.2}/{foreground_worst:.2} dB foreground, {:.1}% recall, {:.1}% precision, \
+         {:.2} dB where-hit",
+        mean(|summary| summary.linear_psnr),
+        mean(|summary| summary.srgb_psnr),
+        mean(|summary| summary.foreground_srgb_psnr.unwrap_or(0.0)),
+        100.0 * mean(|summary| summary.mask_recall.unwrap_or(0.0)),
+        100.0 * mean(|summary| summary.mask_precision.unwrap_or(0.0)),
+        mean(|summary| summary.covered_srgb_psnr),
     );
 }
 
-fn render_point_light(
-    surface: &vol::relight::RelightModel,
-    capture: &train::inverse::capture::Capture,
-    lights: &[vol::relight::PointLight],
-    view: usize,
-) -> Vec<[f32; 4]> {
-    let camera = capture.views[view].camera;
-    let mut rendered = vec![[0.0; 4]; capture.width * capture.height];
-    let mut depth_buffer = vec![f32::INFINITY; rendered.len()];
-    let pixels_per_world = capture.width as f32 / (2.0 * (0.5 * camera.fov[0]).tan());
-    for surfel in &surface.surfels {
-        let point = glam::Vec3::from(surfel.center);
-        let Some((pixel, depth)) =
-            train::inverse::capture::project(&camera, capture.width, capture.height, point)
-        else {
-            continue;
-        };
-        let Some(light) = lights[view].sample(point) else {
-            continue;
-        };
-        let normal = glam::Vec3::from(surfel.normal).normalize_or_zero();
-        let cosine = normal.dot(light.towards).max(0.0);
-        let material = surface.materials[surfel.material as usize];
-        let color: [f32; 3] = std::array::from_fn(|channel| {
-            material.albedo[channel] * light.radiance[channel] * cosine
+fn render_dataset_cross(
+    renderer: &mut train::inverse::score::Renderer,
+    scene: &train::inverse::score::Scene,
+    gaussian: Option<&vol::PointCloudModel>,
+    dataset: &train::inverse::luces::Dataset,
+    light_label: &str,
+    dump: Option<&path::Path>,
+) -> Result<(), String> {
+    let mut surface_fitted = Vec::with_capacity(dataset.captures.len());
+    let mut surface_held = Vec::with_capacity(dataset.captures.len());
+    let mut gaussian_fitted = Vec::with_capacity(dataset.captures.len());
+    let mut gaussian_held = Vec::with_capacity(dataset.captures.len());
+    for ((capture, lights), &source_light) in dataset
+        .captures
+        .iter()
+        .zip(&dataset.lights)
+        .zip(&dataset.source_light_indices)
+    {
+        let surface_dump = dump.map(|directory| {
+            directory
+                .join("surface")
+                .join(format!("light-{:02}", source_light + 1))
         });
-        let radius = (surfel.radius * pixels_per_world / depth).max(0.75);
-        let x_min = (pixel[0] - radius).floor().max(0.0) as usize;
-        let y_min = (pixel[1] - radius).floor().max(0.0) as usize;
-        let x_max = (pixel[0] + radius)
-            .ceil()
-            .min(capture.width.saturating_sub(1) as f32) as usize;
-        let y_max = (pixel[1] + radius)
-            .ceil()
-            .min(capture.height.saturating_sub(1) as f32) as usize;
-        for y in y_min..=y_max {
-            for x in x_min..=x_max {
-                let offset = glam::Vec2::new(x as f32 + 0.5 - pixel[0], y as f32 + 0.5 - pixel[1]);
-                if offset.length_squared() > radius * radius {
-                    continue;
-                }
-                let index = y * capture.width + x;
-                if depth < depth_buffer[index] {
-                    depth_buffer[index] = depth;
-                    rendered[index] = [color[0], color[1], color[2], 1.0];
-                }
+        if let Some(ref directory) = surface_dump {
+            fs::create_dir_all(directory)
+                .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
+        }
+        let summaries = renderer.score_point_light_splits(
+            scene,
+            capture,
+            lights,
+            &[
+                (&train::inverse::luces::TRAIN_VIEW_INDICES, None),
+                (
+                    &train::inverse::luces::HELD_VIEW_INDICES,
+                    surface_dump.as_deref(),
+                ),
+            ],
+        );
+        surface_fitted.push(summaries[0]);
+        surface_held.push(summaries[1]);
+
+        if let Some(gaussian) = gaussian {
+            let gaussian_dump = dump.map(|directory| {
+                directory
+                    .join("gaussian")
+                    .join(format!("light-{:02}", source_light + 1))
+            });
+            if let Some(ref directory) = gaussian_dump {
+                fs::create_dir_all(directory)
+                    .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
             }
+            let summaries = renderer.score_gaussian_point_light_splits(
+                scene,
+                gaussian,
+                capture,
+                lights,
+                &[
+                    (&train::inverse::luces::TRAIN_VIEW_INDICES, None),
+                    (
+                        &train::inverse::luces::HELD_VIEW_INDICES,
+                        gaussian_dump.as_deref(),
+                    ),
+                ],
+            );
+            gaussian_fitted.push(summaries[0]);
+            gaussian_held.push(summaries[1]);
         }
     }
-    rendered
-}
-
-fn save_linear_image(
-    path: &path::Path,
-    pixels: &[[f32; 3]],
-    width: usize,
-    height: usize,
-) -> Result<(), String> {
-    let encoded = pixels
-        .iter()
-        .flat_map(|rgb| {
-            rgb.map(|value| {
-                (train::inverse::capture::linear_to_srgb(value) * u8::MAX as f32).round() as u8
-            })
-        })
-        .collect();
-    image::RgbImage::from_raw(width as u32, height as u32, encoded)
-        .expect("linear image has inconsistent dimensions")
-        .save(path)
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))
-}
-
-fn dump_held_cross(
-    directory: &path::Path,
-    surface: &vol::relight::RelightModel,
-    held: &train::inverse::luces::Dataset,
-) -> Result<(), String> {
-    fs::create_dir_all(directory)
-        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
-    for (light_slot, (&source_light, (capture, lights))) in held
-        .source_light_indices
-        .iter()
-        .zip(held.captures.iter().zip(&held.lights))
-        .enumerate()
-    {
-        for &view in &train::inverse::luces::HELD_VIEW_INDICES {
-            let rendered = render_point_light(surface, capture, lights, view);
-            let reference_path = directory.join(format!(
-                "light-{:02}-view-{:03}-reference.png",
-                source_light + 1,
-                train::inverse::luces::VIEW_IDS[view],
-            ));
-            let render_path = directory.join(format!(
-                "light-{:02}-view-{:03}-render.png",
-                source_light + 1,
-                train::inverse::luces::VIEW_IDS[view],
-            ));
-            save_linear_image(
-                &reference_path,
-                &capture.views[view].pixels,
-                capture.width,
-                capture.height,
-            )?;
-            let linear = rendered
-                .iter()
-                .map(|rgba| [rgba[0], rgba[1], rgba[2]])
-                .collect::<Vec<_>>();
-            save_linear_image(&render_path, &linear, capture.width, capture.height)?;
-        }
-        println!(
-            "dumped held LED {:02} ({}/{})",
-            source_light + 1,
-            light_slot + 1,
-            held.captures.len(),
+    print_render_summaries(
+        &format!("surface {light_label} lights / fitted cameras"),
+        &surface_fitted,
+    );
+    print_render_summaries(
+        &format!("surface {light_label} lights / held cameras"),
+        &surface_held,
+    );
+    if gaussian.is_some() {
+        print_render_summaries(
+            &format!("Gaussian {light_label} lights / fitted cameras"),
+            &gaussian_fitted,
+        );
+        print_render_summaries(
+            &format!("Gaussian {light_label} lights / held cameras"),
+            &gaussian_held,
         );
     }
     Ok(())
@@ -270,7 +201,7 @@ fn refine_surface(
                 },
             )
             .collect::<Vec<_>>();
-        let normals = train::inverse::decompose::refine_normals_known_lights_per_view(
+        let normals = train::inverse::decompose::refine_normals_known_lights(
             surface,
             &known,
             normal_candidates,
@@ -399,23 +330,6 @@ fn run(args: &Args) -> Result<(), String> {
         None
     };
 
-    print_score(
-        "fitted lights / fitted cameras",
-        score_physical_samples(
-            &surface,
-            &training,
-            &train::inverse::luces::TRAIN_VIEW_INDICES,
-        ),
-    );
-    print_score(
-        "fitted lights / held cameras",
-        score_physical_samples(
-            &surface,
-            &training,
-            &train::inverse::luces::HELD_VIEW_INDICES,
-        ),
-    );
-
     vol::io::try_save_relight(path::Path::new(&args.output), &surface)
         .map_err(|error| format!("cannot write {}: {error}", args.output))?;
     println!("wrote {}", args.output);
@@ -424,7 +338,18 @@ fn run(args: &Args) -> Result<(), String> {
         println!("wrote {output}");
     }
 
-    drop(gaussian);
+    let black = vol::relight::Environment::uniform([0.0; 3], 8, 4);
+    let scene = train::inverse::score::Scene::new(surface, black);
+    let mut renderer =
+        train::inverse::score::Renderer::new(args.width, training.captures[0].height)?;
+    render_dataset_cross(
+        &mut renderer,
+        &scene,
+        gaussian.as_ref(),
+        &training,
+        "fitted",
+        None,
+    )?;
     drop(training);
     let held = train::inverse::luces::load(
         input,
@@ -433,17 +358,15 @@ fn run(args: &Args) -> Result<(), String> {
         args.width,
         &train::inverse::luces::HELD_LIGHT_INDICES,
     )?;
-    print_score(
-        "held lights / fitted cameras",
-        score_physical_samples(&surface, &held, &train::inverse::luces::TRAIN_VIEW_INDICES),
-    );
-    print_score(
-        "held lights / held cameras",
-        score_physical_samples(&surface, &held, &train::inverse::luces::HELD_VIEW_INDICES),
-    );
-    if let Some(ref dump) = args.dump {
-        dump_held_cross(path::Path::new(dump), &surface, &held)?;
-    }
+    render_dataset_cross(
+        &mut renderer,
+        &scene,
+        gaussian.as_ref(),
+        &held,
+        "held",
+        args.dump.as_deref().map(path::Path::new),
+    )?;
+    renderer.destroy();
     Ok(())
 }
 
@@ -452,53 +375,5 @@ fn main() {
     if let Err(message) = run(&args) {
         eprintln!("{message}");
         std::process::exit(1);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn diagnostic_point_light_render_uses_calibrated_distance_and_normal() {
-        let surface = vol::relight::RelightModel {
-            kernel: vol::relight::ParticleKernel::Gaussian,
-            surfels: vec![vol::relight::Surfel {
-                center: [0.0, 0.0, 2.0],
-                radius: 0.5,
-                normal: [0.0, 0.0, -1.0],
-                material: 0,
-            }],
-            materials: vec![vol::relight::Material {
-                albedo: [0.5; 3],
-                ..Default::default()
-            }],
-        };
-        let capture = train::inverse::capture::Capture {
-            width: 8,
-            height: 8,
-            views: vec![train::inverse::capture::View {
-                name: "fixture".to_string(),
-                camera: vol::CameraParams {
-                    cam_position: [0.0; 3],
-                    depth: 10.0,
-                    cam_orientation: glam::Quat::IDENTITY.to_array(),
-                    fov: [std::f32::consts::FRAC_PI_2; 2],
-                    principal: [0.0; 2],
-                },
-                pixels: vec![[0.0; 3]; 64],
-                mask: Some(vec![0.0; 64]),
-            }],
-        };
-        let light = vol::relight::PointLight {
-            position: [0.0; 3],
-            direction: [0.0, 0.0, 1.0],
-            intensity: [4.0; 3],
-            exponent: 0.0,
-        };
-        let rendered = render_point_light(&surface, &capture, &[light], 0);
-        let center = rendered[4 * 8 + 4];
-        assert_eq!(center, [0.5, 0.5, 0.5, 1.0]);
-        assert_eq!(rendered[0], [0.0; 4]);
     }
 }

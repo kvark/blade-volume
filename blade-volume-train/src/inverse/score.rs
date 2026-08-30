@@ -613,7 +613,9 @@ impl Renderer {
 
         let summaries = splits
             .iter()
-            .map(|&(indices, dump)| self.score_with_tracer(&mut tracer, capture, indices, dump))
+            .map(|&(indices, dump)| {
+                self.score_with_tracer(&mut tracer, capture, indices, None, dump)
+            })
             .collect();
         tracer.deinit(&self.context);
         summaries
@@ -637,7 +639,90 @@ impl Renderer {
         let mut tracer = self.gaussian_tracer(scene, gaussian, diffuse_samples, false);
         let summaries = splits
             .iter()
-            .map(|&(indices, dump)| self.score_with_tracer(&mut tracer, capture, indices, dump))
+            .map(|&(indices, dump)| {
+                self.score_with_tracer(&mut tracer, capture, indices, None, dump)
+            })
+            .collect();
+        tracer.deinit(&self.context);
+        summaries
+    }
+
+    /// Render one finite emitter per camera through the production surfel
+    /// backend and score the resulting photographs.
+    pub fn score_point_lights(
+        &mut self,
+        scene: &Scene,
+        capture: &capture::Capture,
+        lights: &[vol::relight::PointLight],
+        indices: &[usize],
+        dump: Option<&path::Path>,
+    ) -> Summary {
+        self.score_point_light_splits(scene, capture, lights, &[(indices, dump)])[0]
+    }
+
+    /// Score several camera splits under calibrated finite emitters while
+    /// reusing one production surfel tracer.
+    pub fn score_point_light_splits(
+        &mut self,
+        scene: &Scene,
+        capture: &capture::Capture,
+        lights: &[vol::relight::PointLight],
+        splits: &[(&[usize], Option<&path::Path>)],
+    ) -> Vec<Summary> {
+        assert_eq!(capture.width, self.width);
+        assert_eq!(capture.height, self.height);
+        assert_eq!(lights.len(), capture.views.len());
+        if splits.is_empty() {
+            return Vec::new();
+        }
+        let mut tracer = self.tracer(scene, 0, false);
+        let summaries = splits
+            .iter()
+            .map(|&(indices, dump)| {
+                self.score_with_tracer(&mut tracer, capture, indices, Some(lights), dump)
+            })
+            .collect();
+        tracer.deinit(&self.context);
+        summaries
+    }
+
+    /// Render one finite emitter per camera through the production learned
+    /// Gaussian backend and score the resulting photographs.
+    pub fn score_gaussian_point_lights(
+        &mut self,
+        scene: &Scene,
+        gaussian: &vol::PointCloudModel,
+        capture: &capture::Capture,
+        lights: &[vol::relight::PointLight],
+        indices: &[usize],
+        dump: Option<&path::Path>,
+    ) -> Summary {
+        self.score_gaussian_point_light_splits(scene, gaussian, capture, lights, &[(indices, dump)])
+            [0]
+    }
+
+    /// Score several camera splits under calibrated finite emitters while
+    /// reusing one production Gaussian tracer.
+    pub fn score_gaussian_point_light_splits(
+        &mut self,
+        scene: &Scene,
+        gaussian: &vol::PointCloudModel,
+        capture: &capture::Capture,
+        lights: &[vol::relight::PointLight],
+        splits: &[(&[usize], Option<&path::Path>)],
+    ) -> Vec<Summary> {
+        assert_eq!(capture.width, self.width);
+        assert_eq!(capture.height, self.height);
+        assert_eq!(lights.len(), capture.views.len());
+        if splits.is_empty() {
+            return Vec::new();
+        }
+        let mut tracer = self.gaussian_tracer(scene, gaussian, 0, false);
+        let summaries = splits
+            .iter()
+            .map(|&(indices, dump)| {
+                self.score_with_tracer(&mut tracer, capture, indices, Some(lights), dump)
+            })
             .collect();
         tracer.deinit(&self.context);
         summaries
@@ -648,6 +733,7 @@ impl Renderer {
         tracer: &mut vol::gpu::RelightTracer,
         capture: &capture::Capture,
         indices: &[usize],
+        point_lights: Option<&[vol::relight::PointLight]>,
         dump: Option<&path::Path>,
     ) -> Summary {
         let mut scores = Vec::new();
@@ -655,6 +741,9 @@ impl Renderer {
         tracer.set_background([0.0; 3]);
         for &index in indices {
             let view = &capture.views[index];
+            if let Some(lights) = point_lights {
+                tracer.set_point_light(lights[index]);
+            }
             let started = std::time::Instant::now();
             let rendered = self.draw(tracer, view.camera);
             elapsed += started.elapsed();

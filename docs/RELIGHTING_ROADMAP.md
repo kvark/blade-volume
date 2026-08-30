@@ -1175,24 +1175,26 @@ and forms fifteen aligned captures. Loading all 180 Owl images at 80×60 gives a
 cgroup, with zero swap, limit, OOM, or GPU event.
 
 The predeclared Owl split is now live: cameras 000/024/048 and LEDs 03/09/15
-are held out. A pose-only 4,096-site cloud reaches 33.21 dB whole-frame on the
-three held cameras after correcting the 100-unit far plane and drawing half of
-each masked training batch from foreground; its matched uniform control reaches
-32.43 dB. Surface extraction leaves only 114 broad surfels. They reach
-19.81/19.00 dB foreground mean/worst under the source light with 99.8% recall
-and 74.1% precision, which is recognizable but not a passed surface.
+are held out. Correcting the dataset-scale far plane and balancing masked ray
+batches lifts the 4,096-site held-camera static gate from a background-only
+21.56 dB to 33.21 dB. A stock-Rust 16,384-site run needs neither Qhull nor a new
+dependency. Extracting at a two-pixel rather than five-pixel merge scale leaves
+589 point surfels with 98.4% held-camera mask recall and 91.0% precision under
+the source light.
 
 The calibrated diffuse fit loads only the twelve construction LEDs until the
-scalar and Gaussian clouds are serialized. Visible surfel centers at the
-held-light/held-camera cross-product then reach 32.21 dB linear and 28.19 dB
-sRGB versus an 8.29 dB black baseline. The Gaussian continuation improves its
-training loss from 0.005857 to 0.003876 and retains 111/114 particles. This
-clears the finite-light data and optimization plumbing, not full-image
-relighting: the next controlled gate is a denser point surface, a production
-near-point-light renderer, and masked held-cross image PSNR. Ground-truth shape
-remains unopened until that image-space gate is in place. If the
-non-commercial licence prevents continued use, apply the same finite-light
-contract to public DiLiGenT-MV rather than waiting for OLATverse.
+scalar and Gaussian clouds are serialized. The production relight tracer now
+selects a finite emitter by changing one uniform in the existing pipeline; no
+shader group or shader entry was added. Across the nine camera/light pairs
+excluded from fitting, the scalar cloud reaches 34.42/32.16 dB whole-frame and
+24.72/22.61 dB foreground mean/worst, with 98.0% recall and 93.3% precision.
+The 589-particle Gaussian reaches 34.01/32.66 dB whole-frame and 24.13/22.66 dB
+foreground, with 94.9% recall. This clears the finite-light transport and split
+gate with complete production renders, not projected-center samples. The
+visibly soft ridges make spatial surface detail and correspondence precision
+the next target. Ground-truth shape remains unopened until that quality step.
+If the non-commercial licence prevents continued use, apply the same contract
+to public DiLiGenT-MV rather than waiting for OLATverse.
 
 ## Milestones
 
