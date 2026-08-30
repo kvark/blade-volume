@@ -1484,10 +1484,13 @@ a deterministic repeat agree within the measured training variance.
 - [x] Expose per-point physical loss/gradient attribution from the existing
   optimizer. Remove it after the best one-pass residual ranking still loses a
   Pot2 validation tail, Cow tails, and finds no mask-interior Owl component.
-- [ ] Attribute physical residual separately across construction-camera groups
-  and move a component only when its support and update direction agree. Keep
-  the one-pass/no-complete-render-probe constraint and require a safe component
-  on two objects before adding production code.
+- [x] Attribute the proposed displacement separately across four construction-
+  camera groups; remove it when the threshold-free Pot2 consensus union still
+  loses validation worst-case PSNR by 0.000096 dB.
+- [ ] Cover hard rays explicitly in the calibrated-light objective or its
+  frozen audit. Keep the no-complete-render-probe constraint, predeclare the
+  sampling/tail rule, and require safe selection plus validation on two objects
+  before adding production code.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
@@ -1747,6 +1750,32 @@ good localization signal, but averaging it over all rays hides the camera that
 loses the tail. The next bounded test should collect responsibility by
 construction-camera group and require cross-group agreement before proposing a
 single component; it still gets only one untouched validation render.
+
+That signed group control is now closed too. A zero-forward scalar probe is
+attached to each point/group along the normalized displacement produced by the
+second physical round. With geometry frozen, one balanced pass over all fitted
+lights uses ordinary SGD to sum the negative directional derivative for four
+interleaved camera groups. A component is eligible only when every group
+supports moving along the fitted direction and every point passes the existing
+97.5% two-sigma mask-footprint threshold. No complete render participates in
+ranking.
+
+Pot2 retains exactly two components, 14 and 8 points. Applying their complete
+threshold-free union improves every selection metric: whole mean/worst moves
+`34.712342/31.238559→34.713925/31.239353` dB, foreground mean/tail
+`25.257431/21.203736→25.259292/21.205500` dB, and recall/precision both rise.
+On untouched validation, whole mean rises `33.742434→33.742951` dB,
+foreground mean/tail rises `24.221938/20.059425→24.222507/20.059754` dB, and
+recall/precision rise, but whole worst slips `30.141529→30.141433` dB. The gate
+rejects it before Cow, Owl, or official held splits are opened.
+
+The experimental graph/API adds about 200 lines plus a frozen audit pass and is
+removed. Its limitation is now concrete: all lights in one audit camera share
+one deterministic 512-pixel sequence, only about 3.7% of a 128-pixel-wide
+DiLiGenT-MV view. Cross-camera agreement over the same sparse rays still does
+not constrain the pixel that sets complete-view PSNR. The next test should
+predeclare broader independent/hard-ray coverage or a tail-aware physical loss;
+it should not tune another spatial selector around a `0.0001` dB miss.
 
 DiLiGenT-MV Buddha is the fourth predeclared object gate. Its unchanged 16k
 route extracts 2,143 point surfels and the calibrated Gaussian fit retains

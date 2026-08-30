@@ -654,6 +654,23 @@ removed. Average residual magnitude is useful localization evidence, but the
 next proposal must require consistent evidence across independent camera
 groups before it can move a point.
 
+The signed camera-group control closes that follow-up without adding production
+code. A zero-forward scalar moves each Gaussian only along its fitted
+second-round displacement inside the graph. After geometry is frozen, ordinary
+SGD accumulates the negative directional derivative separately for four
+interleaved construction-camera groups. A component qualifies only when every
+group supports the move and every two-sigma footprint sample remains inside
+the masks. Pot2 retains components of 14 and 8 points. Their threshold-free
+22-point union improves all six selection metrics and five validation metrics:
+validation mean/foreground mean-tail reaches
+`33.742951/24.222507/20.059754` dB and recall/precision improves, but whole
+worst moves `30.141529→30.141433` dB. The strict gate rejects it. The temporary
+branch adds roughly 200 lines and an extra frozen audit pass, so it is removed
+without running independent objects. Camera consensus is not enough while its
+audit sees only one 512-pixel sequence per view; the next bounded control must
+increase hard-ray coverage or put a tail-aware term in the physical objective,
+not add another component selector.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is

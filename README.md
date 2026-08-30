@@ -143,10 +143,12 @@ a convincing real-world result.
   the previously safe selection patches yet loses validation worst-case PSNR
   by 0.00013 dB. Cow similarly gains means but loses tails, and Owl has no
   connected update whose full Gaussian footprint stays inside every
-  construction mask. The attribution graph and API are removed. The next
-  physical proposal must require agreement across camera groups instead of
-  ranking residual averaged over all rays. A fresh Buddha repeat also rejects
-  the correspondence route
+  construction mask. A signed displacement audit across four camera groups
+  narrows Pot2 to two agreed interior components (22 points), but their union
+  still loses validation worst-case PSNR by 0.000096 dB. Both attribution
+  graphs and APIs are removed. The next physical objective must cover hard
+  rays explicitly rather than rank an average residual after fitting. A fresh
+  Buddha repeat also rejects the correspondence route
   before held data: calibrated-albedo tracks form no complete-render-safe
   patch under the default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices
