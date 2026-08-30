@@ -399,6 +399,14 @@ remains. The retained outputs are under
 complete fit peaks at 239 MiB; all extraction, training, reconstruction, and
 fit scopes report zero OOM, throttle, or GPU fault.
 
+Skipping calibrated multi-light Gaussian continuation is also mixed, not a
+valid rollback. It restores held/held recall `84.7%→89.9%` and foreground
+worst `17.55→17.78` dB, but loses whole-frame mean/worst
+`30.81/28.90→30.46/28.64` dB and lowers most other complete-matrix cells. The
+continuation log is therefore explicit that its `0.004036→0.004405` scalar is
+an audit loss for one deterministic light/view batch, not the complete fitting
+objective. No single-sample rollback is added.
+
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
 

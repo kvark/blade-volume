@@ -287,7 +287,7 @@ pub fn fit(
         )?;
         let support = train::gaussian_splat::guard_pbr_support(&mut gaussian, &established)?;
         println!(
-            "Gaussian: {} updates, loss {:.6} -> {:.6}, retained {}/{}{}",
+            "Gaussian: {} updates, audit loss {:.6} -> {:.6}, retained {}/{}{}",
             stats.iter().map(|stats| stats.steps).sum::<usize>(),
             stats.first().map_or(f32::NAN, |stats| stats.initial_loss),
             stats.last().map_or(f32::NAN, |stats| stats.final_loss),
