@@ -191,14 +191,20 @@ scores are:
 
 | Backend | Lights / cameras | sRGB mean/worst | Foreground mean/worst | Recall | Precision |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Surface | fitted / fitted | 34.84 / 32.29 dB | 25.21 / 21.48 dB | 98.2% | 93.8% |
-| Surface | fitted / held | 34.96 / 31.79 dB | 25.36 / 22.02 dB | 98.0% | 93.3% |
-| Surface | held / fitted | 34.40 / 32.66 dB | 24.71 / 22.10 dB | 98.2% | 93.8% |
-| Surface | held / held | 34.42 / 32.16 dB | 24.72 / 22.61 dB | 98.0% | 93.3% |
+| Surface | fitted / fitted | 35.63 / 32.70 dB | 26.44 / 22.54 dB | 98.2% | 93.8% |
+| Surface | fitted / held | 35.50 / 32.16 dB | 26.17 / 22.68 dB | 98.0% | 93.3% |
+| Surface | held / fitted | 35.19 / 33.07 dB | 25.95 / 23.17 dB | 98.2% | 93.8% |
+| Surface | held / held | 34.96 / 32.51 dB | 25.51 / 23.28 dB | 98.0% | 93.3% |
 | Gaussian | fitted / fitted | 34.77 / 32.51 dB | 25.38 / 22.45 dB | 94.5% | 88.8% |
 | Gaussian | fitted / held | 34.39 / 32.20 dB | 24.62 / 22.21 dB | 94.9% | 88.5% |
 | Gaussian | held / fitted | 34.41 / 32.90 dB | 24.81 / 23.20 dB | 94.5% | 88.8% |
 | Gaussian | held / held | 34.01 / 32.66 dB | 24.13 / 22.66 dB | 94.9% | 88.5% |
+
+The final surface-material pass solves all 589 diffuse colours together through
+the same coverage-weighted particle groups as the runtime. It uses only the
+construction lights/cameras and improves every surface row without changing
+geometry. The Gaussian keeps its backend-specific material fit rather than
+receiving parameters optimized for the surface compositor.
 
 The Gaussian continuation runs 1,200 updates, improves its construction loss
 from 0.003958 to 0.002280, and retains all 589 particles. These numbers are
@@ -269,10 +275,10 @@ training, 2.04 GB for calibrated scoring, and 1.64 GB for the averaged-light
 Gaussian continuation, with zero swap, OOM, throttle, or GPU fault. The
 production code is unchanged by every rejected arm.
 
-The remaining problem is a correspondence-aware surface proposal. The next
-implementation should make several calibrated cameras agree on a point before
-adding it, while retaining continuous render responsibility instead of giving
-every projected center the whole pixel. It must be selected on construction
+The selected joint material solve now preserves continuous render
+responsibility without moving points. The remaining problem is a
+correspondence-aware surface proposal: several calibrated cameras must agree
+on a point before adding it. It must be selected on construction
 lights/cameras, then improve whole-frame and foreground mean/worst plus recall
 and precision on both excluded axes. More resolution, a global radius sweep,
 or a looser pair matcher is not a new experiment.
@@ -335,16 +341,18 @@ production renders are:
 
 | Backend | Lights / cameras | sRGB mean/worst | Foreground mean/worst | Recall | Precision |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Surface | fitted / fitted | 29.37 / 25.30 dB | 21.63 / 16.29 dB | 96.2% | 93.9% |
-| Surface | fitted / held | 28.92 / 25.67 dB | 20.97 / 16.71 dB | 95.0% | 94.4% |
-| Surface | held / fitted | 29.85 / 26.28 dB | 21.86 / 17.48 dB | 96.2% | 93.9% |
-| Surface | held / held | 29.23 / 26.70 dB | 21.13 / 17.95 dB | 95.0% | 94.4% |
+| Surface | fitted / fitted | 29.80 / 25.47 dB | 21.99 / 16.44 dB | 96.2% | 93.9% |
+| Surface | fitted / held | 29.14 / 25.73 dB | 21.11 / 16.79 dB | 95.0% | 94.4% |
+| Surface | held / fitted | 30.16 / 26.52 dB | 22.08 / 17.67 dB | 96.2% | 93.9% |
+| Surface | held / held | 29.35 / 26.89 dB | 21.16 / 18.12 dB | 95.0% | 94.4% |
 | Gaussian | fitted / fitted | 30.14 / 25.44 dB | 21.67 / 16.32 dB | 93.1% | 97.0% |
 | Gaussian | fitted / held | 29.40 / 25.49 dB | 20.84 / 16.41 dB | 92.0% | 97.1% |
 | Gaussian | held / fitted | 30.12 / 26.49 dB | 21.47 / 17.45 dB | 93.1% | 97.0% |
 | Gaussian | held / held | 29.32 / 26.67 dB | 20.65 / 17.71 dB | 92.0% | 97.1% |
 
-The Gaussian runs 2,400 geometry updates and retains 2,233 of 2,267 particles.
+The coupled sparse material solve improves every surface mean/tail across both
+axes while preserving geometry. The Gaussian runs 2,400 geometry updates and
+retains 2,233 of 2,267 particles.
 It improves held/held whole-frame mean and precision, but loses foreground
 quality and recall, so it does not replace the scalar result. The complete run
 peaks at 1.09 GB host memory with no swap, cgroup event, or GPU fault.
@@ -358,8 +366,9 @@ merge raises the surface to 5,511 points but drops held/held foreground to
 slightly worse. Using all 88 available construction lights improves the oracle
 by 0.37 dB but gives the surface only `+0.10` dB foreground mean while losing
 its worst view and recall. All three controls are removed or remain ignored.
-The active target is therefore cross-view point ownership and continuous
-surface coverage, not more lights, points, or shader capacity.
+Continuous material ownership is now selected. The active target is therefore
+cross-view geometry correspondence and surface coverage, not more lights,
+points, or shader capacity.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

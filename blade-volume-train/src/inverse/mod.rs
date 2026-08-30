@@ -14,6 +14,7 @@
 //! tracer a viewer would use, and it has no opportunity to agree with the
 //! solver by construction.
 
+pub mod blended;
 pub mod capture;
 pub mod decompose;
 pub mod depth;

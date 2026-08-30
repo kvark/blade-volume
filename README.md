@@ -72,32 +72,44 @@ a convincing real-world result.
   The production relight tracer now accepts a finite emitter by mutating one
   uniform—no new shader group or shader entry—and renders the complete fixed
   light/camera cross-product. On the nine combinations excluded from every fit,
-  the scalar cloud reaches 34.42/32.16 dB whole-frame and 24.72/22.61 dB masked
+  the scalar cloud reaches 34.96/32.51 dB whole-frame and 25.51/23.28 dB masked
   foreground mean/worst, with 98.0% recall and 93.3% precision. The relightable
   Gaussian reaches 34.01/32.66 dB whole-frame and 24.13/22.66 dB foreground,
   with 94.9% recall. This passes the finite-light transport/plumbing gate; the
-  visibly soft result still does not pass the final surface-detail bar. Results
+  final sparse material solve follows the runtime surface blend instead of
+  assigning each blended pixel wholly to every projected point. The visibly
+  soft result still does not pass the final surface-detail bar. Results
   are under `target/audit-runs/luces-mv/far-foreground-16k-rust-v1/`.
   Matched follow-ups rule out higher raster resolution, globally denser or
   locally resized support, construction-light averaging, subpixel colour
   reads, and naive epipolar light signatures: each improves a partial metric
-  but loses a held camera/light tail. The next target is cross-view surface
-  correspondence and point ownership, not simply more points. Progress does
+  but loses a held camera/light tail. The next target is cross-view geometry
+  correspondence and support, not simply more points. Progress does
   not depend on OLATverse access.
 - **Independent distant-light control — DiLiGenT-MV is connected.** A pinned,
   pure-Rust Bear route now imports 20 calibrated cameras and a fixed subset of
   32 out of 96 distant lights without reading the released mesh or normals.
   Twenty-four lights and 16 cameras fit the model; eight lights and four
   cameras remain closed until serialization. On their 32-way cross-product,
-  the 2,267-surfel surface reaches `29.23/26.70` dB whole-frame and
-  `21.13/17.95` dB foreground mean/worst, with 95.0% recall and 94.4%
+  the 2,267-surfel surface reaches `29.35/26.89` dB whole-frame and
+  `21.16/18.12` dB foreground mean/worst, with 95.0% recall and 94.4%
   precision. Its Gaussian trades foreground/recall for whole-frame quality and
   precision, so the scalar remains the stronger control. A same-pixel diffuse
   oracle reaches 33.57 dB on the excluded lights, while denser extraction and
   all 88 construction lights fail the complete gate. This independently
-  confirms that cross-view point ownership—not missing light samples—is the
-  next reconstruction bottleneck. Commands and the full matrix are in
+  confirms that geometry correspondence—not missing light samples or material
+  pixel ownership—is the next reconstruction bottleneck. Commands and the full
+  matrix are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
+
+Held-camera surface renders under three lights excluded from fitting. LUCES-MV
+Owl is first; DiLiGenT-MV Bear is second. Relighting responds, but geometry and
+fine surface detail remain visibly soft.
+
+![LUCES-MV Owl relit under three excluded lights](/etc/relight-luces-owl.png)
+
+![DiLiGenT-MV Bear relit under three excluded lights](/etc/relight-diligent-bear.png)
+
 - **Independent natural-light relighting — first honest result, not yet
   passed.** The Objects With Lighting Ant-Man gate trains on 52 cameras under
   one unknown HDR environment, reserves 12 same-environment cameras, then

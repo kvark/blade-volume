@@ -184,6 +184,33 @@ pub fn refine_surface(
     }
 }
 
+fn refine_blended_surface(
+    surface: &mut vol::relight::RelightModel,
+    captures: &[train::inverse::capture::Capture],
+    lights: &[Vec<vol::relight::PointLight>],
+    views: &[usize],
+    albedo_ceiling: f32,
+) -> Result<(), String> {
+    let blended = train::inverse::blended::refine_materials_point_lights(
+        surface,
+        captures,
+        lights,
+        views,
+        albedo_ceiling,
+    )?;
+    println!(
+        "blended materials: {}/{} supported, {} changed, {} equations / {} terms, linear RMSE {:.6} -> {:.6}",
+        blended.supported,
+        surface.materials.len(),
+        blended.changed,
+        blended.equations,
+        blended.terms,
+        blended.initial_loss.sqrt(),
+        blended.final_loss.sqrt(),
+    );
+    Ok(())
+}
+
 pub fn save_gaussian(path: &path::Path, model: &vol::PointCloudModel) -> Result<(), String> {
     convert::save_ply_with_options(
         path,
@@ -282,8 +309,22 @@ pub fn fit(
             options.albedo_ceiling,
         );
         train::gaussian_splat::attach_pbr(&mut gaussian, &surface)?;
+        refine_blended_surface(
+            &mut surface,
+            &training.captures,
+            &training.lights,
+            options.train_views,
+            options.albedo_ceiling,
+        )?;
         Some(gaussian)
     } else {
+        refine_blended_surface(
+            &mut surface,
+            &training.captures,
+            &training.lights,
+            options.train_views,
+            options.albedo_ceiling,
+        )?;
         None
     };
 

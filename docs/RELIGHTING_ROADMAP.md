@@ -13,10 +13,15 @@ not contain or fall back to polygonal geometry.
 - Controlled multi-light captures prove the material and relighting path end
   to end.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
-  and distant-light axes. Its scalar Bear cloud reaches 21.13/17.95 dB
+  and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
   diffuse oracle reaches 33.57 dB. More lights and a denser extraction are
-  mixed or worse, independently isolating cross-view point ownership.
+  mixed or worse, independently isolating cross-view geometry correspondence.
+- The final diffuse solve now follows the runtime particle blend and solves all
+  surfels together. It improves every surface mean/tail on LUCES-MV and
+  DiLiGenT-MV without changing geometry; held/held foreground reaches
+  25.51/23.28 and 21.16/18.12 dB respectively. Gaussian appearance remains
+  backend-specific.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -81,7 +86,7 @@ surface.
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
-| Materials and capture layout | ownership-filtered response improves 27/28 official cells but remains rejected | Keep the global broad-response diagnostic opt-in; use calibrated depth/correspondence rather than more mask heuristics before revisiting the validated diffuse/F0 basis | Every known-light and whole-frame tail plus two held lights and a second object improve; otherwise keep the feature off |
+| Materials and capture layout | coupled runtime-blend diffuse solve selected on LUCES-MV and DiLiGenT-MV | Keep Gaussian appearance backend-specific; next add capacity only after geometry correspondence improves | Preserve every surface mean/tail on both fixed light/camera splits without changing coverage |
 | Unknown natural illumination | local support recovery selected; appearance quality fails | Replace safety restoration with an ownership-aware training objective before changing material or light capacity | Improve over the recovered cloud's official mean/worst PSNR and recall without losing precision on the fixed nine-pair gate |
 
 The selected dense-support prerequisite remains the training-mask hull. On the
