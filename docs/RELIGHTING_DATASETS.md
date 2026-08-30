@@ -213,6 +213,18 @@ which the coupled diffuse solve is repeated. Gaussian appearance is attached
 before this surface-only pass and remains unchanged. The complete run peaks at
 1.8 GiB host memory with no cgroup or GPU fault.
 
+A matched localized radius refinement is rejected. It lowers the construction
+objective and raises held/held whole-frame quality `35.16→35.74` dB and
+precision `93.4%→94.8%`, but does so by shrinking difficult support: recall
+falls `98.0%→97.2%` and foreground mean/worst falls
+`25.67/23.53→25.51/23.42` dB.
+
+Normal-axis center motion is also rejected. Even with each round limited to 1%
+of the local radius and a tenfold mask penalty, it improves held/held
+whole-frame quality `35.16→35.29` dB at unchanged displayed recall, but lowers
+foreground mean `25.67→25.64` dB. Complete image loss can refine orientation;
+it cannot replace independent cross-view depth/support evidence.
+
 The Gaussian continuation runs 1,200 updates, improves its construction loss
 from 0.003958 to 0.002280, and retains all 589 particles. These numbers are
 full production renders, not projected-center samples; the held/held row is
