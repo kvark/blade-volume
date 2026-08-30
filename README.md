@@ -72,14 +72,18 @@ a convincing real-world result.
   The production relight tracer now accepts a finite emitter by mutating one
   uniform—no new shader group or shader entry—and renders the complete fixed
   light/camera cross-product. On the nine combinations excluded from every fit,
-  the scalar cloud reaches 34.96/32.51 dB whole-frame and 25.51/23.28 dB masked
+  the scalar cloud reaches 35.16/32.68 dB whole-frame and 25.67/23.53 dB masked
   foreground mean/worst, with 98.0% recall and 93.3% precision. The relightable
   Gaussian reaches 34.01/32.66 dB whole-frame and 24.13/22.66 dB foreground,
   with 94.9% recall. This passes the finite-light transport/plumbing gate; the
   final sparse material solve follows the runtime surface blend instead of
-  assigning each blended pixel wholly to every projected point. The visibly
+  assigning each blended pixel wholly to every projected point. Four bounded
+  normal rounds use that same complete renderer and calibrated training lights;
+  Gaussian appearance is frozen first, so this surface-only gain cannot leak
+  into its independently fitted backend. The visibly
   soft result still does not pass the final surface-detail bar. Results
-  are under `target/audit-runs/luces-mv/far-foreground-16k-rust-v1/`.
+  are under
+  `target/audit-runs/luces-mv/far-foreground-16k-rust-v1/rendered-point-normals/`.
   Matched follow-ups rule out higher raster resolution, globally denser or
   locally resized support, construction-light averaging, subpixel colour
   reads, and naive epipolar light signatures: each improves a partial metric
@@ -91,8 +95,8 @@ a convincing real-world result.
   32 out of 96 distant lights without reading the released mesh or normals.
   Twenty-four lights and 16 cameras fit the model; eight lights and four
   cameras remain closed until serialization. On their 32-way cross-product,
-  the 2,267-surfel surface reaches `29.35/26.89` dB whole-frame and
-  `21.16/18.12` dB foreground mean/worst, with 95.0% recall and 94.4%
+  the 2,267-surfel surface reaches `29.41/26.90` dB whole-frame and
+  `21.20/18.13` dB foreground mean/worst, with 95.1% recall and 94.5%
   precision. Its Gaussian trades foreground/recall for whole-frame quality and
   precision, so the scalar remains the stronger control. A same-pixel diffuse
   oracle reaches 33.57 dB on the excluded lights, while denser extraction and
@@ -101,6 +105,8 @@ a convincing real-world result.
   pixel ownership—is the next reconstruction bottleneck. Commands and the full
   matrix are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
+  The latest Bear files and held-out renders are under
+  `target/audit-runs/diligent-mv/rendered-point-normals/`.
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV
 Owl is first; DiLiGenT-MV Bear is second. Relighting responds, but geometry and

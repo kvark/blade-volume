@@ -191,10 +191,10 @@ scores are:
 
 | Backend | Lights / cameras | sRGB mean/worst | Foreground mean/worst | Recall | Precision |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Surface | fitted / fitted | 35.63 / 32.70 dB | 26.44 / 22.54 dB | 98.2% | 93.8% |
-| Surface | fitted / held | 35.50 / 32.16 dB | 26.17 / 22.68 dB | 98.0% | 93.3% |
-| Surface | held / fitted | 35.19 / 33.07 dB | 25.95 / 23.17 dB | 98.2% | 93.8% |
-| Surface | held / held | 34.96 / 32.51 dB | 25.51 / 23.28 dB | 98.0% | 93.3% |
+| Surface | fitted / fitted | 35.95 / 32.95 dB | 26.64 / 22.74 dB | 98.2% | 94.1% |
+| Surface | fitted / held | 35.68 / 32.32 dB | 26.29 / 22.90 dB | 98.0% | 93.4% |
+| Surface | held / fitted | 35.49 / 33.29 dB | 26.13 / 23.38 dB | 98.2% | 94.1% |
+| Surface | held / held | 35.16 / 32.68 dB | 25.67 / 23.53 dB | 98.0% | 93.4% |
 | Gaussian | fitted / fitted | 34.77 / 32.51 dB | 25.38 / 22.45 dB | 94.5% | 88.8% |
 | Gaussian | fitted / held | 34.39 / 32.20 dB | 24.62 / 22.21 dB | 94.9% | 88.5% |
 | Gaussian | held / fitted | 34.41 / 32.90 dB | 24.81 / 23.20 dB | 94.5% | 88.8% |
@@ -205,6 +205,13 @@ the same coverage-weighted particle groups as the runtime. It uses only the
 construction lights/cameras and improves every surface row without changing
 geometry. The Gaussian keeps its backend-specific material fit rather than
 receiving parameters optimized for the surface compositor.
+
+Four deterministic antithetic normal rounds then reuse the complete production
+surface renderer with one calibrated point light per photograph. Every round
+is accepted only when it lowers the complete construction objective, after
+which the coupled diffuse solve is repeated. Gaussian appearance is attached
+before this surface-only pass and remains unchanged. The complete run peaks at
+1.8 GiB host memory with no cgroup or GPU fault.
 
 The Gaussian continuation runs 1,200 updates, improves its construction loss
 from 0.003958 to 0.002280, and retains all 589 particles. These numbers are
@@ -341,21 +348,21 @@ production renders are:
 
 | Backend | Lights / cameras | sRGB mean/worst | Foreground mean/worst | Recall | Precision |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Surface | fitted / fitted | 29.80 / 25.47 dB | 21.99 / 16.44 dB | 96.2% | 93.9% |
-| Surface | fitted / held | 29.14 / 25.73 dB | 21.11 / 16.79 dB | 95.0% | 94.4% |
-| Surface | held / fitted | 30.16 / 26.52 dB | 22.08 / 17.67 dB | 96.2% | 93.9% |
-| Surface | held / held | 29.35 / 26.89 dB | 21.16 / 18.12 dB | 95.0% | 94.4% |
+| Surface | fitted / fitted | 29.89 / 25.51 dB | 22.06 / 16.48 dB | 96.3% | 94.0% |
+| Surface | fitted / held | 29.19 / 25.78 dB | 21.14 / 16.84 dB | 95.1% | 94.5% |
+| Surface | held / fitted | 30.28 / 26.55 dB | 22.18 / 17.70 dB | 96.3% | 94.0% |
+| Surface | held / held | 29.41 / 26.90 dB | 21.20 / 18.13 dB | 95.1% | 94.5% |
 | Gaussian | fitted / fitted | 30.14 / 25.44 dB | 21.67 / 16.32 dB | 93.1% | 97.0% |
 | Gaussian | fitted / held | 29.40 / 25.49 dB | 20.84 / 16.41 dB | 92.0% | 97.1% |
 | Gaussian | held / fitted | 30.12 / 26.49 dB | 21.47 / 17.45 dB | 93.1% | 97.0% |
 | Gaussian | held / held | 29.32 / 26.67 dB | 20.65 / 17.71 dB | 92.0% | 97.1% |
 
-The coupled sparse material solve improves every surface mean/tail across both
-axes while preserving geometry. The Gaussian runs 2,400 geometry updates and
-retains 2,233 of 2,267 particles.
+The coupled sparse material solve and four accepted complete-render normal
+rounds improve every surface mean/tail across both axes. The Gaussian runs
+2,400 geometry updates and retains 2,233 of 2,267 particles.
 It improves held/held whole-frame mean and precision, but loses foreground
 quality and recall, so it does not replace the scalar result. The complete run
-peaks at 1.09 GB host memory with no swap, cgroup event, or GPU fault.
+peaks at 839 MiB host memory with no swap, cgroup event, or GPU fault.
 
 The dataset also localizes the next error. An ignored per-pixel Lambertian
 control, using the same 24 construction and eight excluded lights, reaches

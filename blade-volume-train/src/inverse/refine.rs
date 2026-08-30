@@ -139,13 +139,20 @@ pub struct RenderedMaterialAssignmentStats {
     pub seconds: f64,
 }
 
-/// One known-light capture used to refine Gaussian surface normals against
-/// complete production renders.
+/// Illumination paired with one capture for complete-render refinement.
+#[derive(Clone, Copy)]
+pub enum RenderedLight<'a> {
+    Environment(&'a vol::relight::Environment),
+    PointLights(&'a [vol::relight::PointLight]),
+}
+
+/// One known-light capture used to refine surface normals against complete
+/// production renders.
 #[derive(Clone, Copy)]
 pub struct RenderedNormalEvidence<'a> {
     pub capture: &'a capture::Capture,
     pub indices: &'a [usize],
-    pub environment: &'a vol::relight::Environment,
+    pub light: RenderedLight<'a>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -203,13 +210,23 @@ fn rendered_evidence_errors(
     let mut errors = Vec::with_capacity(capacity);
     for ((tracer, entry), cameras) in tracers.iter_mut().zip(evidence).zip(cameras) {
         tracer.reset_sampling();
-        errors.extend(renderer.prepared_srgb_errors(
-            tracer,
-            entry.capture,
-            entry.indices,
-            cameras,
-            RENDERED_NORMAL_COVERAGE_WEIGHT,
-        ));
+        errors.extend(match entry.light {
+            RenderedLight::Environment(_) => renderer.prepared_srgb_errors(
+                tracer,
+                entry.capture,
+                entry.indices,
+                cameras,
+                RENDERED_NORMAL_COVERAGE_WEIGHT,
+            ),
+            RenderedLight::PointLights(lights) => renderer.prepared_point_light_srgb_errors(
+                tracer,
+                entry.capture,
+                entry.indices,
+                cameras,
+                lights,
+                RENDERED_NORMAL_COVERAGE_WEIGHT,
+            ),
+        });
     }
     errors
 }
@@ -283,6 +300,13 @@ fn refine_rendered_parameter(
                 ));
             }
         }
+        if let RenderedLight::PointLights(lights) = entry.light {
+            if lights.len() != entry.capture.views.len() {
+                return Err(format!(
+                    "rendered {parameter} point-light count does not match the capture"
+                ));
+            }
+        }
     }
 
     let cameras: Vec<Vec<vol::CameraParams>> = evidence
@@ -307,13 +331,18 @@ fn refine_rendered_parameter(
     let mut tracers: Vec<_> = evidence
         .iter()
         .map(|entry| {
-            let prepared_scene = if scene.environment().width == entry.environment.width
-                && scene.environment().height == entry.environment.height
-                && scene.environment().texels == entry.environment.texels
-            {
-                scene.clone()
-            } else {
-                score::Scene::new(scene.model.clone(), entry.environment.clone())
+            let prepared_scene = match entry.light {
+                RenderedLight::Environment(environment)
+                    if scene.environment().width == environment.width
+                        && scene.environment().height == environment.height
+                        && scene.environment().texels == environment.texels =>
+                {
+                    scene.clone()
+                }
+                RenderedLight::Environment(environment) => {
+                    score::Scene::new(scene.model.clone(), environment.clone())
+                }
+                RenderedLight::PointLights(_) => scene.clone(),
             };
             renderer.prepare_scene(&prepared_scene, diffuse_samples, false)
         })
@@ -390,7 +419,7 @@ fn refine_rendered_parameter(
     })
 }
 
-/// Refine observed Gaussian normals against complete renders from known-light
+/// Refine observed surface normals against complete renders from known-light
 /// captures. Each round renders one antithetic perturbation pair, chooses a
 /// direction per projected particle from its local error difference, and only
 /// keeps a proposal that lowers the full multi-light objective. Centers,
@@ -3159,7 +3188,7 @@ mod tests {
         let evidence = [RenderedNormalEvidence {
             capture: &capture,
             indices: &[0, 1],
-            environment: &environment,
+            light: RenderedLight::Environment(&environment),
         }];
         let stats =
             refine_rendered_normals(&mut candidate, &evidence, &observations, 0, 24, 5.0).unwrap();
@@ -3198,6 +3227,76 @@ mod tests {
             (undersized.model.surfels[0].radius - 0.3).abs() < 0.06,
             "radius={}, stats={stats:?}",
             undersized.model.surfels[0].radius,
+        );
+    }
+
+    #[test]
+    fn complete_render_refinement_supports_point_lights() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        const SIZE: usize = 32;
+        let cameras = [
+            camera(glam::Vec3::new(0.0, 0.0, -1.2)),
+            camera(glam::Vec3::new(0.25, 0.0, -1.2)),
+        ];
+        let lights = [
+            vol::relight::PointLight {
+                position: [-0.4, 0.2, -0.8],
+                intensity: [1.0; 3],
+                direction: [0.0; 3],
+                exponent: 0.0,
+            },
+            vol::relight::PointLight {
+                position: [0.5, -0.1, -0.9],
+                intensity: [1.0; 3],
+                direction: [0.0; 3],
+                exponent: 0.0,
+            },
+        ];
+        let truth_normal = -glam::Vec3::Z;
+        let truth = rendered_test_scene(0.0);
+        let Ok(mut renderer) = score::Renderer::new(SIZE, SIZE) else {
+            eprintln!("skipping point-light normal refinement test: no ray-tracing GPU");
+            return;
+        };
+        let mut tracer = renderer.prepare_scene(&truth, 0, false);
+        let rendered =
+            renderer.render_prepared_point_light_views(&mut tracer, &cameras, &lights, &[0, 1]);
+        renderer.destroy_prepared_scene(tracer);
+        renderer.destroy();
+        let capture = capture::Capture {
+            width: SIZE,
+            height: SIZE,
+            views: cameras
+                .iter()
+                .enumerate()
+                .map(|(index, &camera)| capture::View {
+                    name: format!("point-normal-truth-{index}"),
+                    camera,
+                    pixels: rendered[index]
+                        .iter()
+                        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
+                        .collect(),
+                    mask: None,
+                })
+                .collect(),
+        };
+        let mut candidate = truth;
+        let tilted = glam::Quat::from_rotation_y(15.0_f32.to_radians()) * truth_normal;
+        candidate.model.surfels[0].normal = tilted.to_array();
+        let observations = decompose::observe(&candidate.model, &capture, &[0, 1], -1.0);
+        let evidence = [RenderedNormalEvidence {
+            capture: &capture,
+            indices: &[0, 1],
+            light: RenderedLight::PointLights(&lights),
+        }];
+        let stats =
+            refine_rendered_normals(&mut candidate, &evidence, &observations, 0, 24, 5.0).unwrap();
+        let refined = glam::Vec3::from(candidate.model.surfels[0].normal);
+        assert!(stats.accepted > 0, "stats={stats:?}");
+        assert!(stats.final_loss < stats.initial_loss, "stats={stats:?}");
+        assert!(
+            refined.angle_between(truth_normal) < tilted.angle_between(truth_normal),
+            "tilted={tilted:?}, refined={refined:?}, stats={stats:?}"
         );
     }
 }

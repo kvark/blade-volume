@@ -773,7 +773,9 @@ fn main() {
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
             capture: &capture,
             indices: &train_views,
-            environment: known_light.as_ref().expect("known light validated above"),
+            light: train::inverse::refine::RenderedLight::Environment(
+                known_light.as_ref().expect("known light validated above"),
+            ),
         }];
         let stats = train::inverse::refine::refine_rendered_normals(
             &mut fitted.scene,
@@ -1072,7 +1074,7 @@ fn main() {
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
             capture: &capture,
             indices: &train_views,
-            environment: &environment,
+            light: train::inverse::refine::RenderedLight::Environment(&environment),
         }];
         let stats = train::inverse::refine::refine_rendered_radii(
             &mut fitted.scene,
