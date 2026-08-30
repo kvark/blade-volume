@@ -502,6 +502,43 @@ attachment. No checkpoint is retained, and all instrumentation is removed.
 The next narrow diagnostic fits only the proposed patch's material in the
 final Gaussian compositor; it does not reopen geometry, opacity, or matching.
 
+That material-only screen is also negative. Geometry, opacity, normals, and
+all 1,870 base-particle materials stay frozen; only one RGB gain shared by the
+nine proposed particles is coordinate-searched on selection cameras. The
+selected material raises validation whole/foreground means to
+`33.8036/24.2991` dB, but foreground worst falls from `20.0594` to `20.0516`
+dB. It is rejected before any production parameter-partitioning API.
+
+A separate one-shot geometry route uses the landed 24-light photometric-albedo
+estimator before the ordinary trainer. Pure albedo produces 1,940 particles;
+the exact fitted/held matrix is:
+
+| Lights / cameras | Control whole | Albedo whole | Control foreground | Albedo foreground | Recall | Precision |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| fitted / fitted | 34.423 / 30.142 | 34.368 / **30.171** | **24.957 / 20.059** | 24.932 / 19.962 | 90.88% → **91.53%** | 95.30% → **95.37%** |
+| fitted / held | **33.429 / 29.947** | 33.235 / 29.922 | **23.909** / 19.715 | 23.759 / **19.771** | **90.50%** → 90.33% | **95.18%** → 94.98% |
+| held / fitted | **34.225 / 31.256** | 34.137 / 31.128 | **24.643 / 21.156** | 24.566 / 21.079 | 90.88% → **91.53%** | 95.30% → **95.37%** |
+| held / held | **33.242 / 30.711** | 32.989 / 30.570 | **23.599** / 20.523 | 23.362 / **20.668** | **90.50%** → 90.33% | **95.18%** → 94.98% |
+
+Fixed 25% and 50% linear blends with the original shadowed images test whether
+the two cues are complementary. The 50% blend dominates every metric on both
+internal construction-camera splits, but the official held-light/held-camera
+whole/foreground means are only `33.1191/23.5073` dB, despite a best worst
+foreground of `20.8497` dB. The 25% blend reaches
+`33.2411/23.6685;20.5791` dB there, but loses fitted-camera tails and precision
+(`94.82%` on held cameras). A selection-fixed 12/16 center-mask support prune
+fails internal validation foreground mean. Matching the blend's merge budget
+to the base (1,888 versus 1,870 particles) yields only
+`33.0210/23.4398;20.6425` dB held/held. All arms are rejected. Artifacts remain
+ignored under `target/audit-runs/diligent-mv/pot2-albedo-*`; all scoped runs
+finish without swap, OOM, pressure, throttle, or GPU fault, with a 491 MiB peak
+for calibrated fitting.
+
+Pot2 has now served its one adaptive proxy-image audit. Further work must not
+tune another precombined image against this official split. The next fresh
+gate should optimize a shared cloud against the calibrated light stack itself,
+keeping light-conditioned appearance separate while geometry remains common.
+
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
 

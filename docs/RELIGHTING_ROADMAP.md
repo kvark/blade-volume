@@ -1455,9 +1455,14 @@ a deterministic repeat agree within the measured training variance.
   still regress despite every mean and coverage metric improving.
 - [x] Test construction-only geometry/opacity continuation checkpoints; reject
   them when foreground tail and precision cross at different checkpoints.
-- [ ] Fit only proposed-patch appearance in the final Gaussian compositor,
-  then repeat without changing correspondence or geometry thresholds before
-  adding any merge API.
+- [x] Fit only proposed-patch appearance in the final Gaussian compositor;
+  reject it when selection gains make the untouched validation tail worse.
+- [x] Reconstruct Pot2 from photometric albedo and fixed 25%/50% blends;
+  reject all three when novel-camera means regress, including after mask
+  pruning and particle-budget matching.
+- [ ] Train one shared point-cloud geometry against the calibrated light stack
+  directly. Keep per-light appearance as nuisance state; do not first reduce
+  the observations to a proxy image.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
@@ -1525,6 +1530,43 @@ control. Holding position or normals at the checkpoint does not change that
 boundary. The diagnostic instrumentation is removed; the remaining degree of
 freedom is patch appearance in the final Gaussian compositor, not a global
 geometry/opacity rollback.
+
+Patch-local appearance does not clear the gate either. Holding all 1,870 base
+particles and every geometry, opacity, and normal parameter fixed, two bounded
+RGB-gain passes improve selection whole/foreground mean-worst to
+`34.768/31.266;25.324/21.212` dB. On untouched internal validation, however,
+the fitted patch changes foreground worst from the `20.0594` dB base and
+`20.0540` dB jointly fitted candidate to `20.0516` dB. The material-only
+candidate is rejected; no patch-material API enters production.
+
+The next control changes the geometry observation rather than appending a
+surface. Twenty-four calibrated construction lights are reduced to one robust
+photometric-albedo image per camera, then the unchanged 16k cloud trainer,
+surface extraction, and calibrated fitter run end to end. The resulting
+1,940-particle Gaussian improves held-light/held-camera foreground worst
+`20.5232→20.6685` dB, but loses whole mean `33.2416→32.9893` dB, foreground
+mean `23.5994→23.3622` dB, recall, and precision. It is rejected.
+
+A predeclared 50% linear blend with the original shadowed image is closer. It
+dominates the base on both internal construction-camera selection and
+validation splits and improves the official worst foreground frame to
+`20.8497` dB, but held-light/held-camera whole and foreground means still fall
+to `33.1191/23.5073` dB. A 25% blend nearly matches that whole mean
+(`33.2411` dB) but loses fitted-camera tails and precision. Suppressing
+particles whose centers miss the construction visual hull restores precision
+only by trading away foreground mean and recall; the selection-fixed 12/16
+rule fails internal validation. Finally, increasing the merge factor from `2`
+to `2.024` matches the base complexity (1,888 versus 1,870 particles) but
+lowers held/held whole and foreground mean to `33.0210/23.4398` dB. These are
+all rejected diagnostics under `target/audit-runs/diligent-mv/pot2-albedo-*`.
+
+This closes proxy-image geometry for the Pot2 split. Multi-light albedo is a
+useful correspondence signal, but averaging or blending observations before
+geometry training discards the light-conditioned residual that distinguishes
+surface displacement from appearance. The next bounded implementation must
+share geometry across calibrated captures while letting each light keep its
+own predicted appearance. It remains cloud-only and should reuse the existing
+Meganeura renderer rather than add another shader or backend.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

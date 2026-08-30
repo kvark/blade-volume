@@ -112,7 +112,12 @@ a convincing real-world result.
   A fresh Pot2 repeat gets closer: seeding nine surfels before joint fitting
   improves every final Gaussian mean, recall, and precision, but still loses
   two foreground tails by `0.0054/0.0028` dB, so it is also rejected. Commands
-  and the full matrices are in
+  Fitting only those new materials worsens the validation tail further. Using
+  24-light photometric albedo as the geometry image, alone or blended 25%/50%
+  with the original view, also fails novel-camera transfer; mask pruning and a
+  matched particle budget do not repair it. The next surface experiment must
+  optimize one shared cloud against calibrated lights directly instead of
+  collapsing them into one proxy image. Commands and the full matrices are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV
