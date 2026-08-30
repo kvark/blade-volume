@@ -454,6 +454,43 @@ with zero swap, OOM, throttle, or GPU fault. The proposed matching API and
 reconstruction integration remain removed; a production path needs points
 that predict missing support beyond the cameras used to triangulate them.
 
+Pot2 supplies a third fresh control from the same pinned archive. Only its
+image/calibration directory is extracted; released mesh, normal, and depth
+products remain unread. The unchanged 16,384-cell route produces 1,870 surface
+points and 1,850 fitted Gaussians. Its held-light/held-camera Gaussian baseline
+is `33.242/30.711` dB whole-frame and `23.599/20.523` dB foreground, with 90.50%
+recall and 95.18% precision.
+
+The exact eight-pass missing-surface search finds 70 unique tracks, 67 inside
+the selection visual hull, and patches of six and nine surfels. The first has
+no selection-hole coverage and is rejected. The second raises selection and
+validation coverage. A selection-only material screen fixes `1.5×` calibrated
+albedo because it gives the best means among scales that also improve both
+selection tails. On validation it improves whole mean/worst and foreground
+mean, but foreground worst changes `20.0594→20.0543` dB, so the post-hoc cloud
+is rejected before its official matrix.
+
+A one-shot seeded control inserts the same nine surfels into the unfitted
+surface, then reruns the ordinary calibrated normal/material solve and Gaussian
+continuation. The result retains 1,859 Gaussians and improves all four final
+means, recall, and precision. Its exact Gaussian matrix is:
+
+| Lights / cameras | Control whole | Seeded whole | Control foreground | Seeded foreground | Recall | Precision |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| fitted / fitted | 34.423 / 30.142 | **34.487 / 30.175** | 24.957 / **20.059** | **25.035** / 20.054 | 90.88% → **91.10%** | 95.30% → **95.33%** |
+| fitted / held | 33.429 / 29.947 | **33.491 / 29.956** | 23.909 / 19.715 | **23.989 / 19.724** | 90.50% → **90.75%** | 95.18% → **95.21%** |
+| held / fitted | 34.225 / 31.256 | **34.274 / 31.276** | 24.643 / **21.156** | **24.701** / 21.153 | 90.88% → **91.10%** | 95.30% → **95.33%** |
+| held / held | 33.242 / 30.711 | **33.295 / 30.714** | 23.599 / 20.523 | **23.664 / 20.526** | 90.50% → **90.75%** | 95.18% → **95.21%** |
+
+The mean improvements do not excuse the 0.0054/0.0028 dB fitted-camera
+foreground-tail losses, so this candidate is also rejected. The fresh route
+peaks at 1.22 GiB during import; candidate fitting peaks at 309 MiB. Every
+post-extraction scope reports zero swap, OOM, throttle, or GPU fault. Archive
+extraction hit its initial 2 GiB `memory.max` through page cache without an OOM,
+so all subsequent scopes used a raised cap. The next experiment keeps the same
+points and appearance policy and changes only continuation acceptance so an
+average loss cannot trade away a camera/light tail.
+
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
 

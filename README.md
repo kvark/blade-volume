@@ -109,7 +109,10 @@ a convincing real-world result.
   estimator is landed. The multi-pass correspondence and patch selection stay
   diagnostic: a direct one-pass form loses final Cow tails, while the exact
   Bear repeat finds one small patch but loses internal validation recall.
-  Commands and the full matrix are in
+  A fresh Pot2 repeat gets closer: seeding nine surfels before joint fitting
+  improves every final Gaussian mean, recall, and precision, but still loses
+  two foreground tails by `0.0054/0.0028` dB, so it is also rejected. Commands
+  and the full matrices are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV

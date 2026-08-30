@@ -5801,3 +5801,25 @@ oom_events = 0
 gpu_faults = 0
 official_held_split_opened = false
 verdict = "reject before the official held split: preserving alternate correspondences recovers one patch, but it predicts no validation-camera hole support and decreases combined validation recall; prioritize cross-camera missing-support consistency over a broader matcher API"
+
+[diligent_mv.rejected_pot2_seeded_missing_surface]
+date = "2026-08-30"
+protocol = "fresh Pot2 16k reconstruction; exact eight-pass calibrated-albedo search; reject the zero-coverage six-surfel patch; fix the nine-surfel patch and 1.5x albedo on four selection cameras; after post-hoc validation loses one foreground tail, seed the same geometry into the unfitted surface and run the unchanged calibrated normal/material solve plus Gaussian continuation once"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+fitted_lights_fitted_cameras_control = [34.422673, 30.141536, 24.956656, 20.059379, 90.877501, 95.295965]
+fitted_lights_fitted_cameras_candidate = [34.486853, 30.175057, 25.035157, 20.053957, 91.097073, 95.329417]
+fitted_lights_held_cameras_control = [33.428642, 29.946915, 23.909372, 19.714740, 90.502525, 95.184561]
+fitted_lights_held_cameras_candidate = [33.490569, 29.955692, 23.989373, 19.723710, 90.747267, 95.214374]
+held_lights_fitted_cameras_control = [34.225384, 31.256417, 24.643264, 21.155851, 90.877501, 95.295965]
+held_lights_fitted_cameras_candidate = [34.274464, 31.275807, 24.701096, 21.153075, 91.097073, 95.329417]
+held_lights_held_cameras_control = [33.241601, 30.711132, 23.599410, 20.523180, 90.502525, 95.184561]
+held_lights_held_cameras_candidate = [33.295479, 30.714084, 23.664412, 20.526147, 90.747267, 95.214374]
+control_particles = 1850
+candidate_particles = 1859
+fresh_route_peak_memory_bytes = 1309683712
+candidate_fit_peak_memory_bytes = 323981312
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/pot2-16k/{calibrated-production,missing-surface-eight-pass,missing-surface-joint} (gitignored)"
+verdict = "reject: all four Gaussian means, recall, and precision improve, but fitted/fitted and held/fitted foreground tails regress by 0.005422 and 0.002776 dB; keep seeded joint fitting as the next route and make its continuation acceptance tail-aware"
