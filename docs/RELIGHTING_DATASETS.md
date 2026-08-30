@@ -554,6 +554,46 @@ This rejects sequential light windows and the temporary density-rate control.
 The next implementation needs one optimizer session in which multiple lights
 contribute to the same shared-geometry update.
 
+A 64-view control places the four aligned light stacks in one session with one
+Adam state but retains one global SH appearance. Trainable density collapses
+Pot2 to 1,780 retained particles and about 89.2% held-camera recall. Frozen
+density retains 1,861 and improves held-camera means, but still loses
+fitted-camera tails. On Cow, the same frozen-density control reaches only about
+`30.77/19.72` dB held/held whole/foreground mean, 83.8% recall, and 94.9%
+precision. It is rejected and the temporary density control is removed. This
+tests joint batching, not per-light nuisance appearance.
+
+The final control supplies that missing degree of freedom in the same session:
+four packed SH tables are selected by a per-ray one-hot basis while geometry,
+density, and Adam state stay shared. Trainable density retains 1,826 fitted
+particles, but held-camera recall falls to 89.77% and several worst-view cells
+regress by as much as 0.1765 dB. Frozen density retains 1,861 particles and
+improves every mean, recall, and precision cell. It still lowers
+fitted-light/fitted-camera whole worst `30.1415→30.0712` dB and
+held-light/fitted-camera whole worst `31.2564→31.1970` dB; the latter
+foreground worst moves `21.1559→21.1513` dB. Held-light/held-camera
+foreground improves `23.5994/20.5232→23.6535/20.6136` dB, so the signal is
+real but does not satisfy the complete gate. Both arms are rejected and all
+grouping/rate plumbing is removed. Scoped training, fitting, and scoring peak
+at about 1.1 GiB with zero swap, memory event, or GPU fault. The next route is
+a calibrated-light image-formation objective with shared material response,
+not another unconstrained appearance table.
+
+Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
+released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
+surfels and retains 2,118 fitted Gaussians. Before any candidate held split is
+opened, the exact calibrated-albedo matcher finds 94 unique missing-region
+tracks and keeps 89 in the selection visual hull. Its default four-pixel
+shared-view graph has one seven-point component; that component reaches only
+3.7% missing-region precision and falls just below the 98% foreground-safety
+gate. Matching world-space photometric normals instead leaves 28 tracks and no
+component. Six- and eight-pixel neighborhoods produce 22 and 62
+foreground-safe surfels respectively, but every bounded patch/appearance
+candidate trades a selection mean against a tail. No candidate reaches
+validation or official cameras/lights. Scoped runs peak near 1.1 GiB with no
+swap, memory event, or GPU fault. The Buddha control closes descriptor and
+patch-radius tuning rather than weakening the fixed safety gate.
+
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
 

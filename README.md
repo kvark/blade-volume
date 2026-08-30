@@ -111,16 +111,26 @@ a convincing real-world result.
   Bear repeat finds one small patch but loses internal validation recall.
   A fresh Pot2 repeat gets closer: seeding nine surfels before joint fitting
   improves every final Gaussian mean, recall, and precision, but still loses
-  two foreground tails by `0.0054/0.0028` dB, so it is also rejected. Commands
-  Fitting only those new materials worsens the validation tail further. Using
+  two foreground tails by `0.0054/0.0028` dB, so it is also rejected. Fitting
+  only those new materials worsens the validation tail further. Using
   24-light photometric albedo as the geometry image, alone or blended 25%/50%
   with the original view, also fails novel-camera transfer; mask pruning and a
-  matched particle budget do not repair it. The next surface experiment must
-  optimize one shared cloud against calibrated lights directly instead of
-  collapsing them into one proxy image. A first alternating-light prototype
-  improves all Pot2 means but loses fitted-camera tails and regresses Cow; it
-  is removed. The next version needs one joint optimizer, not one restarted
-  fit per light. Commands and the full matrices are in
+  matched particle budget do not repair it. A first alternating-light
+  prototype improves all Pot2 means but loses fitted-camera tails and
+  regresses Cow; it is removed. A stricter follow-up puts four light stacks in
+  one optimizer and gives each light independent nuisance SH while sharing the
+  cloud. Frozen density improves every Pot2 average, recall, and precision,
+  but still loses fitted-camera worst views by up to 0.070 dB; trainable
+  density also loses held-camera recall. The experimental grouping API is
+  removed. Per-light appearance can explain the photographs without
+  identifying better geometry, so the next surface route must use measured
+  lights and shared material response in the image-formation objective, not
+  another free appearance table or proxy image. A fresh Buddha repeat also
+  rejects the correspondence route
+  before held data: calibrated-albedo tracks form no complete-render-safe
+  patch under the default neighborhood, and wider or photometric-normal
+  variants trade selection means against tails. Commands and the full matrices
+  are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV

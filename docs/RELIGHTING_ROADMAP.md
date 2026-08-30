@@ -1460,9 +1460,19 @@ a deterministic repeat agree within the measured training variance.
 - [x] Reconstruct Pot2 from photometric albedo and fixed 25%/50% blends;
   reject all three when novel-camera means regress, including after mask
   pruning and particle-budget matching.
-- [ ] Train one shared point-cloud geometry against the calibrated light stack
-  in one optimizer session. Keep per-light appearance as nuisance state; do
-  not reduce the observations to a proxy image or restart Adam per light.
+- [x] Repeat missing-support discovery on a predeclared fourth DiLiGenT-MV
+  object; reject albedo, photometric-normal, and wider patch-neighborhood
+  variants before opening the candidate held split.
+- [x] Put all four light/camera stacks in one optimizer session with one global
+  nuisance appearance; reject it because it collapses support when density is
+  trainable and repeats the Pot2/Cow transfer failure when density is frozen.
+- [x] Train one shared point-cloud geometry against the calibrated light stack
+  in one optimizer session with independent per-light nuisance SH; reject and
+  remove it because frozen density improves averages but loses fitted-camera
+  tails, while trainable density also loses held-camera support.
+- [ ] Replace free per-light appearance with a calibrated-light, shared-
+  material image-formation objective for the point surface. Select geometry on
+  construction-camera tails before opening another object/light gate.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
@@ -1591,6 +1601,53 @@ prototype must place multiple light-conditioned observations in the same
 Meganeura session and optimizer step, with shared density/position parameters
 and explicitly separate nuisance appearance. That is a graph/training change,
 not a new renderer or runtime representation.
+
+A literal 64-view batch verifies the first half of that boundary but not the
+second. It puts four lights at each of 16 cameras into one session and keeps
+one Adam state. With density trainable, Pot2 falls to 1,780 retained particles
+and roughly 89.2% held-camera recall. Freezing density retains 1,861 particles
+and improves held-camera means, but fitted-camera tails still regress. The
+unchanged Cow replay reaches only about `30.77/19.72` dB held/held
+whole/foreground mean, 83.8% recall, and 94.9% precision. One global SH table
+forces lighting variation into shared geometry, so this is not the required
+per-light nuisance model and no training option is retained.
+
+The complete grouped control then packs four independent SH tables into that
+same graph and selects one with a per-ray one-hot basis. Density, positions,
+and Adam state remain shared; there is still one optimizer session and one
+batched traversal. With density trainable, its 1,826-particle Gaussian
+improves many image cells but lowers held-camera recall to `89.77%` and loses
+three foreground/whole tails by up to `0.1765` dB. Freezing density retains
+1,861 particles and improves all eight means, both recall cells, and both
+precision cells. It nevertheless lowers fitted-light/fitted-camera whole
+worst `30.1415→30.0712` dB and held-light/fitted-camera whole worst
+`31.2564→31.1970` dB; the latter foreground worst also moves
+`21.1559→21.1513` dB. The exact held/held foreground mean/worst improves
+`23.5994/20.5232→23.6535/20.6136` dB.
+
+The strict complete-matrix gate rejects both arms. The temporary grouped SH,
+density-rate control, and GPU test are removed; no runtime field, shader,
+Meganeura operation, or dependency remains. This closes nuisance appearance as
+the next geometry route: an unconstrained table can absorb each light's image
+without making the common surface more identifiable. The next bounded
+experiment must render measured light against a shared diffuse material (and
+only later bounded reflectance) while updating point positions/normals. It
+should extend the existing physical Gaussian multi-light objective or the
+surface PowerFoam continuation, not add another renderer.
+
+DiLiGenT-MV Buddha is the fourth predeclared object gate. Its unchanged 16k
+route extracts 2,143 point surfels and the calibrated Gaussian fit retains
+2,118. The default calibrated-albedo search finds 94 unique missing-region
+tracks, 89 in the selection visual hull, but its only seven-point component
+has just 3.7% missing-region precision and misses the 98% foreground-safety
+gate. A world-space photometric-normal descriptor leaves 28 tracks and no
+five-point component. Widening shared-view adjacency from four to six pixels
+forms three safe components (22 surfels total), and eight pixels forms three
+larger components (62 surfels total), but no bounded appearance candidate
+improves every selection mean and tail. Candidate validation and the official
+camera/light split remain closed. The clean scopes peak near 1.1 GiB with zero
+swap, memory event, or GPU fault. This closes threshold tuning of the sparse
+patch route; it does not justify weakening its precision contract.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the
