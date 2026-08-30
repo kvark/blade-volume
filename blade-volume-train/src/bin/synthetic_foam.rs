@@ -1236,7 +1236,7 @@ fn main() {
                 |(capture, environment)| train::inverse::refine::RenderedNormalEvidence {
                     capture,
                     indices: &training_indices,
-                    light: train::inverse::refine::RenderedLight::Environment(environment),
+                    environment,
                 },
             )
             .collect();
@@ -1497,7 +1497,7 @@ fn main() {
         let evidence = [train::inverse::refine::RenderedNormalEvidence {
             capture: &training_capture,
             indices: &training_indices,
-            light: train::inverse::refine::RenderedLight::Environment(&environment),
+            environment: &environment,
         }];
         let stats = train::inverse::refine::refine_rendered_radii(
             &mut fitted.scene,

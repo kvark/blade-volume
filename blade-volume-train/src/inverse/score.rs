@@ -473,22 +473,9 @@ impl Renderer {
         tracer: &mut vol::gpu::RelightTracer,
         cameras: &[vol::CameraParams],
     ) -> &[[f32; 4]] {
-        self.render_prepared_flat_with_lights(tracer, cameras, None)
-    }
-
-    fn render_prepared_flat_with_lights(
-        &mut self,
-        tracer: &mut vol::gpu::RelightTracer,
-        cameras: &[vol::CameraParams],
-        point_lights: Option<(&[vol::relight::PointLight], &[usize])>,
-    ) -> &[[f32; 4]] {
         if cameras.is_empty() {
             assert!(!self.geometry_update_pending);
             return &[];
-        }
-        if let Some((lights, indices)) = point_lights {
-            assert_eq!(indices.len(), cameras.len());
-            assert!(indices.iter().all(|&index| index < lights.len()));
         }
         self.ensure_readback_frames(cameras.len());
         let frame_bytes = (self.width * self.height) as u64 * 16;
@@ -499,9 +486,6 @@ impl Renderer {
         }
         self.encoder.init_texture(self.texture);
         for (index, &camera) in cameras.iter().enumerate() {
-            if let Some((lights, indices)) = point_lights {
-                tracer.set_point_light(lights[indices[index]]);
-            }
             tracer.dispatch(
                 &mut self.encoder,
                 self.target,
@@ -525,21 +509,6 @@ impl Renderer {
                 self.width * self.height * cameras.len(),
             )
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn render_prepared_point_light_views(
-        &mut self,
-        tracer: &mut vol::gpu::RelightTracer,
-        cameras: &[vol::CameraParams],
-        lights: &[vol::relight::PointLight],
-        indices: &[usize],
-    ) -> Vec<Vec<[f32; 4]>> {
-        let frame_pixels = self.width * self.height;
-        self.render_prepared_flat_with_lights(tracer, cameras, Some((lights, indices)))
-            .chunks(frame_pixels)
-            .map(<[_]>::to_vec)
-            .collect()
     }
 
     pub(crate) fn render_prepared_views(
@@ -584,22 +553,23 @@ impl Renderer {
         cameras: &[vol::CameraParams],
         coverage_weight: f32,
     ) -> Vec<f32> {
+        let frame_pixels = capture.width * capture.height;
         let pixels = self.render_prepared_flat(tracer, cameras);
-        capture_srgb_errors(pixels, capture, indices, coverage_weight)
-    }
-
-    pub(crate) fn prepared_point_light_srgb_errors(
-        &mut self,
-        tracer: &mut vol::gpu::RelightTracer,
-        capture: &capture::Capture,
-        indices: &[usize],
-        cameras: &[vol::CameraParams],
-        lights: &[vol::relight::PointLight],
-        coverage_weight: f32,
-    ) -> Vec<f32> {
-        let pixels =
-            self.render_prepared_flat_with_lights(tracer, cameras, Some((lights, indices)));
-        capture_srgb_errors(pixels, capture, indices, coverage_weight)
+        let mut errors = Vec::with_capacity(pixels.len());
+        for (frame, &index) in pixels.chunks(frame_pixels).zip(indices) {
+            for (pixel, (rendered, reference)) in
+                frame.iter().zip(&capture.views[index].pixels).enumerate()
+            {
+                let reference_coverage = capture.views[index].mask.as_ref().map(|mask| mask[pixel]);
+                errors.push(srgb_error(
+                    rendered,
+                    reference,
+                    reference_coverage,
+                    coverage_weight,
+                ));
+            }
+        }
+        errors
     }
 
     pub(crate) fn destroy_prepared_scene(&mut self, mut tracer: vol::gpu::RelightTracer) {
@@ -860,30 +830,6 @@ fn srgb_error(
         coverage_weight * difference * difference
     });
     color + coverage
-}
-
-fn capture_srgb_errors(
-    rendered: &[[f32; 4]],
-    capture: &capture::Capture,
-    indices: &[usize],
-    coverage_weight: f32,
-) -> Vec<f32> {
-    let frame_pixels = capture.width * capture.height;
-    let mut errors = Vec::with_capacity(rendered.len());
-    for (frame, &index) in rendered.chunks(frame_pixels).zip(indices) {
-        for (pixel, (rendered, reference)) in
-            frame.iter().zip(&capture.views[index].pixels).enumerate()
-        {
-            let reference_coverage = capture.views[index].mask.as_ref().map(|mask| mask[pixel]);
-            errors.push(srgb_error(
-                rendered,
-                reference,
-                reference_coverage,
-                coverage_weight,
-            ));
-        }
-    }
-    errors
 }
 
 pub fn save_rgba(path: &path::Path, pixels: &[[f32; 4]], width: usize, height: usize) {

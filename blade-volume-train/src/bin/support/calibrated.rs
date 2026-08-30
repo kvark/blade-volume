@@ -211,53 +211,6 @@ fn refine_blended_surface(
     Ok(())
 }
 
-fn refine_rendered_surface_normals(
-    surface: &mut vol::relight::RelightModel,
-    captures: &[train::inverse::capture::Capture],
-    lights: &[Vec<vol::relight::PointLight>],
-    views: &[usize],
-) -> Result<bool, String> {
-    if captures.len() != lights.len() {
-        return Err("rendered normal capture/light counts do not match".to_string());
-    }
-    let Some(first_capture) = captures.first() else {
-        return Ok(false);
-    };
-    let observations = train::inverse::decompose::observe(surface, first_capture, views, 0.15);
-    let evidence = captures
-        .iter()
-        .zip(lights)
-        .map(
-            |(capture, lights)| train::inverse::refine::RenderedNormalEvidence {
-                capture,
-                indices: views,
-                light: train::inverse::refine::RenderedLight::PointLights(lights),
-            },
-        )
-        .collect::<Vec<_>>();
-    let black = vol::relight::Environment::uniform([0.0; 3], 8, 4);
-    let mut scene = train::inverse::score::Scene::new(surface.clone(), black);
-    let stats = train::inverse::refine::refine_rendered_normals(
-        &mut scene,
-        &evidence,
-        &observations,
-        0,
-        4,
-        2.5,
-    )?;
-    println!(
-        "rendered surface normals: {} supported, {}/{} rounds accepted, sRGB loss {:.7} -> {:.7} in {:.2} s",
-        stats.normals,
-        stats.accepted,
-        stats.rounds,
-        stats.initial_loss,
-        stats.final_loss,
-        stats.seconds,
-    );
-    *surface = scene.model;
-    Ok(stats.accepted > 0)
-}
-
 pub fn save_gaussian(path: &path::Path, model: &vol::PointCloudModel) -> Result<(), String> {
     convert::save_ply_with_options(
         path,
@@ -356,23 +309,6 @@ pub fn fit(
             options.albedo_ceiling,
         );
         train::gaussian_splat::attach_pbr(&mut gaussian, &surface)?;
-        Some(gaussian)
-    } else {
-        None
-    };
-    refine_blended_surface(
-        &mut surface,
-        &training.captures,
-        &training.lights,
-        options.train_views,
-        options.albedo_ceiling,
-    )?;
-    if refine_rendered_surface_normals(
-        &mut surface,
-        &training.captures,
-        &training.lights,
-        options.train_views,
-    )? {
         refine_blended_surface(
             &mut surface,
             &training.captures,
@@ -380,7 +316,17 @@ pub fn fit(
             options.train_views,
             options.albedo_ceiling,
         )?;
-    }
+        Some(gaussian)
+    } else {
+        refine_blended_surface(
+            &mut surface,
+            &training.captures,
+            &training.lights,
+            options.train_views,
+            options.albedo_ceiling,
+        )?;
+        None
+    };
 
     vol::io::try_save_relight(options.output, &surface)
         .map_err(|error| format!("cannot write {}: {error}", options.output.display()))?;
