@@ -33,7 +33,7 @@ not contain or fall back to polygonal geometry.
   and tail; held/held recall rises by 0.82 points and precision also rises.
   Only the albedo estimator is selected: the multi-pass correspondence search
   is not a production merge, its direct one-pass form loses Cow tails, and the
-  same fixed recipe produces no coherent Bear patch.
+  exact Bear repeat produces no internally valid patch.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -1443,8 +1443,8 @@ a deterministic repeat agree within the measured training variance.
   Gaussian whole-frame transfer.
 - [x] Acquire a fresh non-empty patch proposal and repeat the fixed recipe on
   an untouched final split before adding any production merge/API.
-- [x] Repeat the anchored-albedo patch recipe on Bear; keep the merge out of
-  production when no five-track patch forms.
+- [x] Repeat the exact eight-pass anchored-albedo recipe on Bear; keep the
+  merge out of production when its only patch loses validation recall.
 - [ ] Redesign missing-surface correspondence selection so one deterministic
   search preserves alternate qualifying matches, then repeat the two-object
   gate before adding a merge API.
@@ -1476,8 +1476,13 @@ tracks and three patches of 10/5/5 tracks. Its internally selected 10-surfel
 subset passes construction selection and validation, but the final matrix loses
 foreground tails by 0.004–0.009 dB (and one whole-frame tail by 0.0004 dB). The
 same fixed one-pass recipe on Bear finds 26 qualifying tracks, 24 inside the
-visual hull, and no five-track patch. Both runs have zero swap, OOM, throttle,
-or GPU fault, peaking at 266 MiB and 1.03 GiB respectively. The proposed
+visual hull, and no five-track patch. Alternative retention is real: repeating
+the exact eight-pass Cow policy on Bear raises this to 71 unique tracks, 67 in
+the visual hull, and one six-track patch. But none of the 67 points projects to
+missing support in three of four selection views; the patch covers 0.4% of
+selection holes and 0% of validation holes, then changes combined validation
+recall by -0.010 points. The official held cameras and lights remain unopened.
+The clean 190 MiB run has zero swap, OOM, throttle, or GPU fault. The proposed
 source/qualifier API and reconstruction integration are therefore removed
 rather than encoding a diagnostic search policy.
 

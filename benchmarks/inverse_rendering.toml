@@ -5781,4 +5781,23 @@ bear_peak_memory_bytes = 1101029376
 memory_swap_bytes = 0
 oom_events = 0
 gpu_faults = 0
-verdict = "reject the source/qualifier TrackView API and reconstruction integration: the direct Cow form loses final tails and the fixed Bear repeat forms no coherent patch; retain only the calibrated-albedo estimator"
+verdict = "reject the source/qualifier TrackView API and reconstruction integration: the direct Cow form loses final tails and the one-pass Bear repeat forms no coherent patch; retain only the calibrated-albedo estimator"
+
+[diligent_mv.rejected_bear_missing_surface_repeat]
+date = "2026-08-30"
+protocol = "repeat the exact passing Cow search on Bear: for each of eight matching cameras restrict that camera to holes, use measured foreground in the other cameras, retain tracks containing the selected hole, globally deduplicate, then stop at the internal 4-camera selection/4-camera validation gate"
+unique_tracks = 71
+visual_hull_tracks = 67
+patch_track_counts = [6]
+tracks_with_missing_support_in_three_of_four_selection_views = 0
+patch_selection_missing_recall_percent = 0.4
+patch_validation_missing_recall_percent = 0.0
+combined_match_recall_delta_percent = 0.031
+combined_selection_recall_delta_percent = 0.009
+combined_validation_recall_delta_percent = -0.010
+maximum_peak_memory_bytes = 199397376
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+official_held_split_opened = false
+verdict = "reject before the official held split: preserving alternate correspondences recovers one patch, but it predicts no validation-camera hole support and decreases combined validation recall; prioritize cross-camera missing-support consistency over a broader matcher API"

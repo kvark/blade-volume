@@ -439,12 +439,20 @@ subset search, and merge remain ignored diagnostics.
 A direct one-pass source/qualifier API does not reproduce that result. It finds
 67 Cow tracks and patches of 10/5/5 tracks. An internally selected 10-surfel
 subset passes selection and validation, but loses final foreground tails by
-0.004–0.009 dB and one whole-frame tail by 0.0004 dB. The same fixed recipe on
+0.004–0.009 dB and one whole-frame tail by 0.0004 dB. The same one-pass form on
 Bear finds 26 qualifying tracks, 24 in the visual hull, and no five-track
-patch. The runs peak at 266 MiB and 1.03 GiB with zero swap, OOM, throttle, or
-GPU fault. The proposed matching API and reconstruction integration are
-removed; a production path needs a deterministic way to preserve alternate
-qualifying correspondences and a second controlled-object pass.
+patch.
+
+Repeating the exact eight-pass Cow policy on Bear proves that alternative loss
+is not the whole failure. It finds 71 unique tracks, retains 67 in the visual
+hull, and forms one six-track patch. None of the 67 tracks has missing support
+in at least three of four selection cameras. The patch covers 0.4% of selection
+holes and 0% of validation holes; after merging its six surfels, selection
+recall changes by +0.009 points but validation recall changes by -0.010. The
+official held cameras and lights remain closed. The clean run peaks at 190 MiB
+with zero swap, OOM, throttle, or GPU fault. The proposed matching API and
+reconstruction integration remain removed; a production path needs points
+that predict missing support beyond the cameras used to triangulate them.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

@@ -107,8 +107,9 @@ a convincing real-world result.
   moves `19.74/17.55→19.75/17.59` dB and recall
   `84.68%→85.50%`, while precision also rises slightly. The calibrated-albedo
   estimator is landed. The multi-pass correspondence and patch selection stay
-  diagnostic: a direct one-pass form loses final Cow tails, and Bear produces
-  no coherent patch. Commands and the full matrix are in
+  diagnostic: a direct one-pass form loses final Cow tails, while the exact
+  Bear repeat finds one small patch but loses internal validation recall.
+  Commands and the full matrix are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV
