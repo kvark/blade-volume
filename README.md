@@ -101,7 +101,14 @@ a convincing real-world result.
   pixel ownership—is the next reconstruction bottleneck. A fresh Cow
   reconstruction also rejects complete-render normal polishing: means improve,
   but four fitted/held tails regress by up to 0.05 dB, so the probe and its
-  point-light refinement plumbing are removed. Commands and the full matrix are in
+  point-light refinement plumbing are removed. The next Cow control succeeds:
+  calibrated diffuse-albedo correspondences add 32 cloud-only surfels and
+  improve every fitted/held camera/light mean and tail. Held/held foreground
+  moves `19.74/17.55→19.75/17.59` dB and recall
+  `84.68%→85.50%`, while precision also rises slightly. The calibrated-albedo
+  estimator is landed. The multi-pass correspondence and patch selection stay
+  diagnostic: a direct one-pass form loses final Cow tails, and Bear produces
+  no coherent patch. Commands and the full matrix are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV

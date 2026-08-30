@@ -407,6 +407,45 @@ continuation log is therefore explicit that its `0.004036→0.004405` scalar is
 an audit loss for one deterministic light/view batch, not the complete fitting
 objective. No single-sample rollback is added.
 
+Cow also supplies the first missing-surface proposal to pass the complete
+camera/light gate. Twenty-four calibrated construction lights are reduced to a
+robust diffuse-albedo correspondence image without reading the released mesh,
+depth, or normals. For each of eight matching cameras, a diagnostic pass uses
+that camera's missing pixels and the measured foreground in the other cameras,
+retains tracks containing the selected hole, and globally deduplicates the
+eight result sets. An internal 8/4/4 match/selection/validation camera split
+produces 137 unique tracks and seven shared-view patches. The existing
+two-pixel support cap leaves five
+foreground-safe patches; complete production renders select patches 1/4/5,
+32 Gaussian surfels with one shared diffuse material per patch.
+
+The subset is fixed before the four official held cameras or eight held lights
+are scored:
+
+| Lights / cameras | Gaussian control whole | Candidate whole | Gaussian control foreground | Candidate foreground | Recall | Precision |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| fitted / fitted | 32.427 / 28.839 | **32.444 / 28.855** | 21.471 / 17.951 | **21.490 / 17.964** | 84.18% → **84.92%** | 96.28% → **96.30%** |
+| fitted / held | 31.410 / 29.047 | **31.426 / 29.075** | 20.377 / 17.847 | **20.396 / 17.894** | 84.68% → **85.50%** | 94.50% → **94.52%** |
+| held / fitted | 32.136 / 29.089 | **32.150 / 29.111** | 21.140 / 18.115 | **21.156 / 18.131** | 84.18% → **84.92%** | 96.28% → **96.30%** |
+| held / held | 30.812 / 28.899 | **30.827 / 28.912** | 19.737 / 17.548 | **19.754 / 17.592** | 84.68% → **85.50%** | 94.50% → **94.52%** |
+
+The binary candidate is at
+`target/audit-runs/diligent-mv/cow/16k/missing-surface-candidate/scene-gaussian.ply`.
+It has 1,460 rather than 1,428 particles. The complete run peaks at 266.5 MiB
+with zero swap, OOM, throttle, or GPU fault. Only the calibrated distant-light
+albedo estimator moves into production. The multi-pass correspondence search,
+subset search, and merge remain ignored diagnostics.
+
+A direct one-pass source/qualifier API does not reproduce that result. It finds
+67 Cow tracks and patches of 10/5/5 tracks. An internally selected 10-surfel
+subset passes selection and validation, but loses final foreground tails by
+0.004–0.009 dB and one whole-frame tail by 0.0004 dB. The same fixed recipe on
+Bear finds 26 qualifying tracks, 24 in the visual hull, and no five-track
+patch. The runs peak at 266 MiB and 1.03 GiB with zero swap, OOM, throttle, or
+GPU fault. The proposed matching API and reconstruction integration are
+removed; a production path needs a deterministic way to preserve alternate
+qualifying correspondences and a second controlled-object pass.
+
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
 

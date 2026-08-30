@@ -5740,3 +5740,45 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/openillumination/joint-material-{three-training-two-held,four-139-two-held,four-015-two-held,five-training-two-held,selected-five} (gitignored)"
 verdict = "select only for per-particle materials with at least five broad calibrated lights: every whole-frame and foreground mean/tail improves under both held directions; three lights and one four-light control fail the second-tail gate, while the existing four-light shared-palette synthetic path remains unchanged"
+
+[diligent_mv.selected_missing_surface_candidate]
+date = "2026-08-30"
+protocol = "fresh Cow reconstruction; 24 fitted distant lights; construction cameras split 8 match / 4 selection / 4 validation; run eight diagnostic matches with one camera restricted to holes and the other cameras using measured foreground, retain tracks containing the selected hole, then globally deduplicate; robust photometric-stereo albedo; official 4 held cameras and 8 held lights opened after fixing the 32-surfel subset"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+fitted_lights_fitted_cameras_control = [32.426942, 28.839121, 21.470866, 17.951213, 84.182082, 96.278348]
+fitted_lights_fitted_cameras_candidate = [32.443706, 28.855174, 21.489722, 17.964259, 84.924496, 96.298932]
+fitted_lights_held_cameras_control = [31.409915, 29.047422, 20.377304, 17.847385, 84.683993, 94.500780]
+fitted_lights_held_cameras_candidate = [31.426445, 29.075166, 20.396441, 17.894021, 85.500372, 94.517390]
+held_lights_fitted_cameras_control = [32.135808, 29.089496, 21.140471, 18.115373, 84.182082, 96.278348]
+held_lights_fitted_cameras_candidate = [32.149626, 29.111264, 21.156009, 18.131400, 84.924496, 96.298932]
+held_lights_held_cameras_control = [30.812449, 28.898995, 19.737371, 17.547501, 84.683993, 94.500780]
+held_lights_held_cameras_candidate = [30.827025, 28.912136, 19.754057, 17.591994, 85.500372, 94.517390]
+control_particles = 1428
+candidate_particles = 1460
+maximum_peak_memory_bytes = 279498752
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/cow/16k/missing-surface-candidate/scene-gaussian.ply (gitignored)"
+verdict = "select the calibrated-albedo estimator only: every fitted/held camera/light mean and tail improves together with recall and precision, but keep the multi-pass correspondence search, subset selection, and merge outside production"
+
+[diligent_mv.rejected_missing_surface_integration]
+date = "2026-08-30"
+protocol = "replace the eight-pass Cow diagnostic with one deterministic match in which any foreground pixel is eligible and every accepted track must contain a missing observation; repeat unchanged on Bear"
+cow_qualifying_tracks = 67
+cow_patch_track_counts = [10, 5, 5]
+cow_selected_surfels = 10
+cow_fitted_lights_held_cameras_foreground_worst_delta_db = -0.007901
+cow_held_lights_fitted_cameras_whole_worst_delta_db = -0.000404
+cow_held_lights_fitted_cameras_foreground_worst_delta_db = -0.004209
+cow_held_lights_held_cameras_whole_worst_delta_db = -0.000233
+cow_held_lights_held_cameras_foreground_worst_delta_db = -0.008933
+cow_peak_memory_bytes = 278847488
+bear_qualifying_tracks = 26
+bear_visual_hull_tracks = 24
+bear_patch_track_counts = []
+bear_peak_memory_bytes = 1101029376
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+verdict = "reject the source/qualifier TrackView API and reconstruction integration: the direct Cow form loses final tails and the fixed Bear repeat forms no coherent patch; retain only the calibrated-albedo estimator"

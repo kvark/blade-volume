@@ -91,6 +91,117 @@ pub fn photometric_response(captures: [&Capture; 4]) -> Result<Capture, String> 
     })
 }
 
+/// Recover a view-invariant diffuse-albedo image from calibrated distant lights.
+///
+/// `directions[light][view]` points from the surface towards that light in
+/// world space. A least-squares photometric normal is followed by a median
+/// `radiance / cosine` solve per channel, making the albedo robust to a
+/// minority of shadows or highlights. This is a correspondence cue, not a
+/// replacement for the relightable material fit.
+pub fn photometric_albedo(
+    captures: &[Capture],
+    directions: &[Vec<glam::Vec3>],
+) -> Result<Capture, String> {
+    let Some(primary) = captures.first() else {
+        return Err("photometric albedo needs at least one light".to_string());
+    };
+    if captures.len() < 3 || directions.len() != captures.len() {
+        return Err("photometric albedo needs at least three paired lights".to_string());
+    }
+    for (light, capture) in captures.iter().enumerate() {
+        if capture.width != primary.width
+            || capture.height != primary.height
+            || capture.views.len() != primary.views.len()
+            || directions[light].len() != primary.views.len()
+        {
+            return Err("photometric albedo captures and directions are not aligned".to_string());
+        }
+    }
+
+    let mut views = Vec::with_capacity(primary.views.len());
+    for view_index in 0..primary.views.len() {
+        let light_directions = directions
+            .iter()
+            .map(|light| light[view_index].try_normalize())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| format!("photometric albedo view {view_index} has a zero light"))?;
+        let matrix = light_directions
+            .iter()
+            .fold(glam::Mat3::ZERO, |matrix, &direction| {
+                matrix
+                    + glam::Mat3::from_cols(
+                        direction * direction.x,
+                        direction * direction.y,
+                        direction * direction.z,
+                    )
+            });
+        if !matrix.is_finite() || matrix.determinant().abs() < 1.0e-8 {
+            return Err(format!(
+                "photometric albedo view {view_index} has singular lights"
+            ));
+        }
+        let pixel_count = primary.views[view_index].pixels.len();
+        if captures
+            .iter()
+            .any(|capture| capture.views[view_index].pixels.len() != pixel_count)
+        {
+            return Err(format!(
+                "photometric albedo view {view_index} has inconsistent image sizes"
+            ));
+        }
+        let inverse = matrix.inverse();
+        let mut pixels = Vec::with_capacity(pixel_count);
+        let mut ratios = Vec::with_capacity(captures.len());
+        for pixel in 0..pixel_count {
+            let mut gradients = [glam::Vec3::ZERO; 3];
+            for (channel, gradient) in gradients.iter_mut().enumerate() {
+                let right: glam::Vec3 = light_directions
+                    .iter()
+                    .zip(captures)
+                    .map(|(&direction, capture)| {
+                        direction * capture.views[view_index].pixels[pixel][channel]
+                    })
+                    .sum();
+                *gradient = inverse * right;
+            }
+            let luminance_gradient =
+                0.2126 * gradients[0] + 0.7152 * gradients[1] + 0.0722 * gradients[2];
+            let normal = luminance_gradient.normalize_or_zero();
+            let mut albedo = [0.0f32; 3];
+            for channel in 0..3 {
+                ratios.clear();
+                for (&direction, capture) in light_directions.iter().zip(captures) {
+                    let cosine = direction.dot(normal);
+                    if cosine > 0.2 {
+                        let value = capture.views[view_index].pixels[pixel][channel] / cosine;
+                        if value.is_finite() {
+                            ratios.push(value);
+                        }
+                    }
+                }
+                ratios.sort_by(f32::total_cmp);
+                albedo[channel] = if ratios.is_empty() {
+                    gradients[channel].length()
+                } else {
+                    ratios[ratios.len() / 2]
+                };
+            }
+            pixels.push(albedo);
+        }
+        views.push(View {
+            name: format!("{}-photometric-albedo", primary.views[view_index].name),
+            camera: primary.views[view_index].camera,
+            pixels,
+            mask: primary.views[view_index].mask.clone(),
+        });
+    }
+    Ok(Capture {
+        width: primary.width,
+        height: primary.height,
+        views,
+    })
+}
+
 /// The display transfer function, and its inverse.
 ///
 /// sRGB, not a 2.2 power law: the linear toe near black is where a dark
@@ -664,5 +775,43 @@ mod tests {
                     < 1.0e-6
             );
         }
+    }
+
+    #[test]
+    fn photometric_albedo_removes_calibrated_distant_lighting() {
+        let normal = glam::Vec3::new(0.2, -0.3, 1.0).normalize();
+        let albedo = glam::Vec3::new(0.7, 0.35, 0.12);
+        let light_directions = [
+            glam::Vec3::new(0.5, 0.0, 1.0).normalize(),
+            glam::Vec3::new(-0.5, 0.0, 1.0).normalize(),
+            glam::Vec3::new(0.0, 0.5, 1.0).normalize(),
+            glam::Vec3::new(0.0, -0.5, 1.0).normalize(),
+            glam::Vec3::Z,
+            glam::Vec3::new(0.4, 0.4, 1.0).normalize(),
+        ];
+        let captures: Vec<_> = light_directions
+            .iter()
+            .enumerate()
+            .map(|(index, &direction)| Capture {
+                width: 1,
+                height: 1,
+                views: vec![View {
+                    name: format!("light-{index}"),
+                    camera: camera(),
+                    pixels: vec![(albedo * direction.dot(normal)).to_array()],
+                    mask: Some(vec![1.0]),
+                }],
+            })
+            .collect();
+        let directions: Vec<_> = light_directions
+            .iter()
+            .map(|&direction| vec![direction])
+            .collect();
+
+        let recovered = photometric_albedo(&captures, &directions).unwrap();
+
+        let actual = glam::Vec3::from(recovered.views[0].pixels[0]);
+        assert!((actual - albedo).abs().max_element() < 1.0e-4);
+        assert_eq!(recovered.views[0].mask, Some(vec![1.0]));
     }
 }

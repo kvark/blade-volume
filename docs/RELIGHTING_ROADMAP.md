@@ -27,6 +27,13 @@ not contain or fall back to polygonal geometry.
   Radius and center variants also trade foreground support for background fit.
   All three are rejected; image-space fitting cannot replace cross-view depth
   evidence.
+- A fresh Cow diagnostic matches missing pixels against ordinary foreground
+  using robust diffuse albedo recovered from 24 calibrated lights. A 32-surfel
+  cloud-only patch subset improves every final fitted/held light/camera mean
+  and tail; held/held recall rises by 0.82 points and precision also rises.
+  Only the albedo estimator is selected: the multi-pass correspondence search
+  is not a production merge, its direct one-pass form loses Cow tails, and the
+  same fixed recipe produces no coherent Bear patch.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -87,7 +94,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Controlled-light diversity | LUCES-MV and DiLiGenT-MV routes selected | Keep their near- and distant-light models shared with the production renderer; do not depend on OLATverse | Improve whole-frame and foreground mean/worst, recall, and precision on both fixed camera/light splits |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
-| Missing support | diagnostics only | Keep verified tracks and normal/depth sweeps out of production until a complete-render held-view gain | Recall and covered quality rise without a precision or PSNR regression |
+| Missing support | Cow diagnostic passes; direct integration and Bear repeat rejected | Preserve calibrated albedo; redesign correspondence selection before another controlled-object gate | Recall, precision, and every complete-render mean/tail rise on two controlled objects |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
@@ -1434,8 +1441,45 @@ a deterministic repeat agree within the measured training variance.
 - [x] Bound 32/64-way shared appearance and exact finite-light image-space
   material polishing; remove it when scalar gains trade against coverage and
   Gaussian whole-frame transfer.
-- [ ] Acquire a fresh non-empty patch proposal and repeat the fixed recipe on
+- [x] Acquire a fresh non-empty patch proposal and repeat the fixed recipe on
   an untouched final split before adding any production merge/API.
+- [x] Repeat the anchored-albedo patch recipe on Bear; keep the merge out of
+  production when no five-track patch forms.
+- [ ] Redesign missing-surface correspondence selection so one deterministic
+  search preserves alternate qualifying matches, then repeat the two-object
+  gate before adding a merge API.
+
+The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
+four construction lights recover a robust per-pixel diffuse-albedo image. For
+each of eight matching cameras, one diagnostic pass restricts that camera to
+missing pixels and lets the other cameras match measured foreground; tracks
+without the selected missing observation are discarded, then the eight result
+sets are deduplicated. This multi-pass search produces 137 unique tracks and
+seven shared-view patches. The unchanged two-pixel support cap leaves five
+foreground-safe patches; complete-render selection plus validation chooses
+patches 1/4/5, 32 surfels total, with one shared material per patch.
+
+The official four held cameras and eight held lights are opened only after that
+subset is fixed. On the held/held cross-product, whole-frame mean/worst moves
+`30.812/28.899→30.827/28.912` dB, foreground
+`19.737/17.548→19.754/17.592` dB, recall `84.684%→85.500%`, and precision
+`94.501%→94.517%`. Every corresponding metric also improves in the other
+three fitted/held camera/light cells. The selected artifact is
+`target/audit-runs/diligent-mv/cow/16k/missing-surface-candidate/scene-gaussian.ply`.
+The complete diagnostic peaks at 266.5 MiB with no swap, cgroup event, or GPU
+fault. Production now contains only the calibrated distant-light albedo
+estimator; the multi-pass search, dataset-specific subset selection, and merge
+remain outside the library.
+
+The controls explain why. A direct one-pass qualifying matcher finds 67 Cow
+tracks and three patches of 10/5/5 tracks. Its internally selected 10-surfel
+subset passes construction selection and validation, but the final matrix loses
+foreground tails by 0.004–0.009 dB (and one whole-frame tail by 0.0004 dB). The
+same fixed one-pass recipe on Bear finds 26 qualifying tracks, 24 inside the
+visual hull, and no five-track patch. Both runs have zero swap, OOM, throttle,
+or GPU fault, peaking at 266 MiB and 1.03 GiB respectively. The proposed
+source/qualifier API and reconstruction integration are therefore removed
+rather than encoding a diagnostic search policy.
 
 The calibrated-light estimator fits per-pixel diffuse albedo analytically,
 searches world-space orientation, and reports both normalized residual and the

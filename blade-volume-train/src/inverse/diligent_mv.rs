@@ -31,6 +31,25 @@ pub struct Dataset {
     pub source_light_indices: Vec<usize>,
 }
 
+impl Dataset {
+    /// Material-colour correspondence image recovered from this calibrated
+    /// distant-light stack. Released normals, depths, and geometry are not
+    /// consulted.
+    pub fn photometric_albedo(&self) -> Result<super::capture::Capture, String> {
+        let directions = self
+            .lights
+            .iter()
+            .map(|lights| {
+                lights
+                    .iter()
+                    .map(|light| glam::Vec3::from(light.position).normalize_or_zero())
+                    .collect()
+            })
+            .collect::<Vec<_>>();
+        super::capture::photometric_albedo(&self.captures, &directions)
+    }
+}
+
 /// Load selected DiLiGenT-MV lights at a bounded working resolution.
 pub fn load(object: &path::Path, width: usize, light_indices: &[usize]) -> Result<Dataset, String> {
     if width == 0 {
