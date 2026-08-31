@@ -162,8 +162,11 @@ a convincing real-world result.
   shadow-aware loss is added; exact `T×alpha` camera ownership is equally
   uncorrelated, so gradients are not gated by view support either. Frozen
   half-vector lobes then correlate with individual residuals in the wrong
-  direction, so no specular term is added to the physical geometry fit. A
-  fresh Buddha repeat also rejects the correspondence route before held data:
+  direction, so no specular term is added to the physical geometry fit. Only
+  about 15--16% of physical observations duplicate a center pixel, rejecting
+  an exclusive-owner rewrite; universal footprint mixing remains the next
+  attribution target. A fresh Buddha repeat also rejects the correspondence
+  route before held data:
   calibrated-albedo tracks form no complete-render-safe patch under the
   default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices

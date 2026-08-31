@@ -774,6 +774,17 @@ share that pixel. Its existing overlap diagnostics can establish whether that
 duplication is large enough and consistent enough to warrant a responsibility
 experiment.
 
+The existing observation diagnostics reject the simplest responsibility
+change. Before reading the result, the gate required at least 25% of accepted
+samples to share their center pixel with another accepted surfel on both
+objects. Pot2 reaches only 16.10% and Cow 15.14%, so exclusive center ownership
+is not tested. The same pass exposes a different mismatch without authorizing
+a fix: 100% of sampled center pixels lie under multiple disc footprints, with
+21.54/22.42 supports on average and 38 at worst. A mixture-aware solve could be
+relevant, but aggregate overlap is not causal evidence. The next audit must
+attribute residual or camera-group gradient conflict to per-surfel mixture
+complexity on both objects before a compositing responsibility is allowed.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is

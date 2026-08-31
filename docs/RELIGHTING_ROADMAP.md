@@ -1507,11 +1507,13 @@ a deterministic repeat agree within the measured training variance.
   residual/half-vector alignment. Pot2 misses the predeclared variance gate,
   and individual observations correlate in the wrong direction on both
   objects; add no BRDF capacity.
-- [ ] Quantify duplicated physical observations before changing the image
-  model again. The CPU normal/material solve currently assigns full pixel
-  radiance to every accepted surfel center; use its existing overlap
-  diagnostics to decide whether compositing responsibility deserves a bounded
-  two-object test.
+- [x] Quantify duplicated physical observations. Only 16.10%/15.14% of
+  Pot2/Cow samples share their center pixel, below the predeclared 25% gate;
+  do not replace the solver with exclusive center ownership.
+- [ ] Attribute the universal footprint mixing before changing the solver.
+  Every sampled center lies under multiple disc supports on both objects;
+  correlate per-surfel mixture complexity with physical residual and gradient
+  conflict before testing any compositing-responsibility rule.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
