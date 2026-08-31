@@ -165,8 +165,11 @@ a convincing real-world result.
   direction, so no specular term is added to the physical geometry fit. Only
   about 15--16% of physical observations duplicate a center pixel, rejecting
   an exclusive-owner rewrite. Universal footprint mixing also fails to predict
-  residual on both objects, so no demixing rule is added. A fresh Buddha repeat
-  also rejects the correspondence route before held data:
+  residual on both objects, so no demixing rule is added. Residual variance
+  then splits differently between camera and light on Pot2 and Cow; the next
+  bounded test fits only shared diffuse albedo through the exact Gaussian
+  compositor. A fresh Buddha repeat also rejects the correspondence route
+  before held data:
   calibrated-albedo tracks form no complete-render-safe patch under the
   default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices

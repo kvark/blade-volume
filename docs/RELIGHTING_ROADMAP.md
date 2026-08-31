@@ -1514,10 +1514,14 @@ a deterministic repeat agree within the measured training variance.
   residual. Pot2 correlation is only `0.030` with a 1.53% quartile gap; Cow
   reaches `0.112`/10.38% but still misses the predeclared two-object gate.
   Remove the support counter and add no compositing-responsibility rule.
-- [ ] Decompose the remaining frozen physical residual by camera and light.
-  Require the same axis to explain at least 20% and twice the competing axis
-  on Pot2 and Cow before choosing correspondence work or another light-response
-  term.
+- [x] Decompose the remaining frozen physical residual by camera and light.
+  Cow is camera-dominant, while Pot2 is coupled and slightly light-heavy; no
+  axis satisfies the repeated 20%/2× gate. Add neither correspondence nor
+  light-response capacity from this evidence.
+- [ ] Fit only shared diffuse albedo through the exact Gaussian compositor.
+  Freeze centers, covariance, opacity, normals, and calibrated lights; use
+  separate construction train/selection/validation camera groups and require
+  all complete metrics to pass on Pot2 before opening Cow.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For

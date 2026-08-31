@@ -797,6 +797,19 @@ for demixing the CPU observations. The next frozen attribution separates each
 surfel's residual into camera- and light-index effects; only a repeated dominant
 axis can decide whether to return to correspondence or image response.
 
+The residual decomposition finds no repeated axis. Pot2 attributes 15.19% of
+within-surfel variance to camera index, 8.14% to the predeclared camera groups,
+and 19.36% to light index. Cow attributes 25.48%, 16.93%, and 11.93%
+respectively. The gate required one axis to explain at least 20%, at least
+twice the competing axis, on both objects. Cow is camera-dominant; Pot2 is
+coupled and slightly light-heavy. Neither a geometry-only nor light-only
+parameter family is licensed. The next bounded experiment instead moves one
+physical quantity through the correct coupled observation model: optimize
+shared diffuse albedo inside the exact Gaussian compositor while holding every
+geometry, support, normal, and calibrated-light value fixed. It must use
+separate construction train/selection/validation camera groups and pass every
+complete Pot2 metric before Cow is opened.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is
