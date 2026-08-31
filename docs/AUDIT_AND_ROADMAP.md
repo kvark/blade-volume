@@ -78,6 +78,14 @@ behind these gates:
    Room and Bonsai projections retain only 44.84% and 60.70% of table energy,
    confirming that spatially varying directional response is not redundant.
    The experimental graph path is removed.
+   Two-scene occupancy now bounds the real compaction target: Room's busiest
+   update averages 24.77 active entries/ray despite a 75-entry maximum, and
+   Bonsai's averages 27.46 despite a 124-entry maximum. Both fit an observed
+   `P*28` active prefix while retaining the safe `P*L` allocation. The dense
+   ordered transmittance stays unchanged; only the frozen directional branch
+   should consume the compact prefix. Meganeura `cfdb59c` supplies the needed
+   generic forward-scatter derivative without a new shader path. A generic
+   runtime active extent remains required before adding recorder outputs.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.

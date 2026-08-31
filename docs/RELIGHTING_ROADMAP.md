@@ -98,9 +98,13 @@ quality-positive when fitted after the base, but loses part of the full
 table's two-scene gain and its straightforward row repetition is slower than
 the full table. That prototype is removed rather than adding a special
 operation or shader variant.
-The next performance implementation is an active-segment representation for
-the directional branch, with overflow-safe repacking and indirect work rather
-than another fixed cap.
+Two-scene occupancy confirms that active-prefix execution is worthwhile:
+Room and Bonsai's busiest updates average 24.77 and 27.46 entries/ray despite
+per-ray maxima of 75 and 124. The dense ordered transmittance stays in place;
+the next performance implementation compacts only the frozen directional
+branch into the existing safe allocation and drives it with a generic runtime
+active extent. Differentiable forward scatter is now available on the
+Meganeura performance branch without a new shader path.
 
 ## Execution plan
 

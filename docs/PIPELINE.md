@@ -2796,6 +2796,38 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   performance target because it attacks the 68.8% padded traversal rows for
   both compact and full tables.
 
+#### M2cq — Bound the active-prefix requirement (measured; generic prerequisite upstream)
+
+- Per-ray maxima substantially overstate the work that a compact directional
+  branch must hold. Across the exact 256-update Room stage, individual paths
+  reach 75/76 entries while the most occupied update averages 24.77; 82/256
+  updates exceed 24 entries/ray and none exceeds 28. On the independent
+  255-update Bonsai stage, individual paths reach 124/128 while the busiest
+  update averages 27.46; every update exceeds 24 and none exceeds 28. Thus an
+  active pool with the existing safe `P*L` allocation would execute only about
+  `P*25` or `P*28` rows on these scenes. This measurement does not license a
+  fixed 28-entry cap: the runtime count, not a dataset constant, must bound
+  work.
+- The ordered density/transmittance prefix remains in its current dense
+  per-ray layout. Only the frozen-base directional residual can compact: each
+  active item needs its dense slot, cell, and pixel; it gathers the already
+  computed base colour and path weight, evaluates the released directional
+  table, applies the existing pre-composite clamp, and scatters into its pixel.
+  The allocated tail remains as overflow-safe capacity but must not execute.
+  A raw global append without this split is incorrect because it loses the
+  segmented transmittance order.
+- Meganeura branch `perf/fuse-grouped-gather-blade-357` commit `cfdb59c`
+  makes the existing forward `ScatterAdd` differentiable by gathering the
+  output gradient at each source index. A repeated-index physical-GPU oracle
+  passes. This adds no operation, shader, entry, group, binding, or backend
+  variant. The remaining prerequisite is a generic runtime active-prefix
+  extent (preferably indirect; a uniform early bound is an admissible first
+  screen) shared by every dispatch in the compact subgraph. No recorder buffer
+  or unused directional path is added before that execution contract exists.
+- The Room and Bonsai diagnostics ran in 4 GiB scopes, peaked at 1.47 and
+  2.61 GiB, and recorded zero swap, pressure, OOM, kill, or GPU fault. Logs are
+  under `target/audit-runs/directional-active-capacity/`.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
