@@ -1527,8 +1527,9 @@ a deterministic repeat agree within the measured training variance.
   quality gate passes without changing the appearance model. Keep it opt-in:
   the locally optimized graph is still 2.98× the matched no-table training
   time, above the 2× production gate. Its 76-entry rows average only 23.7
-  active entries. Compact inactive rows or teach the
-  compiler the equivalent sparse reduction before changing the model again.
+  active entries. Smaller hard caps and zero-row shader predicates fail the
+  combined quality/performance gate; compact and indirectly dispatch active
+  rows before changing the model again.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For

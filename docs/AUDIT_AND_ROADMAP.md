@@ -61,10 +61,13 @@ behind these gates:
    fusion and a telemetry-selected 76-entry path row, however, Room table
    training still takes 7.009 seconds versus 2.352 seconds for the matched
    no-table graph (2.98×). Only 23.7 of those 76 entries are active on average,
-   so the remaining work is generic active-path
-   compaction or sparse reduction, not another appearance parameter or shader
-   variant; require at most 2× baseline time before enabling the table by
-   default.
+   so the remaining work is generic active-path compaction, not another
+   appearance parameter or shader variant. A 48-entry cap preserves displayed
+   quality but still takes 2.35× baseline GPU wait; a 32-entry cap reaches
+   2.01× only by truncating 11.31% of rays and losing 0.0176 dB held out.
+   Generated reduction and pointwise zero-row predicates are both removed
+   after failing complete-run timing. Require real row repacking and at most
+   2× baseline time before enabling the table by default.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.

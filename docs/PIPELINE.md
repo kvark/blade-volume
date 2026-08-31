@@ -2743,6 +2743,20 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   Keep training opt-in until active path rows can be compacted/repacked, or an
   equivalent generic sparse reduction is compiled, below the 2× gate. Add no
   directional-specific operation, shader group, or shader-entry variant.
+- Shorter fixed rows do not close the gate. At 48 entries, 0.985% of Room
+  training rays truncate, but final quality is effectively unchanged at
+  25.1413/20.3938 dB. Directional/base GPU wait is still 2.968/1.262 seconds
+  (2.35×). At 32 entries, the wait ratio reaches 2.01× only by truncating
+  11.31% of rays; held quality falls 0.0176 dB to 20.3761 dB. Neither cap is
+  selected.
+- Two exact-shape sparse scheduling prototypes are also rejected and removed.
+  Folding the binary mask into generated reductions cuts ten passes but raises
+  the warm graph from about 9.21 to 9.44 ms. Short-circuiting zero-absorbing
+  pointwise DAGs reaches 8.77--8.86 ms in the isolated profile but does not
+  improve the complete 48-entry run (2.994 seconds GPU wait). Predicating a
+  fully dispatched tensor is not compaction. The next performance attempt must
+  reduce dispatched rows, most likely by repacking active paths and driving
+  the continuation through an indirect dispatch.
 
 ### M3 — Training crate scaffolding
 
