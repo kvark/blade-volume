@@ -169,15 +169,23 @@ a convincing real-world result.
   then splits differently between camera and light on Pot2 and Cow; the next
   bounded test fits only shared diffuse albedo through the exact Gaussian
   compositor, but even a 12.5% continuation loses Pot2 selection means. The
-  one-site parameter branch is now closed; the next route is making the
-  existing eight-site surface-detail training practical without changing its
-  math. A fresh Buddha repeat also rejects the correspondence route before held
+  one-site parameter branch is now closed. The released eight-site directional
+  residual now has a viable staged fit: freeze the already-trained density/SH
+  base, then fit only the residual table. That improves every held Room and
+  Bonsai view, but the table's backward pass is still about 3× the matched
+  no-table step time, so it remains opt-in while active-path compaction is the
+  next performance target. A fresh Buddha repeat also rejects the
+  correspondence route before held
   data:
   calibrated-albedo tracks form no complete-render-safe patch under the
   default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices
   are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
+
+The latest staged directional-residual models and telemetry are under
+`target/audit-runs/directional-staged-validation/`; these generated artifacts
+remain outside version control.
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV
 Owl is first; DiLiGenT-MV Bear is second. Relighting responds, but geometry and

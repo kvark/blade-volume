@@ -2,7 +2,7 @@
 
 Initial audit: 2026-07-12
 
-Last updated: 2026-08-25
+Last updated: 2026-08-31
 
 This document records the correctness audit of `blade-volume` and the staged
 plan for turning it into a dependable, Rust-native point-cloud graphics engine.
@@ -50,18 +50,20 @@ behind these gates:
 
 1. Match reference RadFoam training within the Stage 2 quality tolerance on a
    complete, reproducible scene. Checkpoint renderer parity is done.
-2. Keep the full directional table opt-in until both cost and quality change.
-   Released-checkpoint pixel parity passes. Generic Meganeura grouped
-   scatter/gather fusion, frozen-axis prepacking, and channel-wise Blade
-   parameters reduce the current matched graph to 221 passes and
-   3.17--3.34 ms. Even so, 256 updates take 10.323 seconds and peak at 3.04 GB,
-   versus 2.583 seconds and 292 MB for the no-table production graph. The full
-   table loses 0.9288 dB held out despite fitting the four training views
-   1.9592 dB better. Sharing one eight-direction residual across all eight
-   spatial sites is also rejected at 18.1785 dB held out and 13.139 seconds;
-   smaller copies of the same table are not the missing regularizer. A future
-   retry needs a different spatial/directional responsibility model and must
-   pass a two-scene gate.
+2. Keep the full directional table opt-in until its cost changes.
+   Released-checkpoint pixel parity passes. Joint training is still rejected,
+   but staged residual fitting now freezes the converged density/SH base and
+   passes a fresh two-scene gate: Room improves 24.7981/20.2976 to
+   25.1415/20.3937 dB over train/held views, and weighted/oriented Bonsai
+   improves 21.3762/20.7550 to 21.5280/20.8709 dB. Every held view improves in
+   both scenes. The graph omits base gradients rather than emulating a freeze
+   with tiny rates. With the latest local generic Meganeura scatter/gather
+   fusion and a telemetry-selected 80-entry path row, however, Room table
+   training still takes 7.140 seconds versus 2.346 seconds for the matched
+   no-table graph (3.04×). The remaining work is generic active-path
+   compaction or sparse reduction, not another appearance parameter or shader
+   variant; require at most 2× baseline time before enabling the table by
+   default.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.

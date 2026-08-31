@@ -2712,6 +2712,36 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   sites, recorded zero path truncation, and supplied the rejected 512-ray
   quality result above.
 
+#### M2co — Stage released directional residuals (two-scene quality gate passed; performance gate open)
+
+- Jointly fitting a fresh directional table with base density and SH remains
+  rejected. A clean 32-view Room rerun reaches 24.8823/18.4798 dB
+  train/held versus the table-free base's 24.7981/20.2976 dB. The learned
+  table puts 42.01% of its energy in its per-row mean and 57.99% in directional
+  variation, but removing 25--100% of that mean raises held quality only to
+  18.7060 dB. Scaling the entire table toward zero peaks at 19.3585 dB. This
+  is responsibility transfer during joint optimization, not merely a DC bias.
+- Training the table as a residual after the base has converged resolves that
+  conflict. `--freeze-base-appearance` omits density and SH gradients and Adam
+  state while leaving their values in the ordinary graph. On Room, 256
+  directional-only updates improve 24.7981/20.2976 to 25.1415/20.3937 dB and
+  improve all eight held views. On an independently prepared 200,000-site
+  weighted, oriented Bonsai cloud, the matched tiny-rate control scores
+  21.3762/20.7550 and the exact frozen-base candidate scores
+  21.5280/20.8709 dB; all 37 held views improve. A graph regression asserts
+  that only the three released directional-colour tables receive gradients;
+  an end-to-end PLY audit finds zero changed density or SH bit patterns.
+- The quality result does not yet make the table a default. With the rebased
+  grouped scatter/gather Meganeura compiler work and an 80-entry Room path
+  row, directional-only training takes 7.140 seconds versus 2.346 seconds for
+  the matched base graph (3.04×). It records a 75/80 maximum and zero truncated
+  rays while cutting peak host memory to 1.65 GB. Profiling assigns 9.21 ms to
+  the directional graph versus 1.73 ms for the base graph; the required dense
+  per-path table evaluation and reductions dominate, not Adam or traversal.
+  Keep training opt-in until active path rows can be compacted/repacked, or an
+  equivalent generic sparse reduction is compiled, below the 2× gate. Add no
+  directional-specific operation, shader group, or shader-entry variant.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -3011,10 +3041,10 @@ manifest accidentally.
 
 ## Out-of-scope (for now)
 
-- A longer two-scene training gate for the full PowerFoam directional table;
-  the latest Room screen cuts the historical time gap to 2.23×, but a 32-view
-  ratio sweep still has no positive held result, and no scene-matched weighted
-  Bonsai checkpoint is available locally for a fresh second arm.
+- Default-on training for the full PowerFoam directional table. Staged
+  frozen-base fitting now passes Room and weighted/oriented Bonsai quality,
+  but its locally optimized training time remains 3.04× the matched no-table
+  graph and therefore misses the 2× production gate.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.

@@ -125,6 +125,10 @@ struct Args {
     #[argh(option, default = "0.1")]
     learning_rate: f32,
 
+    /// freeze density and SH while fitting optional residual tables
+    #[argh(switch)]
+    freeze_base_appearance: bool,
+
     /// cap on initial foam points (default 2000; 0 = policy default/all).
     /// Exact Delaunay construction scales poorly without Qhull.
     #[argh(option, default = "2000")]
@@ -976,6 +980,7 @@ fn main() {
         initialization,
         fit: diff_render::AppearanceFitConfig {
             learning_rate: args.learning_rate,
+            train_base_appearance: !args.freeze_base_appearance,
             epochs: args.epochs,
             pixel_batch,
             views_per_batch,
@@ -1462,6 +1467,7 @@ mod tests {
         assert!(default.test_list.is_none());
         assert_eq!(default.opacity_weight, None);
         assert_eq!(default.foreground_fraction, 0.0);
+        assert!(!default.freeze_base_appearance);
         assert_eq!(resolve_opacity_weight(default.opacity_weight, false), 0.0);
         assert_eq!(
             resolve_views_per_batch(default.views_per_batch, Some(default.pixel_batch), 0),
@@ -1485,6 +1491,7 @@ mod tests {
                 "camera-lattice",
                 "--foreground-fraction",
                 "0.5",
+                "--freeze-base-appearance",
             ],
         )
         .unwrap();
@@ -1492,6 +1499,7 @@ mod tests {
         assert_eq!(explicit.views_per_batch, 16);
         assert_eq!(explicit.initialization, "camera-lattice");
         assert_eq!(explicit.foreground_fraction, 0.5);
+        assert!(explicit.freeze_base_appearance);
         assert!(!explicit.skip_eval);
 
         let skip_eval = <Args as argh::FromArgs>::from_args(

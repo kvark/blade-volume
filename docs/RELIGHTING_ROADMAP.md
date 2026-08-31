@@ -1522,9 +1522,12 @@ a deterministic repeat agree within the measured training variance.
   The smallest 12.5% Pot2 continuation loses selection whole and foreground
   means before validation; remove the graph flag/API and leave Cow unopened.
 - [ ] Stop adding isolated parameters to the one-site physical Gaussian.
-  Profile and reduce the existing eight-site surface-detail backward cost
-  without changing its math; require exact checkpoint parity and at most 2×
-  baseline step time before reopening a two-scene quality gate.
+  Staging the released eight-site directional residual after freezing base
+  density/SH now improves every held Room and Bonsai view, so the two-scene
+  quality gate passes without changing the appearance model. Keep it opt-in:
+  the locally optimized graph is still 3.04× the matched no-table training
+  time, above the 2× production gate. Compact inactive path rows or teach the
+  compiler the equivalent sparse reduction before changing the model again.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For

@@ -181,15 +181,18 @@ fn declare_sh_parameters(
     g: &mut mn::Graph,
     n_cells: usize,
     num_components: usize,
+    train: bool,
 ) -> Vec<ShChannelGraph> {
     ["sh_r", "sh_g", "sh_b"]
         .into_iter()
         .map(|channel| ShChannelGraph {
-            dc: g.parameter(channel, &[n_cells, 1]),
+            dc: parameter_with_gradient(g, channel, &[n_cells, 1], train),
             rest: (num_components > 1).then(|| {
-                g.parameter(
+                parameter_with_gradient(
+                    g,
                     &sh_rest_parameter_name(channel),
                     &[n_cells, num_components - 1],
+                    train,
                 )
             }),
         })
@@ -795,6 +798,7 @@ pub fn build_volumetric_graph(
         use_surface_normals,
         VolumetricGraphOptions {
             use_surface_normal_loss: use_surface_normals,
+            train_base_appearance: true,
             train_positions: true,
             train_radii: true,
             train_exposure: true,
@@ -816,6 +820,7 @@ pub fn build_volumetric_graph(
 #[derive(Clone, Copy)]
 struct VolumetricGraphOptions {
     use_surface_normal_loss: bool,
+    train_base_appearance: bool,
     train_positions: bool,
     train_radii: bool,
     train_exposure: bool,
@@ -1056,7 +1061,12 @@ fn build_volumetric_graph_with_options(
     // Parameters live as [N, 1] tables (or [N, 3] for positions) so
     // `embedding` returns [P*L, 1] (or [P*L, 3]). For SH-degree > 0 we
     // have K coefficient tables per channel.
-    let log_density = g.parameter("log_density", &[n_cells, 1]);
+    let log_density = parameter_with_gradient(
+        g,
+        "log_density",
+        &[n_cells, 1],
+        options.train_base_appearance,
+    );
     let positions = g.parameter("positions", &[n_cells, 3]);
     let log_radii = use_recorded_dt.then(|| g.parameter("log_radii", &[n_cells, 1]));
     let surface_normals = use_surface_normals.then(|| {
@@ -1220,7 +1230,8 @@ fn build_volumetric_graph_with_options(
     let exposure_b =
         parameter_with_gradient(g, "exposure_b", &[num_views, 1], options.train_exposure);
     let view_idx = g.input_u32("view_idx", &[p]);
-    let sh_coefficients = declare_sh_parameters(g, n_cells, num_components);
+    let sh_coefficients =
+        declare_sh_parameters(g, n_cells, num_components, options.train_base_appearance);
 
     // Density activation. ReLU (legacy) zeroes negative log-density AND
     // its gradient, so a cell that dips negative dies permanently (dead
@@ -2396,6 +2407,9 @@ pub struct TrainingState {
 #[derive(Clone, Debug)]
 pub struct AppearanceFitConfig {
     pub learning_rate: f32,
+    /// Whether density and SH participate in optimization. Disabling this
+    /// keeps the base light field fixed and omits its backward graph.
+    pub train_base_appearance: bool,
     pub epochs: usize,
     pub adam_beta1: f32,
     pub adam_beta2: f32,
@@ -2674,6 +2688,7 @@ impl Default for AppearanceFitConfig {
     fn default() -> Self {
         Self {
             learning_rate: 0.1,
+            train_base_appearance: true,
             epochs: 200,
             adam_beta1: 0.9,
             adam_beta2: 0.999,
@@ -5766,6 +5781,7 @@ fn build_train_session(
     path_bufs: &vol::gpu::PathRecordBuffers,
     lr: f32,
     lr_groups: LrGroups,
+    train_base_appearance: bool,
     position_lr_ratio: f32,
     radius_lr_ratio: f32,
     surface_normal_lr_ratio: f32,
@@ -5829,6 +5845,7 @@ fn build_train_session(
         model.surface_normals.is_some(),
         VolumetricGraphOptions {
             use_surface_normal_loss,
+            train_base_appearance,
             train_positions,
             train_radii,
             train_exposure: exposure_lr_ratio != 0.0,
@@ -5889,6 +5906,25 @@ fn build_train_session(
     );
     if std::env::var_os("BLADE_VOLUME_PROFILE_GPU").is_some() {
         session.set_profiling(true);
+    }
+    assert_eq!(
+        session.has_param_grad("log_density"),
+        train_base_appearance,
+        "base-density training state does not match its configuration",
+    );
+    for channel in ["sh_r", "sh_g", "sh_b"] {
+        assert_eq!(
+            session.has_param_grad(channel),
+            train_base_appearance,
+            "base-SH training state does not match its configuration",
+        );
+        if sh_degree > 0 {
+            assert_eq!(
+                session.has_param_grad(&sh_rest_parameter_name(channel)),
+                train_base_appearance,
+                "base-SH training state does not match its configuration",
+            );
+        }
     }
     if model.surface_detail.is_some() {
         for (name, ratio) in [
@@ -6500,6 +6536,7 @@ fn fit_appearance_pixel_batched(
         &path_bufs,
         config.learning_rate,
         config.lr_groups,
+        config.train_base_appearance,
         config.position_lr_ratio,
         config.radius_lr_ratio,
         config.surface_normal_lr_ratio,
@@ -7166,6 +7203,7 @@ fn fit_appearance_pixel_batched(
                     &path_bufs,
                     config.learning_rate,
                     config.lr_groups,
+                    config.train_base_appearance,
                     config.position_lr_ratio,
                     config.radius_lr_ratio,
                     config.surface_normal_lr_ratio,
@@ -7978,7 +8016,7 @@ mod tests {
         let basis_inputs: Vec<mn::NodeId> = (1..k)
             .map(|component| graph.input(&format!("basis_{component}"), &[p, 1]))
             .collect();
-        let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, k);
+        let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, k, true);
         let pixels = pixel_sh(
             &mut graph,
             cell_indices,
@@ -8099,7 +8137,7 @@ mod tests {
         let surface_basis = graph.input("surface_basis", &[p * l, components]);
         let surface_color =
             graph.parameter("surface_color_coefficients", &[n_cells, components * 3]);
-        let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, 1);
+        let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, 1, true);
         let pixels = pixel_sh(
             &mut graph,
             cell_indices,
@@ -8909,7 +8947,7 @@ mod tests {
             axes: graph.parameter("spherical_voronoi_axes", &[n_cells, sites * 3]),
             colors: graph.parameter("spherical_voronoi_colors", &[n_cells, sites * 3]),
         };
-        let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, 1);
+        let sh_coefficients = declare_sh_parameters(&mut graph, n_cells, 1, true);
         let pixels = pixel_sh(
             &mut graph,
             cell_indices,
@@ -9847,6 +9885,7 @@ mod tests {
             true,
             VolumetricGraphOptions {
                 use_surface_normal_loss: false,
+                train_base_appearance: true,
                 train_positions: true,
                 train_radii: true,
                 train_exposure: true,
@@ -9889,6 +9928,7 @@ mod tests {
             true,
             VolumetricGraphOptions {
                 use_surface_normal_loss: true,
+                train_base_appearance: true,
                 train_positions: false,
                 train_radii: false,
                 train_exposure: true,
@@ -9983,6 +10023,7 @@ mod tests {
             true,
             VolumetricGraphOptions {
                 use_surface_normal_loss: false,
+                train_base_appearance: true,
                 train_positions: false,
                 train_radii: false,
                 train_exposure: true,
@@ -10095,6 +10136,7 @@ mod tests {
             true,
             VolumetricGraphOptions {
                 use_surface_normal_loss: false,
+                train_base_appearance: false,
                 train_positions: false,
                 train_radii: false,
                 train_exposure: false,
@@ -10130,6 +10172,10 @@ mod tests {
         );
 
         for name in [
+            "log_density",
+            "sh_r",
+            "sh_g",
+            "sh_b",
             "positions",
             "log_radii",
             "surface_normals",
@@ -10648,7 +10694,8 @@ mod tests {
         drop(legacy_session);
 
         let mut packed_graph = mn::Graph::new();
-        let packed_parameters = declare_sh_parameters(&mut packed_graph, n_cells, num_components);
+        let packed_parameters =
+            declare_sh_parameters(&mut packed_graph, n_cells, num_components, true);
         let mut packed_loss = None;
         for channel in &packed_parameters {
             for parameter in [Some(channel.dc), channel.rest].into_iter().flatten() {
@@ -11644,6 +11691,7 @@ mod tests {
             true,
             VolumetricGraphOptions {
                 use_surface_normal_loss: false,
+                train_base_appearance: true,
                 train_positions: false,
                 train_radii: false,
                 train_exposure: true,
