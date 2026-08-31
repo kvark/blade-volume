@@ -157,9 +157,11 @@ a convincing real-world result.
   merely reweight the same objective. That audit finds severe conflict on Pot2
   and Cow, but both strict agreement and PCGrad projection make Pot2 broadly
   worse; they are removed. The conflict belongs to the current image model,
-  not just its optimizer. A fresh Buddha repeat also rejects the correspondence
-  route
-  before held data: calibrated-albedo tracks form no complete-render-safe
+  not just its optimizer. A frozen two-object shadow audit also finds almost no
+  correlation between visibility variation and gradient conflict, so no
+  shadow-aware loss is added. A fresh Buddha repeat also rejects the
+  correspondence route before held data: calibrated-albedo tracks form no
+  complete-render-safe
   patch under the default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices
   are in

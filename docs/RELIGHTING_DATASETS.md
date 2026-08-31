@@ -730,6 +730,20 @@ of the current image model, not permission to discard contradictory views; the
 next audit should correlate it with frozen light visibility on Pot2 and Cow
 before any new shadow-aware training path is considered.
 
+That visibility audit rejects shadows as the immediate explanation. It freezes
+the checkpoint and approximates the sampled near lights by directions from the
+point-cloud center, then evaluates the existing point-cloud shadow test without
+an optimizer step. Camera-group openness varies for 82.07% of active Pot2
+points and 79.26% of Cow points, so the test has ample signal. Nevertheless,
+its Pearson correlation with minimum-pair gradient conflict is only
+`0.100/0.073` for Pot2 position/normal gradients and `0.076/0.007` for Cow.
+The same two-object gate that protected the optimizer therefore rules out a
+shadow loss. Peak scoped RSS is 1.1 GiB for Pot2 and 265.3 MiB for Cow, with
+zero swap or cgroup memory events. All temporary gradient-audit code is removed.
+The next diagnostic asks whether conflict follows which cameras actually own
+visible compositing support for each point, rather than which lights can reach
+it.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is

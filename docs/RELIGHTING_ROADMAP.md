@@ -1496,9 +1496,13 @@ a deterministic repeat agree within the measured training variance.
 - [x] Measure position/normal gradient conflict across predeclared camera
   groups; remove strict agreement and PCGrad displacement projection when both
   make Pot2 broadly worse despite confirming severe conflict on two objects.
-- [ ] Attribute the camera-group conflict to an omitted image-formation term
-  before changing geometry again. Start with a frozen visibility/shadow audit;
-  do not train against it unless the same correlation holds on two objects.
+- [x] Audit frozen shadow visibility as the first omitted image-formation term.
+  It varies by camera group on both objects but correlates weakly with
+  position/normal conflict; leave shadow-aware training out.
+- [ ] Test whether conflict follows observation ownership: correlate each
+  point's conflicting camera groups with the cameras in which its compositing
+  support is actually visible. Do not change training unless Pot2 and Cow show
+  the same relationship.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
