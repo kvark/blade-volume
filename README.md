@@ -164,9 +164,9 @@ a convincing real-world result.
   half-vector lobes then correlate with individual residuals in the wrong
   direction, so no specular term is added to the physical geometry fit. Only
   about 15--16% of physical observations duplicate a center pixel, rejecting
-  an exclusive-owner rewrite; universal footprint mixing remains the next
-  attribution target. A fresh Buddha repeat also rejects the correspondence
-  route before held data:
+  an exclusive-owner rewrite. Universal footprint mixing also fails to predict
+  residual on both objects, so no demixing rule is added. A fresh Buddha repeat
+  also rejects the correspondence route before held data:
   calibrated-albedo tracks form no complete-render-safe patch under the
   default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices

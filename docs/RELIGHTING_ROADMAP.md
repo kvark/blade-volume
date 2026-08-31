@@ -1510,10 +1510,14 @@ a deterministic repeat agree within the measured training variance.
 - [x] Quantify duplicated physical observations. Only 16.10%/15.14% of
   Pot2/Cow samples share their center pixel, below the predeclared 25% gate;
   do not replace the solver with exclusive center ownership.
-- [ ] Attribute the universal footprint mixing before changing the solver.
-  Every sampled center lies under multiple disc supports on both objects;
-  correlate per-surfel mixture complexity with physical residual and gradient
-  conflict before testing any compositing-responsibility rule.
+- [x] Attribute universal footprint mixing against normalized physical
+  residual. Pot2 correlation is only `0.030` with a 1.53% quartile gap; Cow
+  reaches `0.112`/10.38% but still misses the predeclared two-object gate.
+  Remove the support counter and add no compositing-responsibility rule.
+- [ ] Decompose the remaining frozen physical residual by camera and light.
+  Require the same axis to explain at least 20% and twice the competing axis
+  on Pot2 and Cow before choosing correspondence work or another light-response
+  term.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For

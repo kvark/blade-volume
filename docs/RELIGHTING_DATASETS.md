@@ -785,6 +785,18 @@ relevant, but aggregate overlap is not causal evidence. The next audit must
 attribute residual or camera-group gradient conflict to per-surfel mixture
 complexity on both objects before a compositing responsibility is allowed.
 
+Per-surfel attribution rejects that broader rule too. Before running it, the
+gate required support multiplicity to correlate at least `0.20` with normalized
+physical residual and the most-mixed quartile to be at least 10% worse than the
+least-mixed quartile on both objects. Pot2 measures only `0.030` and 1.53%.
+Cow reaches `0.112` and 10.38%, failing the correlation condition and the
+two-object requirement. The scoped Pot2 pass peaks at 1.06 GiB and Cow below
+116 MiB, both without swap. The temporary per-surfel support counter is
+removed. Universal overlap is therefore a representation fact, not evidence
+for demixing the CPU observations. The next frozen attribution separates each
+surfel's residual into camera- and light-index effects; only a repeated dominant
+axis can decide whether to return to correspondence or image response.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is
