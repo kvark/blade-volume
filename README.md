@@ -168,8 +168,11 @@ a convincing real-world result.
   residual on both objects, so no demixing rule is added. Residual variance
   then splits differently between camera and light on Pot2 and Cow; the next
   bounded test fits only shared diffuse albedo through the exact Gaussian
-  compositor. A fresh Buddha repeat also rejects the correspondence route
-  before held data:
+  compositor, but even a 12.5% continuation loses Pot2 selection means. The
+  one-site parameter branch is now closed; the next route is making the
+  existing eight-site surface-detail training practical without changing its
+  math. A fresh Buddha repeat also rejects the correspondence route before held
+  data:
   calibrated-albedo tracks form no complete-render-safe patch under the
   default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices

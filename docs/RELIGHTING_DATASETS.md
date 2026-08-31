@@ -810,6 +810,27 @@ geometry, support, normal, and calibrated-light value fixed. It must use
 separate construction train/selection/validation camera groups and pass every
 complete Pot2 metric before Cow is opened.
 
+That coupled albedo bound is rejected before validation. An audit-only graph
+embeds the existing shared material table through the exact particle-to-
+material indices and performs 2,400 deterministic 512-ray updates on camera
+groups 0/1, with geometry, covariance, opacity, normals, and all light values
+frozen. Its fixed audit loss moves `0.002753→0.003158`. On group-2 selection,
+the smallest 12.5% blend moves whole mean/worst
+`34.712337/31.238324→34.664672/31.198527` dB and foreground mean
+`25.257424→25.214368` dB; only foreground worst improves. Larger blends get
+monotonically worse. Group-3 validation, Cow, and every official split remain
+unopened. The graph-construction flag, material parameter, and audit API are
+removed.
+
+This closes the one-site parameter branch: sampling, tails, gradient surgery,
+shadows, camera ownership, specular response, observation demixing, residual-
+axis attribution, and exact-compositor albedo all fail their predeclared
+controls. The next quality route is already represented by the cloud model,
+not a new geometry type: make the released eight-site surface-detail backward
+practical at production batches. Preserve its exact checkpoint result while
+reducing the current roughly 6× step cost to at most 2× baseline; only then
+repeat the two-scene held-view/held-light gate.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is

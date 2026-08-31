@@ -1518,10 +1518,13 @@ a deterministic repeat agree within the measured training variance.
   Cow is camera-dominant, while Pot2 is coupled and slightly light-heavy; no
   axis satisfies the repeated 20%/2× gate. Add neither correspondence nor
   light-response capacity from this evidence.
-- [ ] Fit only shared diffuse albedo through the exact Gaussian compositor.
-  Freeze centers, covariance, opacity, normals, and calibrated lights; use
-  separate construction train/selection/validation camera groups and require
-  all complete metrics to pass on Pot2 before opening Cow.
+- [x] Fit only shared diffuse albedo through the exact Gaussian compositor.
+  The smallest 12.5% Pot2 continuation loses selection whole and foreground
+  means before validation; remove the graph flag/API and leave Cow unopened.
+- [ ] Stop adding isolated parameters to the one-site physical Gaussian.
+  Profile and reduce the existing eight-site surface-detail backward cost
+  without changing its math; require exact checkpoint parity and at most 2×
+  baseline step time before reopening a two-scene quality gate.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
