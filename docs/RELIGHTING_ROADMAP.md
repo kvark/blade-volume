@@ -93,6 +93,11 @@ Bonsai but remains opt-in for cost. Generic grouped gather/scatter fusion and
 the narrow-group scatter mapping reduce memory and arithmetic without adding
 backend variants; the current Room continuation is still 2.89--2.96× the
 matched base path. Fixed shorter rows and zero-row predicates are rejected.
+The stage horizon is now bounded independently: 98,831-site Room selects 256
+updates and mildly overfits at 512, while 200,000-site Bonsai reaches
+21.6891/20.9944 dB at 510 updates and is nearly plateaued after update 384.
+Both selected endpoints are about one update per 390 sites; use that as an
+experimental budget, not a hidden scene-specific default.
 Sharing directional colours across the eight spatial sites remains mildly
 quality-positive when fitted after the base, but loses part of the full
 table's two-scene gain and its straightforward row repetition is slower than
@@ -1547,7 +1552,10 @@ a deterministic repeat agree within the measured training variance.
   time, above the 2× production gate. Its 76-entry rows average only 23.7
   active entries. Smaller hard caps and zero-row shader predicates fail the
   combined quality/performance gate; compact and indirectly dispatch active
-  rows before changing the model again.
+  rows before changing the model again. Scale the explicit staged budget with
+  table size: Room selects 256 updates for 98,831 sites and mildly overfits at
+  512, while Bonsai is still underfit at 255 and reaches 21.6891/20.9944 dB at
+  510 updates for 200,000 sites.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For

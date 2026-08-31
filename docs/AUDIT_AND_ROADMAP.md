@@ -55,9 +55,12 @@ behind these gates:
    but staged residual fitting now freezes the converged density/SH base and
    passes a fresh two-scene gate: Room improves 24.7981/20.2976 to
    25.1415/20.3937 dB over train/held views, and weighted/oriented Bonsai
-   improves 21.3762/20.7550 to 21.5280/20.8709 dB. Every held view improves in
-   both scenes. The graph omits base gradients rather than emulating a freeze
-   with tiny rates. With the latest local generic Meganeura scatter/gather
+   improves 21.3762/20.7550 to 21.6891/20.9944 dB. Every held view improves in
+   both scenes. The selected horizons, 256 updates for 98,831 Room sites and
+   510 for 200,000 Bonsai sites, are both about one update per 390 sites; the
+   two-scene evidence is a staging guideline rather than a hardcoded policy.
+   The graph omits base gradients rather than emulating a freeze with tiny
+   rates. With the latest local generic Meganeura scatter/gather
    fusion and a telemetry-selected 76-entry path row, however, Room table
    training takes 6.791--6.964 seconds versus 2.352 seconds for the matched
    no-table graph (2.89--2.96×). The latest generic narrow-group scatter maps
@@ -86,6 +89,14 @@ behind these gates:
    should consume the compact prefix. Meganeura `cfdb59c` supplies the needed
    generic forward-scatter derivative without a new shader path. A generic
    runtime active extent remains required before adding recorder outputs.
+   Horizon screens also close the immediate quality follow-up: halfway through
+   Room's selected trajectory scores rise to 25.0446/20.3675, all eight held
+   views improve again by update 256, and a separate 512-update run raises
+   train PSNR but lowers held PSNR by 0.0051 dB. Bonsai rises monotonically from
+   21.5280/20.8709 at 255 updates to 21.6731/20.9815 at update 384 and
+   21.6891/20.9944 at 510; the final interval has 31 rounded per-view gains and
+   six ties. Do not spend a fixed number of updates per scene regardless of
+   table size, and do not extend Room merely to match Bonsai's absolute count.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.

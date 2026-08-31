@@ -2828,6 +2828,32 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   2.61 GiB, and recorded zero swap, pressure, OOM, kill, or GPU fault. Logs are
   under `target/audit-runs/directional-active-capacity/`.
 
+#### M2cr — Scale the staged horizon with table size (selected experimentally)
+
+- A fixed number of directional-only updates undertrains the larger table.
+  Weighted/oriented Bonsai rises from 21.5280/20.8709 dB at 255 updates to
+  21.6731/20.9815 at update 384 on the same 510-update cosine trajectory and
+  21.6891/20.9944 at its endpoint. All 37 rounded held-view scores improve from
+  255 to 384; the last interval has 31 improvements and six ties. The selected
+  510-update model improves the table-free base by +0.3129/+0.2394 dB.
+- Room bounds the other side of the curve. Its halfway checkpoint reaches
+  25.0446/20.3675 dB, then all eight rounded held-view scores improve by the
+  selected 256-update endpoint at 25.1415/20.3937. A separate 512-update cosine
+  fit raises train PSNR to 25.4561 but lowers held PSNR to 20.3886; five of
+  eight rounded held views regress from update 256. The extra Room work is
+  rejected.
+- The independently selected endpoints are nearly the same site-normalized
+  budget: 98,831/256 = 386 sites per update on Room and 200,000/510 = 392 on
+  Bonsai. Use roughly one directional-only update per 390 spatial sites as the
+  next explicit experiment budget. Do not encode it as a trainer default from
+  only two scenes, and do not replace validation or early stopping with the
+  ratio. The selected Room and Bonsai models remain generated artifacts under
+  `target/audit-runs/directional-staged-validation/` and
+  `target/audit-runs/directional-staged-horizon/`.
+- All new training/evaluation runs used 4 GiB scopes. Room training peaked at
+  1.5 GiB and Bonsai at 2.6 GiB, with zero swap, pressure, OOM, kill, throttle,
+  or GPU fault.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -3129,8 +3155,9 @@ manifest accidentally.
 
 - Default-on training for the full PowerFoam directional table. Staged
   frozen-base fitting now passes Room and weighted/oriented Bonsai quality,
-  but its locally optimized training time remains 2.98× the matched no-table
-  graph and therefore misses the 2× production gate.
+  and its explicit budget now scales with table size, but its locally optimized
+  training time remains 2.98× the matched no-table graph and therefore misses
+  the 2× production gate.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.

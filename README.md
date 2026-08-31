@@ -171,20 +171,23 @@ a convincing real-world result.
   compositor, but even a 12.5% continuation loses Pot2 selection means. The
   one-site parameter branch is now closed. The released eight-site directional
   residual now has a viable staged fit: freeze the already-trained density/SH
-  base, then fit only the residual table. That improves every held Room and
-  Bonsai view, but the table's backward pass is still about 3× the matched
-  no-table step time, so it remains opt-in while active-path compaction is the
-  next performance target. A fresh Buddha repeat also rejects the
-  correspondence route before held
-  data:
+  base, then fit only the residual table. The selected stage improves every
+  held Room and Bonsai view; its useful horizon scales with table size (256
+  updates for 98,831 Room sites and 510 for 200,000 Bonsai sites). Bonsai now
+  reaches 21.6891/20.9944 dB over train/held views. The table's backward pass
+  is still about 3× the matched no-table step time, so it remains opt-in while
+  active-path compaction is the next performance target. A fresh Buddha repeat
+  also rejects the correspondence route before held data:
   calibrated-albedo tracks form no complete-render-safe patch under the
   default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices
   are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
 
-The latest staged directional-residual models and telemetry are under
-`target/audit-runs/directional-staged-validation/`; these generated artifacts
+The staged directional-residual models and telemetry are under
+`target/audit-runs/directional-staged-validation/`; the selected longer Bonsai
+result and horizon screens are under
+`target/audit-runs/directional-staged-horizon/`. These generated artifacts
 remain outside version control.
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV
