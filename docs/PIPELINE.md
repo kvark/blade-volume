@@ -2770,6 +2770,32 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   19.9-million-element pass but left the complete graph at 8.60--8.63 ms, so
   it is removed rather than adding neutral compiler policy.
 
+#### M2cp — Share directional colours across spatial sites (staged screen rejected)
+
+- A post-fit capacity diagnostic averages each cell's eight learned spatial
+  sites while preserving its eight directional bins. The projected full-table
+  Room checkpoint keeps 44.84% of table energy and scores
+  24.8714/20.3531 dB versus 24.7981/20.2976 without the table and
+  25.1415/20.3937 with the complete table. The independent Bonsai projection
+  keeps 60.70% of table energy and scores 21.4365/20.8005 dB versus
+  21.3762/20.7550 and 21.5280/20.8709. Shared directional response is useful,
+  but the discarded site-dependent response is also material on both scenes.
+- A direct frozen-base Room fit of the compact `[cell, direction, channel]`
+  table reaches 24.9547/20.3604 dB. It remains positive over the table-free
+  base, but trails the full staged table. The straightforward graph repeats
+  each compact row over eight sites before the existing reductions; this
+  raises the graph from 192 passes at 8.63--8.65 ms to 237 passes at
+  13.48--13.58 ms. The complete 256-update stage takes 8.256 seconds, slower
+  than both 6.791--6.964 seconds for the full table and 2.352 seconds for the
+  base graph.
+- The prototype is removed: an 8x smaller parameter table is not useful if
+  materializing its repeated rows adds more work than it saves. Revisit this
+  capacity only if a generic gathered-row reduction can repeat a narrow row
+  without concatenation or a directional-specific operation, shader group,
+  or shader-entry variant. Active-path compaction remains the primary
+  performance target because it attacks the 68.8% padded traversal rows for
+  both compact and full tables.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the

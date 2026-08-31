@@ -93,6 +93,11 @@ Bonsai but remains opt-in for cost. Generic grouped gather/scatter fusion and
 the narrow-group scatter mapping reduce memory and arithmetic without adding
 backend variants; the current Room continuation is still 2.89--2.96× the
 matched base path. Fixed shorter rows and zero-row predicates are rejected.
+Sharing directional colours across the eight spatial sites remains mildly
+quality-positive when fitted after the base, but loses part of the full
+table's two-scene gain and its straightforward row repetition is slower than
+the full table. That prototype is removed rather than adding a special
+operation or shader variant.
 The next performance implementation is an active-segment representation for
 the directional branch, with overflow-safe repacking and indirect work rather
 than another fixed cap.

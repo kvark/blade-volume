@@ -71,6 +71,13 @@ behind these gates:
    pointwise zero-row, and shared-Softmax folding prototypes are removed after
    failing complete-run timing. Require real row repacking and at most 2×
    baseline time before enabling the table by default.
+   Sharing each cell's eight directional colours across all eight spatial
+   sites is also rejected after a staged screen: direct Room training remains
+   quality-positive at 24.9547/20.3604 dB, but trails the full table and a
+   materialized repeat makes it slower (8.256 seconds for 256 updates). Post-fit
+   Room and Bonsai projections retain only 44.84% and 60.70% of table energy,
+   confirming that spatially varying directional response is not redundant.
+   The experimental graph path is removed.
 3. Keep physical-GPU parity and transformed-scene pixel tests passing across
    supported vendors without driver faults or unbounded memory growth. The
    current NVIDIA/Vulkan gate passes; AMD long runs and Metal remain uncovered.
