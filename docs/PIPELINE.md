@@ -2732,10 +2732,12 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   that only the three released directional-colour tables receive gradients;
   an end-to-end PLY audit finds zero changed density or SH bit patterns.
 - The quality result does not yet make the table a default. With the rebased
-  grouped scatter/gather Meganeura compiler work and an 80-entry Room path
-  row, directional-only training takes 7.140 seconds versus 2.346 seconds for
-  the matched base graph (3.04×). It records a 75/80 maximum and zero truncated
-  rays while cutting peak host memory to 1.65 GB. Profiling assigns 9.21 ms to
+  grouped scatter/gather Meganeura compiler work and a 76-entry Room path row,
+  directional-only training takes 7.009 seconds versus 2.352 seconds for the
+  matched base graph (2.98×). It records a 75/76 maximum and zero truncated
+  rays while preserving 25.1415/20.3937 dB. The new synchronized telemetry
+  reports only 23.7 active entries per ray on average: 68.8% of the fixed row
+  is padding. Profiling assigns 9.21 ms to
   the directional graph versus 1.73 ms for the base graph; the required dense
   per-path table evaluation and reductions dominate, not Adam or traversal.
   Keep training opt-in until active path rows can be compacted/repacked, or an
@@ -3043,7 +3045,7 @@ manifest accidentally.
 
 - Default-on training for the full PowerFoam directional table. Staged
   frozen-base fitting now passes Room and weighted/oriented Bonsai quality,
-  but its locally optimized training time remains 3.04× the matched no-table
+  but its locally optimized training time remains 2.98× the matched no-table
   graph and therefore misses the 2× production gate.
 - Mobile capture app.
 - Multi-GPU / distributed training.

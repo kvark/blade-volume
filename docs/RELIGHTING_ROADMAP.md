@@ -1525,8 +1525,9 @@ a deterministic repeat agree within the measured training variance.
   Staging the released eight-site directional residual after freezing base
   density/SH now improves every held Room and Bonsai view, so the two-scene
   quality gate passes without changing the appearance model. Keep it opt-in:
-  the locally optimized graph is still 3.04× the matched no-table training
-  time, above the 2× production gate. Compact inactive path rows or teach the
+  the locally optimized graph is still 2.98× the matched no-table training
+  time, above the 2× production gate. Its 76-entry rows average only 23.7
+  active entries. Compact inactive rows or teach the
   compiler the equivalent sparse reduction before changing the model again.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-

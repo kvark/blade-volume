@@ -58,9 +58,10 @@ behind these gates:
    improves 21.3762/20.7550 to 21.5280/20.8709 dB. Every held view improves in
    both scenes. The graph omits base gradients rather than emulating a freeze
    with tiny rates. With the latest local generic Meganeura scatter/gather
-   fusion and a telemetry-selected 80-entry path row, however, Room table
-   training still takes 7.140 seconds versus 2.346 seconds for the matched
-   no-table graph (3.04×). The remaining work is generic active-path
+   fusion and a telemetry-selected 76-entry path row, however, Room table
+   training still takes 7.009 seconds versus 2.352 seconds for the matched
+   no-table graph (2.98×). Only 23.7 of those 76 entries are active on average,
+   so the remaining work is generic active-path
    compaction or sparse reduction, not another appearance parameter or shader
    variant; require at most 2× baseline time before enabling the table by
    default.

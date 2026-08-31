@@ -6381,6 +6381,7 @@ fn fit_appearance_pixel_batched(
     let mut training_path_rays = 0usize;
     let mut training_path_truncated_rays = 0usize;
     let mut training_path_max_steps_used = 0u32;
+    let mut training_path_steps = 0usize;
     let mut training_candidate_max_used = 0u32;
     // Frequent loss readouts (every ~2000 steps) so long multi-hour runs
     // surface their trajectory instead of only ~10 lines total.
@@ -6896,6 +6897,7 @@ fn fit_appearance_pixel_batched(
             let first_path_truncation =
                 training_path_truncated_rays == 0 && recorded_path.truncated_rays > 0;
             training_path_rays += pixel_batch;
+            training_path_steps += recorded_path.total_steps_used;
             training_path_truncated_rays += recorded_path.truncated_rays;
             training_path_max_steps_used =
                 training_path_max_steps_used.max(recorded_path.max_steps_used);
@@ -7420,11 +7422,18 @@ fn fit_appearance_pixel_batched(
     } else {
         100.0 * training_path_truncated_rays as f32 / training_path_rays as f32
     };
+    let training_path_average_steps = if training_path_rays == 0 {
+        0.0
+    } else {
+        training_path_steps as f32 / training_path_rays as f32
+    };
     if model.radii.is_some() {
         log::info!(
-            "training path telemetry: {} rays, max {}/{}, {} truncated ({:.6}%); \
+            "training path telemetry: {} rays, average {:.1}, max {}/{}, \
+             {} truncated ({:.6}%); \
              candidates max {}/{}",
             training_path_rays,
+            training_path_average_steps,
             training_path_max_steps_used,
             max_steps,
             training_path_truncated_rays,
@@ -7434,8 +7443,10 @@ fn fit_appearance_pixel_batched(
         );
     } else {
         log::info!(
-            "training path telemetry: {} rays, max {}/{}, {} truncated ({:.6}%)",
+            "training path telemetry: {} rays, average {:.1}, max {}/{}, \
+             {} truncated ({:.6}%)",
             training_path_rays,
+            training_path_average_steps,
             training_path_max_steps_used,
             max_steps,
             training_path_truncated_rays,

@@ -613,7 +613,9 @@ fn assert_gpu_path_record_matches_cpu_with_mode(
         .map(|row| row.iter().filter(|&&value| value > 0.0).count() as u32)
         .max()
         .unwrap_or(0);
+    let expected_steps = cpu.mask.iter().filter(|&&value| value > 0.0).count();
     assert_eq!(path_stats.max_steps_used, expected_max_steps);
+    assert_eq!(path_stats.total_steps_used, expected_steps);
     assert_eq!(
         path_stats.truncated_rays > 0,
         expect_path_truncation,

@@ -585,6 +585,8 @@ impl PathRecorder {
 pub struct PathRecordStats {
     /// Largest number of active entries written for one ray.
     pub max_steps_used: u32,
+    /// Total active entries across the requested rays.
+    pub total_steps_used: usize,
     /// Rays which exhausted the path budget while another valid segment
     /// remained.
     pub truncated_rays: usize,
@@ -1242,7 +1244,9 @@ impl PathRecordBuffers {
         };
         let mut stats = PathRecordStats::default();
         for &value in &status[range] {
-            stats.max_steps_used = stats.max_steps_used.max(value & !PATH_TRUNCATED_BIT);
+            let steps = value & !PATH_TRUNCATED_BIT;
+            stats.max_steps_used = stats.max_steps_used.max(steps);
+            stats.total_steps_used += steps as usize;
             stats.truncated_rays += usize::from(value & PATH_TRUNCATED_BIT != 0);
         }
         stats
