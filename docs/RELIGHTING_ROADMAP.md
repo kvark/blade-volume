@@ -1487,10 +1487,18 @@ a deterministic repeat agree within the measured training variance.
 - [x] Attribute the proposed displacement separately across four construction-
   camera groups; remove it when the threshold-free Pot2 consensus union still
   loses validation worst-case PSNR by 0.000096 dB.
-- [ ] Cover hard rays explicitly in the calibrated-light objective or its
-  frozen audit. Keep the no-complete-render-probe constraint, predeclare the
-  sampling/tail rule, and require safe selection plus validation on two objects
-  before adding production code.
+- [x] Cover hard rays explicitly with foreground and uniform no-replacement
+  sampling; remove every arm when importance correction still loses a Pot2
+  tail and the only Pot2-safe arm loses Cow validation quality and recall.
+- [x] Optimize frozen pixel and camera residual tails; remove both when the
+  pixel tail loses Pot2 validation and the camera tail transfers loss from
+  validation to independent selection.
+- [x] Measure position/normal gradient conflict across predeclared camera
+  groups; remove strict agreement and PCGrad displacement projection when both
+  make Pot2 broadly worse despite confirming severe conflict on two objects.
+- [ ] Attribute the camera-group conflict to an omitted image-formation term
+  before changing geometry again. Start with a frozen visibility/shadow audit;
+  do not train against it unless the same correlation holds on two objects.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
@@ -1776,6 +1784,85 @@ DiLiGenT-MV view. Cross-camera agreement over the same sparse rays still does
 not constrain the pixel that sets complete-view PSNR. The next test should
 predeclare broader independent/hard-ray coverage or a tail-aware physical loss;
 it should not tune another spatial selector around a `0.0001` dB miss.
+
+The broader-coverage controls are now closed. Pot2 construction masks occupy
+only 10.07% of the crop. Sampling foreground/background equally raises recall
+and foreground tails, but lowers whole-frame means by `0.275/0.304` dB and
+precision by about 3.3 points on selection/validation. Exact importance weights
+restore the uniform-image expectation and most whole-frame quality, yet
+selection precision still falls `95.272→94.767%`, validation precision falls
+`95.139→94.868%`, and validation worst moves
+`30.141536→30.134948` dB.
+
+A distribution-preserving cyclic 512-ray lattice is the one positive Pot2
+arm: it improves all six selection and validation aggregates, including whole
+means `34.712337→34.786671` and `33.742428→33.836758` dB. It does not transfer.
+Cow's 7.41%-foreground crop gains selection image tails and precision, but
+recall falls `83.742→82.864%`; validation whole mean/worst falls
+`31.749391/28.942864→31.700264/28.861278` dB and recall falls
+`84.046→83.130%`. Random jitter within the same no-replacement strata already
+fails Pot2 selection tails, so lattice phase is not retained as a dataset rule.
+All sampler, weight-input, graph, and test code is removed. Runs peak below
+1.1 GiB with zero cgroup swap or GPU fault. Sampling can reduce variance, but
+it does not change the mean objective that accepts a bad camera tail. The next
+bounded control must freeze a residual-defined hard set per camera and optimize
+an explicit tail statistic; it must not tune another foreground fraction or
+spatial sampling pattern.
+
+Both frozen-tail formulations are now rejected. The first averages sampled
+sRGB residual over four evenly spaced construction lights, freezes the top
+pixel decile independently for every camera, and replaces one quarter of every
+physical batch with those rays. Pot2 selection worst moves
+`31.238324→31.227836` dB and precision falls `95.272→95.111%`; validation
+worst/foreground worst moves `30.141536/20.059379→30.024416/20.039498` dB.
+The hard pixels are bright or poorly owned observations, but emphasizing them
+does not protect the aggregate camera tail.
+
+The second control matches that aggregate directly. The same frozen sampled
+audit selects the worst quartile of construction cameras, then gives those
+cameras a 25% continuation with the full balanced light schedule. Validation
+improves strongly: whole mean/worst reaches `33.914956/30.307576` dB,
+foreground tail reaches `20.347184` dB, and recall/precision both rise. The
+independent selection split catches the transfer: whole worst falls
+`31.238324→31.186001` dB and recall falls `90.920→90.625%`. No second object or
+official split is opened. Both host audits, continuations, and tests are
+removed; scoped peak RSS is 1.06 GiB with zero swap or GPU fault.
+
+This closes ray and camera reweighting. The mean, pixel-tail, and camera-tail
+objectives all move error between already observed views. Before changing
+geometry again, the next audit should measure whether their position and normal
+gradients actually conflict across fixed camera groups. If they do, test one
+predeclared Pareto projection or agreement-only update; if they do not, return
+to missing cloud support rather than adding another loss weight.
+
+The four-group gradient audit confirms conflict on both established objects.
+It uses four independent 512-ray batches per camera under four evenly spaced
+construction lights and never updates a parameter. On Pot2, selection group 2
+versus validation group 3 has position/normal flat cosine `0.142/0.251`, but
+43.9%/34.5% of active pointwise dots are negative. Across all group pairs, the
+median point's minimum cosine is `-0.751` for position and `-0.875` for normal.
+Cow is at least as conflicted: median minima are `-0.721/-0.971`; two normal
+group pairs have negative global cosine, and one carries 81.4% of its absolute
+dot mass in opposition.
+
+Conflict is not sufficient evidence for optimizer surgery. A strict update
+that keeps a fitted center or normal only when every group pair agrees lowers
+Pot2 selection whole/foreground mean `34.712337/25.257424→34.648098/25.198727`
+dB and validation mean `33.742428→33.720437` dB. A fixed-order PCGrad control
+is less destructive but still lowers selection mean/worst
+`34.712337/31.238324→34.667672/31.194666` dB and validation mean/worst
+`33.742428/30.141536→33.721094/30.105555` dB. It projects only the existing
+Adam displacement onto the joint descent direction, so it neither invents a
+step scale nor adds an optimizer branch.
+
+Both audits, public results, projections, and tests are removed. Scoped runs
+peak at 1.08 GiB with zero swap or GPU fault. The calibrated graph contains
+inverse-square/angular falloff and Lambertian response, but no light
+visibility, whereas the production renderer and photographs contain
+self-shadowing. Existing scalar visibility controls already say not to train
+against shadows from the fragmented surface. The next safe action is therefore
+diagnostic: test whether frozen shadow classification explains the conflicting
+groups on both Pot2 and Cow before revisiting transport or geometry.
 
 DiLiGenT-MV Buddha is the fourth predeclared object gate. Its unchanged 16k
 route extracts 2,143 point surfels and the calibrated Gaussian fit retains

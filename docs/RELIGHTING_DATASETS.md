@@ -671,6 +671,65 @@ audit sees only one 512-pixel sequence per view; the next bounded control must
 increase hard-ray coverage or put a tail-aware term in the physical objective,
 not add another component selector.
 
+Three construction-only sampling controls close the coverage half of that
+choice. Pot2 foreground occupies 10.07% of its fitted crop. An exact 50/50
+foreground/background batch improves foreground quality and recall but lowers
+whole-frame selection/validation means by `0.275/0.304` dB and precision by
+roughly 3.3 points. Weighting those samples by their uniform-image probability
+removes most of that bias, but selection precision still falls
+`95.272→94.767%` and validation worst/precision moves
+`30.141536→30.134948` dB and `95.139→94.868%`.
+
+Uniform no-replacement coverage gives the stronger diagnostic. A deterministic
+cyclic 512-ray lattice improves every Pot2 selection and validation aggregate;
+whole-frame means reach `34.786671/33.836758` dB and foreground tails reach
+`21.402112/20.273102` dB. Cow rejects the identical rule: selection recall
+falls `83.742→82.864%`, while validation whole mean/worst falls
+`31.749391/28.942864→31.700264/28.861278` dB, foreground mean/tail falls
+`20.853258/18.220257→20.810467/18.127553` dB, and recall falls
+`84.046→83.130%`. Independently jittering the same disjoint strata already
+loses Pot2 selection tails. No official camera or excluded light is opened.
+All sampling and graph-weight prototypes are removed after scoped runs stay
+below 1.1 GiB with zero swap or GPU fault. Broader mean-loss coverage is not a
+tail objective; the next control must freeze and optimize a per-camera hard-ray
+set rather than tune another sampler.
+
+Frozen residual tails do not fix the transfer. A four-batch/four-light audit
+freezes each Pot2 camera's top pixel decile before optimization; replacing one
+quarter of every batch with those pixels lowers selection worst
+`31.238324→31.227836` dB and validation whole/foreground worst
+`30.141536/20.059379→30.024416/20.039498` dB. Selecting the worst quartile of
+cameras instead and giving them a 25% balanced-light continuation makes every
+validation aggregate better—whole mean/worst reaches
+`33.914956/30.307576` dB and foreground tail reaches `20.347184` dB—but
+selection worst falls to `31.186001` dB and recall falls
+`90.920→90.625%`. The independent split therefore rejects the apparent tail
+gain before Cow or any official data is opened. Both ray-only audit paths and
+all continuation code are removed. The next useful measurement is camera-group
+gradient conflict at the fixed checkpoint, not another sampling or weighting
+rule.
+
+That gradient audit finds a real two-object conflict. Four interleaved camera
+groups each accumulate four independent 512-ray batches under four evenly
+spaced fitted lights without an optimizer step. Pot2 selection group 2 versus
+validation group 3 has position/normal flat cosine `0.142/0.251`, with
+43.9%/34.5% negative pointwise dots. The median minimum cosine across every
+group pair is `-0.751/-0.875`. Cow's corresponding minima are
+`-0.721/-0.971`; its normal groups 1/3 have global cosine `-0.328` and 81.4%
+negative dot mass.
+
+Two threshold-free uses of that evidence fail Pot2. Keeping standard fitted
+centers/normals only where every group pair agrees lowers selection whole and
+foreground mean to `34.648098/25.198727` dB and validation whole mean to
+`33.720437` dB. Fixed-order PCGrad projection of the existing Adam displacement
+still lowers selection mean/worst to `34.667672/31.194666` dB and validation
+mean/worst to `33.721094/30.105555` dB. No complete render ranks a point and no
+second object or official split is opened after failure. The temporary audit,
+result type, projection, and tests are removed. Gradient conflict is a symptom
+of the current image model, not permission to discard contradictory views; the
+next audit should correlate it with frozen light visibility on Pot2 and Cow
+before any new shadow-aware training path is considered.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is

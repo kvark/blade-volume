@@ -146,9 +146,19 @@ a convincing real-world result.
   construction mask. A signed displacement audit across four camera groups
   narrows Pot2 to two agreed interior components (22 points), but their union
   still loses validation worst-case PSNR by 0.000096 dB. Both attribution
-  graphs and APIs are removed. The next physical objective must cover hard
-  rays explicitly rather than rank an average residual after fitting. A fresh
-  Buddha repeat also rejects the correspondence route
+  graphs and APIs are removed. Three hard-ray sampling controls are removed as
+  well: unweighted foreground balance over-expands Pot2, importance correction
+  still loses precision and one validation tail, and uniform no-replacement
+  image coverage passes Pot2 but loses Cow validation quality and recall. The
+  frozen-tail controls fail too: a top-decile pixel mixture loses Pot2 tails,
+  while a worst-camera continuation improves validation strongly but moves the
+  loss into the independent selection tail and recall. The next physical
+  control must diagnose and reconcile camera-group gradient conflict, not
+  merely reweight the same objective. That audit finds severe conflict on Pot2
+  and Cow, but both strict agreement and PCGrad projection make Pot2 broadly
+  worse; they are removed. The conflict belongs to the current image model,
+  not just its optimizer. A fresh Buddha repeat also rejects the correspondence
+  route
   before held data: calibrated-albedo tracks form no complete-render-safe
   patch under the default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices
