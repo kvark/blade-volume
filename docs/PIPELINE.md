@@ -2757,6 +2757,18 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   fully dispatched tensor is not compaction. The next performance attempt must
   reduce dispatched rows, most likely by repacking active paths and driving
   the continuation through an indirect dispatch.
+- A retained generic Meganeura improvement maps each narrow grouped table
+  scatter invocation to one eight-value group instead of one scalar. It uses
+  the existing scatter shader, entry, binding layout, and operation. Dispatch
+  count is unchanged, but invocations fall 8×; the three scatter passes fall
+  from about 0.70 to 0.54--0.58 ms and the warm complete graph reaches
+  8.63--8.65 ms. Two complete 256-update repeats take 6.964 and 6.791 seconds
+  versus the preceding 7.009-second candidate, and preserve the exact
+  25.1415/20.3937 dB result and all printed held-view scores. This small gain
+  does not close the 2× gate. A second generic prototype allowed a shared
+  pointwise producer to fold into both Softmax reductions; it removed one
+  19.9-million-element pass but left the complete graph at 8.60--8.63 ms, so
+  it is removed rather than adding neutral compiler policy.
 
 ### M3 — Training crate scaffolding
 
