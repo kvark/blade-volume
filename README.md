@@ -159,10 +159,11 @@ a convincing real-world result.
   worse; they are removed. The conflict belongs to the current image model,
   not just its optimizer. A frozen two-object shadow audit also finds almost no
   correlation between visibility variation and gradient conflict, so no
-  shadow-aware loss is added. A fresh Buddha repeat also rejects the
-  correspondence route before held data: calibrated-albedo tracks form no
-  complete-render-safe
-  patch under the default neighborhood, and wider or photometric-normal
+  shadow-aware loss is added; exact `T×alpha` camera ownership is equally
+  uncorrelated, so gradients are not gated by view support either. A fresh
+  Buddha repeat also rejects the correspondence route before held data:
+  calibrated-albedo tracks form no complete-render-safe patch under the
+  default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices
   are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).

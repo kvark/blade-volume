@@ -744,6 +744,21 @@ The next diagnostic asks whether conflict follows which cameras actually own
 visible compositing support for each point, rather than which lights can reach
 it.
 
+Exact compositing ownership is not the missing explanation either. The audit
+replays those same rays through the sorted CPU candidate oracle, accumulates
+front-to-back `T×alpha` contribution per point and camera group, and normalizes
+by the sampled ray count. Fully 95.12% of active Pot2 points and 97.20% of Cow
+points retain at least 10% of their peak ownership in every group. Correlation
+between all-group ownership imbalance and position/normal conflict is only
+`0.043/0.030` on Pot2 and `0.047/0.033` on Cow; measuring imbalance only for
+each point's most contradictory gradient pair remains below `0.059`. The
+least- and most-imbalanced quartiles differ only slightly as well. Scoped peak
+RSS is 1.06 GiB and 262.8 MiB respectively, with zero swap or memory event.
+The temporary ownership/gradient API is removed. The surviving hypothesis is
+view-dependent reflectance omitted by the diffuse-only geometry graph, which
+must be checked from frozen residual/half-vector evidence before adding BRDF
+capacity.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is

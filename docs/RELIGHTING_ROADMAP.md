@@ -1499,10 +1499,14 @@ a deterministic repeat agree within the measured training variance.
 - [x] Audit frozen shadow visibility as the first omitted image-formation term.
   It varies by camera group on both objects but correlates weakly with
   position/normal conflict; leave shadow-aware training out.
-- [ ] Test whether conflict follows observation ownership: correlate each
-  point's conflicting camera groups with the cameras in which its compositing
-  support is actually visible. Do not change training unless Pot2 and Cow show
-  the same relationship.
+- [x] Test whether conflict follows observation ownership using exact sampled
+  `T×alpha` contribution. More than 95% of active points have shared support
+  across all groups, while ownership/conflict correlation stays below 0.06 on
+  Pot2 and Cow; do not gate gradients by camera ownership.
+- [ ] Test view-dependent, non-Lambertian response as the next omitted term.
+  First correlate frozen calibrated residuals with view/light half-vector
+  alignment; add no BRDF parameter unless Pot2 and Cow agree before a complete
+  render is opened.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For
