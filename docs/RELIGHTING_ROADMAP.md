@@ -1503,10 +1503,15 @@ a deterministic repeat agree within the measured training variance.
   `T×alpha` contribution. More than 95% of active points have shared support
   across all groups, while ownership/conflict correlation stays below 0.06 on
   Pot2 and Cow; do not gate gradients by camera ownership.
-- [ ] Test view-dependent, non-Lambertian response as the next omitted term.
-  First correlate frozen calibrated residuals with view/light half-vector
-  alignment; add no BRDF parameter unless Pot2 and Cow agree before a complete
-  render is opened.
+- [x] Test view-dependent, non-Lambertian response using frozen calibrated
+  residual/half-vector alignment. Pot2 misses the predeclared variance gate,
+  and individual observations correlate in the wrong direction on both
+  objects; add no BRDF capacity.
+- [ ] Quantify duplicated physical observations before changing the image
+  model again. The CPU normal/material solve currently assigns full pixel
+  radiance to every accepted surfel center; use its existing overlap
+  diagnostics to decide whether compositing responsibility deserves a bounded
+  two-object test.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For

@@ -759,6 +759,21 @@ view-dependent reflectance omitted by the diffuse-only geometry graph, which
 must be checked from frozen residual/half-vector evidence before adding BRDF
 capacity.
 
+A frozen non-Lambertian audit also fails its predeclared gate. It removes each
+surfel's mean residual, evaluates calibrated Blinn half-vector proxies with
+powers 1--128, and requires one lobe to explain at least 5% of both individual-
+observation and four-camera-group variance on both objects. Pot2's best group
+result is 4.42%; Cow reaches 8.30%, but individual observations correlate in
+the wrong direction on both objects for every power (`-0.306…-0.083` and
+`-0.105…-0.030`). The audit uses 128,184 Pot2 and 90,648 Cow construction
+observations, never opens a complete render or held split, peaks below 116 MiB,
+and uses no swap. No specular parameter is added. The next known mismatch is
+earlier in the pipeline: the CPU normal/material observation pass gives the
+entire sampled pixel to every accepted surfel center when several centers
+share that pixel. Its existing overlap diagnostics can establish whether that
+duplication is large enough and consistent enough to warrant a responsibility
+experiment.
+
 Buddha is a fourth untouched DiLiGenT-MV control, extracted without its
 released mesh, normals, or depth. The ordinary 16k route produces 2,143 point
 surfels and retains 2,118 fitted Gaussians. Before any candidate held split is

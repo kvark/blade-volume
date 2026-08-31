@@ -160,8 +160,10 @@ a convincing real-world result.
   not just its optimizer. A frozen two-object shadow audit also finds almost no
   correlation between visibility variation and gradient conflict, so no
   shadow-aware loss is added; exact `T×alpha` camera ownership is equally
-  uncorrelated, so gradients are not gated by view support either. A fresh
-  Buddha repeat also rejects the correspondence route before held data:
+  uncorrelated, so gradients are not gated by view support either. Frozen
+  half-vector lobes then correlate with individual residuals in the wrong
+  direction, so no specular term is added to the physical geometry fit. A
+  fresh Buddha repeat also rejects the correspondence route before held data:
   calibrated-albedo tracks form no complete-render-safe patch under the
   default neighborhood, and wider or photometric-normal
   variants trade selection means against tails. Commands and the full matrices
