@@ -2,10 +2,14 @@
 //!
 //! Only the predeclared 32-light gate is materialized. Source linear RGB is
 //! intensity-normalized and encoded as sRGB for the ordinary capture loader;
-//! the ground-truth mesh and normals are never read by this path.
+//! the ground-truth mesh and normals are never read by this path. The 24
+//! construction lights also produce one diffuse-albedo image per construction
+//! camera for a leakage-free dense-stereo pass.
 
 use blade_volume_train as train;
 use std::{fs, path};
+
+const PATCH_MATCH_SOURCES: usize = 12;
 
 #[path = "support/import_calibrated.rs"]
 mod import_calibrated;
@@ -28,6 +32,81 @@ struct Args {
 
 fn view_name(index: usize) -> String {
     format!("view_{:02}.png", index + 1)
+}
+
+fn construction_view_name(index: usize) -> String {
+    view_name(train::inverse::diligent_mv::TRAIN_VIEW_INDICES[index])
+}
+
+fn construction_capture(
+    capture: &train::inverse::capture::Capture,
+) -> train::inverse::capture::Capture {
+    let views = train::inverse::diligent_mv::TRAIN_VIEW_INDICES
+        .iter()
+        .map(|&index| {
+            let source = &capture.views[index];
+            train::inverse::capture::View {
+                name: view_name(index),
+                camera: source.camera,
+                pixels: source.pixels.clone(),
+                mask: source.mask.clone(),
+            }
+        })
+        .collect();
+    train::inverse::capture::Capture {
+        width: capture.width,
+        height: capture.height,
+        views,
+    }
+}
+
+fn patch_match_config(capture: &train::inverse::capture::Capture) -> String {
+    let mut graph = String::new();
+    for (index, reference) in capture.views.iter().enumerate() {
+        let position = glam::Vec3::from(reference.camera.cam_position);
+        let mut sources = capture
+            .views
+            .iter()
+            .enumerate()
+            .filter(|&(other, _)| other != index)
+            .map(|(other, source)| {
+                (
+                    position.distance_squared(glam::Vec3::from(source.camera.cam_position)),
+                    other,
+                )
+            })
+            .collect::<Vec<_>>();
+        sources.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+        graph.push_str(&construction_view_name(index));
+        graph.push('\n');
+        graph.push_str(
+            &sources
+                .iter()
+                .take(PATCH_MATCH_SOURCES)
+                .map(|&(_, source)| construction_view_name(source))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        graph.push('\n');
+    }
+    graph
+}
+
+fn write_albedo_mvs(
+    output: &path::Path,
+    capture: &train::inverse::capture::Capture,
+) -> Result<(), String> {
+    let output = output.join("albedo");
+    let capture = construction_capture(capture);
+    import_calibrated::write_colmap(&output.join("sparse"), &capture, construction_view_name)
+        .map_err(|error| format!("cannot write albedo COLMAP poses: {error}"))?;
+    import_calibrated::write_capture_images(
+        &output.join("images"),
+        &capture,
+        construction_view_name,
+    )?;
+    fs::write(output.join("patch-match.cfg"), patch_match_config(&capture))
+        .map_err(|error| format!("cannot write albedo PatchMatch graph: {error}"))
 }
 
 fn write_splits(output: &path::Path) -> std::io::Result<()> {
@@ -69,8 +148,11 @@ fn run(args: &Args) -> Result<(), String> {
     selected.extend(train::inverse::diligent_mv::HELD_LIGHT_INDICES);
     selected.sort_unstable();
     let dataset = train::inverse::diligent_mv::load(input, args.width, &selected)?;
+    let albedo = dataset.construction_photometric_albedo()?;
     fs::create_dir_all(output)
         .map_err(|error| format!("cannot create {}: {error}", output.display()))?;
+    write_albedo_mvs(output, &albedo)?;
+    drop(albedo);
     import_calibrated::write_colmap(&output.join("sparse/0"), &dataset.captures[0], view_name)
         .map_err(|error| format!("cannot write COLMAP poses: {error}"))?;
     import_calibrated::write_masks(&output.join("masks"), &dataset.captures[0], view_name)?;
@@ -104,5 +186,63 @@ mod tests {
         assert_eq!(view_name(19), "view_20.png");
         assert_eq!(train::inverse::diligent_mv::TRAIN_LIGHT_INDICES[0], 3);
         assert_eq!(train::inverse::diligent_mv::HELD_LIGHT_INDICES[0], 0);
+    }
+
+    #[test]
+    fn albedo_patch_match_graph_is_nearest_camera_and_construction_only() {
+        let views = (0..train::inverse::diligent_mv::TRAIN_VIEW_INDICES.len())
+            .map(|index| train::inverse::capture::View {
+                name: String::new(),
+                camera: blade_volume::CameraParams {
+                    cam_position: [index as f32, 0.0, 0.0],
+                    ..Default::default()
+                },
+                pixels: Vec::new(),
+                mask: None,
+            })
+            .collect();
+        let capture = train::inverse::capture::Capture {
+            width: 1,
+            height: 1,
+            views,
+        };
+        let graph = patch_match_config(&capture);
+        let lines = graph.lines().collect::<Vec<_>>();
+
+        assert_eq!(lines.len(), 2 * capture.views.len());
+        assert_eq!(lines[0], "view_02.png");
+        assert_eq!(lines[1].split(", ").count(), PATCH_MATCH_SOURCES);
+        assert!(lines[1].starts_with("view_03.png, view_04.png"));
+        for &held in &train::inverse::diligent_mv::HELD_VIEW_INDICES {
+            assert!(!graph.contains(&view_name(held)));
+        }
+        assert!(!graph.contains("__auto__"));
+    }
+
+    #[test]
+    fn albedo_capture_physically_excludes_held_cameras() {
+        let source = train::inverse::capture::Capture {
+            width: 1,
+            height: 1,
+            views: (0..train::inverse::diligent_mv::VIEW_COUNT)
+                .map(|index| train::inverse::capture::View {
+                    name: view_name(index),
+                    camera: blade_volume::CameraParams::default(),
+                    pixels: vec![[index as f32; 3]],
+                    mask: Some(vec![1.0]),
+                })
+                .collect(),
+        };
+        let construction = construction_capture(&source);
+
+        assert_eq!(construction.views.len(), 16);
+        assert_eq!(construction.views[0].name, "view_02.png");
+        assert_eq!(construction.views[15].name, "view_20.png");
+        for &held in &train::inverse::diligent_mv::HELD_VIEW_INDICES {
+            assert!(construction
+                .views
+                .iter()
+                .all(|view| view.name != view_name(held)));
+        }
     }
 }

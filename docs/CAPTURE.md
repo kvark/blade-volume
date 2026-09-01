@@ -155,6 +155,16 @@ cargo run --release -p blade-volume-train --bin reconstruct -- \
     --pbr-gaussian-output capture-pbr.ply
 ```
 
+`import_diligent_mv` additionally writes `albedo/{images,sparse,patch-match.cfg}`.
+Those images solve diffuse albedo from the 24 construction lights before dense
+stereo, which removes most view-varying illumination from the correspondence
+cue. The pose bundle and nearest-12 graph contain only the 16 construction
+cameras; the four held cameras and eight held lights are absent by
+construction. Run `image_undistorter`, replace its generated
+`stereo/patch-match.cfg` with this file, and set a scene-appropriate PatchMatch
+depth interval. The resulting workspace goes directly to `--dense-workspace`;
+no mesh or flattened fused PLY is needed.
+
 The first run writes the raw grouped fusion cache; later runs require the same
 ordered training-image list and fusion thresholds, then reapply the current
 masks before selecting a point budget. Every selected voxel keeps one real

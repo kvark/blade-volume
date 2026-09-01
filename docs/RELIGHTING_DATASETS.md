@@ -901,17 +901,68 @@ official split. The bounded prototype stays ignored: calibrated normals carry
 local shape, but sparse anchors do not make their integrated depths independent
 multi-view measurements.
 
+The independent-depth follow-up runs fixed-pose PatchMatch on one diffuse
+albedo image recovered from the 24 construction lights at each construction
+camera. The production importer now writes those 16 images, a pose-only sparse
+bundle, and an explicit nearest-12 graph under `prepared/albedo/`. The four
+held cameras are physically absent and none of the eight held lights enters
+the albedo solve. No released depth, normal, mesh, or polygonal intermediate is
+used. For the Reading run, the construction-only baseline cloud bounds the
+PatchMatch interval to `1400..1700`:
+
+```bash
+colmap image_undistorter \
+    --image_path prepared/albedo/images --input_path prepared/albedo/sparse \
+    --output_path dense-albedo --output_type COLMAP
+cp prepared/albedo/patch-match.cfg dense-albedo/stereo/patch-match.cfg
+colmap patch_match_stereo --workspace_path dense-albedo \
+    --workspace_format COLMAP --PatchMatchStereo.depth_min 1400 \
+    --PatchMatchStereo.depth_max 1700 --PatchMatchStereo.geom_consistency true
+
+cargo run --release -p blade-volume-train --bin reconstruct -- \
+    --sparse prepared/sparse/0 --images prepared/light-004/images \
+    --masks prepared/masks --test-list prepared/test-views.txt \
+    --dense-workspace dense-albedo --dense-cache target/reading-albedo.bvf \
+    --dense-max-points 16384 --min-views 2 --width 128 --far-plane 4000 \
+    --stride 1 --no-shadows --output target/reading-albedo.rply
+```
+
+Native Rust fusion forms 15,729 explicit depth groups from 82,676 observations;
+the construction masks reject 3,593 groups and retain 12,136 oriented cloud
+surfels. The unchanged three-round calibrated fit plus 2,400-update Gaussian
+continuation retains 12,110 particles. Compared with the 1,441-particle foam
+baseline, the default-support Gaussian result is:
+
+| Lights / cameras | Baseline whole; foreground | Albedo-MVS whole; foreground | Baseline recall / precision | Albedo-MVS recall / precision |
+| --- | ---: | ---: | ---: | ---: |
+| fitted / fitted | `29.5005/25.5992; 19.2441/15.3591` | `29.8060/25.8946; 19.3061/14.5634` | `90.54/95.75%` | `87.85/94.80%` |
+| fitted / held | `28.7157/25.2616; 18.6046/15.0055` | `29.1527/25.5854; 18.6755/14.9494` | `89.81/95.87%` | `87.55/95.46%` |
+| held / fitted | `29.3491/26.5371; 19.0086/16.4438` | `29.6181/26.7677; 19.0457/15.6259` | `90.54/95.75%` | `87.85/94.80%` |
+| held / held | `28.6325/26.2571; 18.4652/16.0847` | `29.0307/26.4339; 18.5241/15.7985` | `89.81/95.87%` | `87.55/95.46%` |
+
+This is the first route to recover visibly sharper book, face, and clothing
+structure while improving every whole-frame and foreground mean. It still
+fails the complete gate: foreground tails and Gaussian coverage regress. A
+single mechanism-driven `--radius-factor 1.7` control raises held/held
+foreground to `18.7614/16.1428` dB and recall to `93.04%`, but precision falls
+to `94.61%` and fitted-camera foreground tails remain below baseline. Do not
+tune that factor further on Reading. Keep the construction-only data path and
+repeat the frozen dense-depth recipe on a second object before fitting support
+against construction renders.
+
 Static training, production fitting, and the complete diagnostic peak at 134.4,
 232.2, and 283.9 MiB respectively; the early-integration fit peaks at 323.1 MiB.
-All scopes report no swap, cgroup memory event, or GPU fault.
+The albedo import, PatchMatch host scope, native fusion, and calibrated fit peak
+at 1,304.1, 41.0, 137.0, and 513.2 MiB respectively. The COLMAP container has
+an independent 7 GiB hard cap. All scopes report no swap, cgroup memory event,
+or GPU fault.
 Generated results live under
 `target/audit-runs/diligent-mv/{prepared-reading-320,reading-16k}/`. Five object
 controls now say to stop relaxing descriptors, radii, response scales, or patch
 thresholds. Simply introducing the same sparse seed earlier also fails. The
-next missing-surface experiment must reconstruct a denser connected point layer
-from independent multi-view depth. A fixed-pose dense-stereo pass over the
-view-invariant photometric-albedo images is the next untested route; it should
-remain diagnostic until complete internal renders pass.
+independent dense layer is now real and visually better, but its support remains
+tail-negative. The next experiment is a frozen second-object repeat followed,
+only if geometry transfers, by a construction-render support fit.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

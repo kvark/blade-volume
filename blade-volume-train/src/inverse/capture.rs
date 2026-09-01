@@ -102,6 +102,13 @@ pub fn photometric_albedo(
     captures: &[Capture],
     directions: &[Vec<glam::Vec3>],
 ) -> Result<Capture, String> {
+    photometric_albedo_refs(&captures.iter().collect::<Vec<_>>(), directions)
+}
+
+pub(crate) fn photometric_albedo_refs(
+    captures: &[&Capture],
+    directions: &[Vec<glam::Vec3>],
+) -> Result<Capture, String> {
     let Some(primary) = captures.first() else {
         return Err("photometric albedo needs at least one light".to_string());
     };

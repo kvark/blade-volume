@@ -209,9 +209,21 @@ a convincing real-world result.
   seeding is rejected too.
   Perspective-normal integration grows the verified patch to 500 point
   samples, but even requiring three cameras to emit the same voxel leaves 12
-  surfels that still lose validation precision and whole-frame mean. The next
-  dense layer needs independent stereo depth, not normals integrated from a
-  sparse depth anchor.
+  surfels that still lose validation precision and whole-frame mean.
+  Independent dense stereo over the 24-light photometric-albedo images is the
+  first materially stronger route: on Reading it recovers 12,136 cloud
+  surfels, restores visible book/face/clothing detail, and raises held-light /
+  held-camera Gaussian whole-frame mean `28.63→29.03` dB and foreground mean
+  `18.47→18.52` dB. It is not selected yet: worst foreground drops
+  `16.08→15.80` dB and Gaussian recall/precision also fall. A fixed larger
+  support recovers that held/held tail (`16.14` dB) but moves the failure to
+  fitted-camera tails and precision. The importer now emits the
+  construction-only albedo images, poses, and nearest-camera PatchMatch graph
+  so this promising route is reproducible without admitting held cameras,
+  held lights, meshes, or normals. The next gate is cross-object dense-depth
+  consistency plus a support fit that removes the speckled tail. Generated
+  models, renders, and telemetry are under
+  `target/audit-runs/diligent-mv/reading-16k/albedo-mvs/`.
 
 The staged directional-residual models and telemetry are under
 `target/audit-runs/directional-staged-validation/`; the selected longer Bonsai
@@ -233,6 +245,12 @@ fine surface detail remain visibly soft.
 ![LUCES-MV Owl relit under three excluded lights](/etc/relight-luces-owl.png)
 
 ![DiLiGenT-MV Bear relit under three excluded lights](/etc/relight-diligent-bear.png)
+
+The sharper DiLiGenT-MV Reading diagnostic below uses albedo-derived dense
+stereo and a Gaussian cloud. All three lights and the shown camera were
+excluded from fitting; the remaining speckle is why the route is not selected.
+
+![DiLiGenT-MV Reading albedo-MVS diagnostic under three excluded lights](/etc/relight-diligent-reading-albedo-mvs.png)
 
 - **Independent natural-light relighting — first honest result, not yet
   passed.** The Objects With Lighting Ant-Man gate trains on 52 cameras under

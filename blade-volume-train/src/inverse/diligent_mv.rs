@@ -38,9 +38,40 @@ impl Dataset {
     /// distant-light stack. Released normals, depths, and geometry are not
     /// consulted.
     pub fn photometric_albedo(&self) -> Result<super::capture::Capture, String> {
-        let directions = self
-            .lights
+        self.photometric_albedo_at(&(0..self.captures.len()).collect::<Vec<_>>())
+    }
+
+    /// Diffuse-albedo correspondence images using only the predeclared
+    /// construction lights, even when this dataset also loaded held lights.
+    pub fn construction_photometric_albedo(&self) -> Result<super::capture::Capture, String> {
+        self.photometric_albedo_at(&self.construction_light_offsets()?)
+    }
+
+    fn construction_light_offsets(&self) -> Result<Vec<usize>, String> {
+        TRAIN_LIGHT_INDICES
             .iter()
+            .map(|source| {
+                self.source_light_indices
+                    .iter()
+                    .position(|candidate| candidate == source)
+                    .ok_or_else(|| {
+                        format!(
+                            "DiLiGenT-MV construction light {} was not loaded",
+                            source + 1
+                        )
+                    })
+            })
+            .collect()
+    }
+
+    fn photometric_albedo_at(&self, offsets: &[usize]) -> Result<super::capture::Capture, String> {
+        let captures = offsets
+            .iter()
+            .map(|&offset| &self.captures[offset])
+            .collect::<Vec<_>>();
+        let directions = offsets
+            .iter()
+            .map(|&offset| &self.lights[offset])
             .map(|lights| {
                 lights
                     .iter()
@@ -48,7 +79,7 @@ impl Dataset {
                     .collect()
             })
             .collect::<Vec<_>>();
-        super::capture::photometric_albedo(&self.captures, &directions)
+        super::capture::photometric_albedo_refs(&captures, &directions)
     }
 }
 
@@ -498,6 +529,29 @@ mod tests {
         selected.extend(HELD_LIGHT_INDICES);
         selected.sort_unstable();
         assert_eq!(selected, (0..LIGHT_COUNT).step_by(3).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn construction_albedo_offsets_exclude_held_lights() {
+        let mut source_light_indices = TRAIN_LIGHT_INDICES.to_vec();
+        source_light_indices.extend(HELD_LIGHT_INDICES);
+        source_light_indices.sort_unstable();
+        let dataset = Dataset {
+            captures: Vec::new(),
+            lights: Vec::new(),
+            source_light_indices,
+        };
+        let selected = dataset
+            .construction_light_offsets()
+            .unwrap()
+            .into_iter()
+            .map(|offset| dataset.source_light_indices[offset])
+            .collect::<Vec<_>>();
+
+        assert_eq!(selected, TRAIN_LIGHT_INDICES);
+        assert!(selected
+            .iter()
+            .all(|index| !HELD_LIGHT_INDICES.contains(index)));
     }
 
     #[test]

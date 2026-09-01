@@ -50,8 +50,13 @@ not contain or fall back to polygonal geometry.
   denser connected point layer inside the shared geometry objective next. A
   perspective-normal integration diagnostic grows the patch to 500 surfels,
   but even its strict three-camera voxel subset loses validation precision and
-  whole-frame mean. Use independent dense stereo depth next; normal integration
-  is not a substitute.
+  whole-frame mean. Independent dense stereo over construction-only
+  photometric albedo then recovers 12,136 Reading surfels and visibly restores
+  fine structure. It raises every Gaussian mean, but its default support loses
+  foreground tails and coverage; a fixed larger support repairs held/held
+  quality while losing fitted-camera tails and precision. Keep the
+  construction-only importer path, but do not select the reconstruction until
+  the same frozen dense-depth/support recipe passes a second object.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -125,7 +130,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Controlled-light diversity | LUCES-MV and DiLiGenT-MV routes selected | Keep their near- and distant-light models shared with the production renderer; do not depend on OLATverse | Improve whole-frame and foreground mean/worst, recall, and precision on both fixed camera/light splits |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
-| Missing support | Cow diagnostic passes; Bear, Pot2, Buddha, and Reading controls reject | Preserve calibrated albedo as evidence; reconstruct connected point support inside the shared geometry objective before material/Gaussian fitting | Recall, precision, and every complete-render mean/tail rise on two controlled objects |
+| Missing support | Albedo-MVS Reading diagnostic is visually/mean positive but tail-negative | Repeat its frozen dense-depth recipe on a second object, then fit support against construction renders without changing the fused centers | Recall, precision, and every complete-render mean/tail rise on two controlled objects |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
@@ -1501,6 +1506,15 @@ a deterministic repeat agree within the measured training variance.
   the verified Reading tracks. Reject one-, two-, and three-source fused point
   layers when the strict 12-surfel arm still loses validation whole-frame mean
   and precision; do not tune appearance or open its official split.
+- [x] Run fixed-pose dense stereo on construction-only Reading photometric
+  albedo. Keep its reproducible importer inputs after it restores fine detail
+  and improves every Gaussian mean, but reject both default and 1.7× support
+  as final models because foreground tails and coverage/precision do not all
+  pass together.
+- [ ] Repeat the frozen albedo-MVS depth recipe on one second DiLiGenT-MV
+  object without reading released geometry. If geometry transfers, fit only
+  point support against construction renders and require the complete
+  two-object camera/light gate before making dense albedo the default.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.
