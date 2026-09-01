@@ -1643,13 +1643,15 @@ a deterministic repeat agree within the measured training variance.
   3.5 recall points, and lowers every internal mean. Both improve tails and
   precision, exposing a strict localization/coverage frontier; reject them
   without loading Bear's held lights or official held cameras.
-- [ ] Before adding storage or WGSL, build a read-only two-object oracle for
-  spatially local physical response inside one point support. Use exact source
-  observations and shared total optical mass; require a local partition to
-  improve cross-view normal identity on Cow and Bear, then require an ignored
-  fixed-geometry complete-render scorer to pass independent camera/light
-  folds. If the oracle fails, close intra-point response and pursue denser
-  independently anchored point observations instead.
+- [x] Before adding storage or WGSL, build a read-only two-object oracle for
+  spatially local physical response inside one point support. Its CPU baseline
+  reproduces production trends while geometry, alpha, ordering, and total
+  optical mass remain exact. Nearest reliable source sites improve every Bear
+  mean/tail across 463 groups, but the unchanged 97-group Cow replay loses
+  0.002/0.004 dB validation whole/foreground mean; keeping established albedo
+  loses 0.008/0.009 dB. Reject the table without opening held splits or adding
+  storage/WGSL. Pursue denser independently anchored point observations
+  instead of more attributes on ambiguous support.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

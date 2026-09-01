@@ -6406,3 +6406,33 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/bear/{fixed-gaussian-residual,albedo-mvs/radius-{1p0,mixed}} and /tmp/blade-volume-bear-{fixed-residual,association,fusion-association,initial-center,scale-association,radius-*}.log (gitignored)"
 verdict = "the normal estimator is accurate and exact fusion groups retain substantially better identity than final volumetric ownership; center drift is not causal, and uniform or normal-selected support shrink only trades recall/means for precision/tails; require an optical-mass-preserving local physical-response oracle before any model or shader change"
+
+[diligent_mv.rejected_spatial_site_physical_response]
+date = "2026-09-01"
+protocol = "ignored CPU reference using the exact Gaussian candidate response, depth order, production 0.5-radius surface grouping, and 75% saturated alpha; geometry, coverage, and optical mass are identical between arms; normal-coherent source observations must form at least two two-view clusters, pass 30-degree consensus in both disjoint 12-light folds and 15-degree cross-fold agreement, and have centers separated by half the original support radius; choose the nearest source site at each Gaussian maximum-response sample; fit per-site diffuse albedo from construction lights; score fixed internal camera folds on fresh Bear, then replay thresholds unchanged on Cow; official held splits remain unopened"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db"]
+
+bear_separated_groups = 463
+bear_sites = 1782
+bear_base_selection = [29.482933, 25.549787, 20.871674, 16.546408]
+bear_candidate_selection = [29.553551, 25.736793, 20.958097, 16.740323]
+bear_base_validation = [29.252489, 25.256953, 20.618210, 16.096382]
+bear_candidate_validation = [29.268898, 25.383975, 20.638162, 16.224017]
+
+cow_separated_groups = 97
+cow_sites = 284
+cow_base_selection = [32.672374, 29.850467, 21.830256, 18.703842]
+cow_normal_selection = [32.687840, 29.913625, 21.847634, 18.769022]
+cow_normal_diffuse_selection = [32.695640, 29.945100, 21.852635, 18.800132]
+cow_base_validation = [31.609135, 28.202175, 20.605021, 17.327940]
+cow_normal_validation = [31.600902, 28.208121, 20.596565, 17.333992]
+cow_normal_diffuse_validation = [31.606979, 28.225341, 20.600966, 17.351519]
+held_splits_opened = false
+
+maximum_peak_memory_bytes = 834895872
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs/spatial-cluster-oracle and /tmp/blade-volume-{bear,cow}-spatial-{cluster,site}*.log (gitignored)"
+verdict = "reject before any model, trainer, or WGSL work: spatially local normals are identifiable and improve every Bear internal metric with invariant optical support, but Cow validation means regress even though its tails improve; per-site diffuse albedo only partially compensates the normal loss, so the two-object strict gate fails"

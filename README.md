@@ -276,7 +276,13 @@ a convincing real-world result.
   by both light folds still loses 3.5 points and both internal means. The next
   gate must preserve optical mass while making physical response local within
   a point support; another normal loss, center prior, or radius threshold is
-  not justified.
+  not justified. A CPU oracle then keeps geometry and alpha exact while
+  selecting spatially separated normals inside 463 Bear supports. It improves
+  every Bear internal mean/tail, but the unchanged Cow replay's 97 supports
+  lose 0.002/0.004 dB validation whole/foreground mean; normal-only is worse.
+  No intra-point table, model field, or shader is added. Future geometry work
+  needs denser independently anchored points, not more attributes on ambiguous
+  support.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow,bear}/`.
 
