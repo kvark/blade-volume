@@ -239,9 +239,10 @@ a convincing real-world result.
   it. Mapping the stored three-sigma radius to its 50%-coverage contour restores
   the Gaussian mask, yet hard per-cell shading remains about 3 dB behind;
   ownership-specific albedo recovers only 0.3--0.5 dB and normal fitting
-  regresses. Keep PowerFoam PBR experimental and test smooth point-neighborhood
-  attributes over exclusive geometry before changing model/runtime APIs—not
-  another proxy image, support threshold, or polygonal fallback.
+  regresses. Smooth local albedo gains another 0.6--0.7 dB, but the repeat from
+  exact final Gaussian centers/scales still trails by 2.0--2.4 dB. Keep
+  PowerFoam PBR experimental; do not add model/runtime APIs for this rejected
+  transfer—or another proxy image, support threshold, or polygonal fallback.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 

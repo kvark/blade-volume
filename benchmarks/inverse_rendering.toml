@@ -6125,6 +6125,10 @@ cow_internal_selection_owned_albedo = [29.940321, 27.529687, 18.959051, 16.51669
 cow_internal_validation_owned_albedo = [29.131307, 26.585536, 18.033529, 15.720713, 87.339115, 94.552483]
 cow_internal_selection_owned_normal_albedo = [28.940025, 27.118136, 18.028112, 15.989746, 85.625894, 93.642517]
 cow_internal_validation_owned_normal_albedo = [28.067041, 25.497354, 17.012094, 14.680262, 83.238250, 93.155498]
+cow_internal_selection_neighbor_albedo_normal = [30.186074, 28.094118, 19.267130, 16.957184, 88.200206, 94.893415]
+cow_internal_validation_neighbor_albedo_normal = [29.471119, 26.764180, 18.433438, 15.917685, 87.339115, 94.552483]
+cow_internal_selection_final_gaussian_geometry_neighbor = [30.243080, 28.204352, 19.305732, 17.049505, 88.351746, 95.204473]
+cow_internal_validation_final_gaussian_geometry_neighbor = [29.546317, 26.848439, 18.497688, 16.008960, 87.335768, 94.725277]
 
 full_radius_cech_edges = 228812
 half_coverage_cech_edges = 25100
@@ -6136,4 +6140,4 @@ memory_swap_bytes = 0
 oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks and /tmp/blade-volume-powerfoam-reference-cow-*.log (gitignored)"
-verdict = "reject a production oriented-PowerFoam PBR backend from this fixed transfer: full support exchanges precision for recall, the analytic hard/soft radius conversion restores geometry but not appearance, ownership-specific albedo closes only a small part of the three-decibel gap, and ownership-specific normals regress both support and image quality; keep exclusive geometry in the ignored oracle and test locally interpolated point attributes next"
+verdict = "reject a production oriented-PowerFoam PBR backend from this fixed transfer: full support exchanges precision for recall, the analytic hard/soft radius conversion restores geometry but not appearance, ownership-specific and locally interpolated albedo close only part of the gap, normals do not help, and exact final-Gaussian geometry remains 2.0-2.4 dB behind; end this transfer branch without storage or WGSL"

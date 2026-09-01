@@ -70,8 +70,8 @@ not contain or fall back to polygonal geometry.
   An exact oriented-cell reference reaches 97% Cow recall but over-covers; an
   analytic Gaussian-footprint conversion restores the mask but remains about
   3 dB behind. Owned albedo only partly recovers the gap and owned normals
-  regress. Test smooth local point attributes over exclusive geometry before
-  changing the model API.
+  regress. Smooth local albedo and exact final-Gaussian geometry still leave a
+  2.0--2.4 dB mean gap. Do not change the model API for this transfer.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -1556,10 +1556,16 @@ a deterministic repeat agree within the measured training variance.
   dB, while normal refitting loses support and another decibel. The current
   finite point-light fit and renderer are diffuse-only, so this gate does not
   claim roughness or F0 recovery.
-- [ ] In the ignored reference, keep one exclusive oriented-cell geometry hit
+- [x] In the ignored reference, keep one exclusive oriented-cell geometry hit
   but interpolate shading normal and diffuse material from its local Cech
-  point neighborhood. Require Cow selection and validation means, tails,
-  recall, and precision to beat the Gaussian before adding storage or WGSL.
+  point neighborhood. Reject it before storage or WGSL: albedo interpolation
+  gains 0.6--0.7 dB and normals are neutral, but the exact final-Gaussian
+  geometry repeat still trails Gaussian foreground means by 2.54/2.13 dB on
+  Cow selection/validation. End this representation-transfer branch.
+- [ ] Attribute the fixed final-Gaussian residual by rendering matched
+  geometry, coverage, shading-normal, and material controls from one checkpoint.
+  Choose the next reconstruction loss from that residual; do not infer it from
+  another post-fit point-cloud conversion.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

@@ -1849,6 +1849,16 @@ justify backend-neutral storage, direct finite-light specular work, or WGSL.
 The ignored run peaks at 360,214,528 bytes in a 4 GiB cgroup with zero swap,
 OOM, throttle, or GPU fault.
 
+That final local-attribute check is also negative. Gaussian radial weights over
+the owner and its full-radius Cech neighbors raise selection/validation
+foreground means to `19.27/18.43` dB; smoothing normals is neutral to slightly
+negative. Rebuilding the hard cells from the exact optimized Gaussian centers,
+volume-equivalent scales, normals, and material table reaches
+`19.31/18.50` dB, still behind the same Gaussian's `21.85/20.63` dB. Its mask
+is already close (`88.35/87.34%` recall and `95.20/94.73%` precision), so this
+is not a hidden pre-Gaussian-center mismatch. No PowerFoam PBR storage or
+shader follows from this experiment.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable
