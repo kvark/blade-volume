@@ -1596,11 +1596,22 @@ a deterministic repeat agree within the measured training variance.
   and volume-preserving per-observation particles grows 7,631 to 17,279 but
   leaves association median at 0.5193, cuts recall to 79.6%, and loses 0.23--
   0.28 dB mean PSNR. Reject post-fusion expansion.
-- [ ] Apply the two-fold photometric-normal compatibility predicate while
+- [x] Apply the two-fold photometric-normal compatibility predicate while
   traversing and grouping dense depth observations, before observations are
   marked visited or averaged. Compare its untouched source groups and Cow
   selection cameras against the current cached fusion; do not use released
-  normals to configure it and do not add a persisted model field.
+  normals to configure it and do not add a persisted model field. Reject all
+  three predeclared consensus angles. Fifteen degrees drops 29% of the final
+  cloud and loses selection quality; 30 degrees gains 0.04 dB whole-frame mean
+  on both splits but lowers foreground means and about 1.1 recall points; 45
+  degrees preserves 98.6% of the final cloud but lowers every PSNR aggregate.
+  Remove the callback API rather than ship a marginal opt-in.
+- [ ] Collect each geometrically compatible observation set without claiming
+  its pixels, partition the set into two-fold photometric-normal-coherent
+  multi-view clusters, and emit every supported cluster before marking the
+  source observations visited. This must preserve rather than reject a second
+  surface layer, remain point-only, and pass Cow selection without using
+  released normals or opening another held split.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

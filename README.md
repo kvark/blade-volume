@@ -250,9 +250,13 @@ a convincing real-world result.
   transferring those normals to fixed particles still fails: even exact
   exclusive owners correspond to widely different released surface normals
   across cameras. Existing particles are not broad enough for the standard
-  split, and expanding already-fused groups loses nine recall points. The next
-  gate applies the reliable two-fold photometric-normal test while grouping
-  depth observations upstream; it does not add a mesh or another renderer.
+  split, and expanding already-fused groups loses nine recall points. Filtering
+  depth observations upstream at 15, 30, or 45 degrees also opens foreground
+  holes or loses image quality. The closest 30-degree arm gains 0.04 dB
+  whole-frame mean but loses foreground mean and about 1.1 recall points, so no
+  callback API is retained. The next gate clusters one geometric observation
+  set into multiple normal-coherent point groups so a second surface is
+  preserved instead of discarded; it adds neither a mesh nor another renderer.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 

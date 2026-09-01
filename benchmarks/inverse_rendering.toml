@@ -6235,3 +6235,55 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks and /tmp/blade-volume-{normal-disagreement-split-cow-scale,fusion-group-association-cow-cross-fold,fusion-group-expansion-cow}.log (gitignored)"
 verdict = "reject both existing Gaussian splitting and post-fusion observation expansion: particles are not broad, initial centers are already inconsistent, and expansion preserves neither association nor coverage; retain the high-precision construction-only mixed-group predicate and apply it during dense observation traversal before fusion claims or averages samples"
+
+[diligent_mv.rejected_upstream_normal_fusion_filter]
+date = "2026-09-01"
+protocol = "Cow-only ignored upstream filter: after ordinary depth, reprojection, and geometric-normal checks but before marking a sample visited, reject a candidate only when both disjoint 12-light photometric-normal folds make the resulting group less coherent than a predeclared 15-, 30-, or 45-degree consensus; select with four construction cameras, evaluate once on a disjoint four-camera validation split, and use released normals only after each decision as an association diagnostic"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+baseline_raw_groups = 10523
+baseline_raw_observations = 31364
+baseline_final_points = 7631
+baseline_selection = [32.649566, 29.900484, 21.845238, 18.790389, 88.525740, 95.104730]
+baseline_validation = [31.591812, 28.237596, 20.628511, 17.398190, 88.496329, 94.926575]
+baseline_raw_truth_consensus_median = 0.945226
+baseline_fitted_truth_consensus_median = 0.519181
+baseline_fitted_exclusive_truth_consensus_median = 0.556183
+
+angle_15_raw_groups = 8043
+angle_15_raw_observations = 21546
+angle_15_untouched_groups = 5803
+angle_15_final_points = 5392
+angle_15_raw_truth_consensus_median = 0.964738
+angle_15_fitted_truth_consensus_median = 0.576428
+angle_15_fitted_exclusive_truth_consensus_median = 0.558304
+angle_15_selection = [32.580006, 29.633736, 21.726964, 18.679496, 84.680561, 95.051934]
+angle_15_validation = [31.589825, 28.282466, 20.594802, 17.408916, 84.645453, 94.795019]
+
+angle_30_raw_groups = 9976
+angle_30_raw_observations = 27590
+angle_30_untouched_groups = 8104
+angle_30_final_points = 7156
+angle_30_raw_truth_consensus_median = 0.954926
+angle_30_fitted_truth_consensus_median = 0.530056
+angle_30_fitted_exclusive_truth_consensus_median = 0.578665
+angle_30_selection = [32.690526, 29.933584, 21.837402, 18.801713, 87.307159, 95.445681]
+angle_30_validation = [31.630017, 28.185644, 20.621473, 17.337586, 87.417185, 95.205763]
+
+angle_45_raw_groups = 10384
+angle_45_raw_observations = 29494
+angle_45_untouched_groups = 9060
+angle_45_final_points = 7527
+angle_45_raw_truth_consensus_median = 0.951084
+angle_45_fitted_truth_consensus_median = 0.521796
+angle_45_fitted_exclusive_truth_consensus_median = 0.575083
+angle_45_selection = [32.632395, 29.787397, 21.829567, 18.675958, 87.901237, 95.265127]
+angle_45_validation = [31.558180, 28.127044, 20.583270, 17.287209, 87.804860, 95.054839]
+
+maximum_peak_memory_bytes = 1296252928
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/cow/feature-depth-selection/upstream-normal{,-30,-45} and /tmp/blade-volume-upstream-normal-{fusion,reconstruct,score}{,-30,-45}-cow.log (gitignored)"
+verdict = "reject observation filtering and remove its callback API: 15 degrees improves association by discarding too much surface support, 30 degrees trades a tiny whole-frame gain for foreground and recall regressions, and 45 degrees loses every PSNR aggregate; next partition each geometric candidate set into multiple coherent point groups instead of dropping the incompatible layer"
