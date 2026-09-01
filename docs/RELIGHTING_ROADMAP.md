@@ -44,7 +44,10 @@ not contain or fall back to polygonal geometry.
   validation PSNR measure and recall, but loses precision by 0.00017 percentage
   points. The official held split remains unopened to the candidate. Together
   with Bear, Pot2, and Buddha, this closes post-hoc sparse-patch threshold
-  tuning: recover connected support inside the shared geometry objective next.
+  tuning. A frozen early-integration follow-up inserts the same patch before
+  material/normal/Gaussian fitting; it raises recall slightly but lowers
+  precision and every Gaussian PSNR mean/tail on the official split. Recover a
+  denser connected point layer inside the shared geometry objective next.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -1486,6 +1489,10 @@ a deterministic repeat agree within the measured training variance.
   DiLiGenT-MV object. Reject Reading when its internally selected 16-surfel
   patch improves every PSNR measure and recall but lowers validation precision
   by 0.00017 percentage points; leave the official candidate split unopened.
+- [x] Insert the frozen Reading patch before calibrated material/normal and
+  Gaussian fitting. Reject it after serialization because all four official
+  camera/light cells gain only recall while losing precision and every
+  Gaussian PSNR mean/tail.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

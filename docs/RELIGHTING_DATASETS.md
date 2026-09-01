@@ -874,15 +874,27 @@ whole-frame `29.332948/25.599171→29.333330/25.599432` dB, foreground
 `96.200196%→96.200024%`. The strict gate therefore rejects it and the candidate
 never sees the official held cameras or lights.
 
+A distinct frozen follow-up inserts exactly that selected component into the
+unfitted 1,479-surfel cloud, before the unchanged three-round calibrated
+normal/material solve and 2,400-update Gaussian continuation. Only after the
+result is serialized does it open the official split. The candidate retains
+1,455 rather than 1,441 Gaussians and raises recall by `0.014..0.027` percentage
+points, but lowers precision and every Gaussian whole-frame/foreground mean and
+tail. On held lights and held cameras, whole-frame moves
+`28.632456/26.257141→28.618959/26.230927` dB and foreground moves
+`18.465189/16.084684→18.452256/16.055984` dB. Early sparse seeding is therefore
+rejected without response or optimizer tuning against the official result.
+
 Static training, production fitting, and the complete diagnostic peak at 134.4,
-232.2, and 283.9 MiB respectively, with no swap, cgroup memory event, or GPU
-fault.
+232.2, and 283.9 MiB respectively; the early-integration fit peaks at 323.1 MiB.
+All scopes report no swap, cgroup memory event, or GPU fault.
 Generated results live under
 `target/audit-runs/diligent-mv/{prepared-reading-320,reading-16k}/`. Five object
 controls now say to stop relaxing descriptors, radii, response scales, or patch
-thresholds. The next missing-surface experiment must create connected support
-inside the shared geometry reconstruction objective, before material and final
-Gaussian fitting, rather than append a sparse post-hoc patch.
+thresholds. Simply introducing the same sparse seed earlier also fails. The
+next missing-surface experiment must reconstruct a denser connected point layer
+inside the shared geometry objective, rather than append or seed isolated
+correspondences.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

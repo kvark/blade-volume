@@ -201,6 +201,12 @@ a convincing real-world result.
   without opening its official held split. This closes further threshold
   tuning of post-hoc sparse patches; the next surface route must recover
   connected support during reconstruction.
+  A frozen follow-up inserts the same proposal before the ordinary calibrated
+  material/normal solve and opens the official split only after serialization.
+  It retains 1,455 rather than 1,441 Gaussians and raises recall slightly, but
+  lowers precision and every Gaussian PSNR mean/tail. Held-light/held-camera
+  foreground moves `18.4652/16.0847→18.4523/16.0560` dB, so early sparse
+  seeding is rejected too.
 
 The staged directional-residual models and telemetry are under
 `target/audit-runs/directional-staged-validation/`; the selected longer Bonsai
