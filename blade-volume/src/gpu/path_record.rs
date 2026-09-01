@@ -62,8 +62,14 @@ fn splat_candidate_capacity(max_steps: u32, minimum: u32) -> u32 {
         .max(minimum)
 }
 
-fn use_parallel_splat_recording(num_points: usize, num_adjacency: usize) -> bool {
-    num_points != 0 && num_adjacency / num_points >= PARALLEL_SPLAT_MIN_AVERAGE_NEIGHBORS
+fn use_parallel_splat_recording(
+    num_points: usize,
+    num_adjacency: usize,
+    candidate_capacity: u32,
+) -> bool {
+    num_points != 0
+        && num_adjacency / num_points >= PARALLEL_SPLAT_MIN_AVERAGE_NEIGHBORS
+        && candidate_capacity <= MIN_SPLAT_CANDIDATE_CAPACITY
 }
 
 fn parallel_splat_dispatch(num_pixels: u32) -> [u32; 3] {
@@ -294,8 +300,15 @@ impl PathRecorder {
 
     /// Whether this cloud has enough clipping constraints per site to benefit
     /// from assigning a complete workgroup to every ray.
-    pub fn uses_parallel_powerfoam_recording(cloud: &crate::gpu::RadFoamGpuCloud) -> bool {
-        use_parallel_splat_recording(cloud.num_points, cloud.num_adjacency)
+    pub fn uses_parallel_powerfoam_recording(
+        cloud: &crate::gpu::RadFoamGpuCloud,
+        buffers: &PathRecordBuffers,
+    ) -> bool {
+        use_parallel_splat_recording(
+            cloud.num_points,
+            cloud.num_adjacency,
+            buffers.splat_candidate_capacity,
+        )
     }
 
     /// Whether this cloud uses its shared support-sphere hierarchy instead of
@@ -367,7 +380,8 @@ impl PathRecorder {
             tile_capacity: buffers.splat_tile_capacity,
             oriented: cloud.is_oriented as u32
                 | (buffers.has_surface_queries as u32) << 1
-                | (buffers.record_splat_depths as u32) << 2,
+                | (buffers.record_splat_depths as u32) << 2
+                | (cloud.has_surface_detail_height as u32) << 3,
             image_pixel_offset: args.image_pixel_offset,
             _padding: [0; 3],
         };
@@ -459,7 +473,7 @@ impl PathRecorder {
                 pc.bind(0, &data);
                 pc.dispatch([args.num_pixels, 1, 1]);
             }
-            if Self::uses_parallel_powerfoam_recording(cloud) {
+            if Self::uses_parallel_powerfoam_recording(cloud, buffers) {
                 let mut pass = encoder.compute("powerfoam-record-splat-paths-parallel");
                 let mut pc = pass.with(&self.splat_parallel_record_pipeline);
                 pc.bind(0, &data);
@@ -562,7 +576,7 @@ impl PathRecorder {
                 pc.dispatch([arg.num_pixels, 1, 1]);
             }
         }
-        if Self::uses_parallel_powerfoam_recording(cloud) {
+        if Self::uses_parallel_powerfoam_recording(cloud, buffers) {
             let mut pass = encoder.compute("powerfoam-record-splat-path-batch-parallel");
             let mut pc = pass.with(&self.splat_parallel_record_pipeline);
             for (datum, arg) in data.iter().zip(args) {
@@ -1396,10 +1410,11 @@ mod tests {
 
     #[test]
     fn parallel_powerfoam_recording_uses_measured_adjacency_crossover() {
-        assert!(!use_parallel_splat_recording(0, 0));
-        assert!(!use_parallel_splat_recording(200_000, 799_999));
-        assert!(use_parallel_splat_recording(200_000, 800_000));
-        assert!(use_parallel_splat_recording(200_000, 8_340_572));
+        assert!(!use_parallel_splat_recording(0, 0, 1024));
+        assert!(!use_parallel_splat_recording(200_000, 799_999, 1024));
+        assert!(use_parallel_splat_recording(200_000, 800_000, 1024));
+        assert!(use_parallel_splat_recording(200_000, 8_340_572, 1024));
+        assert!(!use_parallel_splat_recording(200_000, 8_340_572, 2048));
     }
 
     #[test]

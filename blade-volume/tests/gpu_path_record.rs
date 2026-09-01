@@ -1083,7 +1083,7 @@ fn gpu_path_compaction_emits_each_active_dense_record_once() {
         eprintln!("skipping: no GPU");
         return;
     };
-    let model = build_grid_model(12);
+    let model = build_grid_model(80);
     let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
         name: "path-compact-test",
         buffer_count: 2,
@@ -1093,7 +1093,7 @@ fn gpu_path_compaction_emits_each_active_dense_record_once() {
     let mut recorder = PathRecorder::new(&context);
     let mut compactor = PathCompactor::new(&context);
     let num_pixels = 8_u32;
-    let max_steps = 16_u32;
+    let max_steps = 96_u32;
     let mut paths = PathRecordBuffers::new_recorded_only(&context, num_pixels, max_steps);
     let mut compact = PathCompactBuffers::new(&context, num_pixels, max_steps);
     let pixels = (0..num_pixels).collect::<Vec<_>>();
@@ -1123,7 +1123,7 @@ fn gpu_path_compaction_emits_each_active_dense_record_once() {
         &cloud,
         &paths,
         RecordPathsArgs {
-            camera: make_camera_looking_along_x(20.0),
+            camera: make_camera_looking_along_x(100.0),
             start_point: 0,
             pixel_offset: 0,
             image_pixel_offset: 0,
@@ -1131,7 +1131,7 @@ fn gpu_path_compaction_emits_each_active_dense_record_once() {
             image_width: num_pixels,
             image_height: 1,
             max_path_dt: 50.0,
-            depth: 20.0,
+            depth: 100.0,
             num_pixels,
         },
     );
@@ -1149,6 +1149,10 @@ fn gpu_path_compaction_emits_each_active_dense_record_once() {
     let stats = paths.path_stats(0..num_pixels as usize);
     assert_eq!(active_count, stats.total_steps_used);
     assert!(active_count > 0);
+    assert!(
+        stats.max_steps_used > 64,
+        "test must exercise more than one cooperative copy iteration"
+    );
     let dense_cells =
         unsafe { std::slice::from_raw_parts(dense_readback.data() as *const u32, capacity) };
     let dense_mask = unsafe {
@@ -1432,13 +1436,22 @@ fn gpu_surface_detail_paths_with_and_without_queries_match_cpu() {
     assert_gpu_path_record_matches_cpu(model.clone(), glam::Vec3::ZERO, false, false);
     model.surface_detail.as_mut().unwrap().heights.fill(0.0);
     assert_gpu_path_record_matches_cpu_with_mode(
-        model,
+        model.clone(),
         glam::Vec3::ZERO,
         false,
         false,
         false,
         PathJacobianMode::Full,
         false,
+    );
+    assert_gpu_path_record_matches_cpu_with_mode(
+        model,
+        glam::Vec3::ZERO,
+        false,
+        false,
+        false,
+        PathJacobianMode::None,
+        true,
     );
 }
 

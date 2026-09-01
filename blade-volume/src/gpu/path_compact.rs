@@ -5,6 +5,16 @@ use std::{mem, ptr, slice};
 use crate::shaders;
 use blade_graphics as gpu;
 
+const MAX_WORKGROUPS_PER_DIMENSION: u32 = 65_535;
+
+fn compact_dispatch(num_pixels: u32) -> [u32; 3] {
+    assert!(num_pixels > 0);
+    let groups_y = num_pixels.div_ceil(MAX_WORKGROUPS_PER_DIMENSION);
+    assert!(groups_y <= MAX_WORKGROUPS_PER_DIMENSION);
+    let groups_x = num_pixels.div_ceil(groups_y);
+    [groups_x, groups_y, 1]
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CompactParams {
@@ -75,7 +85,7 @@ impl PathCompactor {
         let mut pass = encoder.compute("path-compact");
         let mut compute = pass.with(&self.pipeline);
         compute.bind(0, &data);
-        compute.dispatch([paths.num_pixels.div_ceil(64), 1, 1]);
+        compute.dispatch(compact_dispatch(paths.num_pixels));
     }
 
     pub fn destroy(&mut self, context: &gpu::Context) {
@@ -223,5 +233,14 @@ mod tests {
     #[test]
     fn compact_params_match_wgsl_uniform_layout() {
         assert_eq!(mem::size_of::<CompactParams>(), 16);
+    }
+
+    #[test]
+    fn compact_dispatch_covers_large_ray_batches() {
+        assert_eq!(compact_dispatch(1), [1, 1, 1]);
+        assert_eq!(compact_dispatch(4_096), [4_096, 1, 1]);
+        assert_eq!(compact_dispatch(65_535), [65_535, 1, 1]);
+        assert_eq!(compact_dispatch(65_536), [32_768, 2, 1]);
+        assert_eq!(compact_dispatch(100_001), [50_001, 2, 1]);
     }
 }

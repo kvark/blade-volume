@@ -88,28 +88,18 @@ implementation gaps, but material, visibility, and illumination can still
 compensate for wrong or missing geometry. The scalar surfel asset remains a
 valid cloud-only geometry control; no polygonal fallback is needed.
 
-The released directional table now passes staged quality gates on Room and
-Bonsai but remains opt-in for cost. Generic grouped gather/scatter fusion and
-the narrow-group scatter mapping reduce memory and arithmetic without adding
-backend variants; the current Room continuation is still 2.89--2.96× the
-matched base path. Fixed shorter rows and zero-row predicates are rejected.
-The stage horizon is now bounded independently: 98,831-site Room selects 256
-updates and mildly overfits at 512, while 200,000-site Bonsai reaches
-21.6891/20.9944 dB at 510 updates and is nearly plateaued after update 384.
-Both selected endpoints are about one update per 390 sites; use that as an
-experimental budget, not a hidden scene-specific default.
-Sharing directional colours across the eight spatial sites remains mildly
-quality-positive when fitted after the base, but loses part of the full
-table's two-scene gain and its straightforward row repetition is slower than
-the full table. That prototype is removed rather than adding a special
-operation or shader variant.
-Two-scene occupancy confirms that active-prefix execution is worthwhile:
-Room and Bonsai's busiest updates average 24.77 and 27.46 entries/ray despite
-per-ray maxima of 75 and 124. The dense ordered transmittance stays in place;
-the next performance implementation compacts only the frozen directional
-branch into the existing safe allocation and drives it with a generic runtime
-active extent. Differentiable forward scatter is now available on the
-Meganeura performance branch without a new shader path.
+The released directional table now passes staged quality and production-cost
+gates on Room and Bonsai. The frozen-base stage compacts active path rows and
+drives its Meganeura graph from the GPU count without adding an operation or
+shader variant. Room takes 1.74× its matched table-free control; the median of
+three Bonsai pairs is 1.99×, with exact held-score parity against the preceding
+dense implementation. The stage horizon remains bounded independently:
+98,831-site Room selects 256 updates and 200,000-site Bonsai selects 510,
+roughly one update per 390 sites. Keep that as an experimental budget, not a
+hidden scene-specific default. The table remains an explicit second stage
+because fitting it jointly with a fresh density/SH base transfers appearance
+responsibility and loses held quality; the next unresolved question is the
+joint objective, not another performance specialization.
 
 ## Execution plan
 

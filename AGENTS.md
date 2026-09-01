@@ -67,13 +67,13 @@ Concrete deltas vs current RadFoam path:
 - **Per-point data**: `PointCloudModel.radii: Option<Vec<f32>>` carries the weight (done, M2a). `SurfaceDetail::directional` carries the released eight-axis colour function at each of eight detail sites; the older compact cell-level Spherical Voronoi residual remains a separate rejected experiment.
 - **Adjacency builder**: `adjacency::compute_cech` emits an edge `{i,j}` when `|p_i - p_j| ≤ r_i + r_j` (done, M2b). `PointCloudModel::compute_adjacency*` dispatches Čech vs Delaunay based on `radii.is_some()`. CSR storage is unchanged.
 - **Traversal**: WGSL `radfoam_trace.wgsl` uses the radical plane `shift = 0.5 + 0.5·(r_i² - r_j²)/|p_j - p_i|²` (done, M2c). The radius lives in the `.w` channel of `g_points`; unweighted clouds upload 0 and the formula degenerates to the bisector — no new bind-group entry, no fork.
-- **Oriented dipoles**: `PointCloudModel.surface_normals` optionally clips each bounded power cell to its retained surface half. PLY IO, CPU/WGSL traversal, analytical training Jacobians, PCA initialization, normal loss, densification, resume, eight spatial detail sites, and their released per-site directional appearance are implemented. The Bonsai gate selects learned normals as opt-in but not as the default; the full appearance table still needs a held-out quality gate.
+- **Oriented dipoles**: `PointCloudModel.surface_normals` optionally clips each bounded power cell to its retained surface half. PLY IO, CPU/WGSL traversal, analytical training Jacobians, PCA initialization, normal loss, densification, resume, eight spatial detail sites, and their released per-site directional appearance are implemented. The Bonsai gate selects learned normals as opt-in but not as the default; staged directional appearance passes held-out Room/Bonsai quality and production-cost gates.
 - **PLY format**: per-vertex `property float radius` added to the RadFoam PLY reader/writer (done, M2a). Round-trips both binary and ASCII.
 - **Don't pull Python in**: keep PowerFoam adoption to a clean re-implementation in Rust/WGSL. Use the paper + their Warp kernels as a reference, not a dependency.
 
 Remaining work to fully cover the PowerFoam paper:
-1. Make training the released appearance table practical at production ray batches; the exact checkpoint render passes, but zero-initialized Room screens are quality-negative and 6× slower.
-2. Revisit a two-scene training gate only after reducing the table's backward-memory and step-time cost. Keep it opt-in meanwhile.
+1. Make the released directional table part of a robust joint reconstruction objective; its staged frozen-base fit is practical, but a fresh joint fit remains quality-negative.
+2. Validate the full appearance model beyond Room and Bonsai before enabling it by default.
 
 ## Style
 

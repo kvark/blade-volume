@@ -41,6 +41,7 @@ pub struct RadFoamGpuCloud {
     pub(super) has_support_bvh: bool,
     pub is_oriented: bool,
     pub has_surface_detail: bool,
+    pub(super) has_surface_detail_height: bool,
     pub has_surface_detail_density: bool,
     pub has_surface_detail_directional: bool,
     pub has_surface_color: bool,
@@ -514,6 +515,10 @@ impl RadFoamGpuCloud {
             has_support_bvh,
             is_oriented: model.surface_normals.is_some(),
             has_surface_detail: model.surface_detail.is_some(),
+            has_surface_detail_height: model
+                .surface_detail
+                .as_ref()
+                .is_some_and(|detail| detail.heights.iter().any(|&height| height != 0.0)),
             has_surface_detail_density: model
                 .surface_detail
                 .as_ref()

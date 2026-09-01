@@ -117,7 +117,7 @@ pub struct SurfaceDetailGraph {
 
 #[derive(Clone, Debug)]
 pub struct SurfaceDetailDirectionalGraph {
-    /// `[N, 192]` spatial-site/direction-major raw axes.
+    /// `[N, 192]` spatial-site/direction-major axes.
     pub axes: mn::NodeId,
     /// Optional `[N, 192]` unit axes and `[N, 64]` temperatures for frozen axes.
     pub frozen_kernel: Option<(mn::NodeId, mn::NodeId)>,
@@ -426,6 +426,14 @@ struct SurfaceDetailEvaluation {
 }
 
 #[derive(Clone, Copy)]
+struct CompactAppearanceInputs {
+    dense_slots: mn::NodeId,
+    cell_indices: mn::NodeId,
+    pixel_indices: mn::NodeId,
+    active: mn::NodeId,
+}
+
+#[derive(Clone, Copy)]
 struct SurfaceDetailQueryGraph {
     base_numerator: mn::NodeId,
     denominator: mn::NodeId,
@@ -474,11 +482,22 @@ fn repeat_eight_rows(
 }
 
 fn regularized_sqrt(g: &mut mn::Graph, squared: mn::NodeId, rows: usize) -> mn::NodeId {
-    let epsilon = g.constant(vec![1.0e-12_f32; rows], &[rows, 1]);
-    let regularized = g.add(squared, epsilon);
+    let epsilon = g.constant(vec![1.0e-12_f32], &[1, 1]);
+    let regularized = g.broadcast_add(squared, epsilon);
     let log = g.log(regularized);
     let half = g.constant(vec![0.5_f32; rows], &[rows, 1]);
     let half_log = g.mul(log, half);
+    g.exp(half_log)
+}
+
+fn frozen_regularized_sqrt(g: &mut mn::Graph, squared: mn::NodeId, rows: usize) -> mn::NodeId {
+    let epsilon = g.constant(vec![1.0e-12_f32], &[1, 1]);
+    let regularized = g.broadcast_add(squared, epsilon);
+    let log = g.log(regularized);
+    let log = g.reshape(log, &[rows]);
+    let half = g.scalar(0.5);
+    let half_log = g.mul_per_channel(log, half, 1, rows as u32);
+    let half_log = g.reshape(half_log, &[rows, 1]);
     g.exp(half_log)
 }
 
@@ -497,6 +516,7 @@ fn surface_detail_directional_weights(
     tangent_sites: mn::NodeId,
     radii: mn::NodeId,
     ray_origin: mn::NodeId,
+    differentiate: bool,
     rows: usize,
 ) -> mn::NodeId {
     let spatial_rows = rows * vol::SURFACE_DETAIL_SITES;
@@ -535,7 +555,11 @@ fn surface_detail_directional_weights(
     let squared_distances = g.reshape(squared_distances, &[directional_rows, 1]);
     let squared_temperatures = g.mul(temperatures, temperatures);
     let scaled_squared_distances = g.mul(squared_distances, squared_temperatures);
-    let distances = regularized_sqrt(g, scaled_squared_distances, directional_rows);
+    let distances = if differentiate {
+        regularized_sqrt(g, scaled_squared_distances, directional_rows)
+    } else {
+        frozen_regularized_sqrt(g, scaled_squared_distances, directional_rows)
+    };
     let neg_distances = g.neg(distances);
     let logits = g.reshape(
         neg_distances,
@@ -556,6 +580,7 @@ fn evaluate_surface_detail_graph(
     ray_origin: mn::NodeId,
     ray_direction: mn::NodeId,
     path_geometry: Option<PathRoleGeometryGraph>,
+    evaluate_directional_weights: bool,
     differentiate_directional_weights: bool,
     rows: usize,
 ) -> SurfaceDetailEvaluation {
@@ -628,23 +653,28 @@ fn evaluate_surface_detail_graph(
     let displaced_query = surface_detail_query(g, query, effective_offsets, rows);
     let color_weights = surface_detail_weights(g, displaced_query, tangent_sites, rows);
     let color_weights = normalize_surface_detail_weights(g, color_weights);
-    let directional_weights = parameters.directional.as_ref().map(|directional| {
-        let weights = surface_detail_directional_weights(
-            g,
-            cell_indices,
-            directional,
-            centers,
-            tangent_sites,
-            radii,
-            ray_origin,
-            rows,
-        );
-        if differentiate_directional_weights {
-            weights
-        } else {
-            g.stop_gradient(weights)
-        }
-    });
+    let directional_weights = parameters
+        .directional
+        .as_ref()
+        .filter(|_| evaluate_directional_weights)
+        .map(|directional| {
+            let weights = surface_detail_directional_weights(
+                g,
+                cell_indices,
+                directional,
+                centers,
+                tangent_sites,
+                radii,
+                ray_origin,
+                differentiate_directional_weights,
+                rows,
+            );
+            if differentiate_directional_weights {
+                weights
+            } else {
+                g.stop_gradient(weights)
+            }
+        });
     let density_scale = parameters.density_logits.map(|density_logits| {
         let logits = g.embedding(cell_indices, density_logits);
         let proportions = g.softmax(logits);
@@ -808,6 +838,7 @@ pub fn build_volumetric_graph(
             use_surface_detail_density: false,
             use_surface_detail_directional: false,
             differentiate_surface_detail_directional_weights: false,
+            compact_appearance: false,
         },
         use_surface_offsets,
         use_surface_color,
@@ -830,6 +861,9 @@ struct VolumetricGraphOptions {
     use_surface_detail_density: bool,
     use_surface_detail_directional: bool,
     differentiate_surface_detail_directional_weights: bool,
+    /// Execute appearance only for the compact active path prefix. Dense
+    /// transmittance and surface-density evaluation remain unchanged.
+    compact_appearance: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -986,6 +1020,18 @@ fn build_volumetric_graph_with_options(
         "differentiating surface-detail directional weights requires directional appearance",
     );
     assert!(
+        !options.compact_appearance || options.use_surface_detail_directional,
+        "compact appearance currently requires released directional surface detail",
+    );
+    assert!(
+        !options.compact_appearance || !collect_point_error,
+        "compact appearance is unavailable while collecting dense point-error probes",
+    );
+    assert!(
+        !options.compact_appearance || !use_spherical_voronoi,
+        "compact appearance does not support the rejected Spherical Voronoi experiment",
+    );
+    assert!(
         !use_spherical_voronoi || use_surface_normals,
         "Spherical Voronoi appearance requires oriented surfaces",
     );
@@ -998,6 +1044,12 @@ fn build_volumetric_graph_with_options(
     let next_cell_indices = g.input_u32("next_cell_indices", &[pl]);
     let recorded_dt = g.input("recorded_dt", &[pl]);
     let mask = g.input("mask", &[pl]);
+    let compact_inputs = options.compact_appearance.then(|| CompactAppearanceInputs {
+        dense_slots: g.input_u32("compact_dense_slots", &[pl]),
+        cell_indices: g.input_u32("compact_cell_indices", &[pl]),
+        pixel_indices: g.input_u32("compact_pixel_indices", &[pl]),
+        active: g.input("compact_active", &[pl, 1]),
+    });
     let use_geometry_jacobians =
         use_recorded_dt && (options.train_positions || options.train_radii);
     // Full weighted-geometry tangents include the fixed oriented-plane term
@@ -1134,28 +1186,34 @@ fn build_volumetric_graph_with_options(
             let directions = vol::SURFACE_DETAIL_SITES * vol::SURFACE_DETAIL_DIRECTIONS;
             let width = directions * 3;
             let train_axes = options.surface_trainability.detail_directional_axes;
-            SurfaceDetailDirectionalGraph {
-                axes: parameter_with_gradient(
-                    g,
-                    "surface_detail_directional_axes",
-                    &[n_cells, width],
-                    train_axes,
-                ),
-                frozen_kernel: (!train_axes).then(|| {
-                    let unit_axes = parameter_with_gradient(
+            let (axes, frozen_kernel) = if train_axes {
+                (
+                    parameter_with_gradient(
                         g,
-                        "surface_detail_directional_unit_axes",
+                        "surface_detail_directional_axes",
                         &[n_cells, width],
-                        false,
-                    );
-                    let temperatures = parameter_with_gradient(
-                        g,
-                        "surface_detail_directional_temperatures",
-                        &[n_cells, directions],
-                        false,
-                    );
-                    (unit_axes, temperatures)
-                }),
+                        true,
+                    ),
+                    None,
+                )
+            } else {
+                let unit_axes = parameter_with_gradient(
+                    g,
+                    "surface_detail_directional_unit_axes",
+                    &[n_cells, width],
+                    false,
+                );
+                let temperatures = parameter_with_gradient(
+                    g,
+                    "surface_detail_directional_temperatures",
+                    &[n_cells, directions],
+                    false,
+                );
+                (unit_axes, Some((unit_axes, temperatures)))
+            };
+            SurfaceDetailDirectionalGraph {
+                axes,
+                frozen_kernel,
                 colors: DIRECTIONAL_COLOR_PARAMETER_NAMES.map(|name| {
                     parameter_with_gradient(
                         g,
@@ -1330,6 +1388,7 @@ fn build_volumetric_graph_with_options(
             ray_origin_pl,
             ray_dir_pl,
             path_geometry,
+            !options.compact_appearance,
             options.differentiate_surface_detail_directional_weights,
             pl,
         )
@@ -1338,17 +1397,19 @@ fn build_volumetric_graph_with_options(
         .as_ref()
         .map(|evaluation| evaluation.effective_offsets)
         .or(step_surface_offsets);
-    let surface_basis = surface_color_coefficients.map(|_| {
-        surface_color_basis_graph(
-            g,
-            pos_cell,
-            step_surface_normals.unwrap(),
-            effective_surface_offsets,
-            step_surface_radii.unwrap(),
-            ray_origin_pl,
-            ray_dir_pl,
-            pl,
-        )
+    let surface_basis = surface_color_coefficients.and_then(|_| {
+        (!options.compact_appearance).then(|| {
+            surface_color_basis_graph(
+                g,
+                pos_cell,
+                step_surface_normals.unwrap(),
+                effective_surface_offsets,
+                step_surface_radii.unwrap(),
+                ray_origin_pl,
+                ray_dir_pl,
+                pl,
+            )
+        })
     });
     let density = surface_detail_evaluation
         .as_ref()
@@ -1536,32 +1597,62 @@ fn build_volumetric_graph_with_options(
         (None, Some(_)) => unreachable!("surface-normal loss requires oriented normals"),
     };
 
-    // Per-channel pixel: pixel_c = (weight * color_c) @ ones_L
     let ones_1l = g.constant(vec![1.0; l], &[1, l]);
 
     // Accumulated opacity per pixel = Σ_L weight = 1 − T_final. Drives the
     // RadFoam opacity loss + white-background compositing.
     let opacity = g.sum_inner(weight); // [P, 1]
-    let sh = pixel_sh(
-        g,
-        cell_indices,
-        &sh_coefficients,
-        surface_color_coefficients,
-        surface_basis,
-        surface_detail
-            .as_ref()
-            .zip(surface_detail_evaluation.as_ref()),
-        spherical_voronoi
-            .as_ref()
-            .map(|parameters| (parameters, ray_dir_pl)),
-        &basis_inputs,
-        pixel_idx_per_step,
-        weight,
-        n_cells,
-        p,
-        l,
-    );
-    let [pixel_r, pixel_g, pixel_b] = sh.pixels;
+    let (pixels, dense_sh) = match compact_inputs {
+        Some(inputs) => (
+            compact_pixel_sh(
+                g,
+                inputs,
+                weight,
+                &sh_coefficients,
+                surface_color_coefficients,
+                surface_detail
+                    .as_ref()
+                    .expect("compact appearance requires surface detail"),
+                differentiable_positions,
+                surface_normals.expect("compact appearance requires surface normals"),
+                surface_offsets,
+                weighted_path
+                    .as_ref()
+                    .expect("compact appearance requires a weighted path")
+                    .log_radii,
+                ray_origin,
+                ray_dir_per_pixel,
+                &basis_inputs,
+                n_cells,
+                p,
+                pl,
+            ),
+            None,
+        ),
+        None => {
+            let sh = pixel_sh(
+                g,
+                cell_indices,
+                &sh_coefficients,
+                surface_color_coefficients,
+                surface_basis,
+                surface_detail
+                    .as_ref()
+                    .zip(surface_detail_evaluation.as_ref()),
+                spherical_voronoi
+                    .as_ref()
+                    .map(|parameters| (parameters, ray_dir_pl)),
+                &basis_inputs,
+                pixel_idx_per_step,
+                weight,
+                n_cells,
+                p,
+                l,
+            );
+            (sh.pixels, Some(sh))
+        }
+    };
+    let [pixel_r, pixel_g, pixel_b] = pixels;
 
     // Three per-channel L1 losses summed into one scalar. We could concat
     // and call l1_loss once, but concat in meganeura works on flat NCHW
@@ -1582,9 +1673,12 @@ fn build_volumetric_graph_with_options(
     // probe parameter. Build this branch as soon as its inputs exist so the
     // per-step colors need not stay live through the remaining loss graph.
     let point_error = collect_point_error.then(|| {
+        let sh = dense_sh
+            .as_ref()
+            .expect("point-error collection requires dense appearance");
         let target_channels = [target_r, target_g, target_b];
         let mut errors = Vec::with_capacity(3);
-        for (color, target_channel) in sh.step_colors.into_iter().zip(target_channels) {
+        for (&color, target_channel) in sh.step_colors.iter().zip(target_channels) {
             let target_per_step = g.matmul(target_channel, ones_1l);
             let neg_target = g.neg(target_per_step);
             let difference = g.add(color, neg_target);
@@ -2065,7 +2159,7 @@ struct PixelSh {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn pixel_sh(
+fn appearance_rows(
     g: &mut mn::Graph,
     cell_indices: mn::NodeId,
     sh_coefficients: &[ShChannelGraph],
@@ -2073,15 +2167,12 @@ fn pixel_sh(
     surface_basis: Option<mn::NodeId>,
     surface_detail: Option<(&SurfaceDetailGraph, &SurfaceDetailEvaluation)>,
     spherical_voronoi: Option<(&SphericalVoronoiGraph, mn::NodeId)>,
-    basis_inputs: &[mn::NodeId], // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
-    pixel_idx_per_step: mn::NodeId,
-    weight: mn::NodeId,
+    basis: mn::NodeId,
     n_cells: usize,
-    p: usize,
-    l: usize,
-) -> PixelSh {
-    assert_eq!(sh_coefficients.len(), 3, "pixel_sh needs RGB tables");
-    let k = basis_inputs.len() + 1;
+    rows: usize,
+    k: usize,
+) -> [mn::NodeId; 3] {
+    assert_eq!(sh_coefficients.len(), 3, "appearance needs RGB tables");
     assert!(k > 0);
     assert!(sh_coefficients.iter().all(|channel| {
         if k == 1 {
@@ -2090,15 +2181,6 @@ fn pixel_sh(
             channel.rest.is_some()
         }
     }));
-    assert_eq!(
-        basis_inputs.len(),
-        k.saturating_sub(1),
-        "pixel_sh: basis_inputs.len() ({}) must equal coefficient count - 1 ({})",
-        basis_inputs.len(),
-        k.saturating_sub(1),
-    );
-
-    let pl = p * l;
     let coefficient_tables: Vec<mn::NodeId> = sh_coefficients
         .iter()
         .map(|channel| match channel.rest {
@@ -2109,12 +2191,6 @@ fn pixel_sh(
             None => channel.dc,
         })
         .collect();
-
-    let mut basis_columns = Vec::with_capacity(k);
-    basis_columns.push(g.constant(vec![SH_C0; p], &[p, 1]));
-    basis_columns.extend_from_slice(basis_inputs);
-    let basis_per_pixel = concat_columns(g, &basis_columns, p); // [P, K]
-    let basis = g.embedding(pixel_idx_per_step, basis_per_pixel);
     // Camera directions are inputs, not learned values. Keeping RGB as three
     // reductions lets meganeura fold each coefficient embedding and multiply
     // into the reduction without copying a repeated `[PL, 3*K]` basis.
@@ -2150,12 +2226,12 @@ fn pixel_sh(
         ) {
             let directional_tables = directional.colors;
             let bias = g.constant(
-                vec![0.5_f32; pl * vol::SURFACE_DETAIL_SITES],
-                &[pl, vol::SURFACE_DETAIL_SITES],
+                vec![0.5_f32; rows * vol::SURFACE_DETAIL_SITES],
+                &[rows, vol::SURFACE_DETAIL_SITES],
             );
             let negative_bias = g.constant(
-                vec![-0.5_f32; pl * vol::SURFACE_DETAIL_SITES],
-                &[pl, vol::SURFACE_DETAIL_SITES],
+                vec![-0.5_f32; rows * vol::SURFACE_DETAIL_SITES],
+                &[rows, vol::SURFACE_DETAIL_SITES],
             );
             for ((color, table), directional_table) in
                 colors.iter_mut().zip(tables).zip(directional_tables)
@@ -2165,13 +2241,13 @@ fn pixel_sh(
                 let directional_coefficients = g.reshape(
                     directional_coefficients,
                     &[
-                        pl * vol::SURFACE_DETAIL_SITES,
+                        rows * vol::SURFACE_DETAIL_SITES,
                         vol::SURFACE_DETAIL_DIRECTIONS,
                     ],
                 );
                 let terms = g.mul(directional_coefficients, directional_weights);
                 let per_site = g.sum_inner(terms);
-                let per_site = g.reshape(per_site, &[pl, vol::SURFACE_DETAIL_SITES]);
+                let per_site = g.reshape(per_site, &[rows, vol::SURFACE_DETAIL_SITES]);
                 let per_site = g.add(mean_coefficients, per_site);
                 let per_site = g.add(per_site, bias);
                 let per_site = g.relu(per_site);
@@ -2192,17 +2268,17 @@ fn pixel_sh(
     match spherical_voronoi {
         Some((parameters, ray_dir_pl)) => {
             let axes = g.embedding(cell_indices, parameters.axes);
-            let axes = g.reshape(axes, &[pl * vol::SPHERICAL_VORONOI_SITES, 3]);
+            let axes = g.reshape(axes, &[rows * vol::SPHERICAL_VORONOI_SITES, 3]);
 
             let direction = g.stop_gradient(ray_dir_pl);
-            let direction_flat = g.reshape(direction, &[pl * 3]);
-            let direction_2 = g.concat(direction_flat, direction_flat, pl as u32, 3, 3, 1);
-            let direction_4 = g.concat(direction_2, direction_2, pl as u32, 6, 6, 1);
-            let direction_8 = g.concat(direction_4, direction_4, pl as u32, 12, 12, 1);
-            let direction_sites = g.reshape(direction_8, &[pl * vol::SPHERICAL_VORONOI_SITES, 3]);
+            let direction_flat = g.reshape(direction, &[rows * 3]);
+            let direction_2 = g.concat(direction_flat, direction_flat, rows as u32, 3, 3, 1);
+            let direction_4 = g.concat(direction_2, direction_2, rows as u32, 6, 6, 1);
+            let direction_8 = g.concat(direction_4, direction_4, rows as u32, 12, 12, 1);
+            let direction_sites = g.reshape(direction_8, &[rows * vol::SPHERICAL_VORONOI_SITES, 3]);
             let logit_terms = g.mul(axes, direction_sites);
             let logits_flat = g.sum_inner(logit_terms);
-            let logits = g.reshape(logits_flat, &[pl, vol::SPHERICAL_VORONOI_SITES]);
+            let logits = g.reshape(logits_flat, &[rows, vol::SPHERICAL_VORONOI_SITES]);
             let weights = g.softmax(logits);
 
             let tables =
@@ -2217,19 +2293,57 @@ fn pixel_sh(
         None => {}
     }
 
-    let bias = g.constant(vec![0.5; pl], &[pl, 1]);
-    let step_colors: [mn::NodeId; 3] = colors
+    let bias = g.constant(vec![0.5; rows], &[rows, 1]);
+    colors
         .into_iter()
         .map(|color| {
             let biased = g.add(color, bias);
             // Match RadFoam's per-cell `max(rgb, 0)` before volumetric
             // compositing. Clamping only the accumulated pixel is not equivalent.
-            let non_negative = g.relu(biased);
-            g.reshape(non_negative, &[p, l])
+            g.relu(biased)
         })
         .collect::<Vec<_>>()
         .try_into()
-        .expect("pixel_sh needs exactly three channels");
+        .expect("appearance needs exactly three channels")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pixel_sh(
+    g: &mut mn::Graph,
+    cell_indices: mn::NodeId,
+    sh_coefficients: &[ShChannelGraph],
+    surface_color_coefficients: Option<mn::NodeId>,
+    surface_basis: Option<mn::NodeId>,
+    surface_detail: Option<(&SurfaceDetailGraph, &SurfaceDetailEvaluation)>,
+    spherical_voronoi: Option<(&SphericalVoronoiGraph, mn::NodeId)>,
+    basis_inputs: &[mn::NodeId], // K-1 per-pixel basis [P, 1]; basis_0 is SH_C0 constant
+    pixel_idx_per_step: mn::NodeId,
+    weight: mn::NodeId,
+    n_cells: usize,
+    p: usize,
+    l: usize,
+) -> PixelSh {
+    let k = basis_inputs.len() + 1;
+    let mut basis_columns = Vec::with_capacity(k);
+    basis_columns.push(g.constant(vec![SH_C0; p], &[p, 1]));
+    basis_columns.extend_from_slice(basis_inputs);
+    let basis_per_pixel = concat_columns(g, &basis_columns, p);
+    let basis = g.embedding(pixel_idx_per_step, basis_per_pixel);
+    let rows = p * l;
+    let colors = appearance_rows(
+        g,
+        cell_indices,
+        sh_coefficients,
+        surface_color_coefficients,
+        surface_basis,
+        surface_detail,
+        spherical_voronoi,
+        basis,
+        n_cells,
+        rows,
+        k,
+    );
+    let step_colors = colors.map(|color| g.reshape(color, &[p, l]));
     let pixels = step_colors.map(|color_2d| {
         let weighted = g.mul(weight, color_2d);
         g.sum_inner(weighted)
@@ -2238,6 +2352,106 @@ fn pixel_sh(
         pixels,
         step_colors,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compact_pixel_sh(
+    g: &mut mn::Graph,
+    inputs: CompactAppearanceInputs,
+    dense_weight: mn::NodeId,
+    sh_coefficients: &[ShChannelGraph],
+    surface_color_coefficients: Option<mn::NodeId>,
+    surface_detail: &SurfaceDetailGraph,
+    positions: mn::NodeId,
+    surface_normals: mn::NodeId,
+    surface_offsets: Option<mn::NodeId>,
+    log_radii: mn::NodeId,
+    ray_origin: mn::NodeId,
+    ray_direction: mn::NodeId,
+    basis_inputs: &[mn::NodeId],
+    n_cells: usize,
+    p: usize,
+    rows: usize,
+) -> [mn::NodeId; 3] {
+    let k = basis_inputs.len() + 1;
+    let mut basis_columns = Vec::with_capacity(k);
+    basis_columns.push(g.constant(vec![SH_C0; p], &[p, 1]));
+    basis_columns.extend_from_slice(basis_inputs);
+    let basis_per_pixel = concat_columns(g, &basis_columns, p);
+    let basis = g.embedding(inputs.pixel_indices, basis_per_pixel);
+
+    let centers = g.embedding(inputs.cell_indices, positions);
+    let normals = g.embedding(inputs.cell_indices, surface_normals);
+    let unit_scale = 1.0_f32 / 3.0_f32.sqrt();
+    let normal_weight = g.constant(vec![unit_scale; 3], &[3]);
+    let normals = g.rms_norm(normals, normal_weight, 1.0e-12);
+    let radii = g.embedding(inputs.cell_indices, log_radii);
+    let radii = positive_activation(g, radii, RADIUS_SOFTPLUS_BETA);
+    let radii = floor_surface_radii(g, radii, rows);
+    let compact_ray_origin = g.embedding(inputs.pixel_indices, ray_origin);
+    let compact_ray_direction = g.embedding(inputs.pixel_indices, ray_direction);
+    let base_offsets = match surface_offsets {
+        Some(offsets) => g.embedding(inputs.cell_indices, offsets),
+        None => g.constant(vec![0.0_f32; rows], &[rows, 1]),
+    };
+    let mut compact_detail = surface_detail.clone();
+    compact_detail.surface_queries =
+        g.embedding(inputs.dense_slots, surface_detail.surface_queries);
+    compact_detail.density_logits = None;
+    compact_detail.surface_query_grad_previous = None;
+    compact_detail.surface_query_grad_current = None;
+    assert!(
+        compact_detail.frozen_tangent_offsets.is_some(),
+        "compact appearance requires frozen tangent sites",
+    );
+    let mut compact_evaluation = evaluate_surface_detail_graph(
+        g,
+        inputs.cell_indices,
+        &compact_detail,
+        centers,
+        normals,
+        base_offsets,
+        radii,
+        compact_ray_origin,
+        compact_ray_direction,
+        None,
+        true,
+        false,
+        rows,
+    );
+    compact_evaluation.color_weights = g.stop_gradient(compact_evaluation.color_weights);
+    let surface_basis = surface_color_coefficients.map(|_| {
+        surface_color_basis_graph(
+            g,
+            centers,
+            normals,
+            Some(compact_evaluation.effective_offsets),
+            radii,
+            compact_ray_origin,
+            compact_ray_direction,
+            rows,
+        )
+    });
+    let colors = appearance_rows(
+        g,
+        inputs.cell_indices,
+        sh_coefficients,
+        surface_color_coefficients,
+        surface_basis,
+        Some((&compact_detail, &compact_evaluation)),
+        None,
+        basis,
+        n_cells,
+        rows,
+        k,
+    );
+    let dense_weight = g.reshape(dense_weight, &[rows, 1]);
+    let compact_weight = g.embedding(inputs.dense_slots, dense_weight);
+    let compact_weight = g.mul(compact_weight, inputs.active);
+    colors.map(|color| {
+        let weighted = g.mul(compact_weight, color);
+        g.scatter_add(inputs.pixel_indices, weighted, p)
+    })
 }
 
 /// Flatten per-pixel paths into the three tensors meganeura consumes.
@@ -3914,10 +4128,6 @@ fn upload_model_parameters(
         }
         if let Some(ref directional) = detail.directional {
             let directions = sites * vol::SURFACE_DETAIL_DIRECTIONS;
-            let mut axes = Vec::with_capacity(n_cells * directions * 3);
-            for &axis in &directional.axes {
-                axes.extend_from_slice(&axis.to_array());
-            }
             if session.has_parameter("surface_detail_directional_unit_axes") {
                 let (unit_axes, temperatures) = pack_frozen_directional_axes(&directional.axes);
                 session.set_parameter("surface_detail_directional_unit_axes", &unit_axes);
@@ -3933,7 +4143,13 @@ fn upload_model_parameters(
                     }
                 }
             }
-            session.set_parameter("surface_detail_directional_axes", &axes);
+            if session.has_parameter("surface_detail_directional_axes") {
+                let mut axes = Vec::with_capacity(n_cells * directions * 3);
+                for &axis in &directional.axes {
+                    axes.extend_from_slice(&axis.to_array());
+                }
+                session.set_parameter("surface_detail_directional_axes", &axes);
+            }
             for (name, colors) in DIRECTIONAL_COLOR_PARAMETER_NAMES.into_iter().zip(colors) {
                 session.set_parameter(name, &colors);
             }
@@ -4556,6 +4772,34 @@ fn download_model_geometry(session: &mn::Session, model: &mut vol::PointCloudMod
     assert!(readback.next().is_none());
 }
 
+fn download_model_directional_colors(session: &mn::Session, model: &mut vol::PointCloudModel) {
+    let names = DIRECTIONAL_COLOR_PARAMETER_NAMES.map(str::to_string);
+    let mut readback = read_model_parameters(session, names.into());
+    let colors = DIRECTIONAL_COLOR_PARAMETER_NAMES.map(|name| next_parameter(&mut readback, name));
+    let directional = model
+        .surface_detail
+        .as_mut()
+        .and_then(|detail| detail.directional.as_mut())
+        .expect("directional-only readback requires directional surface detail");
+    for (index, color) in directional.colors.iter_mut().enumerate() {
+        *color = glam::Vec3::new(colors[0][index], colors[1][index], colors[2][index]);
+    }
+    assert!(readback.next().is_none());
+}
+
+fn download_current_model_parameters(
+    session: &mn::Session,
+    model: &mut vol::PointCloudModel,
+    softplus_beta: f32,
+    directional_colors_only: bool,
+) {
+    if directional_colors_only {
+        download_model_directional_colors(session, model);
+    } else {
+        download_model_parameters(session, model, softplus_beta);
+    }
+}
+
 fn download_model_parameters(
     session: &mn::Session,
     model: &mut vol::PointCloudModel,
@@ -4575,6 +4819,7 @@ fn download_model_parameters(
     if model.surface_color_coefficients.is_some() {
         names.push("surface_color_coefficients".to_string());
     }
+    let download_directional_axes = session.has_parameter("surface_detail_directional_axes");
     if model.surface_detail.is_some() {
         names.push("surface_detail_colors".to_string());
         if model
@@ -4589,7 +4834,9 @@ fn download_model_parameters(
             .as_ref()
             .is_some_and(|detail| detail.directional.is_some())
         {
-            names.push("surface_detail_directional_axes".to_string());
+            if download_directional_axes {
+                names.push("surface_detail_directional_axes".to_string());
+            }
             names.extend(DIRECTIONAL_COLOR_PARAMETER_NAMES.map(str::to_string));
         }
     }
@@ -4653,15 +4900,18 @@ fn download_model_parameters(
         }
         if let Some(ref mut directional) = detail.directional {
             let directions = sites * vol::SURFACE_DETAIL_DIRECTIONS;
-            let axes = next_parameter(&mut readback, "surface_detail_directional_axes");
+            let axes = download_directional_axes
+                .then(|| next_parameter(&mut readback, "surface_detail_directional_axes"));
             let colors =
                 DIRECTIONAL_COLOR_PARAMETER_NAMES.map(|name| next_parameter(&mut readback, name));
             for point in 0..n_cells {
                 let base = point * directions * 3;
                 for direction in 0..directions {
-                    directional.axes[point * directions + direction] = glam::Vec3::from_slice(
-                        &axes[base + direction * 3..base + direction * 3 + 3],
-                    );
+                    if let Some(ref axes) = axes {
+                        directional.axes[point * directions + direction] = glam::Vec3::from_slice(
+                            &axes[base + direction * 3..base + direction * 3 + 3],
+                        );
+                    }
                     directional.colors[point * directions + direction] = glam::Vec3::new(
                         colors[0][point * directions + direction],
                         colors[1][point * directions + direction],
@@ -5779,6 +6029,7 @@ fn build_train_session(
     background_rgb: [f32; 3],
     gpu: &std::sync::Arc<blade_graphics::Context>,
     path_bufs: &vol::gpu::PathRecordBuffers,
+    compact_bufs: Option<&vol::gpu::PathCompactBuffers>,
     lr: f32,
     lr_groups: LrGroups,
     train_base_appearance: bool,
@@ -5801,6 +6052,7 @@ fn build_train_session(
     betas: (f32, f32, f32),
 ) -> (mn::Session, vol::RadFoamGpuCloud) {
     let n_cells = model.points.len();
+    let compact_appearance = compact_bufs.is_some();
     let exposure_lr_ratio = std::env::var("BLADE_VOLUME_PER_VIEW_EXPOSURE")
         .ok()
         .and_then(|value| value.parse::<f32>().ok())
@@ -5863,6 +6115,7 @@ fn build_train_session(
                     || train_radii
                     || surface_normal_lr_ratio > 0.0
                     || surface_detail_offset_lr_ratio > 0.0),
+            compact_appearance,
         },
         model.surface_offsets.is_some(),
         model.surface_color_coefficients.is_some(),
@@ -5988,6 +6241,48 @@ fn build_train_session(
         session
             .bind_external_buffer(meganeura::ExternalSlot::Input(slot), source, pl_bytes)
             .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
+    }
+    match (compact_appearance, compact_bufs) {
+        (true, Some(buffers)) => {
+            for (slot, buffer) in [
+                ("compact_dense_slots", buffers.dense_slots),
+                ("compact_cell_indices", buffers.cells),
+                ("compact_pixel_indices", buffers.pixel_indices),
+                ("compact_active", buffers.active),
+            ] {
+                let source = gpu
+                    .get_external_buffer_source(buffer)
+                    .expect("PathCompactBuffers::new_external must produce an exportable buffer");
+                session
+                    .bind_external_buffer(meganeura::ExternalSlot::Input(slot), source, pl_bytes)
+                    .unwrap_or_else(|err| panic!("bind_external_buffer({slot}) failed: {err:?}"));
+            }
+            let info = session
+                .configure_runtime_prefix(
+                    &[
+                        "compact_dense_slots",
+                        "compact_cell_indices",
+                        "compact_pixel_indices",
+                        "compact_active",
+                    ],
+                    buffers.capacity(),
+                )
+                .unwrap_or_else(|err| panic!("configure compact appearance prefix: {err}"));
+            let count_source = gpu
+                .get_external_buffer_source(buffers.count())
+                .expect("external compact count must be exportable");
+            session
+                .bind_runtime_prefix_count(count_source, 4)
+                .unwrap_or_else(|err| panic!("bind compact appearance count: {err}"));
+            log::info!(
+                "compact appearance: {} capacity rows, {}-row alignment, {} scaled dispatches",
+                info.max_rows,
+                info.alignment,
+                info.dispatches,
+            );
+        }
+        (false, None) => {}
+        _ => unreachable!("compact appearance graph and buffers must be selected together"),
     }
     if model.radii.is_some() {
         let train_surface_geometry = surface_normal_lr_ratio > 0.0
@@ -6383,6 +6678,7 @@ fn fit_appearance_pixel_batched(
     let mut training_path_max_steps_used = 0u32;
     let mut training_path_steps = 0usize;
     let mut training_candidate_max_used = 0u32;
+    let mut compact_appearance_records = 0usize;
     // Frequent loss readouts (every ~2000 steps) so long multi-hour runs
     // surface their trajectory instead of only ~10 lines total.
     let log_every = 2000.min(total_steps).max(1);
@@ -6462,6 +6758,29 @@ fn fit_appearance_pixel_batched(
         || config.surface_detail_directional_color_lr_ratio > 0.0;
     let evaluate_surface_detail =
         should_evaluate_surface_detail(model.surface_detail.as_ref(), train_surface_detail);
+    // The released directional-color stage freezes every table that defines
+    // geometry, transmittance, and the spatial appearance basis. It can
+    // therefore evaluate the complete appearance branch over only the active
+    // path records without changing those dense calculations.
+    let compact_appearance = model.radii.is_some()
+        && model
+            .surface_detail
+            .as_ref()
+            .is_some_and(|detail| detail.directional.is_some())
+        && config.surface_detail_directional_color_lr_ratio > 0.0
+        && !config.train_base_appearance
+        && !train_positions
+        && !train_radii
+        && !train_surface_geometry
+        && config.surface_color_lr_ratio == 0.0
+        && config.surface_detail_color_lr_ratio == 0.0
+        && config.surface_detail_density_lr_ratio == 0.0
+        && config.surface_detail_directional_axis_lr_ratio == 0.0
+        && config.spherical_voronoi_axis_lr_ratio == 0.0
+        && config.spherical_voronoi_color_lr_ratio == 0.0
+        && model.spherical_voronoi.is_none()
+        && !collect_powerfoam_point_error;
+    let mut compactor = compact_appearance.then(|| vol::gpu::PathCompactor::new(&gpu));
     let path_jacobian_mode = if train_positions || train_radii {
         vol::gpu::PathJacobianMode::Full
     } else if train_surface_geometry {
@@ -6508,6 +6827,9 @@ fn fit_appearance_pixel_batched(
             config.powerfoam_candidate_capacity,
         )
     };
+    let mut compact_bufs = compact_appearance.then(|| {
+        vol::gpu::PathCompactBuffers::new_external(&gpu, pixel_batch as u32, max_steps as u32)
+    });
     let patch_size = config.patch_size;
     let grad_loss_weight = config.grad_loss_weight;
     let interpenetration_sample_count = if config.interpenetration_weight > 0.0 {
@@ -6535,6 +6857,7 @@ fn fit_appearance_pixel_batched(
         config.background_rgb,
         &gpu,
         &path_bufs,
+        compact_bufs.as_ref(),
         config.learning_rate,
         config.lr_groups,
         config.train_base_appearance,
@@ -6571,7 +6894,7 @@ fn fit_appearance_pixel_batched(
         );
         log::info!(
             "PowerFoam interval clipping: {} ({average_neighbors:.1} adjacency entries/site)",
-            if vol::gpu::PathRecorder::uses_parallel_powerfoam_recording(&gpu_cloud) {
+            if vol::gpu::PathRecorder::uses_parallel_powerfoam_recording(&gpu_cloud, &path_bufs) {
                 "one workgroup per ray"
             } else {
                 "one ray per lane"
@@ -6624,6 +6947,7 @@ fn fit_appearance_pixel_batched(
     // `padded_weighted_steps_have_zero_loss_and_parameter_gradient` covers
     // non-zero masked payload for every trainable weighted-path table.
     let mut path_payload_initialized = false;
+    let mut compact_payload_initialized = false;
     phase_timings.setup += setup_start.elapsed();
 
     while steps_done < invocation_end {
@@ -6832,6 +7156,9 @@ fn fit_appearance_pixel_batched(
                     tx.fill_buffer(path_bufs.surface_query_grad_previous.at(0), pl_bytes * 4, 0);
                     tx.fill_buffer(path_bufs.surface_query_grad_current.at(0), pl_bytes * 4, 0);
                 }
+                if let Some(ref buffers) = compact_bufs {
+                    buffers.clear(&mut tx, !compact_payload_initialized);
+                }
             }
             record_args.clear();
             for (slot, &vi) in selected_views.iter().enumerate() {
@@ -6852,8 +7179,12 @@ fn fit_appearance_pixel_batched(
                 });
             }
             recorder.dispatch_batch(&mut record_encoder, &gpu_cloud, &path_bufs, &record_args);
+            if let (Some(compactor), Some(buffers)) = (compactor.as_ref(), compact_bufs.as_ref()) {
+                compactor.dispatch(&mut record_encoder, &path_bufs, buffers);
+            }
             let _ = gpu.submit(&mut record_encoder);
             path_payload_initialized = true;
+            compact_payload_initialized = true;
             phase_timings.path_submit += path_submit_start.elapsed();
 
             let gpu_step_start = std::time::Instant::now();
@@ -6898,6 +7229,9 @@ fn fit_appearance_pixel_batched(
                 training_path_truncated_rays == 0 && recorded_path.truncated_rays > 0;
             training_path_rays += pixel_batch;
             training_path_steps += recorded_path.total_steps_used;
+            if compact_appearance {
+                compact_appearance_records += recorded_path.total_steps_used;
+            }
             training_path_truncated_rays += recorded_path.truncated_rays;
             training_path_max_steps_used =
                 training_path_max_steps_used.max(recorded_path.max_steps_used);
@@ -6981,7 +7315,12 @@ fn fit_appearance_pixel_batched(
                 // prune+densify remaps `model.points`.
                 let n_old = model.points.len();
                 let state_readback_start = std::time::Instant::now();
-                download_model_parameters(&session, model, config.softplus_beta);
+                download_current_model_parameters(
+                    &session,
+                    model,
+                    config.softplus_beta,
+                    compact_appearance,
+                );
                 model_parameters_current = true;
                 let adam_snap = save_adam_state(
                     &session,
@@ -7155,6 +7494,9 @@ fn fit_appearance_pixel_batched(
                 let resource_rebuild_start = std::time::Instant::now();
                 drop(session);
                 gpu_cloud.deinit(&gpu);
+                if let Some(ref mut buffers) = compact_bufs {
+                    buffers.destroy(&gpu);
+                }
                 path_bufs.destroy(&gpu);
                 path_bufs = if use_projected_candidates {
                     vol::gpu::PathRecordBuffers::new_external_powerfoam_projected(
@@ -7185,6 +7527,15 @@ fn fit_appearance_pixel_batched(
                         config.powerfoam_candidate_capacity,
                     )
                 };
+                compact_bufs = compact_appearance.then(|| {
+                    vol::gpu::PathCompactBuffers::new_external(
+                        &gpu,
+                        pixel_batch as u32,
+                        max_steps as u32,
+                    )
+                });
+                path_payload_initialized = false;
+                compact_payload_initialized = false;
                 let rebuilt = build_train_session(
                     model,
                     pixel_batch,
@@ -7203,6 +7554,7 @@ fn fit_appearance_pixel_batched(
                     config.background_rgb,
                     &gpu,
                     &path_bufs,
+                    compact_bufs.as_ref(),
                     config.learning_rate,
                     config.lr_groups,
                     config.train_base_appearance,
@@ -7296,7 +7648,12 @@ fn fit_appearance_pixel_batched(
                     download_model_surface_planes(&session, model);
                 }
             } else {
-                download_model_parameters(&session, model, config.softplus_beta);
+                download_current_model_parameters(
+                    &session,
+                    model,
+                    config.softplus_beta,
+                    compact_appearance,
+                );
                 model_parameters_current = true;
             }
             phase_timings.state_readback += state_readback_start.elapsed();
@@ -7349,7 +7706,12 @@ fn fit_appearance_pixel_batched(
                 let checkpoint_start = std::time::Instant::now();
                 let download_start = std::time::Instant::now();
                 if !model_parameters_current {
-                    download_model_parameters(&session, model, config.softplus_beta);
+                    download_current_model_parameters(
+                        &session,
+                        model,
+                        config.softplus_beta,
+                        compact_appearance,
+                    );
                     model_parameters_current = true;
                 }
                 phase_timings.checkpoint_download += download_start.elapsed();
@@ -7453,16 +7815,39 @@ fn fit_appearance_pixel_batched(
             training_path_truncated_percent,
         );
     }
+    if compact_appearance {
+        let capacity_records = training_path_rays.saturating_mul(max_steps);
+        let occupancy = if capacity_records == 0 {
+            0.0
+        } else {
+            100.0 * compact_appearance_records as f32 / capacity_records as f32
+        };
+        log::info!(
+            "compact appearance telemetry: {} records ({occupancy:.2}% of padded capacity)",
+            compact_appearance_records,
+        );
+    }
 
     let finalize_start = std::time::Instant::now();
     debug_dump_exposure(&session, views.len());
     if !model_parameters_current {
-        download_model_parameters(&session, model, config.softplus_beta);
+        download_current_model_parameters(
+            &session,
+            model,
+            config.softplus_beta,
+            compact_appearance,
+        );
     }
     bake_mean_exposure_into_sh(&session, model, views.len());
     drop(session);
     gpu_cloud.deinit(&gpu);
+    if let Some(ref mut buffers) = compact_bufs {
+        buffers.destroy(&gpu);
+    }
     path_bufs.destroy(&gpu);
+    if let Some(ref mut compactor) = compactor {
+        compactor.destroy(&gpu);
+    }
     let mut recorder = recorder;
     recorder.destroy(&gpu);
     gpu.destroy_command_encoder(&mut record_encoder);
@@ -8278,6 +8663,7 @@ mod tests {
             ray_direction,
             None,
             true,
+            true,
             1,
         );
         let red_table = split_rgb_table(&mut graph, parameters.colors, 1, sites)[0];
@@ -8639,10 +9025,6 @@ mod tests {
                     .normalize()
             })
             .collect::<Vec<_>>();
-        let packed_axes = axes
-            .iter()
-            .flat_map(|axis| axis.to_array())
-            .collect::<Vec<_>>();
         let (unit_axes, temperatures) = pack_frozen_directional_axes(&axes);
 
         let mut graph = mn::Graph::new();
@@ -8651,7 +9033,6 @@ mod tests {
         let tangent_sites = graph.input("tangent_sites", &[sites, 3]);
         let radii = graph.input("radii", &[1, 1]);
         let ray_origin = graph.input("ray_origin", &[1, 3]);
-        let raw_axes = graph.parameter("surface_detail_directional_axes", &[1, width * 3]);
         let unit_axis_table =
             graph.parameter("surface_detail_directional_unit_axes", &[1, width * 3]);
         let temperature_table =
@@ -8660,14 +9041,15 @@ mod tests {
             &mut graph,
             cell_indices,
             &SurfaceDetailDirectionalGraph {
-                axes: raw_axes,
+                axes: unit_axis_table,
                 frozen_kernel: Some((unit_axis_table, temperature_table)),
-                colors: [raw_axes; 3],
+                colors: [unit_axis_table; 3],
             },
             centers,
             tangent_sites,
             radii,
             ray_origin,
+            false,
             1,
         );
         graph.set_outputs(vec![weights]);
@@ -8681,7 +9063,6 @@ mod tests {
             },
         );
         session.set_parameter("positions", &[0.0, 0.0, 1.0]);
-        session.set_parameter("surface_detail_directional_axes", &packed_axes);
         session.set_parameter("surface_detail_directional_unit_axes", &unit_axes);
         session.set_parameter("surface_detail_directional_temperatures", &temperatures);
         session.set_input_u32("cell_indices", &[0]);
@@ -8830,6 +9211,7 @@ mod tests {
                 current,
                 next: current,
             }),
+            false,
             false,
             1,
         );
@@ -9255,6 +9637,188 @@ mod tests {
         };
         m.compute_adjacency_default();
         m
+    }
+
+    #[test]
+    fn compact_directional_appearance_matches_dense_loss_and_gradients() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Some(gpu) = try_init_gpu() else {
+            eprintln!("skipping compact directional appearance test: no GPU");
+            return;
+        };
+        let n_cells = 2;
+        let p = 2;
+        let l = 4;
+        let rows = p * l;
+        let sites = vol::SURFACE_DETAIL_SITES;
+        let directions = vol::SURFACE_DETAIL_DIRECTIONS;
+        let directional_rows = n_cells * sites * directions;
+        let detail_offsets = (0..n_cells * sites)
+            .map(|index| {
+                let angle = index as f32 * 0.7;
+                glam::Vec3::new(0.2 * angle.cos(), 0.2 * angle.sin(), 0.0)
+            })
+            .collect::<Vec<_>>();
+        let directional_axes = (0..directional_rows)
+            .map(|index| {
+                let x = index as f32 * 0.31;
+                glam::Vec3::new(x.cos(), x.sin(), 0.3).normalize() * (0.8 + index as f32 * 0.01)
+            })
+            .collect::<Vec<_>>();
+        let directional_colors = (0..directional_rows)
+            .map(|index| {
+                glam::Vec3::new(
+                    index as f32 * 0.0007 - 0.02,
+                    0.015 - index as f32 * 0.0003,
+                    index as f32 * 0.0002 - 0.01,
+                )
+            })
+            .collect::<Vec<_>>();
+        let model = vol::PointCloudModel {
+            points: vec![
+                glam::Vec4::new(-0.2, 0.1, 0.5, 1.2),
+                glam::Vec4::new(0.4, -0.1, 0.8, 0.9),
+            ],
+            sh_coefficients: vec![0.1, -0.05, 0.2, -0.08, 0.15, 0.03],
+            sh_degree: 0,
+            transforms: None,
+            adjacency: None,
+            radii: Some(vec![0.8, 1.1]),
+            surface_normals: Some(vec![glam::Vec3::Z; n_cells]),
+            surface_offsets: None,
+            surface_detail: Some(vol::SurfaceDetail {
+                offsets: detail_offsets,
+                heights: vec![0.0; n_cells * sites],
+                colors: (0..n_cells * sites)
+                    .map(|index| glam::Vec3::splat(index as f32 * 0.002 - 0.01))
+                    .collect(),
+                density_logits: None,
+                directional: Some(vol::SurfaceDetailDirectional {
+                    axes: directional_axes,
+                    colors: directional_colors,
+                }),
+            }),
+            surface_color_coefficients: None,
+            spherical_voronoi: None,
+        };
+
+        let make_graph = |compact_appearance| {
+            let mut graph = mn::Graph::new();
+            let mut trainability = SurfaceTrainability::NONE;
+            trainability.detail_directional_colors = true;
+            build_volumetric_graph_with_options(
+                &mut graph,
+                n_cells,
+                p,
+                l,
+                0,
+                1,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                10.0,
+                [0.0; 3],
+                true,
+                true,
+                VolumetricGraphOptions {
+                    use_surface_normal_loss: false,
+                    train_base_appearance: false,
+                    train_positions: false,
+                    train_radii: false,
+                    train_exposure: false,
+                    surface_trainability: trainability,
+                    use_surface_detail: true,
+                    evaluate_surface_detail: true,
+                    use_surface_detail_density: false,
+                    use_surface_detail_directional: true,
+                    differentiate_surface_detail_directional_weights: false,
+                    compact_appearance,
+                },
+                false,
+                false,
+                false,
+                false,
+                ColorLoss::L1,
+            );
+            graph
+        };
+        let dense_graph = make_graph(false);
+        let compact_graph = make_graph(true);
+        let (mut dense, _) = mn::build(
+            &dense_graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu.clone()),
+                ..Default::default()
+            },
+        );
+        let (mut compact, _) = mn::build(
+            &compact_graph,
+            mn::SessionConfig {
+                mode: mn::Mode::Training,
+                gpu: Some(gpu),
+                ..Default::default()
+            },
+        );
+        let cells = [0_u32, 1, 0, 0, 1, 0, 0, 0];
+        let dts = [0.4_f32, 0.7, 0.0, 0.0, 1.1, 0.0, 0.0, 0.0];
+        let mask = [1.0_f32, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        let pixel_idx_per_step = [0_u32, 0, 0, 0, 1, 1, 1, 1];
+        let ray_origin = [0.1_f32, -0.2, -1.5, -0.3, 0.4, -1.2];
+        let ray_direction = [0.1_f32, 0.0, 0.995, -0.05, 0.08, 0.995];
+        let surface_queries = [
+            0.2_f32, 1.0, 0.4, 1.0, 0.0, 0.0, 0.0, 0.0, 0.3, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let labels = [0.3_f32, 0.2, 0.4, 0.1, 0.35, 0.25];
+        for session in [&mut dense, &mut compact] {
+            upload_model_parameters(session, &model, 10.0);
+            session.set_parameter("exposure_r", &[1.0]);
+            session.set_parameter("exposure_g", &[1.0]);
+            session.set_parameter("exposure_b", &[1.0]);
+            session.set_input_u32("cell_indices", &cells);
+            session.set_input_u32("next_cell_indices", &cells);
+            session.set_input("recorded_dt", &dts);
+            session.set_input("mask", &mask);
+            session.set_input("surface_queries", &surface_queries);
+            session.set_input("ray_origin", &ray_origin);
+            session.set_input("ray_dir_per_pixel", &ray_direction);
+            session.set_input_u32("pixel_idx_per_step", &pixel_idx_per_step);
+            session.set_input_u32("view_idx", &[0, 0]);
+            session.set_input("labels", &labels);
+            session.set_learning_rate(0.001);
+        }
+        compact.set_input_u32("compact_dense_slots", &[0, 1, 4, 0, 0, 0, 0, 0]);
+        compact.set_input_u32("compact_cell_indices", &[0, 1, 1, 0, 0, 0, 0, 0]);
+        compact.set_input_u32("compact_pixel_indices", &[0, 0, 1, 0, 0, 0, 0, 0]);
+        compact.set_input("compact_active", &[1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+
+        dense.step();
+        compact.step();
+        dense.wait();
+        compact.wait();
+        let dense_loss = dense.read_output(1)[0];
+        let compact_loss = compact.read_output(1)[0];
+        assert!(
+            (dense_loss - compact_loss).abs() <= 1.0e-5,
+            "dense loss {dense_loss} != compact loss {compact_loss}",
+        );
+        for name in DIRECTIONAL_COLOR_PARAMETER_NAMES {
+            let mut dense_gradient = vec![0.0_f32; n_cells * sites * directions];
+            let mut compact_gradient = vec![0.0_f32; n_cells * sites * directions];
+            dense.read_param_grad(name, &mut dense_gradient);
+            compact.read_param_grad(name, &mut compact_gradient);
+            for (index, (&dense_value, &compact_value)) in
+                dense_gradient.iter().zip(&compact_gradient).enumerate()
+            {
+                assert!(
+                    (dense_value - compact_value).abs() <= 2.0e-5,
+                    "{name}[{index}]: dense={dense_value}, compact={compact_value}",
+                );
+            }
+        }
+        assert_eq!(rows, cells.len());
     }
 
     #[test]
@@ -9906,6 +10470,7 @@ mod tests {
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 differentiate_surface_detail_directional_weights: false,
+                compact_appearance: false,
             },
             true,
             false,
@@ -9949,6 +10514,7 @@ mod tests {
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 differentiate_surface_detail_directional_weights: false,
+                compact_appearance: false,
             },
             true,
             true,
@@ -10044,6 +10610,7 @@ mod tests {
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 differentiate_surface_detail_directional_weights: false,
+                compact_appearance: false,
             },
             true,
             true,
@@ -10157,6 +10724,7 @@ mod tests {
                 use_surface_detail_density: true,
                 use_surface_detail_directional: true,
                 differentiate_surface_detail_directional_weights: false,
+                compact_appearance: false,
             },
             true,
             false,
@@ -10196,7 +10764,6 @@ mod tests {
             "surface_detail_heights",
             "surface_detail_colors",
             "surface_detail_density_logits",
-            "surface_detail_directional_axes",
             "surface_detail_directional_unit_axes",
             "surface_detail_directional_temperatures",
             "exposure_r",
@@ -10209,6 +10776,7 @@ mod tests {
                 "unexpected gradient for {name}"
             );
         }
+        assert!(!session.has_parameter("surface_detail_directional_axes"));
         for name in DIRECTIONAL_COLOR_PARAMETER_NAMES {
             assert!(session.has_parameter(name), "missing parameter {name}");
             assert!(session.has_param_grad(name));
@@ -11712,6 +12280,7 @@ mod tests {
                 use_surface_detail_density: false,
                 use_surface_detail_directional: false,
                 differentiate_surface_detail_directional_weights: false,
+                compact_appearance: false,
             },
             true,
             false,

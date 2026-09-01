@@ -2854,6 +2854,134 @@ that endpoint is not misrepresented as a single-hyperparameter ablation.
   1.5 GiB and Bonsai at 2.6 GiB, with zero swap, pressure, OOM, kill, throttle,
   or GPU fault.
 
+#### M2cs — Compact staged directional appearance (done; production gate still open)
+
+- A generic Blade path compactor now appends every live fixed-row record into
+  a full-capacity stream of dense slot, cell, and pixel indices. It reserves
+  once per ray, retains the safe `P*L` allocation, and carries no scene depth
+  cap. Ordered density and transmittance stay in the original per-ray layout;
+  only the frozen-base appearance branch is repacked. A physical-GPU test
+  checks that every active recorder row is emitted exactly once with the right
+  cell and pixel and that the aligned tail remains neutral.
+- The exact frozen-base directional stage gathers its already-computed path
+  weights by dense slot, evaluates the frozen spatial query, oriented surface
+  basis, base SH, and released directional residual only on compact rows, then
+  scatters RGB into pixels. Models with spatial-density logits retain their
+  dense spatial query because transmittance consumes it.
+  Meganeura's generic runtime-prefix support imports the compactor's GPU count,
+  writes ordinary indirect-dispatch arguments in one runtime pass, and scales
+  the existing compiled dispatches. It adds no graph operation, `ShaderEntry`,
+  or shader-group variant. A dense-versus-compact graph test matches the loss
+  and every value in all three `[N,64]` directional-colour gradients.
+- The selected 256-update Room stage executes 31.16% of padded rows and takes
+  4.542 seconds wall time versus the best 6.791-second dense repeat (1.50×).
+  It reproduces 25.1415/20.3937 dB and all eight printed held-view scores. The
+  selected 510-update Bonsai stage executes 20.20% and falls from 14.702 to
+  9.752 seconds (1.51×), reproducing 21.6891/20.9944 dB and all 37 held-view
+  scores. Neither truncates a path.
+- Room profiling assigns about 5.4 ms to the initial compact training graph
+  and 4.3--4.6 ms after moving frozen spatial work into the compact branch,
+  versus 8.6 ms for dense directional appearance. Giving each ray one
+  workgroup makes its active-prefix copies contiguous: compaction falls from
+  1.8--1.9 to 0.2--0.3 ms. The already-parallel PowerFoam recorder now keeps
+  up to 1,024 clipped candidates in workgroup memory and sorts them
+  cooperatively, retaining the serial storage-buffer path for larger explicit
+  capacities. That record pass falls from about 2.8--3.4 to 1.4--1.5 ms, and
+  total path work reaches 2.2--2.6 ms. All 20 physical path-record oracles pass.
+  The compactor oracle covers a path longer than one 64-lane copy iteration;
+  a dispatch test covers more than 65,535 rays. Runtime-prefix preparation
+  remains below 0.01 ms.
+- The performance gate is still open against matched *current* table-free
+  controls: Room is 4.542/2.122 = 2.14× and Bonsai is
+  9.752/4.234 = 2.30×. Comparing the optimized table path to the stale
+  pre-recorder control would incorrectly claim success. Dense transmittance
+  and the full 18.98-million-value Adam update remain; a genuinely sparse
+  parameter update is now the best bounded next target.
+- Production runs used 4 GiB scopes and peaked at 1.62 GB on Room and
+  3.14 GB on Bonsai, with zero swap, pressure, OOM, kill, throttle, or GPU
+  fault. Generated models and logs remain outside version control under
+  `target/audit-runs/directional-compact-parallel-sort/`.
+
+#### M2ct — Remove untouched optimizer, gathered-axis, and lane underfill work (done; production gate still open)
+
+- Meganeura's existing Adam shader now returns after grouped-gradient
+  diagnostics when the gradient and both moments are exactly zero and weight
+  decay is disabled. Thus only virgin untouched entries skip work: a parameter
+  with momentum still advances on a later zero-gradient step, and weight decay
+  disables the shortcut. A physical-GPU regression covers all three cases.
+  The Room profile's Adam pass falls from 0.87--0.90 to 0.42--0.46 ms. This is
+  one branch in the existing shader, not a sparse-optimizer operation, entry,
+  group, or API.
+- The generic reduction compiler now permits an indirect gathered stream to
+  coexist with another stream's existing row-repeat factor. The frozen
+  released-axis distance therefore reads the selected `[cell,site,direction]`
+  row inside the existing reduction instead of materializing a 239 MB gathered
+  tensor. The compact graph falls from 201 to 200 passes and from 3.55--3.69 to
+  3.30--3.42 ms; its 16 gathered passes at 0.62--0.65 ms become 15 passes at
+  0.41--0.45 ms. Structural and physical-GPU CPU-parity regressions cover the
+  combined grouped-gather/repeated-row mapping, and Blade's
+  dense-versus-compact oracle for the loss and all three table gradients
+  remains green. No operation, shader, entry/group, binding layout, pipeline,
+  or public API is added.
+- The existing parallel PowerFoam recorder now uses 128 rather than 64 lanes
+  per ray. Its workgroup storage, clipping, exact depth/cell sort, entry point,
+  binding layout, pipeline selection, and serial large-capacity fallback are
+  unchanged. The observed 162-candidate Room rows need fewer clip chunks and
+  the warmed record pass falls from 1.60--1.70 to 1.41--1.54 ms. An identical
+  16-view Bonsai crossover screen is 2--4% faster as candidate occupancy rises;
+  all 20 physical path-record oracles pass.
+- With all three changes, the selected Room stage takes 4.310 seconds instead
+  of the 6.791-second dense control (1.58× faster) and retains
+  25.1415/20.3937 dB plus all eight held-view scores. Bonsai takes 9.352
+  seconds instead of 14.702 (1.57× faster) and retains 21.6891/20.9944 dB plus
+  all 37 held-view scores. Both have zero path truncation.
+- The honest table/no-table comparison still misses the production gate:
+  Room is 4.310/2.126 = 2.03× and Bonsai is 9.352/4.226 = 2.21×. The warmed
+  Room profile is now led by the 1.41--1.54 ms parallel path recorder, three
+  grouped atomic table scatters at 0.52--0.66 ms, the remaining gathered work
+  at 0.41--0.45 ms, and Adam at 0.42--0.46 ms. Another narrowly tailored
+  compiler rule is unlikely to close both scenes; keep the released table
+  opt-in and next test dynamic traversal regrouping or a measured generic
+  segmented reduction of repeated table rows.
+- All production and evaluation runs used 4 GiB scopes. Training peaked at
+  1,740,828,672 bytes on Room and 3,157,753,856 bytes on Bonsai, with zero
+  swap, pressure, OOM, kill, throttle, or GPU fault. Generated models, complete
+  logs, and matched evaluations are under
+  `target/audit-runs/directional-compact-record-128/`.
+
+#### M2cu — Keep frozen directional state compact (done; production gate passed)
+
+- Frozen raw directional axes are no longer a second session parameter beside
+  their prepacked unit axes and temperatures. The PLY/model remains the
+  checkpoint authority, and directional-only finalization reads back only the
+  three trained colour channels. Full training, trainable axes, densification,
+  checkpoint, and resume paths retain their existing readback behavior.
+- The exact directional distance still evaluates
+  `sqrt(temperature² * squared_distance + 1e-12)`. Its frozen/no-backward path
+  now keeps epsilon and `0.5` scalar, using Meganeura's existing broadcast-add
+  and per-channel multiply instead of materializing two full-capacity constant
+  tensors. The differentiable geometry/axis path is unchanged. This adds no
+  Meganeura operation, shader entry/group, variant, binding, or public API.
+- A zero-height spatial-detail table no longer evaluates its eight-site height
+  kernel during candidate clipping. The existing recorder caches the base
+  power-interval query and emits the same query/plane flag; any nonzero height
+  selects the original path. CPU/GPU tests cover zero-height query output,
+  dense cooperative traversal, nonzero-height intervals, and full Jacobians.
+- The final 256-update Room stage takes 3.634 seconds versus 2.091 seconds for
+  its same-build table-free control (1.74×), down from 4.310/2.126 = 2.03×.
+  It peaks at 746,217,472 bytes instead of 1,740,828,672. The final 510-update
+  Bonsai stage takes 8.090 seconds versus 4.073 seconds (1.986×); two more
+  paired repeats are 8.144/4.079 = 1.997× and 8.056/4.068 = 1.980×. Its peak
+  falls from 3,157,753,856 to 1,411,035,136 bytes. Both scenes therefore pass
+  the `<2×` production-cost gate, with Bonsai retaining little margin.
+- Room remains exactly 25.1415/20.3937 dB over train/held views and every one
+  of its eight printed held scores matches the preceding checkpoint. Bonsai
+  remains 21.6891/20.9944 dB and all 37 held scores match. Both runs retain
+  zero path truncation. Every production, repeat, evaluation, and test ran in
+  a 4 GiB scope with zero swap, pressure, OOM, kill, throttle, or GPU fault.
+  Generated models, matched controls, profiles, and telemetry are under
+  `target/audit-runs/directional-compact-frozen-scalar/`.
+
 ### M3 — Training crate scaffolding
 
 New crate: `blade-volume-train`. Depends on `blade-volume` + `meganeura`. Never the
@@ -3153,11 +3281,12 @@ manifest accidentally.
 
 ## Out-of-scope (for now)
 
-- Default-on training for the full PowerFoam directional table. Staged
-  frozen-base fitting now passes Room and weighted/oriented Bonsai quality,
-  and its explicit budget now scales with table size, but its locally optimized
-  training time remains 2.98× the matched no-table graph and therefore misses
-  the 2× production gate.
+- Default-on joint training for the full PowerFoam directional table. Staged
+  frozen-base fitting passes Room and weighted/oriented Bonsai quality and
+  production-cost gates, with matched table/no-table ratios of 1.74× and a
+  three-pair Bonsai median of 1.99×. A fresh joint fit is still
+  quality-negative, so reconstruction deliberately creates this table only
+  for the explicit second stage.
 - Mobile capture app.
 - Multi-GPU / distributed training.
 - LOD or streaming for huge scenes.

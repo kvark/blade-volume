@@ -174,9 +174,20 @@ a convincing real-world result.
   base, then fit only the residual table. The selected stage improves every
   held Room and Bonsai view; its useful horizon scales with table size (256
   updates for 98,831 Room sites and 510 for 200,000 Bonsai sites). Bonsai now
-  reaches 21.6891/20.9944 dB over train/held views. The table's backward pass
-  is still about 3× the matched no-table step time, so it remains opt-in while
-  active-path compaction is the next performance target. A fresh Buddha repeat
+  reaches 21.6891/20.9944 dB over train/held views. The directional-only stage
+  now compacts live path rows and drives its Meganeura subgraph from the GPU
+  count. The selected short Room stage executes 31.2% of padded rows and is
+  1.87× faster than its dense directional implementation; Bonsai executes
+  20.2% and is 1.82× faster. Generic
+  Meganeura changes skip untouched virgin Adam entries and fold a gathered
+  repeated row into its existing reduction; they add no operation or shader
+  variant. Frozen scalar constants no longer expand to the full directional
+  tensor, and frozen checkpoint state remains authoritative instead of being
+  redundantly uploaded and read back. All reproduce their dense controls'
+  rounded metrics. Against matched current no-table controls, Room is 1.74×
+  slower and the median of three Bonsai pairs is 1.99×, so the staged table
+  now passes its two-scene production-cost gate. It remains staged rather than
+  part of the joint base fit. A fresh Buddha repeat
   also rejects the correspondence route before held data:
   calibrated-albedo tracks form no complete-render-safe patch under the
   default neighborhood, and wider or photometric-normal
@@ -187,8 +198,15 @@ a convincing real-world result.
 The staged directional-residual models and telemetry are under
 `target/audit-runs/directional-staged-validation/`; the selected longer Bonsai
 result and horizon screens are under
-`target/audit-runs/directional-staged-horizon/`. These generated artifacts
-remain outside version control.
+`target/audit-runs/directional-staged-horizon/`. Compact-path performance and
+parity screens are under
+`target/audit-runs/directional-compact-frozen-scalar/` (with preceding
+implementations under `directional-compact-gather-fused/`,
+`directional-compact-record-128/`,
+`directional-compact-parallel-sort/`,
+`directional-compact-cooperative/`,
+`directional-compact-spatial/`, and `directional-compact-indirect/`). These
+generated artifacts remain outside version control.
 
 Held-camera surface renders under three lights excluded from fitting. LUCES-MV
 Owl is first; DiLiGenT-MV Bear is second. Relighting responds, but geometry and

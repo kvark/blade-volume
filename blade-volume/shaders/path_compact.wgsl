@@ -18,19 +18,30 @@ var<storage, read_write> g_pixel_indices: array<u32>;
 var<storage, read_write> g_active: array<f32>;
 var<uniform> g_params: CompactParams;
 
+var<workgroup> w_output_start: u32;
+var<workgroup> w_steps: u32;
+
 @compute @workgroup_size(64)
-fn compact_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let pixel = gid.x;
+fn compact_paths(
+    @builtin(workgroup_id) workgroup_id: vec3<u32>,
+    @builtin(num_workgroups) num_workgroups: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+) {
+    let pixel = workgroup_id.y * num_workgroups.x + workgroup_id.x;
     if (pixel >= g_params.num_pixels) {
         return;
     }
 
-    let steps = g_path_status[pixel] & 0x7fffffffu;
-    let output_start = atomicAdd(&g_count, steps);
+    if (local_id.x == 0u) {
+        w_steps = g_path_status[pixel] & 0x7fffffffu;
+        w_output_start = atomicAdd(&g_count, w_steps);
+    }
+    workgroupBarrier();
+
     let input_start = pixel * g_params.max_steps;
-    for (var step = 0u; step < steps; step += 1u) {
+    for (var step = local_id.x; step < w_steps; step += 64u) {
         let input = input_start + step;
-        let output = output_start + step;
+        let output = w_output_start + step;
         g_dense_slots[output] = input;
         g_compact_cells[output] = g_cells[input];
         g_pixel_indices[output] = pixel;

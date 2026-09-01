@@ -58,7 +58,8 @@ struct RecordParams {
     tile_width: u32,
     tile_height: u32,
     tile_capacity: u32,
-    /// Non-zero when cells are split by learned oriented surface planes.
+    /// Bit flags for oriented planes, surface-query output, splat depth, and
+    /// nonzero spatial-detail height respectively.
     oriented: u32,
     /// Added to compact source indices for batched full-image rendering.
     image_pixel_offset: u32,
@@ -118,11 +119,10 @@ var<uniform> g_params: RecordParams;
 
 var<workgroup> w_candidate_count: atomic<u32>;
 var<workgroup> w_tile_count: atomic<u32>;
-var<workgroup> w_parallel_cells: array<u32, 64>;
-var<workgroup> w_parallel_depths: array<f32, 64>;
-var<workgroup> w_parallel_faces: array<vec2<f32>, 64>;
-var<workgroup> w_parallel_neighbors: array<vec2<u32>, 64>;
-var<workgroup> w_parallel_valid: array<u32, 64>;
+var<workgroup> w_parallel_cells: array<u32, 1024>;
+var<workgroup> w_parallel_depths: array<f32, 1024>;
+var<workgroup> w_parallel_faces: array<vec2<f32>, 1024>;
+var<workgroup> w_parallel_neighbors: array<vec2<u32>, 1024>;
 var<workgroup> w_bvh_frontier_a: array<u32, 64>;
 var<workgroup> w_bvh_frontier_b: array<u32, 64>;
 var<workgroup> w_bvh_frontier_count: atomic<u32>;
@@ -184,13 +184,18 @@ struct PowerInterval {
     face_far: f32,
     effective_near: f32,
     effective_far: f32,
+    query_near: f32,
     previous: u32,
     next: u32,
     valid: u32,
 };
 
-fn has_surface_detail() -> bool {
+fn records_surface_queries() -> bool {
     return (g_params.oriented & 2u) != 0u;
+}
+
+fn has_surface_detail_height() -> bool {
+    return (g_params.oriented & 8u) != 0u;
 }
 
 fn records_splat_depth() -> bool {
@@ -204,7 +209,7 @@ fn effective_surface_offset(
     query_near: f32,
 ) -> f32 {
     let surface = g_surface_normals[cell];
-    if (!has_surface_detail()) {
+    if (!has_surface_detail_height()) {
         return surface.w;
     }
     var sites: array<vec4<f32>, SURFACE_DETAIL_SITES>;
@@ -469,10 +474,10 @@ fn power_interval(
             }
         } else if (numerator < 0.0) {
             // The ray is parallel to this face and lies outside the cell.
-            return PowerInterval(0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
+            return PowerInterval(0.0, 0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
         }
         if (face_far <= face_near) {
-            return PowerInterval(0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
+            return PowerInterval(0.0, 0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
         }
     }
 
@@ -486,7 +491,7 @@ fn power_interval(
         let denominator = dot(ray_dir, surface_normal);
         if (abs(denominator) <= 1e-20) {
             if (dot(ray_origin - current.xyz, surface_normal) > surface_offset) {
-                return PowerInterval(0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
+                return PowerInterval(0.0, 0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
             }
         } else {
             let surface_t =
@@ -500,10 +505,11 @@ fn power_interval(
         }
     }
     if (effective_far <= effective_near) {
-        return PowerInterval(0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
+        return PowerInterval(0.0, 0.0, 0.0, 0.0, 0.0, cell, cell, 0u);
     }
     return PowerInterval(
-        face_near, face_far, effective_near, effective_far, previous, next, 1u,
+        face_near, face_far, effective_near, effective_far, query_near,
+        previous, next, 1u,
     );
 }
 
@@ -906,37 +912,118 @@ fn sort_candidate_row(begin: u32, count: u32) {
     }
 }
 
+fn parallel_candidate_after(left: u32, right: u32) -> bool {
+    let left_depth = w_parallel_depths[left];
+    let right_depth = w_parallel_depths[right];
+    let left_cell = w_parallel_cells[left];
+    let right_cell = w_parallel_cells[right];
+    return left_depth > right_depth ||
+        (left_depth == right_depth && left_cell > right_cell);
+}
+
+fn swap_parallel_candidates(left: u32, right: u32) {
+    let left_cell = w_parallel_cells[left];
+    let left_depth = w_parallel_depths[left];
+    let left_faces = w_parallel_faces[left];
+    let left_neighbors = w_parallel_neighbors[left];
+    w_parallel_cells[left] = w_parallel_cells[right];
+    w_parallel_depths[left] = w_parallel_depths[right];
+    w_parallel_faces[left] = w_parallel_faces[right];
+    w_parallel_neighbors[left] = w_parallel_neighbors[right];
+    w_parallel_cells[right] = left_cell;
+    w_parallel_depths[right] = left_depth;
+    w_parallel_faces[right] = left_faces;
+    w_parallel_neighbors[right] = left_neighbors;
+}
+
+fn sort_parallel_candidate_row(count: u32, lane: u32) {
+    var width = 1u;
+    while (width < count) {
+        width *= 2u;
+    }
+    for (var index = lane; index < width; index += 128u) {
+        if (index >= count) {
+            w_parallel_cells[index] = 0xffffffffu;
+            w_parallel_depths[index] = bitcast<f32>(0x7f800000u);
+            w_parallel_faces[index] = vec2<f32>(0.0);
+            w_parallel_neighbors[index] = vec2<u32>(0u);
+        }
+    }
+    workgroupBarrier();
+
+    for (var span = 2u; span <= width; span *= 2u) {
+        var stride = span / 2u;
+        while (stride != 0u) {
+            for (var left = lane; left < width; left += 128u) {
+                let right = left ^ stride;
+                if (right > left) {
+                    let ascending = (left & span) == 0u;
+                    let swap = select(
+                        parallel_candidate_after(right, left),
+                        parallel_candidate_after(left, right),
+                        ascending,
+                    );
+                    if (swap) {
+                        swap_parallel_candidates(left, right);
+                    }
+                }
+            }
+            workgroupBarrier();
+            stride /= 2u;
+        }
+    }
+}
+
 fn emit_powerfoam_splats(
     ray_origin: vec3<f32>,
     ray_dir: vec3<f32>,
     output_pixel: u32,
     candidate_begin: u32,
     valid_count: u32,
+    parallel_candidates: bool,
 ) {
     let row_start = output_pixel * g_params.max_steps;
-    sort_candidate_row(candidate_begin, valid_count);
 
     var candidate_index = 0u;
     var output_step = 0u;
     while (candidate_index < valid_count && output_step < g_params.max_steps) {
         let candidate_slot = candidate_begin + candidate_index;
-        let cell = g_candidates[candidate_slot];
-        let faces = g_candidate_faces[candidate_slot];
-        let neighbors = g_candidate_neighbors[candidate_slot];
+        var cell: u32;
+        var depth: f32;
+        var faces: vec2<f32>;
+        var neighbors: vec2<u32>;
+        if (parallel_candidates) {
+            cell = w_parallel_cells[candidate_index];
+            depth = w_parallel_depths[candidate_index];
+            faces = w_parallel_faces[candidate_index];
+            neighbors = w_parallel_neighbors[candidate_index];
+        } else {
+            cell = g_candidates[candidate_slot];
+            depth = g_candidate_depths[candidate_slot];
+            faces = g_candidate_faces[candidate_slot];
+            neighbors = g_candidate_neighbors[candidate_slot];
+        }
         candidate_index += 1u;
-        if (g_params.jacobian_mode == 0u && !has_surface_detail()) {
+        if (g_params.jacobian_mode == 0u && !has_surface_detail_height()) {
             let output_slot = row_start + output_step;
             g_cells_out[output_slot] = cell;
             g_next_cells_out[output_slot] = select(
                 neighbors.y,
-                bitcast<u32>(g_candidate_depths[candidate_slot]),
+                bitcast<u32>(depth),
                 records_splat_depth(),
             );
             g_dts_out[output_slot] = min(
-                faces.y - g_candidate_depths[candidate_slot],
+                faces.y - depth,
                 g_params.max_path_dt,
             );
             g_mask_out[output_slot] = 1.0;
+            if (records_surface_queries()) {
+                let denominator = dot(ray_dir, g_surface_normals[cell].xyz);
+                g_surface_queries_out[output_slot] = vec2<f32>(
+                    faces.x,
+                    select(0.0, 1.0, denominator < -1e-20),
+                );
+            }
             output_step += 1u;
             continue;
         }
@@ -957,12 +1044,12 @@ fn emit_powerfoam_splats(
         g_cells_out[output_slot] = cell;
         g_next_cells_out[output_slot] = select(
             neighbors.y,
-            bitcast<u32>(g_candidate_depths[candidate_slot]),
+            bitcast<u32>(depth),
             records_splat_depth(),
         );
         g_dts_out[output_slot] = differential.dt;
         g_mask_out[output_slot] = 1.0;
-        if (has_surface_detail()) {
+        if (records_surface_queries()) {
             g_surface_queries_out[output_slot] = differential.surface_query;
             if (g_params.jacobian_mode == 1u) {
                 g_surface_query_grad_previous_out[output_slot] =
@@ -1048,21 +1135,29 @@ fn record_powerfoam_splats(@builtin(global_invocation_id) gid: vec3<u32>) {
         let cached_far = select(
             interval.face_far,
             interval.effective_far,
-            g_params.jacobian_mode == 0u && !has_surface_detail(),
+            g_params.jacobian_mode == 0u && !has_surface_detail_height(),
         );
-        g_candidate_faces[compact_slot] = vec2<f32>(interval.face_near, cached_far);
+        let cached_near = select(
+            interval.face_near,
+            interval.query_near,
+            g_params.jacobian_mode == 0u && !has_surface_detail_height(),
+        );
+        g_candidate_faces[compact_slot] = vec2<f32>(cached_near, cached_far);
         g_candidate_neighbors[compact_slot] = vec2<u32>(interval.previous, interval.next);
         valid_count += 1u;
     }
-    emit_powerfoam_splats(ray_origin, ray_dir, output_pixel, candidate_begin, valid_count);
+    sort_candidate_row(candidate_begin, valid_count);
+    emit_powerfoam_splats(
+        ray_origin, ray_dir, output_pixel, candidate_begin, valid_count, false,
+    );
 }
 
-// Dense Cech graphs instead use all 64 lanes to clip one ray's candidates.
-// Each chunk stays in workgroup memory while its valid lanes atomically claim
-// compact slots, avoiding a serial lane-zero scan and a device-scope storage
-// barrier. Lane zero then sorts by depth and cell and emits the deterministic
-// path, so the temporary atomic order is not observable.
-@compute @workgroup_size(64)
+// Dense Cech graphs instead use all 128 lanes to clip one ray's candidates.
+// Valid lanes atomically claim workgroup slots. The workgroup then sorts by
+// depth and cell and lane zero emits the deterministic path, so the temporary
+// atomic order is not observable. Candidate rows above the fixed workgroup
+// capacity use the separate serial pipeline selected by the host.
+@compute @workgroup_size(128)
 fn record_powerfoam_splats_parallel(
     @builtin(workgroup_id) workgroup_id: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
@@ -1085,46 +1180,41 @@ fn record_powerfoam_splats_parallel(
         atomicStore(&w_candidate_count, 0u);
     }
     workgroupBarrier();
-    for (var chunk_begin = 0u; chunk_begin < candidate_count; chunk_begin += 64u) {
+    for (var chunk_begin = 0u; chunk_begin < candidate_count; chunk_begin += 128u) {
         let source_slot = chunk_begin + local_id.x;
-        w_parallel_valid[local_id.x] = 0u;
         if (source_slot < candidate_count) {
             let candidate_slot = candidate_begin + source_slot;
             let cell = g_candidates[candidate_slot];
             let sphere_root = g_candidate_depths[candidate_slot];
             let interval = power_interval(ray_origin, ray_dir, cell, sphere_root);
             if (interval.valid != 0u) {
-                w_parallel_cells[local_id.x] = cell;
-                w_parallel_depths[local_id.x] = interval.effective_near;
+                let destination = atomicAdd(&w_candidate_count, 1u);
                 let cached_far = select(
                     interval.face_far,
                     interval.effective_far,
-                    g_params.jacobian_mode == 0u && !has_surface_detail(),
+                    g_params.jacobian_mode == 0u && !has_surface_detail_height(),
                 );
-                w_parallel_faces[local_id.x] =
-                    vec2<f32>(interval.face_near, cached_far);
-                w_parallel_neighbors[local_id.x] =
-                    vec2<u32>(interval.previous, interval.next);
-                w_parallel_valid[local_id.x] = 1u;
+                let cached_near = select(
+                    interval.face_near,
+                    interval.query_near,
+                    g_params.jacobian_mode == 0u && !has_surface_detail_height(),
+                );
+                w_parallel_cells[destination] = cell;
+                w_parallel_depths[destination] = interval.effective_near;
+                w_parallel_faces[destination] = vec2<f32>(cached_near, cached_far);
+                w_parallel_neighbors[destination] = vec2<u32>(interval.previous, interval.next);
             }
         }
-        workgroupBarrier();
-
-        if (w_parallel_valid[local_id.x] != 0u) {
-            let destination = candidate_begin + atomicAdd(&w_candidate_count, 1u);
-            g_candidates[destination] = w_parallel_cells[local_id.x];
-            g_candidate_depths[destination] = w_parallel_depths[local_id.x];
-            g_candidate_faces[destination] = w_parallel_faces[local_id.x];
-            g_candidate_neighbors[destination] = w_parallel_neighbors[local_id.x];
-        }
-        workgroupBarrier();
     }
 
-    if (local_id.x != 0u) {
-        return;
-    }
+    workgroupBarrier();
     let valid_count = atomicLoad(&w_candidate_count);
-    emit_powerfoam_splats(ray_origin, ray_dir, output_pixel, candidate_begin, valid_count);
+    sort_parallel_candidate_row(valid_count, local_id.x);
+    if (local_id.x == 0u) {
+        emit_powerfoam_splats(
+            ray_origin, ray_dir, output_pixel, candidate_begin, valid_count, true,
+        );
+    }
 }
 
 @compute @workgroup_size(64)
@@ -1198,7 +1288,7 @@ fn record_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
             g_next_cells_out[row_start + output_step] = next_idx;
             g_dts_out[row_start + output_step] = interval.dt;
             g_mask_out[row_start + output_step] = 1.0;
-            if (has_surface_detail()) {
+            if (records_surface_queries()) {
                 g_surface_queries_out[row_start + output_step] = interval.surface_query;
                 if (g_params.jacobian_mode == 1u) {
                     g_surface_query_grad_previous_out[row_start + output_step] =
