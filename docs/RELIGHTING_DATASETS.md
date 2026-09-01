@@ -1085,9 +1085,27 @@ extraction. Then fit and score that fixed cloud through the unchanged Gaussian
 path. This remains point-cloud reconstruction; no polygonal intermediate is
 needed.
 
+That upstream proposal is now closed as well. The fixed Cow graph seeds 1,828
+dense points from sparse surfel support and expands to 5,597/7,631 through
+28,344 normal/depth-consistent edges observed within two pixels in a shared
+source camera. Fitting only that connected layer raises precision but collapses
+held-camera recall to 77.34%. Adding 373 sparse surfels not covered by the dense
+layer raises recall to 86.94% but collapses precision to 91.75%; PSNR tails are
+mixed or worse. The graph and fill rules were not threshold-tuned.
+
+Running the already selected 300-update-per-view masked PowerFoam continuation
+on all 7,631 dense points is healthy but does not survive conversion back to a
+Gaussian. Its 4,800 updates reduce the static loss `0.036613→0.000773` in 42
+seconds, yet all 24 final Cow light/camera values change by at most about 0.0006
+dB or 0.0006 coverage points, with mixed signs. This points to a representation
+boundary rather than another initializer: the next bounded experiment is an
+ignored relightable PowerFoam scorer that keeps exclusive oriented-cell
+ownership through PBR shading. Only a Cow and Reading win should justify moving
+PBR attributes into backend-neutral `PointCloudModel` storage and the runtime.
+
 The ignored controls and telemetry are under
 `target/audit-runs/diligent-mv/{reading-16k,cow}/feature-depth-selection/`.
-Their largest scoped peak is 1,094,533,120 bytes, with zero swap, OOM event, or
+Their largest scoped peak is 1,170,440,192 bytes, with zero swap, OOM event, or
 GPU fault.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated

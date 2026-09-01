@@ -232,9 +232,12 @@ a convincing real-world result.
   centre clamps, ray ownership, observed normal thickness, tangent-mask bounds,
   source-pixel material replacement, and explicit mask loss: all trade image
   quality against support, and the one Reading-safe opacity compensation fails
-  unchanged on Cow. The next surface step is an anchor-connected dense point
-  layer grown from the high-precision sparse reconstruction before Gaussian
-  fitting—not another proxy image, support threshold, or polygonal fallback.
+  unchanged on Cow. A sparse-anchored connected dense layer then loses recall
+  without gap fill and precision with it. Existing masked PowerFoam continuation
+  becomes numerically neutral after conversion back to Gaussians. The next gate
+  therefore keeps exclusive oriented PowerFoam cells through a reference PBR
+  render before considering any model/runtime API—not another proxy image,
+  support threshold, or polygonal fallback.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 

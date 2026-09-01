@@ -64,8 +64,10 @@ not contain or fall back to polygonal geometry.
   fix; keep the selector ignored. Exact provenance transfer then closes centre,
   covariance, opacity, source-material, and live mask-loss repairs: each moves
   the same quality/coverage frontier, and the one Reading-safe compensation
-  fails unchanged on Cow. Build the next dense point layer outward from
-  high-precision sparse anchors before Gaussian fitting.
+  fails unchanged on Cow. A high-precision-sparse-anchored dense layer then
+  loses recall without sparse fill and precision with it. Masked PowerFoam
+  continuation becomes numerically neutral after conversion back to Gaussian.
+  Test exclusive oriented-cell PBR rendering before changing the model API.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -1534,10 +1536,16 @@ a deterministic repeat agree within the measured training variance.
   material, and live mask supervision. Reject every arm: the only candidate to
   pass all Reading internal values loses Cow foreground means and recall, while
   direct mask loss gains nine recall points at a clear PSNR cost.
-- [ ] Grow a single dense point layer from high-precision sparse anchors. Join
-  only locally tangent-consistent samples with shared source-view depth order;
-  freeze the resulting point cloud before unchanged Gaussian fitting. Require
-  every Cow and Reading mean, tail, recall, and precision value to improve.
+- [x] Grow a single dense point layer from high-precision sparse anchors, using
+  local tangent consistency and shared-source depth order. Reject the fixed Cow
+  graph: its 5,597 dense points collapse held-camera recall to 77.34%, while 373
+  sparse gap-fill points instead collapse precision to 91.75%.
+- [x] Run the existing masked PowerFoam surface continuation on the full selected
+  Cow layer before calibrated fitting. Reject it as a Gaussian initializer: all
+  24 final values move by at most about 0.0006 with mixed signs.
+- [ ] Build an ignored relightable PowerFoam reference scorer that preserves
+  exclusive oriented-cell ownership through PBR shading. Gate Cow internally,
+  then Reading, before adding backend-neutral PBR storage or runtime code.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

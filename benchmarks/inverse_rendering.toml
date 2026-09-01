@@ -6073,3 +6073,37 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/{reading-16k,cow}/feature-depth-selection/{provenance-clamp,source-owner,provenance-thickness,provenance-mass,mask-loss-graph-1.5} (gitignored)"
 verdict = "reject every post-fit provenance repair and leave the production graph unchanged: centre constraints are inactive, composited ownership is non-exclusive, covariance bounds exchange recall for precision, source-pixel albedo loses selection quality, and explicit mask loss exchanges PSNR for nine recall points; construct one sparse-anchored, tangent- and depth-consistent dense point layer upstream next"
+
+[diligent_mv.rejected_anchor_layer_and_powerfoam_handoff]
+date = "2026-09-01"
+protocol = "Cow-only follow-up with no threshold sweep: seed selected dense surfels inside an overlapping, 30-degree-consistent sparse surfel support; expand through support-overlapping neighbors observed within two pixels in a shared source camera and within half the smaller radius in both normal directions; fit the connected dense layer alone and with uncovered sparse fill; separately run the production 300-update-per-view fixed-center masked PowerFoam continuation on the unchanged full selected layer, then pass its radii/normals through the ordinary calibrated Gaussian fit"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+anchor_dense_seeds = 1828
+anchor_dense_connected = 5597
+anchor_dense_total = 7631
+anchor_shared_view_edges = 28344
+anchor_sparse_fill = 373
+anchor_layer_fitted_lights_fitted_cameras = [32.353434, 27.954264, 21.561590, 17.059353, 86.786561, 93.014023]
+anchor_layer_fitted_lights_held_cameras = [31.098095, 28.282831, 20.071453, 17.925442, 86.936166, 91.745612]
+anchor_layer_held_lights_fitted_cameras = [32.150609, 28.220035, 21.268882, 17.333824, 86.786561, 93.014023]
+anchor_layer_held_lights_held_cameras = [30.507462, 28.271397, 19.420975, 17.766753, 86.936166, 91.745612]
+anchor_dense_fitted_lights_fitted_cameras = [31.943415, 27.376150, 20.895917, 16.424463, 76.974309, 96.131842]
+anchor_dense_fitted_lights_held_cameras = [30.848174, 27.707162, 19.531756, 16.786555, 77.344787, 96.083896]
+anchor_dense_held_lights_fitted_cameras = [31.721097, 27.394668, 20.615109, 16.441656, 76.974309, 96.131842]
+anchor_dense_held_lights_held_cameras = [30.243853, 27.636324, 18.894027, 16.716925, 77.344787, 96.083896]
+
+powerfoam_updates = 4800
+powerfoam_initial_loss = 0.036613
+powerfoam_final_loss = 0.000773
+powerfoam_fitted_lights_fitted_cameras = [32.355244, 28.238016, 21.431725, 17.396514, 88.790356, 95.216622]
+powerfoam_fitted_lights_held_cameras = [31.287339, 28.805652, 20.047794, 17.987323, 88.880620, 95.079218]
+powerfoam_held_lights_fitted_cameras = [32.161069, 28.373994, 21.176466, 17.449903, 88.790356, 95.216622]
+powerfoam_held_lights_held_cameras = [30.761116, 28.763970, 19.482207, 17.901807, 88.880620, 95.079218]
+
+maximum_peak_memory_bytes = 1170440192
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/cow/feature-depth-selection/{anchor-layer,anchor-dense,powerfoam} (gitignored)"
+verdict = "reject both hard sparse anchoring and PowerFoam-to-Gaussian initialization; the connected layer trades recall for precision, sparse fill reverses that trade, and exclusive PowerFoam training becomes neutral when its learned support is converted back to overlapping Gaussians; test a relightable oriented-PowerFoam PBR reference before changing production storage or shaders"
