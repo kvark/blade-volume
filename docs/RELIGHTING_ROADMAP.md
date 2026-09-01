@@ -1630,6 +1630,26 @@ a deterministic repeat agree within the measured training variance.
   refit loses 0.069/0.086 dB. Reject it without opening Bear's held splits or
   adding a production API. Only point observations and measured lights were
   used; no released normals, renderer, or Cow threshold changed.
+- [x] Attribute the exact fixed-Bear residual and association. Covered
+  foreground accounts for 78% of error; perfect coverage gains 0.80--0.83 dB,
+  material-only transfer is negative, and photometric normal plus diffuse
+  response gains 3.76--4.98 dB. The estimator is accurate to 5.6--7.5 degrees
+  median, but cross-view normal consensus falls from 0.927 in source groups to
+  0.498 under final Gaussian ownership. Resetting centers is neutral.
+- [x] Test support localization without changing centers or point count.
+  Uniform radius 1.0 improves median ownership only 0.498 to 0.506 and loses
+  about 12 recall points. Shrinking only the 4,049 groups independently called
+  mixed by both 12-light folds leaves median association at 0.497, loses about
+  3.5 recall points, and lowers every internal mean. Both improve tails and
+  precision, exposing a strict localization/coverage frontier; reject them
+  without loading Bear's held lights or official held cameras.
+- [ ] Before adding storage or WGSL, build a read-only two-object oracle for
+  spatially local physical response inside one point support. Use exact source
+  observations and shared total optical mass; require a local partition to
+  improve cross-view normal identity on Cow and Bear, then require an ignored
+  fixed-geometry complete-render scorer to pass independent camera/light
+  folds. If the oracle fails, close intra-point response and pursue denser
+  independently anchored point observations instead.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

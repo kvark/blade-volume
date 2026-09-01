@@ -6354,3 +6354,55 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/{cow/feature-depth-selection,bear/albedo-mvs}/{upstream-normal-clusters,fusion-cluster-attributes} and /tmp/blade-volume-{fusion,bear}-{normal-clusters,cluster-attributes}*.log (gitignored)"
 verdict = "reject the full family: geometry splitting duplicates optical support and destroys precision; the Cow frozen-support updater loses untouched held cameras; and the unchanged fresh-Bear normal-only arm already loses internal validation means before held data is opened, while its diffuse refit is worse; no API or runtime path is justified"
+
+[diligent_mv.bear_surface_identity_diagnostic]
+date = "2026-09-01"
+protocol = "fresh Bear albedo-MVS baseline; construction lights and internal cameras only; attribute the fixed-Gaussian residual, compare evaluation-only released normals with two disjoint photometric-light folds, replay exact fusion provenance and initial centers, then fit predeclared uniform radius 1.0 and selective 1.0/1.4 supports; the selective arm uses the existing both-fold 30-degree predicate; official held lights and cameras remain physically unloaded"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+selection_residual_baseline_psnr_db = 29.114158
+selection_coverage_oracle_psnr_db = 29.912557
+selection_material_oracle_psnr_db = 28.968847
+selection_normal_material_oracle_psnr_db = 34.095052
+selection_covered_foreground_error_percent = 78.147552
+validation_residual_baseline_psnr_db = 28.858229
+validation_coverage_oracle_psnr_db = 29.692261
+validation_material_oracle_psnr_db = 28.789255
+validation_normal_material_oracle_psnr_db = 32.615591
+validation_covered_foreground_error_percent = 78.077338
+
+photometric_normal_fold_median_error_degrees = [7.476011, 5.637568]
+fusion_group_truth_consensus_median = 0.927455
+fusion_group_photometric_consensus_median = 0.924856
+fusion_group_predicted_mixed = 7793
+fusion_group_truth_mixed = 8290
+fusion_group_mixed_precision_percent = 95.894
+fusion_group_mixed_recall_percent = 90.145
+final_owner_truth_consensus_median = 0.498183
+final_exclusive_owner_truth_consensus_median = 0.568214
+initial_center_truth_consensus_median = 0.499118
+initial_center_exclusive_truth_consensus_median = 0.564598
+final_center_displacement_median = 0.081273
+owner_consensus_median_by_scale_quartile = [0.571511, 0.490266, 0.468160, 0.468644]
+
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+uniform_radius_selection = [28.686302, 25.755422, 19.861376, 16.779900, 80.847891, 96.826638]
+mixed_radius_selection = [29.346678, 25.757248, 20.700677, 16.793911, 89.036311, 95.807389]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+uniform_radius_validation = [28.426590, 25.383986, 19.573685, 16.241444, 79.254452, 97.143651]
+mixed_radius_validation = [29.114923, 25.331669, 20.438786, 16.196044, 87.564079, 96.145874]
+uniform_radius_truth_consensus_median = 0.505999
+uniform_radius_exclusive_truth_consensus_median = 0.553249
+mixed_radius_reduced_groups = 4049
+mixed_radius_supported_groups = 11535
+mixed_radius_truth_consensus_median = 0.496589
+mixed_radius_exclusive_truth_consensus_median = 0.554392
+held_splits_opened = false
+
+maximum_peak_memory_bytes = 411713536
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/bear/{fixed-gaussian-residual,albedo-mvs/radius-{1p0,mixed}} and /tmp/blade-volume-bear-{fixed-residual,association,fusion-association,initial-center,scale-association,radius-*}.log (gitignored)"
+verdict = "the normal estimator is accurate and exact fusion groups retain substantially better identity than final volumetric ownership; center drift is not causal, and uniform or normal-selected support shrink only trades recall/means for precision/tails; require an optical-mass-preserving local physical-response oracle before any model or shader change"

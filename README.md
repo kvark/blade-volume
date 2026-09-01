@@ -266,6 +266,17 @@ a convincing real-world result.
   mean; refitting diffuse albedo widens the loss. The held splits remain
   unopened, the branch is closed, and it adds neither a mesh nor another
   renderer.
+  A fixed-Bear residual audit then localizes the remaining error: 78% lies on
+  covered foreground; a coverage oracle gains only 0.8 dB, while cross-light
+  photometric normals plus diffuse response gain 3.8--5.0 dB. Those normals
+  are accurate to 5.6--7.5 degrees median, but final Gaussian ownership has
+  only 0.498 cross-view normal consensus versus 0.927 in the source fusion
+  groups. Resetting centers is neutral. Uniformly shrinking support to 1.0
+  loses about 12 recall points; shrinking only the 4,049 groups called mixed
+  by both light folds still loses 3.5 points and both internal means. The next
+  gate must preserve optical mass while making physical response local within
+  a point support; another normal loss, center prior, or radius threshold is
+  not justified.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow,bear}/`.
 
