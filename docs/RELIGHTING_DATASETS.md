@@ -1890,6 +1890,32 @@ tool and 384 render/photo dumps are under
 peaks at 427,638,784 bytes with zero swap, memory event, OOM, throttle, or GPU
 fault.
 
+The particle lift closes the tempting direct follow-up. Each Gaussian is
+sampled at its projected center in eight owner cameras, and its exact
+front-to-back `T*alpha` responsibility weights a normal/material estimate from
+one 12-light fold. Updating all supported particles changes 7,599 of 7,631 and
+regresses. Requiring at least three owner cameras and a fixed 15-degree
+cross-view consensus changes 183 particles in one fold and 507 in the other.
+The first arm improves most values but loses validation whole-frame worst by
+`0.0010` dB; the reverse arm regresses broadly. Requiring the two independently
+fit normals to agree inside the same cone leaves 106 particles and moves every
+selection/validation PSNR aggregate down by `0.0017--0.0098` dB. Geometry and
+coverage remain unchanged, so no production code follows.
+
+Released Cow normal maps are then used strictly as evaluation data. The two
+12-light photometric estimates have `23.36/24.78`-degree median error over
+owner-camera foreground and `16.78/23.41` degrees at responsible center rays.
+That estimation error is smaller than the association failure: across 7,556
+particles visible in at least three owner cameras, the weighted resultant of
+released world normals has median length only `0.519`. Restricting to the 558
+particles that are the exclusive largest `T*alpha` owner of their own center
+ray raises it only to `0.556`. One current Gaussian support therefore spans
+different physical surface orientations across views. The next bounded gate
+must subdivide point support using construction-only normal and source-depth
+groups before fitting one relightable normal. Ground-truth normals must remain
+an evaluator, never a split input. The diagnostic peaks at 438,280,192 bytes
+with zero swap, memory event, OOM, throttle, or GPU fault.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable

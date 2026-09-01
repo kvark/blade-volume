@@ -6163,3 +6163,35 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/cow/fixed-gaussian-residual and /tmp/blade-volume-fixed-residual-cow-cross-light.log (gitignored)"
 verdict = "select a fixed-geometry shading-normal gate: correctly covered foreground dominates residual, cross-light material helps modestly, and cross-light normal plus material supplies another 2.0-2.2 dB; next lift the control to Gaussian particles with centers, covariance, opacity, and support frozen"
+
+[diligent_mv.rejected_fixed_particle_normal_transfer]
+date = "2026-09-01"
+protocol = "Cow-only ignored lift from the fixed image-space attribution: use eight owner cameras excluded from the four-camera selection and validation splits; record exact 64-candidate T-alpha responsibility on every Gaussian center ray; fit photometric normal and diffuse albedo on one interleaved 12-light fold and score the other; then require at least three owner cameras, 15-degree within-fold consensus, and finally 15-degree cross-fold agreement"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+fold_0_to_1_base_selection = [32.824311, 29.992508, 22.091373, 19.061954, 88.525740, 95.104730]
+fold_0_to_1_normal_selection = [32.826428, 30.001446, 22.094707, 19.072119, 88.525740, 95.104730]
+fold_0_to_1_base_validation = [32.174702, 28.946104, 21.275493, 18.126895, 88.496329, 94.926575]
+fold_0_to_1_normal_validation = [32.178263, 28.945148, 21.279346, 18.127487, 88.496329, 94.926575]
+fold_1_to_0_base_selection = [32.474822, 29.900484, 21.599102, 18.790389, 88.525740, 95.104730]
+fold_1_to_0_normal_selection = [32.413143, 29.883596, 21.549792, 18.781972, 88.525740, 95.104730]
+fold_1_to_0_base_validation = [31.008922, 28.237596, 19.981528, 17.398190, 88.496329, 94.926575]
+fold_1_to_0_normal_validation = [30.973370, 28.220602, 19.957180, 17.391236, 88.496329, 94.926575]
+strict_fold_0_changed_particles = 183
+strict_fold_1_changed_particles = 507
+cross_fold_changed_particles = 106
+cross_fold_normal_selection = [32.646614, 29.896939, 21.843558, 18.788406, 88.525740, 95.104730]
+cross_fold_normal_validation = [31.589176, 28.233841, 20.626852, 17.396110, 88.496329, 94.926575]
+photometric_truth_error_median_degrees = [23.360220, 24.775938]
+responsible_center_truth_error_median_degrees = [16.777689, 23.410381]
+truth_cross_view_consensus_quantiles = [0.014374, 0.219361, 0.342044, 0.519181, 0.706382, 0.836982, 0.997508]
+truth_cross_view_consensus_particles = 7556
+exclusive_owner_truth_consensus_quantiles = [0.033637, 0.252755, 0.384661, 0.556183, 0.744616, 0.873673, 0.988790]
+exclusive_owner_truth_consensus_particles = 558
+maximum_peak_memory_bytes = 438280192
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/diligent_tracks and /tmp/blade-volume-{gaussian-particle-attributes-cow-consensus,normal-association-cow-owner}.log (gitignored)"
+verdict = "reject direct particle normal/material transfer and retain the production checkpoint: even strict within-fold and cross-fold consensus lose a tail or every aggregate; released-normal evaluation shows that current Gaussian center ownership crosses physical surface orientations, so subdivide support before fitting another normal loss"

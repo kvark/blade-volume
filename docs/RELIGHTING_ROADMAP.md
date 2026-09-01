@@ -1570,11 +1570,24 @@ a deterministic repeat agree within the measured training variance.
   0.91/1.31 dB, while photometric normal plus diffuse material adds 3.06/3.33
   dB. Choose normal-from-light-contrast supervision, with geometry and support
   frozen, rather than another coverage or representation branch.
-- [ ] Lift the cross-light image-space normal control to the fixed Gaussian's
-  particles. Freeze centers, covariance, opacity, and assignments; collect
-  compositing responsibility on one 12-light fold, fit only normal plus diffuse
-  albedo, and score the interleaved fold through the production renderer. Do
-  not add another shader, graph operation, or stored field for this gate.
+- [x] Lift the cross-light image-space normal control to the fixed Gaussian's
+  particles with centers, covariance, opacity, and assignments frozen. Reject
+  the direct transfer: an unrestricted fit changes 7,599/7,631 particles and
+  regresses; a predeclared three-camera/15-degree consensus changes 183 or 507
+  per fold, but each loses at least one held-light tail; requiring the folds to
+  agree leaves 106 particles and regresses every aggregate slightly.
+- [x] Use released Cow normals only as an evaluator to distinguish estimator
+  error from particle association. The two 12-light photometric fits have
+  23.36/24.78-degree median pixel error, but one responsible Gaussian center's
+  truth-normal consensus across cameras is only 0.519 median. Even exclusive
+  `T*alpha` owners reach only 0.556. The current supports do not identify one
+  physical surface across views, so another normal loss cannot fix them.
+- [ ] Subdivide broad Gaussian support into smaller point-cloud particles when
+  construction-only photometric normals and source-depth observations form
+  distinct, cross-view-coherent groups. Start with the existing deterministic
+  Gaussian split geometry and preserve total opacity; use released normals
+  only to audit association, never to select or train a split. A candidate
+  must improve association before any material fit or production API change.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

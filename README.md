@@ -246,10 +246,12 @@ a convincing real-world result.
   A final fixed-Gaussian residual audit now separates those concerns: only
   about 10% of Cow error comes from missed foreground, while 81--84% lies on
   already-covered foreground. A 12-fit/12-held-light material control gains
-  0.9--1.3 dB, and photometric normals plus material gain 3.1--3.3 dB. The next
-  reconstruction gate therefore freezes cloud geometry and learns particle
-  shading normals from light contrast; it does not add a mesh or another
-  renderer.
+  0.9--1.3 dB, and photometric normals plus material gain 3.1--3.3 dB. Directly
+  transferring those normals to fixed particles still fails: even exact
+  exclusive owners correspond to widely different released surface normals
+  across cameras. The next gate subdivides broad Gaussian support into smaller
+  cross-view-coherent cloud particles before fitting material; it does not add
+  a mesh or another renderer.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 
