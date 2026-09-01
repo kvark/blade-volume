@@ -1690,6 +1690,16 @@ a deterministic repeat agree within the measured training variance.
   truth distance 1.34 to 1.48 pixels. Reject multi-order consensus without a
   reconstruction or runtime branch; deterministic instability alone is not a
   physical correspondence signal.
+- [x] Measure construction-only local manifold evidence in the 640 px cloud.
+  Median tangent-plane residual correlates -0.299 with evaluator quality; a
+  fixed 0.5-source-pixel rule keeps 59.7% of points but only 39.8% of the
+  greater-than-ten-pixel error tail, improving retained median truth distance
+  1.34 to 0.98 pixels. Moving the resulting 6,698 unique fine anchors into the
+  established coarse support still loses both internal means and about three
+  recall points. A single fixed 25% interpolation improves every validation
+  PSNR and precision, but loses both selection means, both tails, and recall.
+  Reject both before held data or production code: local geometry can identify
+  a cleaner fine subset, but does not establish transferable optical ownership.
 - [x] Keep accepted 320 Gaussian geometry and optical mass exact while using
   up to eight nearest construction-only 640 groups as existing-style spatial
   surface sites. The CPU oracle populates 9,955/11,543 supports. Fine normals

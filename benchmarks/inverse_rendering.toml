@@ -6711,6 +6711,45 @@ gpu_faults = 0
 artifacts = "/tmp/blade-volume-bear-fusion-order.log and target/audit-tools/diligent_tracks/src/bin/fusion_order.rs (gitignored)"
 verdict = "reject and add no multi-pass fusion mode: camera order changes the greedy grouping, but stability is not geometric quality; the 13/17 rule retains bad-tail points at the same rate as the whole cloud, while unanimous agreement preferentially keeps the bad tail and worsens median truth distance"
 
+[diligent_mv.rejected_bear_local_manifold_anchor]
+date = "2026-09-01"
+protocol = "on the post-hull 640px construction-only Bear fusion, measure four/eight-neighbor radius, median displacement along each point normal, and mean neighboring-normal agreement in units of the point's source-pixel world footprint; predeclare a 0.5px median tangent-plane residual rule; use released vertex positions only after fixing the rule as an evaluation diagnostic; globally match eligible fine points one-to-one inside established 320px surfel radii, preserve point count/radius/material budget, and run the unchanged three-round calibrated fit plus 2400-step Gaussian continuation; after the full replacement fails, test exactly one fixed 25% position/normal interpolation and require all disjoint-camera construction-light values"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+fine_post_hull_groups = 26199
+radius_four_source_pixel_quantiles = [0.623561, 1.216578, 1.430479, 1.779355, 2.303503, 3.172485, 29.053410]
+radius_eight_source_pixel_quantiles = [1.015586, 1.738985, 2.048170, 2.471859, 3.188399, 4.378924, 38.466625]
+plane_residual_source_pixel_quantiles = [0.016547, 0.145386, 0.237677, 0.406860, 0.713780, 1.212166, 22.368095]
+normal_agreement_quantiles = [0.072926, 0.790616, 0.909004, 0.964761, 0.986080, 0.994506, 0.999872]
+quality_correlation_radius_four = -0.2320
+quality_correlation_radius_eight = -0.2946
+quality_correlation_plane_residual = -0.2994
+quality_correlation_normal_agreement = 0.1346
+points_beyond_ten_source_pixels = 2378
+plane_rule_retained = 15629
+plane_rule_bad_tail_retained = 947
+plane_rule_retained_truth_distance = [0.026469, 0.266501, 0.451201, 0.977734, 2.364778, 6.374834, 42.307095]
+plane_rule_rejected_truth_distance = [0.022087, 0.400630, 0.912339, 2.205089, 5.941936, 11.660263, 48.083622]
+
+coarse_points = 11543
+matched_plane_coherent_anchors = 6698
+normalized_displacement_quantiles = [0.023711, 0.147132, 0.236836, 0.395413, 0.627901, 0.832063, 0.999810]
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+full_anchor_selection = [29.225168, 25.508580, 20.667969, 16.657274, 89.434814, 94.741792]
+quarter_anchor_selection = [29.436935, 25.404923, 20.863436, 16.438768, 91.881636, 95.490099]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+full_anchor_validation = [29.045206, 25.499487, 20.410467, 16.362433, 88.056682, 95.368529]
+quarter_anchor_validation = [29.282432, 25.324929, 20.693447, 16.204131, 90.523836, 95.825968]
+
+held_splits_opened = false
+maximum_peak_memory_mib = 357.3
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs-640/fine-anchor-local* plus /tmp/blade-volume-bear-{fusion-local,local-anchor}*.log and target/audit-tools/diligent_tracks/src/bin/{fusion_local,fit_local_anchor,score_local_anchor}.rs (gitignored)"
+verdict = "reject both full and quarter handoffs before held data and add no filter/API: local tangent coherence does enrich geometric accuracy, but full replacement trades all means and coverage for tails, while the only bounded interpolation transfers validation gains into selection losses; a cleaner MVS point is still not proof that it owns the established optical support"
+
 [diligent_mv.rejected_bear_fine_spatial_sites]
 date = "2026-09-01"
 protocol = "freeze accepted 320px Bear Gaussian geometry, alpha, exact candidates, depth groups, and total optical mass; for each coarse support choose up to eight nearest post-hull construction-only 640px fusion points inside its established radius; recover each fine normal and diffuse albedo from calibrated construction lights and its actual source observations; choose the nearest site at each exact Gaussian maximum-response position; score all construction lights on disjoint selection cameras 3,8,13,18 and validation cameras 4,9,14,19 before Cow, storage, WGSL, or official held data"
