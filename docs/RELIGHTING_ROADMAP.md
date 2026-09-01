@@ -1623,11 +1623,13 @@ a deterministic repeat agree within the measured training variance.
   unchanged coverage, but the untouched official held cameras lose 0.022 dB
   mean and about 0.007 dB worst. Reject the update and do not tune Cow after
   opening that split.
-- [ ] Move cluster-attribute development to a fresh object and reserve its
-  disjoint cameras before fitting. Require the same frozen-support updater to
-  pass both camera and light transfer on two objects before considering a
-  production API; use only point observations and measured lights, with no
-  released normals, new renderer, or Cow threshold changes.
+- [x] Move the unchanged cluster-attribute updater to a fresh Bear object with
+  disjoint cameras and lights reserved before fitting. Its 1,290 reliable
+  normal-only updates improve selection mean/tail and validation tails, but
+  lose 0.058/0.039 dB validation whole/foreground mean; the coupled diffuse
+  refit loses 0.069/0.086 dB. Reject it without opening Bear's held splits or
+  adding a production API. Only point observations and measured lights were
+  used; no released normals, renderer, or Cow threshold changed.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

@@ -260,10 +260,14 @@ a convincing real-world result.
   mean. Keeping support frozen and updating only 367 reliable normals/materials
   passes every internal and held-light metric, then loses 0.022 dB on untouched
   held cameras. Neither path is retained. Further cluster-attribute work moves
-  to a fresh object with camera and light splits reserved up front; it adds
-  neither a mesh nor another renderer.
+  to a fresh Bear reconstruction with camera and light splits reserved up
+  front. Its 1,290 reliable updates improve selection and validation worst
+  views, but normal-only still loses 0.058/0.039 dB validation whole/foreground
+  mean; refitting diffuse albedo widens the loss. The held splits remain
+  unopened, the branch is closed, and it adds neither a mesh nor another
+  renderer.
   Generated models, renders, and telemetry are under
-  `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
+  `target/audit-runs/diligent-mv/{reading-16k,cow,bear}/`.
 
 The staged directional-residual models and telemetry are under
 `target/audit-runs/directional-staged-validation/`; the selected longer Bonsai
