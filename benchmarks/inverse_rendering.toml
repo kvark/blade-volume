@@ -6540,3 +6540,32 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs/provenance-support and /tmp/blade-volume-bear-provenance-*.log (gitignored)"
 verdict = "reject before Cow and change no optimizer/API: recovery improves validation and most selection values, but loses selection whole-frame mean and both precision values; only 40 particles were suppressed, so broad support pruning is not the Bear bottleneck and subset tuning would not justify a policy"
+
+[diligent_mv.rejected_high_resolution_fine_anchor]
+date = "2026-09-01"
+protocol = "accepted 320px Bear surface remains the complete point/radius/material budget; after the exact 640px soft visual hull, globally greedy one-to-one nearest matching may replace a coarse center and MVS normal only with a unique fine fusion group inside that coarse surfel's existing radius; retain unmatched coarse surfels; run the unchanged three-round calibrated fit and 2400-step Gaussian continuation; require every internal metric before Cow or official held data"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+points = 11543
+fine_post_hull_groups = 26199
+matched_points = 8486
+normalized_displacement_quantiles = [0.017760, 0.135116, 0.213765, 0.349374, 0.568055, 0.792788, 0.999569]
+
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+candidate_selection = [29.174171, 25.453693, 20.663622, 16.484536, 89.899421, 94.563436]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+candidate_validation = [28.996466, 25.355499, 20.400723, 16.228122, 88.301831, 95.139326]
+
+base_truth_consensus_median = 0.498183
+candidate_truth_consensus_median = 0.489805
+base_exclusive_truth_consensus_median = 0.568214
+candidate_exclusive_truth_consensus_median = 0.569095
+held_splits_opened = false
+
+maximum_peak_memory_bytes = 487276544
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs-640/fine-anchor and /tmp/blade-volume-bear-fine-anchor-*.log (gitignored)"
+verdict = "reject before Cow: preserving the coarse support budget and distribution does not transfer the dense cloud's aggregate identity gain; one-to-one fine anchors lower ownership, means, recall, and precision, so stop refining this photometric-albedo MVS output and move to an independent surface-property hypothesis"

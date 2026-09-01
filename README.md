@@ -299,7 +299,10 @@ a convincing real-world result.
   a narrow support recovery restores 31 of only 40 suppressed particles and
   improves most values, but loses 0.0029 dB selection mean and precision on
   both splits. Broad support collapse is not the Bear bottleneck, and no
-  recovery policy is retained.
+  recovery policy is retained. One-to-one snapping of the accepted coarse
+  support to unique 640 px groups inside each existing radius also lowers
+  ownership, 0.27--0.32 dB mean, and 2.6--2.8 recall points. The
+  higher-resolution geometry branch is closed.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow,bear}/`.
 

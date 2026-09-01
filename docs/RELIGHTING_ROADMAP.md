@@ -1685,11 +1685,26 @@ a deterministic repeat agree within the measured training variance.
   whole-frame mean loses 0.0029 dB and precision loses on both splits. Reject
   without subset tuning, Cow, or an optimizer/API change: broad pruning is not
   the remaining Bear failure.
-- [ ] Stop modifying accepted geometry/support and return to the released
-  eight-site directional appearance stage. Profile its backward graph at a
-  production ray batch, identify the dominant allocations and dispatches, and
-  reduce cost using existing Meganeura operations/shader mutation only. Keep
-  the table opt-in until an unchanged two-scene held-view gate passes.
+- [x] Stop modifying accepted geometry/support and return to the released
+  eight-site directional appearance stage. The later compact-active-path and
+  frozen-state work already closes this item: Room takes 1.74x its matched
+  table-free control, the median of three Bonsai pairs is 1.99x, and the staged
+  table improves every held view on both scenes. Keep it an explicit second
+  stage rather than repeating the earlier joint-fit failure.
+- [x] Preserve the accepted 320 px support distribution while replacing each
+  coarse Bear center/normal one-to-one with the nearest unique 640 px fusion
+  group inside its existing radius. This matches 8,486/11,543 surfels without
+  changing point count, radii, or materials. Median ownership still falls
+  0.498 to 0.490; selection/validation means lose 0.32/0.27 dB and recall loses
+  2.6/2.8 points. Reject without match tuning, Cow, or held data and close the
+  high-resolution MVS branch.
+- [ ] Bound the omitted direct specular response on the frozen Bear cloud.
+  The calibrated distant lights currently use the point-light path, whose
+  renderer and material refinement are diffuse-only. Implement an ignored CPU
+  GGX oracle first, choose roughness/F0 only on disjoint construction
+  light/camera folds, and require every internal mean/tail before changing the
+  runtime shader or fitting API. Geometry, opacity, normals, and diffuse albedo
+  remain fixed.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.
