@@ -6683,6 +6683,34 @@ gpu_faults = 0
 artifacts = "/tmp/blade-volume-bear-gt-point*.log and target/audit-tools/diligent_tracks (gitignored)"
 verdict = "use only as diagnosis: 640px fusion materially improves the median geometry and normals, but grows an extreme outlier tail that weak construction-only ranks do not identify; pursue a correspondence method that constrains the tail, not another global density or image-coverage proxy"
 
+[diligent_mv.rejected_bear_fusion_order_consensus]
+date = "2026-09-01"
+protocol = "evaluation-only diagnostic after closing all construction candidates: re-run the unchanged 640px native point fusion from all 16 cyclic camera starts and one reverse order, apply the unchanged construction-camera visual hull, match each forward-order point to every alternate cloud in source-pixel world units, and compare predeclared 0.5px order-consensus counts to the released Bear truth vertex stream; parse vertex positions/normals but never faces, and never expose truth to fusion or selection"
+orders = 17
+raw_group_range = [28721, 29551]
+post_hull_group_range = [25619, 26386]
+forward_groups = 26199
+forward_distance_over_source_footprint = [0.022087, 0.297140, 0.560512, 1.342794, 3.473784, 9.421193, 48.083622]
+half_rotation_distance_over_source_footprint = [0.017259, 0.297441, 0.563244, 1.358776, 3.571118, 9.533793, 48.083622]
+reverse_distance_over_source_footprint = [0.017259, 0.299723, 0.563270, 1.342254, 3.488516, 9.312546, 48.083622]
+order_agreement_count_quantiles = [1, 7, 8, 15, 17, 17, 17]
+points_beyond_ten_source_pixels = 2378
+consensus_9_of_17_retained = 17927
+consensus_9_of_17_bad_tail_retained = 1615
+consensus_13_of_17_retained = 14845
+consensus_13_of_17_bad_tail_retained = 1357
+consensus_17_of_17_retained = 10977
+consensus_17_of_17_bad_tail_retained = 1094
+consensus_17_of_17_retained_truth_distance = [0.031337, 0.312417, 0.625163, 1.478708, 3.909025, 9.974429, 48.083622]
+consensus_17_of_17_rejected_truth_distance = [0.022087, 0.287607, 0.521745, 1.253434, 3.210994, 9.083862, 45.175198]
+maximum_peak_memory_bytes = 322818048
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "/tmp/blade-volume-bear-fusion-order.log and target/audit-tools/diligent_tracks/src/bin/fusion_order.rs (gitignored)"
+verdict = "reject and add no multi-pass fusion mode: camera order changes the greedy grouping, but stability is not geometric quality; the 13/17 rule retains bad-tail points at the same rate as the whole cloud, while unanimous agreement preferentially keeps the bad tail and worsens median truth distance"
+
 [diligent_mv.rejected_bear_fine_spatial_sites]
 date = "2026-09-01"
 protocol = "freeze accepted 320px Bear Gaussian geometry, alpha, exact candidates, depth groups, and total optical mass; for each coarse support choose up to eight nearest post-hull construction-only 640px fusion points inside its established radius; recover each fine normal and diffuse albedo from calibrated construction lights and its actual source observations; choose the nearest site at each exact Gaussian maximum-response position; score all construction lights on disjoint selection cameras 3,8,13,18 and validation cameras 4,9,14,19 before Cow, storage, WGSL, or official held data"

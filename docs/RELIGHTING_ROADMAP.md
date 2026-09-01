@@ -1681,6 +1681,15 @@ a deterministic repeat agree within the measured training variance.
   only 0.150/0.132 with geometric quality; confidence and source scarcity are
   neutral or negative. Fine geometry is genuinely better for most samples,
   but current construction signals cannot identify its catastrophic tail.
+- [x] Re-run the 640 px point-only fusion from every cyclic camera start plus
+  reverse order. The greedy traversal is order-sensitive (25,619--26,386
+  post-hull groups), but order stability does not identify accurate surface:
+  a 13/17 agreement rule keeps 56.7% of all points and 57.1% of points beyond
+  ten source pixels from the evaluation-only truth. Requiring all 17 orders
+  keeps 41.9% of all points but 46.0% of that bad tail, and worsens median
+  truth distance 1.34 to 1.48 pixels. Reject multi-order consensus without a
+  reconstruction or runtime branch; deterministic instability alone is not a
+  physical correspondence signal.
 - [x] Keep accepted 320 Gaussian geometry and optical mass exact while using
   up to eight nearest construction-only 640 groups as existing-style spatial
   surface sites. The CPU oracle populates 9,955/11,543 supports. Fine normals
