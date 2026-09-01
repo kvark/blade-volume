@@ -29,10 +29,10 @@ trivial_numeric_casts = "warn"
 unused_extern_crates = "warn"
 
 [workspace.dependencies]
-blade-graphics = { git = "https://github.com/kvark/blade", rev = "357777a4a167b7be2d1ee6131abe97b250be902c" }
-blade-macros = { version = "0.3", git = "https://github.com/kvark/blade", rev = "357777a4a167b7be2d1ee6131abe97b250be902c" }
+blade-graphics = { git = "https://github.com/kvark/blade", rev = "2348c9360dcc216390317af49db715047d8af536" }
+blade-macros = { version = "0.3", git = "https://github.com/kvark/blade", rev = "2348c9360dcc216390317af49db715047d8af536" }
 # Includes scalable training kernels and cached bulk parameter downloads.
-meganeura = { git = "https://github.com/kvark/meganeura", rev = "e4debf3e1828af280d0b65f4233ef90b587a44bb" }
+meganeura = { git = "https://github.com/kvark/meganeura", rev = "521869e9087acfbf417dde824c6cabd757b7a111" }
 bytemuck = "1"
 glam = { version = "0.30", features = ["mint"] }
 flate2 = "1"
