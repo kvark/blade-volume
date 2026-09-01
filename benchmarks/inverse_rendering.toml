@@ -6656,3 +6656,56 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "/tmp/blade-volume-bear-dominant-group*.log and target/audit-tools/diligent_tracks (gitignored)"
 verdict = "reject before Cow and change no compositor: most groups need several contributors for their radiance, hard maximum-response ownership loses every Bear mean and tail by much more than run variance, and a weight-preserving averaged position/albedo/normal still loses every mean and tail; surface correspondence must improve upstream without replacing the established optical mixture"
+
+[diligent_mv.bear_ground_truth_point_diagnostic]
+date = "2026-09-01"
+protocol = "evaluation only after closing the reconstruction candidates: read positions and normals from the released Bear ground-truth vertex stream, ignore and never parse faces, build a point-cloud nearest-neighbor oracle, and compare construction-only 320px and 640px post-hull fusion groups in units of each group's mean source-pixel world footprint; ground-truth positions/normals never enter selection, fitting, rendering, or a persisted asset"
+metric_order = ["minimum", "p10", "p25", "median", "p75", "p90", "maximum"]
+
+truth_vertices = 955194
+groups_320 = 11549
+groups_640 = 26199
+distance_over_source_footprint_320 = [0.012174, 0.316992, 0.815253, 1.991681, 4.363805, 8.682385, 27.940264]
+distance_over_source_footprint_640 = [0.022087, 0.297140, 0.560512, 1.342793, 3.473783, 9.421193, 48.083622]
+normal_error_degrees_320 = [0.164325, 9.036551, 17.707035, 37.189720, 63.015804, 79.355385, 89.985214]
+normal_error_degrees_640 = [0.052339, 5.136982, 11.894344, 26.627960, 54.078674, 76.912250, 89.999210]
+within_half_one_two_source_pixels_percent_320 = [15.819551, 29.916010, 50.142868]
+within_half_one_two_source_pixels_percent_640 = [22.184053, 41.261116, 61.418373]
+quality_correlation_view_count_320_640 = [0.0984, 0.1496]
+quality_correlation_confidence_320_640 = [-0.0447, -0.0355]
+quality_correlation_depth_agreement_320_640 = [0.0314, 0.1322]
+quality_correlation_source_scarcity_320_640 = [0.0430, -0.0980]
+maximum_peak_memory_bytes = 189812736
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "/tmp/blade-volume-bear-gt-point*.log and target/audit-tools/diligent_tracks (gitignored)"
+verdict = "use only as diagnosis: 640px fusion materially improves the median geometry and normals, but grows an extreme outlier tail that weak construction-only ranks do not identify; pursue a correspondence method that constrains the tail, not another global density or image-coverage proxy"
+
+[diligent_mv.rejected_bear_fine_spatial_sites]
+date = "2026-09-01"
+protocol = "freeze accepted 320px Bear Gaussian geometry, alpha, exact candidates, depth groups, and total optical mass; for each coarse support choose up to eight nearest post-hull construction-only 640px fusion points inside its established radius; recover each fine normal and diffuse albedo from calibrated construction lights and its actual source observations; choose the nearest site at each exact Gaussian maximum-response position; score all construction lights on disjoint selection cameras 3,8,13,18 and validation cameras 4,9,14,19 before Cow, storage, WGSL, or official held data"
+metric_order = ["whole_mean_psnr_db", "whole_worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db"]
+
+coarse_points = 11543
+fine_post_hull_groups = 26199
+coarse_groups_with_fine_sites = 9955
+sites_per_group_quantiles = [1, 1, 4, 8, 8, 8, 8]
+site_distance_over_radius_quantiles = [0.006461, 0.257099, 0.368171, 0.525650, 0.715329, 0.866285, 0.999995]
+
+base_selection = [29.482933, 25.549787, 20.871674, 16.546408]
+fine_normal_selection = [29.222640, 26.687082, 20.636779, 17.949497]
+fine_normal_albedo_selection = [28.475593, 26.124672, 19.676822, 17.262612]
+base_validation = [29.252489, 25.256953, 20.618210, 16.096382]
+fine_normal_validation = [28.342047, 26.001740, 19.655769, 17.007881]
+fine_normal_albedo_validation = [27.771247, 25.337164, 18.952897, 16.487839]
+
+held_splits_opened = false
+maximum_peak_memory_bytes = 152367104
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "/tmp/blade-volume-bear-fine-sites*.log and target/audit-tools/diligent_tracks (gitignored)"
+verdict = "reject before Cow and add no stored sites/WGSL: fine geometry strongly improves hard-view tails, confirming useful high-resolution evidence, but loses every mean and its refitted diffuse albedo is worse; nearest fine points do not establish one cross-view physical owner inside a coarse optical support"

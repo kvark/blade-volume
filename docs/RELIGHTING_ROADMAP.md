@@ -1672,6 +1672,23 @@ a deterministic repeat agree within the measured training variance.
   but loses 3.6--3.9 precision points and every PSNR aggregate. Reject both
   without opening held data or sweeping radii: higher resolution exposes
   contradictory layers rather than supplying immediately usable support.
+- [x] Diagnose 320/640 fusion against the released Bear vertex cloud strictly
+  as evaluation: parse positions/normals only, never faces, and never expose
+  truth to reconstruction. The 640 groups improve median source-footprint-
+  normalized distance 1.99 to 1.34, median normal error 37.2 to 26.6 degrees,
+  and the fraction within two pixels 50.1% to 61.4%, but the maximum error tail
+  grows 27.9 to 48.1 pixels. View count and source-depth agreement correlate
+  only 0.150/0.132 with geometric quality; confidence and source scarcity are
+  neutral or negative. Fine geometry is genuinely better for most samples,
+  but current construction signals cannot identify its catastrophic tail.
+- [x] Keep accepted 320 Gaussian geometry and optical mass exact while using
+  up to eight nearest construction-only 640 groups as existing-style spatial
+  surface sites. The CPU oracle populates 9,955/11,543 supports. Fine normals
+  improve selection/validation worst foreground by 1.40/0.91 dB, but lose
+  0.26/0.91 dB whole means and 0.24/0.96 dB foreground means; per-site diffuse
+  albedo widens the mean losses. Reject before Cow, storage, or WGSL. Better
+  fine geometry helps hard views but does not make local cross-view ownership
+  reliable.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526

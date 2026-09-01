@@ -292,9 +292,17 @@ a convincing real-world result.
   loses about ten recall points and 1.2--1.4 dB mean. Scaling radii by the
   point-density area ratio raises consensus to 0.617 and restores recall, but
   loses 3.6--3.9 precision points and every PSNR aggregate. Resolution alone
-  therefore adds contradictory optical layers. Reducing that 640 px cloud to
-  the original point budget while retaining whole groups also fails: the
-  existing distinct-view/confidence rank loses 0.53--0.58 dB mean, and making
+  therefore adds contradictory optical layers. A truth-vertex-cloud diagnostic
+  (positions/normals only; faces are never parsed and truth never enters
+  training) confirms that the fine data are not simply bad: median geometric
+  error improves from 1.99 to 1.34 source pixels and median normal error from
+  37.2° to 26.6°, but the catastrophic distance tail grows from 27.9 to 48.1
+  pixels. Reusing up to eight nearest fine samples as spatial physical-response
+  sites inside the exact coarse alpha improves hard-view tails, yet loses
+  0.26--0.91 dB whole means; local ownership remains wrong. Reducing that 640
+  px cloud to the original point budget while retaining whole groups also
+  fails: the existing distinct-view/confidence rank loses 0.53--0.58 dB mean,
+  and making
   two-fold photometric-normal consensus primary raises median ownership from
   0.498 to 0.517 but destroys about 24 recall points and loses 1.80--2.06 dB.
   Coherent interior samples are not a substitute for silhouette support. A
