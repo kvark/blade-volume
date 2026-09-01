@@ -950,6 +950,39 @@ tune that factor further on Reading. Keep the construction-only data path and
 repeat the frozen dense-depth recipe on a second object before fitting support
 against construction renders.
 
+The frozen repeat uses Cow, the same 16/4 cameras and 24/8 lights, the same
+`320`-pixel nearest-12 PatchMatch graph, the same `1400..1700` depth interval,
+and the same default `1.4` support. Its construction cloud projects to
+`1491.81..1590.72`, so the interval is not changed. Albedo stereo forms 8,370
+groups from 25,936 observations; the construction hull retains 5,582 surfels
+and the fit retains 5,559 Gaussians. Unlike Reading, Cow's recovered diffuse
+albedo is nearly textureless and the candidate loses every complete metric:
+
+| Lights / cameras | Baseline whole; foreground | Cow albedo-MVS whole; foreground | Baseline recall / precision | Albedo-MVS recall / precision |
+| --- | ---: | ---: | ---: | ---: |
+| fitted / fitted | `32.4269/28.8391; 21.4709/17.9512` | `30.9608/27.1627; 19.9508/16.2361` | `84.18/96.28%` | `80.65/94.05%` |
+| fitted / held | `31.4099/29.0474; 20.3773/17.8474` | `29.7245/27.5141; 18.4899/16.6534` | `84.68/94.50%` | `79.39/93.56%` |
+| held / fitted | `32.1358/29.0895; 21.1405/18.1154` | `30.7583/27.2243; 19.6974/16.3013` | `84.18/96.28%` | `80.65/94.05%` |
+| held / held | `30.8124/28.8990; 19.7374/17.5475` | `29.3115/27.6491; 18.0493/16.7307` | `84.68/94.50%` | `79.39/93.56%` |
+
+Four fixed diagnostics rule out a simple proxy or support repair. World-space
+photometric-normal images recover 4,382 surfels, but lose 22 of 24 values and
+the complete gate. A 50/50 display-space albedo/normal proxy recovers 6,502
+and also fails.
+Appending the albedo and normal layers raises held-camera recall to `92.56%`,
+but reduces held-light/held-camera foreground mean and precision to
+`18.8584` dB and `91.66%`. Requiring the appended surfels to agree with an
+independently recovered normal within 30 degrees in at least three construction
+cameras collapses the layer to 2,214 surfels and held-camera recall to
+`50.44%`. These are one-shot mechanism controls, not a threshold sweep.
+
+The cross-object gate therefore rejects RGB proxy stereo and post-hoc support
+tuning. The next diagnostic must score the calibrated diffuse-albedo and
+world-normal channels directly at the observations supporting a depth
+hypothesis, where occlusion is already established, rather than encode them
+into another three-channel image. It must first improve construction-only
+candidate ranking on both Cow and Reading before another full fit.
+
 Static training, production fitting, and the complete diagnostic peak at 134.4,
 232.2, and 283.9 MiB respectively; the early-integration fit peaks at 323.1 MiB.
 The albedo import, PatchMatch host scope, native fusion, and calibrated fit peak
@@ -957,12 +990,12 @@ at 1,304.1, 41.0, 137.0, and 513.2 MiB respectively. The COLMAP container has
 an independent 7 GiB hard cap. All scopes report no swap, cgroup memory event,
 or GPU fault.
 Generated results live under
-`target/audit-runs/diligent-mv/{prepared-reading-320,reading-16k}/`. Five object
-controls now say to stop relaxing descriptors, radii, response scales, or patch
-thresholds. Simply introducing the same sparse seed earlier also fails. The
-independent dense layer is now real and visually better, but its support remains
-tail-negative. The next experiment is a frozen second-object repeat followed,
-only if geometry transfers, by a construction-render support fit.
+`target/audit-runs/diligent-mv/{prepared-reading-320,reading-16k,cow}/`. Five
+object controls now say to stop relaxing descriptors, radii, response scales,
+or patch thresholds. Simply introducing the same sparse seed earlier also
+fails. The independent dense layer is real and visually better on Reading but
+does not generalize to Cow. Proxy-image variants are closed; only direct
+multi-channel depth evidence remains open.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

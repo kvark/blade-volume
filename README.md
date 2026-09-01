@@ -219,11 +219,16 @@ a convincing real-world result.
   support recovers that held/held tail (`16.14` dB) but moves the failure to
   fitted-camera tails and precision. The importer now emits the
   construction-only albedo images, poses, and nearest-camera PatchMatch graph
-  so this promising route is reproducible without admitting held cameras,
-  held lights, meshes, or normals. The next gate is cross-object dense-depth
-  consistency plus a support fit that removes the speckled tail. Generated
-  models, renders, and telemetry are under
-  `target/audit-runs/diligent-mv/reading-16k/albedo-mvs/`.
+  so this route is reproducible without admitting held cameras, held lights,
+  meshes, or normals. The frozen Cow repeat rejects it as a general solution:
+  albedo stereo retains 5,582 surfels but loses every one of the 24 Gaussian
+  quality/coverage values, including held-light/held-camera foreground mean
+  `19.74→18.05` dB. World-normal, fixed 50/50 albedo/normal, union, and
+  normal-filtered proxy variants all fail too. This closes proxy RGB images
+  and support tuning. The next bounded experiment will compare albedo and
+  world-normal channels directly for each depth hypothesis and actual stereo
+  observation, preserving the cloud-only runtime. Generated models, renders,
+  and telemetry are under `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 
 The staged directional-residual models and telemetry are under
 `target/audit-runs/directional-staged-validation/`; the selected longer Bonsai
