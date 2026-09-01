@@ -935,20 +935,22 @@ baseline, the default-support Gaussian result is:
 
 | Lights / cameras | Baseline whole; foreground | Albedo-MVS whole; foreground | Baseline recall / precision | Albedo-MVS recall / precision |
 | --- | ---: | ---: | ---: | ---: |
-| fitted / fitted | `29.5005/25.5992; 19.2441/15.3591` | `29.8060/25.8946; 19.3061/14.5634` | `90.54/95.75%` | `87.85/94.80%` |
-| fitted / held | `28.7157/25.2616; 18.6046/15.0055` | `29.1527/25.5854; 18.6755/14.9494` | `89.81/95.87%` | `87.55/95.46%` |
-| held / fitted | `29.3491/26.5371; 19.0086/16.4438` | `29.6181/26.7677; 19.0457/15.6259` | `90.54/95.75%` | `87.85/94.80%` |
-| held / held | `28.6325/26.2571; 18.4652/16.0847` | `29.0307/26.4339; 18.5241/15.7985` | `89.81/95.87%` | `87.55/95.46%` |
+| fitted / fitted | `29.6505/25.5845; 19.4264/15.3437` | `30.0833/25.8072; 19.6006/14.5894` | `90.54/95.75%` | `87.85/94.80%` |
+| fitted / held | `28.9394/25.3484; 18.8435/15.0977` | `29.2037/25.5739; 18.7358/14.9028` | `89.81/95.87%` | `87.55/95.46%` |
+| held / fitted | `29.5578/26.4509; 19.2462/16.3844` | `29.9086/26.8679; 19.3467/15.6956` | `90.54/95.75%` | `87.85/94.80%` |
+| held / held | `28.9146/26.4657; 18.7490/16.3072` | `29.1081/26.4715; 18.6129/15.7842` | `89.81/95.87%` | `87.55/95.46%` |
 
-This is the first route to recover visibly sharper book, face, and clothing
-structure while improving every whole-frame and foreground mean. It still
-fails the complete gate: foreground tails and Gaussian coverage regress. A
-single mechanism-driven `--radius-factor 1.7` control raises held/held
-foreground to `18.7614/16.1428` dB and recall to `93.04%`, but precision falls
-to `94.61%` and fitted-camera foreground tails remain below baseline. Do not
-tune that factor further on Reading. Keep the construction-only data path and
-repeat the frozen dense-depth recipe on a second object before fitting support
-against construction renders.
+These values replay both arms after fixing Gaussian serialization to copy the
+final blended surface materials, superseding the earlier stale-material
+matrix. This is the first route to recover visibly sharper book, face, and
+clothing structure. It improves all whole-frame means and tails, but loses two
+foreground means, every foreground tail, and Gaussian coverage. A single
+mechanism-driven `--radius-factor 1.7` control raises held/held foreground to
+`18.9626/16.1446` dB and recall to `93.04%`, but precision falls to `94.61%`
+and fitted-camera foreground tails remain below baseline. Do not tune that
+factor further on Reading. Keep the construction-only data path and repeat the
+frozen dense-depth recipe on a second object before fitting support against
+construction renders.
 
 The frozen repeat uses Cow, the same 16/4 cameras and 24/8 lights, the same
 `320`-pixel nearest-12 PatchMatch graph, the same `1400..1700` depth interval,
@@ -960,10 +962,10 @@ albedo is nearly textureless and the candidate loses every complete metric:
 
 | Lights / cameras | Baseline whole; foreground | Cow albedo-MVS whole; foreground | Baseline recall / precision | Albedo-MVS recall / precision |
 | --- | ---: | ---: | ---: | ---: |
-| fitted / fitted | `32.4269/28.8391; 21.4709/17.9512` | `30.9608/27.1627; 19.9508/16.2361` | `84.18/96.28%` | `80.65/94.05%` |
-| fitted / held | `31.4099/29.0474; 20.3773/17.8474` | `29.7245/27.5141; 18.4899/16.6534` | `84.68/94.50%` | `79.39/93.56%` |
-| held / fitted | `32.1358/29.0895; 21.1405/18.1154` | `30.7583/27.2243; 19.6974/16.3013` | `84.18/96.28%` | `80.65/94.05%` |
-| held / held | `30.8124/28.8990; 19.7374/17.5475` | `29.3115/27.6491; 18.0493/16.7307` | `84.68/94.50%` | `79.39/93.56%` |
+| fitted / fitted | `32.8948/28.5829; 21.8885/17.6992` | `31.3220/27.4133; 20.3834/16.5216` | `84.18/96.28%` | `80.65/94.05%` |
+| fitted / held | `31.6914/29.1129; 20.5257/18.0409` | `30.1137/27.8276; 18.9055/16.9808` | `84.68/94.50%` | `79.39/93.56%` |
+| held / fitted | `32.6694/29.0790; 21.6235/18.2148` | `31.1447/27.4093; 20.1549/16.5293` | `84.18/96.28%` | `80.65/94.05%` |
+| held / held | `31.1249/29.0753; 19.9275/17.6860` | `29.6920/28.0406; 18.4529/17.0849` | `84.68/94.50%` | `79.39/93.56%` |
 
 Four fixed diagnostics rule out a simple proxy or support repair. World-space
 photometric-normal images recover 4,382 surfels, but lose 22 of 24 values and
@@ -977,25 +979,70 @@ cameras collapses the layer to 2,214 surfels and held-camera recall to
 `50.44%`. These are one-shot mechanism controls, not a threshold sweep.
 
 The cross-object gate therefore rejects RGB proxy stereo and post-hoc support
-tuning. The next diagnostic must score the calibrated diffuse-albedo and
-world-normal channels directly at the observations supporting a depth
-hypothesis, where occlusion is already established, rather than encode them
-into another three-channel image. It must first improve construction-only
-candidate ranking on both Cow and Reading before another full fit.
+tuning. The follow-up scores the calibrated diffuse-albedo and world-normal
+channels directly at observations supporting a depth hypothesis. Each
+construction pixel has at most two candidates: the fixed-pose albedo and
+world-normal PatchMatch depths. A hypothesis projects into the explicit
+nearest-12 construction-camera graph and receives one support vote when it is
+within 1% of either source depth. Distinct-camera support wins first; ties use
+the sum of diffuse-albedo L1 and world-normal angular residual, normalized by
+the object-wide median source residual. Cow's scales are `0.019550` and
+`53.842°`; Reading's are `0.017107` and `75.836°`. No held input, released
+geometry, or polygonal intermediate participates.
 
-Static training, production fitting, and the complete diagnostic peak at 134.4,
-232.2, and 283.9 MiB respectively; the early-integration fit peaks at 323.1 MiB.
-The albedo import, PatchMatch host scope, native fusion, and calibrated fit peak
-at 1,304.1, 41.0, 137.0, and 513.2 MiB respectively. The COLMAP container has
-an independent 7 GiB hard cap. All scopes report no swap, cgroup memory event,
-or GPU fault.
-Generated results live under
-`target/audit-runs/diligent-mv/{prepared-reading-320,reading-16k,cow}/`. Five
-object controls now say to stop relaxing descriptors, radii, response scales,
-or patch thresholds. Simply introducing the same sparse seed earlier also
-fails. The independent dense layer is real and visually better on Reading but
-does not generalize to Cow. Proxy-image variants are closed; only direct
-multi-channel depth evidence remains open.
+Cow selects 40,891 albedo-only pixels, 20,397 normal-only pixels, and 26,627
+pixels with both hypotheses; 15,672 paired pixels choose albedo and 10,955
+choose normal. Native fusion forms 10,523 groups from 31,364 observations; the
+construction hull rejects 2,892 and retains 7,631 surfels, of which 7,577
+Gaussians survive fitting. The complete corrected-material matrix is:
+
+| Lights / cameras | Corrected sparse whole; foreground | Corrected albedo-MVS whole; foreground | Selected depth whole; foreground | Sparse / albedo / selected recall; precision |
+| --- | ---: | ---: | ---: | ---: |
+| fitted / fitted | `32.8948/28.5829; 21.8885/17.6992` | `31.3220/27.4133; 20.3834/16.5216` | `32.3553/28.2376; 21.4318/17.3966` | `84.18/96.28; 80.65/94.05; 88.79/95.22%` |
+| fitted / held | `31.6914/29.1129; 20.5257/18.0409` | `30.1137/27.8276; 18.9055/16.9808` | `31.2870/28.8054; 20.0475/17.9870` | `84.68/94.50; 79.39/93.56; 88.88/95.08%` |
+| held / fitted | `32.6694/29.0790; 21.6235/18.2148` | `31.1447/27.4093; 20.1549/16.5293` | `32.1612/28.3741; 21.1766/17.4500` | `84.18/96.28; 80.65/94.05; 88.79/95.22%` |
+| held / held | `31.1249/29.0753; 19.9275/17.6860` | `29.6920/28.0406; 18.4529/17.0849` | `30.7608/28.7634; 19.4819/17.9014` | `84.68/94.50; 79.39/93.56; 88.88/95.08%` |
+
+The selector improves every one of the 24 albedo-MVS values, proving that
+separate physical features rank the two depth maps better than a proxy image.
+It still improves only 7 of 24 values over the corrected sparse control:
+recall rises, but most quality tails or precision do not.
+
+Reading selects 74,855 albedo-only pixels, 3,374 normal-only pixels, and 46,211
+paired pixels; the paired decisions split 29,962/16,249 between albedo and
+normal. Fusion forms 16,095 groups from 75,101 observations, rejects 3,535 in
+the construction hull, and retains 12,560 surfels and 12,524 fitted Gaussians:
+
+| Lights / cameras | Corrected sparse whole; foreground | Corrected albedo-MVS whole; foreground | Selected depth whole; foreground | Sparse / albedo / selected recall; precision |
+| --- | ---: | ---: | ---: | ---: |
+| fitted / fitted | `29.6505/25.5845; 19.4264/15.3437` | `30.0833/25.8072; 19.6006/14.5894` | `30.2367/25.8340; 19.7752/15.2568` | `90.54/95.75; 87.85/94.80; 90.09/95.31%` |
+| fitted / held | `28.9394/25.3484; 18.8435/15.0977` | `29.2037/25.5739; 18.7358/14.9028` | `29.3960/25.4442; 18.9653/15.0811` | `89.81/95.87; 87.55/95.46; 89.82/96.00%` |
+| held / fitted | `29.5578/26.4509; 19.2462/16.3844` | `29.9086/26.8679; 19.3467/15.6956` | `30.0795/26.9455; 19.5433/16.2275` | `90.54/95.75; 87.85/94.80; 90.09/95.31%` |
+| held / held | `28.9146/26.4657; 18.7490/16.3072` | `29.1081/26.4715; 18.6129/15.7842` | `29.3337/26.3998; 18.8798/16.0184` | `89.81/95.87; 87.55/95.46; 89.82/96.00%` |
+
+Reading improves 22 of 24 values over corrected albedo MVS, but only 15 of 24
+over the corrected sparse control. A direct sparse+dense union instead reaches
+about 97.5% recall at only 90.1% precision on Cow; three-view-only selection
+collapses recall to about 74.4%. Skipping Gaussian continuation trades quality
+against coverage on both objects. These one-shot controls reject a union,
+minimum-view threshold, or static-transfer repair.
+
+This audit also found an independent serialization bug: calibrated fitting
+copied PBR materials into the Gaussian before the final blended surface solve,
+then wrote that stale table. The production call now occurs after the final
+solve. Sparse, albedo-MVS, radius-1.7, and selected-depth arms above were all
+replayed with that fix; geometry and coverage are unchanged. The direct selector
+remains ignored. The next bounded route must preserve each dense point's source
+observations through surface-to-Gaussian conversion and supervise its support
+and visibility from construction cameras, rather than tune another image proxy,
+radius, or support threshold.
+
+The selector builds peak at 1,079,422,976 bytes; corrected complete fits peak at
+561,520,640 bytes. The COLMAP container keeps its independent 7 GiB hard cap.
+Every scope reports zero swap, OOM event, or GPU fault. Generated results live
+under `target/audit-runs/diligent-mv/{prepared-reading-320,reading-16k,cow}/`;
+the four-column held-camera comparison is tracked at
+`etc/relight-diligent-reading-feature-depth.png`.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

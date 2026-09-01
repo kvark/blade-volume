@@ -212,23 +212,26 @@ a convincing real-world result.
   surfels that still lose validation precision and whole-frame mean.
   Independent dense stereo over the 24-light photometric-albedo images is the
   first materially stronger route: on Reading it recovers 12,136 cloud
-  surfels, restores visible book/face/clothing detail, and raises held-light /
-  held-camera Gaussian whole-frame mean `28.63→29.03` dB and foreground mean
-  `18.47→18.52` dB. It is not selected yet: worst foreground drops
-  `16.08→15.80` dB and Gaussian recall/precision also fall. A fixed larger
-  support recovers that held/held tail (`16.14` dB) but moves the failure to
-  fitted-camera tails and precision. The importer now emits the
-  construction-only albedo images, poses, and nearest-camera PatchMatch graph
-  so this route is reproducible without admitting held cameras, held lights,
-  meshes, or normals. The frozen Cow repeat rejects it as a general solution:
-  albedo stereo retains 5,582 surfels but loses every one of the 24 Gaussian
-  quality/coverage values, including held-light/held-camera foreground mean
-  `19.74→18.05` dB. World-normal, fixed 50/50 albedo/normal, union, and
-  normal-filtered proxy variants all fail too. This closes proxy RGB images
-  and support tuning. The next bounded experiment will compare albedo and
-  world-normal channels directly for each depth hypothesis and actual stereo
-  observation, preserving the cloud-only runtime. Generated models, renders,
-  and telemetry are under `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
+  surfels and restores visible book/face/clothing detail. After replaying both
+  arms with the final-material serialization fix, its held-light/held-camera
+  Gaussian reaches `29.11/26.47` dB whole-frame and `18.61/15.78` dB
+  foreground, against the sparse control's `28.91/26.47` and
+  `18.75/16.31` dB. Coverage also falls, so neither default nor 1.7× support is
+  selected. The importer emits only construction-light albedo images, poses,
+  and the nearest-camera PatchMatch graph; no held input, released geometry,
+  or polygonal intermediate enters reconstruction. The frozen Cow repeat and
+  four proxy-image/support controls fail as general solutions.
+  A direct observation-level follow-up now compares the albedo and world-normal
+  residuals for each of their two depth hypotheses instead of encoding another
+  RGB proxy. It improves all 24 Cow values over albedo stereo and 22 of 24 on
+  Reading. The selected depth maps retain 7,631/12,560 surfels and the fits
+  retain 7,577/12,524 Gaussians. They still pass only 7 of 24 Cow values and 15
+  of 24 Reading values against the corrected sparse controls: extra recall and
+  foreground means trade against tails or precision. The selector therefore
+  remains an ignored diagnostic. The next surface step is provenance-aware
+  dense-surface-to-Gaussian transfer and visibility supervision, not another
+  proxy image or support threshold. Generated models, renders, and telemetry
+  are under `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 
 The staged directional-residual models and telemetry are under
 `target/audit-runs/directional-staged-validation/`; the selected longer Bonsai
@@ -251,11 +254,13 @@ fine surface detail remain visibly soft.
 
 ![DiLiGenT-MV Bear relit under three excluded lights](/etc/relight-diligent-bear.png)
 
-The sharper DiLiGenT-MV Reading diagnostic below uses albedo-derived dense
-stereo and a Gaussian cloud. All three lights and the shown camera were
-excluded from fitting; the remaining speckle is why the route is not selected.
+The sharper DiLiGenT-MV Reading diagnostic compares, left to right, the held
+photograph, corrected sparse baseline, albedo-stereo cloud, and direct
+albedo/world-normal depth-selection cloud. Rows are three held lights at one
+held camera. The selected-depth cloud recovers structure but retains visible
+speckle and does not pass every quality/coverage tail.
 
-![DiLiGenT-MV Reading albedo-MVS diagnostic under three excluded lights](/etc/relight-diligent-reading-albedo-mvs.png)
+![DiLiGenT-MV Reading sparse, albedo-stereo, and direct feature-depth comparison under three excluded lights](/etc/relight-diligent-reading-feature-depth.png)
 
 - **Independent natural-light relighting — first honest result, not yet
   passed.** The Objects With Lighting Ant-Man gate trains on 52 cameras under

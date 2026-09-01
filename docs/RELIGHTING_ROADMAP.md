@@ -52,14 +52,17 @@ not contain or fall back to polygonal geometry.
   but even its strict three-camera voxel subset loses validation precision and
   whole-frame mean. Independent dense stereo over construction-only
   photometric albedo then recovers 12,136 Reading surfels and visibly restores
-  fine structure. It raises every Gaussian mean, but its default support loses
-  foreground tails and coverage; a fixed larger support repairs held/held
-  quality while losing fitted-camera tails and precision. Keep the
-  construction-only importer path. The frozen Cow repeat then loses all 24
-  Gaussian quality/coverage values. Normal-image, fixed albedo/normal blend,
-  union, and normal-consistency-filtered controls fail as well. This rejects
-  proxy RGB stereo and support tuning; test a true multi-channel depth cost on
-  actual source observations next.
+  fine structure. With final refined materials correctly copied into both
+  serialized Gaussians, it improves whole-frame quality but loses foreground
+  tails and coverage; a fixed larger support moves rather than closes that
+  failure. The frozen Cow repeat and normal-image, fixed blend, union, and
+  normal-consistency controls fail as well. A true observation-level selector
+  now compares calibrated albedo and world-normal residuals for both depth
+  hypotheses. It improves all 24 Cow metrics over albedo stereo and 22 of 24
+  Reading metrics, but reaches only 7/24 and 15/24 against the corrected sparse
+  controls. Keep the construction-only importer path and the final-material
+  fix; keep the selector ignored. Preserve dense observation provenance through
+  surface-to-Gaussian transfer and visibility supervision next.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -133,7 +136,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Controlled-light diversity | LUCES-MV and DiLiGenT-MV routes selected | Keep their near- and distant-light models shared with the production renderer; do not depend on OLATverse | Improve whole-frame and foreground mean/worst, recall, and precision on both fixed camera/light splits |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
-| Missing support | Albedo-MVS Reading is visually/mean positive but fails tails; frozen Cow repeat and four proxy controls fail the complete gate | Test one bounded observation-level stereo cost over calibrated albedo and world-normal channels; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on two controlled objects |
+| Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
@@ -1518,11 +1521,14 @@ a deterministic repeat agree within the measured training variance.
   geometry. Reject it after all 24 Gaussian values regress; also reject the
   fixed world-normal, 50/50 albedo/normal, union, and normal-consistency-filter
   controls. Do not tune proxy images or support further.
-- [ ] Evaluate one bounded multi-channel stereo cost over calibrated diffuse
-  albedo and world-normal features at the observations that actually support
-  each depth group. Require a construction-only candidate-ranking gain before
-  another complete fit, and keep the route ignored unless both Reading and Cow
-  pass the complete camera/light gate.
+- [x] Evaluate one bounded multi-channel stereo cost over calibrated diffuse
+  albedo and world-normal features at the observations that support each depth
+  hypothesis. It improves 24/24 Cow and 22/24 Reading values over albedo stereo,
+  but reject it after corrected sparse controls pass only 7/24 and 15/24.
+- [ ] Preserve dense observation provenance through surface-to-Gaussian
+  conversion, then use construction-camera support and visibility in the
+  Gaussian objective. Require every Cow and Reading mean, tail, recall, and
+  precision value to improve before opening another representation change.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.
