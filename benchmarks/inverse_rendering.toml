@@ -5829,3 +5829,23 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/pot2-16k/{calibrated-production,missing-surface-eight-pass,missing-surface-joint} (gitignored)"
 verdict = "reject: all four Gaussian means, recall, and precision improve, but fitted/fitted and held/fitted foreground tails regress by 0.005422 and 0.002776 dB; global continuation checkpoints trade tail against precision, so keep seeded geometry and test only patch-local final-compositor appearance next"
+
+[diligent_mv.rejected_reading_missing_surface]
+date = "2026-09-01"
+protocol = "fifth untouched DiLiGenT-MV object; ordinary 16k reconstruction and calibrated material/Gaussian fit; exact eight-pass calibrated-albedo tracks; densify each point-only component with half-radius two-neighbor midpoints; select one component and fixed 0.5 response on four construction cameras, then open a disjoint four-camera internal validation split; never open official held cameras/lights to the candidate"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+validation_control = [29.332948, 25.599171, 19.015456, 15.359089, 90.759918, 96.200196]
+validation_candidate = [29.333330, 25.599432, 19.015939, 15.359382, 90.760760, 96.200024]
+unique_tracks = 44
+visual_hull_tracks = 42
+patch_track_counts = [14, 7, 7]
+selected_patch = 1
+selected_surfels_after_midpoint_densification = 16
+selected_response_scale = 0.5
+maximum_peak_memory_bytes = 297787392
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+official_candidate_split_opened = false
+artifacts = "target/audit-runs/diligent-mv/reading-16k/{calibrated-production,missing-surface-eight-pass} (gitignored)"
+verdict = "reject before the official candidate split: every validation PSNR measure and recall improves, but precision falls by 0.000172 percentage points; five object controls close post-hoc sparse-patch threshold tuning and point to connected support inside the shared geometry objective"

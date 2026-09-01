@@ -194,6 +194,13 @@ a convincing real-world result.
   variants trade selection means against tails. Commands and the full matrices
   are in
   [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
+  A fifth untouched Reading reconstruction produces a coherent 16-surfel
+  proposal, but its construction-only selection gain does not survive disjoint
+  internal validation: every PSNR measure and recall rises slightly, while
+  precision falls by 0.00017 percentage points. The candidate is rejected
+  without opening its official held split. This closes further threshold
+  tuning of post-hoc sparse patches; the next surface route must recover
+  connected support during reconstruction.
 
 The staged directional-residual models and telemetry are under
 `target/audit-runs/directional-staged-validation/`; the selected longer Bonsai

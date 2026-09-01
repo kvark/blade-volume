@@ -23,6 +23,8 @@ pub const HELD_LIGHT_INDICES: [usize; 8] = [0, 12, 24, 36, 48, 60, 72, 84];
 const SOURCE_WIDTH: usize = 612;
 const SOURCE_HEIGHT: usize = 512;
 const LIGHT_DISTANCE: f32 = 1.0e6;
+const STRICT_CAMERA_ROTATION_ERROR: f64 = 1.0e-3;
+const MAX_CAMERA_ROTATION_ERROR: f64 = 1.0e-2;
 
 /// Aligned image captures and their view-specific calibrated lights.
 pub struct Dataset {
@@ -154,22 +156,7 @@ fn load_camera(
     let translation = calibration.matrix(&format!("Tc_{}", index + 1), 3, 1)?;
     let camera_from_world =
         glam::DMat3::from_cols_array(rotation.try_into().expect("matrix shape was checked"));
-    let identity_error = (camera_from_world.transpose() * camera_from_world
-        - glam::DMat3::IDENTITY)
-        .to_cols_array()
-        .into_iter()
-        .map(f64::abs)
-        .fold(0.0, f64::max);
-    let determinant = camera_from_world.determinant();
-    if !camera_from_world.is_finite()
-        || identity_error > 1.0e-3
-        || (determinant - 1.0).abs() > 1.0e-3
-    {
-        return Err(format!(
-            "DiLiGenT-MV camera {} has a non-rigid rotation (error {identity_error}, determinant {determinant})",
-            index + 1,
-        ));
-    }
+    let camera_from_world = rigid_camera_rotation(camera_from_world, index)?;
     let world_from_camera = camera_from_world.transpose();
     let translation = glam::DVec3::from_slice(translation);
     let position = world_from_camera * -translation;
@@ -187,6 +174,44 @@ fn load_camera(
             2.0 * principal[1] / SOURCE_HEIGHT as f32 - 1.0,
         ],
     })
+}
+
+fn rigid_camera_rotation(
+    camera_from_world: glam::DMat3,
+    index: usize,
+) -> Result<glam::DMat3, String> {
+    let identity_error = (camera_from_world.transpose() * camera_from_world
+        - glam::DMat3::IDENTITY)
+        .to_cols_array()
+        .into_iter()
+        .map(f64::abs)
+        .fold(0.0, f64::max);
+    let determinant = camera_from_world.determinant();
+    if !camera_from_world.is_finite()
+        || determinant <= 0.0
+        || identity_error > MAX_CAMERA_ROTATION_ERROR
+        || (determinant - 1.0).abs() > MAX_CAMERA_ROTATION_ERROR
+    {
+        return Err(format!(
+            "DiLiGenT-MV camera {} has a non-rigid rotation (error {identity_error}, determinant {determinant})",
+            index + 1,
+        ));
+    }
+    if identity_error <= STRICT_CAMERA_ROTATION_ERROR
+        && (determinant - 1.0).abs() <= STRICT_CAMERA_ROTATION_ERROR
+    {
+        return Ok(camera_from_world);
+    }
+    // Some released objects carry a small amount of scale/shear in Rc. A
+    // camera pose still needs a rigid rotation, so project the accepted matrix
+    // onto SO(3) with the polar iteration before inverting the extrinsic.
+    let mut rigid = camera_from_world;
+    for _ in 0..3 {
+        rigid = 0.5 * (rigid + rigid.inverse().transpose());
+    }
+    debug_assert!(rigid.is_finite());
+    debug_assert!((rigid.determinant() - 1.0).abs() < 1.0e-10);
+    Ok(rigid)
 }
 
 fn distant_point_light(direction: glam::Vec3) -> vol::relight::PointLight {
@@ -490,6 +515,41 @@ mod tests {
     fn photometric_positive_z_points_back_towards_the_camera() {
         let direction = photometric_direction_world(glam::Quat::IDENTITY, [0.0, 0.0, 1.0]);
         assert_eq!(direction, glam::Vec3::NEG_Z);
+    }
+
+    #[test]
+    fn camera_rotation_projects_small_calibration_scale_and_shear() {
+        let expected = glam::DMat3::from_quat(glam::DQuat::from_rotation_y(0.7));
+        let noisy = glam::DMat3::from_cols(
+            expected.x_axis * 1.003,
+            expected.y_axis * 0.997 + expected.x_axis * 0.002,
+            expected.z_axis * 1.001,
+        );
+        let projected = rigid_camera_rotation(noisy, 0).unwrap();
+        let identity_error = (projected.transpose() * projected - glam::DMat3::IDENTITY)
+            .to_cols_array()
+            .into_iter()
+            .map(f64::abs)
+            .fold(0.0, f64::max);
+        assert!(identity_error < 1.0e-10);
+        assert!((projected.determinant() - 1.0).abs() < 1.0e-10);
+        assert!(projected.x_axis.dot(expected.x_axis) > 0.999_99);
+    }
+
+    #[test]
+    fn camera_rotation_rejects_material_non_rigidity() {
+        let scaled = glam::DMat3::from_diagonal(glam::DVec3::new(1.0, 1.0, 1.1));
+        assert!(rigid_camera_rotation(scaled, 2).is_err());
+    }
+
+    #[test]
+    fn camera_rotation_preserves_previously_accepted_calibration() {
+        let calibration = glam::DMat3::from_cols(
+            glam::DVec3::new(1.0, 1.0e-4, 0.0),
+            glam::DVec3::Y,
+            glam::DVec3::Z,
+        );
+        assert_eq!(rigid_camera_rotation(calibration, 0), Ok(calibration));
     }
 
     #[test]

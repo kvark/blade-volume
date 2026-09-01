@@ -39,6 +39,12 @@ not contain or fall back to polygonal geometry.
   still lose 0.0054/0.0028 dB. A global continuation checkpoint cannot resolve
   the opacity/tail frontier; only patch-local final-compositor appearance
   remains open.
+- A fifth untouched Reading reconstruction supplies the requested fresh,
+  coherent proposal. Its frozen 16-surfel candidate improves every internal
+  validation PSNR measure and recall, but loses precision by 0.00017 percentage
+  points. The official held split remains unopened to the candidate. Together
+  with Bear, Pot2, and Buddha, this closes post-hoc sparse-patch threshold
+  tuning: recover connected support inside the shared geometry objective next.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -112,7 +118,7 @@ surface.
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
 | Controlled-light diversity | LUCES-MV and DiLiGenT-MV routes selected | Keep their near- and distant-light models shared with the production renderer; do not depend on OLATverse | Improve whole-frame and foreground mean/worst, recall, and precision on both fixed camera/light splits |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
-| Missing support | Cow diagnostic passes; Bear and Pot2 production gates reject | Preserve calibrated albedo and seeded geometry; fit only proposed-patch appearance in the final Gaussian compositor before another object gate | Recall, precision, and every complete-render mean/tail rise on two controlled objects |
+| Missing support | Cow diagnostic passes; Bear, Pot2, Buddha, and Reading controls reject | Preserve calibrated albedo as evidence; reconstruct connected point support inside the shared geometry objective before material/Gaussian fitting | Recall, precision, and every complete-render mean/tail rise on two controlled objects |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
 | Light transport | renderer selected | Use coupled sampled visibility and one bounded bounce: four samples for iteration, eight for selected output | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
@@ -1476,6 +1482,10 @@ a deterministic repeat agree within the measured training variance.
 - [x] Repeat missing-support discovery on a predeclared fourth DiLiGenT-MV
   object; reject albedo, photometric-normal, and wider patch-neighborhood
   variants before opening the candidate held split.
+- [x] Repeat the frozen midpoint-densified recipe on a fifth untouched
+  DiLiGenT-MV object. Reject Reading when its internally selected 16-surfel
+  patch improves every PSNR measure and recall but lowers validation precision
+  by 0.00017 percentage points; leave the official candidate split unopened.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.
@@ -1534,18 +1544,14 @@ a deterministic repeat agree within the measured training variance.
 - [x] Fit only shared diffuse albedo through the exact Gaussian compositor.
   The smallest 12.5% Pot2 continuation loses selection whole and foreground
   means before validation; remove the graph flag/API and leave Cow unopened.
-- [ ] Stop adding isolated parameters to the one-site physical Gaussian.
+- [x] Stop adding isolated parameters to the one-site physical Gaussian.
   Staging the released eight-site directional residual after freezing base
-  density/SH now improves every held Room and Bonsai view, so the two-scene
-  quality gate passes without changing the appearance model. Keep it opt-in:
-  the locally optimized graph is still 2.98× the matched no-table training
-  time, above the 2× production gate. Its 76-entry rows average only 23.7
-  active entries. Smaller hard caps and zero-row shader predicates fail the
-  combined quality/performance gate; compact and indirectly dispatch active
-  rows before changing the model again. Scale the explicit staged budget with
-  table size: Room selects 256 updates for 98,831 sites and mildly overfits at
-  512, while Bonsai is still underfit at 255 and reaches 21.6891/20.9944 dB at
-  510 updates for 200,000 sites.
+  density/SH improves every held Room and Bonsai view without changing the
+  appearance model. Compact active rows now preserve the dense result while
+  taking 1.74× the matched Room control and a 1.99× median on Bonsai, passing
+  the predeclared 2× production gate. Keep it opt-in and scale the explicit
+  stage budget with table size: Room selects 256 updates for 98,831 sites and
+  Bonsai reaches 21.6891/20.9944 dB at 510 updates for 200,000 sites.
 
 The fresh DiLiGenT-MV Cow proposal closes the first of those two gates. Twenty-
 four construction lights recover a robust per-pixel diffuse-albedo image. For

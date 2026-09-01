@@ -846,6 +846,44 @@ validation or official cameras/lights. Scoped runs peak near 1.1 GiB with no
 swap, memory event, or GPU fault. The Buddha control closes descriptor and
 patch-radius tuning rather than weakening the fixed safety gate.
 
+Reading is the fifth untouched object control. Its published camera matrices
+contain small calibration scale/shear: the largest observed orthogonality error
+is `0.0069234`, beyond the loader's original rigid-pose tolerance. The importer
+now preserves matrices inside the old `0.001` bound exactly, projects only the
+accepted `0.001..0.01` band onto `SO(3)`, and still rejects material
+non-rigidity. It then imports all 20 cameras and the same predeclared 32 lights.
+The ordinary 16k route trains at `28.5317/28.0048` dB on fitted/held cameras,
+extracts 1,479 point surfels, and retains 1,441 fitted Gaussians. Its independent
+held-light/held-camera baseline is:
+
+| Backend | sRGB mean/worst | Foreground mean/worst | Recall | Precision |
+| --- | ---: | ---: | ---: | ---: |
+| Surface | 28.02 / 25.82 dB | 18.59 / 16.25 dB | 96.2% | 90.4% |
+| Gaussian | 28.63 / 26.26 dB | 18.46 / 16.08 dB | 89.8% | 95.9% |
+
+The images preserve gross light direction and silhouette but visibly blur the
+book, face, and clothing, matching the low foreground tails. The unchanged
+eight-pass calibrated-albedo diagnostic finds 44 unique tracks and three
+components of 14/7/7 points. Cloud-only midpoint densification turns the latter
+two into 16-surfel proposals without introducing polygons. On four selection
+cameras, component 1 at fixed response `0.5` improves all six complete-render
+measures. After freezing that choice, disjoint internal validation moves
+whole-frame `29.332948/25.599171→29.333330/25.599432` dB, foreground
+`19.015456/15.359089→19.015939/15.359382` dB, and recall
+`90.759918%→90.760760%`, but precision slips
+`96.200196%→96.200024%`. The strict gate therefore rejects it and the candidate
+never sees the official held cameras or lights.
+
+Static training, production fitting, and the complete diagnostic peak at 134.4,
+232.2, and 283.9 MiB respectively, with no swap, cgroup memory event, or GPU
+fault.
+Generated results live under
+`target/audit-runs/diligent-mv/{prepared-reading-320,reading-16k}/`. Five object
+controls now say to stop relaxing descriptors, radii, response scales, or patch
+thresholds. The next missing-surface experiment must create connected support
+inside the shared geometry reconstruction objective, before material and final
+Gaussian fitting, rather than append a sparse post-hoc patch.
+
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
 
