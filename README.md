@@ -295,8 +295,11 @@ a convincing real-world result.
   Coherent interior samples are not a substitute for silhouette support. A
   final exact-pipeline depth-residual tie-break preserves aggregate source
   pixels but lowers median ownership to 0.442 and loses about ten recall
-  points. Group ranking is closed. Following retained source observations into
-  a narrow support recovery restores 31 of only 40 suppressed particles and
+  points. Ranking by rare source-image tiles raises 128-scale tile coverage
+  5.9%, yet likewise lowers ownership to 0.441, loses 0.83--0.89 dB mean, and
+  drops about ten recall points. Group ranking is closed: 2D observation
+  coverage is not 3D surface identity. Following retained source observations
+  into a narrow support recovery restores 31 of only 40 suppressed particles and
   improves most values, but loses 0.0029 dB selection mean and precision on
   both splits. Broad support collapse is not the Bear bottleneck, and no
   recovery policy is retained. One-to-one snapping of the accepted coarse

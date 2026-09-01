@@ -1676,6 +1676,14 @@ a deterministic repeat agree within the measured training variance.
   but fitted median ownership falls 0.498 to 0.442. Internal selection and
   validation lose 0.85/0.88 dB mean and 9.8/9.5 recall points. Reject it
   without tuning, Cow, or held data.
+- [x] Rank the same 640 px fixed-budget groups by the scarcity of their actual
+  source-image tiles, directly addressing the silhouette coverage lost by
+  interior coherence ranks. At the identical voxel boundary it raises distinct
+  source pixels 51,357 to 52,028 and 128-scale tiles 11,086 to 11,743, but
+  median ownership falls 0.498 to 0.441. Selection/validation means lose
+  0.83/0.89 dB and recall loses 9.8/9.6 points. Reject before any tile sweep,
+  Cow, or held data: observation-space coverage does not establish correct 3D
+  ownership, so close the complete-group ranking family.
 - [x] Preserve the accepted 320 px geometry and trace each retained fusion
   group's measured source observations through Gaussian support fitting.
   A construction-only oracle restores initialized opacity/scale only below

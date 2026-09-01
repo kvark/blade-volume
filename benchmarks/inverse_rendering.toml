@@ -6593,3 +6593,38 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "/tmp/blade-volume-bear-point-specular*.log and target/audit-tools/diligent_tracks (gitignored)"
 verdict = "reject before Cow and add no WGSL/API: the construction fit monotonically prefers the broadest lobe, but the chosen roughness/F0 loses every disjoint camera/light mean and tail; direct global specular response absorbs diffuse, normal, and ownership error rather than recovering a transferable material property"
+
+[diligent_mv.rejected_high_resolution_source_scarcity]
+date = "2026-09-01"
+protocol = "reuse the construction-only 640px Bear fusion cache and exact 11,543-group voxel budget; map each source observation to its natural 5x5 fusion-pixel tile corresponding to one 128px fit pixel; within each 3D budget cell rank complete groups by the sum of inverse global source-tile frequencies, then distinct views and geometric confidence; run the unchanged three-round calibrated fit and 2400-step Gaussian continuation; compare disjoint internal camera folds before Cow or official held data"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+raw_groups = 29357
+post_hull_groups = 26199
+selected_groups = 11543
+retained_points = 11526
+fitted_retained_points = 11390
+voxel_size = 1.018634
+base_distinct_source_pixels = 51357
+candidate_distinct_source_pixels = 52028
+base_source_tiles = 11086
+candidate_source_tiles = 11743
+
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+candidate_selection = [28.656648, 25.120382, 20.145447, 16.213981, 82.740587, 93.783209]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+candidate_validation = [28.374306, 25.132832, 19.811663, 16.055077, 81.458635, 94.354964]
+
+base_truth_consensus_median = 0.498183
+candidate_truth_consensus_median = 0.441252
+base_exclusive_truth_consensus_median = 0.568214
+candidate_exclusive_truth_consensus_median = 0.563403
+held_splits_opened = false
+
+maximum_peak_memory_bytes = 333197312
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs-640/source-scarcity and /tmp/blade-volume-bear-source-scarcity-*.log (gitignored)"
+verdict = "reject before tile-size tuning, Cow, or held data: source-scarcity ranking materially broadens source-image coverage, but that coverage belongs to contradictory 3D layers; ownership, every mean, recall, and precision regress, closing complete-group ranking as a route to surface identity"
