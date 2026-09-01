@@ -1652,6 +1652,21 @@ a deterministic repeat agree within the measured training variance.
   loses 0.008/0.009 dB. Reject the table without opening held splits or adding
   storage/WGSL. Pursue denser independently anchored point observations
   instead of more attributes on ambiguous support.
+- [x] Re-run Bear albedo stereo at 640 px with the official cameras/lights
+  absent, a separate geometric-consistency workspace, and a 32k cap. It fuses
+  102,752 observations into 29,357 groups and 26,105 final points. Median
+  ownership improves 0.498 to 0.601, but internal recall loses about ten
+  points and means lose 1.17--1.42 dB. The area-neutral 2.10 radius derived
+  from the 2.26x density raises ownership to 0.617 and recall above baseline,
+  but loses 3.6--3.9 precision points and every PSNR aggregate. Reject both
+  without opening held data or sweeping radii: higher resolution exposes
+  contradictory layers rather than supplying immediately usable support.
+- [ ] Select independently anchored dense observations before they acquire
+  optical support. Start with a construction-only confidence oracle that uses
+  source-view depth agreement, photometric-normal agreement, and distinct-view
+  count to rank complete fusion groups, then replay fixed point budgets on
+  Bear and Cow. Preserve whole groups and point-only output; do not filter
+  individual observations, add a renderer, or tune against held splits.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

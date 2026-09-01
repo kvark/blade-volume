@@ -6436,3 +6436,42 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs/spatial-cluster-oracle and /tmp/blade-volume-{bear,cow}-spatial-{cluster,site}*.log (gitignored)"
 verdict = "reject before any model, trainer, or WGSL work: spatially local normals are identifiable and improve every Bear internal metric with invariant optical support, but Cow validation means regress even though its tails improve; per-site diffuse albedo only partially compensates the normal loss, so the two-object strict gate fails"
+
+[diligent_mv.rejected_high_resolution_albedo_mvs]
+date = "2026-09-01"
+protocol = "fresh Bear construction-only 640px photometric-albedo import and fixed-pose COLMAP PatchMatch with geometric consistency; 32,768-point cap, min_views=2, unchanged three-round calibrated fit and 2400-step Gaussian continuation; compare default radius factor 1.4 with one area-neutral 2.10 arm derived as 1.4*sqrt(26105/11543); training-only fitter stops at the held-data loader boundary; no radius sweep or held camera/light load"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+width = 640
+dense_observations = 102752
+dense_groups = 29357
+post_hull_groups = 26199
+points = 26105
+base_points = 11543
+point_density_ratio = 2.2615
+default_radius_factor = 1.4
+area_neutral_radius_factor = 2.10
+
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+default_selection = [28.321857, 25.410039, 19.643796, 16.491024, 82.538419, 94.745776]
+area_neutral_selection = [28.859569, 25.245092, 20.815129, 16.497651, 94.197579, 91.562816]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+default_validation = [27.843050, 25.524353, 19.089308, 16.433759, 80.948141, 95.263337]
+area_neutral_validation = [28.537777, 25.035990, 20.362497, 16.017101, 93.075610, 92.159596]
+
+base_truth_consensus_median = 0.498183
+default_truth_consensus_median = 0.600970
+default_exclusive_truth_consensus_median = 0.599647
+area_neutral_truth_consensus_median = 0.617425
+area_neutral_exclusive_truth_consensus_median = 0.598710
+held_splits_opened = false
+
+initial_import_memory_cap_bytes = 3221225472
+initial_import_oom_kill_events = 1
+successful_import_peak_memory_bytes = 4433285120
+memory_swap_bytes = 0
+successful_run_memory_max_events = 0
+successful_run_oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/bear/{prepared-640-albedo-mvs,albedo-mvs-640} and /tmp/blade-volume-bear-640-*.log (gitignored)"
+verdict = "reject higher resolution as a standalone geometry fix: it materially improves cross-view particle identity, proving independent samples help, but default support under-covers and the single density-derived area correction over-covers contradictory layers; every PSNR aggregate loses, so select coherent whole observation groups before assigning optical support instead of sweeping radii"

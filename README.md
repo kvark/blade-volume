@@ -281,8 +281,14 @@ a convincing real-world result.
   every Bear internal mean/tail, but the unchanged Cow replay's 97 supports
   lose 0.002/0.004 dB validation whole/foreground mean; normal-only is worse.
   No intra-point table, model field, or shader is added. Future geometry work
-  needs denser independently anchored points, not more attributes on ambiguous
-  support.
+  needs independently anchored points, not more attributes on ambiguous
+  support. A fresh 640 px Bear reconstruction then raises the cloud from
+  11,543 to 26,105 points and ownership consensus from 0.498 to 0.601, but
+  loses about ten recall points and 1.2--1.4 dB mean. Scaling radii by the
+  point-density area ratio raises consensus to 0.617 and restores recall, but
+  loses 3.6--3.9 precision points and every PSNR aggregate. Resolution alone
+  therefore adds contradictory optical layers; the next geometry step must
+  select independently anchored observations before assigning support.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow,bear}/`.
 
