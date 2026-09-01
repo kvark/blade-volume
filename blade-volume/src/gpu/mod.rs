@@ -1,5 +1,6 @@
 mod gaussian;
 mod mesh_reference;
+mod path_compact;
 mod path_record;
 mod powerfoam_depth;
 mod powerfoam_splat;
@@ -11,6 +12,7 @@ mod sphere_bvh;
 
 pub use gaussian::{GaussianGpuCloud, InitParameters};
 pub use mesh_reference::{MeshReferenceSettings, MeshReferenceTracer, ReferenceMesh};
+pub use path_compact::{PathCompactBuffers, PathCompactor};
 pub use path_record::{
     PathJacobianMode, PathRecordBuffers, PathRecordStats, PathRecorder, RecordPathsArgs,
 };

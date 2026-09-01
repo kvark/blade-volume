@@ -16,6 +16,7 @@ pub const SCENE_TRAVERSE: &str = include_str!("../shaders/scene_traverse.wgsl");
 pub const SCENE_RADFOAM: &str = include_str!("../shaders/scene_radfoam.wgsl");
 pub const RADFOAM_BLIT: &str = include_str!("../shaders/radfoam_blit.wgsl");
 pub const RADFOAM_RECORD_PATHS: &str = include_str!("../shaders/radfoam_record_paths.wgsl");
+pub const PATH_COMPACT: &str = include_str!("../shaders/path_compact.wgsl");
 pub const POWERFOAM_SPLAT: &str = include_str!("../shaders/powerfoam_splat.wgsl");
 pub const POWERFOAM_DEPTH: &str = include_str!("../shaders/powerfoam_depth.wgsl");
 

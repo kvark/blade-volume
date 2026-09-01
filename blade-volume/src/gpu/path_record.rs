@@ -605,7 +605,7 @@ pub struct PathRecordBuffers {
     pub dts: gpu::Buffer,
     pub mask: gpu::Buffer,
     /// Host-visible recorded-entry count and truncation flag per ray.
-    path_status: gpu::Buffer,
+    pub(super) path_status: gpu::Buffer,
     /// Reference tangent for the streams selected by [`PathJacobianMode`].
     /// Raw recorded intervals remain available in [`Self::dts`].
     pub dt_reference_tangents: gpu::Buffer,

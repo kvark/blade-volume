@@ -9,8 +9,8 @@
 use blade_graphics as gpu;
 use blade_volume as vol;
 use vol::gpu::{
-    PathJacobianMode, PathRecordBuffers, PathRecordStats, PathRecorder, RadFoamGpuCloud,
-    RecordPathsArgs,
+    PathCompactBuffers, PathCompactor, PathJacobianMode, PathRecordBuffers, PathRecordStats,
+    PathRecorder, RadFoamGpuCloud, RecordPathsArgs,
 };
 
 // Some physical GPU drivers can busy-wait when two contexts are initialized
@@ -1072,6 +1072,130 @@ fn record_unweighted_gpu_bytes(
 #[test]
 fn gpu_path_record_matches_cpu_on_grid() {
     assert_gpu_path_record_matches_cpu(build_grid_model(12), glam::Vec3::ZERO, false, false);
+}
+
+#[test]
+fn gpu_path_compaction_emits_each_active_dense_record_once() {
+    let _gpu_test_guard = GPU_TEST_LOCK
+        .lock()
+        .expect("GPU path-record test lock poisoned");
+    let Some(context) = try_init_gpu() else {
+        eprintln!("skipping: no GPU");
+        return;
+    };
+    let model = build_grid_model(12);
+    let mut encoder = context.create_command_encoder(gpu::CommandEncoderDesc {
+        name: "path-compact-test",
+        buffer_count: 2,
+        manual_barriers: false,
+    });
+    let mut cloud = RadFoamGpuCloud::new_path_recording(&model, &context, &mut encoder);
+    let mut recorder = PathRecorder::new(&context);
+    let mut compactor = PathCompactor::new(&context);
+    let num_pixels = 8_u32;
+    let max_steps = 16_u32;
+    let mut paths = PathRecordBuffers::new_recorded_only(&context, num_pixels, max_steps);
+    let mut compact = PathCompactBuffers::new(&context, num_pixels, max_steps);
+    let pixels = (0..num_pixels).collect::<Vec<_>>();
+    paths.write_pixel_indices(&pixels);
+    let bytes = u64::from(num_pixels) * u64::from(max_steps) * 4;
+    let dense_readback = context.create_buffer(gpu::BufferDesc {
+        name: "path-compact-dense-readback",
+        size: bytes * 2,
+        memory: gpu::Memory::Shared,
+    });
+    encoder.start();
+    {
+        let mut transfer = encoder.transfer("path-compact-test-prepare");
+        transfer.copy_buffer_to_buffer(
+            paths.pixel_indices_stage.at(0),
+            paths.pixel_indices.at(0),
+            u64::from(num_pixels) * 4,
+        );
+        transfer.fill_buffer(paths.cells.at(0), bytes, 0);
+        transfer.fill_buffer(paths.next_cells.at(0), bytes, 0);
+        transfer.fill_buffer(paths.dts.at(0), bytes, 0);
+        transfer.fill_buffer(paths.mask.at(0), bytes, 0);
+        compact.clear(&mut transfer, true);
+    }
+    recorder.dispatch(
+        &mut encoder,
+        &cloud,
+        &paths,
+        RecordPathsArgs {
+            camera: make_camera_looking_along_x(20.0),
+            start_point: 0,
+            pixel_offset: 0,
+            image_pixel_offset: 0,
+            max_steps,
+            image_width: num_pixels,
+            image_height: 1,
+            max_path_dt: 50.0,
+            depth: 20.0,
+            num_pixels,
+        },
+    );
+    compactor.dispatch(&mut encoder, &paths, &compact);
+    {
+        let mut transfer = encoder.transfer("path-compact-test-readback");
+        transfer.copy_buffer_to_buffer(paths.cells.at(0), dense_readback.at(0), bytes);
+        transfer.copy_buffer_to_buffer(paths.mask.at(0), dense_readback.at(bytes), bytes);
+    }
+    let sync = context.submit(&mut encoder);
+    assert!(context.wait_for(&sync, !0).unwrap_or(false));
+
+    let capacity = compact.capacity() as usize;
+    let active_count = compact.active_count() as usize;
+    let stats = paths.path_stats(0..num_pixels as usize);
+    assert_eq!(active_count, stats.total_steps_used);
+    assert!(active_count > 0);
+    let dense_cells =
+        unsafe { std::slice::from_raw_parts(dense_readback.data() as *const u32, capacity) };
+    let dense_mask = unsafe {
+        std::slice::from_raw_parts(
+            dense_readback.data().add(bytes as usize) as *const f32,
+            capacity,
+        )
+    };
+    let compact_slots =
+        unsafe { std::slice::from_raw_parts(compact.dense_slots.data() as *const u32, capacity) };
+    let compact_cells =
+        unsafe { std::slice::from_raw_parts(compact.cells.data() as *const u32, capacity) };
+    let compact_pixels =
+        unsafe { std::slice::from_raw_parts(compact.pixel_indices.data() as *const u32, capacity) };
+    let compact_active =
+        unsafe { std::slice::from_raw_parts(compact.active.data() as *const f32, capacity) };
+    let mut seen = vec![false; capacity];
+    for row in 0..active_count {
+        let dense_slot = compact_slots[row] as usize;
+        assert!(dense_slot < capacity);
+        assert!(
+            !seen[dense_slot],
+            "dense slot {dense_slot} was emitted twice"
+        );
+        seen[dense_slot] = true;
+        assert_eq!(dense_mask[dense_slot], 1.0);
+        assert_eq!(compact_cells[row], dense_cells[dense_slot]);
+        assert_eq!(
+            compact_pixels[row] as usize,
+            dense_slot / max_steps as usize
+        );
+        assert_eq!(compact_active[row], 1.0);
+    }
+    for (slot, &mask) in dense_mask.iter().enumerate() {
+        assert_eq!(seen[slot], mask > 0.0, "dense slot {slot}");
+    }
+    assert!(compact_active[active_count..]
+        .iter()
+        .all(|&value| value == 0.0));
+
+    context.destroy_buffer(dense_readback);
+    compact.destroy(&context);
+    paths.destroy(&context);
+    compactor.destroy(&context);
+    recorder.destroy(&context);
+    cloud.deinit(&context);
+    context.destroy_command_encoder(&mut encoder);
 }
 
 #[test]
