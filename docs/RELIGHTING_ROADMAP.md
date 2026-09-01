@@ -1705,9 +1705,11 @@ a deterministic repeat agree within the measured training variance.
   surface sites. The CPU oracle populates 9,955/11,543 supports. Fine normals
   improve selection/validation worst foreground by 1.40/0.91 dB, but lose
   0.26/0.91 dB whole means and 0.24/0.96 dB foreground means; per-site diffuse
-  albedo widens the mean losses. Reject before Cow, storage, or WGSL. Better
-  fine geometry helps hard views but does not make local cross-view ownership
-  reliable.
+  albedo widens the mean losses. Keeping only the later plane-coherent fine
+  sites recovers 0.14 dB selection mean relative to all fine sites, but still
+  loses selection/validation whole means by 0.12/0.81 dB and both foreground
+  means. Reject before Cow, storage, or WGSL. Better fine geometry helps hard
+  views but does not make local cross-view ownership reliable.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526

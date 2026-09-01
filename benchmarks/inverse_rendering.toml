@@ -6768,11 +6768,20 @@ base_validation = [29.252489, 25.256953, 20.618210, 16.096382]
 fine_normal_validation = [28.342047, 26.001740, 19.655769, 17.007881]
 fine_normal_albedo_validation = [27.771247, 25.337164, 18.952897, 16.487839]
 
+locally_plane_coherent_fine_groups = 15629
+locally_coherent_coarse_groups_with_sites = 8450
+locally_coherent_sites_per_group_quantiles = [1, 1, 1, 8, 8, 8, 8]
+locally_coherent_site_distance_over_radius_quantiles = [0.017186, 0.278908, 0.402268, 0.573813, 0.763087, 0.897372, 0.999997]
+locally_coherent_normal_selection = [29.358471, 26.566361, 20.776715, 17.807492]
+locally_coherent_normal_albedo_selection = [28.735584, 26.323701, 19.964043, 17.438136]
+locally_coherent_normal_validation = [28.445226, 26.039935, 19.743046, 16.909372]
+locally_coherent_normal_albedo_validation = [27.959278, 25.592593, 19.149499, 16.565299]
+
 held_splits_opened = false
-maximum_peak_memory_bytes = 152367104
+maximum_peak_memory_bytes = 383721472
 memory_swap_bytes = 0
 memory_max_events = 0
 oom_events = 0
 gpu_faults = 0
-artifacts = "/tmp/blade-volume-bear-fine-sites*.log and target/audit-tools/diligent_tracks (gitignored)"
-verdict = "reject before Cow and add no stored sites/WGSL: fine geometry strongly improves hard-view tails, confirming useful high-resolution evidence, but loses every mean and its refitted diffuse albedo is worse; nearest fine points do not establish one cross-view physical owner inside a coarse optical support"
+artifacts = "/tmp/blade-volume-bear-fine-sites*.log, /tmp/blade-volume-bear-fine-sites-local.log, and target/audit-tools/diligent_tracks (gitignored)"
+verdict = "reject before Cow and add no stored sites/WGSL: fine geometry strongly improves hard-view tails, confirming useful high-resolution evidence, but loses every mean and its refitted diffuse albedo is worse; filtering sites by the independently useful local-plane rule partly recovers selection quality yet still loses every mean, so nearest fine points do not establish one cross-view physical owner inside a coarse optical support"
