@@ -6569,3 +6569,27 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs-640/fine-anchor and /tmp/blade-volume-bear-fine-anchor-*.log (gitignored)"
 verdict = "reject before Cow: preserving the coarse support budget and distribution does not transfer the dense cloud's aggregate identity gain; one-to-one fine anchors lower ownership, means, recall, and precision, so stop refining this photometric-albedo MVS output and move to an independent surface-property hypothesis"
+
+[diligent_mv.rejected_bear_direct_specular_oracle]
+date = "2026-09-01"
+protocol = "freeze the accepted 320px Bear Gaussian geometry, opacity, grouping, PBR normals, and diffuse albedo; composite an ignored CPU point-light GGX response through the exact Gaussian alpha groups; choose one global roughness and RGB F0 analytically from cameras 1,2,6,7,11,12,16,17 and even construction-light offsets; score only odd construction-light offsets on disjoint selection cameras 3,8,13,18 and validation cameras 4,9,14,19; require every mean and tail before runtime shader/fitter work, Cow, or official held data"
+metric_order = ["whole_mean_psnr_db", "whole_worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db"]
+
+roughness_candidates = [0.142857, 0.285714, 0.428571, 0.571429, 0.714286, 0.857143, 1.0]
+selected_roughness = 1.0
+selected_f0 = [0.138738, 0.289572, 0.141987]
+fit_linear_squared_errors = [703.779936, 648.186366, 641.303389, 630.337610, 613.282562, 596.903128, 586.071039]
+
+base_selection = [29.764080, 25.925969, 21.363957, 17.006507]
+candidate_selection = [29.119328, 25.177121, 20.951823, 16.307677]
+base_validation = [29.520811, 25.636149, 21.093120, 16.544098]
+candidate_validation = [28.937616, 25.159967, 20.715912, 16.107854]
+
+held_splits_opened = false
+maximum_peak_memory_bytes = 292528128
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "/tmp/blade-volume-bear-point-specular*.log and target/audit-tools/diligent_tracks (gitignored)"
+verdict = "reject before Cow and add no WGSL/API: the construction fit monotonically prefers the broadest lobe, but the chosen roughness/F0 loses every disjoint camera/light mean and tail; direct global specular response absorbs diffuse, normal, and ownership error rather than recovering a transferable material property"

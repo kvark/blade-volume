@@ -1698,13 +1698,16 @@ a deterministic repeat agree within the measured training variance.
   0.498 to 0.490; selection/validation means lose 0.32/0.27 dB and recall loses
   2.6/2.8 points. Reject without match tuning, Cow, or held data and close the
   high-resolution MVS branch.
-- [ ] Bound the omitted direct specular response on the frozen Bear cloud.
-  The calibrated distant lights currently use the point-light path, whose
-  renderer and material refinement are diffuse-only. Implement an ignored CPU
-  GGX oracle first, choose roughness/F0 only on disjoint construction
-  light/camera folds, and require every internal mean/tail before changing the
-  runtime shader or fitting API. Geometry, opacity, normals, and diffuse albedo
-  remain fixed.
+- [x] Bound the omitted direct specular response on the frozen Bear cloud.
+  An exact-compositor CPU GGX oracle keeps geometry, opacity, normals, and
+  diffuse albedo fixed, then chooses one global roughness/F0 from eight
+  construction cameras and the even construction lights. It selects the
+  broadest tested lobe (roughness 1.0, F0 0.139/0.290/0.142), yet loses every
+  mean and tail on disjoint cameras and odd lights: selection whole/foreground
+  means fall 0.645/0.412 dB and validation falls 0.583/0.377 dB. Reject before
+  Cow or held data and leave the diffuse-only point-light renderer/fitter
+  unchanged. This broad response absorbs model error rather than recovering a
+  transferable material property.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

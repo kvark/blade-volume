@@ -302,7 +302,11 @@ a convincing real-world result.
   recovery policy is retained. One-to-one snapping of the accepted coarse
   support to unique 640 px groups inside each existing radius also lowers
   ownership, 0.27--0.32 dB mean, and 2.6--2.8 recall points. The
-  higher-resolution geometry branch is closed.
+  higher-resolution geometry branch is closed. Finally, an exact-compositor
+  direct GGX oracle fitted only on construction folds selects a maximally broad
+  lobe and loses every disjoint selection/validation mean and tail. No direct
+  specular point-light shader or fitting API is added; this global lobe absorbs
+  reconstruction error instead of exposing a stable surface property.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow,bear}/`.
 
