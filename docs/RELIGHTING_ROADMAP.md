@@ -1606,12 +1606,28 @@ a deterministic repeat agree within the measured training variance.
   on both splits but lowers foreground means and about 1.1 recall points; 45
   degrees preserves 98.6% of the final cloud but lowers every PSNR aggregate.
   Remove the callback API rather than ship a marginal opt-in.
-- [ ] Collect each geometrically compatible observation set without claiming
+- [x] Collect each geometrically compatible observation set without claiming
   its pixels, partition the set into two-fold photometric-normal-coherent
   multi-view clusters, and emit every supported cluster before marking the
   source observations visited. This must preserve rather than reject a second
   surface layer, remain point-only, and pass Cow selection without using
-  released normals or opening another held split.
+  released normals or opening another held split. Reject the point split: 784
+  groups become 2,109 supported clusters and improve evaluator-only normal
+  consensus from 0.804 to 0.936, but the fitted cloud loses 0.32 dB selection
+  mean and 1.85 precision points. Requiring half-radius center separation keeps
+  only 318 groups and still loses 0.32 dB and 1.85 points. The new children
+  duplicate optical support even when their area is conserved.
+- [x] Keep geometry, covariance, opacity, and support frozen; update only the
+  normal and diffuse albedo of points with a reliable dominant provenance
+  cluster. All 367 updates improve every internal and held-light value with
+  unchanged coverage, but the untouched official held cameras lose 0.022 dB
+  mean and about 0.007 dB worst. Reject the update and do not tune Cow after
+  opening that split.
+- [ ] Move cluster-attribute development to a fresh object and reserve its
+  disjoint cameras before fitting. Require the same frozen-support updater to
+  pass both camera and light transfer on two objects before considering a
+  production API; use only point observations and measured lights, with no
+  released normals, new renderer, or Cow threshold changes.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

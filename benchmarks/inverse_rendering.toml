@@ -6287,3 +6287,50 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/cow/feature-depth-selection/upstream-normal{,-30,-45} and /tmp/blade-volume-upstream-normal-{fusion,reconstruct,score}{,-30,-45}-cow.log (gitignored)"
 verdict = "reject observation filtering and remove its callback API: 15 degrees improves association by discarding too much surface support, 30 degrees trades a tiny whole-frame gain for foreground and recall regressions, and 45 degrees loses every PSNR aggregate; next partition each geometric candidate set into multiple coherent point groups instead of dropping the incompatible layer"
+
+[diligent_mv.rejected_fusion_normal_clusters]
+date = "2026-09-01"
+protocol = "Cow-only ignored continuation after rejecting observation filtering: greedily partition each retained geometric fusion group at a predeclared 30-degree consensus, using two disjoint 12-light photometric-normal folds; replace a parent only when at least two clusters retain two-view support, conserve total disc area, fit through the unchanged calibrated pipeline, then try a predeclared half-parent-radius center-separation gate; finally freeze geometry, covariance, opacity, and support and update normal plus diffuse albedo only for a dominant cluster with at least three views, 30-degree consensus in both folds, and 15-degree cross-fold agreement; open official held lights and cameras only after every internal metric improves"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+base_points = 7631
+all_split_groups = 784
+all_supported_clusters = 2109
+all_unresolved_observations = 660
+all_cluster_points = 8956
+all_split_truth_consensus_median = 0.803561
+all_cluster_truth_consensus_median = 0.935825
+cluster_separation_over_parent_radius_quantiles = [0.019772, 0.177356, 0.278891, 0.439051, 0.641238, 0.870306, 2.915893]
+all_cluster_selection = [32.331386, 29.597822, 21.685990, 18.643793, 87.812583, 93.250727]
+all_cluster_validation = [31.313284, 28.292113, 20.467040, 17.372861, 87.488427, 93.156937]
+
+separated_split_groups = 318
+separated_supported_clusters = 1070
+separated_unresolved_observations = 335
+separated_cluster_points = 8383
+separated_split_truth_consensus_median = 0.757107
+separated_cluster_truth_consensus_median = 0.926169
+separated_cluster_selection = [32.328702, 29.627737, 21.675585, 18.631010, 87.775043, 93.256445]
+separated_cluster_validation = [31.352384, 28.317241, 20.495412, 17.422168, 87.397711, 93.204480]
+
+dominant_reliable_clusters = 367
+dominant_changed_particles = 367
+dominant_cluster_size_quantiles = [3, 3, 3, 3, 3, 4, 7]
+base_selection = [32.649566, 29.900484, 21.845238, 18.790389, 88.525740, 95.104730]
+dominant_selection = [32.699153, 29.980119, 21.881426, 18.867642, 88.525740, 95.104730]
+base_validation = [31.591812, 28.237596, 20.628511, 17.398190, 88.496329, 94.926575]
+dominant_validation = [31.614824, 28.274267, 20.642099, 17.432566, 88.496329, 94.926575]
+base_held_light_selection = [32.652200, 30.697222, 21.793224, 19.693944, 88.525740, 95.104730]
+dominant_held_light_selection = [32.691729, 30.765228, 21.820831, 19.729176, 88.525740, 95.104730]
+base_held_light_validation = [31.244837, 28.987229, 20.236015, 18.175172, 88.496329, 94.926575]
+dominant_held_light_validation = [31.261036, 29.023543, 20.244190, 18.209748, 88.496329, 94.926575]
+base_held_light_held_camera = [30.760775, 28.763423, 19.481912, 17.901443, 88.881066, 95.079229]
+dominant_held_light_held_camera = [30.739034, 28.756623, 19.459299, 17.895359, 88.881066, 95.079229]
+
+maximum_peak_memory_bytes = 857686016
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/cow/feature-depth-selection/{upstream-normal-clusters,fusion-cluster-attributes} and /tmp/blade-volume-fusion-{normal-clusters,cluster-attributes}*-cow.log (gitignored)"
+verdict = "reject geometry splitting and the Cow attribute update: supported normal clusters are real, but emitting them duplicates optical support and destroys precision; a frozen-support dominant-cluster normal/material update passes every internal and held-light metric with invariant coverage, then loses every PSNR aggregate on untouched held cameras; do not tune Cow again, and require a fresh-object camera/light transfer gate before adding an API"

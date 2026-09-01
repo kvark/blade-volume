@@ -255,8 +255,13 @@ a convincing real-world result.
   holes or loses image quality. The closest 30-degree arm gains 0.04 dB
   whole-frame mean but loses foreground mean and about 1.1 recall points, so no
   callback API is retained. The next gate clusters one geometric observation
-  set into multiple normal-coherent point groups so a second surface is
-  preserved instead of discarded; it adds neither a mesh nor another renderer.
+  set into multiple normal-coherent point groups. That improves diagnostic
+  normal identity but duplicates optical support and loses 0.32 dB selection
+  mean. Keeping support frozen and updating only 367 reliable normals/materials
+  passes every internal and held-light metric, then loses 0.022 dB on untouched
+  held cameras. Neither path is retained. Further cluster-attribute work moves
+  to a fresh object with camera and light splits reserved up front; it adds
+  neither a mesh nor another renderer.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 
