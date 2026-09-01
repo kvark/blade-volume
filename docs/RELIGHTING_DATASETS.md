@@ -1916,6 +1916,34 @@ groups before fitting one relightable normal. Ground-truth normals must remain
 an evaluator, never a split input. The diagnostic peaks at 438,280,192 bytes
 with zero swap, memory event, OOM, throttle, or GPU fault.
 
+The next association controls locate the failure upstream. Resetting final
+Gaussian centers to the dense-fusion initializer changes positions by only
+`0.0801` median world units and leaves released-normal consensus effectively
+unchanged: all responsible centers move `0.51918→0.51960`, and exclusive owners
+move `0.55618→0.55926`. Standard Gaussian densification cannot subdivide this
+case either. The maximum fitted sigma is `4.37`, well below the established
+`13.96` broad-support threshold, so no disagreement-ranked point qualifies.
+
+At the exact source pixels stored by dense fusion, association is better but
+still mixed. Across 7,612 groups with at least two usable observations,
+released-normal consensus has median `0.9157`; construction-only photometric
+normal consensus is `0.9467`. Calling a group mixed only when both independent
+12-light folds fall outside a 15-degree consensus cone selects 4,229 groups.
+Against evaluation-only released normals that predicate has `97.07%` precision
+and `70.08%` recall. It is a viable upstream grouping signal.
+
+Using it after fusion is too late. Expanding 4,253 predicted-mixed groups back
+to their 13,901 stored depth observations produces 17,279 points. Child opacity
+preserves overlap compositing and scale preserves total Gaussian volume, but
+all-particle truth consensus barely moves `0.51918→0.51928`; exclusive-owner
+median reaches only `0.57133`. Selection/validation recall falls from
+`88.53/88.50%` to `79.62/79.65%`, foreground means lose `0.40/0.34` dB, and
+whole means lose `0.28/0.23` dB. The post-fusion expansion is rejected without
+fitting appearance. The next experiment must apply the same photometric
+compatibility before fusion claims observations and averages their 3D points.
+The complete 4 GiB run peaks at 451,633,152 bytes with zero swap, memory event,
+OOM, throttle, or GPU fault.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable

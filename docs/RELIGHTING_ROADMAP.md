@@ -1582,12 +1582,25 @@ a deterministic repeat agree within the measured training variance.
   truth-normal consensus across cameras is only 0.519 median. Even exclusive
   `T*alpha` owners reach only 0.556. The current supports do not identify one
   physical surface across views, so another normal loss cannot fix them.
-- [ ] Subdivide broad Gaussian support into smaller point-cloud particles when
-  construction-only photometric normals and source-depth observations form
-  distinct, cross-view-coherent groups. Start with the existing deterministic
-  Gaussian split geometry and preserve total opacity; use released normals
-  only to audit association, never to select or train a split. A candidate
-  must improve association before any material fit or production API change.
+- [x] Try the existing broad-Gaussian split policy with construction-only
+  normal disagreement. It selects no particle: current maximum sigma is 4.37,
+  while the established one-percent-of-scene breadth threshold is 13.96. Do
+  not weaken that rule; this is center correspondence, not broad support.
+- [x] Reset final Gaussians to their dense-fusion initial centers. Median
+  displacement is only 0.080 world units, and released-normal association is
+  unchanged (0.5192 to 0.5196; exclusive 0.5562 to 0.5593). The bad identity
+  exists before final Gaussian optimization.
+- [x] Audit exact dense source groups. A two-fold photometric-normal predicate
+  identifies mixed groups with 97.1% precision and 70.1% recall against
+  evaluation-only released normals. Expanding those groups to compositing-
+  and volume-preserving per-observation particles grows 7,631 to 17,279 but
+  leaves association median at 0.5193, cuts recall to 79.6%, and loses 0.23--
+  0.28 dB mean PSNR. Reject post-fusion expansion.
+- [ ] Apply the two-fold photometric-normal compatibility predicate while
+  traversing and grouping dense depth observations, before observations are
+  marked visited or averaged. Compare its untouched source groups and Cow
+  selection cameras against the current cached fusion; do not use released
+  normals to configure it and do not add a persisted model field.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.
