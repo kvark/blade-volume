@@ -1661,12 +1661,19 @@ a deterministic repeat agree within the measured training variance.
   but loses 3.6--3.9 precision points and every PSNR aggregate. Reject both
   without opening held data or sweeping radii: higher resolution exposes
   contradictory layers rather than supplying immediately usable support.
-- [ ] Select independently anchored dense observations before they acquire
-  optical support. Start with a construction-only confidence oracle that uses
-  source-view depth agreement, photometric-normal agreement, and distinct-view
-  count to rank complete fusion groups, then replay fixed point budgets on
-  Bear and Cow. Preserve whole groups and point-only output; do not filter
-  individual observations, add a renderer, or tune against held splits.
+- [x] Select independently anchored dense observations before they acquire
+  optical support, retaining complete fusion groups at the original Bear point
+  budget. The production distinct-view/geometric-confidence rank keeps 11,526
+  points but loses 0.53--0.58 dB internal mean. A construction-only rank with
+  two-fold photometric-normal consensus primary keeps 11,543 and improves
+  median ownership 0.498 to 0.517, but loses 23--24 recall points and
+  1.80--2.06 dB. Reject both before Cow or held data: normal coherence selects
+  redundant interior samples, not image-space support.
+- [ ] Preserve distinct-view count as the primary fixed-budget invariant and
+  test source-view depth residual only as the tie-breaker ahead of geometric
+  confidence. Measure its coverage and identity on Bear before fitting; fit
+  only if it preserves baseline projected support. Keep whole groups and
+  point-only output, and do not tune thresholds or open held splits.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

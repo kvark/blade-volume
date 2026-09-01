@@ -287,8 +287,14 @@ a convincing real-world result.
   loses about ten recall points and 1.2--1.4 dB mean. Scaling radii by the
   point-density area ratio raises consensus to 0.617 and restores recall, but
   loses 3.6--3.9 precision points and every PSNR aggregate. Resolution alone
-  therefore adds contradictory optical layers; the next geometry step must
-  select independently anchored observations before assigning support.
+  therefore adds contradictory optical layers. Reducing that 640 px cloud to
+  the original point budget while retaining whole groups also fails: the
+  existing distinct-view/confidence rank loses 0.53--0.58 dB mean, and making
+  two-fold photometric-normal consensus primary raises median ownership from
+  0.498 to 0.517 but destroys about 24 recall points and loses 1.80--2.06 dB.
+  Coherent interior samples are not a substitute for silhouette support. The
+  next geometry gate must preserve distinct-view coverage first and test depth
+  consistency only as a tie-breaker.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow,bear}/`.
 

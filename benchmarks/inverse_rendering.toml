@@ -6475,3 +6475,36 @@ successful_run_oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/bear/{prepared-640-albedo-mvs,albedo-mvs-640} and /tmp/blade-volume-bear-640-*.log (gitignored)"
 verdict = "reject higher resolution as a standalone geometry fix: it materially improves cross-view particle identity, proving independent samples help, but default support under-covers and the single density-derived area correction over-covers contradictory layers; every PSNR aggregate loses, so select coherent whole observation groups before assigning optical support instead of sweeping radii"
+
+[diligent_mv.rejected_high_resolution_fixed_budget]
+date = "2026-09-01"
+protocol = "reuse the fresh construction-only 640px Bear fusion cache; keep complete fusion groups in the deterministic production voxel budget matching the 11,543-point 320px baseline; first use production distinct-view count then mean geometric confidence, then test a construction-only oracle with minimum consensus across two disjoint 12-light photometric-normal folds as the primary rank; use the unchanged three-round fit and 2400-step Gaussian continuation; stop before Cow and keep official held lights/cameras physically unloaded when Bear rejects both ranks"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+base_points = 11543
+distinct_view_points = 11526
+photometric_consensus_points = 11543
+photometric_consensus_quantiles = [0.0, 0.576920, 0.804006, 0.938003, 0.968048, 0.987193, 1.0]
+
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+distinct_view_selection = [28.964424, 25.425258, 20.478244, 16.511341, 89.752394, 93.950190]
+photometric_consensus_selection = [27.686311, 25.274659, 18.880599, 16.297101, 68.414999, 95.276718]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+distinct_view_validation = [28.686225, 25.386025, 20.097181, 16.305248, 88.396533, 94.546214]
+photometric_consensus_validation = [27.205590, 25.533359, 18.349028, 16.421020, 67.135592, 95.765491]
+
+base_truth_consensus_median = 0.498183
+distinct_view_truth_consensus_median = 0.484965
+photometric_consensus_truth_consensus_median = 0.516710
+base_exclusive_truth_consensus_median = 0.568214
+distinct_view_exclusive_truth_consensus_median = 0.578838
+photometric_consensus_exclusive_truth_consensus_median = 0.573074
+held_splits_opened = false
+
+maximum_peak_memory_bytes = 460664832
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs-640/{fixed-budget,optical-budget} and /tmp/blade-volume-bear-640-{budget,optical}-*.log (gitignored)"
+verdict = "reject both fixed-budget ranks before Cow: the production rank loses identity and every mean, while photometric-normal coherence improves identity but selects redundant interior support and catastrophically lowers recall; preserve distinct-view support as the primary rank and test depth consistency only as a tie-breaker"
