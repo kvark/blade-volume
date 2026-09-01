@@ -6628,3 +6628,29 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs-640/source-scarcity and /tmp/blade-volume-bear-source-scarcity-*.log (gitignored)"
 verdict = "reject before tile-size tuning, Cow, or held data: source-scarcity ranking materially broadens source-image coverage, but that coverage belongs to contradictory 3D layers; ownership, every mean, recall, and precision regress, closing complete-group ranking as a route to surface identity"
+
+[diligent_mv.rejected_bear_dominant_group_shading]
+date = "2026-09-01"
+protocol = "freeze the accepted 320px Bear PBR Gaussian geometry, opacity, exact candidate response, depth ordering, production half-radius surface grouping, and 75-percent saturated group alpha; compare the existing coverage-weighted diffuse normal/material response with one maximum-coverage contributor shading the entire group; score all construction lights on disjoint selection cameras 3,8,13,18 and validation cameras 4,9,14,19; stop before Cow, WGSL, API, or official held data if any internal value loses"
+metric_order = ["whole_mean_psnr_db", "whole_worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db"]
+
+selection_groups = 47323
+selection_multi_contributor_groups = 35009
+validation_groups = 47156
+validation_multi_contributor_groups = 34768
+selection_dominant_coverage_fraction_quantiles = [0.137835, 0.332274, 0.423738, 0.578631, 1.0, 1.0, 1.0]
+validation_dominant_coverage_fraction_quantiles = [0.131951, 0.331345, 0.422357, 0.575626, 1.0, 1.0, 1.0]
+
+base_selection = [29.482933, 25.549787, 20.871674, 16.546408]
+candidate_selection = [28.635709, 25.316711, 19.913229, 16.329669]
+base_validation = [29.252489, 25.256953, 20.618210, 16.096382]
+candidate_validation = [28.456094, 25.026488, 19.714620, 15.867179]
+
+held_splits_opened = false
+maximum_peak_memory_bytes = 483790848
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "/tmp/blade-volume-bear-dominant-group*.log and target/audit-tools/diligent_tracks (gitignored)"
+verdict = "reject before Cow and change no compositor: most groups need several contributors for their radiance, and hard maximum-response ownership loses every Bear mean and tail by much more than run variance; surface correspondence must improve upstream without discarding the established optical mixture"

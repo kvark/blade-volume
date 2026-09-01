@@ -1652,6 +1652,14 @@ a deterministic repeat agree within the measured training variance.
   loses 0.008/0.009 dB. Reject the table without opening held splits or adding
   storage/WGSL. Pursue denser independently anchored point observations
   instead of more attributes on ambiguous support.
+- [x] Keep exact Gaussian geometry, alpha, grouping, and depth order, but shade
+  each surface-depth group with only its maximum-response contributor rather
+  than its coverage-weighted physical mixture. About 74% of Bear groups have
+  multiple contributors and the median winner carries only 58% of their
+  weight. Exclusive shading loses 0.85/0.80 dB selection/validation whole mean
+  and 0.96/0.90 dB foreground mean. Reject before Cow, WGSL, or API work:
+  overlap is carrying necessary radiance as well as ambiguous identity, so a
+  hard compositor owner cannot repair correspondence.
 - [x] Re-run Bear albedo stereo at 640 px with the official cameras/lights
   absent, a separate geometric-consistency workspace, and a 32k cap. It fuses
   102,752 observations into 29,357 groups and 26,105 final points. Median
