@@ -61,8 +61,11 @@ not contain or fall back to polygonal geometry.
   hypotheses. It improves all 24 Cow metrics over albedo stereo and 22 of 24
   Reading metrics, but reaches only 7/24 and 15/24 against the corrected sparse
   controls. Keep the construction-only importer path and the final-material
-  fix; keep the selector ignored. Preserve dense observation provenance through
-  surface-to-Gaussian transfer and visibility supervision next.
+  fix; keep the selector ignored. Exact provenance transfer then closes centre,
+  covariance, opacity, source-material, and live mask-loss repairs: each moves
+  the same quality/coverage frontier, and the one Reading-safe compensation
+  fails unchanged on Cow. Build the next dense point layer outward from
+  high-precision sparse anchors before Gaussian fitting.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -1525,10 +1528,16 @@ a deterministic repeat agree within the measured training variance.
   albedo and world-normal features at the observations that support each depth
   hypothesis. It improves 24/24 Cow and 22/24 Reading values over albedo stereo,
   but reject it after corrected sparse controls pass only 7/24 and 15/24.
-- [ ] Preserve dense observation provenance through surface-to-Gaussian
-  conversion, then use construction-camera support and visibility in the
-  Gaussian objective. Require every Cow and Reading mean, tail, recall, and
-  precision value to improve before opening another representation change.
+- [x] Reconstruct dense observation provenance through surface-to-Gaussian
+  conversion and test source depth/reprojection envelopes, exact ray ownership,
+  observed normal thickness, source-mask tangent bounds, source-pixel diffuse
+  material, and live mask supervision. Reject every arm: the only candidate to
+  pass all Reading internal values loses Cow foreground means and recall, while
+  direct mask loss gains nine recall points at a clear PSNR cost.
+- [ ] Grow a single dense point layer from high-precision sparse anchors. Join
+  only locally tangent-consistent samples with shared source-view depth order;
+  freeze the resulting point cloud before unchanged Gaussian fitting. Require
+  every Cow and Reading mean, tail, recall, and precision value to improve.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

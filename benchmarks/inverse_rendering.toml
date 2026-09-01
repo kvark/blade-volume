@@ -6031,3 +6031,45 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/{cow,reading-16k}/feature-depth-selection (gitignored); etc/relight-diligent-reading-feature-depth.png (tracked comparison)"
 verdict = "keep only the final-material serialization fix; reject the direct selector as a production default: separate albedo/normal evidence decisively improves both albedo-stereo arms, but extra dense support still trades complete-render quality tails or precision against the corrected sparse controls; preserve observation provenance through Gaussian transfer and supervise construction visibility next"
+
+[diligent_mv.rejected_provenance_transfer]
+date = "2026-09-01"
+protocol = "exactly match retained Cow/Reading surfels to native grouped-fusion observations; post-fit controls for one-percent source-depth and two-pixel reprojection envelopes, exact source-ray presence/ownership, measured normal-axis thickness, source-mask tangent bounds, and source-pixel diffuse material; Reading-only optical-mass exponent sweep followed by frozen 0.4 Cow repeat; separate Cow reconstruction with the existing explicit mask MSE enabled at its established 1.5 weight; all geometry controls use internal construction-camera splits, while the mask-loss candidate receives one final full light/camera matrix"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+reading_source_observations = 63145
+reading_source_targets_present = 12448
+reading_source_targets_total = 12560
+reading_source_targets_never_strongest = 7305
+reading_normal_axes_shrunk = 11174
+reading_internal_selection_control = [30.211406, 26.522327, 19.749002, 15.818021, 90.081228, 95.267803]
+reading_internal_selection_mass_0_4 = [30.369817, 26.757212, 19.844585, 15.955045, 90.441802, 96.341289]
+reading_internal_validation_control = [30.262047, 25.834012, 19.801317, 15.256821, 90.091471, 95.355104]
+reading_internal_validation_mass_0_4 = [30.355158, 25.850264, 19.843734, 15.314235, 90.290775, 96.324645]
+
+cow_source_observations = 22040
+cow_source_targets_present = 7352
+cow_source_targets_total = 7631
+cow_source_targets_never_strongest = 5687
+cow_normal_axes_shrunk = 6094
+cow_tangent_axes_shrunk = 1648
+cow_internal_selection_control = [32.406602, 28.319045, 21.467199, 17.396611, 88.938797, 95.238582]
+cow_internal_selection_mass_0_4 = [32.322544, 28.312010, 21.336055, 17.381631, 87.459645, 96.098829]
+cow_internal_selection_source_footprint = [32.470891, 28.334375, 21.425690, 17.409503, 86.540385, 96.686255]
+cow_internal_selection_source_material = [32.312972, 28.093179, 21.301551, 17.173451, 88.938797, 95.238582]
+cow_internal_validation_control = [32.304047, 28.237596, 21.396372, 17.398190, 88.643060, 95.194540]
+cow_internal_validation_mass_0_4 = [32.195000, 28.303605, 21.245132, 17.457578, 87.071237, 96.035762]
+cow_internal_validation_source_footprint = [32.369824, 28.252748, 21.357437, 17.380287, 86.282720, 96.733267]
+cow_internal_validation_source_material = [32.251254, 28.454698, 21.267669, 17.521923, 88.643060, 95.194540]
+
+cow_mask_loss_fitted_lights_fitted_cameras = [32.064669, 28.100393, 21.168326, 17.143335, 97.732384, 95.702327]
+cow_mask_loss_fitted_lights_held_cameras = [31.000290, 28.967894, 19.796398, 17.551009, 97.500987, 95.183422]
+cow_mask_loss_held_lights_fitted_cameras = [32.070844, 28.468051, 21.101269, 17.541655, 97.732384, 95.702327]
+cow_mask_loss_held_lights_held_cameras = [30.654358, 29.070686, 19.396844, 17.655666, 97.500987, 95.183422]
+
+maximum_peak_memory_bytes = 1094533120
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/{reading-16k,cow}/feature-depth-selection/{provenance-clamp,source-owner,provenance-thickness,provenance-mass,mask-loss-graph-1.5} (gitignored)"
+verdict = "reject every post-fit provenance repair and leave the production graph unchanged: centre constraints are inactive, composited ownership is non-exclusive, covariance bounds exchange recall for precision, source-pixel albedo loses selection quality, and explicit mask loss exchanges PSNR for nine recall points; construct one sparse-anchored, tangent- and depth-consistent dense point layer upstream next"

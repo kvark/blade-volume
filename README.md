@@ -228,10 +228,15 @@ a convincing real-world result.
   retain 7,577/12,524 Gaussians. They still pass only 7 of 24 Cow values and 15
   of 24 Reading values against the corrected sparse controls: extra recall and
   foreground means trade against tails or precision. The selector therefore
-  remains an ignored diagnostic. The next surface step is provenance-aware
-  dense-surface-to-Gaussian transfer and visibility supervision, not another
-  proxy image or support threshold. Generated models, renders, and telemetry
-  are under `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
+  remains an ignored diagnostic. Exact source provenance then rules out post-fit
+  centre clamps, ray ownership, observed normal thickness, tangent-mask bounds,
+  source-pixel material replacement, and explicit mask loss: all trade image
+  quality against support, and the one Reading-safe opacity compensation fails
+  unchanged on Cow. The next surface step is an anchor-connected dense point
+  layer grown from the high-precision sparse reconstruction before Gaussian
+  fitting—not another proxy image, support threshold, or polygonal fallback.
+  Generated models, renders, and telemetry are under
+  `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 
 The staged directional-residual models and telemetry are under
 `target/audit-runs/directional-staged-validation/`; the selected longer Bonsai

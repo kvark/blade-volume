@@ -1044,6 +1044,52 @@ under `target/audit-runs/diligent-mv/{prepared-reading-320,reading-16k,cow}/`;
 the four-column held-camera comparison is tracked at
 `etc/relight-diligent-reading-feature-depth.png`.
 
+### Provenance-aware Gaussian transfer
+
+The retained fusion cache can be matched back to every selected surfel exactly,
+so a second audit tested whether the dense model fails only because those source
+observations are discarded during Gaussian transfer. It used 63,145 Reading and
+22,040 Cow source observations without opening a new camera or light split.
+
+- Final optimized centres already satisfy every retained one-percent source
+  depth interval. A two-pixel reprojection envelope constrains only 82 of 12,560
+  Reading points and 30 of 7,631 Cow points, with numerically neutral or negative
+  image changes.
+- Almost every target Gaussian appears on at least one of its exact source rays
+  (12,448/12,560 Reading and 7,352/7,631 Cow), but 58% and 75% are never the
+  strongest contributor. Treating composited ownership as exclusive therefore
+  removes valid overlapping cloud support and fails both internal splits.
+- Shrinking the normal axis to the RMS thickness measured by the source depth
+  samples raises precision but removes 6--10 recall points. Conserving optical
+  mass exposes a smooth tradeoff. A frozen `0.4` compensation exponent improves
+  all twelve Reading internal metrics, then loses both Cow foreground means and
+  recall on both splits. Source-mask bounds on the two tangent axes show the same
+  precision/recall tradeoff.
+- Replacing the compact fitted material table with per-point diffuse albedo from
+  exact source pixels improves some Cow validation tails but lowers both
+  selection means and tails. The deficit is not primarily discarded diffuse
+  appearance.
+- Enabling the existing explicit multi-light mask loss at its established 1.5
+  weight raises Cow Gaussian recall from 88.8% to 97.7%, but fitted/fitted whole
+  and foreground means fall by 0.29 and 0.26 dB. Held/held foreground mean also
+  falls. No smaller weight was tuned after this official result.
+
+No production field, loss, shader, or dependency is retained from these
+controls. They close post-fit provenance constraints on the selected dense
+cloud: centre, normal thickness, tangent footprint, opacity, and diffuse
+appearance each move the same support-versus-photometry frontier rather than
+fix it. The next geometry proposal must be upstream. Grow one connected dense
+point layer from the high-precision sparse reconstruction, requiring consistent
+local tangent orientation and shared source-view depth order before surface
+extraction. Then fit and score that fixed cloud through the unchanged Gaussian
+path. This remains point-cloud reconstruction; no polygonal intermediate is
+needed.
+
+The ignored controls and telemetry are under
+`target/audit-runs/diligent-mv/{reading-16k,cow}/feature-depth-selection/`.
+Their largest scoped peak is 1,094,533,120 bytes, with zero swap, OOM event, or
+GPU fault.
+
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:
 
