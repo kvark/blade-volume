@@ -1813,6 +1813,42 @@ The production factor remains one half. Ignored tools and image dumps are under
 `target/audit-tools/{spatial_lobe_gate,obj45_lobe_sweep}/` and
 `target/audit-runs/openillumination/spatial-lobe-view-31/`.
 
+### Exclusive oriented-cell reference
+
+An ignored CPU reference now traces the same bounded-ball and radical-plane
+constraints as the compute-splat PowerFoam path, accelerates support candidates
+with a checked sphere BVH, and returns one nearest oriented-cell plane. It then
+uses the calibrated finite-light diffuse model and that cell's fitted material;
+geometry hits are cached across all 24 Cow lights. This tests the representation
+without adding a persisted field, shader entry, operation, or runtime branch.
+
+The unchanged selected Cow surface at its stored three-sigma radii reaches
+`97.36/96.48%` selection/validation recall but only `87.02/86.12%` precision.
+Its whole/foreground selection score is `29.24/27.21;18.73/16.37` dB, against
+the matched Gaussian's `32.65/29.90;21.85/18.79` dB. The production masked
+PowerFoam continuation changes no covered pixel and moves appearance only in
+the fourth decimal place.
+
+There is one non-tuned radius conversion with a direct semantic justification:
+the relight surface stores a Gaussian's three-sigma radius, while a hard cell
+is opaque. Scaling by `sqrt(2 ln 2) / 3` makes the hard support boundary equal
+the Gaussian's 50%-coverage contour. This restores selection/validation
+recall to `88.20/87.34%` and precision to `94.89/94.55%`, close to the
+Gaussian geometry, but foreground means remain `18.48/17.81` dB. Re-solving
+albedo from eight disjoint construction cameras raises those means only to
+`18.96/18.03` dB. Re-solving normals changes 3,474 of 3,531 supported sites,
+drops recall to `85.63/83.24%`, and lowers foreground means to
+`18.03/17.01` dB. Reading and official Cow splits therefore stay closed.
+
+This also sharpens the semantics of the result. The calibrated finite-light
+fit and current runtime point-light path are diffuse-only; roughness and F0 are
+not exercised by this gate. The next reference should retain exclusive
+point-cloud geometry while interpolating its shading normal and diffuse
+material over the local Cech neighborhood. Only a Cow internal pass would
+justify backend-neutral storage, direct finite-light specular work, or WGSL.
+The ignored run peaks at 360,214,528 bytes in a 4 GiB cgroup with zero swap,
+OOM, throttle, or GPU fault.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable

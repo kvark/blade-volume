@@ -67,7 +67,11 @@ not contain or fall back to polygonal geometry.
   fails unchanged on Cow. A high-precision-sparse-anchored dense layer then
   loses recall without sparse fill and precision with it. Masked PowerFoam
   continuation becomes numerically neutral after conversion back to Gaussian.
-  Test exclusive oriented-cell PBR rendering before changing the model API.
+  An exact oriented-cell reference reaches 97% Cow recall but over-covers; an
+  analytic Gaussian-footprint conversion restores the mask but remains about
+  3 dB behind. Owned albedo only partly recovers the gap and owned normals
+  regress. Test smooth local point attributes over exclusive geometry before
+  changing the model API.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -1543,9 +1547,19 @@ a deterministic repeat agree within the measured training variance.
 - [x] Run the existing masked PowerFoam surface continuation on the full selected
   Cow layer before calibrated fitting. Reject it as a Gaussian initializer: all
   24 final values move by at most about 0.0006 with mixed signs.
-- [ ] Build an ignored relightable PowerFoam reference scorer that preserves
-  exclusive oriented-cell ownership through PBR shading. Gate Cow internally,
-  then Reading, before adding backend-neutral PBR storage or runtime code.
+- [x] Build an ignored relightable PowerFoam reference scorer that preserves
+  exclusive oriented-cell ownership through calibrated-light shading. Reject
+  it on Cow before opening Reading: full three-sigma supports reach 97% recall
+  but only 86--87% precision; the analytically matched 50%-coverage radius
+  restores 87--88% recall and 94.6--94.9% precision, but remains about 3 dB
+  behind the Gaussian. Exclusive-camera albedo refitting recovers at most 0.5
+  dB, while normal refitting loses support and another decibel. The current
+  finite point-light fit and renderer are diffuse-only, so this gate does not
+  claim roughness or F0 recovery.
+- [ ] In the ignored reference, keep one exclusive oriented-cell geometry hit
+  but interpolate shading normal and diffuse material from its local Cech
+  point neighborhood. Require Cow selection and validation means, tails,
+  recall, and precision to beat the Gaussian before adding storage or WGSL.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

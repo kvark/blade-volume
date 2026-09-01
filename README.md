@@ -234,10 +234,14 @@ a convincing real-world result.
   quality against support, and the one Reading-safe opacity compensation fails
   unchanged on Cow. A sparse-anchored connected dense layer then loses recall
   without gap fill and precision with it. Existing masked PowerFoam continuation
-  becomes numerically neutral after conversion back to Gaussians. The next gate
-  therefore keeps exclusive oriented PowerFoam cells through a reference PBR
-  render before considering any model/runtime API—not another proxy image,
-  support threshold, or polygonal fallback.
+  becomes numerically neutral after conversion back to Gaussians. An exact
+  oriented-cell reference then recovers nearly all foreground but over-covers
+  it. Mapping the stored three-sigma radius to its 50%-coverage contour restores
+  the Gaussian mask, yet hard per-cell shading remains about 3 dB behind;
+  ownership-specific albedo recovers only 0.3--0.5 dB and normal fitting
+  regresses. Keep PowerFoam PBR experimental and test smooth point-neighborhood
+  attributes over exclusive geometry before changing model/runtime APIs—not
+  another proxy image, support threshold, or polygonal fallback.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 

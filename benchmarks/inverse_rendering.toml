@@ -6107,3 +6107,33 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/cow/feature-depth-selection/{anchor-layer,anchor-dense,powerfoam} (gitignored)"
 verdict = "reject both hard sparse anchoring and PowerFoam-to-Gaussian initialization; the connected layer trades recall for precision, sparse fill reverses that trade, and exclusive PowerFoam training becomes neutral when its learned support is converted back to overlapping Gaussians; test a relightable oriented-PowerFoam PBR reference before changing production storage or shaders"
+
+[diligent_mv.rejected_exclusive_powerfoam_reference]
+date = "2026-09-01"
+protocol = "ignored Cow-only CPU reference with an exhaustive-semantics sphere BVH; independently clip every support sphere by Cech-neighbor radical planes, select the nearest enclosed oriented plane, cache hits across 24 fitted lights, and shade with the established diffuse point-light/material model; compare stored three-sigma radii, the unchanged 4800-update PowerFoam continuation, the analytic Gaussian 50-percent-coverage radius sqrt(2 ln 2)/3, eight-camera owned-albedo refitting, and one 1024-candidate owned-normal refit; selection cameras 4/9/14/19 and validation cameras 5/10/15/20 are excluded from the eight-camera ownership fit"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+cow_internal_selection_gaussian = [32.649566, 29.900484, 21.845238, 18.790389, 88.525740, 95.104730]
+cow_internal_validation_gaussian = [31.591812, 28.237596, 20.628511, 17.398190, 88.496329, 94.926575]
+cow_internal_selection_full_radius = [29.240537, 27.208496, 18.728426, 16.371237, 97.364258, 87.020761]
+cow_internal_validation_full_radius = [28.689877, 26.627045, 18.111803, 15.877025, 96.475366, 86.118176]
+cow_internal_selection_continued = [29.239694, 27.205397, 18.727379, 16.368782, 97.364258, 87.020761]
+cow_internal_validation_continued = [28.689601, 26.627395, 18.111222, 15.876685, 96.475366, 86.118176]
+cow_internal_selection_half_coverage = [29.472806, 27.585512, 18.479382, 16.578800, 88.200206, 94.893415]
+cow_internal_validation_half_coverage = [28.902885, 26.486488, 17.813972, 15.642139, 87.339115, 94.552483]
+cow_internal_selection_owned_albedo = [29.940321, 27.529687, 18.959051, 16.516698, 88.200206, 94.893415]
+cow_internal_validation_owned_albedo = [29.131307, 26.585536, 18.033529, 15.720713, 87.339115, 94.552483]
+cow_internal_selection_owned_normal_albedo = [28.940025, 27.118136, 18.028112, 15.989746, 85.625894, 93.642517]
+cow_internal_validation_owned_normal_albedo = [28.067041, 25.497354, 17.012094, 14.680262, 83.238250, 93.155498]
+
+full_radius_cech_edges = 228812
+half_coverage_cech_edges = 25100
+owned_albedo_supported_materials = 2397
+owned_normal_supported = 3531
+owned_normals_changed = 3474
+maximum_peak_memory_bytes = 360214528
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/diligent_tracks and /tmp/blade-volume-powerfoam-reference-cow-*.log (gitignored)"
+verdict = "reject a production oriented-PowerFoam PBR backend from this fixed transfer: full support exchanges precision for recall, the analytic hard/soft radius conversion restores geometry but not appearance, ownership-specific albedo closes only a small part of the three-decibel gap, and ownership-specific normals regress both support and image quality; keep exclusive geometry in the ignored oracle and test locally interpolated point attributes next"
