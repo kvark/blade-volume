@@ -308,7 +308,6 @@ pub fn fit(
             options.normal_candidates,
             options.albedo_ceiling,
         );
-        train::gaussian_splat::attach_pbr(&mut gaussian, &surface)?;
         refine_blended_surface(
             &mut surface,
             &training.captures,
@@ -316,6 +315,7 @@ pub fn fit(
             options.train_views,
             options.albedo_ceiling,
         )?;
+        train::gaussian_splat::attach_pbr(&mut gaussian, &surface)?;
         Some(gaussian)
     } else {
         refine_blended_surface(
