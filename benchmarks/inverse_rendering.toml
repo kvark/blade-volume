@@ -6478,33 +6478,40 @@ verdict = "reject higher resolution as a standalone geometry fix: it materially 
 
 [diligent_mv.rejected_high_resolution_fixed_budget]
 date = "2026-09-01"
-protocol = "reuse the fresh construction-only 640px Bear fusion cache; keep complete fusion groups in the deterministic production voxel budget matching the 11,543-point 320px baseline; first use production distinct-view count then mean geometric confidence, then test a construction-only oracle with minimum consensus across two disjoint 12-light photometric-normal folds as the primary rank; use the unchanged three-round fit and 2400-step Gaussian continuation; stop before Cow and keep official held lights/cameras physically unloaded when Bear rejects both ranks"
+protocol = "reuse the fresh construction-only 640px Bear fusion cache; keep complete fusion groups in the deterministic production voxel budget matching the 11,543-point 320px baseline; test production distinct-view/geometric confidence, two-fold photometric-normal consensus primary, and finally distinct views followed by relative source-depth residual; the depth arm mirrors production ordering exactly: soft visual hull, complete-group voxel selection, neighborhood surface estimation, outlier removal; use the unchanged three-round fit and 2400-step Gaussian continuation; stop before Cow and keep official held lights/cameras physically unloaded when Bear rejects every rank"
 metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
 
 base_points = 11543
 distinct_view_points = 11526
 photometric_consensus_points = 11543
+depth_residual_points = 11526
 photometric_consensus_quantiles = [0.0, 0.576920, 0.804006, 0.938003, 0.968048, 0.987193, 1.0]
+depth_relative_residual_quantiles = [0.000000040, 0.000020098, 0.000040740, 0.000087569, 0.000178794, 0.000410505, 0.005915445]
+depth_source_pixel_coverage_ratio = [1.027589, 1.003398, 1.009625, 1.003369, 1.002345, 1.005493, 1.001343, 0.999771, 1.015498, 0.999621, 1.006378, 1.003032, 0.987601, 0.991770, 0.993529, 1.003651]
 
 base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
 distinct_view_selection = [28.964424, 25.425258, 20.478244, 16.511341, 89.752394, 93.950190]
 photometric_consensus_selection = [27.686311, 25.274659, 18.880599, 16.297101, 68.414999, 95.276718]
+depth_residual_selection = [28.642102, 25.148815, 20.134843, 16.242916, 82.751284, 93.716643]
 base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
 distinct_view_validation = [28.686225, 25.386025, 20.097181, 16.305248, 88.396533, 94.546214]
 photometric_consensus_validation = [27.205590, 25.533359, 18.349028, 16.421020, 67.135592, 95.765491]
+depth_residual_validation = [28.383410, 25.169954, 19.827315, 16.096858, 81.577821, 94.318897]
 
 base_truth_consensus_median = 0.498183
 distinct_view_truth_consensus_median = 0.484965
 photometric_consensus_truth_consensus_median = 0.516710
+depth_residual_truth_consensus_median = 0.442140
 base_exclusive_truth_consensus_median = 0.568214
 distinct_view_exclusive_truth_consensus_median = 0.578838
 photometric_consensus_exclusive_truth_consensus_median = 0.573074
+depth_residual_exclusive_truth_consensus_median = 0.568243
 held_splits_opened = false
 
-maximum_peak_memory_bytes = 460664832
+maximum_peak_memory_bytes = 466829312
 memory_swap_bytes = 0
 memory_max_events = 0
 oom_events = 0
 gpu_faults = 0
-artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs-640/{fixed-budget,optical-budget} and /tmp/blade-volume-bear-640-{budget,optical}-*.log (gitignored)"
-verdict = "reject both fixed-budget ranks before Cow: the production rank loses identity and every mean, while photometric-normal coherence improves identity but selects redundant interior support and catastrophically lowers recall; preserve distinct-view support as the primary rank and test depth consistency only as a tie-breaker"
+artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs-640/{fixed-budget,optical-budget,depth-budget} and /tmp/blade-volume-bear-640-{budget,optical,depth}-*.log (gitignored)"
+verdict = "reject all fixed-budget ranks before Cow: production confidence loses identity and every mean; photometric-normal coherence improves identity but destroys recall; relative source-depth residuals are only 4e-5 at median, preserve source-pixel coverage, yet lower identity and lose roughly ten recall points; stop ranking nearly equivalent COLMAP groups and trace accepted source observations through Gaussian support fitting instead"

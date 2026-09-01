@@ -1669,11 +1669,20 @@ a deterministic repeat agree within the measured training variance.
   median ownership 0.498 to 0.517, but loses 23--24 recall points and
   1.80--2.06 dB. Reject both before Cow or held data: normal coherence selects
   redundant interior samples, not image-space support.
-- [ ] Preserve distinct-view count as the primary fixed-budget invariant and
+- [x] Preserve distinct-view count as the primary fixed-budget invariant and
   test source-view depth residual only as the tie-breaker ahead of geometric
-  confidence. Measure its coverage and identity on Bear before fitting; fit
-  only if it preserves baseline projected support. Keep whole groups and
-  point-only output, and do not tune thresholds or open held splits.
+  confidence. At the exact production boundary it selects 11,543 groups,
+  drops the same 17 outliers, and raises aggregate source-pixel coverage 0.55%,
+  but fitted median ownership falls 0.498 to 0.442. Internal selection and
+  validation lose 0.85/0.88 dB mean and 9.8/9.5 recall points. Reject it
+  without tuning, Cow, or held data.
+- [ ] Preserve the accepted 320 px geometry and trace each retained fusion
+  group's measured source observations through Gaussian support fitting.
+  Before changing the optimizer, test a construction-only provenance recovery
+  oracle: only low-opacity particles may recover their initialized support,
+  and only when their initialized footprint remains inside the masks of the
+  source views that actually observed that group. Require every Bear internal
+  mean/tail, recall, and precision before an unchanged Cow replay.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

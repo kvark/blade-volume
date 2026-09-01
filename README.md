@@ -292,9 +292,11 @@ a convincing real-world result.
   existing distinct-view/confidence rank loses 0.53--0.58 dB mean, and making
   two-fold photometric-normal consensus primary raises median ownership from
   0.498 to 0.517 but destroys about 24 recall points and loses 1.80--2.06 dB.
-  Coherent interior samples are not a substitute for silhouette support. The
-  next geometry gate must preserve distinct-view coverage first and test depth
-  consistency only as a tie-breaker.
+  Coherent interior samples are not a substitute for silhouette support. A
+  final exact-pipeline depth-residual tie-break preserves aggregate source
+  pixels but lowers median ownership to 0.442 and loses about ten recall
+  points. Group ranking is closed; the next gate follows each retained group's
+  measured source observations through Gaussian support fitting.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow,bear}/`.
 
