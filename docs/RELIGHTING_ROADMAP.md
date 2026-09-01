@@ -47,7 +47,11 @@ not contain or fall back to polygonal geometry.
   tuning. A frozen early-integration follow-up inserts the same patch before
   material/normal/Gaussian fitting; it raises recall slightly but lowers
   precision and every Gaussian PSNR mean/tail on the official split. Recover a
-  denser connected point layer inside the shared geometry objective next.
+  denser connected point layer inside the shared geometry objective next. A
+  perspective-normal integration diagnostic grows the patch to 500 surfels,
+  but even its strict three-camera voxel subset loses validation precision and
+  whole-frame mean. Use independent dense stereo depth next; normal integration
+  is not a substitute.
 - Training-mask filtering gives a clean, reproducible gain on a fresh
   OpenIllumination object, but the excluded-light result remains too uniform
   where the photograph contains directional self-shadowing.
@@ -1493,6 +1497,10 @@ a deterministic repeat agree within the measured training variance.
   Gaussian fitting. Reject it after serialization because all four official
   camera/light cells gain only recall while losing precision and every
   Gaussian PSNR mean/tail.
+- [x] Integrate perspective depth from calibrated photometric normals around
+  the verified Reading tracks. Reject one-, two-, and three-source fused point
+  layers when the strict 12-surfel arm still loses validation whole-frame mean
+  and precision; do not tune appearance or open its official split.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

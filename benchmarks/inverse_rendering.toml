@@ -5870,3 +5870,25 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/reading-16k/missing-surface-joint (gitignored)"
 verdict = "reject without holdout tuning: early integration preserves 14 more Gaussians and slightly raises recall, but lowers precision and every Gaussian whole-frame/foreground mean and tail in all four fitted/held camera/light cells; sparse correspondence support is insufficient even before material and Gaussian fitting"
+
+[diligent_mv.rejected_reading_normal_integration]
+date = "2026-09-01"
+protocol = "selected Reading track component only; independently integrate perspective log-depth from 24-light photometric normals in each matching camera over a fixed 8-pixel foreground neighborhood; anchor depth only at verified tracks; require agreement with at least three integrated cameras within two pixel footprints; voxel-fuse at the median source footprint; screen fixed one/two/three emitting-camera subsets at 0.05 opacity and the already selected 0.5 response on disjoint internal camera groups; write no asset and never open the official candidate split"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+selection_control = [29.795905, 26.840834, 19.391786, 16.171259, 91.033146, 96.175718]
+validation_control = [29.332948, 25.599171, 19.015456, 15.359089, 90.759918, 96.200196]
+one_source_surfels = 500
+one_source_selection = [29.798970, 26.842249, 19.395583, 16.172586, 91.056257, 96.165240]
+one_source_validation = [29.335859, 25.601720, 19.019488, 15.361957, 90.776936, 96.188925]
+two_source_surfels = 117
+two_source_selection = [29.796567, 26.841148, 19.392573, 16.171369, 91.037455, 96.174137]
+two_source_validation = [29.333284, 25.599452, 19.015958, 15.359405, 90.764106, 96.198055]
+three_source_surfels = 12
+three_source_selection = [29.795946, 26.840940, 19.391846, 16.171282, 91.033627, 96.174606]
+three_source_validation = [29.332918, 25.599218, 19.015461, 15.359142, 90.759989, 96.199364]
+maximum_peak_memory_bytes = 228212736
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+official_candidate_split_opened = false
+verdict = "reject and keep ignored: denser normal-integrated layers improve quality and recall but lose precision; strict three-camera voxel emission reduces the layer to 12 surfels and still regresses validation whole-frame mean and precision, so independent dense stereo depth is required"

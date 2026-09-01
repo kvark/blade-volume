@@ -885,6 +885,22 @@ tail. On held lights and held cameras, whole-frame moves
 `18.465189/16.084684→18.452256/16.055984` dB. Early sparse seeding is therefore
 rejected without response or optimizer tuning against the official result.
 
+A final diagnostic asks whether calibrated photometric normals can turn the
+verified tracks into the denser connected layer that sparse seeding lacks. In
+each matching camera, it integrates perspective log-depth over an eight-pixel
+foreground neighborhood, anchored only by the selected independent tracks.
+Samples must agree with at least three independently integrated cameras within
+two source-pixel footprints. This yields 642 confirmed camera samples and 500
+one-source voxels; requiring two source cameras leaves 117 surfels and three
+leaves 12. At fixed `0.05` opacity and the already selected `0.5` response, the
+500- and 117-surfel candidates improve every internal PSNR measure and recall
+but lose precision. The strict 12-surfel candidate also lowers validation
+whole-frame mean `29.332948→29.332918` dB and precision
+`96.200196%→96.199364%`. No asset is written and this candidate never sees the
+official split. The bounded prototype stays ignored: calibrated normals carry
+local shape, but sparse anchors do not make their integrated depths independent
+multi-view measurements.
+
 Static training, production fitting, and the complete diagnostic peak at 134.4,
 232.2, and 283.9 MiB respectively; the early-integration fit peaks at 323.1 MiB.
 All scopes report no swap, cgroup memory event, or GPU fault.
@@ -893,8 +909,9 @@ Generated results live under
 controls now say to stop relaxing descriptors, radii, response scales, or patch
 thresholds. Simply introducing the same sparse seed earlier also fails. The
 next missing-surface experiment must reconstruct a denser connected point layer
-inside the shared geometry objective, rather than append or seed isolated
-correspondences.
+from independent multi-view depth. A fixed-pose dense-stereo pass over the
+view-invariant photometric-albedo images is the next untested route; it should
+remain diagnostic until complete internal renders pass.
 
 The datasets below do not satisfy the two-axis gate, but can support isolated
 capture research:

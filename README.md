@@ -207,6 +207,11 @@ a convincing real-world result.
   lowers precision and every Gaussian PSNR mean/tail. Held-light/held-camera
   foreground moves `18.4652/16.0847→18.4523/16.0560` dB, so early sparse
   seeding is rejected too.
+  Perspective-normal integration grows the verified patch to 500 point
+  samples, but even requiring three cameras to emit the same voxel leaves 12
+  surfels that still lose validation precision and whole-frame mean. The next
+  dense layer needs independent stereo depth, not normals integrated from a
+  sparse depth anchor.
 
 The staged directional-residual models and telemetry are under
 `target/audit-runs/directional-staged-validation/`; the selected longer Bonsai
