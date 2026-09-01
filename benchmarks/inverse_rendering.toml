@@ -6643,8 +6643,10 @@ validation_dominant_coverage_fraction_quantiles = [0.131951, 0.331345, 0.422357,
 
 base_selection = [29.482933, 25.549787, 20.871674, 16.546408]
 candidate_selection = [28.635709, 25.316711, 19.913229, 16.329669]
+coherent_selection = [29.351124, 25.272786, 20.808969, 16.278729]
 base_validation = [29.252489, 25.256953, 20.618210, 16.096382]
 candidate_validation = [28.456094, 25.026488, 19.714620, 15.867179]
+coherent_validation = [29.135883, 25.013232, 20.551694, 15.864158]
 
 held_splits_opened = false
 maximum_peak_memory_bytes = 483790848
@@ -6653,4 +6655,4 @@ memory_max_events = 0
 oom_events = 0
 gpu_faults = 0
 artifacts = "/tmp/blade-volume-bear-dominant-group*.log and target/audit-tools/diligent_tracks (gitignored)"
-verdict = "reject before Cow and change no compositor: most groups need several contributors for their radiance, and hard maximum-response ownership loses every Bear mean and tail by much more than run variance; surface correspondence must improve upstream without discarding the established optical mixture"
+verdict = "reject before Cow and change no compositor: most groups need several contributors for their radiance, hard maximum-response ownership loses every Bear mean and tail by much more than run variance, and a weight-preserving averaged position/albedo/normal still loses every mean and tail; surface correspondence must improve upstream without replacing the established optical mixture"

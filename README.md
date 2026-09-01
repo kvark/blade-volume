@@ -285,8 +285,9 @@ a convincing real-world result.
   support. An even smaller exact-alpha control that shades each surface group
   with only its maximum-response Gaussian also fails badly: the winner carries
   just 58% of median group weight and exclusive shading loses 0.8--1.0 dB
-  mean. Hard compositor ownership is not a correspondence fix. A fresh 640 px
-  Bear reconstruction then raises the cloud from
+  mean. Preserving all weights while collapsing each group to one averaged
+  tangent still loses every mean/tail. Compositor ownership is not a
+  correspondence fix. A fresh 640 px Bear reconstruction then raises the cloud from
   11,543 to 26,105 points and ownership consensus from 0.498 to 0.601, but
   loses about ten recall points and 1.2--1.4 dB mean. Scaling radii by the
   point-density area ratio raises consensus to 0.617 and restores recall, but
