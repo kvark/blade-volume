@@ -243,6 +243,13 @@ a convincing real-world result.
   exact final Gaussian centers/scales still trails by 2.0--2.4 dB. Keep
   PowerFoam PBR experimental; do not add model/runtime APIs for this rejected
   transfer—or another proxy image, support threshold, or polygonal fallback.
+  A final fixed-Gaussian residual audit now separates those concerns: only
+  about 10% of Cow error comes from missed foreground, while 81--84% lies on
+  already-covered foreground. A 12-fit/12-held-light material control gains
+  0.9--1.3 dB, and photometric normals plus material gain 3.1--3.3 dB. The next
+  reconstruction gate therefore freezes cloud geometry and learns particle
+  shading normals from light contrast; it does not add a mesh or another
+  renderer.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow}/`.
 

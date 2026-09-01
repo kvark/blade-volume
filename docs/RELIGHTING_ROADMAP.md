@@ -1562,10 +1562,19 @@ a deterministic repeat agree within the measured training variance.
   gains 0.6--0.7 dB and normals are neutral, but the exact final-Gaussian
   geometry repeat still trails Gaussian foreground means by 2.54/2.13 dB on
   Cow selection/validation. End this representation-transfer branch.
-- [ ] Attribute the fixed final-Gaussian residual by rendering matched
+- [x] Attribute the fixed final-Gaussian residual by rendering matched
   geometry, coverage, shading-normal, and material controls from one checkpoint.
-  Choose the next reconstruction loss from that residual; do not infer it from
-  another post-fit point-cloud conversion.
+  On Cow, correctly covered foreground accounts for 81.36%/83.54% of
+  selection/validation squared error. A perfect coverage oracle adds only
+  0.72/0.64 dB; an interleaved 12-fit/12-held-light material control adds
+  0.91/1.31 dB, while photometric normal plus diffuse material adds 3.06/3.33
+  dB. Choose normal-from-light-contrast supervision, with geometry and support
+  frozen, rather than another coverage or representation branch.
+- [ ] Lift the cross-light image-space normal control to the fixed Gaussian's
+  particles. Freeze centers, covariance, opacity, and assignments; collect
+  compositing responsibility on one 12-light fold, fit only normal plus diffuse
+  albedo, and score the interleaved fold through the production renderer. Do
+  not add another shader, graph operation, or stored field for this gate.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

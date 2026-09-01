@@ -6141,3 +6141,25 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks and /tmp/blade-volume-powerfoam-reference-cow-*.log (gitignored)"
 verdict = "reject a production oriented-PowerFoam PBR backend from this fixed transfer: full support exchanges precision for recall, the analytic hard/soft radius conversion restores geometry but not appearance, ownership-specific and locally interpolated albedo close only part of the gap, normals do not help, and exact final-Gaussian geometry remains 2.0-2.4 dB behind; end this transfer branch without storage or WGSL"
+
+[diligent_mv.fixed_gaussian_residual_attribution]
+date = "2026-09-01"
+protocol = "Cow-only ignored diagnostic on one persisted final PBR Gaussian; dump the production finite-light renderer, classify pixels with exact 64-candidate CPU Gaussian alpha at the production 0.03 cutoff, fit per-pixel RGB gain or photometric normal plus bounded diffuse material on alternating 12-light folds, and score only the opposite fold before reversing; selection cameras 4/9/14/19 and validation cameras 5/10/15/20"
+
+production_selection = [32.649566, 29.900484, 21.845238, 18.790389, 88.525740, 95.104730]
+production_validation = [31.591812, 28.237596, 20.628511, 17.398190, 88.496329, 94.926575]
+png_baseline_psnr_db = [32.435954, 31.369391]
+coverage_oracle_psnr_db = [33.154775, 32.007894]
+cross_light_material_oracle_psnr_db = [33.346627, 32.678550]
+cross_light_normal_material_oracle_psnr_db = [35.495876, 34.702675]
+missed_foreground_error_percent = [10.177782, 9.632555]
+covered_foreground_error_percent = [81.359884, 83.539844]
+spilled_background_error_percent = [5.076473, 4.039838]
+empty_background_error_percent = [3.385862, 2.787763]
+maximum_peak_memory_bytes = 427638784
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/cow/fixed-gaussian-residual and /tmp/blade-volume-fixed-residual-cow-cross-light.log (gitignored)"
+verdict = "select a fixed-geometry shading-normal gate: correctly covered foreground dominates residual, cross-light material helps modestly, and cross-light normal plus material supplies another 2.0-2.2 dB; next lift the control to Gaussian particles with centers, covariance, opacity, and support frozen"

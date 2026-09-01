@@ -1859,6 +1859,37 @@ is already close (`88.35/87.34%` recall and `95.20/94.73%` precision), so this
 is not a hidden pre-Gaussian-center mismatch. No PowerFoam PBR storage or
 shader follows from this experiment.
 
+### Fixed-Gaussian residual attribution
+
+The next Cow diagnostic returns to one persisted final Gaussian rather than
+converting it to another point-cloud representation. Production point-light
+renders are paired with exact Gaussian opacity from the CPU oracle. Every pixel
+is classified as missed foreground, covered foreground, spilled background, or
+empty background. Appearance controls keep the same geometry and opacity. To
+avoid an in-sample oracle, each per-pixel RGB gain and photometric normal plus
+diffuse material is fit on one interleaved set of 12 construction lights and
+scored on the other 12, then the folds are reversed.
+
+The production scorer remains the authoritative baseline at
+`32.6496/31.5918` dB selection/validation mean. The diagnostic reads its 8-bit
+PNG dumps, so its corresponding baselines are lower at `32.4360/31.3694` dB;
+all attribution deltas use that same quantized boundary. Correctly covered
+foreground contributes `81.36%/83.54%` of squared error. Missed foreground
+contributes only `10.18%/9.63%`, and spill contributes `5.08%/4.04%`.
+
+A perfect coverage oracle reaches `33.1548/32.0079` dB, only `+0.72/+0.64`
+dB. Cross-light material scaling reaches `33.3466/32.6786` dB. Replacing that
+with the held-light prediction from a photometric normal and bounded diffuse
+material reaches `35.4959/34.7027` dB, an additional `+2.15/+2.02` dB. This is
+an upper bound at image pixels, not a result model, but it selects the next
+loss cleanly: fit particle shading normals from light contrast on the exact
+final Gaussian while freezing geometry, opacity, and support. The ignored
+tool and 384 render/photo dumps are under
+`target/audit-tools/diligent_tracks/` and
+`target/audit-runs/diligent-mv/cow/fixed-gaussian-residual/`. The 4 GiB scope
+peaks at 427,638,784 bytes with zero swap, memory event, OOM, throttle, or GPU
+fault.
+
 ## Capture direction
 
 For our own controlled capture, use one locked camera at a set of repeatable
