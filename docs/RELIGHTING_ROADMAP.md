@@ -1676,13 +1676,20 @@ a deterministic repeat agree within the measured training variance.
   but fitted median ownership falls 0.498 to 0.442. Internal selection and
   validation lose 0.85/0.88 dB mean and 9.8/9.5 recall points. Reject it
   without tuning, Cow, or held data.
-- [ ] Preserve the accepted 320 px geometry and trace each retained fusion
+- [x] Preserve the accepted 320 px geometry and trace each retained fusion
   group's measured source observations through Gaussian support fitting.
-  Before changing the optimizer, test a construction-only provenance recovery
-  oracle: only low-opacity particles may recover their initialized support,
-  and only when their initialized footprint remains inside the masks of the
-  source views that actually observed that group. Require every Bear internal
-  mean/tail, recall, and precision before an unchanged Cow replay.
+  A construction-only oracle restores initialized opacity/scale only below
+  0.05 opacity and only when the two-sigma footprint lies inside at least 97.5%
+  of the group's actual source-mask samples. Just 40/11,543 Bear particles are
+  suppressed and 31 qualify. Validation improves throughout, but selection
+  whole-frame mean loses 0.0029 dB and precision loses on both splits. Reject
+  without subset tuning, Cow, or an optimizer/API change: broad pruning is not
+  the remaining Bear failure.
+- [ ] Stop modifying accepted geometry/support and return to the released
+  eight-site directional appearance stage. Profile its backward graph at a
+  production ray batch, identify the dominant allocations and dispatches, and
+  reduce cost using existing Meganeura operations/shader mutation only. Keep
+  the table opt-in until an unchanged two-scene held-view gate passes.
 - [x] Put all four light/camera stacks in one optimizer session with one global
   nuisance appearance; reject it because it collapses support when density is
   trainable and repeats the Pot2/Cow transfer failure when density is frozen.

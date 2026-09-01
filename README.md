@@ -295,8 +295,11 @@ a convincing real-world result.
   Coherent interior samples are not a substitute for silhouette support. A
   final exact-pipeline depth-residual tie-break preserves aggregate source
   pixels but lowers median ownership to 0.442 and loses about ten recall
-  points. Group ranking is closed; the next gate follows each retained group's
-  measured source observations through Gaussian support fitting.
+  points. Group ranking is closed. Following retained source observations into
+  a narrow support recovery restores 31 of only 40 suppressed particles and
+  improves most values, but loses 0.0029 dB selection mean and precision on
+  both splits. Broad support collapse is not the Bear bottleneck, and no
+  recovery policy is retained.
   Generated models, renders, and telemetry are under
   `target/audit-runs/diligent-mv/{reading-16k,cow,bear}/`.
 

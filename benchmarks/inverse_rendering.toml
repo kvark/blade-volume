@@ -6515,3 +6515,28 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs-640/{fixed-budget,optical-budget,depth-budget} and /tmp/blade-volume-bear-640-{budget,optical,depth}-*.log (gitignored)"
 verdict = "reject all fixed-budget ranks before Cow: production confidence loses identity and every mean; photometric-normal coherence improves identity but destroys recall; relative source-depth residuals are only 4e-5 at median, preserve source-pixel coverage, yet lower identity and lose roughly ten recall points; stop ranking nearly equivalent COLMAP groups and trace accepted source observations through Gaussian support fitting instead"
+
+[diligent_mv.rejected_bear_provenance_support_recovery]
+date = "2026-09-01"
+protocol = "accepted 320px Bear geometry and fitted PBR Gaussian remain fixed; exactly map every retained surfel to its complete native fusion group; for particles below the established 0.05 persistence opacity only, restore initialized opacity and scale when the center and six initialized two-sigma axis endpoints remain inside at least 97.5% of mask samples from only the construction cameras that originally observed that group; require every internal metric before Cow or held data"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+particles = 11543
+low_opacity_particles = 40
+eligible_restored_particles = 31
+restored_source_view_quantiles = [2, 2, 2, 2, 4, 5, 8]
+restored_previous_opacity_quantiles = [0.022120, 0.036126, 0.038088, 0.043166, 0.046781, 0.049144, 0.049584]
+
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+candidate_selection = [29.486808, 25.482303, 20.932045, 16.515305, 92.573295, 95.411369]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+candidate_validation = [29.271975, 25.218318, 20.690265, 16.090956, 91.109223, 95.738025]
+
+held_splits_opened = false
+maximum_peak_memory_bytes = 485916672
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-runs/diligent-mv/bear/albedo-mvs/provenance-support and /tmp/blade-volume-bear-provenance-*.log (gitignored)"
+verdict = "reject before Cow and change no optimizer/API: recovery improves validation and most selection values, but loses selection whole-frame mean and both precision values; only 40 particles were suppressed, so broad support pruning is not the Bear bottleneck and subset tuning would not justify a policy"
