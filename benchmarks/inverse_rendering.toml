@@ -6841,3 +6841,37 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks/src/bin/fusion_owner.rs and /tmp/blade-volume-bear-fine-optical* (gitignored)"
 verdict = "reject every direct normal transfer and keep production unchanged: exact source-ray ownership plus local-plane and depth consistency strongly enriches fine geometric accuracy and improves every fitted-camera aggregate under both fitted and held lights, but the broad, independent-light-consensus, MVS-normal, and two-group-corroborated variants all lose novel-view means or tails; the same coarse Gaussian does not carry one transferable physical surface identity across cameras, so the next proposal must subdivide support using cross-view first-surface evidence before fitting normals rather than add another post-fit selector, shader, operation, or stored table"
+
+[diligent_mv.rejected_bear_optical_support_split]
+date = "2026-09-02"
+protocol = "reuse only the construction-selected optical fine groups from the preceding gate; require at least two groups on one coarse Gaussian and an established half-radius separation; first replace each selected particle with children at the two farthest measured fine centers using the stock compositing-preserving opacity split and 1.6 densification scale reduction; then run the unchanged 2,400-step calibrated multi-light continuation and compare it to an unsplit same-schedule control; after rejection, test one analytic anchor-preserving variant with one child at the established center, one at the farthest fine site, exact opacity division, and a centered scale derived to preserve the production 0.03 cutoff footprint; do not open official held data, tune a split fraction, or add an optimizer mode"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+farthest_pair_split_particles = 33
+farthest_pair_total_points = 11576
+farthest_pair_separation_over_radius_quantiles = [0.060799, 0.159266, 0.208926, 0.269155, 0.379085, 0.513173, 0.979134]
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+farthest_pair_selection = [29.490025, 25.473962, 20.929503, 16.508220, 92.510827, 95.459534]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+farthest_pair_validation = [29.267100, 25.211424, 20.682294, 16.082855, 91.031375, 95.767023]
+
+continued_base_selection = [29.726289, 25.655169, 21.094918, 16.670494, 92.479564, 96.093088]
+continued_farthest_pair_selection = [29.726041, 25.654051, 21.093997, 16.669591, 92.456476, 96.106276]
+continued_base_validation = [29.376937, 25.259702, 20.735269, 16.126149, 91.067977, 96.265614]
+continued_farthest_pair_validation = [29.379196, 25.267307, 20.735192, 16.132485, 91.030343, 96.284199]
+
+anchor_preserving_split_particles = 6
+anchor_preserving_total_points = 11549
+anchor_preserving_separation_over_radius_quantiles = [0.082766, 0.189358, 0.237628, 0.298444, 0.362254, 0.425314, 0.636192]
+anchor_preserving_selection = [29.489844, 25.473058, 20.930141, 16.507071, 92.535197, 95.449043]
+anchor_preserving_validation = [29.267325, 25.211410, 20.684441, 16.083820, 91.077521, 95.749985]
+continued_anchor_preserving_selection = [29.725470, 25.655527, 21.094795, 16.670676, 92.478812, 96.092319]
+continued_anchor_preserving_validation = [29.376594, 25.259599, 20.734849, 16.126078, 91.068864, 96.264733]
+
+maximum_peak_memory_bytes = 470872064
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/diligent_tracks and /tmp/blade-volume-bear-fine-optical-split* (gitignored)"
+verdict = "reject and keep the stock cloud: farthest-pair replacement is already recall-negative and, against an identical continuation, loses every selection PSNR, validation foreground mean, and recall; preserving the original cutoff footprint admits only six above-cutoff splits and remains mean-negative; most ambiguous accepted particles carry too little opacity to create two renderable children without deleting established support or inventing optical mass, so separate surface support must be proposed before coarse Gaussian opacity/material fitting rather than repaired afterward"

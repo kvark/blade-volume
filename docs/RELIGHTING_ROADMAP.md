@@ -1725,6 +1725,16 @@ a deterministic repeat agree within the measured training variance.
   construction signal, but a coarse Gaussian still crosses physical surface
   identities; subdivide support using cross-view first-surface evidence before
   fitting another normal.
+- [x] Subdivide only the optically corroborated coarse supports with stock
+  Gaussian children. Replacing 33 particles by farthest-site pairs preserves
+  total composited opacity and uses the established 1.6 densification scale,
+  but loses recall before fitting. Against an identical 2,400-step unsplit
+  continuation it loses every selection PSNR, validation foreground mean, and
+  recall on both splits. An analytic follow-up keeps one child at the original
+  center and rescales it to preserve the exact 0.03-cutoff footprint; only six
+  particles have enough opacity to leave two visible children, and both means
+  still regress. Add no split mode. Separate physical support must be created
+  before coarse opacity and material fitting, not repaired afterward.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526
