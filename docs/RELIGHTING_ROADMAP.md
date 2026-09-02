@@ -1710,6 +1710,21 @@ a deterministic repeat agree within the measured training variance.
   loses selection/validation whole means by 0.12/0.81 dB and both foreground
   means. Reject before Cow, storage, or WGSL. Better fine geometry helps hard
   views but does not make local cross-view ownership reliable.
+- [x] Replace nearest-neighbor assignment with exact optical correspondence.
+  Trace all 92,744 fine-group source rays through the frozen coarse Gaussian;
+  retain a fine point only when one coarse particle wins at least two and
+  three quarters of its observations, its exact response point agrees with
+  fused depth within one source pixel, and its local tangent plane passes the
+  existing 0.5-pixel rule. This selects 1,283 fine groups on 666 particles and
+  removes nearly 99% of the evaluator-only greater-than-ten-pixel error tail.
+  Direct photometric normals then improve every fitted-camera aggregate under
+  fitted and held lights, but lose novel-view means and tails. Independent
+  light-fold consensus, MVS normals, and a two-fine-group corroboration rule
+  repeat the novel-view failure. Reject all post-fit transfers and add no
+  field, table, shader, op, or dependency. Optical ownership is a useful
+  construction signal, but a coarse Gaussian still crosses physical surface
+  identities; subdivide support using cross-view first-surface evidence before
+  fitting another normal.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526

@@ -6785,3 +6785,59 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "/tmp/blade-volume-bear-fine-sites*.log, /tmp/blade-volume-bear-fine-sites-local.log, and target/audit-tools/diligent_tracks (gitignored)"
 verdict = "reject before Cow and add no stored sites/WGSL: fine geometry strongly improves hard-view tails, confirming useful high-resolution evidence, but loses every mean and its refitted diffuse albedo is worse; filtering sites by the independently useful local-plane rule partly recovers selection quality yet still loses every mean, so nearest fine points do not establish one cross-view physical owner inside a coarse optical support"
+
+[diligent_mv.rejected_bear_optical_normal_transfer]
+date = "2026-09-02"
+protocol = "freeze the accepted 320px Bear Gaussian geometry, covariance, opacity, material, candidates, and depth grouping; trace all 92,744 actual source rays of the post-hull 640px fusion through the exact 64-candidate compositor at its production 0.03 cutoff; assign a fine group only when the same coarse Gaussian has maximum T-alpha on at least two and three quarters of its source observations, its response point is within one mean source-pixel footprint of fused depth, and the independent 0.5px local-plane rule passes; transfer only a point normal through the stock PBR Gaussian representation; after the broad internal gate passes, score fitted and held lights on disjoint fitted cameras and untouched held cameras; run one independent-light-consensus control, one MVS-normal control, and one two-fine-group normal-corroboration control without threshold sweeps"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+fine_post_hull_groups = 26199
+fine_source_rays = 92744
+source_rays_without_coarse_owner = 12
+coarse_gaussians = 11543
+winning_t_alpha_quantiles = [0.030021, 0.127766, 0.157570, 0.200145, 0.259462, 0.330491, 0.828736]
+dominant_owner_ratio_quantiles = [0.0, 0.4, 0.5, 0.5, 1.0, 1.0, 1.0]
+dominant_owner_equals_nearest = 6697
+three_quarter_owner_groups = 8682
+three_quarter_owner_bad_tail = 589
+local_plane_and_owner_groups = 5352
+local_plane_and_owner_bad_tail = 237
+local_plane_owner_depth_groups = 1283
+local_plane_owner_depth_bad_tail = 30
+local_plane_owner_depth_truth_distance_quantiles = [0.031337, 0.278672, 0.446382, 0.853546, 1.930987, 3.874572, 18.530102]
+optically_populated_coarse_gaussians = 666
+
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+broad_photometric_normal_selection = [29.590237, 25.697686, 21.049826, 16.718308, 92.536945, 95.448278]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+broad_photometric_normal_validation = [29.273925, 25.263201, 20.702579, 16.120475, 91.079857, 95.750110]
+base_held_camera = [28.997326, 25.663669, 20.292539, 16.611396, 90.517643, 96.724564]
+broad_photometric_normal_held_camera = [28.955450, 25.528998, 20.252742, 16.592302, 90.517643, 96.724564]
+base_held_light_selection = [29.577273, 26.797929, 20.861560, 17.948162, 92.536945, 95.448278]
+broad_photometric_normal_held_light_selection = [29.665183, 26.953238, 20.969403, 18.082139, 92.536945, 95.448278]
+base_held_light_validation = [29.361869, 26.244436, 20.634055, 17.188842, 91.079857, 95.750110]
+broad_photometric_normal_held_light_validation = [29.331815, 26.252576, 20.625054, 17.175164, 91.079857, 95.750110]
+base_held_light_held_camera = [29.017640, 26.504764, 20.206586, 17.605225, 90.517643, 96.724564]
+broad_photometric_normal_held_light_held_camera = [28.946152, 26.303700, 20.147146, 17.435995, 90.517643, 96.724564]
+
+independent_light_consensus_changed_points = 140
+independent_light_consensus_selection = [29.506961, 25.563072, 20.950595, 16.599443, 92.536945, 95.448278]
+independent_light_consensus_validation = [29.263799, 25.220729, 20.681109, 16.093286, 91.079857, 95.750110]
+independent_light_consensus_held_camera = [28.988338, 25.719809, 20.284511, 16.617960, 90.517643, 96.724564]
+independent_light_consensus_held_light_held_camera = [29.000255, 26.515194, 20.191982, 17.604730, 90.517643, 96.724564]
+
+corroborated_changed_points = 168
+corroborated_selection = [29.527626, 25.555077, 20.972611, 16.589742, 92.536945, 95.448278]
+corroborated_validation = [29.278692, 25.262152, 20.696786, 16.128933, 91.079857, 95.750110]
+corroborated_held_camera = [28.977482, 25.580569, 20.270706, 16.644004, 90.517643, 96.724564]
+corroborated_held_light_selection = [29.617939, 26.844278, 20.907367, 17.993936, 92.536945, 95.448278]
+corroborated_held_light_validation = [29.368336, 26.275514, 20.645495, 17.211820, 91.079857, 95.750110]
+corroborated_held_light_held_camera = [28.991091, 26.366991, 20.183494, 17.506249, 90.517643, 96.724564]
+
+maximum_peak_memory_bytes = 486072320
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/diligent_tracks/src/bin/fusion_owner.rs and /tmp/blade-volume-bear-fine-optical* (gitignored)"
+verdict = "reject every direct normal transfer and keep production unchanged: exact source-ray ownership plus local-plane and depth consistency strongly enriches fine geometric accuracy and improves every fitted-camera aggregate under both fitted and held lights, but the broad, independent-light-consensus, MVS-normal, and two-group-corroborated variants all lose novel-view means or tails; the same coarse Gaussian does not carry one transferable physical surface identity across cameras, so the next proposal must subdivide support using cross-view first-surface evidence before fitting normals rather than add another post-fit selector, shader, operation, or stored table"
