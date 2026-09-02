@@ -7020,10 +7020,14 @@ base_held_light_held_camera = [28.963778, 26.525643, 20.115169, 17.592921]
 normal_held_light_held_camera = [28.958428, 26.552597, 20.110446, 17.595140]
 normal_albedo_held_light_held_camera = [28.958561, 26.547765, 20.109831, 17.594662]
 
+verified_site_separation_over_parent_three_sigma_quantiles = [0.037400, 0.104912, 0.156886, 0.226584, 0.299348, 0.369209, 0.539966]
+verified_sites_beyond_half_radius = 2
+upstream_child_fit_run = false
+
 maximum_peak_memory_bytes = 560857088
 memory_swap_bytes = 0
 memory_max_events = 0
 oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks (gitignored)"
-verdict = "reject before production design: choosing a verified normal at each response location improves every fitted-camera row and held-camera foreground quality, but loses novel-view means under held lights; fine albedo widens the losses, so neither a physical site table nor another shader/training branch is justified"
+verdict = "reject before production design: choosing a verified normal at each response location improves every fitted-camera row and held-camera foreground quality, but loses novel-view means under held lights; fine albedo widens the losses, and only two sites are separated enough for the established child rule, so neither a physical site table, another shader/training branch, nor an upstream split fit is justified"

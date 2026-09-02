@@ -1783,7 +1783,10 @@ a deterministic repeat agree within the measured training variance.
   foreground mean) and held-light held cameras (`28.9638/20.1152→28.9584/
   20.1104` dB). Substituting fine albedo is worse. Add no stored physical site,
   shader branch, or training operation; local attribute selection cannot make
-  the underlying coarse optical support a transferable surface.
+  the underlying coarse optical support a transferable surface. Nor does it
+  justify another upstream child: verified-site distance has median 0.227 of
+  the parent three-sigma radius, and only 2/169 sites pass the already-used
+  half-radius split rule.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526
