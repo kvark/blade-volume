@@ -1733,8 +1733,12 @@ a deterministic repeat agree within the measured training variance.
   recall on both splits. An analytic follow-up keeps one child at the original
   center and rescales it to preserve the exact 0.03-cutoff footprint; only six
   particles have enough opacity to leave two visible children, and both means
-  still regress. Add no split mode. Separate physical support must be created
-  before coarse opacity and material fitting, not repaired afterward.
+  still regress. Moving the same 33 pairs into the point surface before
+  Gaussian opacity initialization makes every child trainable, but against an
+  unsplit model regenerated from the same saved surface it loses every
+  selection PSNR and recall on both splits. Add no split mode: these optical
+  pairs move support between views rather than establishing a stable second
+  surface.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526

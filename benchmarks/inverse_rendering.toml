@@ -6844,7 +6844,7 @@ verdict = "reject every direct normal transfer and keep production unchanged: ex
 
 [diligent_mv.rejected_bear_optical_support_split]
 date = "2026-09-02"
-protocol = "reuse only the construction-selected optical fine groups from the preceding gate; require at least two groups on one coarse Gaussian and an established half-radius separation; first replace each selected particle with children at the two farthest measured fine centers using the stock compositing-preserving opacity split and 1.6 densification scale reduction; then run the unchanged 2,400-step calibrated multi-light continuation and compare it to an unsplit same-schedule control; after rejection, test one analytic anchor-preserving variant with one child at the established center, one at the farthest fine site, exact opacity division, and a centered scale derived to preserve the production 0.03 cutoff footprint; do not open official held data, tune a split fraction, or add an optimizer mode"
+protocol = "reuse only the construction-selected optical fine groups from the preceding gate; require at least two groups on one coarse Gaussian and an established half-radius separation; first replace each selected particle with children at the two farthest measured fine centers using the stock compositing-preserving opacity split and 1.6 densification scale reduction; then run the unchanged 2,400-step calibrated multi-light continuation and compare it to an unsplit same-schedule control; after rejection, test one analytic anchor-preserving variant with one child at the established center, one at the farthest fine site, exact opacity division, and a centered scale derived to preserve the production 0.03 cutoff footprint; finally repeat the farthest-pair split in the saved point surface before Gaussian opacity initialization and compare its full fit to an unsplit model regenerated from that same surface; do not open official held data, tune a split fraction, or add an optimizer mode"
 metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
 
 farthest_pair_split_particles = 33
@@ -6868,10 +6868,17 @@ anchor_preserving_validation = [29.267325, 25.211410, 20.684441, 16.083820, 91.0
 continued_anchor_preserving_selection = [29.725470, 25.655527, 21.094795, 16.670676, 92.478812, 96.092319]
 continued_anchor_preserving_validation = [29.376594, 25.259599, 20.734849, 16.126078, 91.068864, 96.264733]
 
+upstream_split_surfels = 33
+upstream_total_points = 11576
+upstream_control_selection = [29.662220, 25.636735, 21.045036, 16.684493, 91.148540, 95.765578]
+upstream_split_selection = [29.661504, 25.634238, 21.044468, 16.682379, 91.139620, 95.767339]
+upstream_control_validation = [29.348639, 25.244494, 20.693089, 16.119678, 89.623849, 96.074604]
+upstream_split_validation = [29.349819, 25.250559, 20.693447, 16.124618, 89.604811, 96.079346]
+
 maximum_peak_memory_bytes = 470872064
 memory_swap_bytes = 0
 memory_max_events = 0
 oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks and /tmp/blade-volume-bear-fine-optical-split* (gitignored)"
-verdict = "reject and keep the stock cloud: farthest-pair replacement is already recall-negative and, against an identical continuation, loses every selection PSNR, validation foreground mean, and recall; preserving the original cutoff footprint admits only six above-cutoff splits and remains mean-negative; most ambiguous accepted particles carry too little opacity to create two renderable children without deleting established support or inventing optical mass, so separate surface support must be proposed before coarse Gaussian opacity/material fitting rather than repaired afterward"
+verdict = "reject and keep the stock cloud: farthest-pair replacement is already recall-negative and, against an identical continuation, loses every selection PSNR, validation foreground mean, and recall; preserving the original cutoff footprint admits only six above-cutoff splits and remains mean-negative; moving the same 33 splits ahead of opacity initialization gives every child trainable support but still loses every selection PSNR and recall on both splits against its regenerated control; optical site pairs move support between views rather than define a stable second surface, so add neither a post-fit nor upstream split mode"
