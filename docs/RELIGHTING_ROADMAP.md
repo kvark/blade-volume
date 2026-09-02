@@ -1776,6 +1776,14 @@ a deterministic repeat agree within the measured training variance.
   only 19 particles and already loses validation means. Reject both and add no
   depth/normal filter: even independently verified fine normals cannot be
   assigned as one camera-invariant attribute of the existing coarse support.
+- [x] Before designing a per-site PBR field, evaluate the same verified normals
+  in the existing response-local CPU oracle. Normal-only selection improves
+  every fitted-camera aggregate and all worst views. It is still negative on
+  held-light validation cameras (`29.3107/20.5385→29.3057/20.5376` dB whole/
+  foreground mean) and held-light held cameras (`28.9638/20.1152→28.9584/
+  20.1104` dB). Substituting fine albedo is worse. Add no stored physical site,
+  shader branch, or training operation; local attribute selection cannot make
+  the underlying coarse optical support a transferable surface.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526

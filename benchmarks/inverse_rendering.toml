@@ -6995,3 +6995,35 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks, /tmp/blade-volume-bear-first-surface-physical.log (gitignored)"
 verdict = "reject and leave production unchanged: tight depth plus calibrated cross-view physical-normal agreement makes the optical fine subset exceptionally clean and improves every internal metric when one corroborated group may transfer, but the exact candidate still loses novel-camera means under both fitted and held lights; the evidence certifies the fine normal, not a camera-invariant normal for the coarse Gaussian that owns its rays"
+
+[diligent_mv.rejected_bear_cross_view_physical_site]
+date = "2026-09-02"
+protocol = "reuse the frozen 169-group, 132-owner cross-view physical-normal candidate selected before held data; in the existing CPU exact-response oracle, choose the nearest verified fine site independently at each Gaussian response point while preserving coarse geometry, alpha, support, depth grouping, and total optical mass; compare normal-only and normal-plus-albedo variants on all fitted/held camera/light splits before adding any PointCloudModel field, shader, or training operation"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db"]
+
+base_selection = [29.482933, 25.549787, 20.871674, 16.546408]
+normal_selection = [29.501447, 25.625414, 20.893704, 16.620833]
+normal_albedo_selection = [29.498467, 25.615646, 20.886783, 16.610454]
+base_validation = [29.252489, 25.256953, 20.618210, 16.096382]
+normal_validation = [29.252541, 25.278014, 20.622382, 16.116145]
+normal_albedo_validation = [29.250952, 25.270962, 20.616908, 16.109172]
+base_held_camera = [28.978018, 25.697107, 20.232339, 16.595133]
+normal_held_camera = [28.977876, 25.742572, 20.232831, 16.602077]
+normal_albedo_held_camera = [28.976268, 25.736128, 20.230148, 16.601140]
+base_held_light_selection = [29.532048, 26.893918, 20.767974, 18.005675]
+normal_held_light_selection = [29.545879, 26.958698, 20.784612, 18.068809]
+normal_albedo_held_light_selection = [29.543691, 26.948325, 20.780493, 18.057839]
+base_held_light_validation = [29.310702, 26.303715, 20.538467, 17.213334]
+normal_held_light_validation = [29.305696, 26.319641, 20.537553, 17.227927]
+normal_albedo_held_light_validation = [29.304304, 26.311087, 20.533616, 17.219521]
+base_held_light_held_camera = [28.963778, 26.525643, 20.115169, 17.592921]
+normal_held_light_held_camera = [28.958428, 26.552597, 20.110446, 17.595140]
+normal_albedo_held_light_held_camera = [28.958561, 26.547765, 20.109831, 17.594662]
+
+maximum_peak_memory_bytes = 560857088
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/diligent_tracks (gitignored)"
+verdict = "reject before production design: choosing a verified normal at each response location improves every fitted-camera row and held-camera foreground quality, but loses novel-view means under held lights; fine albedo widens the losses, so neither a physical site table nor another shader/training branch is justified"
