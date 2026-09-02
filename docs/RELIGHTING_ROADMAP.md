@@ -1751,6 +1751,18 @@ a deterministic repeat agree within the measured training variance.
   61 per thousand for the plane rule alone. Reject before fitting: the same
   PatchMatch depth maps are not independent confirmation of their own
   coherent wrong layer, so add no visibility filter or training branch.
+- [x] Require every observation in a fusion group to be mutually consistent,
+  rather than only consistent with the greedy traversal's first sample. The
+  production-threshold pairwise clique retains 17,508/26,199 groups, but also
+  1,616/2,378 evaluator-only bad-tail points; adding the local-plane rule is
+  again slightly less selective than the plane rule alone. The audit exposes
+  graph re-entry—some groups carry 69 samples from at most ten distinct
+  cameras—but repeated-view groups are geometrically better, not worse.
+  Giving every camera one median vote moves only the upper decile, worsens
+  median truth distance from 1.343 to 1.356 source pixels, and improves just
+  2,266 groups. Reject reciprocal filtering and balanced representatives;
+  coherent multi-view support, including adjacent samples from one view, is
+  useful evidence even when the reconstructed layer itself is wrong.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526

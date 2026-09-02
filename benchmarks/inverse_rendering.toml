@@ -6914,3 +6914,39 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks/src/bin/fusion_first_surface.rs (gitignored)"
 verdict = "reject before fitting and add no visibility filter: source residuals validate the projection, but non-source first-surface agreement is weaker than the existing local-plane evidence and does not preferentially reject the catastrophic evaluator-only tail at any fixed tolerance; these depth maps share the same PatchMatch failure, so reprojecting a coherent wrong layer into them is not independent surface evidence"
+
+[diligent_mv.rejected_bear_pairwise_fusion_consistency]
+date = "2026-09-02"
+protocol = "for every post-hull 640px construction-only Bear fusion group, backproject each retained depth sample and project it into every other source observation; predeclare the production two-pixel, one-percent-depth, ten-degree-normal pairwise clique and one fixed one-pixel/half-percent control; separately give each camera exactly one coordinate-wise median position vote; use released vertex positions only to evaluate the already-fixed rules and representatives"
+metric_order = ["minimum", "p10", "p25", "median", "p75", "p90", "maximum"]
+
+observation_count_quantiles = [2, 2, 2, 2, 3, 6, 69]
+distinct_source_view_quantiles = [2, 2, 2, 2, 3, 4, 10]
+maximum_pair_reprojection_pixels_quantiles = [0.015812, 0.293150, 0.429447, 0.621080, 1.491925, 3.084759, 40.520237]
+maximum_pair_relative_depth_quantiles = [0.000000, 0.000042, 0.000090, 0.000203, 0.000458, 0.000957, 0.010150]
+maximum_pair_normal_error_degrees_quantiles = [0.055953, 3.479641, 5.473750, 7.760432, 9.471788, 12.299434, 19.901796]
+pair_measure_truth_distance_correlations = [0.0511, 0.1013, -0.0456]
+
+production_clique_retained = 17508
+production_clique_bad_tail_retained = 1616
+strict_clique_retained = 15829
+strict_clique_bad_tail_retained = 1430
+production_clique_local_plane_retained = 10297
+production_clique_local_plane_bad_tail_retained = 657
+unique_view_groups = 20468
+unique_view_groups_bad_tail = 1962
+
+balanced_displacement_source_pixel_quantiles = [0.0, 0.0, 0.0, 0.0, 0.0, 0.452428, 35.986076]
+original_truth_distance_quantiles = [0.022087, 0.297140, 0.560512, 1.342794, 3.473784, 9.421193, 48.083622]
+balanced_truth_distance_quantiles = [0.022087, 0.302454, 0.570977, 1.356185, 3.488027, 9.420826, 48.083622]
+balanced_groups_improved = 2266
+duplicate_count_truth_distance_correlation = -0.0994
+
+held_splits_opened = false
+maximum_peak_memory_bytes = 307167232
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/diligent_tracks/src/bin/fusion_first_surface.rs (gitignored)"
+verdict = "reject before fitting and change no fusion code: pairwise reciprocity preferentially keeps the bad tail, while graph re-entry and duplicate-view observations correlate weakly with better geometry; equalizing each camera to one median vote worsens the geometric median and improves only 8.6 percent of representatives, so neither a clique filter nor traversal-debiased median supplies the missing independent surface evidence"
