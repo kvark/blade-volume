@@ -1739,6 +1739,18 @@ a deterministic repeat agree within the measured training variance.
   selection PSNR and recall on both splits. Add no split mode: these optical
   pairs move support between views rather than establishing a stable second
   surface.
+- [x] Test cross-view first-surface evidence at the fusion boundary. Reproject
+  every 640 px group into all construction depth maps that did not contribute
+  to it, using each map's actual 640x535 extent. Source-view depth residual is
+  only 0.005% at the median, which validates the camera and group mapping, but
+  two extra 1%-consistent views retain 87.6% of all groups and 86.2% of the
+  evaluator-only greater-than-ten-pixel tail. Requiring no free-space
+  violation is slightly worse, and fixed 0.1%, 0.25%, and 0.5% tolerances do
+  not reverse the result. Combining the strongest 0.1% gate with the existing
+  local-plane rule retains 63 bad-tail points per thousand retained, versus
+  61 per thousand for the plane rule alone. Reject before fitting: the same
+  PatchMatch depth maps are not independent confirmation of their own
+  coherent wrong layer, so add no visibility filter or training branch.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526

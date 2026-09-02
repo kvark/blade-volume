@@ -6882,3 +6882,35 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks and /tmp/blade-volume-bear-fine-optical-split* (gitignored)"
 verdict = "reject and keep the stock cloud: farthest-pair replacement is already recall-negative and, against an identical continuation, loses every selection PSNR, validation foreground mean, and recall; preserving the original cutoff footprint admits only six above-cutoff splits and remains mean-negative; moving the same 33 splits ahead of opacity initialization gives every child trainable support but still loses every selection PSNR and recall on both splits against its regenerated control; optical site pairs move support between views rather than define a stable second surface, so add neither a post-fit nor upstream split mode"
+
+[diligent_mv.rejected_bear_cross_view_first_surface]
+date = "2026-09-02"
+protocol = "after fixing the gate and before fitting any candidate, reproject every post-hull 640px construction-only Bear fusion representative into all 16 geometric depth maps; separate exact source observations from non-source views; at the predeclared one-percent depth tolerance count independent first-surface matches, free-space violations, and behind/occluded samples; evaluate fixed 0.1, 0.25, and 0.5-percent resolution-motivated controls without opening Cow, held cameras/lights, or changing production"
+metric_order = ["minimum", "p10", "p25", "median", "p75", "p90", "maximum"]
+
+depth_map_dimensions = [640, 535]
+fine_post_hull_groups = 26199
+valid_non_source_views_quantiles = [0, 3, 4, 6, 8, 9, 14]
+source_absolute_relative_depth_residual_quantiles = [0.0, 0.000001, 0.000017, 0.000050, 0.000127, 0.000302, 0.046063]
+non_source_signed_relative_depth_residual_quantiles = [-0.041123, -0.000894, -0.000120, 0.000401, 0.012033, 0.032592, 0.055110]
+
+one_percent_two_match_retained = 22940
+one_percent_two_match_bad_tail_retained = 2050
+one_percent_two_match_no_free_space_retained = 22158
+one_percent_two_match_no_free_space_bad_tail_retained = 2027
+local_plane_retained = 15629
+local_plane_bad_tail_retained = 947
+tenth_percent_two_match_local_plane_retained = 11405
+tenth_percent_two_match_local_plane_bad_tail_retained = 723
+tenth_percent_two_match_local_plane_truth_distance = [0.026469, 0.272545, 0.487216, 1.056392, 2.601567, 6.976243, 41.114420]
+
+match_fraction_truth_distance_correlation_by_tolerance = [-0.1075, -0.0911, -0.0636, -0.0283]
+tolerance_fraction = [0.001, 0.0025, 0.005, 0.01]
+held_splits_opened = false
+maximum_peak_memory_bytes = 293244928
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/diligent_tracks/src/bin/fusion_first_surface.rs (gitignored)"
+verdict = "reject before fitting and add no visibility filter: source residuals validate the projection, but non-source first-surface agreement is weaker than the existing local-plane evidence and does not preferentially reject the catastrophic evaluator-only tail at any fixed tolerance; these depth maps share the same PatchMatch failure, so reprojecting a coherent wrong layer into them is not independent surface evidence"
