@@ -1763,6 +1763,19 @@ a deterministic repeat agree within the measured training variance.
   2,266 groups. Reject reciprocal filtering and balanced representatives;
   coherent multi-view support, including adjacent samples from one view, is
   useful evidence even when the reconstructed layer itself is wrong.
+- [x] Add independent calibrated-light evidence to the tight cross-view depth
+  match. A physical photometric-normal solve accounts for each camera's actual
+  world-space light directions; one extra construction camera must agree
+  within 15 degrees at a 0.1% first-surface depth match. Intersecting that rule
+  with exact optical ownership leaves 169 fine groups on 132 coarse particles
+  and only 2/2,378 evaluator-only bad-tail points. Letting one such group
+  transfer a normal changes 123 particles and improves every selection and
+  validation value. The exact serialized candidate still loses held-camera
+  means: fitted-light whole/foreground fall 0.0019/0.0018 dB and held-light
+  whole/foreground fall 0.0072/0.0070 dB. Requiring two fine groups changes
+  only 19 particles and already loses validation means. Reject both and add no
+  depth/normal filter: even independently verified fine normals cannot be
+  assigned as one camera-invariant attribute of the existing coarse support.
 - [x] Select independently anchored dense observations before they acquire
   optical support, retaining complete fusion groups at the original Bear point
   budget. The production distinct-view/geometric-confidence rank keeps 11,526

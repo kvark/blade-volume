@@ -6950,3 +6950,48 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "target/audit-tools/diligent_tracks/src/bin/fusion_first_surface.rs (gitignored)"
 verdict = "reject before fitting and change no fusion code: pairwise reciprocity preferentially keeps the bad tail, while graph re-entry and duplicate-view observations correlate weakly with better geometry; equalizing each camera to one median vote worsens the geometric median and improves only 8.6 percent of representatives, so neither a clique filter nor traversal-debiased median supplies the missing independent surface evidence"
+
+[diligent_mv.rejected_bear_cross_view_physical_normal]
+date = "2026-09-02"
+protocol = "solve world-space photometric normals from the 24 construction lights independently in every camera; for each 640px fine fusion group, require one non-source camera whose geometric depth agrees within a fixed 0.1 percent and whose calibrated normal agrees with the source-view mean within 15 degrees and at least as well as the source views agree with each other; intersect this before evaluation with the existing local-plane, exact coarse-Gaussian source-ray ownership, and one-pixel response-depth rules; transfer only the fine normal through the stock PBR Gaussian, score disjoint internal camera splits, and open the already-defined held cameras/lights only after all internal values improve"
+metric_order = ["mean_psnr_db", "worst_psnr_db", "foreground_mean_psnr_db", "foreground_worst_psnr_db", "mask_recall_percent", "mask_precision_percent"]
+
+minimum_source_normal_cosine_quantiles = [-1.0, -0.951455, -0.330537, 0.492821, 0.833462, 0.932749, 0.999947]
+best_extra_tight_depth_normal_cosine_quantiles = [-1.0, -1.0, 0.026461, 0.622626, 0.893670, 0.984660, 0.999999]
+two_extra_normal_matches = 434
+two_extra_normal_matches_bad_tail = 36
+two_extra_normal_matches_local_plane = 223
+two_extra_normal_matches_local_plane_bad_tail = 19
+
+optical_one_extra_normal_groups = 169
+optical_one_extra_normal_bad_tail = 2
+optical_one_extra_normal_coarse_owners = 132
+optical_one_extra_normal_two_site_owners = 28
+optical_two_extra_normal_groups = 13
+optical_two_extra_normal_bad_tail = 0
+
+two_site_changed_points = 19
+two_site_selection = [29.491898, 25.480475, 20.931490, 16.514864, 92.536945, 95.448278]
+two_site_validation = [29.267177, 25.212810, 20.683842, 16.085274, 91.079857, 95.750110]
+
+one_site_changed_points = 123
+base_selection = [29.489695, 25.473127, 20.929873, 16.507185, 92.536945, 95.448278]
+one_site_selection = [29.505715, 25.554859, 20.948245, 16.586179, 92.536945, 95.448278]
+base_validation = [29.267621, 25.211319, 20.684796, 16.083722, 91.079857, 95.750110]
+one_site_validation = [29.268901, 25.236040, 20.688749, 16.106419, 91.079857, 95.750110]
+base_held_camera = [28.997326, 25.663669, 20.292539, 16.611396, 90.517643, 96.724564]
+one_site_held_camera = [28.995415, 25.709053, 20.290773, 16.620151, 90.517643, 96.724564]
+base_held_light_selection = [29.577273, 26.797929, 20.861560, 17.948162, 92.536945, 95.448278]
+one_site_held_light_selection = [29.589877, 26.866153, 20.875978, 18.012454, 92.536945, 95.448278]
+base_held_light_validation = [29.361869, 26.244436, 20.634055, 17.188842, 91.079857, 95.750110]
+one_site_held_light_validation = [29.358441, 26.261560, 20.632648, 17.204336, 91.079857, 95.750110]
+base_held_light_held_camera = [29.017640, 26.504764, 20.206586, 17.605225, 90.517643, 96.724564]
+one_site_held_light_held_camera = [29.010423, 26.530828, 20.199597, 17.607300, 90.517643, 96.724564]
+
+maximum_peak_memory_bytes = 559566848
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/diligent_tracks, /tmp/blade-volume-bear-first-surface-physical.log (gitignored)"
+verdict = "reject and leave production unchanged: tight depth plus calibrated cross-view physical-normal agreement makes the optical fine subset exceptionally clean and improves every internal metric when one corroborated group may transfer, but the exact candidate still loses novel-camera means under both fitted and held lights; the evidence certifies the fine normal, not a camera-invariant normal for the coarse Gaussian that owns its rays"
