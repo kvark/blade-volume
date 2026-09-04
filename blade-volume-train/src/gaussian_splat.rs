@@ -1397,7 +1397,9 @@ fn multilight_opacity_learning_rate(view_count: usize, learn_normals: bool) -> f
 /// order, avoiding an order prior while retaining joint Adam state and
 /// compiling the image-formation graph only once. For distant lights, a short
 /// normals-only tail subtracts aligned light pairs, cancelling their shared
-/// opacity response without moving geometry.
+/// opacity response without moving geometry. A deterministic audit covers
+/// every fitted light and camera; geometry and normals are restored if its
+/// mean loss regresses.
 pub fn fit_multilight_geometry(
     gaussian: &mut vol::PointCloudModel,
     surface: &mut vol::relight::RelightModel,
@@ -1463,19 +1465,35 @@ pub fn fit_multilight_geometry(
     gaussian.sh_degree = saved_degree;
     gaussian.sh_coefficients = saved_appearance;
     match result {
-        Ok(fit) => {
-            if let Some(normals) = fit.normals {
-                for (surfel, normal) in surface.surfels.iter_mut().zip(normals) {
-                    surfel.normal = normal;
-                }
-            }
-            Ok(vec![fit.stats])
-        }
+        Ok(fit) => Ok(vec![select_multilight_fit(
+            gaussian,
+            surface,
+            saved_positions,
+            fit,
+        )]),
         Err(error) => {
             gaussian.points = saved_positions;
             Err(error)
         }
     }
+}
+
+fn select_multilight_fit(
+    gaussian: &mut vol::PointCloudModel,
+    surface: &mut vol::relight::RelightModel,
+    saved_points: Vec<glam::Vec4>,
+    fit: MultilightFit,
+) -> FitStats {
+    if fit.stats.final_loss <= fit.stats.initial_loss {
+        if let Some(normals) = fit.normals {
+            for (surfel, normal) in surface.surfels.iter_mut().zip(normals) {
+                surfel.normal = normal;
+            }
+        }
+    } else {
+        gaussian.points = saved_points;
+    }
+    fit.stats
 }
 
 fn fit_joint_multilight_positions(
@@ -1623,25 +1641,49 @@ fn fit_joint_multilight_positions(
         view_indices,
         options.candidate_min_alpha,
     );
-    let audit_view;
-    let audit_views = if near_lights {
-        audit_view = [view_indices[0]];
-        &audit_view
-    } else {
-        view_indices
+    let audit_loss = |session: &mut mn::Session,
+                      gaussian: &vol::PointCloudModel,
+                      candidate_index: &CandidateIndex| {
+        let sample_count = lights.len().max(view_indices.len());
+        let mut total = 0.0_f64;
+        for sample in 0..sample_count {
+            let light_index = sample % lights.len();
+            let view_index = view_indices[sample % view_indices.len()];
+            if learn_normals {
+                match lights[light_index].light {
+                    KnownLight::Distant(_) => session.set_input(
+                        "diffuse_irradiance",
+                        &normal_irradiance.as_ref().unwrap()[light_index],
+                    ),
+                    KnownLight::Near(view_lights) => set_near_light_inputs(
+                        session,
+                        view_lights[view_index],
+                        gaussian.points.len(),
+                    ),
+                }
+            } else {
+                set_sh_parameters(session, &appearances[light_index]);
+            }
+            let batch = sample_rays_with_color_space(
+                lights[light_index].capture,
+                &pixel_rays,
+                &[view_index],
+                options.batch_size,
+                u32::MAX.wrapping_sub(sample as u32),
+                encode_srgb,
+            );
+            set_batch(session, gaussian, &batch, candidate_index, options);
+            session.step();
+            session.wait();
+            let loss = read_loss(session);
+            if !loss.is_finite() {
+                return loss;
+            }
+            total += f64::from(loss);
+        }
+        (total / sample_count as f64) as f32
     };
-    let audit = sample_rays_with_color_space(
-        lights[0].capture,
-        &pixel_rays,
-        audit_views,
-        options.batch_size,
-        u32::MAX,
-        encode_srgb,
-    );
-    set_batch(&mut session, gaussian, &audit, &candidate_index, options);
-    session.step();
-    session.wait();
-    let initial_loss = read_loss(&session);
+    let initial_loss = audit_loss(&mut session, gaussian, &candidate_index);
 
     session.set_adam(1.0, 0.9, 0.999, 1.0e-8);
     session.set_lr_multiplier("positions", options.position_learning_rate);
@@ -1776,25 +1818,7 @@ fn fit_joint_multilight_positions(
         view_indices,
         options.candidate_min_alpha,
     );
-    if learn_normals {
-        match lights[0].light {
-            KnownLight::Distant(_) => session.set_input(
-                "diffuse_irradiance",
-                &normal_irradiance.as_ref().unwrap()[0],
-            ),
-            KnownLight::Near(view_lights) => set_near_light_inputs(
-                &mut session,
-                view_lights[view_indices[0]],
-                gaussian.points.len(),
-            ),
-        }
-    } else {
-        set_sh_parameters(&mut session, &appearances[0]);
-    }
-    set_batch(&mut session, gaussian, &audit, &final_index, options);
-    session.step();
-    session.wait();
-    let final_loss = read_loss(&session);
+    let final_loss = audit_loss(&mut session, gaussian, &final_index);
     if !initial_loss.is_finite() || !final_loss.is_finite() {
         return Err(format!(
             "joint multi-light Gaussian fit produced a non-finite loss ({initial_loss} -> {final_loss})"
@@ -5016,6 +5040,60 @@ mod tests {
             view.mask = Some(vec![1.0; width * height]);
         }
         capture
+    }
+
+    #[test]
+    fn multilight_fit_selects_only_improving_geometry_and_normals() {
+        let mut surface = vol::relight::RelightModel {
+            kernel: vol::relight::ParticleKernel::Gaussian,
+            surfels: vec![vol::relight::Surfel {
+                center: [0.0, 0.0, 4.0],
+                radius: 0.5,
+                normal: glam::Vec3::Z.to_array(),
+                material: 0,
+            }],
+            materials: vec![vol::relight::Material::default()],
+        };
+        let mut gaussian = from_surface(&surface).unwrap();
+        let saved_points = gaussian.points.clone();
+        gaussian.points[0].x += 1.0;
+        let stats = select_multilight_fit(
+            &mut gaussian,
+            &mut surface,
+            saved_points.clone(),
+            MultilightFit {
+                stats: FitStats {
+                    steps: 10,
+                    initial_loss: 0.1,
+                    final_loss: 0.2,
+                },
+                normals: Some(vec![glam::Vec3::X.to_array()]),
+            },
+        );
+
+        assert!(stats.final_loss > stats.initial_loss);
+        assert_eq!(gaussian.points, saved_points);
+        assert_eq!(surface.surfels[0].normal, glam::Vec3::Z.to_array());
+
+        gaussian.points[0].x += 1.0;
+        let moved_points = gaussian.points.clone();
+        let stats = select_multilight_fit(
+            &mut gaussian,
+            &mut surface,
+            saved_points,
+            MultilightFit {
+                stats: FitStats {
+                    steps: 10,
+                    initial_loss: 0.2,
+                    final_loss: 0.1,
+                },
+                normals: Some(vec![glam::Vec3::X.to_array()]),
+            },
+        );
+
+        assert!(stats.final_loss < stats.initial_loss);
+        assert_eq!(gaussian.points, moved_points);
+        assert_eq!(surface.surfels[0].normal, glam::Vec3::X.to_array());
     }
 
     #[test]
