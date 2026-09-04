@@ -21,27 +21,37 @@ the experiment-by-experiment history in the audit logs.
   diffuse material, and optional view-dependent response. Runtime geometry is
   Gaussian, RadFoam, or PowerFoam; there is no polygon fallback.
 - **Novel views:** working end to end from posed photographs, although fine
-  geometry and boundaries remain softer than the source images.
+  geometry and boundaries remain softer than the source images. A short
+  fixed-topology continuation under one aligned construction OLAT is now
+  available at import time. On the fresh C452 statue it raises the extracted
+  surface's held-camera whole/foreground result from `21.45/21.87` to
+  `24.35/23.52` dB, recall from `97.2%` to `99.7%`, and precision from `75.6%`
+  to `86.3%`.
 - **Novel lighting:** working on controlled captures. The first OLATverse C276
   run holds out both 6/30 cameras and 103/207 lights. Its held-light/held-camera
   result is `33.67` dB whole-frame and `26.63` dB foreground at 128 pixels,
   essentially matching the fitted-light/held-camera quadrant (`33.72` /
   `26.69` dB). This is strong evidence that the measured-light path transfers
-  rather than memorizes light IDs.
+  rather than memorizes light IDs. On fresh C452, aligned-light geometry plus
+  opt-in visibility reaches `36.90/30.92` dB whole-frame and `28.65/22.04` dB
+  foreground mean/worst on held lights and held cameras.
 - **Not solved:** the C276 handbag is still visibly soft, its gold hardware is
   not reconstructed as a specular material, and the worst grazing-light
-  foreground is only `19.45` dB. A 65,536-cell geometry arm improves held-view
-  support and precision, but does not yet improve every relighting metric. Its
-  measured-light Gaussian continuation regresses a representative physical
-  audit and is now automatically restored.
+  foreground is only `19.45` dB. Simply increasing C452 from 16,384 to 65,536
+  cells improves precision and some tails but loses foreground means. The
+  single-OLAT continuation improves every held-camera metric on both C452 and
+  C276, but a few construction-camera minima move by `0.0001--0.0013` dB, so
+  it remains an explicit geometry recipe rather than a hidden default.
 - **Next:** finite lights now evaluate the existing GGX material fields and an
   optional finite-distance visibility ray without a new shader variant.
   Visibility gains about 2 dB on OLAT means but misses the strict gate by two
   0.001--0.002 dB foreground tails and regresses DiLiGenT-MV Bear, so it stays
   opt-in. Reconstructed materials remain explicitly diffuse-only because the
   first local specular fit also failed the complete image gate. Next, make the
-  material/transport solve agree with the full compositor and validate on a
-  fresh object. Do not add free per-light appearance or mesh geometry.
+  material/transport solve agree with the full compositor. Generalize the
+  successful aligned-light geometry signal across several measured
+  construction lights without storing per-light appearance. Do not add free
+  per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
@@ -51,7 +61,9 @@ the current complete comparison set is under
 `/mnt/data/OLATverse/runs/C276/olat-surface-128-r3c/images/`. The checked-in
 gallery below covers datasets whose result images can be published. The latest
 opt-in visibility candidate and its four-light contact sheet are under
-`/mnt/data/OLATverse/runs/C276/olat-visibility64-r2/`.
+`/mnt/data/OLATverse/runs/C276/olat-visibility64-r2/`. The fresh C452 controls,
+all 1,236 held-light images, and latest contact sheet are under
+`/mnt/data/OLATverse/runs/C452/olat-light000-visibility64-r2/`.
 
 ## Detailed Reconstruction Status
 
