@@ -409,7 +409,7 @@ fn gpu_shading_matches_the_cpu_reference() {
 }
 
 #[test]
-fn gpu_point_light_matches_the_cpu_distance_and_spotlight_model() {
+fn gpu_point_light_matches_cpu_pbr_shading() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
@@ -455,9 +455,8 @@ fn gpu_point_light_matches_the_cpu_distance_and_spotlight_model() {
     let origin = glam::Vec3::from(camera.cam_position);
     let distance = -origin.z / direction.z;
     let point = origin + distance * direction;
-    let diffuse = light.diffuse(point, glam::Vec3::NEG_Z);
-    let expected: [f32; 3] =
-        std::array::from_fn(|channel| material.albedo[channel] * diffuse[channel]);
+    let expected =
+        vol::relight::shade_point_light(light, point, glam::Vec3::NEG_Z, -direction, material);
     let actual = rendered[(y * SIZE[0] + x) as usize];
     let worst = actual[..3]
         .iter()
