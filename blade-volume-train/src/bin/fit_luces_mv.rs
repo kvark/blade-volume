@@ -7,9 +7,6 @@
 use blade_volume_train as train;
 use std::path;
 
-#[path = "support/calibrated.rs"]
-mod calibrated;
-
 #[derive(argh::FromArgs)]
 /// Fit LUCES-MV normals, diffuse materials, and optional Gaussian geometry.
 struct Args {
@@ -58,19 +55,11 @@ struct Args {
     albedo_ceiling: f32,
 }
 
-fn dataset(value: train::inverse::luces::Dataset) -> calibrated::Dataset {
-    calibrated::Dataset {
-        captures: value.captures,
-        lights: value.lights,
-        source_light_indices: value.source_light_indices,
-    }
-}
-
 fn run(args: &Args) -> Result<(), String> {
     let input = path::Path::new(&args.input);
     let camera_one = path::Path::new(&args.camera_one);
     let camera_two = path::Path::new(&args.camera_two);
-    calibrated::fit(
+    train::calibrated::fit(
         || {
             train::inverse::luces::load(
                 input,
@@ -79,7 +68,6 @@ fn run(args: &Args) -> Result<(), String> {
                 args.width,
                 &train::inverse::luces::TRAIN_LIGHT_INDICES,
             )
-            .map(dataset)
         },
         || {
             train::inverse::luces::load(
@@ -89,9 +77,8 @@ fn run(args: &Args) -> Result<(), String> {
                 args.width,
                 &train::inverse::luces::HELD_LIGHT_INDICES,
             )
-            .map(dataset)
         },
-        calibrated::FitOptions {
+        train::calibrated::FitOptions {
             surface: path::Path::new(&args.surface),
             output: path::Path::new(&args.output),
             gaussian_output: args.gaussian_output.as_deref().map(path::Path::new),

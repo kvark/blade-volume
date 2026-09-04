@@ -34,11 +34,7 @@ struct Calibration {
 ///
 /// `captures[index]` and `lights[index]` describe one selected LED over all
 /// twelve camera poses. The inner light index is the matching capture view.
-pub struct Dataset {
-    pub captures: Vec<super::capture::Capture>,
-    pub lights: Vec<Vec<vol::relight::PointLight>>,
-    pub source_light_indices: Vec<usize>,
-}
+pub type Dataset = crate::calibrated::Dataset;
 
 /// Load selected LUCES-MV LEDs at a bounded working resolution.
 pub fn load(

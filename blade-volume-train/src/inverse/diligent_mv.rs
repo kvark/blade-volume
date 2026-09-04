@@ -27,60 +27,47 @@ const STRICT_CAMERA_ROTATION_ERROR: f64 = 1.0e-3;
 const MAX_CAMERA_ROTATION_ERROR: f64 = 1.0e-2;
 
 /// Aligned image captures and their view-specific calibrated lights.
-pub struct Dataset {
-    pub captures: Vec<super::capture::Capture>,
-    pub lights: Vec<Vec<vol::relight::PointLight>>,
-    pub source_light_indices: Vec<usize>,
+pub type Dataset = crate::calibrated::Dataset;
+
+/// Diffuse-albedo correspondence images using only the predeclared
+/// construction lights, even when this dataset also loaded held lights.
+pub fn construction_photometric_albedo(
+    dataset: &Dataset,
+) -> Result<super::capture::Capture, String> {
+    let offsets = construction_light_offsets(dataset)?;
+    let captures = offsets
+        .iter()
+        .map(|&offset| &dataset.captures[offset])
+        .collect::<Vec<_>>();
+    let directions = offsets
+        .iter()
+        .map(|&offset| &dataset.lights[offset])
+        .map(|lights| {
+            lights
+                .iter()
+                .map(|light| glam::Vec3::from(light.position).normalize_or_zero())
+                .collect()
+        })
+        .collect::<Vec<_>>();
+    super::capture::photometric_albedo_refs(&captures, &directions)
 }
 
-impl Dataset {
-    /// Material-colour correspondence image recovered from this calibrated
-    /// distant-light stack. Released normals, depths, and geometry are not
-    /// consulted.
-    pub fn photometric_albedo(&self) -> Result<super::capture::Capture, String> {
-        self.photometric_albedo_at(&(0..self.captures.len()).collect::<Vec<_>>())
-    }
-
-    /// Diffuse-albedo correspondence images using only the predeclared
-    /// construction lights, even when this dataset also loaded held lights.
-    pub fn construction_photometric_albedo(&self) -> Result<super::capture::Capture, String> {
-        self.photometric_albedo_at(&self.construction_light_offsets()?)
-    }
-
-    fn construction_light_offsets(&self) -> Result<Vec<usize>, String> {
-        TRAIN_LIGHT_INDICES
-            .iter()
-            .map(|source| {
-                self.source_light_indices
-                    .iter()
-                    .position(|candidate| candidate == source)
-                    .ok_or_else(|| {
-                        format!(
-                            "DiLiGenT-MV construction light {} was not loaded",
-                            source + 1
-                        )
-                    })
-            })
-            .collect()
-    }
-
-    fn photometric_albedo_at(&self, offsets: &[usize]) -> Result<super::capture::Capture, String> {
-        let captures = offsets
-            .iter()
-            .map(|&offset| &self.captures[offset])
-            .collect::<Vec<_>>();
-        let directions = offsets
-            .iter()
-            .map(|&offset| &self.lights[offset])
-            .map(|lights| {
-                lights
-                    .iter()
-                    .map(|light| glam::Vec3::from(light.position).normalize_or_zero())
-                    .collect()
-            })
-            .collect::<Vec<_>>();
-        super::capture::photometric_albedo_refs(&captures, &directions)
-    }
+fn construction_light_offsets(dataset: &Dataset) -> Result<Vec<usize>, String> {
+    TRAIN_LIGHT_INDICES
+        .iter()
+        .map(|source| {
+            dataset
+                .source_light_indices
+                .iter()
+                .position(|candidate| candidate == source)
+                .ok_or_else(|| {
+                    format!(
+                        "DiLiGenT-MV construction light {} was not loaded",
+                        source + 1
+                    )
+                })
+        })
+        .collect()
 }
 
 /// Load selected DiLiGenT-MV lights at a bounded working resolution.
@@ -541,8 +528,7 @@ mod tests {
             lights: Vec::new(),
             source_light_indices,
         };
-        let selected = dataset
-            .construction_light_offsets()
+        let selected = construction_light_offsets(&dataset)
             .unwrap()
             .into_iter()
             .map(|offset| dataset.source_light_indices[offset])

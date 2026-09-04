@@ -28,6 +28,7 @@
 
 use blade_volume as vol;
 
+pub mod calibrated;
 pub mod colmap;
 pub mod dense;
 pub mod diff_render;

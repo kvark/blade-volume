@@ -6,9 +6,6 @@
 use blade_volume_train as train;
 use std::path;
 
-#[path = "support/calibrated.rs"]
-mod calibrated;
-
 #[derive(argh::FromArgs)]
 /// Fit DiLiGenT-MV normals, diffuse materials, and optional Gaussian geometry.
 struct Args {
@@ -49,24 +46,15 @@ struct Args {
     albedo_ceiling: f32,
 }
 
-fn dataset(value: train::inverse::diligent_mv::Dataset) -> calibrated::Dataset {
-    calibrated::Dataset {
-        captures: value.captures,
-        lights: value.lights,
-        source_light_indices: value.source_light_indices,
-    }
-}
-
 fn run(args: &Args) -> Result<(), String> {
     let input = path::Path::new(&args.input);
-    calibrated::fit(
+    train::calibrated::fit(
         || {
             train::inverse::diligent_mv::load(
                 input,
                 args.width,
                 &train::inverse::diligent_mv::TRAIN_LIGHT_INDICES,
             )
-            .map(dataset)
         },
         || {
             train::inverse::diligent_mv::load(
@@ -74,9 +62,8 @@ fn run(args: &Args) -> Result<(), String> {
                 args.width,
                 &train::inverse::diligent_mv::HELD_LIGHT_INDICES,
             )
-            .map(dataset)
         },
-        calibrated::FitOptions {
+        train::calibrated::FitOptions {
             surface: path::Path::new(&args.surface),
             output: path::Path::new(&args.output),
             gaussian_output: args.gaussian_output.as_deref().map(path::Path::new),
