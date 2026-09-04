@@ -34,13 +34,14 @@ the experiment-by-experiment history in the audit logs.
   support and precision, but does not yet improve every relighting metric. Its
   measured-light Gaussian continuation regresses a representative physical
   audit and is now automatically restored.
-- **Next:** finite lights now evaluate the existing GGX material fields without
-  a new shader variant. Reconstructed OLAT materials remain explicitly
-  diffuse-only because the first local specular fit overfit and failed the
-  complete image gate. Add finite-distance visibility next, then fit
-  non-diffuse response through the real compositor. Retain either only when
-  the fixed held-camera/held-light matrix improves. Do not add free per-light
-  appearance or mesh geometry.
+- **Next:** finite lights now evaluate the existing GGX material fields and an
+  optional finite-distance visibility ray without a new shader variant.
+  Visibility gains about 2 dB on OLAT means but misses the strict gate by two
+  0.001--0.002 dB foreground tails and regresses DiLiGenT-MV Bear, so it stays
+  opt-in. Reconstructed materials remain explicitly diffuse-only because the
+  first local specular fit also failed the complete image gate. Next, make the
+  material/transport solve agree with the full compositor and validate on a
+  fresh object. Do not add free per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
@@ -48,7 +49,9 @@ Dataset terms do not currently state that photographs may be redistributed,
 so OLATverse references and renders remain outside git. On the audit machine,
 the current complete comparison set is under
 `/mnt/data/OLATverse/runs/C276/olat-surface-128-r3c/images/`. The checked-in
-gallery below covers datasets whose result images can be published.
+gallery below covers datasets whose result images can be published. The latest
+opt-in visibility candidate and its four-light contact sheet are under
+`/mnt/data/OLATverse/runs/C276/olat-visibility64-r2/`.
 
 ## Detailed Reconstruction Status
 
@@ -139,8 +142,10 @@ a convincing real-world result.
   with nonzero F0, without a new shader group or entry. A first local material
   solve reduces its own sampled residual but regresses the complete fitted and
   held-camera renders, so it is removed and calibrated outputs explicitly keep
-  F0 at zero. Geometry, visibility, and compositor-aware non-diffuse recovery
-  remain the active quality gates.
+  F0 at zero. A finite-distance visibility ray then improves OLAT means by
+  1.4--2.3 dB, but loses two held-light foreground tails by 0.0011/0.0023 dB
+  and remains opt-in. Geometry, coupled transport, and compositor-aware
+  non-diffuse recovery remain the active quality gates.
 - **Independent distant-light control — DiLiGenT-MV is connected.** A pinned,
   pure-Rust Bear route now imports 20 calibrated cameras and a fixed subset of
   32 out of 96 distant lights without reading the released mesh or normals.

@@ -26,6 +26,11 @@ not contain or fall back to polygonal geometry.
   center-sample material solve reduced its local residual but worsened the
   complete held-camera gate, so the fitter was removed. Calibrated outputs use
   explicit zero F0 until a compositor-aware solve passes.
+- One finite-distance visibility ray reuses that shader and its existing ray
+  query. It improves C276 means by 1.4--2.3 dB and all whole-frame tails, but
+  misses the strict gate by 0.0011/0.0023 dB on two held-light foreground
+  tails. LUCES-MV is backend-mixed and DiLiGenT-MV Bear regresses. Keep it
+  opt-in until fitting and transport share the same compositor.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
@@ -157,11 +162,11 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; first complete OLATverse two-axis gate passes light transfer; direct GGX runtime selected; first local F0/roughness fit rejected; regressed Gaussian geometry is guarded | Add finite-distance visibility, then fit non-diffuse response through the complete compositor | Improve whole-frame and foreground mean/worst, recall, and precision on the fixed two-axis split; publish representative held/held images only when dataset terms permit |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; first complete OLATverse two-axis gate passes light transfer; direct GGX runtime selected; finite visibility is opt-in after mixed gates; first local F0/roughness fit rejected; regressed Gaussian geometry is guarded | Make fitted material and bounded transport use the same complete compositor, then validate on a fresh object | Improve whole-frame and foreground mean/worst, recall, and precision on the fixed two-axis split; publish representative held/held images only when dataset terms permit |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
-| Light transport | sampled environment visibility/bounce and direct finite-light GGX selected | Add a finite-distance point-light shadow ray without a shader variant; gate it separately before coupling a bounce | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
+| Light transport | sampled environment visibility/bounce and direct finite-light GGX selected; finite-light visibility implemented but opt-in | Attribute the two OLAT tail losses and the Bear regression on construction-only data before coupling a bounded direct-light bounce | Both excluded-light mean/tail improve with no coverage regression or GPU fault |
 | Radiometry and transport | attributed; scalar correction and extra samples rejected | Preserve measured light scale; treat the repeated `(light, view)` residual as surface/response evidence, not exposure | A correction repeats across objects and every known-light tail before either excluded light is opened |
 | Materials and capture layout | coupled runtime-blend diffuse solve selected on LUCES-MV and DiLiGenT-MV; sampled direct-specular fit rejected on OLATverse | Keep Gaussian appearance backend-specific and F0 explicitly zero; retry roughness/F0 only through visibility-aware complete renders | Preserve every surface mean/tail on the fixed light/camera splits without changing coverage |
 | Unknown natural illumination | local support recovery selected; appearance quality fails | Replace safety restoration with an ownership-aware training objective before changing material or light capacity | Improve over the recovered cloud's official mean/worst PSNR and recall without losing precision on the fixed nine-pair gate |
