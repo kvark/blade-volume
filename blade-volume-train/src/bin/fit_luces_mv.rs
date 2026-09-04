@@ -53,6 +53,10 @@ struct Args {
     /// maximum diffuse albedo (default 1)
     #[argh(option, default = "1.0")]
     albedo_ceiling: f32,
+
+    /// cast one finite-distance visibility ray per shaded point
+    #[argh(switch)]
+    point_light_visibility: bool,
 }
 
 fn run(args: &Args) -> Result<(), String> {
@@ -87,6 +91,7 @@ fn run(args: &Args) -> Result<(), String> {
             rounds: args.rounds,
             normal_candidates: args.normal_candidates,
             albedo_ceiling: args.albedo_ceiling,
+            point_light_visibility: args.point_light_visibility,
             train_views: &train::inverse::luces::TRAIN_VIEW_INDICES,
             held_views: &train::inverse::luces::HELD_VIEW_INDICES,
             light_digits: 2,

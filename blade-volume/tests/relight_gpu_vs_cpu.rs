@@ -471,6 +471,76 @@ fn gpu_point_light_matches_cpu_pbr_shading() {
 }
 
 #[test]
+fn point_light_visibility_stops_at_the_emitter() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let material = vol::relight::Material {
+        albedo: [0.5; 3],
+        roughness: 1.0,
+        specular_f0: [0.0; 3],
+        _padding: 0.0,
+    };
+    let light = vol::relight::PointLight {
+        position: [1.5, 0.0, -3.0],
+        direction: [0.0, 0.0, 1.0],
+        intensity: [16.0; 3],
+        exponent: 0.0,
+    };
+    let shadow_direction = glam::Vec3::new(1.5, 0.0, -2.5).normalize();
+    let receiver = vol::relight::Surfel {
+        center: [0.0; 3],
+        radius: 0.25,
+        normal: glam::Vec3::NEG_Z.to_array(),
+        material: 0,
+    };
+    let mut model = vol::relight::RelightModel {
+        kernel: vol::relight::ParticleKernel::Compact,
+        surfels: vec![
+            receiver,
+            vol::relight::Surfel {
+                // Collinear with the shadow ray, but beyond the emitter.
+                center: [2.25, 0.0, -4.25],
+                radius: 0.5,
+                normal: shadow_direction.to_array(),
+                material: 0,
+            },
+        ],
+        materials: vec![material],
+    };
+    let environment = vol::relight::Environment::uniform([0.0; 3], 8, 4);
+    let specular = vol::relight::SpecularEnvironment::prefilter(&environment, 8, 4);
+    let mut tracer = vol::gpu::RelightTracer::new(
+        &model,
+        &environment,
+        &specular,
+        vol::gpu::RelightSettings::default(),
+        &harness.context,
+        &mut harness.encoder,
+    );
+    tracer.set_point_light(light);
+    let camera = camera(4.0);
+    let pixel = (SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) as usize;
+    let unshadowed = harness.render(&mut tracer, camera)[pixel][0];
+
+    *tracer.diffuse_samples_mut() = 1;
+    let beyond = harness.render(&mut tracer, camera)[pixel][0];
+    assert!(
+        (beyond - unshadowed).abs() < 0.002,
+        "{beyond} vs {unshadowed}"
+    );
+
+    model.surfels[1].center = [0.75, 0.0, -1.75];
+    tracer.update_surfels(&model.surfels, &harness.context, &mut harness.encoder);
+    let blocked = harness.render(&mut tracer, camera)[pixel][0];
+    assert!(unshadowed > 0.2);
+    assert!(blocked < 0.1 * unshadowed, "{blocked} vs {unshadowed}");
+
+    tracer.deinit(&harness.context);
+    harness.destroy();
+}
+
+#[test]
 fn surface_gaussian_groups_across_traversal_batches() {
     let Some(mut harness) = Harness::new() else {
         return;

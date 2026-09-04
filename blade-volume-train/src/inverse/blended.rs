@@ -596,7 +596,7 @@ mod tests {
             truth,
             vol::relight::Environment::uniform([0.0; 3], 8, 4),
         );
-        let summary = renderer.score_point_lights(&scene, &capture, &[light], &[0], None);
+        let summary = renderer.score_point_lights(&scene, &capture, &[light], &[0], false, None);
         assert!(summary.linear_psnr > 90.0, "{summary:?}");
         renderer.destroy();
     }

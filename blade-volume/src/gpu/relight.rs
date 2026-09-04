@@ -59,6 +59,9 @@ pub struct RelightSettings {
     /// indirect light together — they cannot be had separately, because each
     /// ray either reaches the environment or meets something, and what it
     /// meets is what lights the point instead.
+    ///
+    /// A finite point light needs exactly one direction, so any non-zero value
+    /// enables one deterministic finite-distance visibility ray.
     pub diffuse_samples: u32,
     /// Show the environment where nothing was hit, rather than
     /// [`background_rgb`]. What a path traced reference does, so a comparison
@@ -833,8 +836,8 @@ impl RelightTracer {
     /// changes only the uniform light parameters; geometry, materials,
     /// acceleration structures, and shader pipelines remain untouched.
     /// Environment sampling and the prefiltered specular ladder are bypassed
-    /// while the point light is active, so [`RelightSettings::diffuse_samples`]
-    /// has no effect.
+    /// while the point light is active. Any non-zero
+    /// [`RelightSettings::diffuse_samples`] enables its single visibility ray.
     pub fn set_point_light(&mut self, light: relight::PointLight) {
         let direction = glam::Vec3::from(light.direction);
         assert!(
@@ -860,7 +863,8 @@ impl RelightTracer {
         self.params.frame_index = 0;
     }
 
-    /// Rays cast per shading point for the shadowed diffuse term.
+    /// Rays cast per shading point for the shadowed environment diffuse term,
+    /// or zero/one visibility for a finite point light.
     ///
     /// See [`RelightSettings::diffuse_samples`]. Zero is the analytic path.
     ///

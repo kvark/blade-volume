@@ -655,9 +655,10 @@ impl Renderer {
         capture: &capture::Capture,
         lights: &[vol::relight::PointLight],
         indices: &[usize],
+        visibility: bool,
         dump: Option<&path::Path>,
     ) -> Summary {
-        self.score_point_light_splits(scene, capture, lights, &[(indices, dump)])[0]
+        self.score_point_light_splits(scene, capture, lights, &[(indices, dump)], visibility)[0]
     }
 
     /// Score several camera splits under calibrated finite emitters while
@@ -668,6 +669,7 @@ impl Renderer {
         capture: &capture::Capture,
         lights: &[vol::relight::PointLight],
         splits: &[(&[usize], Option<&path::Path>)],
+        visibility: bool,
     ) -> Vec<Summary> {
         assert_eq!(capture.width, self.width);
         assert_eq!(capture.height, self.height);
@@ -675,7 +677,7 @@ impl Renderer {
         if splits.is_empty() {
             return Vec::new();
         }
-        let mut tracer = self.tracer(scene, 0, false);
+        let mut tracer = self.tracer(scene, u32::from(visibility), false);
         let summaries = splits
             .iter()
             .map(|&(indices, dump)| {
@@ -695,10 +697,17 @@ impl Renderer {
         capture: &capture::Capture,
         lights: &[vol::relight::PointLight],
         indices: &[usize],
+        visibility: bool,
         dump: Option<&path::Path>,
     ) -> Summary {
-        self.score_gaussian_point_light_splits(scene, gaussian, capture, lights, &[(indices, dump)])
-            [0]
+        self.score_gaussian_point_light_splits(
+            scene,
+            gaussian,
+            capture,
+            lights,
+            &[(indices, dump)],
+            visibility,
+        )[0]
     }
 
     /// Score several camera splits under calibrated finite emitters while
@@ -710,6 +719,7 @@ impl Renderer {
         capture: &capture::Capture,
         lights: &[vol::relight::PointLight],
         splits: &[(&[usize], Option<&path::Path>)],
+        visibility: bool,
     ) -> Vec<Summary> {
         assert_eq!(capture.width, self.width);
         assert_eq!(capture.height, self.height);
@@ -717,7 +727,7 @@ impl Renderer {
         if splits.is_empty() {
             return Vec::new();
         }
-        let mut tracer = self.gaussian_tracer(scene, gaussian, 0, false);
+        let mut tracer = self.gaussian_tracer(scene, gaussian, u32::from(visibility), false);
         let summaries = splits
             .iter()
             .map(|&(indices, dump)| {
