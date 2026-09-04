@@ -15,7 +15,38 @@ see [`docs/RELIGHTING_ROADMAP.md`](docs/RELIGHTING_ROADMAP.md). It separates
 the next surface, calibration, visibility, lighting, and material gates without
 the experiment-by-experiment history in the audit logs.
 
-## Reconstruction Status
+## Relightable Pipeline at a Glance
+
+- **Asset:** one point cloud carrying geometry, opacity, surface orientation,
+  diffuse material, and optional view-dependent response. Runtime geometry is
+  Gaussian, RadFoam, or PowerFoam; there is no polygon fallback.
+- **Novel views:** working end to end from posed photographs, although fine
+  geometry and boundaries remain softer than the source images.
+- **Novel lighting:** working on controlled captures. The first OLATverse C276
+  run holds out both 6/30 cameras and 103/207 lights. Its held-light/held-camera
+  result is `33.67` dB whole-frame and `26.63` dB foreground at 128 pixels,
+  essentially matching the fitted-light/held-camera quadrant (`33.72` /
+  `26.69` dB). This is strong evidence that the measured-light path transfers
+  rather than memorizes light IDs.
+- **Not solved:** the C276 handbag is still visibly soft, its gold hardware is
+  not reconstructed as a specular material, and the worst grazing-light
+  foreground is only `19.45` dB. A 65,536-cell geometry arm improves held-view
+  support and precision, but does not yet improve every relighting metric. Its
+  measured-light Gaussian continuation regresses a representative physical
+  audit and is now automatically restored.
+- **Next:** add finite-light specular response and visibility one bounded piece
+  at a time, retaining each only when the fixed held-camera/held-light matrix
+  improves. Do not add free per-light appearance or mesh geometry.
+
+The exact OLATverse commands, split, metrics, decoder caveat, and artifact
+paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
+Dataset terms do not currently state that photographs may be redistributed,
+so OLATverse references and renders remain outside git. On the audit machine,
+the current complete comparison set is under
+`/mnt/data/OLATverse/runs/C276/olat-surface-128-r3c/images/`. The checked-in
+gallery below covers datasets whose result images can be published.
+
+## Detailed Reconstruction Status
 
 Short version: capture-light novel-view reconstruction works end to end. A
 relightable surface is proven on controlled synthetic captures, but is not yet
@@ -86,14 +117,20 @@ a convincing real-world result.
   but loses a held camera/light tail. The next target is cross-view geometry
   correspondence and support, not simply more points. This compact baseline
   remains reproducible independently of the larger OLATverse gate.
-- **OLATverse — integration complete, first reconstruction pending.** Access is
-  available to a 42-object validation set with 35 calibrated cameras and 331
-  finite lights per object. The pure-Rust loader decodes the released AVIF
-  radiance, preserves per-camera intrinsics, removes the documented 2× display
-  scale, and follows the official disjoint 24/6-camera and 104/103-light split.
-  Full-bright photographs initialize cloud-only geometry; the released mesh,
-  pseudo normals, and albedo do not enter training. The first archive and
-  point-only reconstruction are now the active large-scale quality gate.
+- **OLATverse — first two-axis reconstruction complete.** The pure-Rust path
+  reconstructs C276 without reading the released mesh, pseudo normals, or
+  albedo. At 128-pixel fitting resolution, fitted and held lights are nearly
+  indistinguishable on the six held cameras: `33.72/26.69` versus
+  `33.67/26.63` dB whole-frame/foreground. A 65,536-cell arm improves static
+  held-view PSNR, recall, and precision together, but after material fitting it
+  trades 0.4 recall point for 1.3 precision points and leaves foreground PSNR
+  effectively flat. The measured-light Gaussian optimizer worsens its
+  representative loss `0.003033→0.010926`, so the pipeline now restores the
+  established cloud. That guarded Gaussian reaches `33.37/25.86` dB
+  whole-frame/foreground on held lights and held cameras, versus
+  `34.46/27.22` dB for the surface cloud. The split and light transfer are
+  validated; geometry and non-diffuse response remain the active quality
+  gates.
 - **Independent distant-light control — DiLiGenT-MV is connected.** A pinned,
   pure-Rust Bear route now imports 20 calibrated cameras and a fixed subset of
   32 out of 96 distant lights without reading the released mesh or normals.

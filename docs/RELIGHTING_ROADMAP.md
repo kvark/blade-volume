@@ -12,11 +12,15 @@ not contain or fall back to polygonal geometry.
 - Novel-view rendering under the captured light works.
 - Controlled multi-light captures prove the material and relighting path end
   to end.
-- OLATverse access is now available. Its pure-Rust adapter preserves the
-  official disjoint 24/6-camera and 104/103-light split, uses full-bright
-  photographs only for point-cloud geometry, and excludes the released mesh
-  and pseudo-PBR products. The first validation-object reconstruction is the
-  active large calibrated gate; no result is claimed yet.
+- OLATverse C276 now completes the official disjoint 24/6-camera and
+  104/103-light split without reading the released mesh or pseudo-PBR products.
+  At width 128, fitted-light/held-camera and held-light/held-camera scores are
+  respectively `33.72/26.69` and `33.67/26.63` dB
+  whole-frame/foreground. Light transfer passes; fine geometry, grazing-light
+  response, and specular hardware remain visibly wrong. A matched dense
+  Gaussian continuation regresses its representative physical audit and is
+  now restored automatically; its held/held result remains below the surface
+  cloud on PSNR and recall.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
@@ -148,7 +152,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse adapter complete | Run one OLATverse validation object through the same finite-light renderer without reading its mesh or pseudo-PBR products | Improve whole-frame and foreground mean/worst, recall, and precision on the fixed two-axis split; publish representative held/held images |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; first complete OLATverse two-axis gate passes light transfer; regressed Gaussian geometry is guarded | Add finite-light specular response, then direct-light visibility, as separately gated changes | Improve whole-frame and foreground mean/worst, recall, and precision on the fixed two-axis split; publish representative held/held images only when dataset terms permit |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
