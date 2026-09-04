@@ -95,10 +95,73 @@ cargo run --release -p blade-volume-train --bin fit_olatverse -- \
     --dump target/audit-runs/olatverse/C276/held-renders
 ```
 
-No quality claim is made until a point-only reconstruction and the complete
-held-camera/held-light render set have finished. Dataset imagery remains
-outside version control; representative result/reference pairs may be added
-only after confirming the release terms allow redistribution.
+The first complete point-only gate is C276. A 16,384-cell full-bright foam
+produces 7,417 relightable surfels; fitting at width 128 and evaluating every
+official cross-product gives:
+
+| Lights / cameras | sRGB mean / worst | Foreground mean / worst | Recall | Precision |
+| --- | ---: | ---: | ---: | ---: |
+| fitted / fitted | 34.22 / 24.12 dB | 26.28 / 15.18 dB | 99.4% | 89.3% |
+| fitted / held | 33.72 / 26.88 dB | 26.69 / 19.20 dB | 99.5% | 91.0% |
+| held / fitted | 34.16 / 26.49 dB | 26.21 / 16.70 dB | 99.4% | 89.3% |
+| held / held | 33.67 / 26.92 dB | 26.63 / 19.45 dB | 99.5% | 91.0% |
+
+The held-light quadrants match their fitted-light counterparts closely. That
+passes the split and finite-light transfer gate; it does not pass the visual
+quality gate. The handbag silhouette is recognizable, but quilting, flap
+edges, chain, and gold clasp remain soft, and the worst grazing-light render is
+nearly black. The current finite-light renderer is direct diffuse only, so it
+cannot reproduce the clasp's specular response or cast shadows.
+
+A cloud-only 65,536-cell geometry arm at width 256 uses 19.7 million optimizer
+rays without truncation and improves static held-camera whole-frame PSNR
+`25.84→27.43` dB, foreground `20.03→21.58` dB, recall `85.9→90.7%`, and
+precision `74.0→81.2%`. Its 31,932-surfel relight fit at width 64 improves the
+held/held whole-frame mean/worst `34.30/27.10→34.48/27.72` dB and precision
+`90.7→92.0%`, while foreground remains `27.23/19.61` dB and recall changes
+`99.4→99.0%`. Keep it as a promising geometry arm, not an all-metric-selected
+replacement.
+
+The matched 31,932-particle measured-light Gaussian continuation is rejected.
+Its deterministic audit, cycling across every fitted light and camera, changes
+`0.003033→0.010926`; accepting it turns the object into a broad low-precision
+fog. The pipeline now restores geometry and normals whenever that audit
+regresses. On the official held-light/held-camera cross-product, the restored
+Gaussian reaches `33.37/27.45` dB whole-frame mean/worst,
+`25.86/19.64` dB foreground, `96.2%` recall, and `92.8%` precision. The
+corresponding surface cloud reaches `34.46/27.68`, `27.22/19.61`, `99.0%`, and
+`92.0%`. The Gaussian is therefore a safe serialized control but is not the
+selected quality result.
+
+The loader now decodes cameras in parallel. On this 12-thread machine that
+reduces a complete width-64 fit/evaluation from 30m06s to 5m37s with a
+byte-identical output model. The coupled surface solver also discards exact
+zero-response light terms: on the 31,932-surfel arm it stores 14,760,383 rather
+than 28,693,080 terms and again writes a byte-identical model.
+
+One source-format caveat remains. `avif-rust 0.0.7` strictly decodes 6,218 of
+the 6,240 extracted C276 files; 22 valid files exercise decoder paths it does
+not yet implement correctly. Both libaom and dav1d agree on those images.
+Disabling entropy validation produces corrupted blocks and is rejected. The
+audit preserves the raw release and losslessly re-encodes only those 22 files
+in `/mnt/data/OLATverse/derived/C276-avif-rust/`; the Rust loader itself has no
+external-process fallback. Fix the decoder upstream rather than silently
+accepting damaged pixels.
+
+Current artifacts are under `/mnt/data/OLATverse/runs/C276/`:
+
+- `olat-surface-128-r3c/scene.rply` and `images/` — complete production-size
+  scalar fit and 618 held-light/held-camera reference/render pairs;
+- `foam-static-64k-256/foam.ply` and `novel_00.png` … `novel_04.png` — denser
+  static cloud and nearest-camera novel-view strip;
+- `surface-64k-256-vf2/scene.rply` — denser relightable surface initializer;
+- `olat-gaussian-64k-fit64-r1-guard/scene.{rply,ply}` — guarded matched surface
+  and Gaussian control; the regressed candidate was restored before writing.
+
+Dataset imagery remains outside version control. Representative OLATverse
+reference/result pairs may be checked in only after the release terms
+explicitly permit redistribution; the public repository currently states no
+dataset licence.
 
 ## Compact calibrated route: LUCES-MV
 
