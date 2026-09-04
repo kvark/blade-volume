@@ -274,6 +274,13 @@ impl DiffuseProbe {
     }
 }
 
+#[derive(Clone, Copy)]
+struct NormalReading {
+    probe: DiffuseProbe,
+    radiance: [f32; 3],
+    weight: f64,
+}
+
 impl CalibratedLight<'_> {
     fn probe(self, point: glam::Vec3, view: u32) -> Option<DiffuseProbe> {
         match self {
@@ -321,29 +328,31 @@ fn normal_candidates(count: usize) -> Vec<glam::Vec3> {
 fn photometric_normal_score(
     normal: glam::Vec3,
     towards: glam::Vec3,
-    readings: &[(DiffuseProbe, [f32; 3])],
+    readings: &[NormalReading],
 ) -> f64 {
     if normal.dot(towards) <= 0.05 {
         return f64::INFINITY;
     }
-    let shades: Vec<_> = readings.iter().map(|entry| entry.0.shade(normal)).collect();
+    let shades: Vec<_> = readings
+        .iter()
+        .map(|reading| reading.probe.shade(normal))
+        .collect();
     let mut error = 0.0f64;
     for channel in 0..3 {
         let mut numerator = 0.0f64;
         let mut denominator = 0.0f64;
-        for (shade, entry) in shades.iter().zip(readings) {
-            let observed = &entry.1;
-            numerator += shade[channel] as f64 * observed[channel] as f64;
-            denominator += (shade[channel] as f64).powi(2);
+        for (shade, reading) in shades.iter().zip(readings) {
+            numerator += reading.weight * shade[channel] as f64 * reading.radiance[channel] as f64;
+            denominator += reading.weight * (shade[channel] as f64).powi(2);
         }
         let albedo = if denominator > 1.0e-12 {
             (numerator / denominator).clamp(0.005, 0.8)
         } else {
             0.5
         };
-        for (shade, entry) in shades.iter().zip(readings) {
-            let observed = &entry.1;
-            error += (albedo * shade[channel] as f64 - observed[channel] as f64).powi(2);
+        for (shade, reading) in shades.iter().zip(readings) {
+            error += reading.weight
+                * (albedo * shade[channel] as f64 - reading.radiance[channel] as f64).powi(2);
         }
     }
     error
@@ -403,7 +412,7 @@ fn calibrated_lights_differ(left: CalibratedLight<'_>, right: CalibratedLight<'_
 fn best_photometric_normal(
     current: glam::Vec3,
     towards: glam::Vec3,
-    readings: &[(DiffuseProbe, [f32; 3])],
+    readings: &[NormalReading],
     candidates: &[glam::Vec3],
 ) -> (glam::Vec3, f64) {
     let mut best = current;
@@ -416,6 +425,39 @@ fn best_photometric_normal(
         }
     }
     (best, best_score)
+}
+
+/// Collapse repeat cameras when they observed the same fixed finite emitter.
+///
+/// A weighted mean gives the same candidate-dependent least-squares terms as
+/// the individual readings; their omitted within-group variance is constant
+/// for every normal. Moving camera-mounted emitters keep one reading per view.
+fn shared_near_reading(
+    lights: &[vol::relight::PointLight],
+    point: glam::Vec3,
+    samples: &[Sample],
+) -> Option<NormalReading> {
+    let first = *lights.get(samples.first()?.view as usize)?;
+    if samples
+        .iter()
+        .any(|sample| lights.get(sample.view as usize) != Some(&first))
+    {
+        return None;
+    }
+    let mut radiance = [0.0f32; 3];
+    for sample in samples {
+        for (sum, value) in radiance.iter_mut().zip(sample.radiance) {
+            *sum += value;
+        }
+    }
+    for value in &mut radiance {
+        *value /= samples.len() as f32;
+    }
+    Some(NormalReading {
+        probe: DiffuseProbe::Near(first.sample(point)?),
+        radiance,
+        weight: samples.len() as f64,
+    })
 }
 
 /// Fit one diffuse normal per Gaussian against repeated captures under known
@@ -457,14 +499,28 @@ pub fn refine_normals_known_lights(
                         *value /= samples.len() as f32;
                     }
                     if let Some(probe) = light.light.probe(point, samples[0].view) {
-                        readings.push((probe, radiance));
+                        readings.push(NormalReading {
+                            probe,
+                            radiance,
+                            weight: 1.0,
+                        });
                     }
                 }
-                CalibratedLight::Near(_) => {
+                CalibratedLight::Near(near_lights) => {
                     for sample in samples {
                         towards += sample.towards;
-                        if let Some(probe) = light.light.probe(point, sample.view) {
-                            readings.push((probe, sample.radiance));
+                    }
+                    if let Some(reading) = shared_near_reading(near_lights, point, samples) {
+                        readings.push(reading);
+                    } else {
+                        for sample in samples {
+                            if let Some(probe) = light.light.probe(point, sample.view) {
+                                readings.push(NormalReading {
+                                    probe,
+                                    radiance: sample.radiance,
+                                    weight: 1.0,
+                                });
+                            }
                         }
                     }
                 }
@@ -532,7 +588,11 @@ pub fn refine_normals_known_lights_per_view(
                 };
                 towards = sample.towards;
                 if let Some(probe) = light.light.probe(point, sample.view) {
-                    readings.push((probe, sample.radiance));
+                    readings.push(NormalReading {
+                        probe,
+                        radiance: sample.radiance,
+                        weight: 1.0,
+                    });
                 }
             }
             if readings.len() < 2 {
@@ -2290,6 +2350,40 @@ mod tests {
             recovered.dot(truth) > 0.995,
             "normal {recovered:?} against {truth:?}"
         );
+    }
+
+    #[test]
+    fn fixed_near_light_repeats_collapse_to_one_weighted_reading() {
+        let light = vol::relight::PointLight {
+            position: [0.0, 0.0, 2.0],
+            direction: [0.0, 0.0, -1.0],
+            intensity: [1.0; 3],
+            exponent: 0.0,
+        };
+        let samples = [
+            Sample {
+                view: 0,
+                radiance: [0.2, 0.3, 0.4],
+                towards: glam::Vec3::Z,
+                facing: 1.0,
+            },
+            Sample {
+                view: 1,
+                radiance: [0.4, 0.5, 0.6],
+                towards: glam::Vec3::Z,
+                facing: 1.0,
+            },
+        ];
+
+        let reading = shared_near_reading(&[light; 2], glam::Vec3::ZERO, &samples).unwrap();
+
+        assert_eq!(reading.radiance, [0.3, 0.4, 0.5]);
+        assert_eq!(reading.weight, 2.0);
+        let moved = vol::relight::PointLight {
+            position: [1.0, 0.0, 2.0],
+            ..light
+        };
+        assert!(shared_near_reading(&[light, moved], glam::Vec3::ZERO, &samples).is_none());
     }
 
     #[test]
