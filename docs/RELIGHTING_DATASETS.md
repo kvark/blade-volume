@@ -207,6 +207,36 @@ Held/held whole-frame and foreground worst improve from `29.3903/21.6954` to
 visibility more promising, but it does not erase the small C276 tail losses or
 the DiLiGenT-MV Bear regression; the flag therefore remains explicit.
 
+Two direct attempts to generalize geometry across fitted lights are rejected.
+The existing physical Gaussian multi-light objective, replayed from the
+improved C452 surface, changes its construction audit loss
+`0.002379→0.004154`; its guard restores geometry before serialization. The
+restored Gaussian remains below the surface on held/held whole-frame mean
+(`34.6499` versus `35.4370` dB), recall (`96.227%` versus `98.848%`), and
+precision (`89.501%` versus `90.139%`).
+
+A four-light log-response field is a stronger but still mixed control. It
+uses frozen construction lights `0/102/204/306`, centers log luminance across
+the four observations so scalar albedo cancels, and stores three response
+coordinates only as temporary geometry supervision. The resulting response
+appearance is not copied into the relightable surface. On C452, held-camera
+full-bright whole-frame mean/worst improves `24.35/23.60→25.25/24.41` dB,
+foreground `23.52/22.81→23.72/23.31` dB, and precision `86.3→88.5%`, with
+recall tied at `99.7%`. After two material rounds, held/held whole-frame
+mean/worst improves `35.4370/29.3903→35.8559/30.7297` dB and precision
+`90.139→92.235%`, but foreground mean changes `27.4816→27.4738` dB and recall
+`98.848→98.815%`.
+
+The frozen C276 replay rejects promotion more clearly: held-camera
+full-bright whole-frame mean/worst improves `23.61/20.99→24.44/21.64` dB and
+precision `89.1→90.9%`, while foreground regresses
+`24.22/22.15→24.08/21.96` dB. Coordinate interpolation is not a safe rollback:
+25/50/75% blends between the two healthy foam endpoints all collapse support,
+because intermediate Voronoi ownership is not meaningful. Keep the one-light
+recipe. Any next multi-light geometry proposal must select coherent whole
+topology states or construction-validated spatial regions rather than blend
+point indices globally.
+
 A cloud-only 65,536-cell geometry arm at width 256 uses 19.7 million optimizer
 rays without truncation and improves static held-camera whole-frame PSNR
 `25.84→27.43` dB, foreground `20.03→21.58` dB, recall `85.9→90.7%`, and
@@ -270,6 +300,9 @@ Fresh-object artifacts are under `/mnt/data/OLATverse/runs/C452/`:
 - `olat-light000-visibility64-r2/` — latest combined opt-in transport result
   with all 1,236 held-light/held-camera reference-render images and
   `held-contact.png`.
+- `olat-light000-physical-gaussian64-r1/` and the `response4` directories —
+  rejected physical-Gaussian, response-field, and endpoint controls retained
+  for local audit only.
 
 Dataset imagery remains outside version control. Representative OLATverse
 reference/result pairs may be checked in only after the release terms

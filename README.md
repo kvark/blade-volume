@@ -41,16 +41,19 @@ the experiment-by-experiment history in the audit logs.
   cells improves precision and some tails but loses foreground means. The
   single-OLAT continuation improves every held-camera metric on both C452 and
   C276, but a few construction-camera minima move by `0.0001--0.0013` dB, so
-  it remains an explicit geometry recipe rather than a hidden default.
+  it remains an explicit geometry recipe rather than a hidden default. A
+  four-light, albedo-invariant response field sharpens C452 silhouettes but
+  regresses C276 held-camera foreground by `0.14/0.19` dB mean/worst, so it is
+  not promoted.
 - **Next:** finite lights now evaluate the existing GGX material fields and an
   optional finite-distance visibility ray without a new shader variant.
   Visibility gains about 2 dB on OLAT means but misses the strict gate by two
   0.001--0.002 dB foreground tails and regresses DiLiGenT-MV Bear, so it stays
   opt-in. Reconstructed materials remain explicitly diffuse-only because the
   first local specular fit also failed the complete image gate. Next, make the
-  material/transport solve agree with the full compositor. Generalize the
-  successful aligned-light geometry signal across several measured
-  construction lights without storing per-light appearance. Do not add free
+  material/transport solve agree with the full compositor. Localize the useful
+  multi-light geometry signal with construction-only validation instead of
+  moving the whole cloud or storing per-light appearance. Do not add free
   per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
