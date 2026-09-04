@@ -20,6 +20,7 @@ pub mod decompose;
 pub mod depth;
 pub mod diligent_mv;
 pub mod luces;
+pub mod olatverse;
 pub mod powerfoam;
 pub mod refine;
 pub mod score;

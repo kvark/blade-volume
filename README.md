@@ -84,8 +84,16 @@ a convincing real-world result.
   locally resized support, construction-light averaging, subpixel colour
   reads, and naive epipolar light signatures: each improves a partial metric
   but loses a held camera/light tail. The next target is cross-view geometry
-  correspondence and support, not simply more points. Progress does
-  not depend on OLATverse access.
+  correspondence and support, not simply more points. This compact baseline
+  remains reproducible independently of the larger OLATverse gate.
+- **OLATverse — integration complete, first reconstruction pending.** Access is
+  available to a 42-object validation set with 35 calibrated cameras and 331
+  finite lights per object. The pure-Rust loader decodes the released AVIF
+  radiance, preserves per-camera intrinsics, removes the documented 2× display
+  scale, and follows the official disjoint 24/6-camera and 104/103-light split.
+  Full-bright photographs initialize cloud-only geometry; the released mesh,
+  pseudo normals, and albedo do not enter training. The first archive and
+  point-only reconstruction are now the active large-scale quality gate.
 - **Independent distant-light control — DiLiGenT-MV is connected.** A pinned,
   pure-Rust Bear route now imports 20 calibrated cameras and a fixed subset of
   32 out of 96 distant lights without reading the released mesh or normals.

@@ -24,9 +24,10 @@ reconstruction.
 As of 2026-08-29, the only official Hugging Face copy among the requested
 datasets is
 [`OpenIllumination/OpenIllumination`](https://huggingface.co/datasets/OpenIllumination/OpenIllumination).
-No official Hub repository was found for MIT Multi-Illumination, FAU
-Multi-Illuminant, Flash/Ambient, MILL, LUCES-MV, ReNé, DiLiGenT-MV, Objects
-With Lighting, or OpenSubstance; use their official project releases instead.
+No official Hub repository was found for OLATverse, MIT Multi-Illumination,
+FAU Multi-Illuminant, Flash/Ambient, MILL, LUCES-MV, ReNé, DiLiGenT-MV,
+Objects With Lighting, or OpenSubstance; use their official project releases
+instead.
 The additional official
 [`cyberagent/mvscps`](https://huggingface.co/datasets/cyberagent/mvscps)
 release provides six multi-view OLAT scenes, masks, and camera projection
@@ -42,6 +43,7 @@ metadata.
 
 | Dataset | Camera/light coverage | Best use here | Limitation |
 | --- | --- | --- | --- |
+| [OLATverse](https://github.com/xilongzhou/OLATverse) | 42 validation and 767 training objects, each with 35 cameras and 331 measured finite lights | **Active large calibrated gate.** The official split gives a dense, independently held camera/light cross-product for geometry, material, and transport. | Registration-gated, about 21.2 GiB compressed for validation and 284.4 GiB for all archives; five polarized cameras need separate treatment. |
 | [LUCES-MV](https://arxiv.org/abs/2412.16737) | Public calibrated subset: 10 objects, 12 views by 15 near-field LEDs | **Current controlled-light gate.** It has linear 16-bit RGB, masks, camera/LED calibration, depth, normals, and ground-truth shape. One object is about 1.9 GB. | Non-commercial research licence; the calibrated public subset is smaller than the paper's complete capture. |
 | [DiLiGenT-MV](https://sites.google.com/site/photometricstereodata/mv) | 5 objects, 20 views by 96 calibrated lights | **Second active controlled-light gate.** The pure-Rust Bear route below reconstructs and scores a fixed 16/4-camera, 24/8-light split. | Only five object-centric scenes; the lights are distant and the objects are mostly diffuse. |
 | [MVSCPS capture](https://huggingface.co/datasets/cyberagent/mvscps) | 6 scenes, generally 24 camera poses under each of 6 moving-rig OLATs | Later unknown-light reconstruction and capture-practice gate with RAW/JPEG, masks, and camera projection matrices. | 65.1 GB, CC BY-NC; no measured lights and no quantitative ground-truth mesh. |
@@ -52,14 +54,56 @@ metadata.
 | [DTU robot data](https://roboimagedata.compute.dtu.dk/?page_id=24) | 60 scenes, 119 cameras by 19 LEDs | Larger, more scene-like multi-view/multi-light stress test. | Approximately 730 GB in full and built around local LEDs. |
 | [OpenSubstance](https://opensubstance.github.io/) | 187 objects, 270 views and 1,637 lighting conditions | Later high-resolution material and specular benchmark. | Multi-terabyte scale and access by request. |
 
-OLATverse is not part of the active plan. Its registration-gated release may
-never be available to this project, so no milestone or quality claim depends
-on it.
+## Active large calibrated route: OLATverse
 
-## Current alternative route: LUCES-MV
+Access is now available. The validation archive contains 42 objects; each raw
+object supplies a complete 35-camera by 331-light grid plus two full-bright
+frames. The published benchmark excludes the five polarized cameras and uses
+24 construction plus six held cameras. Its light split uses 104 construction
+indices `(0..310).step_by(3)` and 103 held indices
+`(1..310).step_by(3)`. Both axes are disjoint, while the full grid provides
+all four fitted/held camera-light quadrants needed for an honest score.
 
-LUCES-MV replaces OLATverse and the blocked public ReNé capture for the next
-controlled-light work. The official calibrated release provides twelve poses
+The project adapter is deliberately cloud-only and compact:
+
+- `import_olatverse` materializes only frame 14, masks, calibrated pose-only
+  COLMAP files, an explicit construction-camera PatchMatch graph, and split
+  lists. It does not read the released mesh or pseudo-PBR products.
+- `fit_olatverse` reads the selected OLAT AVIF files directly instead of
+  copying thousands of PNGs. A small MIT-licensed pure-Rust decoder adds one
+  transitive crate. The loader converts sRGB to linear radiance and removes
+  the release's documented 2× visualization scale.
+- Camera transforms convert millimetres to metres and OpenGL camera axes to
+  Blade's `+Y`-down, `+Z`-forward convention. Every view retains its own focal
+  lengths and principal point.
+
+For one extracted validation object and the official shared metadata:
+
+```bash
+cargo run --release -p blade-volume-train --bin import_olatverse -- \
+    --input /mnt/data/OLATverse/validation/OLATverse_Upload_Val/data-042325-C276 \
+    --output target/audit-runs/olatverse/C276/prepared-320 \
+    --width 320
+
+# After the ordinary pose-only point reconstruction writes surface.f32:
+cargo run --release -p blade-volume-train --bin fit_olatverse -- \
+    --input /mnt/data/OLATverse/validation/OLATverse_Upload_Val/data-042325-C276 \
+    --lights /mnt/data/OLATverse/reference/shared/all_lights.json \
+    --surface target/audit-runs/olatverse/C276/surface.f32 \
+    --output target/audit-runs/olatverse/C276/relightable.f32 \
+    --gaussian-output target/audit-runs/olatverse/C276/relightable.ply \
+    --dump target/audit-runs/olatverse/C276/held-renders
+```
+
+No quality claim is made until a point-only reconstruction and the complete
+held-camera/held-light render set have finished. Dataset imagery remains
+outside version control; representative result/reference pairs may be added
+only after confirming the release terms allow redistribution.
+
+## Compact calibrated route: LUCES-MV
+
+LUCES-MV remains the compact regression gate alongside OLATverse. The official
+calibrated release provides twelve poses
 per object and fifteen individually calibrated LEDs per pose. Each LED has a
 camera-local position, brightest outgoing direction, RGB scale, and
 cosine-power exponent. This is exactly the missing observation model: a

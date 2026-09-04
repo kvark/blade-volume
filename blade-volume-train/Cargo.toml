@@ -12,6 +12,7 @@ qhull = ["blade-volume/qhull"]
 
 [dependencies]
 argh.workspace = true
+avif-rust = "0.0.7"
 blade-graphics.workspace = true
 blade-volume = { path = "../blade-volume" }
 blade-volume-convert = { path = "../blade-volume-convert" }
