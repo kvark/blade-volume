@@ -43,6 +43,68 @@ pub fn psnr(pred: &[f32], target: &[f32]) -> f32 {
     -10.0 * mse.log10()
 }
 
+/// PSNR weighted by foreground coverage. Returns `None` for an empty mask.
+pub fn foreground_psnr(pred: &[f32], target: &[f32], mask: &[f32]) -> Option<f32> {
+    assert_eq!(pred.len(), target.len(), "foreground_psnr: length mismatch");
+    assert_eq!(pred.len(), mask.len() * 3, "foreground_psnr: mask mismatch");
+    let coverage = mask.iter().map(|&value| value as f64).sum::<f64>();
+    if coverage <= f64::EPSILON {
+        return None;
+    }
+    let error = pred
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(target.as_chunks::<3>().0)
+        .zip(mask)
+        .map(|((actual, expected), &weight)| {
+            actual
+                .iter()
+                .zip(expected)
+                .map(|(&a, &b)| {
+                    let difference = (a - b) as f64;
+                    difference * difference * weight as f64
+                })
+                .sum::<f64>()
+        })
+        .sum::<f64>()
+        / (3.0 * coverage);
+    Some(if error <= 0.0 {
+        f32::INFINITY
+    } else {
+        -10.0 * error.log10() as f32
+    })
+}
+
+/// Soft silhouette intersection divided by target and rendered coverage.
+pub fn mask_recall_precision(
+    rendered_alpha: &[f32],
+    target_alpha: &[f32],
+) -> (Option<f32>, Option<f32>) {
+    assert_eq!(
+        rendered_alpha.len(),
+        target_alpha.len(),
+        "mask_recall_precision: length mismatch"
+    );
+    let intersection = rendered_alpha
+        .iter()
+        .zip(target_alpha)
+        .map(|(&rendered, &target)| rendered.clamp(0.0, 1.0).min(target.clamp(0.0, 1.0)) as f64)
+        .sum::<f64>();
+    let rendered = rendered_alpha
+        .iter()
+        .map(|&value| value.clamp(0.0, 1.0) as f64)
+        .sum::<f64>();
+    let target = target_alpha
+        .iter()
+        .map(|&value| value.clamp(0.0, 1.0) as f64)
+        .sum::<f64>();
+    (
+        (target > f64::EPSILON).then_some((intersection / target) as f32),
+        (rendered > f64::EPSILON).then_some((intersection / rendered) as f32),
+    )
+}
+
 /// Drop the alpha channel from RGBA pixels produced by `render_cpu`,
 /// returning `N*3` floats in `[0, 1]`.
 pub fn rgba_to_rgb(rgba: &[f32]) -> Vec<f32> {
@@ -104,5 +166,21 @@ mod tests {
     fn rgba_composites_premultiplied_color_over_background() {
         let rgb = rgba_over_background(&[0.2, 0.1, 0.0, 0.25], [1.0, 0.5, 0.0]);
         assert_eq!(rgb, vec![0.95, 0.475, 0.0]);
+    }
+
+    #[test]
+    fn foreground_psnr_ignores_background_error() {
+        let target = [0.5, 0.5, 0.5, 0.0, 0.0, 0.0];
+        let prediction = [0.4, 0.4, 0.4, 1.0, 1.0, 1.0];
+        let score = foreground_psnr(&prediction, &target, &[1.0, 0.0]).unwrap();
+        assert!((score - 20.0).abs() < 1.0e-3, "{score}");
+        assert!(foreground_psnr(&prediction, &target, &[0.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn soft_masks_report_recall_and_precision() {
+        let (recall, precision) = mask_recall_precision(&[1.0, 0.5, 0.0], &[0.5, 0.5, 1.0]);
+        assert!((recall.unwrap() - 0.5).abs() < 1.0e-6);
+        assert!((precision.unwrap() - 2.0 / 3.0).abs() < 1.0e-6);
     }
 }
