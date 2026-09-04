@@ -20,6 +20,7 @@ pub struct FitOptions<'a> {
     pub rounds: usize,
     pub normal_candidates: usize,
     pub albedo_ceiling: f32,
+    pub point_light_visibility: bool,
     pub train_views: &'a [usize],
     pub held_views: &'a [usize],
     pub light_digits: usize,
@@ -251,6 +252,7 @@ pub fn render_dataset_cross(
     held_views: &[usize],
     light_label: &str,
     light_digits: usize,
+    point_light_visibility: bool,
     dump: Option<&path::Path>,
 ) -> Result<(), String> {
     let mut surface_fitted = Vec::with_capacity(captures.len());
@@ -275,6 +277,7 @@ pub fn render_dataset_cross(
             capture,
             lights,
             &[(train_views, None), (held_views, surface_dump.as_deref())],
+            point_light_visibility,
         );
         surface_fitted.push(summaries[0]);
         surface_held.push(summaries[1]);
@@ -297,6 +300,7 @@ pub fn render_dataset_cross(
                 capture,
                 lights,
                 &[(train_views, None), (held_views, gaussian_dump.as_deref())],
+                point_light_visibility,
             );
             gaussian_fitted.push(summaries[0]);
             gaussian_held.push(summaries[1]);
@@ -544,6 +548,7 @@ pub fn fit(
         options.held_views,
         "fitted",
         options.light_digits,
+        options.point_light_visibility,
         None,
     )?;
     drop(training);
@@ -559,6 +564,7 @@ pub fn fit(
         options.held_views,
         "held",
         options.light_digits,
+        options.point_light_visibility,
         options.dump,
     )?;
     renderer.destroy();

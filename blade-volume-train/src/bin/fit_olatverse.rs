@@ -48,6 +48,10 @@ struct Args {
     /// maximum diffuse albedo (default 1)
     #[argh(option, default = "1.0")]
     albedo_ceiling: f32,
+
+    /// disable the selected finite-distance visibility ray
+    #[argh(switch)]
+    no_point_light_visibility: bool,
 }
 
 fn run(args: &Args) -> Result<(), String> {
@@ -67,6 +71,7 @@ fn run(args: &Args) -> Result<(), String> {
             rounds: args.rounds,
             normal_candidates: args.normal_candidates,
             albedo_ceiling: args.albedo_ceiling,
+            point_light_visibility: !args.no_point_light_visibility,
             train_views: &train::inverse::olatverse::TRAIN_VIEW_INDICES,
             held_views: &train::inverse::olatverse::HELD_VIEW_INDICES,
             light_digits: 3,

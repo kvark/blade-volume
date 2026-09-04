@@ -24,8 +24,9 @@ struct Parameters {
     // Highest index in the prefiltered ladder, as a float, since every use of
     // it is arithmetic rather than indexing.
     max_specular_level: f32,
-    // Rays cast per shading point for the shadowed diffuse term. Zero keeps
-    // the analytic unshadowed one, which is cheaper and has no noise.
+    // Rays cast per shading point for the shadowed environment diffuse term.
+    // For a point light, zero disables and any other value enables its one
+    // deterministic visibility ray.
     diffuse_samples: u32,
     // Decorrelates the sampling between frames so an accumulating viewer
     // converges instead of settling on one noisy estimate.
@@ -189,6 +190,7 @@ fn sh9_dot_irradiance(n: vec3<f32>) -> vec3<f32> {
 fn point_light_shade(
     position: vec3<f32>,
     normal: vec3<f32>,
+    radius: f32,
     view: vec3<f32>,
     material: Material,
 ) -> vec3<f32> {
@@ -204,9 +206,30 @@ fn point_light_shade(
     }
     let towards_light = -away;
     let n_dot_l = max(dot(normal, towards_light), 0.0);
-    let radiance = g_params.point_intensity * (angular / distance_squared);
+    if (n_dot_l == 0.0) {
+        return vec3<f32>(0.0);
+    }
+    var radiance = g_params.point_intensity * (angular / distance_squared);
+    if (g_params.diffuse_samples != 0u) {
+        // The same representation-scale bias as sampled environment lighting:
+        // overlapping surfels cannot resolve contact shadows below their own
+        // spacing and otherwise immediately shadow one another.
+        let bias = 2.0 * radius;
+        let origin = position + normal * bias;
+        let to_light = g_params.point_position - origin;
+        let light_distance = length(to_light);
+        if (light_distance > bias) {
+            let occlusion = trace_occlusion(
+                origin,
+                to_light / light_distance,
+                bias,
+                light_distance,
+            );
+            radiance *= occlusion.transmittance;
+        }
+    }
     var out = material.albedo * radiance * n_dot_l;
-    if (n_dot_l == 0.0 || all(material.specular_f0 == vec3<f32>(0.0))) {
+    if (all(material.specular_f0 == vec3<f32>(0.0))) {
         return out;
     }
 
@@ -336,10 +359,9 @@ struct Occlusion {
 // consistently wound icosahedron, so back-face culling keeps only its entry
 // triangle and applies that particle's opacity exactly once. Transmittance is a
 // product and therefore does not require the camera path's sorting.
-fn trace_occlusion(origin: vec3<f32>, dir: vec3<f32>, t_min: f32) -> Occlusion {
+fn trace_occlusion(origin: vec3<f32>, dir: vec3<f32>, t_min: f32, t_end: f32) -> Occlusion {
     var rq: ray_query;
     let flags = select(0u, RAY_FLAG_CULL_BACK_FACING, g_params.kernel == 2u);
-    let t_end = select(g_camera.depth, 1.0e30, g_params.kernel == 2u);
     rayQueryInitialize(&rq, g_tlas, RayDesc(flags, 0xFFu, t_min, t_end, origin, dir));
 
     var result = Occlusion(1.0, 0u, false);
@@ -504,7 +526,8 @@ fn shaded_diffuse(position: vec3<f32>, normal: vec3<f32>, radius: f32, seed: u32
 // blocker, so a renderer cannot end up with one and not the other — and one
 // without the other was measured to be worse than neither.
 fn incoming_radiance(origin: vec3<f32>, dir: vec3<f32>, bias: f32) -> vec3<f32> {
-    let occlusion = trace_occlusion(origin, dir, bias);
+    let t_end = select(g_camera.depth, 1.0e30, g_params.kernel == 2u);
+    let occlusion = trace_occlusion(origin, dir, bias, t_end);
     var arriving = occlusion.transmittance * environment_radiance(dir);
     if (occlusion.blocked) {
         // The blocker's whole response, not only its diffuse half. A metal has
@@ -543,7 +566,7 @@ fn shade_surfel_sampled(index: u32, position: vec3<f32>, ray_dir: vec3<f32>, see
     }
     let material = g_materials[surfel.material];
     if (g_params.point_enabled != 0u) {
-        return point_light_shade(position, normal, -ray_dir, material);
+        return point_light_shade(position, normal, surfel.radius, -ray_dir, material);
     }
     var out = material.albedo * shaded_diffuse(position, normal, surfel.radius, seed);
 
@@ -562,7 +585,8 @@ fn shade_surfel_sampled(index: u32, position: vec3<f32>, ray_dir: vec3<f32>, see
             // One ray along the reflection, so a mirror shows what is actually
             // in front of it rather than the sky behind that.
             let bias = 2.0 * surfel.radius;
-            let occlusion = trace_occlusion(position + normal * bias, reflection, bias);
+            let t_end = select(g_camera.depth, 1.0e30, g_params.kernel == 2u);
+            let occlusion = trace_occlusion(position + normal * bias, reflection, bias, t_end);
             if (occlusion.blocked) {
                 let blocker = g_surfels[occlusion.blocker];
                 var facing = blocker.normal;
