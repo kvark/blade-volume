@@ -34,9 +34,13 @@ the experiment-by-experiment history in the audit logs.
   support and precision, but does not yet improve every relighting metric. Its
   measured-light Gaussian continuation regresses a representative physical
   audit and is now automatically restored.
-- **Next:** add finite-light specular response and visibility one bounded piece
-  at a time, retaining each only when the fixed held-camera/held-light matrix
-  improves. Do not add free per-light appearance or mesh geometry.
+- **Next:** finite lights now evaluate the existing GGX material fields without
+  a new shader variant. Reconstructed OLAT materials remain explicitly
+  diffuse-only because the first local specular fit overfit and failed the
+  complete image gate. Add finite-distance visibility next, then fit
+  non-diffuse response through the real compositor. Retain either only when
+  the fixed held-camera/held-light matrix improves. Do not add free per-light
+  appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
@@ -69,8 +73,10 @@ a convincing real-world result.
   registering a separately mounted object improves one held light but fails
   the two-light quality gate. It never converts the result to polygons.
 - **Surface properties and relighting — controlled proof.** With aligned
-  captures under measured lights, the pipeline fits a shared PBR material table
-  and renders held cameras under a light excluded from fitting. Recovering
+  captures under measured lights, the pipeline fits a shared material table
+  and renders held cameras under a light excluded from fitting. Diffuse albedo
+  is selected; roughness and F0 are represented and rendered but not yet
+  recovered robustly. Recovering
   geometry, unknown illumination, and especially specular properties from one
   ordinary real capture remains weak and underconstrained.
 - **Cloud runtime — working.** The same viewer consumes static Gaussian and
@@ -129,8 +135,12 @@ a convincing real-world result.
   established cloud. That guarded Gaussian reaches `33.37/25.86` dB
   whole-frame/foreground on held lights and held cameras, versus
   `34.46/27.22` dB for the surface cloud. The split and light transfer are
-  validated; geometry and non-diffuse response remain the active quality
-  gates.
+  validated. The finite-light runtime now evaluates direct GGX for materials
+  with nonzero F0, without a new shader group or entry. A first local material
+  solve reduces its own sampled residual but regresses the complete fitted and
+  held-camera renders, so it is removed and calibrated outputs explicitly keep
+  F0 at zero. Geometry, visibility, and compositor-aware non-diffuse recovery
+  remain the active quality gates.
 - **Independent distant-light control — DiLiGenT-MV is connected.** A pinned,
   pure-Rust Bear route now imports 20 calibrated cameras and a fixed subset of
   32 out of 96 distant lights without reading the released mesh or normals.

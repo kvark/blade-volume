@@ -110,8 +110,20 @@ The held-light quadrants match their fitted-light counterparts closely. That
 passes the split and finite-light transfer gate; it does not pass the visual
 quality gate. The handbag silhouette is recognizable, but quilting, flap
 edges, chain, and gold clasp remain soft, and the worst grazing-light render is
-nearly black. The current finite-light renderer is direct diffuse only, so it
-cannot reproduce the clasp's specular response or cast shadows.
+nearly black.
+
+The finite-light renderer now evaluates the existing roughness/F0 material
+fields with direct GGX, in the same shader path and without another bind group
+or entry point. This closes a runtime gap, not the reconstruction gate. A
+bounded center-sample solve selected 12,436 of 15,667 supported materials and
+reduced its sampled linear RMSE `0.016449→0.009711`, but complete
+fitted-light/held-camera quality fell from `34.51/27.28` to `33.80/26.64` dB
+whole-frame/foreground. Even using the old placeholder dielectric F0 without
+fitting fell to `33.89/26.76` dB. Both material experiments are rejected and
+their fitting code is removed. Calibrated reconstruction now writes explicit
+zero F0, preserving the selected diffuse result exactly while leaving the
+runtime ready for a later compositor-aware material solve. Direct-light
+visibility is still absent.
 
 A cloud-only 65,536-cell geometry arm at width 256 uses 19.7 million optimizer
 rays without truncation and improves static held-camera whole-frame PSNR
@@ -157,6 +169,9 @@ Current artifacts are under `/mnt/data/OLATverse/runs/C276/`:
 - `surface-64k-256-vf2/scene.rply` — denser relightable surface initializer;
 - `olat-gaussian-64k-fit64-r1-guard/scene.{rply,ply}` — guarded matched surface
   and Gaussian control; the regressed candidate was restored before writing.
+- `olat-directspec-disabled64-r2/scene.rply` — exact diffuse-preservation
+  control after adding runtime GGX; all four reported camera/light quadrants
+  match the selected 65,536-cell surface baseline.
 
 Dataset imagery remains outside version control. Representative OLATverse
 reference/result pairs may be checked in only after the release terms
