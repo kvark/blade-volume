@@ -66,9 +66,10 @@ all four fitted/held camera-light quadrants needed for an honest score.
 
 The project adapter is deliberately cloud-only and compact:
 
-- `import_olatverse` materializes only frame 14, masks, calibrated pose-only
-  COLMAP files, an explicit construction-camera PatchMatch graph, and split
-  lists. It does not read the released mesh or pseudo-PBR products.
+- `import_olatverse` materializes frame 14, masks, calibrated pose-only COLMAP
+  files, an explicit construction-camera PatchMatch graph, and split lists. It
+  can additionally materialize one construction OLAT for the aligned-light
+  geometry stage. It does not read the released mesh or pseudo-PBR products.
 - `fit_olatverse` reads the selected OLAT AVIF files directly instead of
   copying thousands of PNGs. A small MIT-licensed pure-Rust decoder adds one
   transitive crate. The loader converts sRGB to linear radiance and removes
@@ -83,7 +84,24 @@ For one extracted validation object and the official shared metadata:
 cargo run --release -p blade-volume-train --bin import_olatverse -- \
     --input /mnt/data/OLATverse/validation/OLATverse_Upload_Val/data-042325-C276 \
     --output target/audit-runs/olatverse/C276/prepared-320 \
-    --width 320
+    --width 320 \
+    --lights /mnt/data/OLATverse/reference/shared/all_lights.json \
+    --geometry-light 0
+
+# Fit the full-bright field, then move its fixed topology for 200 updates per
+# construction camera under that one aligned, construction-only OLAT.
+cargo run --release -p blade-volume-train --bin train_colmap -- \
+    --sparse target/audit-runs/olatverse/C276/prepared-320/sparse/0 \
+    --images target/audit-runs/olatverse/C276/prepared-320/images \
+    --geometry-images target/audit-runs/olatverse/C276/prepared-320/geometry-images \
+    --geometry-steps-per-view 200 \
+    --masks target/audit-runs/olatverse/C276/prepared-320/masks \
+    --test-list target/audit-runs/olatverse/C276/prepared-320/test-views.txt \
+    --output target/audit-runs/olatverse/C276/foam.ply \
+    --initialization camera-lattice --max-points 16384 \
+    --width 128 --height 243 --views 0 --far-plane 10 --max-steps 384 \
+    --pixel-batch 1024 --views-per-batch 16 --steps-per-view 200 \
+    --sh-degree 2 --foreground-fraction 0.5
 
 # After the ordinary pose-only point reconstruction writes surface.f32:
 cargo run --release -p blade-volume-train --bin fit_olatverse -- \
@@ -141,6 +159,54 @@ changes `16.9353→16.9342` and `19.6083→19.6060` dB on fitted and held camera
 Those 0.0011/0.0023 dB losses were measured at higher precision rather than
 rounded away, and the held data is not used to tune the fixed two-radius bias.
 
+One aligned construction OLAT provides a stronger geometry result without
+changing the model or renderer. `import_olatverse --lights ...
+--geometry-light 0` writes only the 24 construction-camera PNGs and refuses
+any held light. The existing `train_colmap --geometry-images ...
+--geometry-steps-per-view 200` stage then moves fixed cloud topology under that
+second capture. Light 0 and 200 updates were frozen before the second-object
+replay; no held camera or held light selects the stage.
+
+On the fresh C452 plaster statue, the 16,384-cell extracted surface changes its
+held-camera full-bright score from `21.45/20.20` to `24.35/23.60` dB
+whole-frame mean/worst and from `21.87/19.75` to `23.52/22.81` dB foreground.
+Recall changes `97.2→99.7%` and precision `75.6→86.3%`. The complete
+finite-light comparison is:
+
+| Lights / cameras | C452 base whole / foreground | Aligned-light whole / foreground |
+| --- | ---: | ---: |
+| fitted / fitted | `34.2762 / 26.8906` dB | `36.2056 / 27.5976` dB |
+| fitted / held | `33.4325 / 26.6292` dB | `35.4441 / 27.4855` dB |
+| held / fitted | `34.2309 / 26.8425` dB | `36.1557 / 27.5443` dB |
+| held / held | `33.4496 / 26.6294` dB | `35.4370 / 27.4816` dB |
+
+Held-camera tails, recall, and precision all improve; held/held foreground
+worst moves `20.9275→21.6954` dB and precision `79.101→90.139%`. Three
+construction-camera minima move by only `-0.0001` to `-0.0010` dB. C276 then
+repeats the held-camera result at width 64 and one material/normal round:
+fitted-light whole/foreground means move `34.3543/27.2910→34.6864/27.6721`
+dB, while held-light means move `34.3042/27.2253→34.6455/27.6198` dB.
+Every held-camera tail and coverage metric improves. Construction-camera means
+and coverage improve too, while four minima move by `-0.0001` to `-0.0013`
+dB. Keep this as the explicit OLATverse surface recipe; the post-continuation
+SH describes the secondary light, so retain or refit the pre-continuation
+cloud separately when a static capture-light asset is also required.
+
+Combining that C452 geometry with the still-opt-in visibility ray improves all
+four means again:
+
+| Lights / cameras | Aligned-light whole / foreground | With visibility whole / foreground |
+| --- | ---: | ---: |
+| fitted / fitted | `36.2056 / 27.5976` dB | `37.5926 / 28.6722` dB |
+| fitted / held | `35.4441 / 27.4855` dB | `36.9359 / 28.6875` dB |
+| held / fitted | `36.1557 / 27.5443` dB | `37.5254 / 28.6057` dB |
+| held / held | `35.4370 / 27.4816` dB | `36.9021 / 28.6494` dB |
+
+Held/held whole-frame and foreground worst improve from `29.3903/21.6954` to
+`30.9228/22.0447` dB, with identical coverage. This fresh-object result makes
+visibility more promising, but it does not erase the small C276 tail losses or
+the DiLiGenT-MV Bear regression; the flag therefore remains explicit.
+
 A cloud-only 65,536-cell geometry arm at width 256 uses 19.7 million optimizer
 rays without truncation and improves static held-camera whole-frame PSNR
 `25.84→27.43` dB, foreground `20.03→21.58` dB, recall `85.9→90.7%`, and
@@ -169,11 +235,13 @@ than 28,693,080 terms and again writes a byte-identical model.
 
 One source-format caveat remains. `avif-rust 0.0.7` strictly decodes 6,218 of
 the 6,240 extracted C276 files; 22 valid files exercise decoder paths it does
-not yet implement correctly. Both libaom and dav1d agree on those images.
-Disabling entropy validation produces corrupted blocks and is rejected. The
-audit preserves the raw release and losslessly re-encodes only those 22 files
-in `/mnt/data/OLATverse/derived/C276-avif-rust/`; the Rust loader itself has no
-external-process fallback. Fix the decoder upstream rather than silently
+not yet implement correctly. The selected C452 protocol has one such file;
+eight more failures found in a full partial scan belong to excluded polarized
+camera 39. Both libaom and dav1d agree on these images. Disabling entropy
+validation produces corrupted blocks and is rejected. The audit preserves the
+raw release and losslessly re-encodes only rejected files in hard-linked
+derived trees under `/mnt/data/OLATverse/derived/`; the Rust loader itself has
+no external-process fallback. Fix the decoder upstream rather than silently
 accepting damaged pixels.
 
 Current artifacts are under `/mnt/data/OLATverse/runs/C276/`:
@@ -191,6 +259,17 @@ Current artifacts are under `/mnt/data/OLATverse/runs/C276/`:
 - `olat-visibility64-r2/scene.rply`, `images/`, and `held-contact.png` — the
   opt-in visibility candidate, all 618 held/held reference-render pairs, and a
   four-light local contact sheet. These stay outside git with the dataset.
+
+Fresh-object artifacts are under `/mnt/data/OLATverse/runs/C452/`:
+
+- `surface-16k-vf2/scene.rply` and `olat-baseline64-r2/scene.rply` — unchanged
+  16,384-cell geometry and its exact finite-light control;
+- `surface-16k-vf2-light000/scene.rply` and
+  `olat-light000-baseline64-r2/scene.rply` — the selected aligned-light surface
+  and complete no-visibility gate;
+- `olat-light000-visibility64-r2/` — latest combined opt-in transport result
+  with all 1,236 held-light/held-camera reference-render images and
+  `held-contact.png`.
 
 Dataset imagery remains outside version control. Representative OLATverse
 reference/result pairs may be checked in only after the release terms

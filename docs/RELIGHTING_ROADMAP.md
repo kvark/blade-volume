@@ -29,8 +29,19 @@ not contain or fall back to polygonal geometry.
 - One finite-distance visibility ray reuses that shader and its existing ray
   query. It improves C276 means by 1.4--2.3 dB and all whole-frame tails, but
   misses the strict gate by 0.0011/0.0023 dB on two held-light foreground
-  tails. LUCES-MV is backend-mixed and DiLiGenT-MV Bear regresses. Keep it
-  opt-in until fitting and transport share the same compositor.
+  tails. On fresh C452 with aligned-light geometry it improves all four means
+  and held/held whole/foreground tails by 1.53/0.35 dB. LUCES-MV is
+  backend-mixed and DiLiGenT-MV Bear regresses. Keep visibility opt-in until
+  fitting and transport share the same compositor.
+- One aligned construction OLAT now drives the existing 200-update
+  fixed-topology geometry continuation. On fresh C452 it improves every
+  held-camera surface metric (`21.45/21.87→24.35/23.52` dB whole/foreground,
+  `97.2/75.6→99.7/86.3%` recall/precision) and adds about 2 dB to all four
+  finite-light whole-frame means. A frozen C276 replay improves every
+  held-camera relighting metric too. Construction-camera means and coverage
+  improve on both objects, while a few almost-black minima move by at most
+  0.0013 dB. The importer exposes this as an explicit construction-only option;
+  it is not a hidden default and does not materialize the remaining lights.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
@@ -162,7 +173,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; first complete OLATverse two-axis gate passes light transfer; direct GGX runtime selected; finite visibility is opt-in after mixed gates; first local F0/roughness fit rejected; regressed Gaussian geometry is guarded | Make fitted material and bounded transport use the same complete compositor, then validate on a fresh object | Improve whole-frame and foreground mean/worst, recall, and precision on the fixed two-axis split; publish representative held/held images only when dataset terms permit |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one explicit aligned construction OLAT improves every held-camera surface/relighting metric on C452 and C276; direct GGX selected; finite visibility remains opt-in | Generalize the successful geometry signal across several measured construction lights without durable per-light appearance, then make fitted material and bounded transport share the complete compositor | Preserve the two-object held-camera gains and eliminate the small construction-tail trade before making the stage automatic; publish held/held images only when dataset terms permit |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
