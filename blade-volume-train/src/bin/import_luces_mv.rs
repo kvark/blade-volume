@@ -8,9 +8,6 @@
 use blade_volume_train as train;
 use std::{fs, path};
 
-#[path = "support/import_calibrated.rs"]
-mod import_calibrated;
-
 #[derive(argh::FromArgs)]
 /// Convert a downloaded LUCES-MV object to the training layout.
 struct Args {
@@ -78,13 +75,13 @@ fn run(args: &Args) -> Result<(), String> {
             train::inverse::luces::load(input, camera_one, camera_two, args.width, &[light])?;
         let capture = &dataset.captures[0];
         if light == 0 {
-            import_calibrated::write_colmap(&output.join("sparse/0"), capture, view_name)
+            train::calibrated::write_colmap(&output.join("sparse/0"), capture, view_name)
                 .map_err(|error| format!("cannot write COLMAP poses: {error}"))?;
-            import_calibrated::write_masks(&output.join("masks"), capture, view_name)?;
+            train::calibrated::write_masks(&output.join("masks"), capture, view_name)?;
             write_splits(output, capture.views.len())
                 .map_err(|error| format!("cannot write fixed splits: {error}"))?;
         }
-        import_calibrated::write_capture_images(
+        train::calibrated::write_capture_images(
             &output.join(format!("light-{:02}/images", light + 1)),
             capture,
             view_name,

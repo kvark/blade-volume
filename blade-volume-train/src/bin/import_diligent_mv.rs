@@ -11,9 +11,6 @@ use std::{fs, path};
 
 const PATCH_MATCH_SOURCES: usize = 12;
 
-#[path = "support/import_calibrated.rs"]
-mod import_calibrated;
-
 #[derive(argh::FromArgs)]
 /// Convert a downloaded DiLiGenT-MV object to the training layout.
 struct Args {
@@ -98,9 +95,9 @@ fn write_albedo_mvs(
 ) -> Result<(), String> {
     let output = output.join("albedo");
     let capture = construction_capture(capture);
-    import_calibrated::write_colmap(&output.join("sparse"), &capture, construction_view_name)
+    train::calibrated::write_colmap(&output.join("sparse"), &capture, construction_view_name)
         .map_err(|error| format!("cannot write albedo COLMAP poses: {error}"))?;
-    import_calibrated::write_capture_images(
+    train::calibrated::write_capture_images(
         &output.join("images"),
         &capture,
         construction_view_name,
@@ -148,17 +145,17 @@ fn run(args: &Args) -> Result<(), String> {
     selected.extend(train::inverse::diligent_mv::HELD_LIGHT_INDICES);
     selected.sort_unstable();
     let dataset = train::inverse::diligent_mv::load(input, args.width, &selected)?;
-    let albedo = dataset.construction_photometric_albedo()?;
+    let albedo = train::inverse::diligent_mv::construction_photometric_albedo(&dataset)?;
     fs::create_dir_all(output)
         .map_err(|error| format!("cannot create {}: {error}", output.display()))?;
     write_albedo_mvs(output, &albedo)?;
     drop(albedo);
-    import_calibrated::write_colmap(&output.join("sparse/0"), &dataset.captures[0], view_name)
+    train::calibrated::write_colmap(&output.join("sparse/0"), &dataset.captures[0], view_name)
         .map_err(|error| format!("cannot write COLMAP poses: {error}"))?;
-    import_calibrated::write_masks(&output.join("masks"), &dataset.captures[0], view_name)?;
+    train::calibrated::write_masks(&output.join("masks"), &dataset.captures[0], view_name)?;
     write_splits(output).map_err(|error| format!("cannot write fixed splits: {error}"))?;
     for (capture, &light) in dataset.captures.iter().zip(&selected) {
-        import_calibrated::write_capture_images(
+        train::calibrated::write_capture_images(
             &output.join(format!("light-{:03}/images", light + 1)),
             capture,
             view_name,
