@@ -337,6 +337,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "avif-rust"
+version = "0.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a863edf2a25c3c687063232b641f17d0402724d8cc1c9a6d8a244a335558a3f1"
+dependencies = [
+ "bin-rs",
+]
+
+[[package]]
 name = "avif-serialize"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -362,6 +371,12 @@ name = "base64"
 version = "0.21.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "bin-rs"
+version = "0.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23f756521115a60a84bc45722261eaf03aa6a59d886c9c3b41d08ac1c39e3e24"
 
 [[package]]
 name = "bindgen"
@@ -556,6 +571,7 @@ name = "blade-volume-train"
 version = "0.1.0"
 dependencies = [
  "argh",
+ "avif-rust",
  "blade-graphics",
  "blade-volume",
  "blade-volume-convert",

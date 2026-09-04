@@ -57,36 +57,13 @@ fn construction_capture(
     }
 }
 
-fn patch_match_config(capture: &train::inverse::capture::Capture) -> String {
-    let mut graph = String::new();
-    for (index, reference) in capture.views.iter().enumerate() {
-        let position = glam::Vec3::from(reference.camera.cam_position);
-        let mut sources = capture
-            .views
-            .iter()
-            .enumerate()
-            .filter(|&(other, _)| other != index)
-            .map(|(other, source)| {
-                (
-                    position.distance_squared(glam::Vec3::from(source.camera.cam_position)),
-                    other,
-                )
-            })
-            .collect::<Vec<_>>();
-        sources.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
-        graph.push_str(&construction_view_name(index));
-        graph.push('\n');
-        graph.push_str(
-            &sources
-                .iter()
-                .take(PATCH_MATCH_SOURCES)
-                .map(|&(_, source)| construction_view_name(source))
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-        graph.push('\n');
-    }
-    graph
+fn patch_match_config(capture: &train::inverse::capture::Capture) -> Result<String, String> {
+    train::calibrated::patch_match_config(
+        capture,
+        &(0..capture.views.len()).collect::<Vec<_>>(),
+        construction_view_name,
+        PATCH_MATCH_SOURCES,
+    )
 }
 
 fn write_albedo_mvs(
@@ -102,8 +79,11 @@ fn write_albedo_mvs(
         &capture,
         construction_view_name,
     )?;
-    fs::write(output.join("patch-match.cfg"), patch_match_config(&capture))
-        .map_err(|error| format!("cannot write albedo PatchMatch graph: {error}"))
+    fs::write(
+        output.join("patch-match.cfg"),
+        patch_match_config(&capture)?,
+    )
+    .map_err(|error| format!("cannot write albedo PatchMatch graph: {error}"))
 }
 
 fn write_splits(output: &path::Path) -> std::io::Result<()> {
@@ -203,7 +183,7 @@ mod tests {
             height: 1,
             views,
         };
-        let graph = patch_match_config(&capture);
+        let graph = patch_match_config(&capture).unwrap();
         let lines = graph.lines().collect::<Vec<_>>();
 
         assert_eq!(lines.len(), 2 * capture.views.len());

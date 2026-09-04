@@ -12,6 +12,11 @@ not contain or fall back to polygonal geometry.
 - Novel-view rendering under the captured light works.
 - Controlled multi-light captures prove the material and relighting path end
   to end.
+- OLATverse access is now available. Its pure-Rust adapter preserves the
+  official disjoint 24/6-camera and 104/103-light split, uses full-bright
+  photographs only for point-cloud geometry, and excludes the released mesh
+  and pseudo-PBR products. The first validation-object reconstruction is the
+  active large calibrated gate; no result is claimed yet.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
@@ -143,7 +148,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV routes selected | Keep their near- and distant-light models shared with the production renderer; do not depend on OLATverse | Improve whole-frame and foreground mean/worst, recall, and precision on both fixed camera/light splits |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse adapter complete | Run one OLATverse validation object through the same finite-light renderer without reading its mesh or pseudo-PBR products | Improve whole-frame and foreground mean/worst, recall, and precision on the fixed two-axis split; publish representative held/held images |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
@@ -1075,15 +1080,15 @@ The Hub-hosted M2AD alternative has 12 angle labels and 10 illumination labels,
 but its complete metadata archive contains no camera or light calibration, so
 its 15--17 GB category archives are not downloaded.
 
-Do not plan around OLATverse access. LUCES-MV is the active controlled-light
-route: its official Drive exposes object archives separately, and each public
-calibrated object contains 12 masked views under 15 near-field LEDs plus
-camera/light calibration and ground-truth normals/depth/shape. DiLiGenT-MV is
-the smaller fallback with 20 views by 96 calibrated lights. Stanford-ORB is the
-later distant-HDR cross-check. OpenSubstance remains a request-gated,
-multi-terabyte option rather than a milestone. Objects With Lighting is the
-compact benchmark for one *unknown* natural environment and is evaluated
-separately below.
+OLATverse access is now available and its validation archive is the active
+large controlled-light route. Its official split supplies 24/6 non-polarized
+cameras and 104/103 disjoint finite lights. LUCES-MV remains the compact
+near-field regression with 12 masked views by 15 calibrated LEDs; DiLiGenT-MV
+remains the distant-light control with 20 views by 96 calibrated lights.
+Stanford-ORB is the later distant-HDR cross-check. OpenSubstance remains a
+request-gated, multi-terabyte option rather than a milestone. Objects With
+Lighting is the compact benchmark for one *unknown* natural environment and is
+evaluated separately below.
 
 ReNé is the next autonomous surface screen. Its 50 camera poses and 40 robot
 light poses have exactly the aligned multi-view/multi-light product needed by
@@ -1217,8 +1222,8 @@ decomposition with shared material structure or calibrated repeated
 environments; one unknown input environment cannot by itself identify arbitrary
 per-point BRDFs. Batch point proposals before revisiting the exact 44-minute
 refinement. ReNé remains behind unavailable empty-enclosure data and honest
-background subtraction. The next repeated-light gate is public LUCES-MV; no
-result depends on OLATverse access.
+background subtraction. LUCES-MV remains the compact repeated-light regression;
+OLATverse is now the larger independent-camera/light gate.
 
 ### LUCES-MV finite-light route
 
@@ -1269,7 +1274,7 @@ visibly soft ridges make spatial surface detail and correspondence precision
 the next target. Ground-truth depth was opened only after that gate, as an
 offline diagnosis of rejected surfaces rather than a fitting input. If the
 non-commercial licence prevents continued use, apply the same contract to
-public DiLiGenT-MV rather than waiting for OLATverse.
+public DiLiGenT-MV and the now-available OLATverse validation set.
 
 That first quality step is now bounded. Higher training resolution improves
 the static field but worsens projected depth and calibrated relighting; dense,

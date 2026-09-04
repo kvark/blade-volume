@@ -48,25 +48,29 @@ pub fn write_colmap(
     view_name: fn(usize) -> String,
 ) -> io::Result<()> {
     fs::create_dir_all(sparse)?;
-    let reference = capture
-        .views
-        .first()
-        .expect("calibrated dataset loader returned no views");
+    if capture.views.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "calibrated dataset loader returned no views",
+        ));
+    }
     let width = capture.width as f64;
     let height = capture.height as f64;
-    let focal_x = 0.5 * width / (0.5 * reference.camera.fov[0] as f64).tan();
-    let focal_y = 0.5 * height / (0.5 * reference.camera.fov[1] as f64).tan();
-    let principal_x = 0.5 * width * (reference.camera.principal[0] as f64 + 1.0);
-    let principal_y = 0.5 * height * (reference.camera.principal[1] as f64 + 1.0);
 
     let mut cameras = io::BufWriter::new(fs::File::create(sparse.join("cameras.bin"))?);
-    write_u64(&mut cameras, 1)?;
-    write_u32(&mut cameras, 1)?;
-    write_i32(&mut cameras, 1)?;
-    write_u64(&mut cameras, capture.width as u64)?;
-    write_u64(&mut cameras, capture.height as u64)?;
-    for value in [focal_x, focal_y, principal_x, principal_y] {
-        write_f64(&mut cameras, value)?;
+    write_u64(&mut cameras, capture.views.len() as u64)?;
+    for (index, view) in capture.views.iter().enumerate() {
+        let focal_x = 0.5 * width / (0.5 * view.camera.fov[0] as f64).tan();
+        let focal_y = 0.5 * height / (0.5 * view.camera.fov[1] as f64).tan();
+        let principal_x = 0.5 * width * (view.camera.principal[0] as f64 + 1.0);
+        let principal_y = 0.5 * height * (view.camera.principal[1] as f64 + 1.0);
+        write_u32(&mut cameras, index as u32 + 1)?;
+        write_i32(&mut cameras, 1)?;
+        write_u64(&mut cameras, capture.width as u64)?;
+        write_u64(&mut cameras, capture.height as u64)?;
+        for value in [focal_x, focal_y, principal_x, principal_y] {
+            write_f64(&mut cameras, value)?;
+        }
     }
     io::Write::flush(&mut cameras)?;
 
@@ -89,7 +93,7 @@ pub fn write_colmap(
         ] {
             write_f64(&mut images, value as f64)?;
         }
-        write_u32(&mut images, 1)?;
+        write_u32(&mut images, index as u32 + 1)?;
         io::Write::write_all(&mut images, view_name(index).as_bytes())?;
         io::Write::write_all(&mut images, &[0])?;
         write_u64(&mut images, 0)?;
@@ -154,6 +158,55 @@ pub fn write_masks(
             .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
     }
     Ok(())
+}
+
+/// Build an explicit nearest-camera PatchMatch graph from construction views.
+pub fn patch_match_config(
+    capture: &train::inverse::capture::Capture,
+    views: &[usize],
+    view_name: fn(usize) -> String,
+    source_count: usize,
+) -> Result<String, String> {
+    if source_count == 0 || views.len() < 2 {
+        return Err("PatchMatch needs at least two views and one source".to_string());
+    }
+    if views
+        .iter()
+        .enumerate()
+        .any(|(offset, index)| *index >= capture.views.len() || views[..offset].contains(index))
+    {
+        return Err("PatchMatch view indices must be unique and in range".to_string());
+    }
+    let mut graph = String::new();
+    for &index in views {
+        let position = glam::Vec3::from(capture.views[index].camera.cam_position);
+        let mut sources = views
+            .iter()
+            .copied()
+            .filter(|&other| other != index)
+            .map(|other| {
+                (
+                    position.distance_squared(glam::Vec3::from(
+                        capture.views[other].camera.cam_position,
+                    )),
+                    other,
+                )
+            })
+            .collect::<Vec<_>>();
+        sources.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+        graph.push_str(&view_name(index));
+        graph.push('\n');
+        graph.push_str(
+            &sources
+                .iter()
+                .take(source_count)
+                .map(|&(_, source)| view_name(source))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        graph.push('\n');
+    }
+    Ok(graph)
 }
 
 fn print_render_summaries(label: &str, summaries: &[train::inverse::score::Summary]) {
@@ -501,4 +554,89 @@ pub fn fit(
     )?;
     renderer.destroy();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view(
+        position: [f32; 3],
+        fov: [f32; 2],
+        principal: [f32; 2],
+    ) -> train::inverse::capture::View {
+        train::inverse::capture::View {
+            name: String::new(),
+            camera: vol::CameraParams {
+                cam_position: position,
+                cam_orientation: glam::Quat::IDENTITY.to_array(),
+                depth: 10.0,
+                fov,
+                principal,
+            },
+            pixels: vec![[0.0; 3]],
+            mask: Some(vec![1.0]),
+        }
+    }
+
+    fn view_name(index: usize) -> String {
+        format!("view-{index}.png")
+    }
+
+    #[test]
+    fn colmap_writer_preserves_per_view_intrinsics_and_poses() {
+        let temporary =
+            std::env::temp_dir().join(format!("blade-volume-calibrated-{}", std::process::id(),));
+        let _ = fs::remove_dir_all(&temporary);
+        let capture = train::inverse::capture::Capture {
+            width: 100,
+            height: 80,
+            views: vec![
+                view([0.0, 0.0, 0.0], [1.0, 0.8], [0.0, 0.0]),
+                view([1.0, 2.0, 3.0], [0.5, 0.4], [0.2, -0.1]),
+            ],
+        };
+
+        write_colmap(&temporary, &capture, view_name).unwrap();
+        let reconstruction = train::colmap::try_load_reconstruction(&temporary).unwrap();
+
+        assert_eq!(reconstruction.cameras.len(), 2);
+        assert_eq!(reconstruction.images.len(), 2);
+        assert_eq!(reconstruction.images[0].camera_id, 1);
+        assert_eq!(reconstruction.images[1].camera_id, 2);
+        assert_ne!(
+            reconstruction.cameras[&1].params,
+            reconstruction.cameras[&2].params
+        );
+        assert!((reconstruction.cameras[&2].params[2] - 60.0).abs() < 1.0e-5);
+        assert!((reconstruction.cameras[&2].params[3] - 36.0).abs() < 1.0e-5);
+        assert_eq!(reconstruction.images[1].translation, [-1.0, -2.0, -3.0]);
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn patch_match_uses_nearest_selected_views_only() {
+        let capture = train::inverse::capture::Capture {
+            width: 1,
+            height: 1,
+            views: vec![
+                view([0.0, 0.0, 0.0], [1.0; 2], [0.0; 2]),
+                view([10.0, 0.0, 0.0], [1.0; 2], [0.0; 2]),
+                view([2.0, 0.0, 0.0], [1.0; 2], [0.0; 2]),
+                view([1.0, 0.0, 0.0], [1.0; 2], [0.0; 2]),
+            ],
+        };
+
+        let graph = patch_match_config(&capture, &[0, 1, 2], view_name, 2).unwrap();
+
+        assert_eq!(
+            graph,
+            "view-0.png\nview-2.png, view-1.png\n\
+             view-1.png\nview-2.png, view-0.png\n\
+             view-2.png\nview-0.png, view-1.png\n"
+        );
+        assert!(!graph.contains("view-3"));
+        assert!(patch_match_config(&capture, &[0, 0], view_name, 1).is_err());
+        assert!(patch_match_config(&capture, &[0, 4], view_name, 1).is_err());
+    }
 }
