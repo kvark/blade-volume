@@ -559,6 +559,46 @@ pub fn evaluate_views(
     out
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ViewMetrics {
+    pub psnr: f32,
+    pub foreground_psnr: Option<f32>,
+    pub mask_recall: Option<f32>,
+    pub mask_precision: Option<f32>,
+}
+
+fn view_metrics(
+    rgba: &[f32],
+    view: &diff_render::ViewSupervision,
+    background_rgb: [f32; 3],
+) -> ViewMetrics {
+    let mut prediction = metrics::rgba_over_background(rgba, background_rgb);
+    for value in &mut prediction {
+        *value = value.clamp(0.0, 1.0);
+    }
+    let Some(ref mask) = view.target_alpha else {
+        return ViewMetrics {
+            psnr: metrics::psnr(&prediction, &view.target_rgb),
+            foreground_psnr: None,
+            mask_recall: None,
+            mask_precision: None,
+        };
+    };
+    let alpha = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| pixel[3])
+        .collect::<Vec<_>>();
+    let (mask_recall, mask_precision) = metrics::mask_recall_precision(&alpha, mask);
+    ViewMetrics {
+        psnr: metrics::psnr(&prediction, &view.target_rgb),
+        foreground_psnr: metrics::foreground_psnr(&prediction, &view.target_rgb, mask),
+        mask_recall,
+        mask_precision,
+    }
+}
+
 pub struct GpuViewEvaluator {
     context: sync::Arc<gpu::Context>,
     encoder: gpu::CommandEncoder,
@@ -727,6 +767,18 @@ impl GpuViewEvaluator {
         views: &[diff_render::ViewSupervision],
         background_rgb: [f32; 3],
     ) -> Result<Vec<f32>, String> {
+        Ok(self
+            .evaluate_metrics(views, background_rgb)?
+            .into_iter()
+            .map(|score| score.psnr)
+            .collect())
+    }
+
+    pub fn evaluate_metrics(
+        &mut self,
+        views: &[diff_render::ViewSupervision],
+        background_rgb: [f32; 3],
+    ) -> Result<Vec<ViewMetrics>, String> {
         self.path_rays = 0;
         self.path_truncated_rays = 0;
         self.path_max_steps_used = 0;
@@ -734,11 +786,7 @@ impl GpuViewEvaluator {
         let mut out = Vec::with_capacity(views.len());
         for view in views {
             let rgba = self.render_rgba(view.camera)?;
-            let mut pred = metrics::rgba_over_background(&rgba, background_rgb);
-            for value in pred.iter_mut() {
-                *value = value.clamp(0.0, 1.0);
-            }
-            out.push(metrics::psnr(&pred, &view.target_rgb));
+            out.push(view_metrics(&rgba, view, background_rgb));
         }
         if let Some(ref tracer) = self.splat_tracer {
             let truncated_percent = if self.path_rays == 0 {

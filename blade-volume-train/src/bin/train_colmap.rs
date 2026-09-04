@@ -1271,8 +1271,8 @@ fn main() {
         } else {
             let mut evaluator =
                 pipeline::GpuViewEvaluator::new(&outcome.model, &config, gpu.clone());
-            let psnrs = evaluator
-                .evaluate(&test_views, config.fit.background_rgb)
+            let scores = evaluator
+                .evaluate_metrics(&test_views, config.fit.background_rgb)
                 .unwrap_or_else(|err| {
                     eprintln!("GPU test-view evaluation failed: {err}");
                     std::process::exit(3);
@@ -1289,26 +1289,49 @@ fn main() {
                 eprintln!("cannot reload masked training views: {message}");
                 std::process::exit(2);
             });
-            let train_psnrs = evaluator
-                .evaluate(&train_views, config.fit.background_rgb)
+            let train_scores = evaluator
+                .evaluate_metrics(&train_views, config.fit.background_rgb)
                 .unwrap_or_else(|err| {
                     eprintln!("GPU train-view evaluation failed: {err}");
                     std::process::exit(3);
                 });
             evaluator.deinit();
-            let avg_train: f32 =
-                train_psnrs.iter().copied().sum::<f32>() / train_psnrs.len() as f32;
-            let avg_test: f32 = psnrs.iter().copied().sum::<f32>() / psnrs.len() as f32;
+            let avg_train: f32 = train_scores.iter().map(|score| score.psnr).sum::<f32>()
+                / train_scores.len() as f32;
+            let avg_test: f32 =
+                scores.iter().map(|score| score.psnr).sum::<f32>() / scores.len() as f32;
             println!(
                 "PSNR train (avg over {} views): {avg_train:.4} dB",
-                train_psnrs.len()
+                train_scores.len()
             );
             println!(
                 "PSNR test  (avg over {} views): {avg_test:.4} dB",
-                psnrs.len()
+                scores.len()
             );
-            for (img, p) in test_images.iter().zip(psnrs.iter()) {
-                println!("  test {}: {:.2} dB", img.name, p);
+            if scores.iter().all(|score| score.foreground_psnr.is_some()) {
+                let average = |get: fn(&pipeline::ViewMetrics) -> Option<f32>| {
+                    scores.iter().filter_map(get).sum::<f32>() / scores.len() as f32
+                };
+                println!(
+                    "test foreground: {:.4} dB PSNR, {:.1}% mask recall, {:.1}% mask precision",
+                    average(|score| score.foreground_psnr),
+                    100.0 * average(|score| score.mask_recall),
+                    100.0 * average(|score| score.mask_precision),
+                );
+            }
+            for (img, score) in test_images.iter().zip(&scores) {
+                if let Some(foreground) = score.foreground_psnr {
+                    println!(
+                        "  test {}: {:.2} dB full, {:.2} dB foreground, {:.1}% recall, {:.1}% precision",
+                        img.name,
+                        score.psnr,
+                        foreground,
+                        100.0 * score.mask_recall.unwrap_or(0.0),
+                        100.0 * score.mask_precision.unwrap_or(0.0),
+                    );
+                } else {
+                    println!("  test {}: {:.2} dB", img.name, score.psnr);
+                }
             }
         }
     }
@@ -1338,10 +1361,8 @@ fn main() {
     );
 }
 
-/// Render the trained model from a pose interpolated between the first two
-/// training cameras at parameter `t` in `[0, 1]`. `t = 0` reproduces the first
-/// training view, `t = 1` reproduces the second, anything in between is a
-/// genuinely novel pose.
+/// Render the trained model between the nearest pair of training cameras.
+/// Their short baseline keeps the interpolated camera outside the scene.
 fn render_novel_at(
     model: &vol::PointCloudModel,
     sparse: &path::Path,
@@ -1350,16 +1371,20 @@ fn render_novel_at(
     novel_path: &str,
 ) {
     let recon = blade_volume_train::colmap::load_reconstruction(sparse);
-    if recon.images.len() < 2 {
+    let cameras = recon
+        .images
+        .iter()
+        .filter(|image| !config.test_names.contains(&image.name))
+        .map(|image| recon.camera_params_for(image, config.far_plane))
+        .collect::<Vec<_>>();
+    let Some((index_a, index_b)) = closest_camera_pair(&cameras) else {
         eprintln!(
-            "need at least 2 images to interpolate a novel view; got {}",
-            recon.images.len()
+            "need at least 2 training images to interpolate a novel view; got {}",
+            cameras.len()
         );
         return;
-    }
-    let cam_a = recon.camera_params_for(&recon.images[0], config.far_plane);
-    let cam_b = recon.camera_params_for(&recon.images[1], config.far_plane);
-    let novel = interp_camera(&cam_a, &cam_b, t);
+    };
+    let novel = interp_camera(&cameras[index_a], &cameras[index_b], t);
 
     let settings = blade_volume_train::render::RenderSettings {
         width: config.resolution.0,
@@ -1385,6 +1410,18 @@ fn render_novel_at(
     } else {
         println!("wrote {} ({}x{})", novel_path, w, h);
     }
+}
+
+fn closest_camera_pair(cameras: &[vol::CameraParams]) -> Option<(usize, usize)> {
+    (0..cameras.len())
+        .flat_map(|left| (left + 1..cameras.len()).map(move |right| (left, right)))
+        .min_by(|&(left_a, right_a), &(left_b, right_b)| {
+            let distance = |left: usize, right: usize| {
+                glam::Vec3::from(cameras[left].cam_position)
+                    .distance_squared(glam::Vec3::from(cameras[right].cam_position))
+            };
+            distance(left_a, right_a).total_cmp(&distance(left_b, right_b))
+        })
 }
 
 fn interp_camera(a: &vol::CameraParams, b: &vol::CameraParams, t: f32) -> vol::CameraParams {
@@ -1422,6 +1459,24 @@ fn interp_camera(a: &vol::CameraParams, b: &vol::CameraParams, t: f32) -> vol::C
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn camera_at(position: [f32; 3]) -> vol::CameraParams {
+        vol::CameraParams {
+            cam_position: position,
+            ..vol::CameraParams::default()
+        }
+    }
+
+    #[test]
+    fn novel_strip_uses_the_shortest_camera_baseline() {
+        let cameras = [
+            camera_at([0.0, 0.0, 0.0]),
+            camera_at([4.0, 0.0, 0.0]),
+            camera_at([4.25, 0.0, 0.0]),
+        ];
+        assert_eq!(closest_camera_pair(&cameras), Some((1, 2)));
+        assert_eq!(closest_camera_pair(&cameras[..1]), None);
+    }
 
     #[test]
     fn endpoint_checkpoint_copy_atomically_replaces_final_ply() {
