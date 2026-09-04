@@ -186,7 +186,12 @@ fn sh9_dot_irradiance(n: vec3<f32>) -> vec3<f32> {
     return total;
 }
 
-fn point_light_diffuse(position: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+fn point_light_shade(
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    view: vec3<f32>,
+    material: Material,
+) -> vec3<f32> {
     let from_light = position - g_params.point_position;
     let distance_squared = dot(from_light, from_light);
     if (distance_squared <= 1.1920929e-7) {
@@ -197,8 +202,38 @@ fn point_light_diffuse(position: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     if (g_params.point_exponent != 0.0) {
         angular = pow(max(dot(g_params.point_direction, away), 0.0), g_params.point_exponent);
     }
-    let cosine = max(dot(normal, -away), 0.0);
-    return g_params.point_intensity * (angular * cosine / distance_squared);
+    let towards_light = -away;
+    let n_dot_l = max(dot(normal, towards_light), 0.0);
+    let radiance = g_params.point_intensity * (angular / distance_squared);
+    var out = material.albedo * radiance * n_dot_l;
+    if (n_dot_l == 0.0 || all(material.specular_f0 == vec3<f32>(0.0))) {
+        return out;
+    }
+
+    let n_dot_v = max(dot(normal, view), 0.0);
+    let half_sum = towards_light + view;
+    if (n_dot_v == 0.0 || dot(half_sum, half_sum) <= 1.1920929e-7) {
+        return out;
+    }
+    let half_vector = normalize(half_sum);
+    let n_dot_h = max(dot(normal, half_vector), 0.0);
+    let v_dot_h = clamp(dot(view, half_vector), 0.0, 1.0);
+    let alpha = pow(clamp(material.roughness, 0.045, 1.0), 2.0);
+    let alpha_squared = alpha * alpha;
+    let denominator = n_dot_h * n_dot_h * (alpha_squared - 1.0) + 1.0;
+    let distribution = alpha_squared / max(PI * denominator * denominator, 1.1754944e-38);
+    let smith_l = 2.0 * n_dot_l / (
+        n_dot_l + sqrt(alpha_squared + (1.0 - alpha_squared) * n_dot_l * n_dot_l)
+    );
+    let smith_v = 2.0 * n_dot_v / (
+        n_dot_v + sqrt(alpha_squared + (1.0 - alpha_squared) * n_dot_v * n_dot_v)
+    );
+    let grazing = pow(1.0 - v_dot_h, 5.0);
+    let fresnel = material.specular_f0 + (vec3<f32>(1.0) - material.specular_f0) * grazing;
+    // Point intensity is calibrated as unit-albedo diffuse response, with the
+    // Lambertian 1/PI already folded in.
+    out += radiance * (PI * distribution * smith_l * smith_v / (4.0 * n_dot_v)) * fresnel;
+    return out;
 }
 
 // Lazarov's analytic fit to the environment BRDF, so no lookup table is needed
@@ -508,7 +543,7 @@ fn shade_surfel_sampled(index: u32, position: vec3<f32>, ray_dir: vec3<f32>, see
     }
     let material = g_materials[surfel.material];
     if (g_params.point_enabled != 0u) {
-        return material.albedo * point_light_diffuse(position, normal);
+        return point_light_shade(position, normal, -ray_dir, material);
     }
     var out = material.albedo * shaded_diffuse(position, normal, surfel.radius, seed);
 

@@ -442,6 +442,7 @@ mod tests {
                 .into_iter()
                 .map(|albedo| vol::relight::Material {
                     albedo,
+                    specular_f0: [0.0; 3],
                     ..vol::relight::Material::default()
                 })
                 .collect(),

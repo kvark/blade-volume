@@ -180,11 +180,13 @@ pub struct PointLight {
     pub exponent: f32,
 }
 
-/// Incident radiance and direction from a sampled finite light.
+/// Calibrated diffuse response and direction from a sampled finite light.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PointLightSample {
     /// Unit direction from the shaded point towards the emitter.
     pub towards: glam::Vec3,
+    /// Normal-incidence outgoing radiance for a unit Lambertian albedo. The
+    /// Lambertian `1 / PI` is already folded in.
     pub radiance: [f32; 3],
 }
 
@@ -241,6 +243,83 @@ impl PointLight {
             .map_or(0.0, |normal| normal.dot(sample.towards).max(0.0));
         sample.radiance.map(|radiance| radiance * cosine)
     }
+}
+
+/// Direct GGX reflection from a sampled finite light.
+fn point_light_specular(
+    sample: PointLightSample,
+    normal: glam::Vec3,
+    view: glam::Vec3,
+    roughness: f32,
+    f0: [f32; 3],
+) -> [f32; 3] {
+    let Some(normal) = normal.try_normalize() else {
+        return [0.0; 3];
+    };
+    let Some(view) = view.try_normalize() else {
+        return [0.0; 3];
+    };
+    let n_dot_l = normal.dot(sample.towards).max(0.0);
+    let n_dot_v = normal.dot(view).max(0.0);
+    let Some(half) = (sample.towards + view).try_normalize() else {
+        return [0.0; 3];
+    };
+    if n_dot_l == 0.0 || n_dot_v == 0.0 {
+        return [0.0; 3];
+    }
+    let n_dot_h = normal.dot(half).max(0.0);
+    let v_dot_h = view.dot(half).clamp(0.0, 1.0);
+    let alpha = roughness.clamp(0.045, 1.0).powi(2);
+    let alpha_squared = alpha * alpha;
+    let denominator = n_dot_h * n_dot_h * (alpha_squared - 1.0) + 1.0;
+    let distribution =
+        alpha_squared / (std::f32::consts::PI * denominator * denominator).max(f32::MIN_POSITIVE);
+    let smith = |cosine: f32| {
+        2.0 * cosine / (cosine + (alpha_squared + (1.0 - alpha_squared) * cosine * cosine).sqrt())
+    };
+    let geometry = smith(n_dot_l) * smith(n_dot_v);
+    let grazing = (1.0 - v_dot_h).powi(5);
+    // `sample.radiance` has the Lambertian 1/PI folded in, so undo that
+    // calibration before applying the microfacet BRDF.
+    let scale = std::f32::consts::PI * distribution * geometry / (4.0 * n_dot_v);
+    std::array::from_fn(|channel| {
+        let fresnel = f0[channel] + (1.0 - f0[channel]) * grazing;
+        sample.radiance[channel] * scale * fresnel
+    })
+}
+
+/// Shade one material with a calibrated finite light.
+///
+/// An all-zero F0 is the explicit diffuse-only representation used before a
+/// specular fit has been selected.
+pub fn shade_point_light(
+    light: PointLight,
+    point: glam::Vec3,
+    normal: glam::Vec3,
+    view: glam::Vec3,
+    material: Material,
+) -> [f32; 3] {
+    let Some(sample) = light.sample(point) else {
+        return [0.0; 3];
+    };
+    let cosine = normal
+        .try_normalize()
+        .map_or(0.0, |normal| normal.dot(sample.towards).max(0.0));
+    let mut response =
+        std::array::from_fn(|channel| material.albedo[channel] * sample.radiance[channel] * cosine);
+    if material.specular_f0 != [0.0; 3] {
+        let specular = point_light_specular(
+            sample,
+            normal,
+            view,
+            material.roughness,
+            material.specular_f0,
+        );
+        for (value, reflected) in response.iter_mut().zip(specular) {
+            *value += reflected;
+        }
+    }
+    response
 }
 
 /// Real spherical harmonic basis for bands 0..=2.
@@ -966,6 +1045,40 @@ mod tests {
             light.diffuse(glam::Vec3::new(0.0, 0.0, 2.0), glam::Vec3::NEG_Z),
             [1.0, 2.0, 3.0]
         );
+    }
+
+    #[test]
+    fn point_light_shading_keeps_diffuse_only_explicit() {
+        let light = PointLight {
+            position: [0.0, 0.0, 2.0],
+            direction: glam::Vec3::NEG_Z.to_array(),
+            intensity: [4.0; 3],
+            exponent: 0.0,
+        };
+        let mut material = Material {
+            albedo: [0.5; 3],
+            roughness: 0.25,
+            specular_f0: [0.0; 3],
+            _padding: 0.0,
+        };
+        let diffuse = shade_point_light(
+            light,
+            glam::Vec3::ZERO,
+            glam::Vec3::Z,
+            glam::Vec3::Z,
+            material,
+        );
+        assert_eq!(diffuse, [0.5; 3]);
+
+        material.specular_f0 = [0.04; 3];
+        let reflected = shade_point_light(
+            light,
+            glam::Vec3::ZERO,
+            glam::Vec3::Z,
+            glam::Vec3::Z,
+            material,
+        );
+        assert!(reflected.into_iter().all(|value| value > 0.5));
     }
 
     #[test]

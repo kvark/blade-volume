@@ -434,6 +434,10 @@ pub fn fit(
     }
     let mut surface = vol::io::try_load_relight(options.surface)
         .map_err(|error| format!("cannot read {}: {error}", options.surface.display()))?;
+    for material in &mut surface.materials {
+        material.roughness = 1.0;
+        material.specular_f0 = [0.0; 3];
+    }
     let training = load_training()?;
 
     refine_surface(
