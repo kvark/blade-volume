@@ -228,9 +228,9 @@ fn print_render_summaries(label: &str, summaries: &[train::inverse::score::Summa
         .filter_map(|summary| summary.worst_foreground_srgb_psnr)
         .fold(f64::INFINITY, f64::min);
     println!(
-        "{label}: {views} views, {:.2} dB linear, {:.2}/{worst:.2} dB sRGB mean/worst, \
-         {:.2}/{foreground_worst:.2} dB foreground, {:.1}% recall, {:.1}% precision, \
-         {:.2} dB where-hit",
+        "{label}: {views} views, {:.4} dB linear, {:.4}/{worst:.4} dB sRGB mean/worst, \
+         {:.4}/{foreground_worst:.4} dB foreground, {:.3}% recall, {:.3}% precision, \
+         {:.4} dB where-hit",
         mean(|summary| summary.linear_psnr),
         mean(|summary| summary.srgb_psnr),
         mean(|summary| summary.foreground_srgb_psnr.unwrap_or(0.0)),

@@ -123,7 +123,23 @@ fitting fell to `33.89/26.76` dB. Both material experiments are rejected and
 their fitting code is removed. Calibrated reconstruction now writes explicit
 zero F0, preserving the selected diffuse result exactly while leaving the
 runtime ready for a later compositor-aware material solve. Direct-light
-visibility is still absent.
+visibility is available separately through `--point-light-visibility`.
+
+That single deterministic finite-distance ray is a strong but not selected
+C276 candidate. On the 31,932-surfel width-64 control it changes:
+
+| Lights / cameras | Baseline whole / foreground | Visibility whole / foreground |
+| --- | ---: | ---: |
+| fitted / fitted | 35.6179 / 27.4820 dB | 37.5367 / 28.9653 dB |
+| fitted / held | 34.5119 / 27.2796 dB | 36.6593 / 28.9774 dB |
+| held / fitted | 35.5659 / 27.4186 dB | 37.4426 / 28.8540 dB |
+| held / held | 34.4636 / 27.2177 dB | 36.5655 / 28.8732 dB |
+
+Every mean and whole-frame tail improves, and coverage is unchanged. The
+strict gate still rejects making it automatic: held-light foreground worst
+changes `16.9353→16.9342` and `19.6083→19.6060` dB on fitted and held cameras.
+Those 0.0011/0.0023 dB losses were measured at higher precision rather than
+rounded away, and the held data is not used to tune the fixed two-radius bias.
 
 A cloud-only 65,536-cell geometry arm at width 256 uses 19.7 million optimizer
 rays without truncation and improves static held-camera whole-frame PSNR
@@ -172,6 +188,9 @@ Current artifacts are under `/mnt/data/OLATverse/runs/C276/`:
 - `olat-directspec-disabled64-r2/scene.rply` — exact diffuse-preservation
   control after adding runtime GGX; all four reported camera/light quadrants
   match the selected 65,536-cell surface baseline.
+- `olat-visibility64-r2/scene.rply`, `images/`, and `held-contact.png` — the
+  opt-in visibility candidate, all 618 held/held reference-render pairs, and a
+  four-light local contact sheet. These stay outside git with the dataset.
 
 Dataset imagery remains outside version control. Representative OLATverse
 reference/result pairs may be checked in only after the release terms
@@ -306,10 +325,10 @@ data is opened only after both point clouds are serialized.
 
 The ordinary production tracer now evaluates the same finite point-light model
 as the CPU solve. It mutates one uniform at runtime rather than adding a shader
-group, shader entry, or point-light-specific pipeline. Direct point-light
-shading is diffuse-only, matching the identified material model; environment
-specular and sampled indirect transport are bypassed. Complete image-space
-scores are:
+group, shader entry, or point-light-specific pipeline. Reconstructed point-light
+materials are explicitly diffuse-only; the runtime can evaluate GGX and an
+opt-in visibility ray, while environment sampling is bypassed. Complete
+image-space scores are:
 
 | Backend | Lights / cameras | sRGB mean/worst | Foreground mean/worst | Recall | Precision |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -321,6 +340,12 @@ scores are:
 | Gaussian | fitted / held | 34.39 / 32.20 dB | 24.62 / 22.21 dB | 94.9% | 88.5% |
 | Gaussian | held / fitted | 34.41 / 32.90 dB | 24.81 / 23.20 dB | 94.5% | 88.8% |
 | Gaussian | held / held | 34.01 / 32.66 dB | 24.13 / 22.66 dB | 94.9% | 88.5% |
+
+The optional finite-light visibility ray is backend-mixed here. Every Gaussian
+whole/foreground mean and tail improves; held/held moves from
+`34.01/32.66;24.13/22.66` to `34.89/34.23;24.62/23.14` dB. The scalar
+fitted-light foreground means regress by 0.09--0.20 dB even though their tails
+improve. It therefore remains opt-in rather than changing the LUCES default.
 
 The final surface-material pass solves all 589 diffuse colours together through
 the same coverage-weighted particle groups as the runtime. It uses only the
@@ -478,6 +503,11 @@ production renders are:
 | Gaussian | fitted / held | 29.40 / 25.49 dB | 20.84 / 16.41 dB | 92.0% | 97.1% |
 | Gaussian | held / fitted | 30.12 / 26.49 dB | 21.47 / 17.45 dB | 93.1% | 97.0% |
 | Gaussian | held / held | 29.32 / 26.67 dB | 20.65 / 17.71 dB | 92.0% | 97.1% |
+
+Finite-light visibility is rejected on Bear. The held/held scalar row falls to
+`29.08/26.04;20.75/17.15` dB, and every other scalar quadrant also regresses.
+This confirms that a valid shadow ray is not automatically a better image when
+the fitted surface layers and material solve assumed unshadowed transport.
 
 The coupled sparse material solve improves every surface mean/tail across both
 axes while preserving geometry. The Gaussian runs 2,400 geometry updates and
