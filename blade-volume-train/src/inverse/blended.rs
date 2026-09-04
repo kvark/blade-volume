@@ -286,11 +286,14 @@ fn build_equations(
                 terms: blend
                     .terms
                     .iter()
-                    .map(|term| EquationTerm {
-                        material: term.material,
-                        response: light
+                    .filter_map(|term| {
+                        let response = light
                             .diffuse(term.point, term.normal)
-                            .map(|value| term.weight * value),
+                            .map(|value| term.weight * value);
+                        (response != [0.0; 3]).then_some(EquationTerm {
+                            material: term.material,
+                            response,
+                        })
                     })
                     .collect(),
             });
@@ -508,6 +511,50 @@ mod tests {
                 assert!((actual - expected).abs() < 0.03, "{actual} != {expected}");
             }
         }
+    }
+
+    #[test]
+    fn equations_discard_exactly_unlit_terms() {
+        let capture = capture::Capture {
+            width: 1,
+            height: 1,
+            views: vec![capture::View {
+                name: "view".to_string(),
+                camera: camera(),
+                pixels: vec![[0.0; 3]],
+                mask: Some(vec![1.0]),
+            }],
+        };
+        let light = vol::relight::PointLight {
+            position: [0.0; 3],
+            direction: [0.0, 0.0, 1.0],
+            intensity: [1.0; 3],
+            exponent: 0.0,
+        };
+        let blends = [PixelBlend {
+            view: 0,
+            pixel: 0,
+            terms: vec![
+                BlendTerm {
+                    material: 0,
+                    weight: 1.0,
+                    point: glam::Vec3::new(0.0, 0.0, 2.0),
+                    normal: glam::Vec3::NEG_Z,
+                },
+                BlendTerm {
+                    material: 1,
+                    weight: 1.0,
+                    point: glam::Vec3::new(0.0, 0.0, 2.0),
+                    normal: glam::Vec3::Z,
+                },
+            ],
+        }];
+
+        let equations = build_equations(&[capture], &[vec![light]], &blends);
+
+        assert_eq!(equations.len(), 1);
+        assert_eq!(equations[0].terms.len(), 1);
+        assert_eq!(equations[0].terms[0].material, 0);
     }
 
     #[test]
