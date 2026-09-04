@@ -8,7 +8,7 @@
 //! removes that scale before fitting physical materials.
 
 use blade_volume as vol;
-use std::{collections, fs, path};
+use std::{collections, fs, path, thread};
 
 pub const SOURCE_WIDTH: usize = 1500;
 pub const SOURCE_HEIGHT: usize = 2844;
@@ -114,28 +114,61 @@ pub fn load(
         })
         .collect::<Vec<_>>();
 
-    for camera in cameras {
-        let mask = load_mask(
-            &object.join("mask").join(format!("{}.png", camera.name)),
-            width,
-        )?;
-        let files = image_frames(&object.join("masked_olat").join(&camera.name))?;
-        for (output, &light_index) in light_indices.iter().enumerate() {
-            let source = &source_lights[light_index];
-            let file = files.get(&source.frame).ok_or_else(|| {
-                format!(
-                    "{} has no OLAT frame {:06} for light {light_index}",
-                    object.join("masked_olat").join(&camera.name).display(),
-                    source.frame,
-                )
-            })?;
-            let pixels = load_image(file, width, height, &mask)?;
-            captures[output].views.push(super::capture::View {
-                name: format!("{}-light-{light_index:03}", camera.name),
-                camera: camera.params,
-                pixels,
-                mask: Some(mask.clone()),
-            });
+    let workers = thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(cameras.len());
+    let mut decoded = thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            let cameras = &cameras;
+            let source_lights = &source_lights;
+            handles.push(scope.spawn(move || {
+                let mut decoded = Vec::new();
+                for camera_index in (worker..cameras.len()).step_by(workers) {
+                    let camera = &cameras[camera_index];
+                    let mask = load_mask(
+                        &object.join("mask").join(format!("{}.png", camera.name)),
+                        width,
+                    )?;
+                    let directory = object.join("masked_olat").join(&camera.name);
+                    let files = image_frames(&directory)?;
+                    let mut views = Vec::with_capacity(light_indices.len());
+                    for &light_index in light_indices {
+                        let source = &source_lights[light_index];
+                        let file = files.get(&source.frame).ok_or_else(|| {
+                            format!(
+                                "{} has no OLAT frame {:06} for light {light_index}",
+                                directory.display(),
+                                source.frame,
+                            )
+                        })?;
+                        let pixels = load_image(file, width, height, &mask)?;
+                        views.push(super::capture::View {
+                            name: format!("{}-light-{light_index:03}", camera.name),
+                            camera: camera.params,
+                            pixels,
+                            mask: Some(mask.clone()),
+                        });
+                    }
+                    decoded.push((camera_index, views));
+                }
+                Ok::<_, String>(decoded)
+            }));
+        }
+        let mut decoded = Vec::with_capacity(cameras.len());
+        for handle in handles {
+            decoded.extend(
+                handle
+                    .join()
+                    .map_err(|_| "OLATverse decode worker panicked".to_string())??,
+            );
+        }
+        Ok::<_, String>(decoded)
+    })?;
+    decoded.sort_unstable_by_key(|&(camera_index, _)| camera_index);
+    for (_, views) in decoded {
+        for (capture, view) in captures.iter_mut().zip(views) {
+            capture.views.push(view);
         }
     }
 
