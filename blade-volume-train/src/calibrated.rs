@@ -469,6 +469,9 @@ pub fn fit(
             options.train_views,
             gpu,
         )?;
+        let regression_restored = stats
+            .last()
+            .is_some_and(|stats| stats.final_loss > stats.initial_loss);
         let support = train::gaussian_splat::guard_pbr_support(&mut gaussian, &established)?;
         println!(
             "Gaussian: {} updates, audit loss {:.6} -> {:.6}, retained {}/{}{}",
@@ -477,7 +480,9 @@ pub fn fit(
             stats.last().map_or(f32::NAN, |stats| stats.final_loss),
             support.retained,
             support.particles,
-            if support.restored {
+            if regression_restored {
+                " (regression restored)"
+            } else if support.restored {
                 " (support restored)"
             } else {
                 ""
