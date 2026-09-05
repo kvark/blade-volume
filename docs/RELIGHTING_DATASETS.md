@@ -557,14 +557,32 @@ highlight. The complete diagnostic peaks at 2.02 GB with zero swap, OOM,
 throttle, or GPU fault.
 
 This makes a scratch light-response field the next discriminating experiment,
-not a released representation. One response per density cell and construction
-light, shared across every camera, can absorb local transport while forcing
-cross-view observations that traverse the same cell to agree. It must be
-discarded before physical material fitting, retain the control's optical
-support, and pass every construction image before C713/C777 are opened. A pass
-would justify factorizing that response by physical light direction; a failure
-would close radiance-driven density fitting until first-surface correspondence
-is supplied upstream.
+not a released representation. One RGB response per density cell and each of
+the 104 construction lights is shared across every camera. A first session
+freezes density and lowers response loss `0.001153→0.000051`; a fresh session
+then trains response at `0.001` absolute rate and density at `0.0001`, with a
+ten-weight mask term, lowering its combined loss `0.095665→0.086937`. The
+table uses the existing embedding/reduction primitives and is discarded before
+serialization; no shader, Meganeura operation, dependency, or persisted field
+is added.
+
+The result is closer to the control but still rejected. Extraction retains
+3,787 rather than 3,793 surfels and ties traced-hit support at 99.1%. After the
+unchanged two-round material fit, the exact 192-image construction screen
+changes whole/foreground mean by `-0.002586/+0.001861` dB, recall by `-0.0147`
+points, and precision by `+0.0704` points. It regresses 106 foreground images
+and loses 0.317244 dB in the worst pair. The fit, extraction, material fit, and
+score peak at 1.20/0.15/1.75/1.10 GB with zero swap, OOM, throttle, or GPU
+fault. The temporary graph/API/CLI are removed.
+
+This closes radiance-driven density on the current official split. A zero
+density rate is exactly the unchanged foam; the first meaningful response-
+conditioned step already has broad contradictory tails, and selecting another
+rate against those same 192 images would tune the validation screen. The next
+geometry input must therefore supply absolute cross-view first-surface
+correspondence upstream—triangulated response tracks or another independent
+multi-view depth cue—then use the renderer only to validate and polish the
+point cloud. C713 and C777 remain untouched transfer gates.
 
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
