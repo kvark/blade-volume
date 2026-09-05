@@ -41,7 +41,12 @@ the experiment-by-experiment history in the audit logs.
   cells improves precision and some tails but loses foreground means. The
   single-OLAT continuation improves every held-camera metric on both C452 and
   C276, but a few construction-camera minima move by `0.0001--0.0013` dB, so
-  it remains an explicit geometry recipe rather than a hidden default. A
+  it remains an explicit geometry recipe rather than a hidden default. Three
+  predeclared training-shard objects confirm that decision: on held lights and
+  held cameras it raises Gaussian whole-frame mean by `0.16--0.26` dB and
+  precision by `3.8--11.7` points, but C769 loses `0.50` recall points and two
+  worst-image tails by about `0.003` dB, while C777 loses `0.24` dB foreground
+  mean on construction cameras. A
   four-light, albedo-invariant response field sharpens C452 silhouettes but
   regresses C276 held-camera foreground by `0.14/0.19` dB mean/worst, so it is
   not promoted. A bounded display-space material update improves every mean
@@ -69,8 +74,8 @@ the experiment-by-experiment history in the audit logs.
   eight-light construction mean by `0.43/0.19` dB whole/foreground, but 68 of
   192 images regress and the worst foreground loss is 1.45 dB. More points
   alone are therefore not the answer. Next, split only support whose exact
-  blend evidence identifies contradictory surface fragments, and validate the
-  rule on newly downloaded OLATverse objects. Do not add free per-light
+  blend evidence identifies contradictory surface fragments, using the fresh
+  C713/C769/C777 controls as the transfer gate. Do not add free per-light
   appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact

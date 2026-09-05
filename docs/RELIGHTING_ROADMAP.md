@@ -53,6 +53,17 @@ not contain or fall back to polygonal geometry.
   improve on both objects, while a few almost-black minima move by at most
   0.0013 dB. The importer exposes this as an explicit construction-only option;
   it is not a hidden default and does not materialize the remaining lights.
+- Three training-shard objects were selected from full-bright thumbnails before
+  fitting: faceted C713, thin-structure C769, and dark manufactured C777. On
+  the held-light/held-camera Gaussian cross-product, aligned geometry changes
+  whole/foreground mean from `38.821/26.212→39.016/26.274`,
+  `37.171/26.179→37.329/26.395`, and
+  `44.209/31.284→44.469/31.284` dB respectively. Precision gains
+  `3.81/3.97/11.69` points. The strict gate still rejects a default: C769 loses
+  0.50 recall points and about 0.003 dB on two held-image tails, while C777
+  loses 0.24 dB foreground mean on construction cameras. Light transfer itself
+  remains clean; each untouched-light quadrant tracks its fitted-light peer.
+  Use these three objects as the fresh transfer gate for any support split.
 - Two frozen multi-light follow-ups are rejected. Physical Gaussian geometry
   worsens its C452 construction audit by 74% and is restored automatically. A
   four-light scalar-gain-invariant response improves C452 held-camera shape

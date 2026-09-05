@@ -278,6 +278,29 @@ independent evidence and are not used for selection. Future splitting must be
 driven by the contradictory exact-blend support itself, not by a global
 position-gradient densification score.
 
+Three untouched training-shard objects now make that next gate independent of
+C276/C452. They were predeclared from one masked full-bright thumbnail each,
+before any fit: faceted C713, thin plant C769, and dark manufactured C777. Only
+`all_cam.json`, masks, and raw masked OLATs were extracted; released meshes,
+PBR products, and normal benchmarks were not opened by the pipeline. The
+matched width-64, two-round Gaussian held-light/held-camera results are:
+
+| Object | Static whole / foreground | Aligned whole / foreground | Static → aligned recall | Static → aligned precision | Strict failure |
+| --- | ---: | ---: | ---: | ---: | --- |
+| C713 | `38.8210 / 26.2121` dB | `39.0155 / 26.2735` dB | `96.867→96.889%` | `76.381→80.192%` | held whole/foreground worst `-0.0009/-0.0008` dB; construction foreground means `-0.0143/-0.0060` dB |
+| C769 | `37.1710 / 26.1786` dB | `37.3290 / 26.3950` dB | `97.486→96.985%` | `73.366→77.334%` | recall `-0.501` points; held whole/foreground worst `-0.0023/-0.0028` dB |
+| C777 | `44.2090 / 31.2836` dB | `44.4693 / 31.2838` dB | `95.241→96.018%` | `67.548→79.233%` | construction foreground means `-0.2395/-0.2385` dB |
+
+Thus aligned-light geometry transfers broadly and can sharply remove false
+extent, but it still moves the support/photometry frontier rather than closing
+it. The new-object evidence strengthens the next requirement: subdivide only
+exact-blend support with contradictory camera/light evidence, conserve its
+optical support, and reject the candidate if any construction image or fresh
+object loses. Complete outputs are under `/mnt/data/OLATverse/runs/{C713,C769,C777}/`;
+each aligned `olat-light000-baseline64-r2-v1/` contains all 2,472 held-camera
+reference/render PNGs. The three raw selected objects occupy about 1.1 GiB at
+`/mnt/data/OLATverse/training/Tr0281-0350-selected-v1/`.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
