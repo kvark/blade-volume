@@ -100,9 +100,16 @@ the experiment-by-experiment history in the audit logs.
   normal check to 44.65 degrees after fitting, but loses 1.18 recall points and
   regresses 46 of 192 construction foreground images; even the weakest version
   loses the foreground mean and 86 image tails. That implementation remains an
-  ignored diagnostic. Next, put the calibrated photometric-normal constraint on
-  differentiable first-surface depth during shared density training, before
-  point fusion, with scratch-only light appearance.
+  ignored diagnostic. Putting that constraint directly on differentiable
+  expected absorption depth also fails. The density-only candidate changes
+  whole/foreground means by `-0.0211/-0.0015` dB and regresses 106 of 192
+  construction images; allowing site motion drops traced-hit coverage from
+  `99.1%` to `97.0%` before material fitting. A per-view depth derivative can
+  match a normal while leaving absolute layer and point ownership ambiguous,
+  so the prototype is removed. Next, train the actual calibrated OLAT RGB and
+  masks against one shared first-surface/material state instead of compressing
+  the evidence into an independent normal target. Light-specific appearance
+  remains scratch-only.
   Keep C713/C777 untouched as transfer gates; do not add free persisted
   per-light appearance or polygonal geometry.
 
