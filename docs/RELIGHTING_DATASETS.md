@@ -755,6 +755,45 @@ or append them in the camera lattice. The next geometry route must construct
 continuous cross-view point-cloud support rather than transfer isolated site
 ownership.
 
+That continuous-support follow-up is rejected as well. The first fixed
+construction treats the 3,689 width-256 tracks as robust eight-neighbor
+oriented discs and keeps the established 64K surface only outside each disc's
+one-radius tangent-and-plane support. It replaces 11,959 of 30,286 fallback
+surfels and produces 22,016 points. After the same material fit, precision
+rises 0.7268 points, but whole/foreground/covered mean loses
+`0.2564/0.4029/0.2851` dB, recall loses 0.5048 points, and 152/192 foreground
+pairs regress. Twenty lose more than 1 dB and the worst loses 1.5895 dB.
+
+A stronger fixed construction reuses the repository's existing missing-track
+patch rule rather than tuning another threshold: observations within four
+pixels in at least two shared source cameras form a component, components need
+five tracks, orientation and support are estimated within each component, and
+one point-only midpoint sample is added on each unique two-nearest-neighbor
+edge. Forty-four components retain 3,531/3,831 selected tracks and produce
+8,103 samples. Their small observed-pixel support replaces only 3,060 fallback
+surfels, yielding a 35,329-point cloud at a 16.7% point cost. Recall and
+precision rise by only 0.0361/0.0503 points, while whole/foreground/covered
+mean loses `0.2999/0.3170/0.3078` dB and 152/192 tails regress. Every light and
+camera mean is negative.
+
+Released point-only C452 truth, opened strictly after both candidates were
+fixed and rejected, rules out poor interpolation as the main cause. Midpoint
+resampling changes track-only median nearest-truth distance
+`0.001842→0.001793` world units and normal error `21.91→26.85` degrees. The
+combined patch surface improves over fallback from `0.005312→0.004236` world
+units and `51.08→45.75` degrees, yet renders worse. Better isolated geometry
+therefore still changes radial optical support and per-view compositing
+ownership incorrectly. Track matching, construction, fitting, and truth
+diagnosis peak at 1.06/1.60/0.09 GiB with zero cgroup swap, memory event, OOM,
+throttle, or GPU fault. No experimental code is retained.
+
+This closes post-formation response-track geometry, including broad discs,
+shared-view point patches, and point-only resampling. The next bounded route
+must estimate dense depth from per-pixel multi-light signatures along
+calibrated epipolar lines before any cloud surface or support is formed. It
+must retain masks and source observations and must not introduce polygonal
+geometry.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
@@ -2838,10 +2877,10 @@ cycled or strobed during one trajectory.
 
 ## Implementation order
 
-1. Expand the verified sparse tracks into continuous oriented point-cloud
-   patches. Infer tangent support from shared-view neighborhoods, share or
-   regularize material parameters within each patch, and select additions on
-   withheld training cameras using foreground PSNR and mask precision/recall.
+1. Estimate dense depth directly from per-pixel multi-light response signatures
+   along calibrated epipolar lines. Fuse only mutually consistent camera rays
+   into point samples, retain their source observations, and use the mask hull
+   for low-response regions before any optical support is assigned.
 2. Once that surface gate passes, revisit visibility and indirect transport
    together. The current scalar control proves they are not useful while the
    support is fragmented; enabling only one half can also trade an over-bright
