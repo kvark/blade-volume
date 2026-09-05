@@ -1092,6 +1092,21 @@ at once. Local-only outputs are under
 `photometric-normal-angle30-screen-dumps/`. The scoped runs peak at 1.23 GiB
 with zero swap, OOM, throttle, or GPU fault.
 
+A deliberately smaller physical response test asks whether those broad dim
+back-facing photographs are explained by one scene-wide wrapped-diffuse
+cosine. The exact compositor replaces `max(n·l, 0)` with
+`max((n·l + w) / (1 + w), 0)`, searches `w` from zero to one on the 27 fitting
+lights and 16 fitting cameras, and jointly solves only one global diffuse
+gain. It selects `w = 0` exactly. The remaining gain of `0.940838` raises the
+eight-light/eight-camera validation mean by `+0.1830/+0.1410/+0.1813` dB
+whole/foreground/covered, but regresses 12/64 foreground images, worst
+`-0.3285` dB. Thus neither a shared backside lobe nor one residual exposure
+scale explains the transport error, and C452 is not opened. The CPU baseline
+agrees with the production GPU within 0.0016 dB. The 12 GiB scope peaks at
+1,188,560,896 bytes with zero swap, pressure, OOM, throttle, or GPU fault;
+the ignored oracle and telemetry remain under `target/audit-tools/` and
+`/mnt/data/OLATverse/runs/C769/wrapped-diffuse-cgroup.log`.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
