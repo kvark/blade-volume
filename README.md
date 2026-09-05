@@ -172,10 +172,16 @@ the experiment-by-experiment history in the audit logs.
   the repository's shared-view components and point-only midpoint resampling
   improve released point-truth geometry, recall, and precision, yet lose
   `0.317` dB foreground and the same 152 tails. Post-formation insertion is
-  closed. The next route is dense epipolar depth from per-pixel multi-light
-  signatures before point-cloud surface formation. Keep C713/C777 untouched
-  as transfer gates; do not add free persisted per-light appearance or
-  polygonal geometry.
+  closed. Per-pixel multi-light signatures establish the next useful
+  primitive: a fixed 27-light descriptor gives 99.32% within-one-pixel depth
+  at width 64 and 96.18% at width 128, versus 50.0% for a four-light
+  single-pixel response. Keeping every already-triangulated width-64 candidate
+  yields 3,194 oriented tracks and 7,351 coherent point samples without
+  reducing accuracy. They cover only 51.7% of the mask, however; rendering
+  them alone or borrowing fallback support both fail badly. The next route is
+  dense disparity propagation from these verified matches before point-cloud
+  surface formation. Keep C713/C777 untouched as transfer gates; do not add
+  free persisted per-light appearance or polygonal geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).

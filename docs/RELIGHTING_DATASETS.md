@@ -794,6 +794,49 @@ calibrated epipolar lines before any cloud surface or support is formed. It
 must retain masks and source observations and must not introduce polygonal
 geometry.
 
+The first dense-depth prerequisite is now established. Replacing the spatial
+3×3 four-light response patch by only its normalized centre pixel increases
+width-128 selection to 2,894 tracks, but released truth rejects it before any
+render: median error is 1.000 source pixel, only 49.97% lie within one pixel,
+and median normal error is 46.83 degrees. A local lighting signature alone is
+not unique enough.
+
+A fixed higher-dimensional control packs the centered log responses of 27
+evenly spaced construction lights into the matcher's existing 3×3×RGB
+descriptor. This is an audit encoding, not an image format or production API;
+the mutual epipolar, match-ratio, three-view, reprojection, construction-hull,
+and disjoint-camera validation rules are unchanged. At logical width 64 it
+selects 881 observation-unique tracks, 99.32% within one source pixel of
+truth at a 0.302-pixel median. At width 128 it selects 2,381 tracks, persists
+2,366 oriented sites, reaches 96.18% within one pixel and a 0.482-pixel median,
+and keeps median normal error at 21.95 degrees. The resolution replay takes
+87.0 seconds for matching and peaks at 1.21 GiB.
+
+Observation uniqueness, not triangulation, is the immediate density boundary.
+At width 64, 3,415 candidates already pass mutual multi-view triangulation;
+keeping all of them before spatial fusion leaves 3,223 after the
+construction-only hull and persists 3,194 oriented sites. Accuracy is
+unchanged at 99.32% within one pixel and a 0.299-pixel median. The existing
+shared-view component rule forms one coherent component and point-only
+resampling yields 7,351 samples.
+
+That cloud is still not a finished surface. After identical material fitting,
+standalone mask recall is only 51.66% despite 96.87% precision; foreground
+mean loses 2.9378 dB and 171/192 tails regress. Replacing the 12,773 fallback
+surfels inside its support produces 24,864 points and improves precision by
+0.7243 points, but loses `0.6018/0.8359/0.6322` dB
+whole/foreground/covered mean, 1.3662 recall points, and 185/192 foreground
+tails. Every light mean is negative and the worst pair loses 2.2104 dB. The
+full integration gate peaks at 1.43 GiB with zero cgroup swap, memory event,
+OOM, throttle, or GPU fault.
+
+The selected result is therefore correspondence evidence, not a renderable
+asset or retained production implementation. Dense disparity must propagate
+the verified multi-light matches across low-response foreground while camera
+rays and source observations still define ownership. Only after cross-view
+consistency and mask-hull validation should the pipeline assign point radii,
+normals, and materials.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
