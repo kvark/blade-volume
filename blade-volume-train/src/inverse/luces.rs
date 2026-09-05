@@ -7,7 +7,7 @@
 //! photometric-stereo code and leaves material albedo on a useful scale.
 
 use blade_volume as vol;
-use std::{fs, path};
+use std::{fs, path, sync};
 
 pub const VIEW_IDS: [usize; 12] = [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66];
 pub const LIGHT_COUNT: usize = 15;
@@ -95,13 +95,14 @@ pub fn load(
             source_width,
             source_height,
         )?;
-        let mask = load_mask(
+        let mask: sync::Arc<[f32]> = load_mask(
             &view_path.join("mask.png"),
             source_width,
             source_height,
             width,
             height,
-        )?;
+        )?
+        .into();
         let orientation = glam::Quat::from_array(camera.cam_orientation);
         let position = glam::Vec3::from(camera.cam_position);
         for (output, &light_index) in light_indices.iter().enumerate() {

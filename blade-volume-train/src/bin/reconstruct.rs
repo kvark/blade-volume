@@ -2399,7 +2399,7 @@ fn write_missing_tracks(
                 .expect("missing-track masks were validated before reconstruction");
             alpha
                 .iter()
-                .zip(mask)
+                .zip(mask.iter())
                 .map(|(&coverage, &foreground)| coverage < 0.5 && foreground > 0.5)
                 .collect()
         })
@@ -2733,7 +2733,7 @@ fn missing_track_coverage(
             .iter()
             .zip(&established_alpha[position])
             .zip(&missing[position])
-            .zip(mask)
+            .zip(mask.iter())
         {
             debug_assert_eq!(
                 target,
@@ -3884,7 +3884,7 @@ mod tests {
             name: "masked".to_string(),
             camera: vol::CameraParams::default(),
             pixels: vec![[0.0; 3]; 2],
-            mask: Some(vec![0.5, 1.0]),
+            mask: Some(vec![0.5, 1.0].into()),
         };
         assert_eq!(mask_depth(&mut map, &view), 1);
         assert_eq!(map.distance, [2.0, 3.0]);

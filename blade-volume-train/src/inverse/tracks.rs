@@ -878,7 +878,7 @@ mod tests {
                         100.0,
                     ),
                     pixels,
-                    mask: Some(vec![1.0; WIDTH * WIDTH]),
+                    mask: Some(vec![1.0; WIDTH * WIDTH].into()),
                 }
             })
             .collect();

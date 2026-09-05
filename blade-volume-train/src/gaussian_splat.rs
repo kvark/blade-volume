@@ -4499,7 +4499,7 @@ mod tests {
                     name: format!("sheet-{index}"),
                     camera,
                     pixels: pixels.clone(),
-                    mask: Some(mask.clone()),
+                    mask: Some(mask.clone().into()),
                 })
                 .collect(),
         };
@@ -4639,7 +4639,7 @@ mod tests {
                     principal: [0.0; 2],
                 },
                 pixels: vec![[0.0; 3]; 64],
-                mask: Some(mask),
+                mask: Some(mask.into()),
             }],
         };
         let learned = || {
@@ -4815,7 +4815,7 @@ mod tests {
         assert!(captures_are_aligned(&first, &second));
         assert!(!capture_has_masks(&second, &[0, 1]));
         for view in &mut second.views {
-            view.mask = Some(vec![1.0; second.width * second.height]);
+            view.mask = Some(vec![1.0; second.width * second.height].into());
         }
         assert!(capture_has_masks(&second, &[0, 1]));
 
@@ -5037,7 +5037,7 @@ mod tests {
                     })
                 })
                 .collect();
-            view.mask = Some(vec![1.0; width * height]);
+            view.mask = Some(vec![1.0; width * height].into());
         }
         capture
     }
@@ -5131,7 +5131,8 @@ mod tests {
                             0.0
                         }
                     })
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
             );
         }
         let mut candidate = truth.clone();
@@ -5462,7 +5463,7 @@ mod tests {
                     name: format!("empty-{index}"),
                     camera,
                     pixels: vec![[0.0; 3]; width * height],
-                    mask: Some(vec![0.0; width * height]),
+                    mask: Some(vec![0.0; width * height].into()),
                 })
                 .collect(),
         }

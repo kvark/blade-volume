@@ -1756,7 +1756,7 @@ mod tests {
                     name: format!("view-{index}"),
                     camera,
                     pixels: vec![[0.0; 3]; 16],
-                    mask,
+                    mask: mask.map(Into::into),
                 })
                 .collect(),
         }
