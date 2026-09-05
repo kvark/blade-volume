@@ -61,11 +61,12 @@ the experiment-by-experiment history in the audit logs.
   quality and about 2 dB on individual construction images, so that prototype
   is removed too. Projected-footprint normal refinement has the same failure:
   it gains `0.058/0.042` dB mean while losing `0.324/0.289` dB on one image,
-  and requiring every image to agree leaves no accepted update. Next, derive
-  ownership from the exact surfel blend rather than a projected rectangle
-  before changing geometry or transport again. A static-image screen cannot
-  safely localize the useful multi-light geometry signal. Do not add free
-  per-light appearance or mesh geometry.
+  and requiring every image to agree leaves no accepted update. Exact surfel-
+  blend gradients confirm that this is representational: only 418/198/1 of
+  6,840 surfels have a direction consistent across light/camera/image groups,
+  and their bounded candidate still misses the tail gate. Next, split or
+  densify contradictory cloud support so distinct surface fragments no longer
+  share one normal. Do not add free per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).

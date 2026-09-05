@@ -243,6 +243,22 @@ proposal must retain the existing exact compact-disc blend terms and their
 surfel identities instead of approximating ownership by projection. Both runs
 peak at 1 GiB with no swap, cgroup event, or GPU fault.
 
+Retaining those identities confirms the limit rather than producing a selected
+normal pass. An analytic diffuse-normal gradient through the exact blend lowers
+its four-round sparse objective `0.00019483→0.00019116` and raises production
+whole/foreground construction means by `0.0398/0.0569` dB, but light 3 at
+Cam32 loses `0.3287/0.4315` dB. The strict decomposition is more informative:
+of 6,840 supported surfels, only 418 have one gradient direction after grouping
+by light, 198 after grouping by camera, and one across all 192 individual
+images. Four steps of that one surfel still lose `0.000008/0.000011` dB on a
+different pair. The implementation is removed; its 1.5 GiB cgroup records no
+swap, memory event, or GPU fault. Both light response and camera ownership are
+mixed inside individual surfels, with the camera contradiction stronger. A
+single physical normal cannot satisfy the data regardless of how accurately
+its residual is attributed. The next cloud-only proposal must split or
+densify contradictory support before refitting normals, then pass the same
+per-image production gate.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
