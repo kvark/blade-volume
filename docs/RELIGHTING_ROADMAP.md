@@ -38,7 +38,10 @@ not contain or fall back to polygonal geometry.
   light still teaches the wrong material. A four-sample finite-light bounce
   also loses mean quality and about 2 dB on individual construction images, so
   its shader prototype is removed. Keep visibility opt-in while residual
-  ownership is attributed on the existing cloud.
+  ownership is attributed on the existing cloud. Projected-footprint normal
+  refinement gains 0.058/0.042 dB mean but loses 0.324/0.289 dB on one image;
+  requiring every image to agree accepts no update. Its point-light plumbing
+  is removed too. Preserve surfel identities through the exact blend next.
 - One aligned construction OLAT now drives the existing 200-update
   fixed-topology geometry continuation. On fresh C452 it improves every
   held-camera surface metric (`21.45/21.87→24.35/23.52` dB whole/foreground,
@@ -201,7 +204,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one explicit aligned construction OLAT improves every held-camera surface/relighting metric on C452 and C276; physical Gaussian plus global/coarse/fine response continuations are rejected; direct GGX selected; visibility-only material coupling and a bounded finite-light bounce are rejected; finite visibility remains opt-in | Attribute construction-image residuals to camera support and owning cloud points; do not recurse into smaller spatial boxes or add another transport knob | Preserve the two-object held-camera gains and eliminate the small construction-tail trade before making the stage automatic; publish held/held images only when dataset terms permit |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one explicit aligned construction OLAT improves every held-camera surface/relighting metric on C452 and C276; physical Gaussian plus global/coarse/fine response continuations are rejected; direct GGX selected; visibility-only material coupling, a bounded finite-light bounce, and projected-footprint normal attribution are rejected; finite visibility remains opt-in | Preserve surfel identities through the exact compact-disc blend and test an ownership-aware normal proposal; do not recurse into smaller spatial boxes or add another transport knob | Preserve the two-object held-camera gains and eliminate the small construction-tail trade before making the stage automatic; publish held/held images only when dataset terms permit |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |

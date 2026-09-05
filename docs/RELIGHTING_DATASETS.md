@@ -231,6 +231,18 @@ the incorrect recovered-radiance attribution. The shader prototype is removed.
 Before changing transport again, attribute complete-render residuals to their
 camera support and owning cloud points.
 
+The first complete-render normal attribution bounds the simpler version of
+that idea. Four `2.5°` antithetic rounds over 4,631 observed surfels and the
+same 192 construction images lower pooled sRGB loss by 2.3% and raise
+whole/foreground mean PSNR by `0.0582/0.0419` dB. They nevertheless lose
+`0.3239/0.2890` dB on light 51 at Cam32. Requiring the plus/minus direction in
+each projected surfel rectangle to agree in every construction image accepts
+no round and changes no surfel. Both prototypes are removed. A screen-space
+rectangle includes other overlapping and occluding particles; the next normal
+proposal must retain the existing exact compact-disc blend terms and their
+surfel identities instead of approximating ownership by projection. Both runs
+peak at 1 GiB with no swap, cgroup event, or GPU fault.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
