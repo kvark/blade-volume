@@ -142,7 +142,14 @@ the experiment-by-experiment history in the audit logs.
   `-0.127/-0.038` dB, precision by `-0.455` points, and regresses 102/192
   foreground images. The next geometry experiment must propagate these
   independently measured anchors with local, support-conserving point-cloud
-  corrections rather than another global radiance or density update.
+  corrections rather than another global radiance or density update. Denser
+  matching reaches 1,332 selected tracks at 128 pixels and 3,831 at 256, but
+  closes the obvious post-extraction routes: direct and smooth center motion
+  improve some means while losing precision and 58--88 image tails; replacing
+  normals loses both means; and a track-only cloud retains high precision but
+  misses textureless regions. The next test must seed/fix these absolute sites
+  before ordinary image training so the surrounding cloud learns compatible
+  support, rather than deforming a finished surface.
   Keep C713/C777 untouched as transfer gates; do not add free persisted
   per-light appearance or polygonal geometry.
 
