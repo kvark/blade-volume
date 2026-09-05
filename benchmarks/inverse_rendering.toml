@@ -7195,3 +7195,40 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "/mnt/data/OLATverse/runs/C769/{foam-first-surface-normal-w005-s50-v1,olat-first-surface-normal-w005-s50-64-r2-v1,foam-first-surface-normal-w005-s50-pos001-v1,surface-first-surface-normal-w005-s50-pos001-v1} (outside git); implementation removed"
 verdict = "reject and retain no API or graph option: density-only loses both PSNR means and 106/192 image pairs, while coupled position training sheds support before material fitting; a per-view expected-depth derivative constrains local slope without anchoring absolute layer or optical ownership, so the next shared geometry objective must retain actual calibrated per-light RGB and masks"
+
+[olatverse.rejected_physical_multilight_density]
+date = "2026-09-05"
+protocol = "construction-only C769 rate ladder: fit shared RadFoam density plus scratch per-cell normal and diffuse albedo directly against all 104 calibrated construction lights, 24 construction cameras, and their masks; use the existing finite-emitter diffuse equation and absorption weights; extract every arm before material fitting, then pass only the support-preserving arm through the unchanged two-round material fit and exact 192-image construction screen; never read held cameras/lights or released geometry/normal products for fitting or selection"
+construction_lights = 104
+construction_cameras = 24
+training_images = 2496
+working_width = 32
+steps_per_image = 1
+pixel_batch = 512
+views_per_batch = 8
+maximum_recorded_steps = 384
+initial_loss = 0.009590
+density_learning_rates = [0.01, 0.001, 0.0001]
+scratch_normal_albedo_learning_rates = [0.001, 0.001, 0.001]
+final_losses = [0.004469, 0.008302, 0.008760]
+
+control_surfels = 3793
+control_traced_hit_percent = 99.1
+candidate_surfels = [3545, 3764, 3790]
+candidate_traced_hit_percent = [97.6, 99.0, 99.1]
+
+selected_density_learning_rate = 0.0001
+whole_mean_psnr_db_delta = 0.013338
+foreground_mean_psnr_db_delta = 0.011536
+mask_recall_percent_delta = -0.0256
+mask_precision_percent_delta = 0.0820
+foreground_regressions = 94
+foreground_worst_delta_db = -0.328559
+
+maximum_peak_memory_bytes = 1694732288
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "/mnt/data/OLATverse/runs/C769/{foam-physical-density-w32-s1-v1,foam-physical-density-w32-s1-lr001-v1,foam-physical-density-w32-s1-lr0001-v1,surface-physical-density-w32-s1-lr0001-v1,olat-physical-density-w32-s1-lr0001-64-r2-v1} (outside git); implementation removed"
+verdict = "reject and retain no API, graph option, shader, operation, or test: all rates lower the average physical RGB/mask objective, but large steps delete optical support and the least destructive nonzero step still loses recall plus 94/192 foreground tails; without light-specific visibility, moving shadows are misattributed to shared density, so the next objective must conserve absolute first-surface support and select on individual image tails"

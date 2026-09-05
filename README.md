@@ -106,9 +106,16 @@ the experiment-by-experiment history in the audit logs.
   construction images; allowing site motion drops traced-hit coverage from
   `99.1%` to `97.0%` before material fitting. A per-view depth derivative can
   match a normal while leaving absolute layer and point ownership ambiguous,
-  so the prototype is removed. Next, train the actual calibrated OLAT RGB and
-  masks against one shared first-surface/material state instead of compressing
-  the evidence into an independent normal target. Light-specific appearance
+  so the prototype is removed. Training the actual calibrated OLAT RGB and
+  masks against density plus scratch-only shared normals/albedo is not enough
+  either. Across a `0.01→0.0001` density-rate ladder, lower loss still trades
+  optical support for average colour: the least destructive arm changes
+  whole/foreground mean by `+0.0133/+0.0115` dB, but loses `0.0256` recall
+  points, regresses 94/192 foreground images, and loses 0.329 dB in the worst
+  pair. That implementation is removed too. The next shared objective must
+  model or condition on light-specific visibility while explicitly preserving
+  first-surface ownership and foreground support; another average RGB, normal,
+  or proxy-image loss cannot make that trade safe. Light-specific appearance
   remains scratch-only.
   Keep C713/C777 untouched as transfer gates; do not add free persisted
   per-light appearance or polygonal geometry.

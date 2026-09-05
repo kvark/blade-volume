@@ -488,6 +488,36 @@ retain the full calibrated per-light RGB and mask residual in one shared
 first-surface/material objective. Per-light latent appearance may help
 optimization but must remain scratch-only and cannot enter the result model.
 
+That full-image experiment is now closed as well. A temporary Meganeura graph
+reused the RadFoam absorption weights and existing finite-emitter equations to
+fit shared density against all 104 construction lights and 24 construction
+cameras (2,496 RGB-and-mask observations). Shared per-cell normals and diffuse
+albedo were initialized from the established fitted surface and optimized only
+as scratch state; SH appearance was disabled. The prototype added no operation,
+shader variant, dependency, persisted model field, or released-data target.
+
+At width 32, one update per observation, a 512-ray batch, eight views per batch,
+and a 384-step path limit, all three density rates lower the objective from
+`0.009590`: rates `0.01/0.001/0.0001` end at
+`0.004469/0.008302/0.008760`. Absolute scratch normal/albedo rate is `0.001`
+throughout. The corresponding extractions retain `3,545/3,764/3,790` surfels
+and `97.6/99.0/99.1%` traced hits, versus `3,793` and `99.1%` for the control.
+The least destructive arm was passed through the unchanged two-round material
+fit and exact 192-image construction screen. Whole/foreground mean changes by
+`+0.013338/+0.011536` dB and precision by `+0.0820` points, but recall changes
+by `-0.0256` points, 94 foreground images regress, and the worst pair loses
+`0.328559` dB. Smaller steps converge toward no geometry change; larger steps
+delete support.
+
+The failure identifies missing image formation, not a density-rate choice.
+Moving shadows and indirect light are present in the targets but absent from
+the direct diffuse scratch model, so an average residual can explain dark
+observations by removing shared opacity. The implementation is removed. The
+next geometry objective must condition the calibrated light residual on
+light-specific visibility while conserving foreground support and absolute
+first-surface ownership, and its selector must include per-image tails. The
+largest complete scoped run peaks at 1.69 GB with zero swap, OOM, or GPU fault.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
