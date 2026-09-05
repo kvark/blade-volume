@@ -259,6 +259,25 @@ its residual is attributed. The next cloud-only proposal must split or
 densify contradictory support before refitting normals, then pass the same
 per-image production gate.
 
+The first no-code-change densification control establishes that ordinary
+capacity growth is insufficient. Starting from the selected 16,384-cell C452
+aligned-light cloud, the existing four-response geometry objective performs
+one 15% split at update 500 and continues to 4,800 updates. It finishes with
+18,842 cells and improves the static held-camera surface from
+`24.35/23.52` to `24.92/23.94` dB whole/foreground mean while raising
+precision from 86.3% to 87.7%. After the unchanged two-round calibrated
+material fit, the predeclared construction-only screen over lights
+`3/51/99/153/201/255/303/309` and all 24 construction cameras improves mean
+whole/foreground PSNR `36.1559/27.6205→36.5813/27.8117` dB, recall by 0.04
+points, and precision by 1.11 points. It nevertheless regresses 68 of 192
+foreground images. Light 51 at Cam32 loses 1.45 dB foreground and 1.11 dB
+whole-frame PSNR. The aggregate-positive candidate is rejected and adds no
+training option. Because the generic fitter also printed the official held
+quadrants before this per-image screen was run, those held results are not
+independent evidence and are not used for selection. Future splitting must be
+driven by the contradictory exact-blend support itself, not by a global
+position-gradient densification score.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
