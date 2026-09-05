@@ -301,6 +301,26 @@ each aligned `olat-light000-baseline64-r2-v1/` contains all 2,472 held-camera
 reference/render PNGs. The three raw selected objects occupy about 1.1 GiB at
 `/mnt/data/OLATverse/training/Tr0281-0350-selected-v1/`.
 
+A direct exact-blend support split is rejected on C769 before either remaining
+fresh object is opened. All 104 fitted lights accumulate per-camera tangent
+normal gradients and their residual-weighted disc hit points. Of 3,793
+surfels, 3,778 have multi-camera support and 3,691 have an opposing,
+spatially separated camera pair. Replacing the top 19 parents with two
+contained discs of radius `r/√2` lowers construction-validation whole and
+foreground means by `0.0161/0.0134` dB and regresses 122/107 of 192 images.
+The one-parent bound raises the means by `0.0021/0.0016` dB but still regresses
+43/35 images, loses `0.0223/0.0306` dB on the worst whole/foreground image,
+and lowers recall. A zero-split replay is bit-exact, isolating the change to
+support rather than the material refit or scorer. Equal summed disc area is
+not equal optical support: two smaller radial kernels cannot partition a
+larger radial kernel without overlap or holes. The host prototype and its
+diagnostic binary are removed, leaving no API, shader, operation, or model
+field. The three scoped runs peak at 1.47--1.53 GiB with zero swap, OOM, or
+GPU fault. C769 is now a development object; C713 and C777 remain unopened by
+this rule. The next proposal should triangulate distinct sites from the
+104-light multi-view response before surface fusion rather than subdividing an
+already merged radial primitive.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
