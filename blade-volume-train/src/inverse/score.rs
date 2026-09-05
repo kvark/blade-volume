@@ -661,6 +661,29 @@ impl Renderer {
         self.score_point_light_splits(scene, capture, lights, &[(indices, dump)], visibility)[0]
     }
 
+    /// Score individual camera images under calibrated finite emitters.
+    ///
+    /// Results follow `indices` exactly. This is the non-aggregated production
+    /// score used to reject a proposal that improves a pooled metric by harming
+    /// one construction image.
+    pub fn score_point_light_views(
+        &mut self,
+        scene: &Scene,
+        capture: &capture::Capture,
+        lights: &[vol::relight::PointLight],
+        indices: &[usize],
+        visibility: bool,
+    ) -> Vec<Score> {
+        assert_eq!(capture.width, self.width);
+        assert_eq!(capture.height, self.height);
+        assert_eq!(lights.len(), capture.views.len());
+        let mut tracer = self.tracer(scene, u32::from(visibility), false);
+        let (scores, _) =
+            self.score_views_with_tracer(&mut tracer, capture, indices, Some(lights), None);
+        tracer.deinit(&self.context);
+        scores
+    }
+
     /// Score several camera splits under calibrated finite emitters while
     /// reusing one production surfel tracer.
     pub fn score_point_light_splits(
@@ -746,6 +769,19 @@ impl Renderer {
         point_lights: Option<&[vol::relight::PointLight]>,
         dump: Option<&path::Path>,
     ) -> Summary {
+        let (scores, per_frame_ms) =
+            self.score_views_with_tracer(tracer, capture, indices, point_lights, dump);
+        Summary::of(&scores, per_frame_ms)
+    }
+
+    fn score_views_with_tracer(
+        &mut self,
+        tracer: &mut vol::gpu::RelightTracer,
+        capture: &capture::Capture,
+        indices: &[usize],
+        point_lights: Option<&[vol::relight::PointLight]>,
+        dump: Option<&path::Path>,
+    ) -> (Vec<Score>, f64) {
         let mut scores = Vec::new();
         let mut elapsed = std::time::Duration::ZERO;
         tracer.set_background([0.0; 3]);
@@ -784,7 +820,7 @@ impl Renderer {
             }
         }
         let per_frame_ms = elapsed.as_secs_f64() * 1000.0 / indices.len().max(1) as f64;
-        Summary::of(&scores, per_frame_ms)
+        (scores, per_frame_ms)
     }
 
     pub fn destroy(mut self) {
@@ -993,6 +1029,70 @@ mod tests {
         renderer.destroy_prepared_scene(blocked_tracer);
         assert!(blocked[0][center][0] < 0.99 * clear[0][center][0]);
         assert!((blocked[0][center][3] - clear[0][center][3]).abs() < 1.0e-5);
+        renderer.destroy();
+    }
+
+    #[test]
+    fn point_light_view_scores_follow_requested_order() {
+        let _gpu_test_guard = crate::fit::gpu_test_guard();
+        let Ok(mut renderer) = Renderer::new(8, 8) else {
+            eprintln!("skipping point-light score order test: no ray-tracing GPU");
+            return;
+        };
+        let camera = vol::CameraParams {
+            cam_position: [0.0; 3],
+            cam_orientation: glam::Quat::IDENTITY.to_array(),
+            fov: [1.0; 2],
+            depth: 10.0,
+            principal: [0.0; 2],
+        };
+        let scene = Scene::new(
+            vol::relight::RelightModel {
+                kernel: vol::relight::ParticleKernel::Compact,
+                surfels: vec![vol::relight::Surfel {
+                    center: [0.0, 0.0, 2.0],
+                    radius: 0.5,
+                    normal: glam::Vec3::NEG_Z.to_array(),
+                    material: 0,
+                }],
+                materials: vec![vol::relight::Material {
+                    albedo: [1.0; 3],
+                    specular_f0: [0.0; 3],
+                    ..Default::default()
+                }],
+            },
+            vol::relight::Environment::uniform([0.0; 3], 8, 4),
+        );
+        let capture = capture::Capture {
+            width: 8,
+            height: 8,
+            views: vec![
+                capture::View {
+                    name: "black".to_string(),
+                    camera,
+                    pixels: vec![[0.0; 3]; 64],
+                    mask: None,
+                },
+                capture::View {
+                    name: "white".to_string(),
+                    camera,
+                    pixels: vec![[1.0; 3]; 64],
+                    mask: None,
+                },
+            ],
+        };
+        let light = vol::relight::PointLight {
+            position: [0.0; 3],
+            direction: [0.0, 0.0, 1.0],
+            intensity: [1.0; 3],
+            exponent: 0.0,
+        };
+
+        let scores =
+            renderer.score_point_light_views(&scene, &capture, &[light; 2], &[1, 0], false);
+
+        assert_eq!(scores.len(), 2);
+        assert!(scores[1].srgb_psnr > scores[0].srgb_psnr);
         renderer.destroy();
     }
 

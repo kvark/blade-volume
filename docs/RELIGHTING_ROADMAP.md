@@ -57,7 +57,9 @@ not contain or fall back to polygonal geometry.
   on both C452 and C276, but loses one C276 novel-camera foreground minimum by
   0.0048 dB. Weighting the step by construction-camera support reduces the
   loss to 0.0014 dB without eliminating it. Both implementations are removed.
-  The next selector must use per-image production-compositor evidence; neither
+  An eight-light production-render replay then rejects every non-empty coarse
+  region on individual construction images, even where pooled means improve.
+  Per-image finite-light scores are now available to finer selectors; neither
   pooled material loss nor a static full-bright proxy is sufficient.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
