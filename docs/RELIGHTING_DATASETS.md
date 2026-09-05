@@ -902,6 +902,44 @@ source-pixel footprint onto its tangent plane and retain that anisotropic
 point support through material fitting. It remains a point cloud, with no
 polygonal fallback or per-light stored appearance.
 
+Two stricter support controls close that geometry branch. A layer-aware voxel
+merge retains a second aggregate when normals disagree by more than 60 degrees
+or their normal-plane depths differ by half a voxel. The same 26,972 verified
+depth pixels yield 18,726 oriented samples, 7,655 occupied voxels, and 9,698
+surfels; 1,802 voxels genuinely split into multiple sheets. A construction-
+selected local radius of `2.25` ties pre-fit recall within 0.0028 point while
+gaining 2.8581 precision points. After identical material fitting, however,
+whole/foreground/covered mean changes `+0.4670/-0.1541/+0.1037` dB, recall
+loses 0.8891 point, and 98/192 frames regress. The worst loses 3.6184 dB.
+Conflicting layers exist, but preserving them does not recover a transferable
+surface.
+
+The existing anisotropic PBR Gaussian path then isolates support shape without
+adding an operation or shader. Relative to the same 7,619-center isotropic
+Gaussian, an area-preserving eight-neighbor covariance ellipse changes
+whole/foreground mean by `-0.0625/-0.0263` dB, recall/precision by
+`+0.2583/-1.2159` points, and loses 109/192 tails. Aligning only points within
+2.5 pixels of a construction-mask boundary is less negative, but still changes
+whole/foreground by `-0.0325/+0.0069` dB, recall/precision by
+`+0.1343/-0.4348` points, and loses 90/192 tails. Neither anisotropy heuristic
+is retained.
+
+The corresponding fixed visibility replay identifies the next dependency.
+Without visibility, the recall-restored dense candidate beats the established
+C769 surface by `+0.3068/+0.0200/+0.1592` dB whole/foreground/covered and
+3.0367 precision points, but has 90/192 foreground regressions. Rendering both
+frozen models with the existing finite-distance visibility ray changes those
+gains to `+0.6044/+0.4282/+0.4853` dB and cuts regressions to 52/192. Seven of
+eight light means and 20/24 camera means become positive. The remaining worst
+loss is 1.7836 dB, so visibility remains opt-in and C769 held data stays
+closed. A local worst-frame dump shows both no-visibility models much brighter
+than the dark, cast-shadowed photograph while the dense silhouette is sharper.
+The next bounded experiment is therefore a low-order point-local transfer
+basis fitted on one subset of construction light directions and validated on
+another. It may model smooth indirect/shadow residual, but must not store a
+light-indexed table or alter geometry; only an internal split can justify a
+later held-light gate.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss

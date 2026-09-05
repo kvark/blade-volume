@@ -190,10 +190,17 @@ the experiment-by-experiment history in the audit logs.
   from 2,793 to 7,619 surfels and a post-fit radius correction restores
   aggregate recall and improves precision by 3.04 points, but 90/192 images
   still regress. More verified points with resized circular discs is therefore
-  also closed. The next route is point support derived from actual
-  source-image footprints, including anisotropy where the observations require
-  it. Keep C713/C777 untouched as transfer gates; do not add free persisted
-  per-light appearance or polygonal geometry.
+  also closed. Splitting the 1,802 voxels that contain conflicting surface
+  sheets produces 9,698 surfels, but loses foreground mean, recall, and 98/192
+  tails after fitting. Existing anisotropic Gaussians need no new shader, but
+  both neighbor-covariance and source-mask-boundary initializations fail their
+  same-cloud controls. Visibility is the useful clue: on frozen C769 models it
+  changes the dense candidate's relative foreground gain from `+0.020` to
+  `+0.428` dB and cuts regressions from 90 to 52. The next route is a smooth
+  point-local light-transfer residual fitted and validated on disjoint
+  construction lights before any held data is opened. It must interpolate by
+  calibrated light direction, never by light ID. Keep C713/C777 untouched as
+  transfer gates; do not add polygonal geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
