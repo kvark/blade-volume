@@ -75,6 +75,14 @@ not contain or fall back to polygonal geometry.
   image by 0.13--0.49 dB. Per-image finite-light scores make that rejection
   explicit; neither pooled material loss, static full-bright proxies, nor
   finer axis-aligned selectors are sufficient.
+- Generic capacity growth is rejected too. One existing 15% densification
+  grows the selected C452 cloud from 16,384 to 18,842 cells and improves the
+  eight-light construction mean by `0.425/0.191` dB whole/foreground, recall
+  by 0.04 points, and precision by 1.11 points. It still regresses 68/192
+  images, with a 1.45 dB foreground loss at the worst camera/light pair. No
+  option or new implementation is retained. The next split proposal must be
+  ranked by contradictory exact-blend support and transfer to newly acquired
+  OLATverse objects, rather than globally densifying a radiance objective.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel

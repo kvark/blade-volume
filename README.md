@@ -64,9 +64,14 @@ the experiment-by-experiment history in the audit logs.
   and requiring every image to agree leaves no accepted update. Exact surfel-
   blend gradients confirm that this is representational: only 418/198/1 of
   6,840 surfels have a direction consistent across light/camera/image groups,
-  and their bounded candidate still misses the tail gate. Next, split or
-  densify contradictory cloud support so distinct surface fragments no longer
-  share one normal. Do not add free per-light appearance or mesh geometry.
+  and their bounded candidate still misses the tail gate. A first generic 15%
+  densification grows C452 from 16,384 to 18,842 cells and improves the
+  eight-light construction mean by `0.43/0.19` dB whole/foreground, but 68 of
+  192 images regress and the worst foreground loss is 1.45 dB. More points
+  alone are therefore not the answer. Next, split only support whose exact
+  blend evidence identifies contradictory surface fragments, and validate the
+  rule on newly downloaded OLATverse objects. Do not add free per-light
+  appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
