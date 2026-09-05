@@ -996,12 +996,56 @@ leaves 13/64 regressions, rejecting a visibility toggle as the repair.
 
 This is useful evidence, not a selected field. The fit clamps roughly 4% of
 C452 channel evaluations at ridge `1.0`, and its unconstrained per-point
-coefficients can redistribute energy between nearby overlapping supports. No
-runtime field, shader, operation, dependency, or file format is added. The
-next construction-only oracle must regularize coefficients across spatially
-and normally compatible point neighborhoods while retaining the exact blend.
-C452 is now a development object for this family; C713 and C777 remain unopened
-by the response experiments and serve as fresh transfer gates.
+coefficients can redistribute energy between nearby overlapping supports.
+The bounded spatial follow-up connects each point to at most four nearby
+normal-compatible points. With relative spatial strength `0.25`, a scalar
+degree-1 field reduces coefficient magnitude but leaves the same five C452
+tails. A degree-2 RGB field improves all 64 C769 disjoint-light images by
+`+1.2390/+1.4512/+1.2601` dB whole/foreground/covered. On C452 it gains
+`+0.6412/+0.7045/+0.6657` dB, but light 156 still loses Cam09 and Cam16 by up
+to 0.2863 dB. More SH order and neighbor smoothing therefore improve the
+mean without resolving the contradictory camera evidence.
+
+A broad exact-compositor material oracle jointly refits diffuse albedo and
+the existing GGX F0 at fixed roughness `1.0`, retaining explicit zero F0 for
+diffuse-only points. It gains `+4.4130/+4.3181` dB whole/foreground on C769's
+disjoint split and improves every image, but changes C452 by
+`-0.2864/-0.2497` dB and regresses 60/64 images. This object-specific result
+rejects a larger direct material fit. A brightened dump of the remaining
+C452 light-156/Cam09 failure is under
+`/mnt/data/OLATverse/runs/C452/blended-degree2-sp025-light156/`: the photograph
+contains a dim but coherent back-facing statue while both direct-light renders
+contain only sparse grazing slivers. The current directional-albedo family
+still multiplies its result by `max(n·l, 0)` and therefore cannot represent
+that observation.
+
+The final response-family oracle removes that cosine only from an additive
+low-order transport residual while retaining the production direct GGX base.
+It uses the same exact compositor, 27 fit lights by 16 fit cameras, eight
+disjoint construction lights by eight disjoint construction cameras, relative
+ridge `1.0`, spatial strength `0.25`, and a global half step. The CPU evaluator
+includes all pixels rather than only the fit mask and is gated against the
+production GPU baseline: maximum score disagreement is 0.0069 dB on C769 and
+0.0014 dB on C452.
+
+With pooled linear fitting, degree-2 light-only transport improves every C769
+disjoint image by `+1.0150/+1.1794/+1.0420` dB, but C452 gains only
+`+0.1019/+0.1303/+0.1149` dB and loses 10/64 images, one by 6.8037 dB.
+First-order sRGB weighting reduces that C452 worst loss to 0.3128 dB and gains
+`+0.3403/+0.3790/+0.3483` dB, but the same 10/64 tail count remains. A
+continuous degree-1 light-direction by degree-1 view-direction field also
+passes every C769 image (`+0.8485/+0.9763/+0.8705` dB) and fails C452:
+`+0.2824/+0.3341/+0.2871` dB with 13/64 regressions, worst 0.9685 dB. This is
+not a light-indexed table, yet its additional view capacity makes transfer
+worse.
+
+No runtime field, shader, operation, dependency, or file-format change is
+added for any of these rejected oracles. C713 and C777 remain unopened by this
+response family. The next experiment must move the physical evidence upstream:
+jointly optimize oriented point geometry with visibility/indirect transport
+through complete composited images, weight the per-image tails explicitly, and
+hold both light and camera directions out. Another frozen-surface response
+field is not justified.
 
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the

@@ -207,11 +207,21 @@ the experiment-by-experiment history in the audit logs.
   coverage exactly fixed. It transfers only partly to C452, where the stronger
   regularized fit gains `+0.408/+0.404` dB but loses five isolated light/camera
   pairs by up to 0.180 dB. Sharing one transport factor across RGB and enabling
-  existing visibility do not remove those tails. The next bounded route is to
-  regularize this response spatially across compatible point neighborhoods,
-  keeping geometry frozen and the representation scratch-only. C713/C777 stay
-  untouched as transfer gates; do not add polygonal geometry or a runtime
-  appearance field before a fresh response-family object passes.
+  existing visibility do not remove those tails. Spatial/normal smoothing and
+  a degree-2 basis raise C452's mean gain to `+0.641/+0.705` dB, but still lose
+  two light-156 views by up to 0.286 dB. A full direct diffuse+GGX refit is even
+  more object-specific: it gains over 4 dB on C769 and regresses 60/64 C452
+  images. A brightened failure frame shows the photograph's coherent dim
+  backside where direct-light renders contain only grazing slivers. Removing
+  the direct cosine from an additive transport oracle therefore models the
+  right missing signal, and an sRGB-weighted half step improves all C769
+  images, but still loses 10/64 C452 pairs. Adding a continuous degree-1
+  light-by-view residual loses 13/64. More generic response capacity is now
+  closed: no field, shader, operation, dependency, or format change is kept.
+  The next route must jointly reconstruct the oriented point surface and its
+  visibility/indirect transport through complete composited images, with
+  per-image tail checks rather than a pooled appearance correction. C713/C777
+  stay unopened by this response family; do not add polygonal geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
