@@ -352,6 +352,29 @@ the same verified sites where ownership is partitioned by a PowerFoam cell,
 not represented by another composited radial kernel. It must pass C769's same
 192-image gate before C713 or C777 is opened.
 
+The exact partition control is negative too. It maps every fitted Gaussian's
+stored three-sigma radius to its analytically fixed half-opacity radius
+`sqrt(2 ln 2) / 3`, uses an opaque oriented PowerFoam cell, and evaluates the
+same diffuse material and calibrated point light at each cell. Thus a new site
+partitions overlapping support through radical planes instead of layering more
+alpha. All 25 sites raise whole-frame mean by 0.0087 dB but lower foreground
+mean by 0.0052 dB, lower recall, and regress 92/192 foreground images; the
+worst loses 1.07 dB. The three source-connected components also fail alone:
+their foreground mean changes are `-0.0148`, `+0.0115`, and `+0.0141` dB,
+with 61/63/30 regressions and worst losses of 0.888/0.826/0.226 dB. The latter
+component raises recall but still lowers precision. Rendering its eight sites
+through the actual radial production path confirms the rejection: whole and
+foreground means lose 0.0012/0.0011 dB, precision falls 0.0075 points, and
+63/192 foreground images regress.
+
+The temporary hard-cell renderer and component writer are removed. Each score
+scope peaks at approximately 1.0 GiB with zero swap, OOM, or GPU fault. This
+closes post-fusion insertion for both overlapping radial and exactly
+partitioned support: credible sites still need correct source-observation
+ownership before their centers, radii, and materials are fused. The next
+proposal must use response compatibility while forming the surface, and pass
+C769 before the two untouched objects are opened.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss

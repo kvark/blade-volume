@@ -81,10 +81,13 @@ the experiment-by-experiment history in the audit logs.
   full 104-light response does recover 25 coherent C769 sites, but 23 already
   lie inside an existing radial support and their normals differ by 52 degrees
   at the median. Appending them either before or after material fitting lowers
-  the independent construction score. Next, test these same correspondences
-  as partitioned PowerFoam ownership, where a new cloud site divides support
-  instead of adding another overlapping kernel. Keep C713/C777 untouched as
-  transfer gates; do not add free per-light appearance or mesh geometry.
+  the independent construction score. Exact PowerFoam partitioning fixes the
+  overlap algebra but still loses foreground mean and 92/192 image tails; its
+  best connected component improves both means yet loses precision and 30
+  foreground images. Post-fusion insertion is therefore closed. Next, use the
+  verified response correspondence to decide observation ownership before
+  surface fusion creates a radial support. Keep C713/C777 untouched as transfer
+  gates; do not add free per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).

@@ -105,9 +105,13 @@ not contain or fall back to polygonal geometry.
   degrees at the median. Adding them after fitting loses `0.043/0.033` dB
   whole/foreground mean; adding them before normal/material fitting still
   loses `0.004/0.005` dB and regresses 98/192 foreground images. The response
-  tracks expose ambiguous ownership rather than absent support. Test them as
-  partitioning PowerFoam sites next; C713 and C777 remain untouched transfer
-  gates.
+  tracks expose ambiguous ownership rather than absent support. Exact
+  PowerFoam partitioning fixes the overlap algebra, but all sites lose
+  foreground mean and 92/192 image tails. Its best component improves both
+  means but loses precision and 30 foreground tails; the same component loses
+  both means in the actual radial renderer. Post-fusion insertion is closed.
+  Apply response compatibility before source observations are fused; C713 and
+  C777 remain untouched transfer gates.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
@@ -239,7 +243,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one aligned construction OLAT improves held-camera means on five objects but has small tail/coverage tradeoffs; physical Gaussian, generic densification, radial support splitting, additive 104-light response tracks, global/coarse/fine response continuations, visibility-only material coupling, a bounded finite-light bounce, and projected/exact-blend normal attribution are rejected; direct GGX selected and finite visibility remains opt-in | Reuse the verified 104-light tracks as partitioning PowerFoam sites inside the shared geometry objective; do not append another radial layer, recurse into spatial boxes, or add another transport knob | Improve every construction image and coverage metric on C769, then preserve the result on both untouched C713/C777 before opening their held lights |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one aligned construction OLAT improves held-camera means on five objects but has small tail/coverage tradeoffs; physical Gaussian, generic densification, radial support splitting, additive and exactly partitioned 104-light response tracks, global/coarse/fine response continuations, visibility-only material coupling, a bounded finite-light bounce, and projected/exact-blend normal attribution are rejected; direct GGX selected and finite visibility remains opt-in | Apply normalized 104-light response compatibility while assigning observations to surface-fusion groups, before centers and supports are averaged; do not append a post-fusion layer, recurse into spatial boxes, or add another transport knob | Improve every construction image and coverage metric on C769, then preserve the result on both untouched C713/C777 before opening their held lights |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
