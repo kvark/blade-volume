@@ -7287,3 +7287,25 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "/mnt/data/OLATverse/runs/C769/{foam-physical-density-staged-w32-w1-d1-lr001-v2,olat-physical-density-staged-w32-w1-d1-lr001-64-r2-v1} (outside git); implementation removed"
 verdict = "reject and retain no API, graph option, shader, operation, CLI, or test: separating material warmup from density improves physical loss and coarse traced support but substantially degrades the exact construction render gate; average direct-light residual is not a safe geometry signal without cross-view first-surface identity and absolute support conservation"
+
+[olatverse.fitted_surface_residual_components]
+date = "2026-09-05"
+protocol = "construction-only diagnostic on C769: project the established fitted 3793-surfel surface into all 104 construction captures and 24 construction cameras; evaluate calibrated observed-minus-direct-diffuse luminance per surfel, remove each surfel mean, and decompose balanced residual variance by camera and light identity plus half-vector powers 1/2/4/8/16/32/64/128; held axes and released geometry excluded"
+supported_surfels = 2250
+calibrated_observations = 865488
+positive_residual_mean = 0.004754
+negative_residual_mean = 0.003509
+positive_absolute_residual_fraction = 0.5753
+camera_main_effect_variance_percent = 5.082
+light_main_effect_variance_percent = 62.689
+global_camera_effect_variance_percent = 0.502
+global_light_effect_variance_percent = 0.595
+maximum_half_vector_positive_r_squared_percent = 0.0598
+maximum_half_vector_power = 128
+maximum_peak_memory_bytes = 2015715328
+memory_swap_bytes = 0
+memory_max_events = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/olat_residual_components and /tmp/olat-c769-residual-components*.telemetry.log (gitignored)"
+verdict = "diagnosis only: remaining response is predominantly local to each surfel/light pair, not a global light calibration error, camera exposure, or ordinary half-vector lobe; test a scratch per-cell/per-light response shared across cameras as a direct cross-view identity signal, discard it before physical fitting, and preserve absolute optical support"

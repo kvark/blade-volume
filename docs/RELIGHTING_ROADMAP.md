@@ -132,12 +132,17 @@ not contain or fall back to polygonal geometry.
   while losing 0.0256 recall points, 94/192 foreground tails, and 0.329 dB on
   the worst pair. Direct residual attribution then falsifies the simple shadow
   explanation: lost-opacity pixels carry less negative residual than stable
-  pixels, and unexplained positive response is roughly twenty times larger.
+  pixels, and unexplained positive response is roughly twenty times larger. A
+  balanced fitted-surface decomposition assigns 62.7% of the remaining
+  variance to local light identity and 5.1% to camera identity, while global
+  light bias and the strongest half-vector lobe proxy explain only 0.60% and
+  0.06%.
   A proper material-only warmup followed by fresh density optimization raises
   traced-hit support to 99.4%, but still loses `0.150/0.175` dB mean, regresses
   116/192 foreground images, and loses 1.61 dB on the worst pair. Its
-  graph/API/CLI path is removed. Establish cross-view first-surface identity
-  and absolute support before letting any average light residual move density;
+  graph/API/CLI path is removed. Test one scratch per-cell/per-light response
+  shared across cameras while conserving absolute support, then discard it
+  before the physical fit. This directly tests cross-view surface identity;
   visibility alone is not the missing switch. C713 and C777 remain untouched
   transfer gates.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
@@ -271,7 +276,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one aligned construction OLAT improves held-camera means on five objects but has small tail/coverage tradeoffs; physical Gaussian, generic densification, radial support splitting, additive/partitioned/pre-fusion 104-light response tracks, robust-albedo density training, conditional absorption depth, post-depth normal integration, direct expected-depth photometric-normal loss, direct calibrated multi-light diffuse density fitting, global/coarse/fine response continuations, visibility-only material coupling, a bounded finite-light bounce, and projected/exact-blend normal attribution are rejected; C452 point truth and excluded C769 polarized normals localize the first error before fusion; construction OLATs recover a 24.66-degree photometric-normal signal; direct GGX selected and finite visibility remains opt-in | Couple calibrated per-light RGB/masks to light-specific visibility and absolute first-surface/support conservation; keep light-specific appearance scratch-only, include individual image tails in selection, and do not use evaluator truth for fitting | Improve every construction image and coverage metric on C769, improve its excluded polarized-normal metric, then preserve the result on both untouched C713/C777 before opening their held lights |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one aligned construction OLAT improves held-camera means on five objects but has small tail/coverage tradeoffs; physical Gaussian, generic densification, radial support splitting, additive/partitioned/pre-fusion 104-light response tracks, robust-albedo density training, conditional absorption depth, post-depth normal integration, direct expected-depth photometric-normal loss, direct calibrated multi-light diffuse density fitting (joint and material-warmed), global/coarse/fine response continuations, visibility-only material coupling, a bounded finite-light bounce, and projected/exact-blend normal attribution are rejected; C452 point truth and excluded C769 polarized normals localize the first error before fusion; construction OLATs recover a 24.66-degree photometric-normal signal; residual decomposition finds local point/light response rather than global calibration or a half-vector lobe; direct GGX selected and finite visibility remains opt-in | Test a scratch per-cell/per-light response shared across cameras while anchoring the control's first-surface support; discard it before physical fitting, keep light-specific appearance out of the asset, include individual image tails in selection, and do not use evaluator truth for fitting | Improve every construction image and coverage metric on C769, improve its excluded polarized-normal metric, then preserve the result on both untouched C713/C777 before opening their held lights |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |

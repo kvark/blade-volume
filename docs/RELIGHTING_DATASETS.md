@@ -543,6 +543,29 @@ depth, and conserve optical support; only then may a robust light residual move
 that shared surface. Selection must continue to include every construction
 image tail.
 
+A balanced residual decomposition narrows that ambiguity without training a
+candidate. It projects the established 3,793-surfel fitted surface into all 104
+construction captures and groups 865,488 calibrated observations on 2,250
+well-supported surfels. After removing each surfel's mean, camera identity
+explains 5.082% of residual variance and light identity explains 62.689%.
+Neither is a global exposure correction: effects shared across the whole image
+explain only 0.502% by camera and 0.595% by light. Half-vector lobe proxies from
+powers 1 through 128 explain at most 0.0598%. The remaining mismatch is thus a
+spatially local point/light response—consistent with local transport, a wrong
+normal/layer, or both—not global calibration or an ordinary view-dependent
+highlight. The complete diagnostic peaks at 2.02 GB with zero swap, OOM,
+throttle, or GPU fault.
+
+This makes a scratch light-response field the next discriminating experiment,
+not a released representation. One response per density cell and construction
+light, shared across every camera, can absorb local transport while forcing
+cross-view observations that traverse the same cell to agree. It must be
+discarded before physical material fitting, retain the control's optical
+support, and pass every construction image before C713/C777 are opened. A pass
+would justify factorizing that response by physical light direction; a failure
+would close radiance-driven density fitting until first-surface correspondence
+is supplied upstream.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
