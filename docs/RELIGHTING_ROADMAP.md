@@ -130,10 +130,16 @@ not contain or fall back to polygonal geometry.
   all 104 calibrated-light RGB/mask stacks with shared scratch normals/albedo,
   but its best nonzero density rate improves means by only `0.0133/0.0115` dB
   while losing 0.0256 recall points, 94/192 foreground tails, and 0.329 dB on
-  the worst pair. Direct diffuse supervision mistakes light-specific shadows
-  for absent shared support. Its graph/API/test path is removed. Couple the
-  residual to light-specific visibility and an absolute ownership/support
-  constraint next; C713 and C777 remain untouched transfer gates.
+  the worst pair. Direct residual attribution then falsifies the simple shadow
+  explanation: lost-opacity pixels carry less negative residual than stable
+  pixels, and unexplained positive response is roughly twenty times larger.
+  A proper material-only warmup followed by fresh density optimization raises
+  traced-hit support to 99.4%, but still loses `0.150/0.175` dB mean, regresses
+  116/192 foreground images, and loses 1.61 dB on the worst pair. Its
+  graph/API/CLI path is removed. Establish cross-view first-surface identity
+  and absolute support before letting any average light residual move density;
+  visibility alone is not the missing switch. C713 and C777 remain untouched
+  transfer gates.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
