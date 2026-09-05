@@ -59,8 +59,11 @@ not contain or fall back to polygonal geometry.
   loss to 0.0014 dB without eliminating it. Both implementations are removed.
   An eight-light production-render replay then rejects every non-empty coarse
   region on individual construction images, even where pooled means improve.
-  Per-image finite-light scores are now available to finer selectors; neither
-  pooled material loss nor a static full-bright proxy is sufficient.
+  The `8×8×8` children of the best-mean coarse region fail too: only three
+  change the extracted surface, and each loses an individual construction
+  image by 0.13--0.49 dB. Per-image finite-light scores make that rejection
+  explicit; neither pooled material loss, static full-bright proxies, nor
+  finer axis-aligned selectors are sufficient.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
@@ -192,7 +195,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one explicit aligned construction OLAT improves every held-camera surface/relighting metric on C452 and C276; physical Gaussian and global four-light response continuations are rejected; direct GGX selected; finite visibility remains opt-in | Use construction-only validation to localize the useful response-field geometry signal, then make fitted material and bounded transport share the complete compositor | Preserve the two-object held-camera gains and eliminate the small construction-tail trade before making the stage automatic; publish held/held images only when dataset terms permit |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one explicit aligned construction OLAT improves every held-camera surface/relighting metric on C452 and C276; physical Gaussian plus global/coarse/fine response continuations are rejected; direct GGX selected; finite visibility remains opt-in | Make fitted material and bounded finite-light transport share visibility in the complete compositor; do not recurse into smaller spatial boxes | Preserve the two-object held-camera gains and eliminate the small construction-tail trade before making the stage automatic; publish held/held images only when dataset terms permit |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |

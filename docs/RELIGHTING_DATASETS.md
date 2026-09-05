@@ -257,6 +257,21 @@ region 55 gains `+0.0040/+0.0032` dB while losing `0.154/0.202` dB on a tail.
 The reusable scorer now exposes per-image finite-light results so later,
 finer proposals can be rejected before their pooled average hides that loss.
 
+An `8×8×8` subdivision of region 52 closes the axis-aligned follow-up. Its
+eight children partition all 131 foam cells exactly; five produce a
+byte-identical extracted surface. The three effective children contain
+25/75/2 cells. After the identical two-round material/normal fit, their
+whole/foreground mean changes are respectively `+0.0025/-0.0003`,
+`+0.0023/+0.0058`, and `-0.0002/-0.0047` dB. Their worst individual-image
+changes are `-0.357/-0.274`, `-0.462/-0.492`, and `-0.132/-0.164` dB. Thus
+even the useful 75-cell foreground mean is paid for by a much larger
+construction-image loss. The extraction command was recovered and reproduced
+both the surface and environment byte-for-byte before this screen; the eight
+candidate extractions peaked at 169 MiB, and exact scoring peaked at 990 MiB,
+with zero swap, cgroup event, or GPU fault. Do not recurse into smaller boxes
+or add a spatial-selector option. The next proposal must remove the mismatch
+between fitted equations and the finite-light production compositor.
+
 A display-referred material control reaches the same conclusion from the
 appearance side. One Gauss-Newton direction minimizes sRGB error through the
 existing sparse particle blend; a 5% trust-region step was frozen using only
