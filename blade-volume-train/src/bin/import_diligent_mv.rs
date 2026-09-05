@@ -206,7 +206,7 @@ mod tests {
                     name: view_name(index),
                     camera: blade_volume::CameraParams::default(),
                     pixels: vec![[index as f32; 3]],
-                    mask: Some(vec![1.0]),
+                    mask: Some(vec![1.0].into()),
                 })
                 .collect(),
         };

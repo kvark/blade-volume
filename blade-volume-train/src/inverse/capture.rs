@@ -8,7 +8,7 @@
 
 use crate::{colmap, pipeline, relight};
 use blade_volume as vol;
-use std::{path, thread};
+use std::{path, sync, thread};
 
 /// One image and the camera that took it.
 pub struct View {
@@ -17,8 +17,8 @@ pub struct View {
     pub camera: vol::CameraParams,
     /// Linear radiance, row major, `width * height` texels.
     pub pixels: Vec<[f32; 3]>,
-    /// Optional foreground coverage, row major. Values are in `[0, 1]`.
-    pub mask: Option<Vec<f32>>,
+    /// Optional shared foreground coverage, row major. Values are in `[0, 1]`.
+    pub mask: Option<sync::Arc<[f32]>>,
 }
 
 impl View {
@@ -409,7 +409,7 @@ impl Capture {
                 name: format!("view_{:03}-{environment_name}", view.index),
                 camera: relight::camera_params(view, dataset.width, dataset.height),
                 pixels,
-                mask,
+                mask: mask.map(Into::into),
             });
         }
         Ok(Self {
@@ -541,7 +541,7 @@ impl Capture {
                                 name: image.name.clone(),
                                 camera: reconstruction.camera_params_for(image, far),
                                 pixels,
-                                mask,
+                                mask: mask.map(Into::into),
                             });
                         }
                         Ok::<Vec<View>, String>(loaded)
@@ -751,7 +751,7 @@ mod tests {
             name: "mask".to_string(),
             camera: camera(),
             pixels: masked,
-            mask: Some(vec![0.5, 0.500_1]),
+            mask: Some(vec![0.5, 0.500_1].into()),
         };
         assert!(!view.is_foreground(0));
         assert!(view.is_foreground(1));
@@ -769,7 +769,7 @@ mod tests {
                     name: "aligned".to_string(),
                     camera: camera(),
                     pixels: vec![[light; 3], [0.4 * light; 3]],
-                    mask: Some(vec![1.0; 2]),
+                    mask: Some(vec![1.0; 2].into()),
                 }],
             })
             .collect();
@@ -806,7 +806,7 @@ mod tests {
                     name: format!("light-{index}"),
                     camera: camera(),
                     pixels: vec![(albedo * direction.dot(normal)).to_array()],
-                    mask: Some(vec![1.0]),
+                    mask: Some(vec![1.0].into()),
                 }],
             })
             .collect();
@@ -819,6 +819,6 @@ mod tests {
 
         let actual = glam::Vec3::from(recovered.views[0].pixels[0]);
         assert!((actual - albedo).abs().max_element() < 1.0e-4);
-        assert_eq!(recovered.views[0].mask, Some(vec![1.0]));
+        assert_eq!(recovered.views[0].mask, Some(vec![1.0].into()));
     }
 }

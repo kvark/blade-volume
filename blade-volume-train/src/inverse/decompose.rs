@@ -2725,7 +2725,7 @@ mod tests {
         assert_eq!(diagnostics.max_supports_per_sample, 2);
 
         for view in &mut capture.views {
-            view.mask = Some(vec![0.0; capture.width * capture.height]);
+            view.mask = Some(vec![0.0; capture.width * capture.height].into());
         }
         let (masked, masked_diagnostics) = observe_with_diagnostics(&model, &capture, &views, 0.15);
         assert_eq!(masked.seen(), 0);

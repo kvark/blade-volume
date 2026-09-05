@@ -2465,7 +2465,7 @@ mod tests {
         )
         .is_some());
 
-        capture.views[0].mask = Some(vec![0.0; capture.width * capture.height]);
+        capture.views[0].mask = Some(vec![0.0; capture.width * capture.height].into());
         assert!(normalized_patch(
             glam::Vec3::ZERO,
             glam::Vec3::X,

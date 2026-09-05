@@ -146,7 +146,7 @@ fn supervision(
         result.push(diff_render::ViewSupervision {
             camera: view.camera,
             target_rgb,
-            target_alpha: Some(mask.clone()),
+            target_alpha: Some(mask.to_vec()),
             width: capture.width as u32,
             height: capture.height as u32,
         });
@@ -254,7 +254,7 @@ mod tests {
             }],
         };
         assert!(supervision(&capture, &[0]).is_err());
-        capture.views[0].mask = Some(vec![0.75]);
+        capture.views[0].mask = Some(vec![0.75].into());
         let views = supervision(&capture, &[0]).unwrap();
         assert_eq!(views[0].target_alpha.as_deref(), Some(&[0.75][..]));
         for (actual, linear) in views[0].target_rgb.iter().zip([0.25, 0.5, 1.0]) {
@@ -313,7 +313,7 @@ mod tests {
                 name: format!("masked-{index}"),
                 camera: camera(position),
                 pixels: vec![[0.5; 3]],
-                mask: Some(vec![1.0]),
+                mask: Some(vec![1.0].into()),
             })
             .collect(),
         };

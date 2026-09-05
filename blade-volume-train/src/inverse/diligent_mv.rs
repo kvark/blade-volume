@@ -8,7 +8,7 @@
 
 use blade_volume as vol;
 use flate2::read;
-use std::{collections, fs, io, path};
+use std::{collections, fs, io, path, sync};
 
 pub const VIEW_COUNT: usize = 20;
 pub const LIGHT_COUNT: usize = 96;
@@ -119,7 +119,7 @@ pub fn load(object: &path::Path, width: usize, light_indices: &[usize]) -> Resul
     for view_index in 0..VIEW_COUNT {
         let camera = load_camera(&calibration, view_index, focal, principal)?;
         let directory = object.join(format!("view_{:02}", view_index + 1));
-        let mask = load_mask(&directory.join("mask.png"), width, height)?;
+        let mask: sync::Arc<[f32]> = load_mask(&directory.join("mask.png"), width, height)?.into();
         let directions = load_vectors(&directory.join("light_directions.txt"), "directions")?;
         let intensities = load_vectors(&directory.join("light_intensities.txt"), "intensities")?;
         let orientation = glam::Quat::from_array(camera.cam_orientation);

@@ -590,7 +590,7 @@ mod tests {
                 principal,
             },
             pixels: vec![[0.0; 3]],
-            mask: Some(vec![1.0]),
+            mask: Some(vec![1.0].into()),
         }
     }
 

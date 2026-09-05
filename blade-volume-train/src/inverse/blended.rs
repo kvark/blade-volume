@@ -459,7 +459,7 @@ mod tests {
                 name: "view".to_string(),
                 camera: camera(),
                 pixels: vec![[0.0; 3]; 64],
-                mask: Some(vec![1.0; 64]),
+                mask: Some(vec![1.0; 64].into()),
             }],
         };
         let blends = pixel_blends(&truth, &blank, &[0]);
@@ -484,7 +484,7 @@ mod tests {
                     name: "view".to_string(),
                     camera: camera(),
                     pixels: vec![[0.0; 3]; 64],
-                    mask: Some(vec![1.0; 64]),
+                    mask: Some(vec![1.0; 64].into()),
                 }],
             };
             for blend in &blends {
@@ -523,7 +523,7 @@ mod tests {
                 name: "view".to_string(),
                 camera: camera(),
                 pixels: vec![[0.0; 3]],
-                mask: Some(vec![1.0]),
+                mask: Some(vec![1.0].into()),
             }],
         };
         let light = vol::relight::PointLight {
@@ -579,7 +579,7 @@ mod tests {
                 name: "view".to_string(),
                 camera: camera(),
                 pixels: vec![[0.0; 3]; 64],
-                mask: Some(vec![1.0; 64]),
+                mask: Some(vec![1.0; 64].into()),
             }],
         };
         for blend in pixel_blends(&truth, &capture, &[0]) {

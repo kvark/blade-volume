@@ -8,7 +8,7 @@
 //! removes that scale before fitting physical materials.
 
 use blade_volume as vol;
-use std::{collections, fs, path, thread};
+use std::{collections, fs, path, sync, thread};
 
 pub const SOURCE_WIDTH: usize = 1500;
 pub const SOURCE_HEIGHT: usize = 2844;
@@ -73,7 +73,7 @@ pub fn load_full_bright(
             name: format!("{}-full-bright", camera.name),
             camera: camera.params,
             pixels,
-            mask: Some(mask),
+            mask: Some(mask.into()),
         });
     }
     Ok(capture)
@@ -126,10 +126,11 @@ pub fn load(
                 let mut decoded = Vec::new();
                 for camera_index in (worker..cameras.len()).step_by(workers) {
                     let camera = &cameras[camera_index];
-                    let mask = load_mask(
+                    let mask: sync::Arc<[f32]> = load_mask(
                         &object.join("mask").join(format!("{}.png", camera.name)),
                         width,
-                    )?;
+                    )?
+                    .into();
                     let directory = object.join("masked_olat").join(&camera.name);
                     let files = image_frames(&directory)?;
                     let mut views = Vec::with_capacity(light_indices.len());
