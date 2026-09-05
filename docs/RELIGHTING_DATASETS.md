@@ -407,9 +407,42 @@ suppresses valid low-response support.
 All fusion and albedo-training prototypes are removed. The response scopes
 peak at 1.9--2.0 GiB, the foam continuation at 1.8 GiB, and every run records
 zero swap, OOM, or GPU fault. Do not tune another response threshold or train
-another proxy image. Use the released geometry for C769 only as an evaluator
-to attribute error between density training, depth-mode extraction, and fusion;
-C713 and C777 remain untouched transfer gates.
+another proxy image.
+
+The release layout rules out the previously written C769 geometry check:
+training shards contain `masked_olat/`, `mask/`, `pbr/`, and `all_cam.json`,
+but only validation shards contain `model/`. Instead, the released C452
+validation point stream was used strictly after candidate selection as a
+point-cloud evaluator; its faces were never parsed. At 128 pixels, the
+light-000 foam's per-view density depth is already displaced from the released
+surface by 3.02 source-pixel footprints at the median and 8.28 at p90. The
+fused 6,180-point surface has 1.28-pixel median nearest-truth distance and
+49.34-degree median normal error. The fitted 6,840-point Gaussian improves
+those to 1.11 pixels and 32.35 degrees, respectively. Fusion therefore does
+not create the position error, while the later fit improves but does not fix
+surface orientation.
+
+Moving the selected absorption segment from its midpoint to the conditional
+exponential mean improves the evaluator-only median depth error from 3.02 to
+2.59 pixels and the fused median from 1.28 to 1.24 pixels. It still fails the
+real C769 construction gate before material fitting: whole/foreground mean
+rises by 0.847/0.368 dB, but precision falls 0.234 points, 84 of 192
+foreground images regress, and the worst loses 2.01 dB. The implementation is
+removed. A better average truth distance is not sufficient when it moves
+optical ownership between images.
+
+C769 does provide an independent normal evaluator. Its five polarized cameras
+(`Cam07/10/17/22/39`) are excluded from the published 24-construction/6-held
+camera split and carry diffuse-normal `_nd` maps. At 320 pixels, the direct
+RGB-to-world-XYZ convention is the uniquely strongest camera-facing decoding.
+Against these maps, unsigned median normal error is 54.69 degrees directly at
+derivative-qualified density depths, 54.04 degrees at the pre-fit surface,
+and 47.37 degrees after the calibrated surface fit. The 3,793 surfel centers
+are bit-identical before and after fitting. This independently confirms that
+the first failing stage is shared density/first-surface geometry, not fusion;
+normal fitting recovers part of the loss but inherits a badly associated
+surface. The pseudo-GT maps remain evaluator-only. C713 and C777 remain
+untouched transfer gates.
 
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
