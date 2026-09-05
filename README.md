@@ -235,6 +235,9 @@ the experiment-by-experiment history in the audit logs.
   Multi-light Gaussian continuation is now guarded per fitted light/camera
   image rather than only by a pooled sparse audit; C769 regresses 426/432
   such images, so the candidate is restored exactly.
+  A complete-render, visibility-aware normal search is negative too: its
+  pooled optimum changes 4,633/7,619 normals but loses 49/64 disjoint
+  light/camera images, while the balanced objective correctly keeps none.
   The next route must jointly reconstruct the oriented point surface and its
   visibility/indirect transport through complete composited images, with
   per-image tail checks rather than a pooled appearance correction. C713/C777

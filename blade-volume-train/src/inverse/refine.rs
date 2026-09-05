@@ -190,6 +190,20 @@ fn rendered_errors(
     renderer.prepared_srgb_errors(tracer, capture, indices, cameras, 0.0)
 }
 
+fn rendered_balanced_loss(
+    renderer: &mut score::Renderer,
+    tracer: &mut vol::gpu::RelightTracer,
+    capture: &capture::Capture,
+    indices: &[usize],
+    cameras: &[vol::CameraParams],
+) -> (f64, Vec<f64>) {
+    let errors = rendered_errors(renderer, tracer, capture, indices, cameras);
+    (
+        mean_error(&errors),
+        image_mean_errors(&errors, capture.width * capture.height),
+    )
+}
+
 fn rendered_evidence_errors(
     renderer: &mut score::Renderer,
     tracers: &mut [vol::gpu::RelightTracer],
@@ -212,6 +226,26 @@ fn rendered_evidence_errors(
         ));
     }
     errors
+}
+
+fn image_mean_errors(errors: &[f32], pixels: usize) -> Vec<f64> {
+    assert!(pixels != 0);
+    assert!(errors.len().is_multiple_of(pixels));
+    errors.chunks(pixels).map(mean_error).collect()
+}
+
+fn balanced_rendered_candidate(
+    current_loss: f64,
+    current_images: &[f64],
+    candidate_loss: f64,
+    candidate_images: &[f64],
+) -> bool {
+    current_images.len() == candidate_images.len()
+        && candidate_loss < current_loss
+        && current_images
+            .iter()
+            .zip(candidate_images)
+            .all(|(&current, &candidate)| candidate <= current)
 }
 
 fn update_rendered_geometry(
@@ -321,6 +355,8 @@ fn refine_rendered_parameter(
     let started = std::time::Instant::now();
     let initial_errors = rendered_evidence_errors(&mut renderer, &mut tracers, evidence, &cameras);
     let mut loss = mean_error(&initial_errors);
+    let pixels = width * height;
+    let mut image_losses = image_mean_errors(&initial_errors, pixels);
     let initial_loss = loss;
     let mut accepted = 0usize;
     for round in 0..rounds {
@@ -335,10 +371,12 @@ fn refine_rendered_parameter(
         update_rendered_geometry(&mut renderer, &mut tracers, &plus);
         let plus_errors = rendered_evidence_errors(&mut renderer, &mut tracers, evidence, &cameras);
         let plus_loss = mean_error(&plus_errors);
+        let plus_image_losses = image_mean_errors(&plus_errors, pixels);
         update_rendered_geometry(&mut renderer, &mut tracers, &minus);
         let minus_errors =
             rendered_evidence_errors(&mut renderer, &mut tracers, evidence, &cameras);
         let minus_loss = mean_error(&minus_errors);
+        let minus_image_losses = image_mean_errors(&minus_errors, pixels);
         let difference = ErrorDifference::new(&plus_errors, &minus_errors, width, height);
 
         let mut localized = current.clone();
@@ -358,22 +396,35 @@ fn refine_rendered_parameter(
         let localized_errors =
             rendered_evidence_errors(&mut renderer, &mut tracers, evidence, &cameras);
         let localized_loss = mean_error(&localized_errors);
+        let localized_image_losses = image_mean_errors(&localized_errors, pixels);
 
-        let (next, next_loss) =
-            if localized_loss < loss && localized_loss <= plus_loss && localized_loss <= minus_loss
-            {
-                (localized, localized_loss)
-            } else if plus_loss < loss && plus_loss <= minus_loss {
-                (plus, plus_loss)
-            } else if minus_loss < loss {
-                (minus, minus_loss)
-            } else {
-                (current, loss)
-            };
+        let localized_improves = balanced_rendered_candidate(
+            loss,
+            &image_losses,
+            localized_loss,
+            &localized_image_losses,
+        );
+        let plus_improves =
+            balanced_rendered_candidate(loss, &image_losses, plus_loss, &plus_image_losses);
+        let minus_improves =
+            balanced_rendered_candidate(loss, &image_losses, minus_loss, &minus_image_losses);
+        let (next, next_loss, next_image_losses) = if localized_improves
+            && (!plus_improves || localized_loss <= plus_loss)
+            && (!minus_improves || localized_loss <= minus_loss)
+        {
+            (localized, localized_loss, localized_image_losses)
+        } else if plus_improves && (!minus_improves || plus_loss <= minus_loss) {
+            (plus, plus_loss, plus_image_losses)
+        } else if minus_improves {
+            (minus, minus_loss, minus_image_losses)
+        } else {
+            (current, loss, image_losses)
+        };
         if next_loss < loss {
             accepted += 1;
             loss = next_loss;
         }
+        image_losses = next_image_losses;
         scene.model.surfels = next;
         update_rendered_geometry(&mut renderer, &mut tracers, &scene.model.surfels);
     }
@@ -393,8 +444,9 @@ fn refine_rendered_parameter(
 /// Refine observed Gaussian normals against complete renders from known-light
 /// captures. Each round renders one antithetic perturbation pair, chooses a
 /// direction per projected particle from its local error difference, and only
-/// keeps a proposal that lowers the full multi-light objective. Centers,
-/// radii, materials, assignments, and illumination stay fixed.
+/// keeps a proposal that lowers the full multi-light objective without
+/// regressing any participating image. Centers, radii, materials, assignments,
+/// and illumination stay fixed.
 pub fn refine_rendered_normals(
     scene: &mut score::Scene,
     evidence: &[RenderedNormalEvidence<'_>],
@@ -1459,9 +1511,10 @@ fn refine_simultaneous(
     candidates: &[usize],
     rounds: usize,
     mut loss: f64,
-) -> (f64, usize) {
+    mut image_losses: Vec<f64>,
+) -> (f64, Vec<f64>, usize) {
     if candidates.is_empty() || rounds == 0 {
-        return (loss, 0);
+        return (loss, image_losses, 0);
     }
     let anchors: Vec<[f32; 3]> = candidates
         .iter()
@@ -1482,6 +1535,7 @@ fn refine_simultaneous(
         renderer.update_prepared_surfels(&scene.model.surfels);
         let plus_errors = rendered_errors(renderer, tracer, capture, indices, cameras);
         let plus = mean_error(&plus_errors);
+        let plus_image_losses = image_mean_errors(&plus_errors, capture.width * capture.height);
         let plus_objective = plus + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&plus_offsets);
 
         let minus_offsets: Vec<f32> = offsets
@@ -1495,6 +1549,7 @@ fn refine_simultaneous(
         renderer.update_prepared_surfels(&scene.model.surfels);
         let minus_errors = rendered_errors(renderer, tracer, capture, indices, cameras);
         let minus = mean_error(&minus_errors);
+        let minus_image_losses = image_mean_errors(&minus_errors, capture.width * capture.height);
         let minus_objective = minus + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&minus_offsets);
         let error_difference =
             ErrorDifference::new(&plus_errors, &minus_errors, capture.width, capture.height);
@@ -1528,30 +1583,44 @@ fn refine_simultaneous(
             .collect();
         apply_offsets(scene, candidates, &anchors, &localized_offsets);
         renderer.update_prepared_surfels(&scene.model.surfels);
-        let localized = rendered_loss(renderer, tracer, capture, indices, cameras);
+        let (localized, localized_image_losses) =
+            rendered_balanced_loss(renderer, tracer, capture, indices, cameras);
         let localized_objective =
             localized + SIMULTANEOUS_OFFSET_PRIOR * offset_prior(&localized_offsets);
 
-        if localized_objective < objective
-            && localized_objective <= plus_objective
-            && localized_objective <= minus_objective
+        let localized_improves =
+            balanced_rendered_candidate(loss, &image_losses, localized, &localized_image_losses);
+        let plus_improves =
+            balanced_rendered_candidate(loss, &image_losses, plus, &plus_image_losses);
+        let minus_improves =
+            balanced_rendered_candidate(loss, &image_losses, minus, &minus_image_losses);
+        if localized_improves
+            && localized_objective < objective
+            && (!plus_improves || localized_objective <= plus_objective)
+            && (!minus_improves || localized_objective <= minus_objective)
         {
             offsets = localized_offsets;
             loss = localized;
+            image_losses = localized_image_losses;
             objective = localized_objective;
             accepted += 1;
-        } else if plus_objective < objective && plus_objective <= minus_objective {
+        } else if plus_improves
+            && plus_objective < objective
+            && (!minus_improves || plus_objective <= minus_objective)
+        {
             offsets = plus_offsets;
             apply_offsets(scene, candidates, &anchors, &offsets);
             renderer.update_prepared_surfels(&scene.model.surfels);
             loss = plus;
+            image_losses = plus_image_losses;
             objective = plus_objective;
             accepted += 1;
-        } else if minus_objective < objective {
+        } else if minus_improves && minus_objective < objective {
             offsets = minus_offsets;
             apply_offsets(scene, candidates, &anchors, &offsets);
             renderer.update_prepared_surfels(&scene.model.surfels);
             loss = minus;
+            image_losses = minus_image_losses;
             objective = minus_objective;
             accepted += 1;
         } else {
@@ -1559,7 +1628,7 @@ fn refine_simultaneous(
             renderer.update_prepared_surfels(&scene.model.surfels);
         }
     }
-    (loss, accepted)
+    (loss, image_losses, accepted)
 }
 
 /// Move particles along their current normals against the complete runtime
@@ -1571,7 +1640,8 @@ fn refine_simultaneous(
 /// best of that proposal and the original two whole-frame directions. Every
 /// proposal refreshes the production TLAS and all training renders. A small
 /// radius-normalized anchor prior limits drift. The exact pass then tests up
-/// to `max_particles` independently in both directions.
+/// to `max_particles` independently in both directions. No simultaneous or
+/// exact proposal may regress an individual training image.
 /// Materials and illumination stay fixed throughout. The held-out cameras
 /// never enter this function; callers decide which indices are training
 /// evidence.
@@ -1610,13 +1680,14 @@ pub fn refine_rendered(
     let mut renderer = score::Renderer::new(capture.width, capture.height)?;
     let mut tracer = renderer.prepare_scene(scene, diffuse_samples, false);
     let started = std::time::Instant::now();
-    let mut loss = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+    let (mut loss, mut image_losses) =
+        rendered_balanced_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
     let initial_loss = loss;
     let radius_fraction = refine_radii.then_some(0.2);
     let observed: Vec<usize> = (0..scene.model.surfels.len())
         .filter(|&index| !observations.of(index).is_empty())
         .collect();
-    let (next_loss, simultaneous_accepted) = refine_simultaneous(
+    let (next_loss, next_image_losses, simultaneous_accepted) = refine_simultaneous(
         scene,
         &mut renderer,
         &mut tracer,
@@ -1626,8 +1697,10 @@ pub fn refine_rendered(
         &observed,
         simultaneous_rounds,
         loss,
+        image_losses,
     );
     loss = next_loss;
+    image_losses = next_image_losses;
     let simultaneous_particles = if simultaneous_rounds > 0 {
         observed.len()
     } else {
@@ -1644,14 +1717,19 @@ pub fn refine_rendered(
         let plus = (glam::Vec3::from(original) + step * normal).to_array();
         let mut best_loss = loss;
         let mut best = original;
+        let mut best_image_losses = None;
         for sign in [-1.0f32, 1.0] {
             scene.model.surfels[index].center =
                 (glam::Vec3::from(original) + sign * step * normal).to_array();
             renderer.update_prepared_surfels(&scene.model.surfels);
-            let candidate = rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
-            if candidate < best_loss {
+            let (candidate, candidate_image_losses) =
+                rendered_balanced_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+            if balanced_rendered_candidate(loss, &image_losses, candidate, &candidate_image_losses)
+                && candidate < best_loss
+            {
                 best_loss = candidate;
                 best = scene.model.surfels[index].center;
+                best_image_losses = Some(candidate_image_losses);
                 // This coordinate pass is a bounded final polish. Once the
                 // first direction improves its full rendered objective, keep
                 // it instead of paying another TLAS rebuild for a marginally
@@ -1668,20 +1746,29 @@ pub fn refine_rendered(
         if best != original {
             moved += 1;
             loss = best_loss;
+            image_losses = best_image_losses.unwrap();
         }
         if let Some(fraction) = radius_fraction {
             let original = scene.model.surfels[index].radius;
             let plus = original * (1.0 + fraction);
             let mut best_loss = loss;
             let mut best = original;
+            let mut best_image_losses = None;
             for scale in [1.0 + fraction, 1.0 - fraction] {
                 scene.model.surfels[index].radius = original * scale;
                 renderer.update_prepared_surfels(&scene.model.surfels);
-                let candidate =
-                    rendered_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
-                if candidate < best_loss {
+                let (candidate, candidate_image_losses) =
+                    rendered_balanced_loss(&mut renderer, &mut tracer, capture, indices, &cameras);
+                if balanced_rendered_candidate(
+                    loss,
+                    &image_losses,
+                    candidate,
+                    &candidate_image_losses,
+                ) && candidate < best_loss
+                {
                     best_loss = candidate;
                     best = scene.model.surfels[index].radius;
+                    best_image_losses = Some(candidate_image_losses);
                     if scale > 1.0 {
                         break;
                     }
@@ -1694,6 +1781,7 @@ pub fn refine_rendered(
             if best != original {
                 radii_moved += 1;
                 loss = best_loss;
+                image_losses = best_image_losses.unwrap();
             }
         }
     }
@@ -2271,6 +2359,27 @@ fn source_depth_visible(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn balanced_rendered_candidate_rejects_an_image_tail() {
+        assert!(balanced_rendered_candidate(
+            0.5,
+            &[0.4, 0.6],
+            0.4,
+            &[0.3, 0.5],
+        ));
+        assert!(!balanced_rendered_candidate(
+            0.5,
+            &[0.4, 0.6],
+            0.4,
+            &[0.2, 0.61],
+        ));
+    }
+
+    #[test]
+    fn image_means_preserve_frame_boundaries() {
+        assert_eq!(image_mean_errors(&[1.0, 3.0, 4.0, 8.0], 2), [2.0, 6.0]);
+    }
 
     #[test]
     fn dense_solver_pivots_to_the_known_solution() {
@@ -3133,7 +3242,7 @@ mod tests {
             eprintln!("skipping rendered normal refinement test: no ray-tracing GPU");
             return;
         };
-        let rendered = truth_renderer.render_views(&truth, &cameras, 0, false);
+        let rendered = truth_renderer.render_views(&truth, &cameras, 2, false);
         truth_renderer.destroy();
         let capture = capture::Capture {
             width: SIZE,
@@ -3162,7 +3271,7 @@ mod tests {
             environment: &environment,
         }];
         let stats =
-            refine_rendered_normals(&mut candidate, &evidence, &observations, 0, 24, 5.0).unwrap();
+            refine_rendered_normals(&mut candidate, &evidence, &observations, 2, 24, 5.0).unwrap();
         let refined = glam::Vec3::from(candidate.model.surfels[0].normal);
         assert!(stats.accepted > 0, "stats={stats:?}");
         assert!(stats.final_loss < stats.initial_loss, "stats={stats:?}");
@@ -3171,7 +3280,7 @@ mod tests {
             "tilted={tilted:?}, refined={refined:?}, stats={stats:?}"
         );
         let mut final_renderer = score::Renderer::new(SIZE, SIZE).unwrap();
-        let mut final_tracer = final_renderer.prepare_scene(&candidate, 0, false);
+        let mut final_tracer = final_renderer.prepare_scene(&candidate, 2, false);
         let final_loss = rendered_loss(
             &mut final_renderer,
             &mut final_tracer,
@@ -3191,7 +3300,7 @@ mod tests {
         undersized.model.surfels[0].radius = 0.24;
         let observations = decompose::observe(&undersized.model, &capture, &[0, 1], -1.0);
         let stats =
-            refine_rendered_radii(&mut undersized, &evidence, &observations, 0, 24, 0.05).unwrap();
+            refine_rendered_radii(&mut undersized, &evidence, &observations, 2, 24, 0.05).unwrap();
         assert!(stats.accepted > 0, "stats={stats:?}");
         assert!(stats.final_loss < stats.initial_loss, "stats={stats:?}");
         assert!(

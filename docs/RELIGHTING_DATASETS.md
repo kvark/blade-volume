@@ -1129,6 +1129,30 @@ reconstruction by itself, but it closes a correctness hole before the next
 transport objective: a pooled gain can no longer silently buy its mean by
 sacrificing a fitted light-camera image.
 
+The existing complete-render point-surface optimizer had the same pooled-loss
+hole. Its normal, center, and radius proposals now retain the mean error of
+each participating image and reject a step if any one rises. This applies to
+its sampled environment path as well, where visibility and one-bounce indirect
+light are evaluated together by the production renderer. The change is only
+an acceptance rule; it adds no parameter, operation, shader, dependency, or
+model field.
+
+A scratch finite-light extension then tests whether normal-only physical
+refinement is the missing C769 step. It renders the 7,619-point surface through
+the production point-cloud backend with its deterministic visibility ray, fits
+27 construction lights by 16 construction cameras, and keeps eight other
+construction lights and eight disjoint cameras for evaluation. With the strict
+image guard, neither eight 2.5-degree rounds nor eight 0.5-degree rounds accepts
+a proposal. The diagnostic old pooled rule accepts all eight larger rounds,
+changes 4,633 normals, and lowers its fitted pixel error
+`0.0006940→0.0006753`; that apparent success reverses on disjoint cameras.
+The 27 fitted lights lose `0.0992/0.1034` dB whole/foreground with 166/216
+foreground regressions, worst `-0.6782` dB. The eight disjoint lights lose
+`0.0648/0.0852` dB with 49/64 regressions, worst `-0.4534` dB. Both scopes peak
+near 1.1 GB with zero swap, pressure, OOM, throttle, or GPU fault. The temporary
+finite-light API is therefore removed. Visibility-aware normals alone are not
+the joint transport/surface objective the evidence calls for.
+
 A four-light log-response field is a stronger but still mixed control. It
 uses frozen construction lights `0/102/204/306`, centers log luminance across
 the four observations so scalar albedo cancels, and stores three response
