@@ -1115,6 +1115,20 @@ restored Gaussian remains below the surface on held/held whole-frame mean
 (`34.6499` versus `35.4370` dB), recall (`96.227%` versus `98.848%`), and
 precision (`89.501%` versus `90.139%`).
 
+That guard now measures one deterministic 512-ray batch for every fitted
+light-camera pair instead of pairing each light with only one cycling camera.
+It accepts a continuation only when both the balanced mean and every
+individual image loss are non-regressing. A production-graph C769 replay over
+27 fitting lights by 16 fitting cameras executes 2,700 updates, measures all
+432 pairs before and after, and changes the balanced audit
+`0.0009080→0.0018700`. Fully 426 pairs regress, worst `+0.0039857`, so the
+guard restores every point and normal. Training plus both audits take 4.914
+seconds after loading; the complete scope peaks at 1,112,649,728 bytes with
+zero swap, pressure, OOM, throttle, or GPU fault. This does not improve the
+reconstruction by itself, but it closes a correctness hole before the next
+transport objective: a pooled gain can no longer silently buy its mean by
+sacrificing a fitted light-camera image.
+
 A four-light log-response field is a stronger but still mixed control. It
 uses frozen construction lights `0/102/204/306`, centers log luminance across
 the four observations so scalar albedo cancels, and stores three response
