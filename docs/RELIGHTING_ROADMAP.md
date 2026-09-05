@@ -31,8 +31,12 @@ not contain or fall back to polygonal geometry.
   misses the strict gate by 0.0011/0.0023 dB on two held-light foreground
   tails. On fresh C452 with aligned-light geometry it improves all four means
   and held/held whole/foreground tails by 1.53/0.35 dB. LUCES-MV is
-  backend-mixed and DiLiGenT-MV Bear regresses. Keep visibility opt-in until
-  fitting and transport share the same compositor.
+  backend-mixed and DiLiGenT-MV Bear regresses. An exact visibility-aware
+  diffuse equation lowers its own linear loss but regresses C452 construction
+  means by 0.083/0.059 dB and one image by 0.414/0.436 dB whole/foreground;
+  its CPU BVH prototype is removed. Visibility without the captured indirect
+  light still teaches the wrong material. Keep visibility opt-in until a
+  bounded bounce is coupled in fitting and transport.
 - One aligned construction OLAT now drives the existing 200-update
   fixed-topology geometry continuation. On fresh C452 it improves every
   held-camera surface metric (`21.45/21.87→24.35/23.52` dB whole/foreground,
@@ -195,7 +199,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one explicit aligned construction OLAT improves every held-camera surface/relighting metric on C452 and C276; physical Gaussian plus global/coarse/fine response continuations are rejected; direct GGX selected; finite visibility remains opt-in | Make fitted material and bounded finite-light transport share visibility in the complete compositor; do not recurse into smaller spatial boxes | Preserve the two-object held-camera gains and eliminate the small construction-tail trade before making the stage automatic; publish held/held images only when dataset terms permit |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one explicit aligned construction OLAT improves every held-camera surface/relighting metric on C452 and C276; physical Gaussian plus global/coarse/fine response continuations are rejected; direct GGX selected; visibility-only material coupling is rejected and finite visibility remains opt-in | Couple finite-light visibility and a bounded bounce in both fitting and the complete compositor; do not recurse into smaller spatial boxes | Preserve the two-object held-camera gains and eliminate the small construction-tail trade before making the stage automatic; publish held/held images only when dataset terms permit |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
