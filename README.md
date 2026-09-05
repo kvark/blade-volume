@@ -84,10 +84,15 @@ the experiment-by-experiment history in the audit logs.
   the independent construction score. Exact PowerFoam partitioning fixes the
   overlap algebra but still loses foreground mean and 92/192 image tails; its
   best connected component improves both means yet loses precision and 30
-  foreground images. Post-fusion insertion is therefore closed. Next, use the
-  verified response correspondence to decide observation ownership before
-  surface fusion creates a radial support. Keep C713/C777 untouched as transfer
-  gates; do not add free per-light appearance or mesh geometry.
+  foreground images. Post-fusion insertion is therefore closed. Applying the
+  same descriptor before fusion either removes support or, with exact fallback,
+  lowers every aggregate. Training the density field directly on robust
+  104-light albedo sharpens its outline but loses 0.94 recall points and up to
+  2.20 dB on a construction image. Response invariance is a correspondence cue,
+  not a replacement rendering target. Next, use C769 truth only as an evaluator
+  to locate whether the wrong depth begins in density training, depth-mode
+  extraction, or fusion. Keep C713/C777 untouched as transfer gates; do not add
+  free per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
