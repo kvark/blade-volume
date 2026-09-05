@@ -147,9 +147,16 @@ the experiment-by-experiment history in the audit logs.
   closes the obvious post-extraction routes: direct and smooth center motion
   improve some means while losing precision and 58--88 image tails; replacing
   normals loses both means; and a track-only cloud retains high precision but
-  misses textureless regions. The next test must seed/fix these absolute sites
-  before ordinary image training so the surrounding cloud learns compatible
-  support, rather than deforming a finished surface.
+  misses textureless regions. Seeding 1,297 dense tracks before ordinary image
+  training is promising only while the sites remain free: after identical
+  fitting it changes construction whole/foreground mean by
+  `+0.160/+0.147` dB and recall/precision by `+0.656/-0.273` points, but still
+  regresses 69/192 image tails. Hard-fixing those same centers proves why:
+  traced support falls to 96.7%, precision loses 7.41 points, and 153/192
+  images regress. Both scratch paths are removed. Response tracks are accurate
+  sparse evidence, but a useful next objective must associate them softly with
+  rendered ownership while explicitly preserving silhouette support; neither
+  retrofit nor immutable sites are suitable.
   Keep C713/C777 untouched as transfer gates; do not add free persisted
   per-light appearance or polygonal geometry.
 

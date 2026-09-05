@@ -669,6 +669,41 @@ neighboring sites and optical support are optimized around the absolute
 anchors. Do not add them after extraction, inflate them across evidence gaps,
 or tune another displacement radius on C452's construction screen.
 
+That upstream initialization is now tested too. The width-128 stride-one
+tracks replace 1,297 low-density sites in a 16,384-site camera lattice, retain
+the exact site budget, and initialize their ordinary density/SH from the
+measured response. With every site free during the unchanged single-light plus
+geometry continuation, the seeded surface grows from 6,759 to 6,986 surfels
+and traced support from 99.6% to 99.8%. Against its paired freshly fitted
+control, construction whole/foreground mean improves by `0.2056/0.3226` dB
+and recall by 0.8787 points, while precision loses 0.6586 points and 51/192
+foreground pairs regress. Against the established fitted control, the same
+candidate remains positive by `0.1600/0.1474` dB and 0.6556 recall points, but
+loses 0.2729 precision points, regresses 69/192 pairs, and loses 1.9178 dB in
+the worst pair. The aggregate signal is real, but it does not clear the
+complete-render gate.
+
+Freezing the 1,297 seeded positions tests whether training merely forgets the
+measurement. A temporary stop-gradient prefix holds every center exactly (all
+position-drift quantiles are zero) without adding an operation or shader. It
+instead prevents the power cells from adapting: foam held-view precision falls
+to 74.3%, extraction traces only 96.7% of rays, and the fitted construction
+screen changes whole/foreground/covered mean by
+`-1.3555/-0.5664/-0.9012` dB, recall/precision by
+`-0.6458/-7.4095` points, and regresses 153/192 foreground pairs. Restoring
+the accurate centers only after free training is also invalid: traversal falls
+to 92.6% and the surface to 6,165 surfels because topology and optical support
+were learned around the moved sites. Training, extraction, and the full gate
+peak at 1.0/0.15/1.6 GB with zero swap, OOM, throttle, or GPU fault. The
+temporary gradient mask is removed.
+
+This closes hard response-track initialization. The next candidate must keep
+the ordinary adaptive cloud and use tracks through a soft, dynamically
+associated first-surface term plus an explicit support guard. It must first
+improve every construction aggregate and the image-tail distribution on C452;
+only then should it open the C769 construction and excluded-normal transfer
+gates. Do not tune a freeze fraction or anchor stiffness against C452.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
