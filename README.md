@@ -125,10 +125,15 @@ the experiment-by-experiment history in the audit logs.
   whole/foreground mean, regresses 116/192 foreground images, and loses 1.61
   dB in the worst pair. The next shared objective must establish consistent
   cross-view first-surface ownership and preserve absolute depth/support before
-  using unexplained radiance to move density. The next bounded test is a
-  scratch per-point/per-light response shared across cameras and discarded
-  before material fitting; visibility alone is not the missing switch.
-  Light-specific appearance remains scratch-only.
+  using unexplained radiance to move density. A scratch 104-way response per
+  cell, shared across cameras and discarded before material fitting, is much
+  safer than direct diffuse supervision but still changes whole/foreground
+  mean by `-0.0026/+0.0019` dB, loses `0.0147` recall points, regresses 106/192
+  foreground images, and loses 0.317 dB on the worst pair. Its implementation
+  is removed. Radiance-driven density fitting is therefore closed until
+  upstream multi-view evidence supplies an absolute first-surface association;
+  visibility alone is not the missing switch. Light-specific appearance
+  remains scratch-only.
   Keep C713/C777 untouched as transfer gates; do not add free persisted
   per-light appearance or polygonal geometry.
 
