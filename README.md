@@ -166,10 +166,16 @@ the experiment-by-experiment history in the audit logs.
   material fitting, foreground mean rises `0.212` dB and recall `0.707` point,
   but precision falls `0.459` point, 60/192 image tails regress, and three lose
   more than 1 dB. The failures span cameras under every light. Response-track
-  initialization is therefore closed without production code; keep the tracks
-  only as independent geometry evidence and pursue continuous cross-view
-  point-cloud support instead. Keep C713/C777 untouched as transfer gates; do
-  not add free persisted per-light appearance or polygonal geometry.
+  initialization is therefore closed without production code. Turning the
+  same evidence into continuous point patches does not rescue it: broad local
+  discs improve precision but lose `0.403` dB foreground and 152/192 tails;
+  the repository's shared-view components and point-only midpoint resampling
+  improve released point-truth geometry, recall, and precision, yet lose
+  `0.317` dB foreground and the same 152 tails. Post-formation insertion is
+  closed. The next route is dense epipolar depth from per-pixel multi-light
+  signatures before point-cloud surface formation. Keep C713/C777 untouched
+  as transfer gates; do not add free persisted per-light appearance or
+  polygonal geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
