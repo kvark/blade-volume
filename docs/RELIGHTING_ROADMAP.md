@@ -115,8 +115,15 @@ not contain or fall back to polygonal geometry.
   regresses 103/192 images. Training the density field on robust 104-light
   albedo instead sharpens mean quality and precision but loses 0.94 recall
   points and up to 2.20 dB. Response invariance is evidence, not a rendering
-  target. Attribute C769 against released geometry before changing another
-  stage; C713 and C777 remain untouched transfer gates.
+  target. Released C452 point-only truth localizes a 3.02-pixel median error in
+  the per-view density depth before fusion; a more accurate conditional
+  absorption depth still loses C769 precision and 84/192 image tails. Five
+  excluded polarized C769 normal maps independently measure 54.69/54.04/47.37
+  degree unsigned median error at density depth/pre-fit surface/post-fit
+  surface. The surfel centers do not move during the last fit. Improve shared
+  density and first-surface association with a real multi-light image objective,
+  not another proxy, fusion threshold, or segment statistic; C713 and C777
+  remain untouched transfer gates.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
@@ -248,7 +255,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one aligned construction OLAT improves held-camera means on five objects but has small tail/coverage tradeoffs; physical Gaussian, generic densification, radial support splitting, additive/partitioned/pre-fusion 104-light response tracks, robust-albedo density training, global/coarse/fine response continuations, visibility-only material coupling, a bounded finite-light bounce, and projected/exact-blend normal attribution are rejected; direct GGX selected and finite visibility remains opt-in | Use C769 released geometry only as an evaluator to attribute error among trained density, per-camera depth mode, and fusion; change the first failing stage rather than another response threshold or proxy target | Improve every construction image and coverage metric on C769, then preserve the result on both untouched C713/C777 before opening their held lights |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; one aligned construction OLAT improves held-camera means on five objects but has small tail/coverage tradeoffs; physical Gaussian, generic densification, radial support splitting, additive/partitioned/pre-fusion 104-light response tracks, robust-albedo density training, conditional absorption depth, global/coarse/fine response continuations, visibility-only material coupling, a bounded finite-light bounce, and projected/exact-blend normal attribution are rejected; C452 point truth and excluded C769 polarized normals localize the first error before fusion; direct GGX selected and finite visibility remains opt-in | Train shared density/first-surface association against actual calibrated multi-light images while keeping light-specific appearance scratch-only; do not make another invariant RGB proxy or use evaluator truth for fitting | Improve every construction image and coverage metric on C769, improve its excluded polarized-normal metric, then preserve the result on both untouched C713/C777 before opening their held lights |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |

@@ -89,10 +89,14 @@ the experiment-by-experiment history in the audit logs.
   lowers every aggregate. Training the density field directly on robust
   104-light albedo sharpens its outline but loses 0.94 recall points and up to
   2.20 dB on a construction image. Response invariance is a correspondence cue,
-  not a replacement rendering target. Next, use C769 truth only as an evaluator
-  to locate whether the wrong depth begins in density training, depth-mode
-  extraction, or fusion. Keep C713/C777 untouched as transfer gates; do not add
-  free per-light appearance or mesh geometry.
+  not a replacement rendering target. Released C452 point truth puts the first
+  large error in per-view density depth, before fusion. Five excluded polarized
+  C769 cameras confirm 54.69/54.04/47.37-degree median unsigned normal error at
+  density depth/pre-fit surface/post-fit surface, while the final fit leaves all
+  surfel centers unchanged. Next, optimize shared point-cloud geometry against
+  actual calibrated multi-light images with scratch-only light appearance.
+  Keep C713/C777 untouched as transfer gates; do not add free persisted
+  per-light appearance or polygonal geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
