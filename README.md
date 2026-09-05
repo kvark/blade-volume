@@ -153,10 +153,15 @@ the experiment-by-experiment history in the audit logs.
   `+0.160/+0.147` dB and recall/precision by `+0.656/-0.273` points, but still
   regresses 69/192 image tails. Hard-fixing those same centers proves why:
   traced support falls to 96.7%, precision loses 7.41 points, and 153/192
-  images regress. Both scratch paths are removed. Response tracks are accurate
-  sparse evidence, but a useful next objective must associate them softly with
-  rendered ownership while explicitly preserving silhouette support; neither
-  retrofit nor immutable sites are suitable.
+  images regress. A soft rendered-depth association is worse, collapsing
+  traced support to 91.9%. Replacing the nearest lattice sites instead of
+  distant low-density sites gives the strongest result: all five aggregates
+  improve, including `+0.471/+0.310` dB whole/foreground and
+  `+0.656/+0.609` recall/precision points. It still regresses 52/192 tails,
+  however; locality filtering and appending sites are both worse. All scratch
+  paths are removed. The 16K response-track family is closed; its remaining
+  defensible scale test is the already established 64K/256 reconstruction,
+  where track-to-lattice displacement is materially smaller.
   Keep C713/C777 untouched as transfer gates; do not add free persisted
   per-light appearance or polygonal geometry.
 

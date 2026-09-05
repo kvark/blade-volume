@@ -697,12 +697,43 @@ were learned around the moved sites. Training, extraction, and the full gate
 peak at 1.0/0.15/1.6 GB with zero swap, OOM, throttle, or GPU fault. The
 temporary gradient mask is removed.
 
-This closes hard response-track initialization. The next candidate must keep
-the ordinary adaptive cloud and use tracks through a soft, dynamically
-associated first-surface term plus an explicit support guard. It must first
-improve every construction aggregate and the image-tail distribution on C452;
-only then should it open the C769 construction and excluded-normal transfer
-gates. Do not tune a freeze fraction or anchor stiffness against C452.
+The reordered all-sites-trainable control reproduces the earlier result
+(99.8% tracing, 19.173 dB held foam PSNR, and 86.8% precision), ruling out
+point order as the cause of the fixed-site collapse. A soft dynamic variant
+then projects the 1,297 tracks to 20,435 construction pixels and applies the
+previously selected weight-100 relative loss to conditional expected
+absorption depth while both density and positions move. The ordinary RGB and
+weight-one mask objective remains active. Nevertheless held foam
+recall/precision collapses to 76.9/68.8%, extraction traces only 91.9% of rays,
+and the surface shrinks to 5,608 points. Conditional mean depth can move
+optical mass without establishing a coherent first surface; no lower weight is
+tuned and the scratch graph is removed.
+
+Changing which lattice site is replaced isolates a useful but still
+unaccepted initialization signal. Replacing the nearest site, rather than the
+nearest low-density site, reduces median displacement from 0.0783 to 0.0441
+world units. The freely trained 6,900-surfel surface retains 99.8% tracing and,
+against the established fitted control, improves whole/foreground/covered mean
+by `0.4714/0.3101/0.4220` dB, recall/precision by `0.6560/0.6090` points, and
+every per-light mean. It still regresses 52/192 foreground pairs; 26 lose more
+than 0.25 dB and the worst loses 1.7089 dB. The tails span cameras and lights,
+so this is not one bad calibration entry.
+
+A topology-local selection accepts only the 523 tracks whose displacement is
+within the source site's median Delaunay-neighbor distance. It raises precision
+by 0.9102 points, but loses 0.0238 dB foreground mean, 0.0698 recall points,
+and 94/192 tails. Appending all tracks preserves every lattice site at a 7.9%
+point-count cost (16,384→17,681), yet loses 0.1261 precision points and 65/192
+tails despite gains of 0.2838/0.2251 dB whole/foreground and 0.6182 recall
+points. Neither topology locality nor extra capacity fixes ownership.
+
+This closes the 16K response-track initialization family without an API,
+graph option, shader, operation, dependency, or persisted field. The one
+defensible remaining scale check is to apply the predeclared nearest-site rule
+once at the established 64K/256 reconstruction, where the lattice is denser
+and 3,689 selected track sites are already available. It must improve all
+aggregates and the tail distribution before C769 is opened; do not tune a
+track subset, weight, or displacement threshold on C452.
 
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
