@@ -201,11 +201,17 @@ the experiment-by-experiment history in the audit logs.
   lights and no light-ID lookup, it loses `0.077` dB on the fitted-light /
   disjoint-camera foreground and `0.104` dB on eight disjoint construction
   lights; stronger regularization still regresses 59/64 disjoint images. The
-  next route is the same bounded light-direction oracle solved through the
-  renderer's exact overlapping-surface blend instead of assigning each pixel
-  to one point. Keep geometry frozen, require the disjoint construction split
-  to improve before opening held data, keep C713/C777 untouched as transfer
-  gates, and do not add polygonal geometry or a runtime appearance field.
+  exact overlapping-surface solve proves that pixel ownership matters: a
+  four-coefficient light-direction oracle improves C769 disjoint-light
+  whole/foreground by `+1.367/+1.602` dB and all 64 images improve, with
+  coverage exactly fixed. It transfers only partly to C452, where the stronger
+  regularized fit gains `+0.408/+0.404` dB but loses five isolated light/camera
+  pairs by up to 0.180 dB. Sharing one transport factor across RGB and enabling
+  existing visibility do not remove those tails. The next bounded route is to
+  regularize this response spatially across compatible point neighborhoods,
+  keeping geometry frozen and the representation scratch-only. C713/C777 stay
+  untouched as transfer gates; do not add polygonal geometry or a runtime
+  appearance field before a fresh response-family object passes.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).

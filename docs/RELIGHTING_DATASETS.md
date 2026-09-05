@@ -940,7 +940,7 @@ another. It may model smooth indirect/shadow residual, but must not store a
 light-indexed table or alter geometry; only an internal split can justify a
 later held-light gate.
 
-That first transfer oracle is rejected before any held data is opened. It
+That first transfer oracle is rejected without indexing or scoring held data. It
 freezes the 7,619-point C769 geometry, refits normals and diffuse material on
 27 evenly spaced construction lights and 16 construction cameras, and fits a
 per-point RGB degree-2 SH residual from calibrated point-to-light direction.
@@ -963,6 +963,45 @@ The next bounded oracle keeps the same frozen geometry and light/camera split,
 but places the directional coefficients inside the existing sparse
 compositor-aware material equations. It must improve every disjoint-light
 aggregate and tail before C452 or any official held observation is opened.
+
+The exact-blend follow-up validates the formulation but not yet a production
+representation. A new construction-only loader ensures that these subsequent
+runs do not open or decode held-camera photographs at all; the earlier general
+loader had decoded those files even though the fit and score never indexed
+them. Replaying C769 through the stricter loader is byte-for-byte metric
+identical.
+
+The oracle copies the established depth-ordered compact-disc blend, keeps the
+7,619 centers, normals, radii, opacity, and material ownership frozen, and
+solves four degree-1 SH coefficients per point and RGB channel inside the
+coupled pixel equations. At relative ridge `0.1`, its fitted linear RMSE moves
+`0.011458→0.005750`. On fitted lights and disjoint cameras it gains
+`+1.5151/+1.7971` dB whole/foreground with one 0.00009 dB regression among
+216 images. More importantly, the eight disjoint construction lights by eight
+disjoint cameras gain `+1.3666/+1.6019/+1.3901` dB
+whole/foreground/covered, and all 64 foreground images improve. Coverage is
+identical by construction. The scope peaks at 1.1 GiB with no swap, memory
+event, throttle, or GPU fault.
+
+The frozen C452 transfer is mixed. Ridge `0.1` gains
+`+0.5769/+0.4791` dB whole/foreground on the same 64-image internal split but
+regresses 13 images by up to 0.6234 dB. The one predeclared stronger ridge of
+`1.0` reduces this to five regressions and a 0.1802 dB worst loss while
+preserving `+0.4080/+0.4037/+0.4205` dB whole/foreground/covered gains. Every
+light mean and every camera mean is positive; the failures are isolated
+light/camera interactions. A four-coefficient achromatic transport factor
+behaves almost identically, so light-dependent colour is not responsible.
+Rendering the RGB candidate with existing visibility reduces its gain and
+leaves 13/64 regressions, rejecting a visibility toggle as the repair.
+
+This is useful evidence, not a selected field. The fit clamps roughly 4% of
+C452 channel evaluations at ridge `1.0`, and its unconstrained per-point
+coefficients can redistribute energy between nearby overlapping supports. No
+runtime field, shader, operation, dependency, or file format is added. The
+next construction-only oracle must regularize coefficients across spatially
+and normally compatible point neighborhoods while retaining the exact blend.
+C452 is now a development object for this family; C713 and C777 remain unopened
+by the response experiments and serve as fresh transfer gates.
 
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
