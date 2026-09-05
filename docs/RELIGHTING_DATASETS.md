@@ -444,6 +444,29 @@ normal fitting recovers part of the loss but inherits a badly associated
 surface. The pseudo-GT maps remain evaluator-only. C713 and C777 remain
 untouched transfer gates.
 
+The ordinary construction captures contain a substantially stronger usable
+signal. Solving a world-space Lambertian normal independently at every density
+hit from all 104 calibrated finite lights gives 24.66-degree median unsigned
+error against the construction `_ncg` maps, compared with 56.29 degrees for
+the density-depth derivative. The fit corrects each observation with the exact
+finite point-light radiance at that density hit; it uses only construction
+photographs and masks. The `_ncg` maps are loaded afterward for measurement,
+never for normal recovery or candidate construction. A brighter-observation
+robustification is worse at 26.01 degrees and is rejected.
+
+Perspective log-depth integration proves that this normal signal is real but
+also that applying it after density tracing is the wrong boundary. With a weak
+anchor, median depth moves only 0.06% and the integrated normal is 52.12
+degrees; after the unchanged calibrated fit, the 192-image screen loses the
+foreground mean, 0.51 recall points, and 86 image tails. The strongest
+predeclared anchor moves depth by 0.22% at the median and improves the excluded
+polarized normal check from 47.37 to 44.65 degrees after fitting, but it loses
+1.18 recall points and regresses 46 foreground images, by as much as 1.97 dB.
+Both candidates improve precision, demonstrating a familiar shrinkage trade,
+not a better shared surface. No production option or asset format is added.
+The next implementation must put this calibrated normal constraint on
+differentiable first-surface depth inside density training, before fusion.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
