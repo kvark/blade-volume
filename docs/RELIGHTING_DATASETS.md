@@ -940,6 +940,30 @@ another. It may model smooth indirect/shadow residual, but must not store a
 light-indexed table or alter geometry; only an internal split can justify a
 later held-light gate.
 
+That first transfer oracle is rejected before any held data is opened. It
+freezes the 7,619-point C769 geometry, refits normals and diffuse material on
+27 evenly spaced construction lights and 16 construction cameras, and fits a
+per-point RGB degree-2 SH residual from calibrated point-to-light direction.
+Eight different construction lights and eight disjoint construction cameras
+form the validation cross-product. The basis contains no light ID, and its
+evaluation changes material only; mask coverage is therefore exactly fixed.
+
+With relative ridge `0.1`, fitted-light/disjoint-camera whole/foreground PSNR
+changes by `-0.0772/-0.0767` dB and 172/216 foreground images regress. On the
+disjoint-light/disjoint-camera split it changes by `-0.1040/-0.1039` dB and
+54/64 images regress, with a 0.4457 dB worst loss. Raising the predeclared
+ridge to `1.0` does not reverse the result: disjoint-light whole/foreground
+changes by `-0.0685/-0.0718` dB and 59/64 images regress. The implementation
+uses the same world-space finite-light direction and SH ordering as the
+renderer; the likely mismatch is its center-pixel, one-owner observation
+solve versus the renderer's depth-ordered overlapping-surface blend.
+
+No runtime field, shader, operation, dependency, or model format is added.
+The next bounded oracle keeps the same frozen geometry and light/camera split,
+but places the directional coefficients inside the existing sparse
+compositor-aware material equations. It must improve every disjoint-light
+aggregate and tail before C452 or any official held observation is opened.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss

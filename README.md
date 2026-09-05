@@ -196,11 +196,16 @@ the experiment-by-experiment history in the audit logs.
   both neighbor-covariance and source-mask-boundary initializations fail their
   same-cloud controls. Visibility is the useful clue: on frozen C769 models it
   changes the dense candidate's relative foreground gain from `+0.020` to
-  `+0.428` dB and cuts regressions from 90 to 52. The next route is a smooth
-  point-local light-transfer residual fitted and validated on disjoint
-  construction lights before any held data is opened. It must interpolate by
-  calibrated light direction, never by light ID. Keep C713/C777 untouched as
-  transfer gates; do not add polygonal geometry.
+  `+0.428` dB and cuts regressions from 90 to 52. A degree-2 point-local
+  light-direction residual is not enough: despite using 27 fitted construction
+  lights and no light-ID lookup, it loses `0.077` dB on the fitted-light /
+  disjoint-camera foreground and `0.104` dB on eight disjoint construction
+  lights; stronger regularization still regresses 59/64 disjoint images. The
+  next route is the same bounded light-direction oracle solved through the
+  renderer's exact overlapping-surface blend instead of assigning each pixel
+  to one point. Keep geometry frozen, require the disjoint construction split
+  to improve before opening held data, keep C713/C777 untouched as transfer
+  gates, and do not add polygonal geometry or a runtime appearance field.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
