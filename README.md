@@ -232,6 +232,9 @@ the experiment-by-experiment history in the audit logs.
   test selects zero wrap; its remaining global gain still loses 12/64
   disjoint light/camera pairs, worst 0.329 dB. Broad backside response is not
   one shared half-Lambert lobe either.
+  Multi-light Gaussian continuation is now guarded per fitted light/camera
+  image rather than only by a pooled sparse audit; C769 regresses 426/432
+  such images, so the candidate is restored exactly.
   The next route must jointly reconstruct the oriented point surface and its
   visibility/indirect transport through complete composited images, with
   per-image tail checks rather than a pooled appearance correction. C713/C777
