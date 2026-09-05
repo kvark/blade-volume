@@ -247,6 +247,15 @@ fitted/held `27.4855→27.4783`, held/fitted `27.5443→27.5440`, and held/held
 `27.4816→27.4723` dB. Several minima improve, but a static full-bright image is
 not a valid selector for local finite-light transport. Future region proposals
 must be selected through construction-light production renders.
+The follow-up does that without opening either official held axis: every raw
+region receives the same two-round fit from eight fixed construction lights
+`3/51/99/153/201/255/303/309`, then all 192 light/camera images are scored
+individually by the production renderer. No non-empty region preserves every
+image. Region 52 has the best combined mean gain (`+0.0138/+0.0191` dB
+whole/foreground) but loses `0.423/0.546` dB on its worst affected image;
+region 55 gains `+0.0040/+0.0032` dB while losing `0.154/0.202` dB on a tail.
+The reusable scorer now exposes per-image finite-light results so later,
+finer proposals can be rejected before their pooled average hides that loss.
 
 A display-referred material control reaches the same conclusion from the
 appearance side. One Gauss-Newton direction minimizes sRGB error through the
