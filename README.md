@@ -59,10 +59,13 @@ the experiment-by-experiment history in the audit logs.
   fit also failed the complete image gate. A direct finite-light bounce is not
   enough either: four samples improve the aggregate worst case but lose mean
   quality and about 2 dB on individual construction images, so that prototype
-  is removed too. Next, attribute complete-render residuals to their camera
-  support and owning cloud points before changing geometry or transport again.
-  A static-image screen cannot safely localize the useful multi-light geometry
-  signal. Do not add free per-light appearance or mesh geometry.
+  is removed too. Projected-footprint normal refinement has the same failure:
+  it gains `0.058/0.042` dB mean while losing `0.324/0.289` dB on one image,
+  and requiring every image to agree leaves no accepted update. Next, derive
+  ownership from the exact surfel blend rather than a projected rectangle
+  before changing geometry or transport again. A static-image screen cannot
+  safely localize the useful multi-light geometry signal. Do not add free
+  per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
