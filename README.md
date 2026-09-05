@@ -77,10 +77,14 @@ the experiment-by-experiment history in the audit logs.
   C769 disc improves the aggregate by `0.0021/0.0016` dB, yet regresses 43/35
   of 192 whole/foreground images and loses 0.031 dB on the worst foreground.
   Two smaller radial discs conserve area but cannot conserve the parent's
-  optical support: their union necessarily has overlap or holes. Next, recover
-  distinct fragment sites upstream through multi-view correspondence of the
-  104-light OLAT response, using C713/C777 as untouched transfer gates. Do not
-  add free per-light appearance or mesh geometry.
+  optical support: their union necessarily has overlap or holes. Matching the
+  full 104-light response does recover 25 coherent C769 sites, but 23 already
+  lie inside an existing radial support and their normals differ by 52 degrees
+  at the median. Appending them either before or after material fitting lowers
+  the independent construction score. Next, test these same correspondences
+  as partitioned PowerFoam ownership, where a new cloud site divides support
+  instead of adding another overlapping kernel. Keep C713/C777 untouched as
+  transfer gates; do not add free per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).

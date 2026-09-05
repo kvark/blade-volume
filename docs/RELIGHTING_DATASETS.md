@@ -321,6 +321,37 @@ this rule. The next proposal should triangulate distinct sites from the
 104-light multi-view response before surface fusion rather than subdividing an
 already merged radial primitive.
 
+That response-track proposal is informative but does not justify additive
+support. Gain-normalized 104-light descriptors from 16 construction cameras
+produce 2,314 one-way and 899 mutual matches. Of 248 multi-view groups, 80
+triangulate and 63 pass the reprojection and construction-only visual-hull
+screens. Fifty-seven also survive the disjoint validation-camera masks. Local
+connectivity leaves three coherent components containing 25 sites, the largest
+with nine. They average 3.22 observations, 0.395-pixel reprojection error,
+0.086 descriptor error, and 78.3 degrees of parallax.
+
+Appending those 25 sites after the established fit lowers the exact joint
+material objective, but its 192-image construction-validation replay loses
+`0.0426/0.0333` dB whole/foreground mean, regresses 141/118 images, and trades
+`+0.0331` recall points for `-0.0359` precision points. Inserting the same
+sites before the established two-round normal/material fit is much closer but
+still fails: whole/foreground means fall `0.0043/0.0045` dB, 98 foreground
+images regress, recall loses 0.0106 points, and the worst foreground loss is
+0.333 dB. The exact material system improves from `9.87e-5` to `9.71e-5` in
+the post-fit arm, so neither rejection is caused by a failed solver.
+
+A final spatial audit identifies the ambiguity. Twenty-three of the 25 sites
+are already inside the nearest fitted surfel's radial support; all lie within
+one radius of its tangent plane. Their median centre distance is 0.52 radii,
+but their median unoriented normal disagreement is 52.4 degrees. The matches
+therefore identify competing surface ownership inside support already claimed
+by the radial model, not an independent missing layer. Both temporary
+diagnostics are removed. The fit and score scopes peak at 1.77 and 1.01 GiB
+with zero swap, OOM, or GPU fault. The next bounded experiment should insert
+the same verified sites where ownership is partitioned by a PowerFoam cell,
+not represented by another composited radial kernel. It must pass C769's same
+192-image gate before C713 or C777 is opened.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
