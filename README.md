@@ -56,11 +56,13 @@ the experiment-by-experiment history in the audit logs.
   its linear objective but regresses C452 production renders, confirming that
   visibility without interreflection teaches the wrong material. Reconstructed
   materials remain explicitly diffuse-only because the first local specular
-  fit also failed the complete image gate. Next, couple finite-light visibility
-  with a bounded bounce and validate proposals per image, not only through
-  pooled pixel error. A static-image screen cannot safely localize the useful
-  multi-light geometry signal. Do not add free per-light appearance or mesh
-  geometry.
+  fit also failed the complete image gate. A direct finite-light bounce is not
+  enough either: four samples improve the aggregate worst case but lose mean
+  quality and about 2 dB on individual construction images, so that prototype
+  is removed too. Next, attribute complete-render residuals to their camera
+  support and owning cloud points before changing geometry or transport again.
+  A static-image screen cannot safely localize the useful multi-light geometry
+  signal. Do not add free per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).

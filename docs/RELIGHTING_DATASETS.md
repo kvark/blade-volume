@@ -219,8 +219,17 @@ baseline, its means still rise by `1.4226/1.2026` dB but individual-image
 changes reach `-0.0146/-0.3201` dB. The implementation and BVH are removed.
 Real shadowed pixels contain indirect light; deleting their direct term while
 offering the solve no bounce simply moves the compensation into albedo. The
-next transport proposal must add visibility and a bounded finite-light bounce
-together in both fitting and rendering.
+matching bounded-bounce control is also negative. A first exact-direct-blocker
+bounce is identically zero for one-sided diffuse surfaces. Replacing it with a
+cosine-hemisphere estimate of one unshadowed secondary hit raises the one-sample
+whole/foreground construction means by `1.2671/1.1541` dB over analytic direct
+lighting, below the visibility-only gains of `1.5052/1.2615` dB. Four samples
+reach `1.3557/1.2407` dB, but individual images still lose as much as
+`2.0101/1.8389` dB. The global worst case improves, yet both means and these
+large per-image tails fail the gate; more samples reduce variance rather than
+the incorrect recovered-radiance attribution. The shader prototype is removed.
+Before changing transport again, attribute complete-render residuals to their
+camera support and owning cloud points.
 
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
