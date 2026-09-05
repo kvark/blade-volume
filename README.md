@@ -112,11 +112,17 @@ the experiment-by-experiment history in the audit logs.
   optical support for average colour: the least destructive arm changes
   whole/foreground mean by `+0.0133/+0.0115` dB, but loses `0.0256` recall
   points, regresses 94/192 foreground images, and loses 0.329 dB in the worst
-  pair. That implementation is removed too. The next shared objective must
-  model or condition on light-specific visibility while explicitly preserving
-  first-surface ownership and foreground support; another average RGB, normal,
-  or proxy-image loss cannot make that trade safe. Light-specific appearance
-  remains scratch-only.
+  pair. That implementation is removed too. A construction-only attribution
+  check rules out cast-shadow deficit as the main cause: pixels whose opacity
+  is lost have less negative radiance residual than stable pixels, while a much
+  larger positive residual dominates every group. Warming scratch normals and
+  albedo before allowing density to move also fails: it raises traced-hit
+  support from `99.1%` to `99.4%`, yet loses `0.150/0.175` dB
+  whole/foreground mean, regresses 116/192 foreground images, and loses 1.61
+  dB in the worst pair. The next shared objective must establish consistent
+  cross-view first-surface ownership and preserve absolute depth/support before
+  using unexplained radiance to move density; visibility alone is not the
+  missing switch. Light-specific appearance remains scratch-only.
   Keep C713/C777 untouched as transfer gates; do not add free persisted
   per-light appearance or polygonal geometry.
 

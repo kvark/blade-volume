@@ -510,13 +510,38 @@ by `-0.0256` points, 94 foreground images regress, and the worst pair loses
 delete support.
 
 The failure identifies missing image formation, not a density-rate choice.
-Moving shadows and indirect light are present in the targets but absent from
-the direct diffuse scratch model, so an average residual can explain dark
-observations by removing shared opacity. The implementation is removed. The
-next geometry objective must condition the calibrated light residual on
-light-specific visibility while conserving foreground support and absolute
-first-surface ownership, and its selector must include per-image tails. The
-largest complete scoped run peaks at 1.69 GB with zero swap, OOM, or GPU fault.
+The implementation is removed. A construction-only attribution diagnostic then
+compared the control and least-destructive density arm at every eligible
+foreground pixel after normalizing each measured light's radiance. Of 40,569
+samples, 40,250 retain stable opacity, 160 lose opacity, and 159 gain it. The
+mean negative residual is `0.0070` for stable pixels but only `0.0045` for lost
+pixels; their dark-residual fractions are `2.96%` and `1.65%`. Positive residual
+dominates instead: `0.1228` for stable, `0.1214` for lost, and `0.1395` for
+gained pixels. Cast-shadow deficit therefore does not preferentially select the
+support that density removes. The diagnostic peaks at 2.95 GB with zero swap,
+OOM, or GPU fault.
+
+A second scratch run tests optimization order rather than changing the image
+model. It first freezes density and warms shared normals/albedo for 2,496
+updates, lowering the physical loss from `0.004580` to `0.003380`; a fresh Adam
+session then enables density for another 2,496 updates and reaches `0.002973`.
+The extraction appears healthier than the control by a coarse support count:
+`99.4%` versus `99.1%` traced hits, with 3,761 versus 3,793 surfels. After the
+unchanged two-round material fit, however, the exact 192-image construction
+screen changes whole/foreground mean by `-0.150134/-0.174586` dB, recall by
+`-0.0377` points, and precision by `+0.4411` points. It regresses 116 foreground
+images and loses 1.606390 dB in the worst pair. The fit and score peak at
+1.75/1.13 GB with zero swap, OOM, or GPU fault. This rejects material warmup,
+and the temporary graph/API/CLI are removed.
+
+The next geometry objective should not begin by adding light visibility. The
+measured failure is dominated by unexplained positive response—compatible with
+highlight, indirect-light, or wrong-layer ownership—and a lower average
+physical loss does not identify which. First establish one observation-
+consistent surface identity across cameras, anchor its absolute first-surface
+depth, and conserve optical support; only then may a robust light residual move
+that shared surface. Selection must continue to include every construction
+image tail.
 
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
