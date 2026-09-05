@@ -73,10 +73,14 @@ the experiment-by-experiment history in the audit logs.
   densification grows C452 from 16,384 to 18,842 cells and improves the
   eight-light construction mean by `0.43/0.19` dB whole/foreground, but 68 of
   192 images regress and the worst foreground loss is 1.45 dB. More points
-  alone are therefore not the answer. Next, split only support whose exact
-  blend evidence identifies contradictory surface fragments, using the fresh
-  C713/C769/C777 controls as the transfer gate. Do not add free per-light
-  appearance or mesh geometry.
+  alone are therefore not the answer. An exact-blend-ranked split of even one
+  C769 disc improves the aggregate by `0.0021/0.0016` dB, yet regresses 43/35
+  of 192 whole/foreground images and loses 0.031 dB on the worst foreground.
+  Two smaller radial discs conserve area but cannot conserve the parent's
+  optical support: their union necessarily has overlap or holes. Next, recover
+  distinct fragment sites upstream through multi-view correspondence of the
+  104-light OLAT response, using C713/C777 as untouched transfer gates. Do not
+  add free per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
