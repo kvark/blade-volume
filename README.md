@@ -44,17 +44,21 @@ the experiment-by-experiment history in the audit logs.
   it remains an explicit geometry recipe rather than a hidden default. A
   four-light, albedo-invariant response field sharpens C452 silhouettes but
   regresses C276 held-camera foreground by `0.14/0.19` dB mean/worst, so it is
-  not promoted.
+  not promoted. A bounded display-space material update improves every mean
+  on C452 and C276, but still loses one C276 novel-camera foreground minimum
+  by `0.0048` dB; camera-support weighting only shrinks that loss to `0.0014`
+  dB. Neither variant remains in the code.
 - **Next:** finite lights now evaluate the existing GGX material fields and an
   optional finite-distance visibility ray without a new shader variant.
   Visibility gains about 2 dB on OLAT means but misses the strict gate by two
   0.001--0.002 dB foreground tails and regresses DiLiGenT-MV Bear, so it stays
   opt-in. Reconstructed materials remain explicitly diffuse-only because the
   first local specular fit also failed the complete image gate. Next, make the
-  material/transport solve agree with the full compositor. Localize the useful
-  multi-light geometry signal with construction-only validation instead of
-  moving the whole cloud or storing per-light appearance. Do not add free
-  per-light appearance or mesh geometry.
+  material/transport solve agree with the full compositor and validate its
+  proposals per image, not only through pooled pixel error. A static-image
+  screen cannot safely localize the useful multi-light geometry signal; the
+  finite-light compositor must select coherent local proposals. Do not add
+  free per-light appearance or mesh geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
