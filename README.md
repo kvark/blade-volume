@@ -93,8 +93,16 @@ the experiment-by-experiment history in the audit logs.
   large error in per-view density depth, before fusion. Five excluded polarized
   C769 cameras confirm 54.69/54.04/47.37-degree median unsigned normal error at
   density depth/pre-fit surface/post-fit surface, while the final fit leaves all
-  surfel centers unchanged. Next, optimize shared point-cloud geometry against
-  actual calibrated multi-light images with scratch-only light appearance.
+  surfel centers unchanged. The ordinary construction OLATs independently
+  recover 24.66-degree photometric normals, so useful physical evidence is
+  present in the captures. Applying it only after density tracing is too late:
+  the strongest normal-guided depth candidate improves the excluded polarized
+  normal check to 44.65 degrees after fitting, but loses 1.18 recall points and
+  regresses 46 of 192 construction foreground images; even the weakest version
+  loses the foreground mean and 86 image tails. That implementation remains an
+  ignored diagnostic. Next, put the calibrated photometric-normal constraint on
+  differentiable first-surface depth during shared density training, before
+  point fusion, with scratch-only light appearance.
   Keep C713/C777 untouched as transfer gates; do not add free persisted
   per-light appearance or polygonal geometry.
 

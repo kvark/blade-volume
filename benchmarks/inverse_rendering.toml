@@ -7113,3 +7113,53 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "/mnt/data/OLATverse/evaluation/C769-polarized-pbr-v1 and target/audit-tools/olatverse_normals (gitignored); /tmp/olat-c769-polar-normal-audit2-20260905.telemetry.log"
 verdict = "diagnosis only: fusion preserves the density-depth normal error, while the final calibrated fit improves orientation but leaves every center unchanged and retains a 47-degree median error; the next candidate must improve shared density/first-surface association on actual multi-light images"
+
+[olatverse.c769_construction_photometric_normal_diagnostic]
+date = "2026-09-05"
+protocol = "construction-only normal recovery: trace the unchanged light-000 density field in the official 24 construction cameras, load all 104 construction OLAT photographs and masks, divide luminance by exact finite point-light normal-incidence radiance at each traced hit, and solve a world-space Lambertian normal per pixel; load construction _ncg maps only afterward for evaluation and keep all five polarized cameras absent"
+construction_cameras = 24
+construction_lights = 104
+working_width = 128
+normal_convention = "RGB channels encode world XYZ; identity signs and order"
+density_normal_error_degrees_median = 56.2924
+plain_photometric_normal_error_degrees_median = 24.6594
+plain_photometric_normal_error_degrees_p90 = 47.2406
+robust_photometric_normal_error_degrees_median = 26.0071
+robust_photometric_normal_error_degrees_p90 = 51.9037
+maximum_peak_memory_bytes = 2180321280
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "target/audit-tools/olatverse_normals (gitignored)"
+verdict = "diagnosis only: actual calibrated construction captures contain a much stronger physical normal signal than the density-depth derivative; reject the brighter-observation robustification and consume the plain signal in a shared first-surface objective without using released normal maps as training labels"
+
+[olatverse.rejected_normal_guided_depth_integration]
+date = "2026-09-05"
+protocol = "construction-only candidate generation: derive plain 104-light photometric normals from actual captures and masks, integrate perspective log-depth over each density map for 100 Jacobi iterations with 5-percent displacement and discontinuity bounds, fuse through the unchanged point-cloud path, and fit with the unchanged two-round 64px calibrated pipeline; use all 192 construction light/camera pairs for the acceptance screen, then open excluded normal maps only to diagnose the already rejected strongest candidate"
+anchor_weights = [4.0, 1.0, 0.25]
+median_relative_depth_change_percent = [0.06, 0.13, 0.22]
+integrated_normal_error_degrees_median = [52.1244, 48.0731, 41.6650]
+fused_surfels = [4119, 4170, 3891]
+
+anchor4_whole_mean_psnr_db_delta = 0.152801
+anchor4_foreground_mean_psnr_db_delta = -0.002166
+anchor4_mask_recall_percent_delta = -0.5102
+anchor4_mask_precision_percent_delta = 1.3876
+anchor4_foreground_regressions = 86
+anchor4_foreground_worst_delta_db = -2.036380
+
+anchor025_whole_mean_psnr_db_delta = 0.726650
+anchor025_foreground_mean_psnr_db_delta = 0.426502
+anchor025_mask_recall_percent_delta = -1.1845
+anchor025_mask_precision_percent_delta = 3.6377
+anchor025_foreground_regressions = 46
+anchor025_foreground_worst_delta_db = -1.967435
+anchor025_excluded_polarized_pre_fit_normal_error_degrees_median = 48.0936
+anchor025_excluded_polarized_post_fit_normal_error_degrees_median = 44.6516
+
+maximum_peak_memory_bytes = 2180321280
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "/mnt/data/OLATverse/runs/C769/olat-normal-guided-a{4,025}-64-r2-v1 and target/audit-tools/olatverse_normals (ignored or outside git)"
+verdict = "reject and add no option: the weakest integration already loses foreground mean, recall, and 86 image tails; the strongest materially improves both construction and fully excluded normal metrics but sharpens by deleting optical support, losing recall and 46 tails, so calibrated normal evidence must constrain differentiable shared density/first-surface depth before fusion rather than repair independent depth maps afterward"
