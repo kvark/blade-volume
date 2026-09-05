@@ -52,13 +52,15 @@ the experiment-by-experiment history in the audit logs.
   optional finite-distance visibility ray without a new shader variant.
   Visibility gains about 2 dB on OLAT means but misses the strict gate by two
   0.001--0.002 dB foreground tails and regresses DiLiGenT-MV Bear, so it stays
-  opt-in. Reconstructed materials remain explicitly diffuse-only because the
-  first local specular fit also failed the complete image gate. Next, make the
-  material/transport solve agree with the full compositor and validate its
-  proposals per image, not only through pooled pixel error. A static-image
-  screen cannot safely localize the useful multi-light geometry signal; the
-  finite-light compositor must select coherent local proposals. Do not add
-  free per-light appearance or mesh geometry.
+  opt-in. Feeding the exact visibility factor into the diffuse solve lowers
+  its linear objective but regresses C452 production renders, confirming that
+  visibility without interreflection teaches the wrong material. Reconstructed
+  materials remain explicitly diffuse-only because the first local specular
+  fit also failed the complete image gate. Next, couple finite-light visibility
+  with a bounded bounce and validate proposals per image, not only through
+  pooled pixel error. A static-image screen cannot safely localize the useful
+  multi-light geometry signal. Do not add free per-light appearance or mesh
+  geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).

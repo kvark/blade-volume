@@ -207,6 +207,21 @@ Held/held whole-frame and foreground worst improve from `29.3903/21.6954` to
 visibility more promising, but it does not erase the small C276 tail losses or
 the DiLiGenT-MV Bear regression; the flag therefore remains explicit.
 
+Making only the final diffuse equations visibility-aware is not the missing
+coupling. A temporary CPU BVH reproduced the production compositor's
+finite-distance translucent shadow ray and passed an exact physical-GPU
+pixel test. On the same eight construction lights and 24 construction cameras
+used by the region screen, it lowers the sparse linear fit loss
+`0.0001541→0.0001237`. Rendered with that same visibility, however, it loses
+`0.0826/0.0589` dB whole/foreground mean against the existing material and as
+much as `0.4136/0.4358` dB on one image. Against the analytic no-visibility
+baseline, its means still rise by `1.4226/1.2026` dB but individual-image
+changes reach `-0.0146/-0.3201` dB. The implementation and BVH are removed.
+Real shadowed pixels contain indirect light; deleting their direct term while
+offering the solve no bounce simply moves the compensation into albedo. The
+next transport proposal must add visibility and a bounded finite-light bounce
+together in both fitting and rendering.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
