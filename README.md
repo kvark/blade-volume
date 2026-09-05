@@ -228,7 +228,10 @@ the experiment-by-experiment history in the audit logs.
   loses whole-frame mean, precision, and 29/64 tails. Per-image light gains
   vary by up to 4.2x in the repeated bad camera, while the light-099 photograph
   is broadly brighter but only 0.60 correlated with the concentrated direct
-  render, ruling out one exposure scalar.
+  render, ruling out one exposure scalar. A final scene-wide wrapped-diffuse
+  test selects zero wrap; its remaining global gain still loses 12/64
+  disjoint light/camera pairs, worst 0.329 dB. Broad backside response is not
+  one shared half-Lambert lobe either.
   The next route must jointly reconstruct the oriented point surface and its
   visibility/indirect transport through complete composited images, with
   per-image tail checks rather than a pooled appearance correction. C713/C777
