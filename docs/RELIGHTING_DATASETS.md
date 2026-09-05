@@ -584,6 +584,42 @@ correspondence upstream—triangulated response tracks or another independent
 multi-view depth cue—then use the renderer only to validate and polish the
 point cloud. C713 and C777 remain untouched transfer gates.
 
+The first upstream test confirms that calibrated response tracks are a useful
+absolute cue, while rejecting their first propagation mechanism. Four fixed
+construction OLATs (`0/102/204/306`) are matched across 16 cameras; four more
+construction cameras select tracks by a 3/4 visual-hull rule and a disjoint
+four-camera subset checks them. At width 128, C452 yields 579 selected tracks,
+of which 565 (97.58%) pass that camera check. Only after persisting the tracks
+is released point-only truth opened: median nearest error is 0.350 source
+pixels and 93.96% lie within one pixel. Local covariance normals remain noisy
+at 26.49 degrees, so the positions—not their inferred normals—are the useful
+measurement. The same construction-only protocol yields 197 selected C769
+tracks, of which 193 (97.97%) pass the disjoint-camera check. No released
+geometry, normal map, held light, or held camera participates in matching or
+selection.
+
+A scratch C452 continuation then freezes positions and adds an L1 loss between
+each matched ray's absolute track depth and the density field's conditional
+expected depth. The selected `100` weight and `0.01` density rate lower the
+track-relative median/p90 error from `0.01045/0.02181` to
+`0.00827/0.01870`. Evaluation truth subsequently moves in the intended
+direction: same-pixel density-depth median improves from `3.0166` to `2.9257`
+source pixels, raw nearest truth distance from `1.2652` to `1.2502`, and fused
+surface distance from `1.2783` to `1.2681` pixels.
+
+The independent construction render gate nevertheless rejects the result.
+After identical two-round material fits, whole/foreground mean changes
+`36.1905/27.6589→36.0632/27.6208` dB, recall changes
+`98.3420→98.4506%`, precision changes `90.8236→90.3682%`, and 102/192
+foreground images regress; the worst pair loses 1.5679 dB. This is an
+easy-track-biased sparse measurement spread through a globally shared optical
+field: it gains a little depth and recall while disturbing unrelated support.
+The temporary depth-loss path is removed. Tracking, training, truth audit,
+extraction, and the complete gate peak at 1.00/1.02/0.10/1.1/3.5 GB with zero
+swap, OOM, or GPU fault. Keep the accurate sparse anchors, but next propagate
+them through bounded local point-cloud corrections that conserve all
+unconstrained support; do not tune another global density rate on this screen.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
