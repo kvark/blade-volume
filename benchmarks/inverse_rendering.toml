@@ -7163,3 +7163,35 @@ oom_events = 0
 gpu_faults = 0
 artifacts = "/mnt/data/OLATverse/runs/C769/olat-normal-guided-a{4,025}-64-r2-v1 and target/audit-tools/olatverse_normals (ignored or outside git)"
 verdict = "reject and add no option: the weakest integration already loses foreground mean, recall, and 86 image tails; the strongest materially improves both construction and fully excluded normal metrics but sharpens by deleting optical support, losing recall and 46 tails, so calibrated normal evidence must constrain differentiable shared density/first-surface depth before fusion rather than repair independent depth maps afterward"
+
+[olatverse.rejected_differentiable_first_surface_normal_loss]
+date = "2026-09-05"
+protocol = "construction-only C769 screen: derive normal targets from all 104 calibrated construction lights at unchanged density hits; train a contiguous 8x8 patch loss on the world-space normal of differentiable expected absorption depth for 50 steps per view at weight 0.05; first optimize density alone, then repeat with a 0.01 position learning-rate ratio and topology rebuild every 100 steps; never use released normal maps or held cameras/lights for fitting or selection"
+construction_normal_quads = 35128
+patch_size = 8
+training_steps = 1200
+training_rays = 76800
+maximum_recorded_steps = 71
+path_limit = 384
+truncated_rays = 0
+training_seconds = [2.868, 3.693]
+
+control_surfels = 3793
+density_only_surfels = 3786
+density_only_traced_hit_percent = 99.1
+density_only_whole_mean_psnr_db_delta = -0.021059
+density_only_foreground_mean_psnr_db_delta = -0.001506
+density_only_mask_recall_percent_delta = -0.0009
+density_only_mask_precision_percent_delta = 0.0266
+density_only_regressions = 106
+density_only_worst_delta_db = -0.472782
+
+position_arm_surfels = 3693
+position_arm_traced_hit_percent = 97.0
+position_arm_prefit_reconstruction_recall_percent = 98.0
+maximum_peak_memory_bytes = 2097983488
+memory_swap_bytes = 0
+oom_events = 0
+gpu_faults = 0
+artifacts = "/mnt/data/OLATverse/runs/C769/{foam-first-surface-normal-w005-s50-v1,olat-first-surface-normal-w005-s50-64-r2-v1,foam-first-surface-normal-w005-s50-pos001-v1,surface-first-surface-normal-w005-s50-pos001-v1} (outside git); implementation removed"
+verdict = "reject and retain no API or graph option: density-only loses both PSNR means and 106/192 image pairs, while coupled position training sheds support before material fitting; a per-view expected-depth derivative constrains local slope without anchoring absolute layer or optical ownership, so the next shared geometry objective must retain actual calibrated per-light RGB and masks"

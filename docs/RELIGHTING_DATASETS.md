@@ -467,6 +467,27 @@ not a better shared surface. No production option or asset format is added.
 The next implementation must put this calibrated normal constraint on
 differentiable first-surface depth inside density training, before fusion.
 
+That direct differentiable test is now closed as well. A contiguous-patch loss
+formed the expected absorption depth on each ray, unprojected it to a
+world-space point patch, and compared its camera-facing normal with the
+construction-only 104-light estimate. It used only existing Meganeura tensor
+operations. On C769, a density-only `0.05`-weight candidate produces 3,786
+surfels instead of 3,793, retains 99.1% traced hits, but changes the exact
+192-pair construction screen by `-0.021059/-0.001506` dB whole/foreground
+mean. It regresses 106 images and loses as much as 0.472782 dB. Allowing a
+`0.01` position learning-rate ratio is worse at the geometry gate: traced-hit
+coverage falls to 97.0% and extraction retains only 3,693 surfels, so material
+fitting is not run. Both scoped runs have zero swap, OOM, or GPU fault; peak
+memory is 2.10 GB.
+
+The failure is structural rather than a weight-selection result. A normal made
+from neighboring expected depths constrains slope, but not the absolute layer
+that owns the RGB or the optical support that preserves the mask. The public
+API, CLI, graph path, and tests are removed. The next density experiment must
+retain the full calibrated per-light RGB and mask residual in one shared
+first-surface/material objective. Per-light latent appearance may help
+optimization but must remain scratch-only and cannot enter the result model.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
