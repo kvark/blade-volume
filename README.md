@@ -179,9 +179,18 @@ the experiment-by-experiment history in the audit logs.
   yields 3,194 oriented tracks and 7,351 coherent point samples without
   reducing accuracy. They cover only 51.7% of the mask, however; rendering
   them alone or borrowing fallback support both fail badly. The next route is
-  dense disparity propagation from these verified matches before point-cloud
-  surface formation. Keep C713/C777 untouched as transfer gates; do not add
-  free persisted per-light appearance or polygonal geometry.
+  now tested: propagating scalar disparity along camera rays, checking it
+  against independently solved views, and only then forming a point cloud
+  yields 9,683 C452 surfels. On the untouched 103-light x 6-camera quadrant,
+  its fixed candidate improves whole/foreground mean by `+2.356/+1.486` dB
+  and precision by 6.84 points; every held-light mean and every held-camera
+  mean improves. It is not selected yet: recall loses 0.312 point, 48/618
+  individual images regress, and the same circular-support recipe fails on
+  thin C769 geometry. The next route is to preserve more independently
+  verified samples through fusion and derive support from their source-image
+  footprints instead of inflating one isotropic radius. Keep C713/C777
+  untouched as transfer gates; do not add free persisted per-light appearance
+  or polygonal geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
@@ -194,6 +203,9 @@ opt-in visibility candidate and its four-light contact sheet are under
 `/mnt/data/OLATverse/runs/C276/olat-visibility64-r2/`. The fresh C452 controls,
 all 1,236 held-light images, and latest contact sheet are under
 `/mnt/data/OLATverse/runs/C452/olat-light000-visibility64-r2/`.
+The latest dense-correspondence visual comparison is local-only because of the
+same dataset terms. Its photo/control/candidate images are under
+`/mnt/data/OLATverse/runs/C452/packed27-dense-radius-1.68-w128-all24-v1/light099-dump/`.
 
 ## Detailed Reconstruction Status
 

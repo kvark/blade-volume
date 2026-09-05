@@ -837,6 +837,53 @@ rays and source observations still define ownership. Only after cross-view
 consistency and mask-hull validation should the pipeline assign point radii,
 normals, and materials.
 
+### Dense 27-light disparity propagation
+
+An ignored follow-up now performs that propagation without loading released
+truth during construction or selection. It normalizes the 27-light
+log-luminance response at every foreground pixel, seeds each source view from
+the triangulated tracks, and searches scalar depth along the source camera ray.
+Each proposal must agree in response with four nearby construction cameras,
+remain in the construction mask hull, and agree in depth with independently
+solved camera maps before ordinary point-cloud fusion. No polygonal geometry
+or persisted light-specific appearance is introduced.
+
+At width 128, using all 24 construction cameras produces 21,303 selected
+tracks, 69,614 consistent depth pixels, and 9,683 fused C452 surfels. Released
+point truth is opened only after selection: median nearest error is 0.594
+source pixel, the 90th/99th percentiles are 1.053/1.732 pixels, and median
+normal error is 28.72 degrees. A construction-selected circular radius of
+`1.68` times the base footprint improves the fixed 192-image construction
+score by `+1.7123/+1.0300` dB whole/foreground mean, `+0.0902` recall point,
+`+4.9528` precision points, and `+1.6131` dB covered mean. Twenty-four images
+still regress and the worst loses 2.1769 dB, so it does not pass the strict
+every-image gate.
+
+Only after freezing that candidate, the official 103 held lights by 6 held
+cameras are opened. Relative to the established surface, whole/foreground
+mean improves `+2.3561/+1.4863` dB and precision improves 6.8410 points. All
+103 per-light means and all six per-camera means improve, including every
+camera omitted from construction. Recall loses 0.3122 point, however, and
+48/618 individual images regress, with a 2.1802 dB worst loss. The worst
+construction frame is a dark cast-shadow case where both diffuse models are
+too bright while the candidate silhouette is visibly sharper, localizing the
+remaining tail to appearance/transport rather than a geometry collapse.
+Photo, control, and candidate dumps remain outside git under
+`/mnt/data/OLATverse/runs/C452/packed27-dense-radius-1.68-w128-all24-v1/light099-dump/`.
+
+The predeclared C769 construction transfer rejects a universal circular
+support rule before held data is opened. Its 8,609 selected tracks yield only
+2,793 fused surfels. A global `3.4` radius multiplier recovers raw recall but
+leaves 82/192 fitted images worse; an eight-neighbor local radius recovers raw
+recall at factor `2.0` but still leaves 69/192 images worse and loses 0.8278
+recall point after fitting. C769 held images and polarized truth remain
+untouched. Dense multi-light disparity is therefore selected as the upstream
+geometry signal, while isotropic support inflation is rejected. The next
+bounded experiment will retain cross-view-certified samples that the second
+voxel-consensus pass currently discards, then derive point support from actual
+source-camera footprints. Anisotropic support is only justified if that
+minimal cloud-only correction still fails.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
