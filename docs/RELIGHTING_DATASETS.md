@@ -727,13 +727,33 @@ point-count cost (16,384→17,681), yet loses 0.1261 precision points and 65/192
 tails despite gains of 0.2838/0.2251 dB whole/foreground and 0.6182 recall
 points. Neither topology locality nor extra capacity fixes ownership.
 
-This closes the 16K response-track initialization family without an API,
-graph option, shader, operation, dependency, or persisted field. The one
-defensible remaining scale check is to apply the predeclared nearest-site rule
-once at the established 64K/256 reconstruction, where the lattice is denser
-and 3,689 selected track sites are already available. It must improve all
-aggregates and the tail distribution before C769 is opened; do not tune a
-track subset, weight, or displacement threshold on C452.
+The predeclared scale check closes response-track initialization completely.
+At 64K/256, the same nearest-site rule replaces 3,689 of 65,536 lattice sites
+and reduces median displacement from 0.0441 to 0.0265 world units. That is
+still 2.65 times the source site's median Delaunay-neighbor distance. Against
+the paired freshly trained control, held foam whole/foreground PSNR falls
+`19.5080/10.0652→19.0924/9.6181` dB, recall `94.5→93.6%`, and precision
+`83.9→82.6%`. Extraction creates 31,199 rather than 30,286 surfels, but held
+surface whole-frame PSNR falls `24.17→23.81` dB and precision `85.6→84.6%`;
+recall rises only `99.3→99.5%`.
+
+Identically fitting both raw surfaces on all 104 construction lights leaves a
+small aggregate signal: whole/foreground/covered mean changes
+`+0.0389/+0.2124/+0.0815` dB and recall rises 0.7071 points. It does not pass
+the gate: precision loses 0.4595 points and 60/192 foreground pairs regress;
+51 lose more than 0.05 dB, 31 more than 0.25 dB, and three more than 1 dB. The
+worst pair loses 1.3079 dB. Every light has a positive mean while six camera
+means are negative, localizing the failure to view-dependent cell ownership
+rather than light calibration. Training and the full fit peak at 0.28 and
+1.61 GiB with zero cgroup swap, memory event, OOM, throttle, or GPU fault.
+
+No C769 or transfer object is opened, and no subset, weight, or threshold is
+tuned. The complete initialization family is rejected without an API, graph
+option, shader, operation, dependency, or persisted field. Keep the tracks as
+independent sparse geometry evidence, but do not insert, fix, softly supervise,
+or append them in the camera lattice. The next geometry route must construct
+continuous cross-view point-cloud support rather than transfer isolated site
+ownership.
 
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the

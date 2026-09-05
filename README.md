@@ -159,11 +159,17 @@ the experiment-by-experiment history in the audit logs.
   improve, including `+0.471/+0.310` dB whole/foreground and
   `+0.656/+0.609` recall/precision points. It still regresses 52/192 tails,
   however; locality filtering and appending sites are both worse. All scratch
-  paths are removed. The 16K response-track family is closed; its remaining
-  defensible scale test is the already established 64K/256 reconstruction,
-  where track-to-lattice displacement is materially smaller.
-  Keep C713/C777 untouched as transfer gates; do not add free persisted
-  per-light appearance or polygonal geometry.
+  paths are removed. The predeclared 64K/256 scale check reduces median
+  track-to-lattice displacement from `0.0441` to `0.0265` world units, but it
+  makes the foam worse on every held-view metric and the extracted surface
+  loses `0.36` dB whole-frame PSNR and `1.0` precision point. After identical
+  material fitting, foreground mean rises `0.212` dB and recall `0.707` point,
+  but precision falls `0.459` point, 60/192 image tails regress, and three lose
+  more than 1 dB. The failures span cameras under every light. Response-track
+  initialization is therefore closed without production code; keep the tracks
+  only as independent geometry evidence and pursue continuous cross-view
+  point-cloud support instead. Keep C713/C777 untouched as transfer gates; do
+  not add free persisted per-light appearance or polygonal geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).
