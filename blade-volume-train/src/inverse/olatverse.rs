@@ -86,6 +86,36 @@ pub fn load(
     width: usize,
     light_indices: &[usize],
 ) -> Result<crate::calibrated::Dataset, String> {
+    load_named(object, lights_file, width, light_indices, &VIEW_NAMES)
+}
+
+/// Load selected OLATs from construction cameras only.
+///
+/// Unlike [`load`], this does not open or decode any held-camera photograph.
+/// Use it while selecting reconstruction or appearance candidates so the
+/// published held-camera files remain physically outside the fit.
+pub fn load_construction(
+    object: &path::Path,
+    lights_file: &path::Path,
+    width: usize,
+    light_indices: &[usize],
+) -> Result<crate::calibrated::Dataset, String> {
+    load_named(
+        object,
+        lights_file,
+        width,
+        light_indices,
+        &VIEW_NAMES[..TRAIN_VIEW_INDICES.len()],
+    )
+}
+
+fn load_named(
+    object: &path::Path,
+    lights_file: &path::Path,
+    width: usize,
+    light_indices: &[usize],
+    view_names: &[&str],
+) -> Result<crate::calibrated::Dataset, String> {
     if light_indices.is_empty() {
         return Err("OLATverse needs at least one selected light".to_string());
     }
@@ -102,7 +132,7 @@ pub fn load(
         return Err("OLATverse selected lights must be unique".to_string());
     }
 
-    let cameras = load_cameras(object, width)?;
+    let cameras = load_named_cameras(object, width, view_names)?;
     let source_lights = load_lights(lights_file)?;
     let height = output_height(width)?;
     let mut captures = light_indices
@@ -175,7 +205,7 @@ pub fn load(
 
     let lights = light_indices
         .iter()
-        .map(|&index| vec![source_lights[index].light; VIEW_NAMES.len()])
+        .map(|&index| vec![source_lights[index].light; cameras.len()])
         .collect();
     Ok(crate::calibrated::Dataset {
         captures,
@@ -201,14 +231,26 @@ fn output_height(width: usize) -> Result<usize, String> {
 }
 
 fn load_cameras(object: &path::Path, width: usize) -> Result<Vec<Camera>, String> {
+    load_named_cameras(object, width, &VIEW_NAMES)
+}
+
+fn load_named_cameras(
+    object: &path::Path,
+    width: usize,
+    view_names: &[&str],
+) -> Result<Vec<Camera>, String> {
     output_height(width)?;
     let file = object.join("all_cam.json");
     let text = fs::read_to_string(&file)
         .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
-    parse_cameras(&text, &file)
+    parse_cameras(&text, &file, view_names)
 }
 
-fn parse_cameras(text: &str, source: &path::Path) -> Result<Vec<Camera>, String> {
+fn parse_cameras(
+    text: &str,
+    source: &path::Path,
+    view_names: &[&str],
+) -> Result<Vec<Camera>, String> {
     let root: serde_json::Value = serde_json::from_str(text)
         .map_err(|error| format!("cannot parse {}: {error}", source.display()))?;
     let frames = root
@@ -226,7 +268,7 @@ fn parse_cameras(text: &str, source: &path::Path) -> Result<Vec<Camera>, String>
             return Err(format!("duplicate OLATverse camera {name}"));
         }
     }
-    VIEW_NAMES
+    view_names
         .iter()
         .map(|&name| {
             by_name
@@ -504,6 +546,15 @@ mod tests {
         for polarized in ["Cam07", "Cam10", "Cam17", "Cam22", "Cam39"] {
             assert!(!VIEW_NAMES.contains(&polarized));
         }
+    }
+
+    #[test]
+    fn construction_loader_names_exclude_held_cameras() {
+        let construction = &VIEW_NAMES[..TRAIN_VIEW_INDICES.len()];
+        assert_eq!(construction.len(), TRAIN_VIEW_INDICES.len());
+        assert!(HELD_VIEW_INDICES
+            .iter()
+            .all(|&index| !construction.contains(&VIEW_NAMES[index])));
     }
 
     #[test]
