@@ -50,6 +50,15 @@ not contain or fall back to polygonal geometry.
   and precision while lowering held-camera foreground mean/worst by 0.14/0.19
   dB. Coarse coordinate blends collapse support; do not add a global response
   stage or point-index interpolation.
+- A construction-only `4×4×4` spatial screen also fails to localize that
+  response update: its best static C452 region contains only 147 cells, yet
+  exact finite-light replay lowers all four foreground means. A separate 5%
+  display-referred diffuse step improves every whole-frame and foreground mean
+  on both C452 and C276, but loses one C276 novel-camera foreground minimum by
+  0.0048 dB. Weighting the step by construction-camera support reduces the
+  loss to 0.0014 dB without eliminating it. Both implementations are removed.
+  The next selector must use per-image production-compositor evidence; neither
+  pooled material loss nor a static full-bright proxy is sufficient.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel

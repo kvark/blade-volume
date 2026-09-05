@@ -237,6 +237,42 @@ recipe. Any next multi-light geometry proposal must select coherent whole
 topology states or construction-validated spatial regions rather than blend
 point indices globally.
 
+The first spatial selection proxy is also rejected. A construction-only
+`4×4×4` screen freezes the best C452 full-bright region (region 55, 147 of
+16,384 cells) from the four-light response endpoint and leaves everything else
+at the aligned-light baseline. Static held-camera foreground improves
+`22.81→22.83` dB at its worst view, but the exact finite-light compositor
+lowers all four foreground means: fitted/fitted `27.5976→27.5971`,
+fitted/held `27.4855→27.4783`, held/fitted `27.5443→27.5440`, and held/held
+`27.4816→27.4723` dB. Several minima improve, but a static full-bright image is
+not a valid selector for local finite-light transport. Future region proposals
+must be selected through construction-light production renders.
+
+A display-referred material control reaches the same conclusion from the
+appearance side. One Gauss-Newton direction minimizes sRGB error through the
+existing sparse particle blend; a 5% trust-region step was frozen using only
+C452 fitted-light/fitted-camera results. On C452 it improves every mean by
+`0.035–0.043` dB and preserves all reported minima except fitted-light/held-
+camera foreground, which changes `19.5091→19.5090` dB. The untouched C276
+transfer is:
+
+| Lights / cameras | Baseline whole / foreground | 5% display step whole / foreground |
+| --- | ---: | ---: |
+| fitted / fitted | `35.4371 / 27.4939` dB | `35.4829 / 27.5441` dB |
+| fitted / held | `34.6959 / 27.6798` dB | `34.7384 / 27.7235` dB |
+| held / fitted | `35.3807 / 27.4288` dB | `35.4264 / 27.4789` dB |
+| held / held | `34.6517 / 27.6240` dB | `34.6941 / 27.6681` dB |
+
+Coverage is identical and all C276 held-light minima improve or tie, but the
+fitted-light/held-camera foreground minimum regresses `19.7062→19.7014` dB.
+Scaling every update by the fraction of construction cameras that observe its
+material reduces that loss to `19.7062→19.7048` dB while retaining smaller
+mean gains; it does not close the gate. Both experimental implementations are
+removed. Optimizing pooled pixels in the correct transfer function is still
+not enough when material ownership changes with camera. A next material pass
+needs per-image production-render acceptance and a construction-camera
+cross-validation split, not another global objective or trust knob.
+
 A cloud-only 65,536-cell geometry arm at width 256 uses 19.7 million optimizer
 rays without truncation and improves static held-camera whole-frame PSNR
 `25.84→27.43` dB, foreground `20.03→21.58` dB, recall `85.9→90.7%`, and
@@ -262,6 +298,10 @@ reduces a complete width-64 fit/evaluation from 30m06s to 5m37s with a
 byte-identical output model. The coupled surface solver also discards exact
 zero-response light terms: on the 31,932-surfel arm it stores 14,760,383 rather
 than 28,693,080 terms and again writes a byte-identical model.
+Foreground masks are immutable and now shared across every light from the same
+camera. A matched C276 width-64/two-round replay remains byte-identical while
+peak cgroup memory falls from 2,095,202,304 to 1,888,456,704 bytes (9.9%); it
+uses no swap and records no memory or OOM event.
 
 One source-format caveat remains. `avif-rust 0.0.7` strictly decodes 6,218 of
 the 6,240 extracted C276 files; 22 valid files exercise decoder paths it does
