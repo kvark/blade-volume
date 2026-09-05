@@ -218,6 +218,17 @@ the experiment-by-experiment history in the audit logs.
   images, but still loses 10/64 C452 pairs. Adding a continuous degree-1
   light-by-view residual loses 13/64. More generic response capacity is now
   closed: no field, shader, operation, dependency, or format change is kept.
+  Directly lifting construction-only photometric normals is not the repair
+  either. Requiring two disjoint light folds, multiple source cameras, a
+  15-degree cross-fold cone, and a 30-degree geometry cone changes only 285 of
+  7,619 C769 points and gains `+1.075/+1.175` dB whole/foreground, but still
+  loses four of 64 disjoint image tails; a half step loses three. Keeping those
+  normals shading-only fixes coverage exactly and still loses 10/64 tails.
+  Moving the same evidence before fusion raises recall by 0.50 points, but
+  loses whole-frame mean, precision, and 29/64 tails. Per-image light gains
+  vary by up to 4.2x in the repeated bad camera, while the light-099 photograph
+  is broadly brighter but only 0.60 correlated with the concentrated direct
+  render, ruling out one exposure scalar.
   The next route must jointly reconstruct the oriented point surface and its
   visibility/indirect transport through complete composited images, with
   per-image tail checks rather than a pooled appearance correction. C713/C777
