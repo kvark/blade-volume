@@ -1047,6 +1047,51 @@ through complete composited images, weight the per-image tails explicitly, and
 hold both light and camera directions out. Another frozen-surface response
 field is not justified.
 
+The direct photometric-normal follow-up closes three narrower alternatives on
+C769 before C452 is opened again. Dense disparity supplies 16,826 normal
+samples from the 16 fitting cameras. Assigning samples to the established
+7,619-point surface, requiring at least two samples at 0.9 directional
+concentration, and accepting only candidates within 30 degrees of the current
+normal changes 3,027 points. After the same exact-blend material fit, the eight
+construction lights by eight disjoint construction cameras gain
+`+1.0864/+1.1816/+1.1236` dB whole/foreground/covered, but four of 64
+foreground images regress; light 099 / Cam09 loses 0.4046 dB. Existing finite
+visibility changes the mean without removing that tail.
+
+A stronger independence check estimates each pixel normal separately from two
+interleaved construction-light folds. It requires two assigned samples per
+fold, 0.9 concentration inside each fold, agreement within 15 degrees between
+folds, and the same 30-degree geometry bound. Only 285 points remain. A 25%
+normal step still gains `+1.0749/+1.1746` dB whole/foreground but loses four
+of 64 images, worst 0.1453 dB; a 12.5% step loses three, worst 0.1410 dB.
+This is not support-intersection coupling alone. An exact CPU replay uses the
+unchanged geometric discs and coverage while applying the candidate as a
+separate shading normal. It gains `+1.0386/+1.1759/+1.0776` dB on a second
+eight-light construction split but regresses 10/64 pairs, worst 0.1036 dB.
+The control agrees with the production GPU within 0.0008 dB.
+
+Using the fold-consistent evidence before point formation is also mixed. A
+strict 16-camera build keeps the other eight construction cameras out of
+matching and depth. Its ordinary fine fusion contains 4,640 cells. Selecting
+one two-camera, 30-degree-consistent photometric cluster per voxel replaces 243
+cells and adds 12, falling back exactly everywhere else. After identical local
+radius and normal/material fitting, the 4,652-point candidate changes
+whole/foreground/covered by `-0.0131/+0.0035/+0.0091` dB and recall/precision
+by `+0.4965/-0.1942` percentage points. It regresses 29/64 images, worst
+0.1953 dB. No normal field, alternate fusion path, or threshold follows.
+
+The repeated bad frames are not explained by camera exposure. Across the same
+eight lights, Cam09's per-image optimal linear gain spans `0.4540--1.9006`.
+Under light 099 the photograph contains 1.9905 times the rendered foreground
+luminance, yet its least-squares gain is 0.7125 and its spatial correlation is
+only 0.5957: the render has too much energy in narrow grazing slivers and too
+little over the broad dim backside. A camera scalar cannot make those changes
+at once. Local-only outputs are under
+`/mnt/data/OLATverse/runs/C769/packed27-photometric-normal-*`,
+`packed27-dense-fit16-vf1-min1-*`, and
+`photometric-normal-angle30-screen-dumps/`. The scoped runs peak at 1.23 GiB
+with zero swap, OOM, throttle, or GPU fault.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
