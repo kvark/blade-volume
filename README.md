@@ -186,11 +186,14 @@ the experiment-by-experiment history in the audit logs.
   and precision by 6.84 points; every held-light mean and every held-camera
   mean improves. It is not selected yet: recall loses 0.312 point, 48/618
   individual images regress, and the same circular-support recipe fails on
-  thin C769 geometry. The next route is to preserve more independently
-  verified samples through fusion and derive support from their source-image
-  footprints instead of inflating one isotropic radius. Keep C713/C777
-  untouched as transfer gates; do not add free persisted per-light appearance
-  or polygonal geometry.
+  thin C769 geometry. Removing a redundant voxel-consensus pass grows C769
+  from 2,793 to 7,619 surfels and a post-fit radius correction restores
+  aggregate recall and improves precision by 3.04 points, but 90/192 images
+  still regress. More verified points with resized circular discs is therefore
+  also closed. The next route is point support derived from actual
+  source-image footprints, including anisotropy where the observations require
+  it. Keep C713/C777 untouched as transfer gates; do not add free persisted
+  per-light appearance or polygonal geometry.
 
 The exact OLATverse commands, split, metrics, decoder caveat, and artifact
 paths are in [`docs/RELIGHTING_DATASETS.md`](docs/RELIGHTING_DATASETS.md).

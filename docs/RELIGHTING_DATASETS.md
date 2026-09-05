@@ -878,11 +878,29 @@ leaves 82/192 fitted images worse; an eight-neighbor local radius recovers raw
 recall at factor `2.0` but still leaves 69/192 images worse and loses 0.8278
 recall point after fitting. C769 held images and polarized truth remain
 untouched. Dense multi-light disparity is therefore selected as the upstream
-geometry signal, while isotropic support inflation is rejected. The next
-bounded experiment will retain cross-view-certified samples that the second
-voxel-consensus pass currently discards, then derive point support from actual
-source-camera footprints. Anisotropic support is only justified if that
-minimal cloud-only correction still fails.
+geometry signal, while isotropic support inflation is rejected.
+
+The minimal fusion correction also fails its bounded gate. Every retained
+depth pixel already agrees with at least two independently solved camera maps,
+so a scratch replay changes only the later voxel merge from factor `1.5` with
+two contributing views to factor `1.0` with one. It preserves the same 26,972
+verified depth pixels and grows C769 from 2,793 to 7,619 oriented surfels. The
+smallest pre-fit local support that beats both control coverage measures uses
+`2.2` times eight-neighbor spacing: recall changes
+`98.4748%→98.6612%` and precision `77.7121%→79.3418%`.
+
+After identical fitting, whole/foreground/covered mean changes
+`+0.5063/+0.0221/+0.2244` dB and precision gains 5.4192 points, but recall
+loses 0.5145 point and 94/192 frames regress. A frozen 1.15 post-fit radius
+scale restores recall (`+0.0969` point) and still gains 3.0367 precision
+points, yet reduces the whole-frame gain to 0.3068 dB and leaves 90/192
+foreground frames worse. Four of eight light means and ten of 24 camera means
+are negative; the worst pair loses 2.9577 dB. This closes redundant voxel
+filtering and isotropic support resizing together. C769 held data remains
+unopened. The next experiment must project each accepted sample's actual
+source-pixel footprint onto its tangent plane and retain that anisotropic
+point support through material fitting. It remains a point cloud, with no
+polygonal fallback or per-light stored appearance.
 
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the

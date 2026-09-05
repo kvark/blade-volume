@@ -196,9 +196,11 @@ not contain or fall back to polygonal geometry.
   mean by `2.356/1.486` dB; every light mean and camera mean improves. It is
   not selected as a surface because recall loses 0.312 point and 48/618 image
   tails regress. The same circular-support rule fails the predeclared C769
-  construction gate. Keep the disparity signal, reject isotropic support
-  inflation, and preserve more cross-view-certified samples through fusion
-  before considering anisotropic point support.
+  construction gate. Preserving cross-view-certified samples through a finer
+  one-view voxel merge grows C769 from 2,793 to 7,619 surfels, but even its
+  recall-restored candidate loses 90/192 image tails. Keep the disparity
+  signal, reject isotropic support inflation, and derive anisotropic point
+  support from each sample's observed source-pixel footprints.
 - A second, independently calibrated DiLiGenT-MV gate now excludes both camera
   and distant-light axes. Its scalar Bear cloud reaches 21.16/18.12 dB
   foreground mean/worst on the held/held cross-product, while a same-pixel
@@ -330,7 +332,7 @@ surface.
 | Phase | Status | Next action | Decision gate |
 | --- | --- | --- | --- |
 | Capture integrity | selected | Keep held cameras physically absent from dense reconstruction; canonicalize masks on import | Rebuilding a training asset cannot read an excluded pose or light |
-| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; dense 27-light signatures and camera-ray disparity are selected as upstream correspondence evidence; the C452 dense candidate improves all official held-light and held-camera means, but its isotropic support loses recall and 48/618 tails, and the same support rule fails C769 construction; post-formation track geometry, generic densification, direct radiance-driven density, isotropic support inflation, visibility-only coupling, and bounded finite-light bounce are rejected; direct GGX is selected and finite visibility remains opt-in | Preserve cross-view-certified dense samples through point fusion and derive support from source-camera footprints; keep light-specific appearance out of the asset and add no polygonal geometry | Improve every C452 aggregate and tail, then improve C769 construction before opening its held data; only then preserve the result on untouched C713/C777 |
+| Controlled-light diversity | LUCES-MV and DiLiGenT-MV selected; OLATverse two-axis light transfer passes; dense 27-light signatures and camera-ray disparity are selected as upstream correspondence evidence; the C452 dense candidate improves all official held-light and held-camera means, but its isotropic support loses recall and 48/618 tails; finer fusion grows C769 to 7,619 surfels yet a recall-restored candidate still loses 90/192 construction tails; post-formation track geometry, generic densification, direct radiance-driven density, isotropic support inflation, visibility-only coupling, and bounded finite-light bounce are rejected; direct GGX is selected and finite visibility remains opt-in | Derive anisotropic point support from each accepted sample's source-camera pixel footprints and preserve it through material fitting; keep light-specific appearance out of the asset and add no polygonal geometry | Improve every C452 aggregate and tail, then improve C769 construction before opening its held data; only then preserve the result on untouched C713/C777 |
 | Dense support | selected and independently validated | Keep the training-mask soft visual hull before spatial downsampling; do not use it as evidence that Gaussian transfer or relighting is solved | Held-camera scalar foreground mean/worst and precision improve on another object; report the small recall trade and mixed Gaussian/light results |
 | Missing support | Direct albedo/world-normal depth selection improves the albedo-stereo arm on both objects but still fails the corrected sparse controls | Preserve each dense point's source observations through Gaussian transfer and supervise support/visibility from construction cameras; do not create more RGB proxies or tune support | Recall, precision, and every complete-render mean/tail rise on Cow and Reading |
 | Representation scale | final-compositor diffuse transfer selected and automatic for large individual tables; topology replacement, additive support, and scalar-alpha distillation rejected | Keep the one-proposal transfer narrow; keep small shared palettes behind `--render-refine-materials` and on their bounded joint solver | Preserve the exact same-cloud gains on three material classes while geometry, visibility, and non-diffuse properties remain unchanged |
