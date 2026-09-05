@@ -620,6 +620,55 @@ swap, OOM, or GPU fault. Keep the accurate sparse anchors, but next propagate
 them through bounded local point-cloud corrections that conserve all
 unconstrained support; do not tune another global density rate on this screen.
 
+Post-extraction local propagation is now closed as well. The first candidate
+leaves alpha/hit decisions unchanged, applies each observed depth correction
+within a compact data-derived 2--8-pixel footprint, and re-fuses the maps. It
+touches 21.21% of valid samples and creates 7,446 rather than 6,838 surfels.
+Foreground mean and recall improve by 0.0924 dB and 0.4727 points, but whole
+mean changes by -0.0817 dB, precision by -0.9865 points, and 62/192 foreground
+images regress. The extra cells expose the problem: even a local per-view warp
+fragments shared support during voxel fusion.
+
+Exact-count surface variants remove that confound. Assigning each persisted
+track to a surfel only inside its existing radial support, moving only along
+the established normal, and capping displacement at half a radius improves
+whole/foreground/covered means by `0.0144/0.0519/0.0292` dB and recall by
+0.1170 points, but loses 0.0986 precision points and 55/192 foreground tails.
+An inner-half assignment with a quarter-radius cap reduces the precision loss
+to 0.0513 points but regresses 69 tails. Replacing only the normals of those
+inner correspondences is worse: whole/foreground mean changes
+`-0.0427/-0.0325` dB and 125 tails regress. Accurate sparse normals are not a
+drop-in replacement for the jointly fitted shading normals.
+
+Seeding every pixel rather than every other pixel increases the width-128
+selection from 579 to 1,332 tracks (1,297 oriented sites); 97.37% pass the
+disjoint-camera hull check, and a later truth audit puts the median at 0.361
+source pixels, 91.74% within one pixel, and the local-normal median at 26.40
+degrees. The unchanged inner-half/quarter-radius rule then moves 627/6,840
+surfels and improves all three PSNR aggregates by `0.0342/0.0514/0.0414` dB,
+but still loses 0.0616 precision points and 58 tails. Spreading those offsets
+smoothly over two support radii moves 4,912 surfels and improves foreground,
+recall, and covered quality, yet changes whole mean by -0.0024 dB, precision by
+-0.1354 points, and regresses 88 tails. Local smoothness is therefore not the
+missing constraint.
+
+At width 256 the same fixed matcher yields 3,831 selected tracks, 3,735
+disjoint-camera hull passes, and 3,689 oriented sites. Evaluator truth opened
+after persistence reports 0.464 working-pixel median distance and 21.64-degree
+median normal error. As a standalone cloud, however, a conservative two-pixel
+radius covers only 27.58% of the mask. Standard point-cloud radii (1.4 times
+mean eight-neighbor spacing, robustly capped) raise recall to 57.82% while
+keeping 96.20% precision, but whole/foreground mean remain 1.558/2.735 dB
+below control. Response texture does not cover textureless surface regions.
+
+These variants peak at 3.94 GB with zero swap, OOM, or GPU fault. The tracks
+remain unusually accurate independent geometry evidence; what is rejected is
+retrofitting them onto a density-derived finished surface. Next use them as
+fixed or seeded sites before the ordinary full-image point-cloud training, so
+neighboring sites and optical support are optimized around the absolute
+anchors. Do not add them after extraction, inflate them across evidence gaps,
+or tune another displacement radius on C452's construction screen.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
