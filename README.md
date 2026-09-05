@@ -133,7 +133,16 @@ the experiment-by-experiment history in the audit logs.
   is removed. Radiance-driven density fitting is therefore closed until
   upstream multi-view evidence supplies an absolute first-surface association;
   visibility alone is not the missing switch. Light-specific appearance
-  remains scratch-only.
+  remains scratch-only. That upstream cue now works as a sparse diagnostic:
+  four construction lights produce 579 C452 tracks, 97.6% pass a disjoint-
+  camera silhouette check, and—only after selection—94.0% fall within one
+  source pixel of released point truth. Applying their absolute depths through
+  a global density continuation is rejected, however: it improves C452 truth
+  depth slightly but changes construction whole/foreground mean by
+  `-0.127/-0.038` dB, precision by `-0.455` points, and regresses 102/192
+  foreground images. The next geometry experiment must propagate these
+  independently measured anchors with local, support-conserving point-cloud
+  corrections rather than another global radiance or density update.
   Keep C713/C777 untouched as transfer gates; do not add free persisted
   per-light appearance or polygonal geometry.
 
