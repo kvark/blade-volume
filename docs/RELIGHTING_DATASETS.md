@@ -375,6 +375,42 @@ ownership before their centers, radii, and materials are fused. The next
 proposal must use response compatibility while forming the surface, and pass
 C769 before the two untouched objects are opened.
 
+Applying that compatibility during foam-depth fusion is also rejected. The
+current extraction is first reproduced at width 128: 24 construction cameras,
+the 16,384-cell light-000 foam, and voxel factor two yield the same 3,793
+particles. A direct 3x3 photometric-albedo descriptor then keeps the dominant
+compatible source-camera subset in each voxel. The unrestricted arm changes
+826 cells, removes 2,055 observations, and leaves 3,551 particles. Before any
+material fit it gains 0.055/0.035 dB whole/foreground mean and 0.366 precision
+points, but loses 0.090 recall points, regresses 72/192 foreground images, and
+loses 0.672 dB on the worst. A conservative arm falls back to the ordinary
+voxel whenever its compatible subset cannot form a valid multi-view surfel. It
+keeps 3,795 particles while changing 476 cells, yet loses every aggregate:
+`-0.0015/-0.0056` dB whole/foreground, `-0.0064/-0.0163` recall/precision
+points, 103 foreground regressions, and a 0.432 dB worst loss. Geometry fixes
+those alpha metrics, so a material fit cannot rescue either arm.
+
+The stronger upstream proxy fails for the complementary reason. A robust
+photometric-albedo image is recovered from all 104 calibrated construction
+lights at every camera after normalizing finite-light radiance at the cloud
+centre. Its foreground values are bounded (median 0.043, p99 0.382, maximum
+0.480). The established 200-update-per-view fixed-topology continuation lowers
+its training loss `0.1195→0.0542` in 35.6 seconds, but its extracted surface
+shrinks to 3,518 particles and traced-hit rate falls `99.1→97.8%`. Before
+material fitting it raises whole/foreground mean by 0.787/0.198 dB and
+precision by 3.57 points, while losing 0.94 recall points, regressing 103/192
+foreground images, and losing up to 2.20 dB. This repeats the earlier
+four-light response-field boundary with much stronger data: a light-invariant
+proxy sharpens likely foreground but is not the image-formation objective and
+suppresses valid low-response support.
+
+All fusion and albedo-training prototypes are removed. The response scopes
+peak at 1.9--2.0 GiB, the foam continuation at 1.8 GiB, and every run records
+zero swap, OOM, or GPU fault. Do not tune another response threshold or train
+another proxy image. Use the released geometry for C769 only as an evaluator
+to attribute error between density training, depth-mode extraction, and fusion;
+C713 and C777 remain untouched transfer gates.
+
 Two direct attempts to generalize geometry across fitted lights are rejected.
 The existing physical Gaussian multi-light objective, replayed from the
 improved C452 surface, changes its construction audit loss
